@@ -33,6 +33,23 @@ export function PointsIcon() {
   );
 }
 
+export function HiddenLineIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {/* Cube front face */}
+      <path d="M4 8L12 4L20 8L12 12Z" fill="rgba(255,255,255,0.15)" />
+      {/* Visible edges - solid */}
+      <path d="M4 8L12 12L20 8" />
+      <path d="M12 12V20" />
+      <path d="M4 8V16L12 20L20 16V8" />
+      <path d="M12 4L20 8" />
+      <path d="M12 4L4 8" />
+      {/* Hidden edges - dashed */}
+      <line x1="4" y1="16" x2="12" y2="12" strokeDasharray="2 2" opacity="0.4" />
+    </svg>
+  );
+}
+
 export function SectionBoxIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

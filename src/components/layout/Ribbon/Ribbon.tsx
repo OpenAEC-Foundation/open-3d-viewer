@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, ThemeSelector } from './RibbonComponents';
-import { WireframeIcon, SolidIcon, PointsIcon, SectionBoxIcon, OrbitIcon, WalkIcon, PerspectiveIcon, OrthoIcon } from './RibbonIcons';
+import { WireframeIcon, SolidIcon, PointsIcon, HiddenLineIcon, SectionBoxIcon, OrbitIcon, WalkIcon, PerspectiveIcon, OrthoIcon } from './RibbonIcons';
 import { useViewerActions } from './useViewerActions';
 import './Ribbon.css';
 
@@ -87,6 +87,7 @@ export const Ribbon = memo(function Ribbon() {
                 <RibbonSmallButton icon={<SolidIcon />} label="Solid" onClick={() => setRenderMode('solid')} active={renderMode === 'solid'} />
                 <RibbonSmallButton icon={<WireframeIcon />} label="Wireframe" onClick={() => setRenderMode('wireframe')} active={renderMode === 'wireframe'} />
                 <RibbonSmallButton icon={<PointsIcon />} label="Points" onClick={() => setRenderMode('points')} active={renderMode === 'points'} />
+                <RibbonSmallButton icon={<HiddenLineIcon />} label="Hidden Line" onClick={() => setRenderMode('hiddenline')} active={renderMode === 'hiddenline'} />
               </RibbonButtonStack>
             </RibbonGroup>
 

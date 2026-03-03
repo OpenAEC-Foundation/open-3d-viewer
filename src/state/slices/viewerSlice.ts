@@ -25,7 +25,7 @@ export interface ModelEntry {
 }
 
 export type CameraMode = 'orbit' | 'walk';
-export type RenderMode = 'solid' | 'wireframe' | 'points';
+export type RenderMode = 'solid' | 'wireframe' | 'points' | 'hiddenline';
 export type ProjectionMode = 'perspective' | 'orthographic';
 
 // ============================================================================

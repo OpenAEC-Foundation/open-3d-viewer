@@ -26,6 +26,7 @@ export interface ModelEntry {
 
 export type CameraMode = 'orbit' | 'walk';
 export type RenderMode = 'solid' | 'wireframe' | 'points';
+export type ProjectionMode = 'perspective' | 'orthographic';
 
 // ============================================================================
 // State Interface
@@ -36,6 +37,7 @@ export interface ViewerState {
   activeModelId: string | null;
   cameraMode: CameraMode;
   renderMode: RenderMode;
+  projectionMode: ProjectionMode;
   walkSpeed: number;
   sectionBoxEnabled: boolean;
   sectionBoxBounds: {
@@ -77,6 +79,7 @@ export interface ViewerActions {
   updateModelStats: (id: string, vertices: number, triangles: number, bounds: ModelEntry['bounds']) => void;
   setCameraMode: (mode: CameraMode) => void;
   setRenderMode: (mode: RenderMode) => void;
+  setProjectionMode: (mode: ProjectionMode) => void;
   setWalkSpeed: (speed: number) => void;
   setSectionBoxEnabled: (enabled: boolean) => void;
   setSectionBoxBounds: (bounds: ViewerState['sectionBoxBounds']) => void;
@@ -104,6 +107,7 @@ export const initialViewerState: ViewerState = {
   activeModelId: null,
   cameraMode: 'orbit',
   renderMode: 'solid',
+  projectionMode: 'perspective',
   walkSpeed: 5,
   sectionBoxEnabled: false,
   sectionBoxBounds: null,
@@ -184,6 +188,10 @@ export const createViewerSlice = (
 
   setRenderMode: (mode: RenderMode) => {
     set((s) => { s.renderMode = mode; });
+  },
+
+  setProjectionMode: (mode: ProjectionMode) => {
+    set((s) => { s.projectionMode = mode; });
   },
 
   setWalkSpeed: (speed: number) => {

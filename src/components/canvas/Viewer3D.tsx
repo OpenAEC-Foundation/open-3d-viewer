@@ -15,7 +15,9 @@ export function Viewer3D() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<RendererManager | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const perspCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const orthoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const controlsRef = useRef<ControlsManager | null>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
   const sectionBoxRef = useRef<SectionBox | null>(null);
@@ -40,22 +42,42 @@ export function Viewer3D() {
 
   // Fit camera to bounding box
   const fitCameraToBox = useCallback((box: THREE.Box3) => {
-    const camera = cameraRef.current;
+    const persp = perspCameraRef.current;
     const controls = controlsRef.current;
-    if (!camera || !controls || box.isEmpty()) return;
+    if (!persp || !controls || box.isEmpty()) return;
 
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    const fov = camera.fov * (Math.PI / 180);
+    const fov = persp.fov * (Math.PI / 180);
     const dist = maxDim / (2 * Math.tan(fov / 2)) * 1.5;
+    const near = Math.max(0.01, maxDim * 0.001);
+    const far = maxDim * 100;
 
-    camera.position.set(center.x + dist * 0.5, center.y + dist * 0.5, center.z + dist * 0.5);
-    camera.lookAt(center);
+    // Update perspective camera
+    persp.position.set(center.x + dist * 0.5, center.y + dist * 0.5, center.z + dist * 0.5);
+    persp.lookAt(center);
+    persp.near = near;
+    persp.far = far;
+    persp.updateProjectionMatrix();
+
+    // Update ortho camera
+    const ortho = orthoCameraRef.current;
+    if (ortho) {
+      const halfH = maxDim * 0.75;
+      const halfW = halfH * persp.aspect;
+      ortho.left = -halfW;
+      ortho.right = halfW;
+      ortho.top = halfH;
+      ortho.bottom = -halfH;
+      ortho.near = near;
+      ortho.far = far;
+      ortho.position.copy(persp.position);
+      ortho.lookAt(center);
+      ortho.updateProjectionMatrix();
+    }
+
     controls.orbit.setTarget(center);
-    camera.near = Math.max(0.01, maxDim * 0.001);
-    camera.far = maxDim * 100;
-    camera.updateProjectionMatrix();
   }, []);
 
   // Load a file into the scene
@@ -130,10 +152,17 @@ export function Viewer3D() {
     const sectionBox = new SectionBox(scene);
     sectionBoxRef.current = sectionBox;
 
-    // Camera
+    // Camera (perspective + orthographic)
     const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 10000);
     camera.position.set(5, 5, 5);
     camera.lookAt(0, 0, 0);
+    perspCameraRef.current = camera;
+
+    const orthoCamera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 10000);
+    orthoCamera.position.set(5, 5, 5);
+    orthoCamera.lookAt(0, 0, 0);
+    orthoCameraRef.current = orthoCamera;
+
     cameraRef.current = camera;
 
     // Renderer
@@ -179,7 +208,7 @@ export function Viewer3D() {
     const animate = () => {
       rafRef.current = requestAnimationFrame(animate);
       controls.update();
-      rendererManager.render(scene, camera);
+      rendererManager.render(scene, cameraRef.current!);
 
       fpsFrames.current++;
       const now = performance.now();
@@ -198,6 +227,15 @@ export function Viewer3D() {
       if (w === 0 || h === 0) return;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      // Also update ortho frustum if active
+      const oc = orthoCameraRef.current;
+      if (oc) {
+        const aspect = w / h;
+        const halfH = (oc.top - oc.bottom) / 2;
+        oc.left = -halfH * aspect;
+        oc.right = halfH * aspect;
+        oc.updateProjectionMatrix();
+      }
       rendererManager.setSize(w, h);
     });
     resizeObserver.observe(container);
@@ -209,16 +247,17 @@ export function Viewer3D() {
       const center = bounds.isEmpty() ? controls.orbit.controls.target.clone() : bounds.getCenter(new THREE.Vector3());
       const size = bounds.isEmpty() ? new THREE.Vector3(10, 10, 10) : bounds.getSize(new THREE.Vector3());
       const dist = Math.max(size.x, size.y, size.z) * 1.5;
+      const cam = cameraRef.current!;
 
       switch (preset) {
-        case 'front':  camera.position.set(center.x, center.y, center.z + dist); break;
-        case 'back':   camera.position.set(center.x, center.y, center.z - dist); break;
-        case 'left':   camera.position.set(center.x - dist, center.y, center.z); break;
-        case 'right':  camera.position.set(center.x + dist, center.y, center.z); break;
-        case 'top':    camera.position.set(center.x, center.y + dist, center.z); break;
-        case 'bottom': camera.position.set(center.x, center.y - dist, center.z); break;
+        case 'front':  cam.position.set(center.x, center.y, center.z + dist); break;
+        case 'back':   cam.position.set(center.x, center.y, center.z - dist); break;
+        case 'left':   cam.position.set(center.x - dist, center.y, center.z); break;
+        case 'right':  cam.position.set(center.x + dist, center.y, center.z); break;
+        case 'top':    cam.position.set(center.x, center.y + dist, center.z); break;
+        case 'bottom': cam.position.set(center.x, center.y - dist, center.z); break;
       }
-      camera.lookAt(center);
+      cam.lookAt(center);
       controls.orbit.setTarget(center);
     };
     window.addEventListener('open3d:camera', handleCamera);
@@ -315,7 +354,7 @@ export function Viewer3D() {
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       );
 
-      raycasterRef.current.setFromCamera(mouse, camera);
+      raycasterRef.current.setFromCamera(mouse, cameraRef.current!);
       const intersects = raycasterRef.current.intersectObjects(scene.children, true);
 
       // Deselect previous
@@ -503,6 +542,43 @@ export function Viewer3D() {
   useEffect(() => {
     controlsRef.current?.setMode(cameraMode);
   }, [cameraMode]);
+
+  // Update projection mode (perspective / orthographic)
+  const projectionMode = useAppStore((s) => s.projectionMode);
+  useEffect(() => {
+    const persp = perspCameraRef.current;
+    const ortho = orthoCameraRef.current;
+    const controls = controlsRef.current;
+    const sbCtrl = sectionBoxCtrlRef.current;
+    if (!persp || !ortho || !controls) return;
+
+    if (projectionMode === 'orthographic') {
+      // Calculate ortho frustum from current perspective view
+      const target = controls.orbit.controls.target;
+      const distance = persp.position.distanceTo(target);
+      const halfH = distance * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
+      const halfW = halfH * persp.aspect;
+      ortho.left = -halfW;
+      ortho.right = halfW;
+      ortho.top = halfH;
+      ortho.bottom = -halfH;
+      ortho.near = persp.near;
+      ortho.far = persp.far;
+      ortho.position.copy(persp.position);
+      ortho.rotation.copy(persp.rotation);
+      ortho.zoom = 1;
+      ortho.updateProjectionMatrix();
+      cameraRef.current = ortho;
+    } else {
+      // Sync perspective camera position from ortho
+      persp.position.copy(ortho.position);
+      persp.rotation.copy(ortho.rotation);
+      persp.updateProjectionMatrix();
+      cameraRef.current = persp;
+    }
+    controls.setCamera(cameraRef.current);
+    sbCtrl?.setCamera(cameraRef.current);
+  }, [projectionMode]);
 
   // Update walk speed
   useEffect(() => {

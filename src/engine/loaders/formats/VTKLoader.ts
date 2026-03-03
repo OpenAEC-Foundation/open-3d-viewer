@@ -10,7 +10,9 @@ export async function loadVTK(
   onProgress?.(0.3, 'Parsing VTK...');
 
   const loader = new ThreeVTKLoader();
-  const geometry = loader.parse(data, '');
+  // VTK ASCII files must be parsed as text
+  const text = new TextDecoder().decode(data);
+  const geometry = loader.parse(text, '');
 
   onProgress?.(0.8, 'Building mesh...');
 

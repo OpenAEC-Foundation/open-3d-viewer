@@ -1,0 +1,556 @@
+/* Ribbon Container - Theme-aware */
+.ribbon-container {
+  background: var(--theme-ribbon-bg);
+  border-bottom: 1px solid var(--theme-border-light);
+  flex-shrink: 0;
+  user-select: none;
+  cursor: default;
+}
+
+/* Ribbon Tabs */
+.ribbon-tabs {
+  background: var(--theme-ribbon-tab-bg);
+  border-bottom: 1px solid var(--theme-border-light);
+  display: flex;
+  padding: 0 8px;
+  gap: 2px;
+  height: 28px;
+  align-items: flex-end;
+}
+
+.ribbon-tab {
+  padding: 6px 16px;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-weight: 500;
+  border-radius: 4px 4px 0 0;
+  transition: all 0.15s ease;
+  position: relative;
+  border: 1px solid transparent;
+  border-bottom: none;
+  cursor: default;
+}
+
+.ribbon-tab.file {
+  background: var(--theme-file-tab-bg);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ribbon-tab.file:hover {
+  background: var(--theme-file-tab-hover);
+  color: #ffffff;
+}
+
+.ribbon-tab:focus {
+  outline: none;
+}
+
+.ribbon-tab:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-tab.active {
+  background: var(--theme-ribbon-content-bg);
+  color: var(--theme-text);
+  border-color: var(--theme-border-light);
+  border-bottom: 1px solid var(--theme-ribbon-content-bg);
+  margin-bottom: -1px;
+}
+
+/* Ribbon Content Container */
+.ribbon-content-container {
+  position: relative;
+  height: 94px;
+}
+
+/* Ribbon Content */
+.ribbon-content {
+  background: var(--theme-ribbon-content-bg);
+  padding: 4px 8px 0 8px;
+  display: none;
+  height: 94px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.ribbon-content.active {
+  display: flex;
+  align-items: stretch;
+}
+
+.ribbon-groups {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 100%;
+}
+
+.ribbon-group {
+  display: flex;
+  flex-direction: column;
+  padding: 0 4px;
+  border-right: 1px solid var(--theme-border-light);
+  min-width: 50px;
+  height: 100%;
+  margin-right: 4px;
+}
+
+.ribbon-group:last-child {
+  border-right: none;
+  margin-right: 0;
+}
+
+.ribbon-group-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  text-align: center;
+  font-weight: 500;
+  padding: 2px 0;
+  margin-top: auto;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ribbon-group-content {
+  display: flex;
+  gap: 2px;
+  align-items: flex-start;
+  flex: 1;
+  padding: 2px 0;
+}
+
+/* Ribbon Slider Group */
+.ribbon-slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  justify-content: center;
+  height: 100%;
+}
+
+.ribbon-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.ribbon-slider-label {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  width: 38px;
+  text-align: right;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.ribbon-slider-value {
+  font-size: 10px;
+  color: var(--theme-text);
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.ribbon-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  background: var(--theme-border);
+  border-radius: 0;
+  outline: none;
+  cursor: default;
+}
+
+.ribbon-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 16px;
+  background: var(--theme-text-muted);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 1px;
+  cursor: default;
+}
+
+.ribbon-slider::-webkit-slider-thumb:hover {
+  background: var(--theme-text);
+}
+
+.ribbon-slider::-moz-range-thumb {
+  width: 10px;
+  height: 16px;
+  background: var(--theme-text-muted);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 1px;
+  cursor: default;
+}
+
+.ribbon-slider::-moz-range-thumb:hover {
+  background: var(--theme-text);
+}
+
+.ribbon-slider::-moz-range-track {
+  height: 4px;
+  background: var(--theme-border);
+  border-radius: 0;
+}
+
+/* Small buttons container */
+.ribbon-btn-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+/* Ribbon Buttons - Default (Large) */
+.ribbon-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 4px 6px 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: default;
+  transition: all 0.15s ease;
+  min-width: 54px;
+  gap: 4px;
+  height: 66px;
+}
+
+.ribbon-btn:focus {
+  outline: none;
+}
+
+.ribbon-btn:hover {
+  background: var(--theme-hover);
+  border-color: var(--theme-border-light);
+}
+
+.ribbon-btn.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+}
+
+.ribbon-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ribbon-btn.disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.ribbon-btn-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--theme-text-dim);
+}
+
+.ribbon-btn:hover .ribbon-btn-icon {
+  color: var(--theme-text);
+}
+
+.ribbon-btn.active .ribbon-btn-icon {
+  color: #ffffff;
+}
+
+.ribbon-btn-label {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  text-align: center;
+  line-height: 1.1;
+  max-width: 58px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  flex-shrink: 1;
+}
+
+.ribbon-btn:hover .ribbon-btn-label {
+  color: var(--theme-text);
+}
+
+.ribbon-btn.active .ribbon-btn-label {
+  color: #ffffff;
+}
+
+/* Small ribbon buttons */
+.ribbon-btn.small {
+  flex-direction: row;
+  min-width: 70px;
+  height: 22px;
+  padding: 2px 8px 2px 4px;
+  gap: 6px;
+  justify-content: flex-start;
+  border-radius: 3px;
+}
+
+.ribbon-btn.small .ribbon-btn-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.ribbon-btn.small .ribbon-btn-label {
+  font-size: 11px;
+  text-align: left;
+  max-width: none;
+  white-space: nowrap;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* Medium ribbon buttons */
+.ribbon-btn-medium-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.ribbon-btn.medium {
+  flex-direction: row;
+  min-width: 74px;
+  height: 32px;
+  padding: 2px 10px 2px 6px;
+  gap: 8px;
+  justify-content: flex-start;
+  border-radius: 3px;
+}
+
+.ribbon-btn.medium .ribbon-btn-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.ribbon-btn.medium .ribbon-btn-label {
+  font-size: 11px;
+  text-align: left;
+  max-width: none;
+  white-space: nowrap;
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* Ribbon dropdown */
+.ribbon-dropdown-container {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  position: relative;
+}
+
+.ribbon-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 140px;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+
+.ribbon-dropdown-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-size: 11px;
+  text-align: left;
+  cursor: default;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-dropdown-item:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-dropdown-item.selected {
+  color: var(--theme-accent);
+}
+
+/* Custom Tooltip */
+.ribbon-tooltip {
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.ribbon-tooltip-label {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  color: var(--theme-text);
+  font-weight: 400;
+}
+
+.ribbon-tooltip-shortcut {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  color: var(--theme-text-dim);
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  padding: 1px 5px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+/* ============================================================================
+   Theme Selector
+   ============================================================================ */
+
+.ribbon-theme-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+}
+
+.ribbon-theme-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ribbon-theme-dropdown {
+  position: relative;
+  min-width: 100px;
+}
+
+.ribbon-theme-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  color: var(--theme-text);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-theme-button:hover {
+  border-color: var(--theme-accent);
+}
+
+.ribbon-theme-button:focus {
+  outline: none;
+  border-color: var(--theme-accent);
+}
+
+.ribbon-theme-button-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ribbon-theme-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1px solid var(--theme-border-light);
+}
+
+.ribbon-theme-swatch.dark {
+  background: linear-gradient(135deg, #1a1a2e 50%, #16213e 50%);
+}
+
+.ribbon-theme-swatch.light {
+  background: linear-gradient(135deg, #f5f5f5 50%, #ffffff 50%);
+}
+
+.ribbon-theme-swatch.blue {
+  background: linear-gradient(135deg, #0d1b2a 50%, #1b263b 50%);
+}
+
+.ribbon-theme-swatch.highContrast {
+  background: linear-gradient(135deg, #000000 50%, #ffff00 50%);
+}
+
+.ribbon-theme-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.ribbon-theme-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-theme-option:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-theme-option.selected {
+  color: var(--theme-accent);
+}
+
+.ribbon-theme-option .checkmark {
+  width: 14px;
+  color: var(--theme-accent);
+}
+
+.ribbon-theme-option .no-check {
+  width: 14px;
+}

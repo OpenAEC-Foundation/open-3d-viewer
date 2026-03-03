@@ -10,6 +10,7 @@ import { isSupported } from '../../engine/loaders/LoaderRegistry';
 import { useAppStore } from '../../state/appStore';
 import { ErrorOverlay } from './ErrorOverlay';
 import { ViewCube } from './ViewCube';
+import { WelcomeScreen } from './WelcomeScreen';
 
 export function Viewer3D() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -632,6 +633,7 @@ export function Viewer3D() {
   return (
     <div ref={containerRef} className="w-full h-full relative">
       <canvas ref={canvasRef} className="w-full h-full block" />
+      <WelcomeScreen />
       <ViewCube cameraRef={cameraRef} />
       <ErrorOverlay />
     </div>

@@ -66,10 +66,8 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installers
-          path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+          name: windows-installer
+          path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
       - name: Upload artifacts (Linux)
@@ -86,10 +84,8 @@ jobs:
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: macos-installers
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app
+          name: macos-installer
+          path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
   release:

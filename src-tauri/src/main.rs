@@ -6,6 +6,7 @@ mod converter;
 
 use commands::{save_file, load_file, read_file_bytes};
 use converter::commands::{is_rust_convertible, convert_3d_file};
+use tauri::Emitter;
 
 fn main() {
     tauri::Builder::default()
@@ -13,6 +14,22 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .setup(|app| {
+            // If a file path was passed as CLI argument (e.g. from file association),
+            // emit it to the frontend so it can load the file.
+            let args: Vec<String> = std::env::args().collect();
+            if args.len() > 1 {
+                let file_path = args[1].clone();
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure frontend is mounted and listening
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    let _ = handle.emit("open-file", file_path);
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             save_file,
             load_file,

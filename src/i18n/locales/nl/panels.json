@@ -1,0 +1,31 @@
+{
+  "layers": {
+    "title": "Lagen",
+    "collapseLeft": "Linkerpaneel inklappen",
+    "expandLayers": "Lagenpaneel uitklappen",
+    "noLayers": "Geen lagen \u2014 laad een model om lagen te zien",
+    "hideAll": "Alles verbergen",
+    "showAll": "Alles tonen",
+    "trianglesVisible": "{{visible}} / {{total}} driehoeken zichtbaar",
+    "hide": "Verbergen",
+    "show": "Tonen"
+  },
+  "properties": {
+    "title": "Eigenschappen",
+    "collapseRight": "Rechterpaneel inklappen",
+    "expandRight": "Rechterpaneel uitklappen",
+    "models": "Modellen",
+    "noModels": "Geen modellen geladen",
+    "removeModel": "Model verwijderen",
+    "selectedObject": "Geselecteerd object",
+    "name": "Naam",
+    "triangles": "Driehoeken",
+    "size": "Afmetingen",
+    "center": "Middelpunt",
+    "file": "Bestand",
+    "format": "Formaat",
+    "vertices": "Hoekpunten",
+    "loading": "Laden",
+    "bounds": "Begrenzing"
+  }
+}

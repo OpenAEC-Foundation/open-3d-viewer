@@ -1,8 +1,10 @@
 import { memo } from 'react';
 import { useAppStore } from '../../../state/appStore';
 import { formatPoints } from '../../../utils/format';
+import { useTranslation } from '../../../i18n/useTranslation';
 
 export const StatusBar = memo(function StatusBar() {
+  const { t } = useTranslation('statusBar');
   const models = useAppStore((s) => s.models);
   const rendererType = useAppStore((s) => s.rendererType);
   const fps = useAppStore((s) => s.fps);
@@ -28,26 +30,26 @@ export const StatusBar = memo(function StatusBar() {
 
       {/* Models count */}
       <div className="flex items-center gap-2">
-        <span>Models:</span>
+        <span>{t('models')}:</span>
         <span className="text-cad-text font-mono">{models.length}</span>
       </div>
 
       {/* Total vertices */}
       <div className="flex items-center gap-2">
-        <span>Vertices:</span>
+        <span>{t('vertices')}:</span>
         <span className="text-cad-text font-mono">{formatPoints(totalVertices)}</span>
       </div>
 
       {/* Total triangles */}
       <div className="flex items-center gap-2">
-        <span>Triangles:</span>
+        <span>{t('triangles')}:</span>
         <span className="text-cad-text font-mono">{formatPoints(totalTriangles)}</span>
       </div>
 
       {/* Selected object */}
       {selectedObject && (
         <div className="flex items-center gap-2">
-          <span>Selected:</span>
+          <span>{t('selected')}:</span>
           <span className="text-blue-400 font-mono">{selectedObject.name}</span>
         </div>
       )}
@@ -69,7 +71,7 @@ export const StatusBar = memo(function StatusBar() {
       {/* Loading status */}
       {loading.length > 0 && (
         <div className="flex items-center gap-2 text-yellow-400">
-          <span>Loading...</span>
+          <span>{t('loading')}</span>
           {loading.map((f) => (
             <span key={f.id} className="font-mono">
               {f.fileName}: {(f.progress * 100).toFixed(0)}%
@@ -80,7 +82,7 @@ export const StatusBar = memo(function StatusBar() {
 
       {/* FPS */}
       <div className="flex items-center gap-2">
-        <span>FPS:</span>
+        <span>{t('fps')}:</span>
         <span className="text-cad-text font-mono">{fps}</span>
       </div>
 

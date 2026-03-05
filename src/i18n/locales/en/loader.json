@@ -1,0 +1,52 @@
+{
+  "unsupportedFormat": "Unsupported format: {{ext}}\nSupported formats: GLB, GLTF, OBJ, STL, FBX, PLY, 3DS, DAE, PCD, STEP, STP, SKP, 3MF, X3D, BLEND",
+  "readingFile": "Reading {{fileName}}...",
+  "readingProgress": "Reading file... {{percent}}%",
+  "cannotRead": "Cannot read file: {{fileName}}\n{{error}}",
+  "loadingModule": "Loading module...",
+  "cannotLoadLoader": "Cannot load loader for {{ext}}: {{error}}",
+  "noLoader": "No loader available for: {{ext}}",
+  "parsing": "Parsing...",
+  "errorLoading": "Error loading {{fileName}}: {{error}}",
+  "done": "Done",
+  "readingFilePhase": "Reading file...",
+
+  "assimp": {
+    "loadingWasm": "Loading {{ext}} via Assimp WASM...",
+    "cannotLoadWasm": "Cannot load Assimp WASM: {{error}}",
+    "convertingToGlb": "Converting {{ext}} to GLB...",
+    "cannotPrepare": "Cannot prepare file for conversion: {{error}}",
+    "conversionFailed": "Assimp conversion failed for {{ext}}: {{error}}",
+    "couldNotConvert": "Assimp could not convert {{ext}}: {{error}}",
+    "loadingGlb": "Loading GLB in Three.js...",
+    "buildingScene": "Building scene..."
+  },
+
+  "rust": {
+    "tauriRequired": "{{format}} files can only be opened in the Tauri desktop app.\nThis format requires the Rust backend converter.\nStart the app with \"npm run tauri dev\" to load {{format}} files.",
+    "converting": "Converting {{format}} via Rust backend...",
+    "convertingShort": "Converting {{format}}...",
+    "cannotLoadTauri": "Cannot load Tauri API. Are you running the app as a Tauri desktop app?\nError: {{error}}",
+    "converterError": "Rust converter error for {{format}}: {{error}}",
+    "conversionFailed": "{{format}} conversion failed (no details)",
+    "noGeometry": "{{format}} conversion produced no geometry",
+    "buildingScene": "Building scene...",
+    "finishing": "Finishing..."
+  },
+
+  "skp": {
+    "checkingHeader": "Checking SKP header...",
+    "invalidFile": "Invalid SKP file: not a ZIP archive",
+    "extractingZip": "Extracting ZIP archive...",
+    "zipExtractionFailed": "ZIP extraction failed: {{error}}",
+    "scanningVertices": "Scanning vertices...",
+    "loadingMaterials": "Loading materials...",
+    "scanningDefinitions": "Scanning definition blocks...",
+    "buildingScene": "Building scene...",
+    "buildingSceneProgress": "Building scene ({{count}} meshes)...",
+    "group": "Group",
+    "finishing": "Finishing...",
+    "noGeometry": "No geometry found in SKP file",
+    "loadFailed": "SKP load failed: {{error}}"
+  }
+}

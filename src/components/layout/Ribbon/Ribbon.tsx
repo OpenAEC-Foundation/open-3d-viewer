@@ -7,6 +7,7 @@ import { useAppStore } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, ThemeSelector } from './RibbonComponents';
 import { WireframeIcon, SolidIcon, PointsIcon, HiddenLineIcon, SectionBoxIcon, OrbitIcon, WalkIcon, PerspectiveIcon, OrthoIcon } from './RibbonIcons';
 import { useViewerActions } from './useViewerActions';
+import { useTranslation } from '../../../i18n/useTranslation';
 import './Ribbon.css';
 
 type RibbonTab = 'home' | 'view' | 'tools';
@@ -33,6 +34,7 @@ export const Ribbon = memo(function Ribbon() {
   const setUITheme = useAppStore((s) => s.setUITheme);
 
   const actions = useViewerActions();
+  const { t } = useTranslation('ribbon');
 
   return (
     <>
@@ -52,19 +54,19 @@ export const Ribbon = memo(function Ribbon() {
           className={`ribbon-tab ${activeTab === 'home' ? 'active' : ''}`}
           onClick={() => setActiveTab('home')}
         >
-          Home
+          {t('tabs.home')}
         </button>
         <button
           className={`ribbon-tab ${activeTab === 'view' ? 'active' : ''}`}
           onClick={() => setActiveTab('view')}
         >
-          View
+          {t('tabs.view')}
         </button>
         <button
           className={`ribbon-tab ${activeTab === 'tools' ? 'active' : ''}`}
           onClick={() => setActiveTab('tools')}
         >
-          Tools
+          {t('tabs.tools')}
         </button>
       </div>
 
@@ -73,33 +75,33 @@ export const Ribbon = memo(function Ribbon() {
         {/* Home tab */}
         <div className={`ribbon-content ${activeTab === 'home' ? 'active' : ''}`}>
           <div className="ribbon-groups">
-            <RibbonGroup label="File">
+            <RibbonGroup label={t('groups.file')}>
               <RibbonButton
                 icon={<Download size={20} />}
-                label="Import"
+                label={t('buttons.import')}
                 onClick={actions.handleImport}
-                tooltip="Import 3D file"
+                tooltip={t('buttons.importTooltip')}
               />
             </RibbonGroup>
 
-            <RibbonGroup label="Render Mode">
+            <RibbonGroup label={t('groups.renderMode')}>
               <RibbonButtonStack>
-                <RibbonSmallButton icon={<SolidIcon />} label="Solid" onClick={() => setRenderMode('solid')} active={renderMode === 'solid'} />
-                <RibbonSmallButton icon={<WireframeIcon />} label="Wireframe" onClick={() => setRenderMode('wireframe')} active={renderMode === 'wireframe'} />
-                <RibbonSmallButton icon={<PointsIcon />} label="Points" onClick={() => setRenderMode('points')} active={renderMode === 'points'} />
-                <RibbonSmallButton icon={<HiddenLineIcon />} label="Hidden Line" onClick={() => setRenderMode('hiddenline')} active={renderMode === 'hiddenline'} />
+                <RibbonSmallButton icon={<SolidIcon />} label={t('buttons.solid')} onClick={() => setRenderMode('solid')} active={renderMode === 'solid'} />
+                <RibbonSmallButton icon={<WireframeIcon />} label={t('buttons.wireframe')} onClick={() => setRenderMode('wireframe')} active={renderMode === 'wireframe'} />
+                <RibbonSmallButton icon={<PointsIcon />} label={t('buttons.points')} onClick={() => setRenderMode('points')} active={renderMode === 'points'} />
+                <RibbonSmallButton icon={<HiddenLineIcon />} label={t('buttons.hiddenLine')} onClick={() => setRenderMode('hiddenline')} active={renderMode === 'hiddenline'} />
               </RibbonButtonStack>
             </RibbonGroup>
 
-            <RibbonGroup label="Display">
+            <RibbonGroup label={t('groups.display')}>
               <RibbonButtonStack>
-                <RibbonSmallButton icon={<Grid3x3 size={14} />} label="Grid" onClick={() => setShowGrid(!showGrid)} active={showGrid} />
-                <RibbonSmallButton icon={<Lightbulb size={14} />} label="Ambient" onClick={() => setAmbientLightEnabled(!ambientLightEnabled)} active={ambientLightEnabled} />
-                <RibbonSmallButton icon={<Sun size={14} />} label="Directional" onClick={() => setDirectionalLightEnabled(!directionalLightEnabled)} active={directionalLightEnabled} />
+                <RibbonSmallButton icon={<Grid3x3 size={14} />} label={t('buttons.grid')} onClick={() => setShowGrid(!showGrid)} active={showGrid} />
+                <RibbonSmallButton icon={<Lightbulb size={14} />} label={t('buttons.ambient')} onClick={() => setAmbientLightEnabled(!ambientLightEnabled)} active={ambientLightEnabled} />
+                <RibbonSmallButton icon={<Sun size={14} />} label={t('buttons.directional')} onClick={() => setDirectionalLightEnabled(!directionalLightEnabled)} active={directionalLightEnabled} />
               </RibbonButtonStack>
             </RibbonGroup>
 
-            <RibbonGroup label="Settings">
+            <RibbonGroup label={t('groups.settings')}>
               <ThemeSelector currentTheme={uiTheme} onThemeChange={setUITheme} />
             </RibbonGroup>
           </div>
@@ -108,19 +110,19 @@ export const Ribbon = memo(function Ribbon() {
         {/* View tab */}
         <div className={`ribbon-content ${activeTab === 'view' ? 'active' : ''}`}>
           <div className="ribbon-groups">
-            <RibbonGroup label="Navigation">
+            <RibbonGroup label={t('groups.navigation')}>
               <RibbonButtonStack>
-                <RibbonSmallButton icon={<OrbitIcon />} label="Orbit" onClick={() => setCameraMode('orbit')} active={cameraMode === 'orbit'} />
-                <RibbonSmallButton icon={<WalkIcon />} label="Walk" onClick={() => setCameraMode('walk')} active={cameraMode === 'walk'} />
+                <RibbonSmallButton icon={<OrbitIcon />} label={t('buttons.orbit')} onClick={() => setCameraMode('orbit')} active={cameraMode === 'orbit'} />
+                <RibbonSmallButton icon={<WalkIcon />} label={t('buttons.walk')} onClick={() => setCameraMode('walk')} active={cameraMode === 'walk'} />
               </RibbonButtonStack>
               <RibbonButtonStack>
-                <RibbonSmallButton icon={<PerspectiveIcon />} label="Perspective" onClick={() => setProjectionMode('perspective')} active={projectionMode === 'perspective'} />
-                <RibbonSmallButton icon={<OrthoIcon />} label="Ortho" onClick={() => setProjectionMode('orthographic')} active={projectionMode === 'orthographic'} />
+                <RibbonSmallButton icon={<PerspectiveIcon />} label={t('buttons.perspective')} onClick={() => setProjectionMode('perspective')} active={projectionMode === 'perspective'} />
+                <RibbonSmallButton icon={<OrthoIcon />} label={t('buttons.ortho')} onClick={() => setProjectionMode('orthographic')} active={projectionMode === 'orthographic'} />
               </RibbonButtonStack>
               {cameraMode === 'walk' && (
                 <div className="ribbon-slider-group">
                   <label className="ribbon-slider-row">
-                    <span className="ribbon-slider-label">Speed</span>
+                    <span className="ribbon-slider-label">{t('buttons.speed')}</span>
                     <input type="range" min="0.5" max="50" step="0.5" value={walkSpeed} onChange={(e) => setWalkSpeed(Number(e.target.value))} className="ribbon-slider" />
                     <span className="ribbon-slider-value">{walkSpeed}</span>
                   </label>
@@ -128,35 +130,35 @@ export const Ribbon = memo(function Ribbon() {
               )}
             </RibbonGroup>
 
-            <RibbonGroup label="Section Box">
+            <RibbonGroup label={t('groups.sectionBox')}>
               <RibbonButton
                 icon={<SectionBoxIcon />}
-                label="Section"
+                label={t('buttons.section')}
                 onClick={() => setSectionBoxEnabled(!sectionBoxEnabled)}
                 active={sectionBoxEnabled}
-                tooltip="Toggle section box"
+                tooltip={t('buttons.sectionTooltip')}
               />
               <RibbonButton
                 icon={<RotateCcw size={20} />}
-                label="Reset"
+                label={t('buttons.reset')}
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent('open3d:sectionbox-reset'));
                 }}
                 disabled={!sectionBoxEnabled}
-                tooltip="Reset section box to model bounds"
+                tooltip={t('buttons.resetSectionTooltip')}
               />
             </RibbonGroup>
 
-            <RibbonGroup label="Camera">
+            <RibbonGroup label={t('groups.camera')}>
               <RibbonButtonStack>
-                <RibbonSmallButton icon={<Camera size={14} />} label="Front" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'front' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Back" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'back' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Left" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'left' }))} />
+                <RibbonSmallButton icon={<Camera size={14} />} label={t('buttons.front')} onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'front' }))} />
+                <RibbonSmallButton icon={<Camera size={14} />} label={t('buttons.back')} onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'back' }))} />
+                <RibbonSmallButton icon={<Camera size={14} />} label={t('buttons.left')} onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'left' }))} />
               </RibbonButtonStack>
               <RibbonButtonStack>
-                <RibbonSmallButton icon={<Camera size={14} />} label="Right" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'right' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Top" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'top' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Bottom" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'bottom' }))} />
+                <RibbonSmallButton icon={<Camera size={14} />} label={t('buttons.right')} onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'right' }))} />
+                <RibbonSmallButton icon={<Camera size={14} />} label={t('buttons.top')} onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'top' }))} />
+                <RibbonSmallButton icon={<Camera size={14} />} label={t('buttons.bottom')} onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'bottom' }))} />
               </RibbonButtonStack>
             </RibbonGroup>
           </div>
@@ -165,29 +167,29 @@ export const Ribbon = memo(function Ribbon() {
         {/* Tools tab */}
         <div className={`ribbon-content ${activeTab === 'tools' ? 'active' : ''}`}>
           <div className="ribbon-groups">
-            <RibbonGroup label="Measure">
+            <RibbonGroup label={t('groups.measure')}>
               <RibbonButton
                 icon={<MoveVertical size={20} />}
-                label="Distance"
+                label={t('buttons.distance')}
                 onClick={() => {}}
                 disabled
-                tooltip="Measure distance (coming soon)"
+                tooltip={t('buttons.distanceTooltip')}
               />
               <RibbonButton
                 icon={<Gauge size={20} />}
-                label="Angle"
+                label={t('buttons.angle')}
                 onClick={() => {}}
                 disabled
-                tooltip="Measure angle (coming soon)"
+                tooltip={t('buttons.angleTooltip')}
               />
             </RibbonGroup>
 
-            <RibbonGroup label="Info">
+            <RibbonGroup label={t('groups.info')}>
               <RibbonButton
                 icon={<Camera size={20} />}
-                label="Statistics"
+                label={t('buttons.statistics')}
                 onClick={() => window.dispatchEvent(new CustomEvent('open3d:show-stats'))}
-                tooltip="Show model statistics"
+                tooltip={t('buttons.statisticsTooltip')}
               />
             </RibbonGroup>
           </div>

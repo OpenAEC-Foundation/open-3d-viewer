@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAppStore, type UITheme } from '../../state/appStore';
+import { useTranslation } from '../../i18n/useTranslation';
+import { SUPPORTED_LANGUAGES } from '../../i18n/config';
 import './SettingsDialog.css';
 
-const THEMES: { value: UITheme; label: string; swatches: string[] }[] = [
-  { value: 'dark', label: 'Dark', swatches: ['#1a1a2e', '#16213e', '#e94560', '#eaeaea'] },
-  { value: 'light', label: 'Light', swatches: ['#f5f5f5', '#ffffff', '#e94560', '#1f2937'] },
-  { value: 'blue', label: 'Blue', swatches: ['#0d1b2a', '#1b263b', '#00b4d8', '#e0e1dd'] },
-  { value: 'highContrast', label: 'High Contrast', swatches: ['#000000', '#0a0a0a', '#ffff00', '#ffffff'] },
+const THEME_KEYS: { value: UITheme; key: string; swatches: string[] }[] = [
+  { value: 'dark', key: 'dark', swatches: ['#1a1a2e', '#16213e', '#e94560', '#eaeaea'] },
+  { value: 'light', key: 'light', swatches: ['#f5f5f5', '#ffffff', '#e94560', '#1f2937'] },
+  { value: 'blue', key: 'blue', swatches: ['#0d1b2a', '#1b263b', '#00b4d8', '#e0e1dd'] },
+  { value: 'highContrast', key: 'highContrast', swatches: ['#000000', '#0a0a0a', '#ffff00', '#ffffff'] },
 ];
 
 interface SettingsDialogProps {
@@ -14,6 +16,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
+  const { t, i18n, language } = useTranslation('settings');
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
 
@@ -63,7 +66,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
         style={offset ? { transform: `translate(${offset.x}px, ${offset.y}px)` } : undefined}
       >
         <div className="settings-header" onMouseDown={handleHeaderMouseDown}>
-          <h2 className="settings-title">Settings</h2>
+          <h2 className="settings-title">{t('title')}</h2>
           <button className="settings-close" onClick={onClose}>&times;</button>
         </div>
 
@@ -74,15 +77,15 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-              <span>General</span>
+              <span>{t('general')}</span>
             </button>
           </div>
 
           <div className="settings-content">
             <div className="settings-section">
-              <h3 className="settings-section-title">Theme</h3>
+              <h3 className="settings-section-title">{t('theme')}</h3>
               <div className="settings-theme-table">
-                {THEMES.map(theme => (
+                {THEME_KEYS.map(theme => (
                   <button
                     key={theme.value}
                     className={`settings-theme-row${uiTheme === theme.value ? ' active' : ''}`}
@@ -93,16 +96,29 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                         <span key={i} className="settings-theme-row-swatch" style={{ background: color }} />
                       ))}
                     </span>
-                    <span className="settings-theme-row-name">{theme.label}</span>
+                    <span className="settings-theme-row-name">{t(`themes.${theme.key}`)}</span>
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="settings-section">
+              <h3 className="settings-section-title">{t('language')}</h3>
+              <select
+                className="settings-language-select"
+                value={SUPPORTED_LANGUAGES.find(l => language === l.code || language?.startsWith(l.code + '-'))?.code ?? 'en'}
+                onChange={(e) => i18n.changeLanguage(e.target.value)}
+              >
+                {SUPPORTED_LANGUAGES.map(lang => (
+                  <option key={lang.code} value={lang.code}>{lang.label}</option>
+                ))}
+              </select>
             </div>
           </div>
         </div>
 
         <div className="settings-footer">
-          <button className="settings-footer-close" onClick={onClose}>Close</button>
+          <button className="settings-footer-close" onClick={onClose}>{t('close')}</button>
         </div>
       </div>
     </div>

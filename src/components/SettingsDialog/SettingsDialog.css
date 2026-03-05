@@ -202,6 +202,22 @@
   font-weight: 500;
 }
 
+.settings-language-select {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--theme-text);
+  background: var(--theme-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  cursor: default;
+  outline: none;
+}
+
+.settings-language-select:focus {
+  border-color: var(--theme-accent);
+}
+
 .settings-theme-row.active .settings-theme-row-name {
   color: var(--theme-accent);
 }

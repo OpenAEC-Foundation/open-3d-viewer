@@ -1,5 +1,6 @@
 import { useAppStore } from '../../state/appStore';
 import { isSupported } from '../../engine/loaders/LoaderRegistry';
+import { useTranslation } from '../../i18n/useTranslation';
 
 interface SampleFile {
   name: string;
@@ -11,19 +12,20 @@ interface SampleFile {
 }
 
 const SAMPLES: SampleFile[] = [
-  { name: 'Kavel 3.09', path: '/test-kavel.skp', format: 'SKP', description: 'SketchUp bouwproject', size: '2.1 MB', color: '#e44' },
-  { name: 'Cube', path: '/samples/test-cube.stl', format: 'STL', description: 'Stereolithography kubus', size: '2.5 KB', color: '#4a9' },
+  { name: 'Plot 3.09', path: '/test-kavel.skp', format: 'SKP', description: 'SketchUp building project', size: '2.1 MB', color: '#e44' },
+  { name: 'Cube', path: '/samples/test-cube.stl', format: 'STL', description: 'Stereolithography cube', size: '2.5 KB', color: '#4a9' },
   { name: 'Cube', path: '/samples/test-cube.obj', format: 'OBJ', description: 'Wavefront 3D object', size: '1.6 KB', color: '#49e' },
   { name: 'Sphere', path: '/samples/test-sphere.3mf', format: '3MF', description: '3D Manufacturing Format', size: '34 KB', color: '#e8a' },
-  { name: 'Cube', path: '/samples/test-cube.wrl', format: 'WRL', description: 'VRML wereld', size: '12 KB', color: '#a6e' },
-  { name: 'Point Cloud', path: '/samples/test-pointcloud.xyz', format: 'XYZ', description: 'Puntenwolk', size: '202 B', color: '#6be' },
+  { name: 'Cube', path: '/samples/test-cube.wrl', format: 'WRL', description: 'VRML world', size: '12 KB', color: '#a6e' },
+  { name: 'Point Cloud', path: '/samples/test-pointcloud.xyz', format: 'XYZ', description: 'Point cloud', size: '202 B', color: '#6be' },
   { name: 'Cube', path: '/samples/test-cube.vtk', format: 'VTK', description: 'Visualization Toolkit mesh', size: '248 B', color: '#ea6' },
-  { name: 'CNC Toolpath', path: '/samples/test.gcode', format: 'GCODE', description: '3D-print / CNC instructies', size: '794 B', color: '#6a6' },
+  { name: 'CNC Toolpath', path: '/samples/test.gcode', format: 'GCODE', description: '3D print / CNC instructions', size: '794 B', color: '#6a6' },
   { name: 'Mesh', path: '/samples/test.amf', format: 'AMF', description: 'Additive Manufacturing File', size: '924 B', color: '#c86' },
-  { name: 'Plattegrond', path: '/samples/test-floorplan.dxf', format: 'DXF', description: 'AutoCAD tekening', size: '1.1 MB', color: '#88e' },
+  { name: 'Floor Plan', path: '/samples/test-floorplan.dxf', format: 'DXF', description: 'AutoCAD drawing', size: '1.1 MB', color: '#88e' },
 ];
 
 export function WelcomeScreen() {
+  const { t } = useTranslation('welcome');
   const models = useAppStore((s) => s.models);
 
   // Don't show if models are loaded
@@ -47,7 +49,7 @@ export function WelcomeScreen() {
       bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
       visible: true,
       loadingProgress: 0,
-      loadingPhase: 'Laden...',
+      loadingPhase: t('loading'),
     });
     useAppStore.getState().addLoadingFile(id, fileName);
 
@@ -80,10 +82,10 @@ export function WelcomeScreen() {
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: 'rgba(200, 210, 230, 0.95)', margin: 0, letterSpacing: 0.5 }}>
-            Open 3D Viewer Studio
+            {t('title')}
           </h1>
           <p style={{ fontSize: 12, color: 'rgba(140, 155, 180, 0.8)', marginTop: 6 }}>
-            Sleep een bestand hierheen of kies een voorbeeld
+            {t('subtitle')}
           </p>
         </div>
 
@@ -164,7 +166,7 @@ export function WelcomeScreen() {
         {/* Supported formats */}
         <div style={{ textAlign: 'center', marginTop: 20 }}>
           <p style={{ fontSize: 10, color: 'rgba(110, 125, 150, 0.6)' }}>
-            Ondersteunde formaten: GLB, OBJ, STL, FBX, SKP, STEP, DXF, IFC, 3MF, DAE, PLY, PCD, WRL, XYZ, VTK, GCode, KMZ, VOX, AMF, BLEND, IGES en meer
+            {t('supportedFormats')}
           </p>
         </div>
       </div>

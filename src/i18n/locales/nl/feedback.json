@@ -1,0 +1,21 @@
+{
+  "sendFeedback": "Feedback verzenden",
+  "title": "Feedback verzenden",
+  "categoryGeneral": "Algemeen",
+  "categoryBug": "Bug",
+  "categoryFeature": "Functie",
+  "messagePlaceholder": "Vertel ons wat u denkt... (minimaal 10 tekens)",
+  "attachImages": "Afbeeldingen bijvoegen",
+  "imageLimit": "Max 3 afbeeldingen, 1MB totaal",
+  "sentiment": "Hoe voelt u zich?",
+  "sentimentFrustrated": "Gefrustreerd",
+  "sentimentNeutral": "Neutraal",
+  "sentimentHappy": "Blij",
+  "submit": "Feedback verzenden",
+  "submitting": "Verzenden...",
+  "successTitle": "Bedankt!",
+  "successMessage": "Uw feedback is succesvol verzonden.",
+  "sendAnother": "Nog een verzenden",
+  "errorGeneric": "Feedback verzenden mislukt. Probeer het opnieuw.",
+  "close": "Sluiten"
+}

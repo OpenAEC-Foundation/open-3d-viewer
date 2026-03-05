@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 
 /**
- * First-person walk mode with WASD + mouselook.
+ * First-person walk mode — Unity/Unreal style.
+ *
+ * Hold right-click to look around (cursor hidden, manual delta tracking).
+ * While looking: WASD to move, Shift to sprint, Q/E or Space/C for vertical.
+ * Scroll wheel adjusts walk speed anytime walk mode is active.
  */
 export class WalkMode {
   private camera: THREE.Camera;
@@ -11,37 +15,52 @@ export class WalkMode {
   /** Movement speed (units/second) */
   speed = 5;
 
-  /** Mouse sensitivity */
+  /** Mouse sensitivity (radians/pixel) */
   sensitivity = 0.002;
+
+  /** Called when scroll wheel adjusts speed */
+  onSpeedChange?: (speed: number) => void;
 
   setCamera(camera: THREE.Camera): void {
     this.camera = camera;
   }
 
-  /** Euler angles for mouselook */
-  private euler = new THREE.Euler(0, 0, 0, 'YXZ');
+  // Euler angles for mouselook (Z-up: yaw around Z, pitch around local X)
+  private euler = new THREE.Euler(0, 0, 0, 'ZXY');
 
-  /** Currently pressed keys */
+  // Reusable vectors to avoid per-frame allocations
+  private _forward = new THREE.Vector3();
+  private _right = new THREE.Vector3();
+  private _movement = new THREE.Vector3();
+
   private keys = new Set<string>();
-
-  /** Is pointer locked */
-  private isLocked = false;
-
+  private isLooking = false;
+  private lastMouseX = 0;
+  private lastMouseY = 0;
   private clock = new THREE.Clock(false);
 
+  // Event handler references
   private _onKeyDown: (e: KeyboardEvent) => void;
   private _onKeyUp: (e: KeyboardEvent) => void;
   private _onMouseMove: (e: MouseEvent) => void;
-  private _onPointerlockChange: () => void;
-  private _onClick: () => void;
+  private _onMouseDown: (e: MouseEvent) => void;
+  private _onMouseUp: (e: MouseEvent) => void;
+  private _onContextMenu: (e: Event) => void;
+  private _onWheel: (e: WheelEvent) => void;
 
   constructor(camera: THREE.Camera, domElement: HTMLElement) {
     this.camera = camera;
     this.domElement = domElement;
 
     this._onKeyDown = (e: KeyboardEvent) => {
-      if (!this.enabled || !this.isLocked) return;
-      this.keys.add(e.key.toLowerCase());
+      if (!this.enabled || !this.isLooking) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const key = e.key.toLowerCase();
+      this.keys.add(key);
+      if (['w', 'a', 's', 'd', 'q', 'e', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+        e.preventDefault();
+      }
     };
 
     this._onKeyUp = (e: KeyboardEvent) => {
@@ -49,73 +68,100 @@ export class WalkMode {
     };
 
     this._onMouseMove = (e: MouseEvent) => {
-      if (!this.enabled || !this.isLocked) return;
+      if (!this.enabled || !this.isLooking) return;
+      const dx = e.clientX - this.lastMouseX;
+      const dy = e.clientY - this.lastMouseY;
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+
       this.euler.setFromQuaternion(this.camera.quaternion);
-      this.euler.y -= e.movementX * this.sensitivity;
-      this.euler.x -= e.movementY * this.sensitivity;
-      // Clamp pitch
+      this.euler.z -= dx * this.sensitivity;  // yaw around Z (up)
+      this.euler.x -= dy * this.sensitivity;  // pitch around local X
+      // Clamp pitch to avoid flipping
       this.euler.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.euler.x));
       this.camera.quaternion.setFromEuler(this.euler);
     };
 
-    this._onPointerlockChange = () => {
-      this.isLocked = document.pointerLockElement === this.domElement;
-      if (!this.isLocked) {
-        this.keys.clear();
+    this._onMouseDown = (e: MouseEvent) => {
+      if (!this.enabled || e.button !== 2) return;
+      e.preventDefault();
+      this.isLooking = true;
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+      this.domElement.style.cursor = 'none';
+    };
+
+    this._onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      this.isLooking = false;
+      this.keys.clear();
+      if (this.enabled) {
+        this.domElement.style.cursor = '';
       }
     };
 
-    this._onClick = () => {
-      if (this.enabled && !this.isLocked) {
-        this.domElement.requestPointerLock();
-      }
+    this._onContextMenu = (e: Event) => {
+      if (this.enabled) e.preventDefault();
+    };
+
+    this._onWheel = (e: WheelEvent) => {
+      if (!this.enabled) return;
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 0.85 : 1.18;
+      this.speed = Math.max(0.5, Math.min(50, this.speed * factor));
+      this.onSpeedChange?.(this.speed);
     };
 
     document.addEventListener('keydown', this._onKeyDown);
     document.addEventListener('keyup', this._onKeyUp);
     document.addEventListener('mousemove', this._onMouseMove);
-    document.addEventListener('pointerlockchange', this._onPointerlockChange);
-    this.domElement.addEventListener('click', this._onClick);
+    this.domElement.addEventListener('mousedown', this._onMouseDown);
+    document.addEventListener('mouseup', this._onMouseUp);
+    this.domElement.addEventListener('contextmenu', this._onContextMenu);
+    this.domElement.addEventListener('wheel', this._onWheel, { passive: false });
   }
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (enabled) {
       this.clock.start();
+      // Initialize euler from current camera orientation
+      this.euler.setFromQuaternion(this.camera.quaternion);
     } else {
       this.clock.stop();
       this.keys.clear();
-      if (this.isLocked) {
-        document.exitPointerLock();
-      }
+      this.isLooking = false;
+      this.domElement.style.cursor = '';
     }
   }
 
   update(): void {
     if (!this.enabled) return;
 
+    // Consume delta every frame to avoid large jump when looking starts
     const dt = this.clock.getDelta();
-    if (dt === 0) return;
 
-    const moveSpeed = this.speed * dt;
+    if (!this.isLooking || dt === 0) return;
 
-    // Direction vectors
-    const forward = new THREE.Vector3();
-    this.camera.getWorldDirection(forward);
-    forward.y = 0;
-    forward.normalize();
+    const sprint = this.keys.has('shift') ? 2.5 : 1;
+    const moveSpeed = this.speed * sprint * dt;
 
-    const right = new THREE.Vector3();
-    right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+    // Use yaw angle for ground-plane directions (robust when looking straight up/down)
+    const yaw = this.euler.z;
+    const forward = this._forward.set(-Math.sin(yaw), Math.cos(yaw), 0);
+    const right = this._right.set(Math.cos(yaw), Math.sin(yaw), 0);
 
-    const movement = new THREE.Vector3();
+    const movement = this._movement.set(0, 0, 0);
 
-    if (this.keys.has('w')) movement.add(forward);
-    if (this.keys.has('s')) movement.sub(forward);
-    if (this.keys.has('a')) movement.sub(right);
-    if (this.keys.has('d')) movement.add(right);
-    if (this.keys.has(' ')) movement.y += 1;       // Space = up
-    if (this.keys.has('shift')) movement.y -= 1;    // Shift = down
+    // WASD + Arrow keys
+    if (this.keys.has('w') || this.keys.has('arrowup')) movement.add(forward);
+    if (this.keys.has('s') || this.keys.has('arrowdown')) movement.sub(forward);
+    if (this.keys.has('a') || this.keys.has('arrowleft')) movement.sub(right);
+    if (this.keys.has('d') || this.keys.has('arrowright')) movement.add(right);
+
+    // Vertical: Q/E or Space/C
+    if (this.keys.has('e') || this.keys.has(' ')) movement.z += 1;
+    if (this.keys.has('q') || this.keys.has('c')) movement.z -= 1;
 
     if (movement.lengthSq() > 0) {
       movement.normalize().multiplyScalar(moveSpeed);
@@ -127,10 +173,10 @@ export class WalkMode {
     document.removeEventListener('keydown', this._onKeyDown);
     document.removeEventListener('keyup', this._onKeyUp);
     document.removeEventListener('mousemove', this._onMouseMove);
-    document.removeEventListener('pointerlockchange', this._onPointerlockChange);
-    this.domElement.removeEventListener('click', this._onClick);
-    if (this.isLocked) {
-      document.exitPointerLock();
-    }
+    this.domElement.removeEventListener('mousedown', this._onMouseDown);
+    document.removeEventListener('mouseup', this._onMouseUp);
+    this.domElement.removeEventListener('contextmenu', this._onContextMenu);
+    this.domElement.removeEventListener('wheel', this._onWheel);
+    this.domElement.style.cursor = '';
   }
 }

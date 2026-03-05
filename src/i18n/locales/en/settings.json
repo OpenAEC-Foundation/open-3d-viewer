@@ -1,0 +1,13 @@
+{
+  "title": "Settings",
+  "general": "General",
+  "theme": "Theme",
+  "language": "Language",
+  "close": "Close",
+  "themes": {
+    "dark": "Dark",
+    "light": "Light",
+    "blue": "Blue",
+    "highContrast": "High Contrast"
+  }
+}

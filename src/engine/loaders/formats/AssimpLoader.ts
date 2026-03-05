@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { t } from '../../../i18n/useTranslation';
 import type { ThreeJSResult, ProgressCallback } from '../types';
 
 /**
@@ -19,7 +20,7 @@ export async function loadWithAssimp(
 ): Promise<ThreeJSResult> {
   const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase().replace('.', '').toUpperCase();
 
-  onProgress?.(0.1, `${ext} laden via Assimp WASM...`);
+  onProgress?.(0.1, t('loader:assimp.loadingWasm', { ext }));
 
   // Dynamically import assimpjs (WASM module)
   let ajs: any;
@@ -37,15 +38,13 @@ export async function loadWithAssimp(
       // Already initialized module
       ajs = factory;
     } else {
-      throw new Error(`Onverwacht module formaat: ${typeof factory} (keys: ${Object.keys(factory || {}).join(',')})`);
+      throw new Error(`Unexpected module format: ${typeof factory} (keys: ${Object.keys(factory || {}).join(',')})`);
     }
   } catch (err) {
-    throw new Error(
-      `Kan Assimp WASM niet laden: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new Error(t('loader:assimp.cannotLoadWasm', { error: err instanceof Error ? err.message : String(err) }));
   }
 
-  onProgress?.(0.3, `${ext} converteren naar GLB...`);
+  onProgress?.(0.3, t('loader:assimp.convertingToGlb', { ext }));
 
   // Create file list and add our file
   let fileList: any;
@@ -53,9 +52,7 @@ export async function loadWithAssimp(
     fileList = new ajs.FileList();
     fileList.AddFile(fileName, new Uint8Array(data));
   } catch (err) {
-    throw new Error(
-      `Kan bestand niet voorbereiden voor conversie: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new Error(t('loader:assimp.cannotPrepare', { error: err instanceof Error ? err.message : String(err) }));
   }
 
   // Convert to GLB2 (binary glTF 2.0)
@@ -63,19 +60,15 @@ export async function loadWithAssimp(
   try {
     result = ajs.ConvertFileList(fileList, 'glb2');
   } catch (err) {
-    throw new Error(
-      `Assimp conversie mislukt voor ${ext}: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new Error(t('loader:assimp.conversionFailed', { ext, error: err instanceof Error ? err.message : String(err) }));
   }
 
   if (!result.IsSuccess() || result.FileCount() === 0) {
-    const errorCode = result.GetErrorCode ? result.GetErrorCode() : 'Onbekende fout';
-    throw new Error(
-      `Assimp kon ${ext} niet converteren: ${errorCode}`
-    );
+    const errorCode = result.GetErrorCode ? result.GetErrorCode() : 'Unknown error';
+    throw new Error(t('loader:assimp.couldNotConvert', { ext, error: String(errorCode) }));
   }
 
-  onProgress?.(0.6, 'GLB laden in Three.js...');
+  onProgress?.(0.6, t('loader:assimp.loadingGlb'));
 
   // Get the GLB result
   const resultFile = result.GetFile(0);
@@ -91,12 +84,12 @@ export async function loadWithAssimp(
       '',
       (result) => resolve(result),
       (error) => reject(new Error(
-        `GLB parsing mislukt na Assimp conversie: ${error instanceof Error ? error.message : String(error)}`
+        `GLB parse error: ${error instanceof Error ? error.message : String(error)}`
       ))
     );
   });
 
-  onProgress?.(0.9, 'Scene opbouwen...');
+  onProgress?.(0.9, t('loader:assimp.buildingScene'));
 
   const scene = gltf.scene as THREE.Group;
 

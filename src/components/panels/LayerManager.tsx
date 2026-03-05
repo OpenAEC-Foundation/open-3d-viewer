@@ -1,8 +1,10 @@
 import { Eye, EyeOff } from 'lucide-react';
 import { useAppStore } from '../../state/appStore';
 import { formatPoints } from '../../utils/format';
+import { useTranslation } from '../../i18n/useTranslation';
 
 export function LayerManager() {
+  const { t } = useTranslation('panels');
   const layers = useAppStore((s) => s.layers);
   const setLayerVisible = useAppStore((s) => s.setLayerVisible);
   const setMultipleLayersVisible = useAppStore((s) => s.setMultipleLayersVisible);
@@ -17,7 +19,7 @@ export function LayerManager() {
   if (layers.length === 0) {
     return (
       <div className="p-3 text-xs text-cad-text-muted italic">
-        No layers — load a model to see layers
+        {t('layers.noLayers')}
       </div>
     );
   }
@@ -32,10 +34,10 @@ export function LayerManager() {
         <button
           onClick={toggleAll}
           className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-          title={allVisible ? 'Hide all' : 'Show all'}
+          title={allVisible ? t('layers.hideAll') : t('layers.showAll')}
         >
           {allVisible ? <EyeOff size={12} /> : <Eye size={12} />}
-          <span>{allVisible ? 'Hide all' : 'Show all'}</span>
+          <span>{allVisible ? t('layers.hideAll') : t('layers.showAll')}</span>
         </button>
         <div className="flex-1" />
         <span className="text-cad-text-muted font-mono">
@@ -45,7 +47,7 @@ export function LayerManager() {
 
       {/* Stats */}
       <div className="px-3 py-1 text-cad-text-muted border-b border-cad-border bg-cad-surface/50">
-        {formatPoints(visibleTriangles)} / {formatPoints(totalTriangles)} triangles visible
+        {t('layers.trianglesVisible', { visible: formatPoints(visibleTriangles), total: formatPoints(totalTriangles) })}
       </div>
 
       {/* Layer list */}
@@ -62,7 +64,7 @@ export function LayerManager() {
               className={`flex-shrink-0 w-4 h-4 flex items-center justify-center rounded ${
                 layer.visible ? 'text-cad-text' : 'text-cad-text-muted'
               }`}
-              title={layer.visible ? 'Hide' : 'Show'}
+              title={layer.visible ? t('layers.hide') : t('layers.show')}
             >
               {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
             </button>

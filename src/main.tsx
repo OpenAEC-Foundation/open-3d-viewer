@@ -1,7 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './i18n/config';
+import { loadPreferences } from './state/appStore';
 import App from './App';
 import './styles/globals.css';
+
+loadPreferences();
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

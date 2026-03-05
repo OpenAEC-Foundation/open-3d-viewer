@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { type UITheme, UI_THEMES } from '../../../state/appStore';
+import { useTranslation } from '../../../i18n/useTranslation';
 
 // ============================================================================
 // Tooltip
@@ -270,6 +271,7 @@ interface ThemeSelectorProps {
 }
 
 export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProps) {
+  const { t } = useTranslation('settings');
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -286,11 +288,11 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  const currentThemeLabel = UI_THEMES.find(t => t.id === currentTheme)?.label || 'Dark';
+  const currentThemeLabel = t(`themes.${currentTheme}`);
 
   return (
     <div className="ribbon-theme-selector" ref={dropdownRef}>
-      <span className="ribbon-theme-label">Theme</span>
+      <span className="ribbon-theme-label">{t('theme')}</span>
       <div className="ribbon-theme-dropdown">
         <button
           className="ribbon-theme-button"
@@ -319,7 +321,7 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
                   <span className="no-check" />
                 )}
                 <span className={`ribbon-theme-swatch ${theme.id}`} />
-                <span>{theme.label}</span>
+                <span>{t(`themes.${theme.id}`)}</span>
               </button>
             ))}
           </div>

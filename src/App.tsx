@@ -7,7 +7,9 @@ import { Viewer3D } from './components/canvas/Viewer3D';
 import { PropertiesPanel } from './components/panels/PropertiesPanel';
 import { LayerManager } from './components/panels/LayerManager';
 import { SettingsDialog } from './components/SettingsDialog/SettingsDialog';
+import { FeedbackDialog } from './components/FeedbackDialog/FeedbackDialog';
 import { useAppStore } from './state/appStore';
+import { useTranslation } from './i18n/useTranslation';
 
 function App() {
   // Apply theme on mount
@@ -19,7 +21,9 @@ function App() {
   const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const [showSettings, setShowSettings] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const { t } = useTranslation('panels');
 
   // Right panel resizing
   const [rightPanelWidth, setRightPanelWidth] = useState(256);
@@ -80,7 +84,7 @@ function App() {
   return (
     <div className="flex flex-col h-full w-full bg-cad-bg text-cad-text no-select">
       {/* Menu Bar */}
-      <MenuBar onSettingsClick={() => setShowSettings(true)} />
+      <MenuBar onSettingsClick={() => setShowSettings(true)} onFeedbackClick={() => setShowFeedback(true)} />
 
       {/* Ribbon */}
       <Ribbon />
@@ -95,12 +99,12 @@ function App() {
           >
             {/* Panel header */}
             <div className="flex items-center justify-between px-3 h-7 min-h-[28px] select-none border-b border-cad-border bg-cad-surface">
-              <span className="text-xs font-semibold text-cad-text">Layers</span>
+              <span className="text-xs font-semibold text-cad-text">{t('layers.title')}</span>
               <button
                 type="button"
                 onClick={() => setLeftPanelOpen(false)}
                 className="flex items-center justify-center w-5 h-5 rounded hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-                title="Collapse left panel"
+                title={t('layers.collapseLeft')}
               >
                 <PanelLeftClose size={14} />
               </button>
@@ -125,7 +129,7 @@ function App() {
               type="button"
               onClick={() => setLeftPanelOpen(true)}
               className="flex items-center justify-center w-full h-7 hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-              title="Expand layers panel"
+              title={t('layers.expandLayers')}
             >
               <PanelLeftOpen size={16} />
             </button>
@@ -157,12 +161,12 @@ function App() {
             />
             {/* Panel header */}
             <div className="flex items-center justify-between px-3 h-7 min-h-[28px] select-none border-b border-cad-border bg-cad-surface">
-              <span className="text-xs font-semibold text-cad-text">Properties</span>
+              <span className="text-xs font-semibold text-cad-text">{t('properties.title')}</span>
               <button
                 type="button"
                 onClick={toggleRightPanel}
                 className="flex items-center justify-center w-5 h-5 rounded hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-                title="Collapse right panel"
+                title={t('properties.collapseRight')}
               >
                 <PanelRightClose size={14} />
               </button>
@@ -177,7 +181,7 @@ function App() {
               type="button"
               onClick={toggleRightPanel}
               className="flex items-center justify-center w-full h-7 hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-              title="Expand right panel"
+              title={t('properties.expandRight')}
             >
               <PanelRightOpen size={16} />
             </button>
@@ -191,6 +195,11 @@ function App() {
       {/* Settings Dialog */}
       {showSettings && (
         <SettingsDialog onClose={() => setShowSettings(false)} />
+      )}
+
+      {/* Feedback Dialog */}
+      {showFeedback && (
+        <FeedbackDialog onClose={() => setShowFeedback(false)} />
       )}
     </div>
   );

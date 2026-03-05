@@ -7,9 +7,11 @@ import { SectionBox } from '../../engine/sectionbox/SectionBox';
 import { SectionBoxController } from '../../engine/sectionbox/SectionBoxController';
 import { modelLoader } from '../../engine/loaders/ModelLoader';
 import { isSupported } from '../../engine/loaders/LoaderRegistry';
+import { t } from '../../i18n/useTranslation';
 import { useAppStore } from '../../state/appStore';
 import { ErrorOverlay } from './ErrorOverlay';
 import { ViewCube } from './ViewCube';
+import { AxisIndicator } from './AxisIndicator';
 import { WelcomeScreen } from './WelcomeScreen';
 
 export function Viewer3D() {
@@ -56,8 +58,8 @@ export function Viewer3D() {
     const near = Math.max(0.01, maxDim * 0.001);
     const far = maxDim * 100;
 
-    // Update perspective camera
-    persp.position.set(center.x + dist * 0.5, center.y + dist * 0.5, center.z + dist * 0.5);
+    // Update perspective camera (Z-up)
+    persp.position.set(center.x + dist * 0.5, center.y - dist * 0.5, center.z + dist * 0.5);
     persp.lookAt(center);
     persp.near = near;
     persp.far = far;
@@ -154,14 +156,16 @@ export function Viewer3D() {
     const sectionBox = new SectionBox(scene);
     sectionBoxRef.current = sectionBox;
 
-    // Camera (perspective + orthographic)
+    // Camera (perspective + orthographic) — Z-up coordinate system
     const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 10000);
-    camera.position.set(5, 5, 5);
+    camera.up.set(0, 0, 1);
+    camera.position.set(5, -5, 5);
     camera.lookAt(0, 0, 0);
     perspCameraRef.current = camera;
 
     const orthoCamera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 10000);
-    orthoCamera.position.set(5, 5, 5);
+    orthoCamera.up.set(0, 0, 1);
+    orthoCamera.position.set(5, -5, 5);
     orthoCamera.lookAt(0, 0, 0);
     orthoCameraRef.current = orthoCamera;
 
@@ -177,6 +181,11 @@ export function Viewer3D() {
     const controls = new ControlsManager(camera, canvas);
     controlsRef.current = controls;
 
+    // Walk mode: sync scroll-wheel speed changes back to the store
+    controls.walk.onSpeedChange = (speed) => {
+      useAppStore.getState().setWalkSpeed(Math.round(speed * 2) / 2);
+    };
+
     // Section Box Controller (interactive dragging of faces)
     const sbController = new SectionBoxController(sectionBox, sectionBox.gizmo, camera, canvas, {
       onDragStart: () => controls.orbit.controls.enabled = false,
@@ -188,8 +197,9 @@ export function Viewer3D() {
     });
     sectionBoxCtrlRef.current = sbController;
 
-    // Grid
+    // Grid (Z-up: rotate GridHelper from XZ to XY plane)
     const grid = new THREE.GridHelper(50, 50, 0x3a3a5a, 0x2a2a4a);
+    grid.rotation.x = Math.PI / 2;
     scene.add(grid);
     gridRef.current = grid;
 
@@ -199,7 +209,7 @@ export function Viewer3D() {
     ambientRef.current = ambient;
 
     const directional = new THREE.DirectionalLight(0xffffff, 0.8);
-    directional.position.set(10, 20, 10);
+    directional.position.set(10, -10, 20);
     scene.add(directional);
     directionalRef.current = directional;
 
@@ -251,13 +261,24 @@ export function Viewer3D() {
       const dist = Math.max(size.x, size.y, size.z) * 1.5;
       const cam = cameraRef.current!;
 
-      switch (preset) {
-        case 'front':  cam.position.set(center.x, center.y, center.z + dist); break;
-        case 'back':   cam.position.set(center.x, center.y, center.z - dist); break;
-        case 'left':   cam.position.set(center.x - dist, center.y, center.z); break;
-        case 'right':  cam.position.set(center.x + dist, center.y, center.z); break;
-        case 'top':    cam.position.set(center.x, center.y + dist, center.z); break;
-        case 'bottom': cam.position.set(center.x, center.y - dist, center.z); break;
+      // Z-up camera presets: front = -Y, right = +X, top = +Z
+      if (preset.startsWith('dir:')) {
+        const [dx, dy, dz] = preset.slice(4).split(',').map(Number);
+        const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+        cam.position.set(
+          center.x + (dx / len) * dist,
+          center.y + (dy / len) * dist,
+          center.z + (dz / len) * dist,
+        );
+      } else {
+        switch (preset) {
+          case 'front':  cam.position.set(center.x, center.y - dist, center.z); break;
+          case 'back':   cam.position.set(center.x, center.y + dist, center.z); break;
+          case 'left':   cam.position.set(center.x - dist, center.y, center.z); break;
+          case 'right':  cam.position.set(center.x + dist, center.y, center.z); break;
+          case 'top':    cam.position.set(center.x, center.y, center.z + dist); break;
+          case 'bottom': cam.position.set(center.x, center.y, center.z - dist); break;
+        }
       }
       cam.lookAt(center);
       controls.orbit.setTarget(center);
@@ -328,7 +349,7 @@ export function Viewer3D() {
           bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
           visible: true,
           loadingProgress: 0,
-          loadingPhase: 'Reading file...',
+          loadingPhase: t('loader:readingFilePhase'),
         });
         useAppStore.getState().addLoadingFile(id, file.name);
 
@@ -502,7 +523,7 @@ export function Viewer3D() {
       bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
       visible: true,
       loadingProgress: 0,
-      loadingPhase: 'Auto-loading...',
+      loadingPhase: t('loader:readingFilePhase'),
     });
     useAppStore.getState().addLoadingFile(id, autoFile);
 
@@ -520,6 +541,46 @@ export function Viewer3D() {
         useAppStore.getState().setLoadingFileError(id, String(err));
       });
   }, [loadFileIntoScene]);
+
+  // Handle file open from OS file association (Tauri backend emits 'open-file')
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlisten = await listen<string>('open-file', (event) => {
+        const filePath = event.payload;
+        if (!filePath) return;
+
+        const fileName = filePath.split(/[/\\]/).pop() || 'unknown';
+        const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+        if (!isSupported(ext)) return;
+
+        const id = crypto.randomUUID();
+        const format = ext.replace('.', '').toUpperCase();
+
+        useAppStore.getState().addModel({
+          id,
+          fileName,
+          filePath,
+          format,
+          vertices: 0,
+          triangles: 0,
+          bounds: { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 },
+          visible: true,
+          loadingProgress: 0,
+          loadingPhase: t('loader:readingFilePhase'),
+        });
+        useAppStore.getState().addLoadingFile(id, fileName);
+
+        window.dispatchEvent(new CustomEvent('open3d:import', {
+          detail: { id, filePath, fileName, format: ext }
+        }));
+      });
+    })();
+
+    return () => { unlisten?.(); };
+  }, []);
 
   // Update grid visibility
   useEffect(() => {
@@ -635,6 +696,21 @@ export function Viewer3D() {
       <canvas ref={canvasRef} className="w-full h-full block" />
       <WelcomeScreen />
       <ViewCube cameraRef={cameraRef} />
+      <AxisIndicator cameraRef={cameraRef} />
+      {cameraMode === 'walk' && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          width: 0,
+          height: 0,
+          zIndex: 10,
+          pointerEvents: 'none',
+        }}>
+          <div style={{ position: 'absolute', width: 20, height: 2, left: -10, top: -1, background: 'rgba(255,255,255,0.4)', borderRadius: 1 }} />
+          <div style={{ position: 'absolute', width: 2, height: 20, left: -1, top: -10, background: 'rgba(255,255,255,0.4)', borderRadius: 1 }} />
+        </div>
+      )}
       <ErrorOverlay />
     </div>
   );

@@ -1,5 +1,7 @@
 import { useState, useEffect, memo, useCallback } from 'react';
 import { Settings } from 'lucide-react';
+import { useTranslation } from '../../../i18n/useTranslation';
+import '../../FeedbackDialog/FeedbackDialog.css';
 
 type Platform = 'windows' | 'linux' | 'macos';
 
@@ -34,12 +36,13 @@ function WindowsControls({
   onClose: () => void;
   isMaximized: boolean;
 }) {
+  const { t } = useTranslation('menuBar');
   return (
     <div className="flex items-center h-full">
       <button
         onClick={onMinimize}
         className="w-[46px] h-full flex items-center justify-center hover:bg-[#3d3d3d] transition-colors cursor-default"
-        title="Minimize"
+        title={t('minimize')}
       >
         <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor">
           <rect width="10" height="1" />
@@ -48,7 +51,7 @@ function WindowsControls({
       <button
         onClick={onMaximize}
         className="w-[46px] h-full flex items-center justify-center hover:bg-[#3d3d3d] transition-colors cursor-default"
-        title={isMaximized ? 'Restore Down' : 'Maximize'}
+        title={isMaximized ? t('restoreDown') : t('maximize')}
       >
         {isMaximized ? (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
@@ -64,7 +67,7 @@ function WindowsControls({
       <button
         onClick={onClose}
         className="w-[46px] h-full flex items-center justify-center hover:bg-[#c42b1c] transition-colors group cursor-default"
-        title="Close"
+        title={t('close')}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2" className="group-hover:stroke-white">
           <line x1="0" y1="0" x2="10" y2="10" />
@@ -86,12 +89,13 @@ function LinuxControls({
   onClose: () => void;
   isMaximized: boolean;
 }) {
+  const { t } = useTranslation('menuBar');
   return (
     <div className="flex items-center h-full gap-2 px-3">
       <button
         onClick={onMinimize}
         className="w-3 h-3 rounded-full bg-[#f5c211] hover:bg-[#d9a900] transition-colors flex items-center justify-center group cursor-default"
-        title="Minimize"
+        title={t('minimize')}
       >
         <svg width="6" height="1" viewBox="0 0 6 1" className="opacity-0 group-hover:opacity-100 transition-opacity">
           <rect width="6" height="1" fill="#000" fillOpacity="0.6" />
@@ -100,7 +104,7 @@ function LinuxControls({
       <button
         onClick={onMaximize}
         className="w-3 h-3 rounded-full bg-[#2ecc71] hover:bg-[#27ae60] transition-colors flex items-center justify-center group cursor-default"
-        title={isMaximized ? 'Restore' : 'Maximize'}
+        title={isMaximized ? t('restore') : t('maximize')}
       >
         {isMaximized ? (
           <svg width="6" height="6" viewBox="0 0 6 6" className="opacity-0 group-hover:opacity-100 transition-opacity">
@@ -116,7 +120,7 @@ function LinuxControls({
       <button
         onClick={onClose}
         className="w-3 h-3 rounded-full bg-[#e95420] hover:bg-[#c44117] transition-colors flex items-center justify-center group cursor-default"
-        title="Close"
+        title={t('close')}
       >
         <svg width="6" height="6" viewBox="0 0 6 6" className="opacity-0 group-hover:opacity-100 transition-opacity">
           <line x1="1" y1="1" x2="5" y2="5" stroke="#000" strokeOpacity="0.6" strokeWidth="1" />
@@ -172,46 +176,57 @@ function WindowControls() {
   return <WindowsControls {...controlProps} />;
 }
 
-export const MenuBar = memo(function MenuBar({ onSettingsClick }: { onSettingsClick: () => void }) {
+export const MenuBar = memo(function MenuBar({ onSettingsClick, onFeedbackClick }: { onSettingsClick: () => void; onFeedbackClick: () => void }) {
+  const { t } = useTranslation(['menuBar', 'app', 'feedback']);
   const handleDoubleClick = useCallback(() => {
     getTauriWindow().then((w) => w?.toggleMaximize());
   }, []);
 
   return (
-    <div className="h-8 bg-cad-surface border-b border-cad-border flex items-center select-none">
+    <div className="h-8 bg-cad-surface border-b border-cad-border flex items-center select-none relative">
       {/* Logo + Quick Access */}
       <div className="flex items-center gap-2 pr-3">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-5 h-5 ml-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" stroke="#00b4d8" />
-          <path d="M12 12l8-4.5" stroke="#e94560" opacity="0.7" />
-          <path d="M12 12v9" stroke="#e94560" opacity="0.7" />
-          <path d="M12 12L4 7.5" stroke="#e94560" opacity="0.7" />
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className="w-5 h-5 ml-3">
+          <defs>
+            <linearGradient id="menu-bg" x1="0" y1="0" x2="0.3" y2="1">
+              <stop offset="0%" stopColor="#ffc820"/>
+              <stop offset="100%" stopColor="#f5960a"/>
+            </linearGradient>
+          </defs>
+          <rect width="512" height="512" rx="90" fill="url(#menu-bg)"/>
+          <text x="256" y="256" textAnchor="middle" dominantBaseline="central" fontFamily="Impact,Arial Black,sans-serif" fontSize="340" fontWeight="900" fill="#281e0f" letterSpacing="-10">3D</text>
         </svg>
         <div className="w-px h-4 bg-cad-border" />
         <button
           className="flex items-center justify-center w-6 h-6 hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors cursor-default"
-          title="Settings"
+          title={t('menuBar:settings')}
           onClick={onSettingsClick}
         >
           <Settings size={14} />
         </button>
       </div>
 
-      {/* Draggable area with app title */}
+      {/* Draggable area */}
       <div
         data-tauri-drag-region
-        className="flex-1 h-full flex items-center justify-center cursor-default"
+        className="flex-1 h-full cursor-default"
         onDoubleClick={handleDoubleClick}
-      >
-        <span className="text-cad-text-dim text-sm font-medium pointer-events-none">
-          Open 3D Viewer Studio
+      />
+
+      {/* App title - fixed center */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <span className="text-cad-text-dim text-sm font-medium">
+          {t('app:title')}
         </span>
-        <span className="text-cad-text-muted text-[10px] ml-1.5 pointer-events-none">
-          v0.1.0
+        <span className="text-cad-text-muted text-[10px] ml-1.5">
+          {t('app:version')}
         </span>
       </div>
 
-      {/* Window controls */}
+      {/* Send Feedback + Window controls */}
+      <button className="send-feedback-btn" onClick={onFeedbackClick}>
+        {t('feedback:sendFeedback')}
+      </button>
       <WindowControls />
     </div>
   );

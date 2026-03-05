@@ -6,6 +6,7 @@
 
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import { getPref, setPref } from './preferences';
 
 import {
   type ViewerState,
@@ -61,9 +62,11 @@ export const useAppStore = create<AppState>()(
     // UI actions
     setUITheme: (theme: UITheme) => {
       set((s) => { s.uiTheme = theme; });
+      setPref('uiTheme', theme);
     },
     toggleRightPanel: () => {
       set((s) => { s.rightPanelOpen = !s.rightPanelOpen; });
+      setPref('rightPanelOpen', get().rightPanelOpen);
     },
 
     // Viewer actions
@@ -73,3 +76,16 @@ export const useAppStore = create<AppState>()(
     ...createLoadingSlice(set as any, get as any),
   }))
 );
+
+export async function loadPreferences() {
+  const [theme, rightPanelOpen, language] = await Promise.all([
+    getPref<UITheme>('uiTheme', 'dark'),
+    getPref<boolean>('rightPanelOpen', true),
+    getPref<string>('language', ''),
+  ]);
+  useAppStore.setState({ uiTheme: theme, rightPanelOpen });
+  if (language) {
+    const { default: i18next } = await import('../i18n/config');
+    i18next.changeLanguage(language);
+  }
+}

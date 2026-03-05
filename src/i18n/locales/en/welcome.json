@@ -1,0 +1,6 @@
+{
+  "title": "Open 3D Viewer Studio",
+  "subtitle": "Drag a file here or choose an example",
+  "supportedFormats": "Supported formats: GLB, OBJ, STL, FBX, SKP, STEP, DXF, IFC, 3MF, DAE, PLY, PCD, WRL, XYZ, VTK, GCode, KMZ, VOX, AMF, BLEND, IGES and more",
+  "loading": "Loading..."
+}

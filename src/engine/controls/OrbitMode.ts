@@ -15,6 +15,9 @@ export class OrbitMode {
     this.controls.panSpeed = 1;
     this.controls.rotateSpeed = 0.8;
     this.controls.zoomSpeed = 1.2;
+    // Z-up coordinate system
+    camera.up.set(0, 0, 1);
+    this.controls.object.up.set(0, 0, 1);
   }
 
   update() {

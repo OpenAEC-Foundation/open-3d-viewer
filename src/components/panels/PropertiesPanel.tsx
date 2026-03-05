@@ -1,8 +1,10 @@
 import { X } from 'lucide-react';
 import { useAppStore } from '../../state/appStore';
 import { formatPoints } from '../../utils/format';
+import { useTranslation } from '../../i18n/useTranslation';
 
 export function PropertiesPanel() {
+  const { t } = useTranslation('panels');
   const models = useAppStore((s) => s.models);
   const activeModelId = useAppStore((s) => s.activeModelId);
   const setActiveModelId = useAppStore((s) => s.setActiveModelId);
@@ -25,9 +27,9 @@ export function PropertiesPanel() {
     <div className="p-3 text-xs overflow-y-auto h-full">
       {/* Model list */}
       <div className="mb-3">
-        <h3 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mb-2">Models</h3>
+        <h3 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mb-2">{t('properties.models')}</h3>
         {models.length === 0 ? (
-          <div className="text-cad-text-muted italic py-2">No models loaded</div>
+          <div className="text-cad-text-muted italic py-2">{t('properties.noModels')}</div>
         ) : (
           <div className="flex flex-col gap-1">
             {models.map((m) => (
@@ -48,7 +50,7 @@ export function PropertiesPanel() {
                 <span className="text-cad-text-muted flex-shrink-0">{m.format}</span>
                 <button
                   className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-red-500/30 text-cad-text-muted hover:text-red-400 transition-colors"
-                  title="Remove model"
+                  title={t('properties.removeModel')}
                   onClick={(e) => { e.stopPropagation(); handleRemoveModel(m.id); }}
                 >
                   <X size={12} />
@@ -62,22 +64,22 @@ export function PropertiesPanel() {
       {/* Selected object */}
       {selectedObject && (
         <div className="mb-3">
-          <h3 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mb-2">Selected Object</h3>
+          <h3 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mb-2">{t('properties.selectedObject')}</h3>
           <div className="flex flex-col gap-1">
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Name</span>
+              <span className="panel-prop-label">{t('properties.name')}</span>
               <span className="panel-prop-value text-blue-400 text-left flex-1 truncate">{selectedObject.name}</span>
             </div>
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Triangles</span>
+              <span className="panel-prop-label">{t('properties.triangles')}</span>
               <span className="panel-prop-value">{formatPoints(selectedObject.triangles)}</span>
             </div>
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Size</span>
+              <span className="panel-prop-label">{t('properties.size')}</span>
               <span className="panel-prop-value">{selectedObject.sizeX} x {selectedObject.sizeY} x {selectedObject.sizeZ} m</span>
             </div>
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Center</span>
+              <span className="panel-prop-label">{t('properties.center')}</span>
               <span className="panel-prop-value">{selectedObject.centerX}, {selectedObject.centerY}, {selectedObject.centerZ}</span>
             </div>
           </div>
@@ -87,27 +89,27 @@ export function PropertiesPanel() {
       {/* Active model properties */}
       {activeModel && (
         <div>
-          <h3 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mb-2">Properties</h3>
+          <h3 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mb-2">{t('properties.title')}</h3>
           <div className="flex flex-col gap-1">
             <div className="panel-prop-row">
-              <span className="panel-prop-label">File</span>
+              <span className="panel-prop-label">{t('properties.file')}</span>
               <span className="panel-prop-value text-left flex-1 truncate">{activeModel.fileName}</span>
             </div>
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Format</span>
+              <span className="panel-prop-label">{t('properties.format')}</span>
               <span className="panel-prop-value">{activeModel.format}</span>
             </div>
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Vertices</span>
+              <span className="panel-prop-label">{t('properties.vertices')}</span>
               <span className="panel-prop-value">{formatPoints(activeModel.vertices)}</span>
             </div>
             <div className="panel-prop-row">
-              <span className="panel-prop-label">Triangles</span>
+              <span className="panel-prop-label">{t('properties.triangles')}</span>
               <span className="panel-prop-value">{formatPoints(activeModel.triangles)}</span>
             </div>
             {activeModel.loadingProgress < 1.0 && (
               <div className="panel-prop-row">
-                <span className="panel-prop-label">Loading</span>
+                <span className="panel-prop-label">{t('properties.loading')}</span>
                 <span className="panel-prop-value text-yellow-400">
                   {(activeModel.loadingProgress * 100).toFixed(0)}% - {activeModel.loadingPhase}
                 </span>
@@ -115,7 +117,7 @@ export function PropertiesPanel() {
             )}
 
             {/* Bounding box */}
-            <h4 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mt-2 mb-1">Bounds</h4>
+            <h4 className="text-[10px] font-semibold text-cad-text-muted uppercase tracking-wide mt-2 mb-1">{t('properties.bounds')}</h4>
             <div className="panel-prop-row">
               <span className="panel-prop-label">Min X</span>
               <span className="panel-prop-value">{activeModel.bounds.minX.toFixed(2)}</span>

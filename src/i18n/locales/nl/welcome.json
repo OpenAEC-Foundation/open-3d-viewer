@@ -1,0 +1,6 @@
+{
+  "title": "Open 3D Viewer Studio",
+  "subtitle": "Sleep een bestand hierheen of kies een voorbeeld",
+  "supportedFormats": "Ondersteunde formaten: GLB, OBJ, STL, FBX, SKP, STEP, DXF, IFC, 3MF, DAE, PLY, PCD, WRL, XYZ, VTK, GCode, KMZ, VOX, AMF, BLEND, IGES en meer",
+  "loading": "Laden..."
+}

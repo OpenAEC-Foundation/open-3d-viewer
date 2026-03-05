@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { t } from '../../../i18n/useTranslation';
 import type { ThreeJSResult, ProgressCallback } from '../types';
 
 /**
@@ -39,29 +40,22 @@ export async function loadViaRustConverter(
 
   // Guard: Tauri required
   if (!isTauri) {
-    throw new Error(
-      `${formatName} bestanden kunnen alleen geopend worden in de Tauri desktop app.\n` +
-      `Dit formaat vereist de Rust backend converter.\n` +
-      `Start de app met "npm run tauri dev" om ${formatName} bestanden te laden.`
-    );
+    throw new Error(t('loader:rust.tauriRequired', { format: formatName }));
   }
 
-  onProgress?.(0.1, `${formatName} converteren via Rust backend...`);
+  onProgress?.(0.1, t('loader:rust.converting', { format: formatName }));
 
   let invoke: any;
   try {
     const core = await import('@tauri-apps/api/core');
     invoke = core.invoke;
   } catch (err) {
-    throw new Error(
-      `Kan Tauri API niet laden. Draai je de app als Tauri desktop app?\n` +
-      `Fout: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new Error(t('loader:rust.cannotLoadTauri', { error: err instanceof Error ? err.message : String(err) }));
   }
 
   const fileId = crypto.randomUUID();
 
-  onProgress?.(0.2, `${formatName} converteren...`);
+  onProgress?.(0.2, t('loader:rust.convertingShort', { format: formatName }));
 
   let result: ConversionResult;
   try {
@@ -70,20 +64,18 @@ export async function loadViaRustConverter(
       filePath: fileName,
     });
   } catch (err) {
-    throw new Error(
-      `Rust converter fout voor ${formatName}: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new Error(t('loader:rust.converterError', { format: formatName, error: err instanceof Error ? err.message : String(err) }));
   }
 
   if (!result.success) {
-    throw new Error(result.error ?? `${formatName} conversie mislukt (geen details)`);
+    throw new Error(result.error ?? t('loader:rust.conversionFailed', { format: formatName }));
   }
 
   if (result.meshes.length === 0) {
-    throw new Error(`${formatName} conversie leverde geen geometrie op`);
+    throw new Error(t('loader:rust.noGeometry', { format: formatName }));
   }
 
-  onProgress?.(0.7, 'Scene opbouwen...');
+  onProgress?.(0.7, t('loader:rust.buildingScene'));
 
   const group = new THREE.Group();
   let totalVertices = 0;
@@ -121,7 +113,7 @@ export async function loadViaRustConverter(
     totalTriangles += mesh.indices.length > 0 ? mesh.indices.length / 3 : positions.length / 9;
   }
 
-  onProgress?.(0.9, 'Afronden...');
+  onProgress?.(0.9, t('loader:rust.finishing'));
 
   const bounds = {
     min: new THREE.Vector3(result.bounds_min[0], result.bounds_min[1], result.bounds_min[2]),

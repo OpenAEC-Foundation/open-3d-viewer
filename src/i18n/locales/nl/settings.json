@@ -1,0 +1,13 @@
+{
+  "title": "Instellingen",
+  "general": "Algemeen",
+  "theme": "Thema",
+  "language": "Taal",
+  "close": "Sluiten",
+  "themes": {
+    "dark": "Donker",
+    "light": "Licht",
+    "blue": "Blauw",
+    "highContrast": "Hoog contrast"
+  }
+}

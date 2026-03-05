@@ -1,5 +1,6 @@
 import { getLoader, isSupported } from './LoaderRegistry';
 import { StreamReader } from './StreamReader';
+import { t } from '../../i18n/useTranslation';
 import type { LoaderResult, ProgressCallback } from './types';
 
 /**
@@ -17,25 +18,19 @@ export class ModelLoader {
     const ext = this.getExtension(file.name);
 
     if (!isSupported(ext)) {
-      throw new Error(
-        `Niet-ondersteund formaat: ${ext}\n` +
-        `Ondersteunde formaten: GLB, GLTF, OBJ, STL, FBX, PLY, 3DS, DAE, PCD, STEP, STP, SKP, 3MF, X3D, BLEND`
-      );
+      throw new Error(t('loader:unsupportedFormat', { ext }));
     }
 
-    onProgress?.(0, `${file.name} lezen...`);
+    onProgress?.(0, t('loader:readingFile', { fileName: file.name }));
 
     let buffer: ArrayBuffer;
     try {
       buffer = await this.streamReader.readFile(file, (_chunk, offset, total) => {
         const readProgress = StreamReader.progress(offset + _chunk.byteLength, total);
-        onProgress?.(readProgress * 0.15, `Bestand lezen... ${Math.round(readProgress * 100)}%`);
+        onProgress?.(readProgress * 0.15, t('loader:readingProgress', { percent: Math.round(readProgress * 100).toString() }));
       });
     } catch (err) {
-      throw new Error(
-        `Kan bestand niet lezen: ${file.name}\n` +
-        `${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new Error(t('loader:cannotRead', { fileName: file.name, error: err instanceof Error ? err.message : String(err) }));
     }
 
     return this.loadBuffer(buffer, file.name, onProgress);
@@ -51,22 +46,20 @@ export class ModelLoader {
   ): Promise<LoaderResult> {
     const ext = this.getExtension(fileName);
 
-    onProgress?.(0.15, 'Loader ophalen...');
+    onProgress?.(0.15, t('loader:loadingModule'));
 
     let loader;
     try {
       loader = await getLoader(ext);
     } catch (err) {
-      throw new Error(
-        `Kan loader niet laden voor ${ext}: ${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new Error(t('loader:cannotLoadLoader', { ext, error: err instanceof Error ? err.message : String(err) }));
     }
 
     if (!loader) {
-      throw new Error(`Geen loader beschikbaar voor: ${ext}`);
+      throw new Error(t('loader:noLoader', { ext }));
     }
 
-    onProgress?.(0.2, 'Parseren...');
+    onProgress?.(0.2, t('loader:parsing'));
 
     let result: LoaderResult;
     try {
@@ -77,10 +70,10 @@ export class ModelLoader {
       if (msg.includes(fileName) || msg.includes(ext.replace('.', '').toUpperCase())) {
         throw err;
       }
-      throw new Error(`Fout bij laden van ${fileName}: ${msg}`);
+      throw new Error(t('loader:errorLoading', { fileName, error: msg }));
     }
 
-    onProgress?.(1, 'Klaar');
+    onProgress?.(1, t('loader:done'));
     return result;
   }
 

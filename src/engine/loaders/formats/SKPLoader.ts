@@ -25,6 +25,7 @@
 
 import { unzipSync } from 'fflate';
 import * as THREE from 'three';
+import { t } from '../../../i18n/useTranslation';
 import type { ThreeJSResult, ProgressCallback } from '../types';
 
 // ============================================================================
@@ -78,12 +79,12 @@ export async function loadSKP(
 ): Promise<ThreeJSResult> {
   const buf = new Uint8Array(data);
 
-  onProgress?.(0.05, 'SKP header controleren...');
+  onProgress?.(0.05, t('loader:skp.checkingHeader'));
 
   if (!validateSKPHeader(buf)) {
     throw new Error(
-      `Ongeldig SKP bestand: ${fileName}\n` +
-      `Het bestand heeft geen geldig SketchUp header.`
+      `Invalid SKP file: ${fileName}\n` +
+      `The file does not have a valid SketchUp header.`
     );
   }
 
@@ -91,7 +92,7 @@ export async function loadSKP(
   const { major, versionStr } = parseSKPVersion(buf);
   console.log(`SKP: Detected format version ${versionStr} (major=${major})`);
 
-  onProgress?.(0.1, 'ZIP archief uitpakken...');
+  onProgress?.(0.1, t('loader:skp.extractingZip'));
 
   // Find ZIP magic (PK\x03\x04) — offset varies by version string length
   let zipOffset = -1;
@@ -105,13 +106,13 @@ export async function loadSKP(
   if (zipOffset === -1) {
     if (major > 0 && major < 21) {
       throw new Error(
-        `SketchUp formaat ${versionStr} wordt niet ondersteund.\n` +
-        `Dit is een ouder binair formaat (pre-2021). Open het bestand in SketchUp 2021 of nieuwer en sla het opnieuw op.`
+        `SketchUp format ${versionStr} is not supported.\n` +
+        `This is an older binary format (pre-2021). Open the file in SketchUp 2021 or newer and save it again.`
       );
     }
     throw new Error(
-      `Geen ZIP archief gevonden in SKP bestand: ${fileName}\n` +
-      `Het bestand is mogelijk beschadigd of gebruikt een onbekend formaat (${versionStr}).`
+      `No ZIP archive found in SKP file: ${fileName}\n` +
+      `The file may be corrupted or uses an unknown format (${versionStr}).`
     );
   }
 
@@ -122,7 +123,7 @@ export async function loadSKP(
     zipFiles = unzipSync(zipData);
   } catch (err) {
     throw new Error(
-      `Kan SKP ZIP niet uitpakken: ${fileName}\n` +
+      `Cannot extract SKP ZIP: ${fileName}\n` +
       `${err instanceof Error ? err.message : String(err)}`
     );
   }
@@ -130,8 +131,8 @@ export async function loadSKP(
   const modelDat = zipFiles['model.dat'];
   if (!modelDat) {
     throw new Error(
-      `Geen model.dat gevonden in SKP bestand: ${fileName}\n` +
-      `Het bestand is mogelijk beschadigd.`
+      `No model.dat found in SKP file: ${fileName}\n` +
+      `The file may be corrupted.`
     );
   }
 
@@ -143,32 +144,32 @@ export async function loadSKP(
   console.log(`SKP: Entity ID size: ${entityIdSize} bytes`);
 
   // Extract raw geometry data
-  onProgress?.(0.15, 'Vertices scannen...');
+  onProgress?.(0.15, t('loader:skp.scanningVertices'));
   const vertexPositions = extractVertices(md, dv, entityIdSize);
-  onProgress?.(0.25, `${vertexPositions.size} vertices gevonden...`);
+  onProgress?.(0.25, `${vertexPositions.size} vertices found...`);
 
   const edgeVertices = extractEdges(md, entityIdSize);
-  onProgress?.(0.35, `${edgeVertices.size} edges gevonden...`);
+  onProgress?.(0.35, `${edgeVertices.size} edges found...`);
 
   const faces = extractFaces(md, dv, entityIdSize);
-  onProgress?.(0.45, `${faces.length} faces gevonden...`);
+  onProgress?.(0.45, `${faces.length} faces found...`);
 
   // Extract material data
-  onProgress?.(0.5, 'Materialen laden...');
+  onProgress?.(0.5, t('loader:skp.loadingMaterials'));
   const materialEntityMap = extractMaterialEntityMap(md, entityIdSize);
   const materialColors = parseMaterialsFromZip(zipFiles);
-  onProgress?.(0.55, `${materialColors.size} materialen geladen...`);
+  onProgress?.(0.55, `${materialColors.size} materials loaded...`);
 
   // Extract scene hierarchy
-  onProgress?.(0.58, 'Definitieblokken scannen...');
+  onProgress?.(0.58, t('loader:skp.scanningDefinitions'));
   const definitionBlocks = findDefinitionBlocks(md);
-  onProgress?.(0.6, `${definitionBlocks.length} definities gevonden...`);
+  onProgress?.(0.6, `${definitionBlocks.length} definitions found...`);
 
   const instanceTransforms = findInstanceTransforms(md, dv);
-  onProgress?.(0.63, `${instanceTransforms.length} instanties gevonden...`);
+  onProgress?.(0.63, `${instanceTransforms.length} instances found...`);
 
   // Build Three.js scene with definition/instance transforms
-  onProgress?.(0.65, 'Scene opbouwen...');
+  onProgress?.(0.65, t('loader:skp.buildingScene'));
   const result = buildThreeJSScene(
     vertexPositions, edgeVertices, faces,
     materialEntityMap, materialColors, zipFiles,
@@ -176,7 +177,7 @@ export async function loadSKP(
     onProgress
   );
 
-  onProgress?.(1.0, 'Klaar');
+  onProgress?.(1.0, t('loader:done'));
   return result;
 }
 
@@ -307,7 +308,7 @@ function extractVertices(md: Uint8Array, dv: DataView, _idSize: number): Map<num
 // Edge extraction
 // ============================================================================
 
-function extractEdges(md: Uint8Array, idSize: number): Map<number, [number, number]> {
+function extractEdges(md: Uint8Array, _idSize: number): Map<number, [number, number]> {
   const edges = new Map<number, [number, number]>();
 
   for (let i = 0; i < md.length - 20; i++) {
@@ -352,7 +353,7 @@ function extractEdges(md: Uint8Array, idSize: number): Map<number, [number, numb
 // Face extraction (with material references)
 // ============================================================================
 
-function extractFaces(md: Uint8Array, dv: DataView, idSize: number): SKPFace[] {
+function extractFaces(md: Uint8Array, dv: DataView, _idSize: number): SKPFace[] {
   const faces: SKPFace[] = [];
 
   // Edge ref structure: a0_0f(N) { a1_0f(M) { edgeId[M] } a2_0f(1) { reversed } }
@@ -909,7 +910,7 @@ function buildThreeJSScene(
   for (const groupName of groupNames) {
     groupIdx++;
     onProgress?.(0.65 + (groupIdx / groupNames.length) * 0.3,
-      `Groep ${groupIdx}/${groupNames.length}: ${groupName}`);
+      `${t('loader:skp.group')} ${groupIdx}/${groupNames.length}: ${groupName}`);
 
     const groupFaces = worldFacesByGroup.get(groupName)!;
 
@@ -1056,16 +1057,16 @@ function buildFaceGeometryWithTransform(
       const v1 = tv[t];
       const v2 = tv[t + 1];
 
-      // Convert: inches → meters, SketchUp (X,Y,Z) → Three.js (X,Z,-Y)
+      // Convert: inches → meters (SketchUp Z-up matches our Z-up scene)
       positions.push(
-        v0.x * INCHES_TO_METERS, v0.z * INCHES_TO_METERS, -v0.y * INCHES_TO_METERS,
-        v1.x * INCHES_TO_METERS, v1.z * INCHES_TO_METERS, -v1.y * INCHES_TO_METERS,
-        v2.x * INCHES_TO_METERS, v2.z * INCHES_TO_METERS, -v2.y * INCHES_TO_METERS,
+        v0.x * INCHES_TO_METERS, v0.y * INCHES_TO_METERS, v0.z * INCHES_TO_METERS,
+        v1.x * INCHES_TO_METERS, v1.y * INCHES_TO_METERS, v1.z * INCHES_TO_METERS,
+        v2.x * INCHES_TO_METERS, v2.y * INCHES_TO_METERS, v2.z * INCHES_TO_METERS,
       );
       normals.push(
-        nx, nz, -ny,
-        nx, nz, -ny,
-        nx, nz, -ny,
+        nx, ny, nz,
+        nx, ny, nz,
+        nx, ny, nz,
       );
     }
   }

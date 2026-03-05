@@ -8,16 +8,13 @@ import type { CameraMode } from '../../state/slices/viewerSlice';
  * with smooth camera transitions.
  */
 export class ControlsManager {
-  private camera: THREE.PerspectiveCamera;
-
   orbit: OrbitMode;
   walk: WalkMode;
 
   private currentMode: CameraMode = 'orbit';
-  private transitioning = false;
+  private savedOrbitTarget = new THREE.Vector3();
 
   constructor(camera: THREE.PerspectiveCamera, domElement: HTMLElement) {
-    this.camera = camera;
     this.orbit = new OrbitMode(camera, domElement);
     this.walk = new WalkMode(camera, domElement);
     this.walk.setEnabled(false);
@@ -28,26 +25,24 @@ export class ControlsManager {
   }
 
   setMode(mode: CameraMode): void {
-    if (mode === this.currentMode || this.transitioning) return;
+    if (mode === this.currentMode) return;
 
     this.currentMode = mode;
 
     if (mode === 'walk') {
+      // Save orbit target before switching
+      this.savedOrbitTarget.copy(this.orbit.controls.target);
       this.orbit.setEnabled(false);
       this.walk.setEnabled(true);
     } else {
       this.walk.setEnabled(false);
       this.orbit.setEnabled(true);
-      // Sync orbit target to current camera position
-      const forward = new THREE.Vector3();
-      this.camera.getWorldDirection(forward);
-      const target = this.camera.position.clone().add(forward.multiplyScalar(5));
-      this.orbit.setTarget(target);
+      // Restore saved orbit target so zoom/pan speed stays correct
+      this.orbit.setTarget(this.savedOrbitTarget);
     }
   }
 
   setCamera(camera: THREE.Camera): void {
-    this.camera = camera as THREE.PerspectiveCamera;
     this.orbit.controls.object = camera;
     this.walk.setCamera(camera);
   }

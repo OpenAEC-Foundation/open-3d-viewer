@@ -13,6 +13,8 @@ export class SceneManager {
   private originalMaterials = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
   /** Edge line objects added in hiddenline mode */
   private edgeLines: THREE.LineSegments[] = [];
+  /** Previous background color before hidden line mode */
+  private prevBackground: THREE.Color | THREE.Texture | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -129,6 +131,13 @@ export class SceneManager {
     this.modelGroups.delete(id);
   }
 
+  removeAllModels(): void {
+    for (const id of [...this.modelGroups.keys()]) {
+      this.removeModel(id);
+    }
+    this.clearHiddenLine();
+  }
+
   /**
    * Get bounding box of all models.
    */
@@ -181,25 +190,39 @@ export class SceneManager {
    * Apply hidden line mode: white faces for occlusion + dark edge lines.
    */
   private applyHiddenLine(): void {
-    const whiteMat = new THREE.MeshBasicMaterial({
-      color: 0xf8f8f8,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    });
-
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x222222, linewidth: 1 });
+    // Set scene background to white for clean hidden line look
+    this.prevBackground = this.scene.background;
+    this.scene.background = new THREE.Color(0xffffff);
 
     for (const group of this.modelGroups.values()) {
       group.traverse((child) => {
         if (child instanceof THREE.Mesh) {
           // Store original material
           this.originalMaterials.set(child, child.material);
+
+          // Copy clipping planes from original material so section box still works
+          const origMat = Array.isArray(child.material) ? child.material[0] : child.material;
+          const clippingPlanes = origMat?.clippingPlanes || [];
+
+          const whiteMat = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            polygonOffset: true,
+            polygonOffsetFactor: 2,
+            polygonOffsetUnits: 2,
+            clippingPlanes,
+            clipShadows: true,
+            side: THREE.DoubleSide,
+          });
           child.material = whiteMat;
 
           // Create edge geometry (threshold ~15 degrees for crisp edges)
           const edges = new THREE.EdgesGeometry(child.geometry, 15);
-          const lineSegments = new THREE.LineSegments(edges, lineMat);
+          const edgeLineMat = new THREE.LineBasicMaterial({
+            color: 0x000000,
+            linewidth: 1,
+            clippingPlanes,
+          });
+          const lineSegments = new THREE.LineSegments(edges, edgeLineMat);
           lineSegments.name = '__hiddenline_edge';
           lineSegments.renderOrder = 1;
           child.add(lineSegments);
@@ -213,6 +236,12 @@ export class SceneManager {
    * Remove hidden line mode: restore original materials and remove edge lines.
    */
   private clearHiddenLine(): void {
+    // Restore scene background
+    if (this.prevBackground !== null) {
+      this.scene.background = this.prevBackground;
+      this.prevBackground = null;
+    }
+
     // Restore original materials
     for (const [mesh, mat] of this.originalMaterials) {
       mesh.material = mat;

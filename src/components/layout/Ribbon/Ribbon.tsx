@@ -1,7 +1,7 @@
-import { useState, memo } from 'react';
+import { memo } from 'react';
 import {
   Download, Sun, Grid3x3, Lightbulb, RotateCcw,
-  Camera, MoveVertical, Gauge,
+  MoveVertical, Gauge, Home,
 } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, ThemeSelector } from './RibbonComponents';
@@ -9,10 +9,7 @@ import { WireframeIcon, SolidIcon, PointsIcon, HiddenLineIcon, SectionBoxIcon, O
 import { useViewerActions } from './useViewerActions';
 import './Ribbon.css';
 
-type RibbonTab = 'home' | 'view' | 'tools';
-
 export const Ribbon = memo(function Ribbon() {
-  const [activeTab, setActiveTab] = useState<RibbonTab>('home');
   const renderMode = useAppStore((s) => s.renderMode);
   const setRenderMode = useAppStore((s) => s.setRenderMode);
   const showGrid = useAppStore((s) => s.showGrid);
@@ -29,8 +26,14 @@ export const Ribbon = memo(function Ribbon() {
   const setProjectionMode = useAppStore((s) => s.setProjectionMode);
   const sectionBoxEnabled = useAppStore((s) => s.sectionBoxEnabled);
   const setSectionBoxEnabled = useAppStore((s) => s.setSectionBoxEnabled);
+  const sectionCapsEnabled = useAppStore((s) => s.sectionCapsEnabled);
+  const setSectionCapsEnabled = useAppStore((s) => s.setSectionCapsEnabled);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
+  const clearModels = useAppStore((s) => s.clearModels);
+  const measureMode = useAppStore((s) => s.measureMode);
+  const setMeasureMode = useAppStore((s) => s.setMeasureMode);
+  const clearMeasurements = useAppStore((s) => s.clearMeasurements);
 
   const actions = useViewerActions();
 
@@ -46,34 +49,21 @@ export const Ribbon = memo(function Ribbon() {
       onChange={actions.handleFileInputChange}
     />
     <div className="ribbon-container">
-      {/* Tab bar */}
+      {/* Tab label */}
       <div className="ribbon-tabs">
-        <button
-          className={`ribbon-tab ${activeTab === 'home' ? 'active' : ''}`}
-          onClick={() => setActiveTab('home')}
-        >
-          Home
-        </button>
-        <button
-          className={`ribbon-tab ${activeTab === 'view' ? 'active' : ''}`}
-          onClick={() => setActiveTab('view')}
-        >
-          View
-        </button>
-        <button
-          className={`ribbon-tab ${activeTab === 'tools' ? 'active' : ''}`}
-          onClick={() => setActiveTab('tools')}
-        >
-          Tools
-        </button>
+        <button className="ribbon-tab active">Home</button>
       </div>
 
-      {/* Content area */}
       <div className="ribbon-content-container">
-        {/* Home tab */}
-        <div className={`ribbon-content ${activeTab === 'home' ? 'active' : ''}`}>
+        <div className="ribbon-content active">
           <div className="ribbon-groups">
             <RibbonGroup label="File">
+              <RibbonButton
+                icon={<Home size={20} />}
+                label="Start"
+                onClick={() => clearModels()}
+                tooltip="Terug naar startscherm"
+              />
               <RibbonButton
                 icon={<Download size={20} />}
                 label="Import"
@@ -82,32 +72,6 @@ export const Ribbon = memo(function Ribbon() {
               />
             </RibbonGroup>
 
-            <RibbonGroup label="Render Mode">
-              <RibbonButtonStack>
-                <RibbonSmallButton icon={<SolidIcon />} label="Solid" onClick={() => setRenderMode('solid')} active={renderMode === 'solid'} />
-                <RibbonSmallButton icon={<WireframeIcon />} label="Wireframe" onClick={() => setRenderMode('wireframe')} active={renderMode === 'wireframe'} />
-                <RibbonSmallButton icon={<PointsIcon />} label="Points" onClick={() => setRenderMode('points')} active={renderMode === 'points'} />
-                <RibbonSmallButton icon={<HiddenLineIcon />} label="Hidden Line" onClick={() => setRenderMode('hiddenline')} active={renderMode === 'hiddenline'} />
-              </RibbonButtonStack>
-            </RibbonGroup>
-
-            <RibbonGroup label="Display">
-              <RibbonButtonStack>
-                <RibbonSmallButton icon={<Grid3x3 size={14} />} label="Grid" onClick={() => setShowGrid(!showGrid)} active={showGrid} />
-                <RibbonSmallButton icon={<Lightbulb size={14} />} label="Ambient" onClick={() => setAmbientLightEnabled(!ambientLightEnabled)} active={ambientLightEnabled} />
-                <RibbonSmallButton icon={<Sun size={14} />} label="Directional" onClick={() => setDirectionalLightEnabled(!directionalLightEnabled)} active={directionalLightEnabled} />
-              </RibbonButtonStack>
-            </RibbonGroup>
-
-            <RibbonGroup label="Settings">
-              <ThemeSelector currentTheme={uiTheme} onThemeChange={setUITheme} />
-            </RibbonGroup>
-          </div>
-        </div>
-
-        {/* View tab */}
-        <div className={`ribbon-content ${activeTab === 'view' ? 'active' : ''}`}>
-          <div className="ribbon-groups">
             <RibbonGroup label="Navigation">
               <RibbonButtonStack>
                 <RibbonSmallButton icon={<OrbitIcon />} label="Orbit" onClick={() => setCameraMode('orbit')} active={cameraMode === 'orbit'} />
@@ -128,6 +92,23 @@ export const Ribbon = memo(function Ribbon() {
               )}
             </RibbonGroup>
 
+            <RibbonGroup label="Render Mode">
+              <RibbonButtonStack>
+                <RibbonSmallButton icon={<SolidIcon />} label="Solid" onClick={() => setRenderMode('solid')} active={renderMode === 'solid'} />
+                <RibbonSmallButton icon={<WireframeIcon />} label="Wireframe" onClick={() => setRenderMode('wireframe')} active={renderMode === 'wireframe'} />
+                <RibbonSmallButton icon={<PointsIcon />} label="Points" onClick={() => setRenderMode('points')} active={renderMode === 'points'} />
+                <RibbonSmallButton icon={<HiddenLineIcon />} label="Hidden Line" onClick={() => setRenderMode('hiddenline')} active={renderMode === 'hiddenline'} />
+              </RibbonButtonStack>
+            </RibbonGroup>
+
+            <RibbonGroup label="Display">
+              <RibbonButtonStack>
+                <RibbonSmallButton icon={<Grid3x3 size={14} />} label="Grid" onClick={() => setShowGrid(!showGrid)} active={showGrid} />
+                <RibbonSmallButton icon={<Lightbulb size={14} />} label="Ambient" onClick={() => setAmbientLightEnabled(!ambientLightEnabled)} active={ambientLightEnabled} />
+                <RibbonSmallButton icon={<Sun size={14} />} label="Directional" onClick={() => setDirectionalLightEnabled(!directionalLightEnabled)} active={directionalLightEnabled} />
+              </RibbonButtonStack>
+            </RibbonGroup>
+
             <RibbonGroup label="Section Box">
               <RibbonButton
                 icon={<SectionBoxIcon />}
@@ -145,50 +126,44 @@ export const Ribbon = memo(function Ribbon() {
                 disabled={!sectionBoxEnabled}
                 tooltip="Reset section box to model bounds"
               />
+              <RibbonButton
+                icon={<SectionBoxIcon />}
+                label="Caps"
+                onClick={() => setSectionCapsEnabled(!sectionCapsEnabled)}
+                active={sectionCapsEnabled}
+                disabled={!sectionBoxEnabled}
+                tooltip="Toon zwarte doorsnede-vulling"
+              />
             </RibbonGroup>
 
-            <RibbonGroup label="Camera">
-              <RibbonButtonStack>
-                <RibbonSmallButton icon={<Camera size={14} />} label="Front" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'front' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Back" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'back' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Left" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'left' }))} />
-              </RibbonButtonStack>
-              <RibbonButtonStack>
-                <RibbonSmallButton icon={<Camera size={14} />} label="Right" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'right' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Top" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'top' }))} />
-                <RibbonSmallButton icon={<Camera size={14} />} label="Bottom" onClick={() => window.dispatchEvent(new CustomEvent('open3d:camera', { detail: 'bottom' }))} />
-              </RibbonButtonStack>
-            </RibbonGroup>
-          </div>
-        </div>
-
-        {/* Tools tab */}
-        <div className={`ribbon-content ${activeTab === 'tools' ? 'active' : ''}`}>
-          <div className="ribbon-groups">
             <RibbonGroup label="Measure">
               <RibbonButton
                 icon={<MoveVertical size={20} />}
-                label="Distance"
-                onClick={() => {}}
-                disabled
-                tooltip="Measure distance (coming soon)"
+                label="Point"
+                onClick={() => setMeasureMode(measureMode === 'point' ? 'off' : 'point')}
+                active={measureMode === 'point'}
+                tooltip="Punt-tot-punt afstand meten"
               />
               <RibbonButton
                 icon={<Gauge size={20} />}
-                label="Angle"
-                onClick={() => {}}
-                disabled
-                tooltip="Measure angle (coming soon)"
+                label="Face"
+                onClick={() => setMeasureMode(measureMode === 'face' ? 'off' : 'face')}
+                active={measureMode === 'face'}
+                tooltip="Vlak-tot-vlak afstand meten"
+              />
+              <RibbonButton
+                icon={<RotateCcw size={20} />}
+                label="Wissen"
+                onClick={() => {
+                  clearMeasurements();
+                  window.dispatchEvent(new CustomEvent('open3d:clear-measurements'));
+                }}
+                tooltip="Alle metingen wissen"
               />
             </RibbonGroup>
 
-            <RibbonGroup label="Info">
-              <RibbonButton
-                icon={<Camera size={20} />}
-                label="Statistics"
-                onClick={() => window.dispatchEvent(new CustomEvent('open3d:show-stats'))}
-                tooltip="Show model statistics"
-              />
+            <RibbonGroup label="Settings">
+              <ThemeSelector currentTheme={uiTheme} onThemeChange={setUITheme} />
             </RibbonGroup>
           </div>
         </div>

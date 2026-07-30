@@ -231,3 +231,20 @@
 .settings-footer-close:hover {
   background: var(--theme-hover);
 }
+
+/* ── Unit Select ── */
+.settings-unit-select {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--theme-text);
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 0;
+  cursor: default;
+  outline: none;
+}
+
+.settings-unit-select:hover {
+  border-color: var(--theme-accent);
+}

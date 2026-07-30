@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { MenuBar } from './components/layout/MenuBar/MenuBar';
 import { Ribbon } from './components/layout/Ribbon/Ribbon';
 import { StatusBar } from './components/layout/StatusBar/StatusBar';
@@ -16,33 +16,22 @@ function App() {
     document.documentElement.setAttribute('data-theme', uiTheme);
   }, [uiTheme]);
 
-  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
-  const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const [showSettings, setShowSettings] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
 
-  // Right panel resizing
-  const [rightPanelWidth, setRightPanelWidth] = useState(256);
-  const isResizingRight = useRef(false);
-
   // Left panel resizing
-  const [leftPanelWidth, setLeftPanelWidth] = useState(240);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(260);
   const isResizingLeft = useRef(false);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (isResizingRight.current) {
-        const newWidth = Math.max(180, Math.min(500, window.innerWidth - e.clientX));
-        setRightPanelWidth(newWidth);
-      }
       if (isResizingLeft.current) {
-        const newWidth = Math.max(180, Math.min(400, e.clientX));
+        const newWidth = Math.max(200, Math.min(450, e.clientX));
         setLeftPanelWidth(newWidth);
       }
     };
     const handleMouseUp = () => {
-      if (isResizingRight.current || isResizingLeft.current) {
-        isResizingRight.current = false;
+      if (isResizingLeft.current) {
         isResizingLeft.current = false;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
@@ -87,23 +76,30 @@ function App() {
 
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Panel - Layers */}
+        {/* Left Panel - Properties + Layers */}
         {leftPanelOpen ? (
           <div
             className="bg-cad-surface border-r border-cad-border flex flex-col overflow-hidden relative"
-            style={{ width: leftPanelWidth, minWidth: 180, maxWidth: 400 }}
+            style={{ width: leftPanelWidth, minWidth: 200, maxWidth: 450 }}
           >
             {/* Panel header */}
             <div className="flex items-center justify-between px-3 h-7 min-h-[28px] select-none border-b border-cad-border bg-cad-surface">
-              <span className="text-xs font-semibold text-cad-text">Layers</span>
+              <span className="text-xs font-semibold text-cad-text">Properties</span>
               <button
                 type="button"
                 onClick={() => setLeftPanelOpen(false)}
                 className="flex items-center justify-center w-5 h-5 rounded hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-                title="Collapse left panel"
+                title="Collapse panel"
               >
                 <PanelLeftClose size={14} />
               </button>
+            </div>
+            <div className="overflow-y-auto" style={{ maxHeight: '40%' }}>
+              <PropertiesPanel />
+            </div>
+            {/* Layers section */}
+            <div className="flex items-center px-3 h-7 min-h-[28px] select-none border-y border-cad-border bg-cad-surface">
+              <span className="text-xs font-semibold text-cad-text">Layers</span>
             </div>
             <div className="flex-1 overflow-y-auto">
               <LayerManager />
@@ -125,7 +121,7 @@ function App() {
               type="button"
               onClick={() => setLeftPanelOpen(true)}
               className="flex items-center justify-center w-full h-7 hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-              title="Expand layers panel"
+              title="Expand panel"
             >
               <PanelLeftOpen size={16} />
             </button>
@@ -138,51 +134,6 @@ function App() {
             <Viewer3D />
           </div>
         </div>
-
-        {/* Right Panel - Properties */}
-        {rightPanelOpen ? (
-          <div
-            className="bg-cad-surface border-l border-cad-border flex flex-col overflow-hidden relative"
-            style={{ width: rightPanelWidth, minWidth: 180, maxWidth: 500 }}
-          >
-            {/* Resize handle */}
-            <div
-              className="absolute top-0 left-0 w-px h-full cursor-col-resize hover:bg-cad-accent z-10"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                isResizingRight.current = true;
-                document.body.style.cursor = 'col-resize';
-                document.body.style.userSelect = 'none';
-              }}
-            />
-            {/* Panel header */}
-            <div className="flex items-center justify-between px-3 h-7 min-h-[28px] select-none border-b border-cad-border bg-cad-surface">
-              <span className="text-xs font-semibold text-cad-text">Properties</span>
-              <button
-                type="button"
-                onClick={toggleRightPanel}
-                className="flex items-center justify-center w-5 h-5 rounded hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-                title="Collapse right panel"
-              >
-                <PanelRightClose size={14} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <PropertiesPanel />
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col bg-cad-surface border-l border-cad-border" style={{ width: 28 }}>
-            <button
-              type="button"
-              onClick={toggleRightPanel}
-              className="flex items-center justify-center w-full h-7 hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors"
-              title="Expand right panel"
-            >
-              <PanelRightOpen size={16} />
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Bottom Status Bar */}

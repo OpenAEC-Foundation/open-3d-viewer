@@ -153,8 +153,14 @@ registerLoader(['.vox'], async () => {
   return loadVOX;
 });
 
-// Additional Assimp-supported formats (DXF, IGES, IFC, BLEND, X3D, LWO, etc.)
-registerLoader(['.x3d', '.blend', '.lwo', '.x', '.dxf', '.igs', '.iges', '.ifc', '.off'], async () => {
+// IFC (native web-ifc WASM parser)
+registerLoader(['.ifc'], async () => {
+  const { loadIFC } = await import('./formats/IFCNativeLoader');
+  return loadIFC;
+});
+
+// Additional Assimp-supported formats (DXF, IGES, BLEND, X3D, LWO, etc.)
+registerLoader(['.x3d', '.blend', '.lwo', '.x', '.dxf', '.igs', '.iges', '.off'], async () => {
   const { loadWithAssimp } = await import('./formats/AssimpLoader');
   return loadWithAssimp;
 });

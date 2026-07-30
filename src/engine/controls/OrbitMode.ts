@@ -14,7 +14,13 @@ export class OrbitMode {
     this.controls.enablePan = true;
     this.controls.panSpeed = 1;
     this.controls.rotateSpeed = 0.8;
-    this.controls.zoomSpeed = 1.2;
+    this.controls.zoomSpeed = 3.0;
+    // Left click = orbit, middle = pan, right = pan
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.PAN,
+    };
   }
 
   update() {

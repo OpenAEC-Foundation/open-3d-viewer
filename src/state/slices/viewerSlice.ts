@@ -27,6 +27,16 @@ export interface ModelEntry {
 export type CameraMode = 'orbit' | 'walk';
 export type RenderMode = 'solid' | 'wireframe' | 'points' | 'hiddenline';
 export type ProjectionMode = 'perspective' | 'orthographic';
+export type MeasureMode = 'off' | 'point' | 'face';
+
+export interface MeasurePoint { x: number; y: number; z: number }
+
+export interface Measurement {
+  id: string;
+  type: 'point' | 'face';
+  points: MeasurePoint[];
+  distance: number;
+}
 
 // ============================================================================
 // State Interface
@@ -40,6 +50,7 @@ export interface ViewerState {
   projectionMode: ProjectionMode;
   walkSpeed: number;
   sectionBoxEnabled: boolean;
+  sectionCapsEnabled: boolean;
   sectionBoxBounds: {
     minX: number; minY: number; minZ: number;
     maxX: number; maxY: number; maxZ: number;
@@ -64,6 +75,12 @@ export interface ViewerState {
   layerVisibilityHistory: boolean[][];
   /** Redo stack for layer visibility */
   layerVisibilityFuture: boolean[][];
+  /** Measurement mode */
+  measureMode: MeasureMode;
+  /** Active measurement points (building current measurement) */
+  measurePoints: MeasurePoint[];
+  /** Completed measurements */
+  measurements: Measurement[];
 }
 
 // ============================================================================
@@ -82,6 +99,7 @@ export interface ViewerActions {
   setProjectionMode: (mode: ProjectionMode) => void;
   setWalkSpeed: (speed: number) => void;
   setSectionBoxEnabled: (enabled: boolean) => void;
+  setSectionCapsEnabled: (enabled: boolean) => void;
   setSectionBoxBounds: (bounds: ViewerState['sectionBoxBounds']) => void;
   setShowGrid: (show: boolean) => void;
   setAmbientLightEnabled: (enabled: boolean) => void;
@@ -94,6 +112,13 @@ export interface ViewerActions {
   setMultipleLayersVisible: (updates: { name: string; visible: boolean }[]) => void;
   undoLayerVisibility: () => void;
   redoLayerVisibility: () => void;
+  clearModels: () => void;
+  setMeasureMode: (mode: MeasureMode) => void;
+  addMeasurePoint: (point: MeasurePoint) => void;
+  clearMeasurePoints: () => void;
+  addMeasurement: (m: Measurement) => void;
+  removeMeasurement: (id: string) => void;
+  clearMeasurements: () => void;
 }
 
 export type ViewerSlice = ViewerState & ViewerActions;
@@ -110,8 +135,9 @@ export const initialViewerState: ViewerState = {
   projectionMode: 'perspective',
   walkSpeed: 5,
   sectionBoxEnabled: false,
+  sectionCapsEnabled: true,
   sectionBoxBounds: null,
-  showGrid: true,
+  showGrid: false,
   ambientLightEnabled: true,
   directionalLightEnabled: true,
   rendererType: 'webgl',
@@ -120,6 +146,9 @@ export const initialViewerState: ViewerState = {
   layers: [],
   layerVisibilityHistory: [],
   layerVisibilityFuture: [],
+  measureMode: 'off',
+  measurePoints: [],
+  measurements: [],
 };
 
 // ============================================================================
@@ -200,6 +229,10 @@ export const createViewerSlice = (
 
   setSectionBoxEnabled: (enabled: boolean) => {
     set((s) => { s.sectionBoxEnabled = enabled; });
+  },
+
+  setSectionCapsEnabled: (enabled: boolean) => {
+    set((s) => { s.sectionCapsEnabled = enabled; });
   },
 
   setSectionBoxBounds: (bounds: ViewerState['sectionBoxBounds']) => {
@@ -289,5 +322,47 @@ export const createViewerSlice = (
         s.layers[i].visible = snapshot[i];
       }
     });
+  },
+
+  clearModels: () => {
+    set((s) => {
+      s.models = [];
+      s.activeModelId = null;
+      s.layers = [];
+      s.layerVisibilityHistory = [];
+      s.layerVisibilityFuture = [];
+      s.measureMode = 'off';
+      s.measurePoints = [];
+      s.measurements = [];
+    });
+    // Notify 3D viewer to clear scene
+    window.dispatchEvent(new CustomEvent('open3d:clear-scene'));
+  },
+
+  setMeasureMode: (mode: MeasureMode) => {
+    set((s) => {
+      s.measureMode = mode;
+      s.measurePoints = [];
+    });
+  },
+
+  addMeasurePoint: (point: MeasurePoint) => {
+    set((s) => { s.measurePoints.push(point); });
+  },
+
+  clearMeasurePoints: () => {
+    set((s) => { s.measurePoints = []; });
+  },
+
+  addMeasurement: (m: Measurement) => {
+    set((s) => { s.measurements.push(m); });
+  },
+
+  removeMeasurement: (id: string) => {
+    set((s) => { s.measurements = s.measurements.filter((m) => m.id !== id); });
+  },
+
+  clearMeasurements: () => {
+    set((s) => { s.measurements = []; });
   },
 });

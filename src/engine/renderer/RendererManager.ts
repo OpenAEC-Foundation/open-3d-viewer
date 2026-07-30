@@ -23,6 +23,7 @@ export class RendererManager {
       canvas,
       antialias: true,
       alpha: false,
+      stencil: true,
       powerPreference: 'high-performance',
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));

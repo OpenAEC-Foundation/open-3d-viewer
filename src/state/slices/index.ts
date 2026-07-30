@@ -6,6 +6,9 @@ export {
   type CameraMode,
   type RenderMode,
   type ProjectionMode,
+  type MeasureMode,
+  type MeasurePoint,
+  type Measurement,
   initialViewerState,
   createViewerSlice,
 } from './viewerSlice';

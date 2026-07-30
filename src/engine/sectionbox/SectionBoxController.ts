@@ -136,9 +136,12 @@ export class SectionBoxController {
     this.camera.getWorldDirection(cameraDir);
     this.dragPlane.setFromNormalAndCoplanarPoint(cameraDir, hitPoint);
 
-    // Store the initial face position along its normal to compute offset
+    // Store the initial face position along its axis to compute offset.
+    // Use the positive axis direction (not the face outward normal) so that
+    // dragging visually outward always enlarges the box.
     const facePos = this.getFacePosition(face.id);
-    const projectedHit = hitPoint.dot(face.normal);
+    const axis = this.getFaceAxis(face.id);
+    const projectedHit = hitPoint.dot(axis);
     this.dragOffset = facePos - projectedHit;
 
     this.onDragStart?.();
@@ -161,8 +164,9 @@ export class SectionBoxController {
     const face = this.gizmo.getFaceById(faceId);
     if (!face) return;
 
-    // Project world point onto the face normal axis
-    const newPos = worldPoint.dot(face.normal) + this.dragOffset;
+    // Project world point onto the positive axis (not outward normal)
+    const axis = this.getFaceAxis(faceId);
+    const newPos = worldPoint.dot(axis) + this.dragOffset;
 
     // Clamp to prevent box collapse
     const min = this.sectionBox.min.clone();
@@ -187,6 +191,15 @@ export class SectionBoxController {
     // Re-apply clipping to scene
     this.sectionBox.applyToScene();
     this.onBoundsChange?.();
+  }
+
+  /** Get the positive axis vector for a face (always points in the + direction). */
+  private getFaceAxis(faceId: FaceId): THREE.Vector3 {
+    switch (faceId) {
+      case '+x': case '-x': return new THREE.Vector3(1, 0, 0);
+      case '+y': case '-y': return new THREE.Vector3(0, 1, 0);
+      case '+z': case '-z': return new THREE.Vector3(0, 0, 1);
+    }
   }
 
   private getFacePosition(faceId: FaceId): number {

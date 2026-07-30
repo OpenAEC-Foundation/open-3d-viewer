@@ -31,19 +31,24 @@ export const UI_THEMES: { id: UITheme; label: string }[] = [
   { id: 'highContrast', label: 'High Contrast' },
 ];
 
+export type DisplayUnit = 'mm' | 'cm' | 'm';
+
 export interface UIState {
   uiTheme: UITheme;
   rightPanelOpen: boolean;
+  displayUnit: DisplayUnit;
 }
 
 export interface UIActions {
   setUITheme: (theme: UITheme) => void;
   toggleRightPanel: () => void;
+  setDisplayUnit: (unit: DisplayUnit) => void;
 }
 
 const initialUIState: UIState = {
-  uiTheme: 'dark',
+  uiTheme: 'light',
   rightPanelOpen: true,
+  displayUnit: 'mm',
 };
 
 // ============================================================================
@@ -64,6 +69,9 @@ export const useAppStore = create<AppState>()(
     },
     toggleRightPanel: () => {
       set((s) => { s.rightPanelOpen = !s.rightPanelOpen; });
+    },
+    setDisplayUnit: (unit: DisplayUnit) => {
+      set((s) => { s.displayUnit = unit; });
     },
 
     // Viewer actions

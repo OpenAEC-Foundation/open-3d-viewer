@@ -25,6 +25,7 @@
 
 import { unzipSync } from 'fflate';
 import * as THREE from 'three';
+import { Earcut } from 'three/src/extras/Earcut.js';
 import type { ThreeJSResult, ProgressCallback } from '../types';
 
 // ============================================================================
@@ -55,6 +56,7 @@ interface SKPMaterialInfo {
 
 interface DefinitionBlock {
   name: string;
+  nameOffset: number; // Position of the 7e_15 name tag in the binary
   dataStart: number;
   dataEnd: number;
 }
@@ -63,6 +65,8 @@ interface InstanceTransform {
   defName: string;
   transform: number[]; // 13 doubles: [m0..m8, tx, ty, tz, 1.0]
   offset: number;
+  parentDef?: string | null; // Set if nested inside another definition
+  isDefinitionHeader?: boolean; // True = template at origin, not a real placement
 }
 
 const INCHES_TO_METERS = 0.0254;
@@ -575,6 +579,7 @@ function findDefinitionBlocks(md: Uint8Array): DefinitionBlock[] {
 
     blocks.push({
       name: bestDef?.name ?? '__unassigned__',
+      nameOffset: bestDef?.offset ?? gb.offset,
       dataStart: gb.dataStart,
       dataEnd: gb.dataEnd,
     });
@@ -599,64 +604,266 @@ function findDefinitionBlocks(md: Uint8Array): DefinitionBlock[] {
 }
 
 // ============================================================================
+// Entity ID helpers for instance → definition resolution
+// ============================================================================
+
+/** Convert a byte sequence to a hex string ID. */
+function hexId(md: Uint8Array, offset: number, len: number): string {
+  let s = '';
+  for (let i = 0; i < len; i++) {
+    s += md[offset + i].toString(16).padStart(2, '0');
+  }
+  return s;
+}
+
+/**
+ * Build a map of child entity IDs → definition names.
+ * For each 7e_15 definition name, scans backward for 8e_13 tags (child entity ID lists)
+ * and forward into 85_15 blocks for de_05 entity IDs.
+ * These IDs are referenced by de_05 tags in instance data (64_19/4c_1d blocks).
+ */
+function buildChildIdToDefNameMap(md: Uint8Array): Map<string, string> {
+  const map = new Map<string, string>();
+
+  for (let i = 0; i < md.length - 10; i++) {
+    if (md[i] !== 0x7e || md[i + 1] !== 0x15) continue;
+    const len = md[i + 2] | (md[i + 3] << 8) | (md[i + 4] << 16) | (md[i + 5] << 24);
+    if (len <= 0 || len >= 300 || i + 6 + len > md.length) continue;
+    const name = new TextDecoder('utf-8')
+      .decode(md.subarray(i + 6, i + 6 + len))
+      .replace(/\0/g, '').trim();
+    if (!name) continue;
+
+    // Scan backward for 8e_13 child entity ID list
+    for (let j = i - 1; j >= Math.max(0, i - 300); j--) {
+      if (md[j] === 0x8e && md[j + 1] === 0x13) {
+        const l = md[j + 2] | (md[j + 3] << 8) | (md[j + 4] << 16) | (md[j + 5] << 24);
+        if (l > 0 && l < 500 && j + 6 + l <= md.length) {
+          // Parse: prefix byte (= size in bytes) followed by entity ID bytes
+          let p = 0;
+          while (p < l) {
+            const sz = md[j + 6 + p];
+            if (sz >= 1 && sz <= 4 && p + 1 + sz <= l) {
+              map.set(hexId(md, j + 6 + p + 1, sz), name);
+              p += 1 + sz;
+            } else {
+              break;
+            }
+          }
+        }
+        break;
+      }
+      if ((md[j] === 0x66 && md[j + 1] === 0x19) || (md[j] === 0x7c && md[j + 1] === 0x15)) break;
+    }
+
+    // Scan forward into 85_15 for additional de_05 entity IDs
+    const afterName = i + 6 + len;
+    for (let j = afterName; j < Math.min(afterName + 400, md.length - 6); j++) {
+      if (md[j] === 0x85 && md[j + 1] === 0x15) {
+        const l = md[j + 2] | (md[j + 3] << 8) | (md[j + 4] << 16) | (md[j + 5] << 24);
+        if (l > 0 && l < 10000 && j + 6 + l <= md.length) {
+          for (let k = 0; k < l - 6; k++) {
+            if (md[j + 6 + k] === 0xde && md[j + 6 + k + 1] === 0x05) {
+              const el = md[j + 6 + k + 2] | (md[j + 6 + k + 3] << 8) |
+                         (md[j + 6 + k + 4] << 16) | (md[j + 6 + k + 5] << 24);
+              if (el >= 1 && el <= 4 && k + 6 + el <= l) {
+                const eid = hexId(md, j + 6 + k + 6, el);
+                if (!map.has(eid)) map.set(eid, name);
+              }
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Extract de_05 entity ID from instance reference data (64_19 or 4c_1d block).
+ * Returns the hex ID string, or null if not found.
+ */
+function extractDe05FromInstance(md: Uint8Array, scanPos: number): string | null {
+  // Try: if next tag is 64_19 or 4c_1d, parse its data for de_05
+  if (scanPos + 6 <= md.length) {
+    const t0 = md[scanPos], t1 = md[scanPos + 1];
+    if ((t0 === 0x64 && t1 === 0x19) || (t0 === 0x4c && t1 === 0x1d)) {
+      const dataLen = md[scanPos + 2] | (md[scanPos + 3] << 8) |
+                      (md[scanPos + 4] << 16) | (md[scanPos + 5] << 24);
+      if (dataLen > 0 && dataLen < 10000 && scanPos + 6 + dataLen <= md.length) {
+        const end = scanPos + 6 + dataLen;
+        for (let k = scanPos + 6; k < end - 6; k++) {
+          if (md[k] === 0xde && md[k + 1] === 0x05) {
+            const el = md[k + 2] | (md[k + 3] << 8) | (md[k + 4] << 16) | (md[k + 5] << 24);
+            if (el >= 1 && el <= 4 && k + 6 + el <= end) {
+              return hexId(md, k + 6, el);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Fallback: scan forward up to 600 bytes for de_05
+  const searchEnd = Math.min(scanPos + 600, md.length - 6);
+  for (let j = scanPos; j < searchEnd; j++) {
+    if (md[j] === 0xde && md[j + 1] === 0x05) {
+      const el = md[j + 2] | (md[j + 3] << 8) | (md[j + 4] << 16) | (md[j + 5] << 24);
+      if (el >= 1 && el <= 4 && j + 6 + el <= md.length) {
+        return hexId(md, j + 6, el);
+      }
+    }
+    // Stop at next 66_19 instance
+    if (md[j] === 0x66 && md[j + 1] === 0x19) {
+      const nl = md[j + 2] | (md[j + 3] << 8) | (md[j + 4] << 16) | (md[j + 5] << 24);
+      if (nl === 104) break;
+    }
+  }
+
+  return null;
+}
+
+// ============================================================================
 // Instance transform extraction (66_19 tags = component placement transforms)
+//
+// Two-phase approach:
+// Phase 1: Scan all 66_19 instances, read 67_19 entity ID, classify as
+//          definition-header (9e_13) or reference instance (64_19/4c_1d).
+// Phase 2: Resolve names using entity ID mapping and de_05 → child ID mapping.
 // ============================================================================
 
 function findInstanceTransforms(md: Uint8Array, dv: DataView): InstanceTransform[] {
-  const instances: InstanceTransform[] = [];
+  // Phase 1: Build child entity ID → definition name map from 8e_13 tags in definition headers
+  const childIdToDefName = buildChildIdToDefNameMap(md);
+  console.log(`SKP: Built child-ID → definition map: ${childIdToDefName.size} entries`);
+
+  // Phase 2: Scan all 66_19 instances, read 67_19 entity ID, classify each
+  const rawInstances: {
+    offset: number;
+    entityId: string | null;
+    transform: number[];
+    isDefHeader: boolean;
+    defName: string | null;
+    de05Id: string | null;
+  }[] = [];
 
   for (let i = 0; i < md.length - 110; i++) {
-    if (md[i] === 0x66 && md[i + 1] === 0x19) {
-      const len = md[i + 2] | (md[i + 3] << 8) | (md[i + 4] << 16) | (md[i + 5] << 24);
-      if (len !== 104) continue;
+    if (md[i] !== 0x66 || md[i + 1] !== 0x19) continue;
+    const len = md[i + 2] | (md[i + 3] << 8) | (md[i + 4] << 16) | (md[i + 5] << 24);
+    if (len !== 104) continue;
 
-      // Read 13 float64s
-      const vals: number[] = [];
-      let valid = true;
-      for (let k = 0; k < 13; k++) {
-        const v = dv.getFloat64(i + 6 + k * 8, true);
-        if (!isFinite(v)) { valid = false; break; }
-        vals.push(v);
+    // Read 13 float64s
+    const vals: number[] = [];
+    let valid = true;
+    for (let k = 0; k < 13; k++) {
+      const v = dv.getFloat64(i + 6 + k * 8, true);
+      if (!isFinite(v)) { valid = false; break; }
+      vals.push(v);
+    }
+    if (!valid || Math.abs(vals[12] - 1.0) > 0.01) continue;
+
+    let scanPos = i + 110;
+
+    // Read 67_19 entity ID (always present right after 66_19)
+    let entityId: string | null = null;
+    if (scanPos + 6 <= md.length && md[scanPos] === 0x67 && md[scanPos + 1] === 0x19) {
+      const l = md[scanPos + 2] | (md[scanPos + 3] << 8) | (md[scanPos + 4] << 16) | (md[scanPos + 5] << 24);
+      if (l > 0 && l <= 8) {
+        entityId = hexId(md, scanPos + 6, l);
+        scanPos += 6 + l;
       }
-      if (!valid) continue;
-      // Last value should be 1.0 (homogeneous coordinate sentinel)
-      if (Math.abs(vals[12] - 1.0) > 0.01) continue;
+    }
 
-      // Find definition name by scanning forward for 7e_15
-      let defName = '';
-      for (let j = i + 110; j < Math.min(i + 3000, md.length - 10); j++) {
+    // Skip 68_19 UUID
+    if (scanPos + 6 <= md.length && md[scanPos] === 0x68 && md[scanPos + 1] === 0x19) {
+      const l = md[scanPos + 2] | (md[scanPos + 3] << 8) | (md[scanPos + 4] << 16) | (md[scanPos + 5] << 24);
+      scanPos += 6 + l;
+    }
+
+    // Classify by next tag
+    let isDefHeader = false;
+    let defName: string | null = null;
+    let de05Id: string | null = null;
+
+    if (scanPos + 2 <= md.length && md[scanPos] === 0x9e && md[scanPos + 1] === 0x13) {
+      // Definition-header instance (template) — get name from 7e_15
+      isDefHeader = true;
+      for (let j = scanPos; j < Math.min(scanPos + 300, md.length - 10); j++) {
         if (md[j] === 0x7e && md[j + 1] === 0x15) {
           const nlen = md[j + 2] | (md[j + 3] << 8) | (md[j + 4] << 16) | (md[j + 5] << 24);
           if (nlen > 0 && nlen < 300 && j + 6 + nlen <= md.length) {
             defName = new TextDecoder('utf-8')
               .decode(md.subarray(j + 6, j + 6 + nlen))
-              .replace(/\0/g, '')
-              .trim();
+              .replace(/\0/g, '').trim();
             break;
           }
         }
-        // Stop if we hit another 66_19 (next instance)
-        if (md[j] === 0x66 && md[j + 1] === 0x19) {
-          const nextLen = md[j + 2] | (md[j + 3] << 8) | (md[j + 4] << 16) | (md[j + 5] << 24);
-          if (nextLen === 104) break;
-        }
       }
+    } else {
+      // Reference instance (actual placement) — extract de_05 from 64_19/4c_1d data
+      de05Id = extractDe05FromInstance(md, scanPos);
+    }
 
-      if (!defName) continue;
+    rawInstances.push({ offset: i, entityId, transform: vals, isDefHeader, defName, de05Id });
+  }
 
-      instances.push({ defName, transform: vals, offset: i });
+  // Phase 3: Build entity ID → name map from definition-header instances
+  const entityIdToName = new Map<string, string>();
+  for (const inst of rawInstances) {
+    if (inst.isDefHeader && inst.entityId && inst.defName) {
+      entityIdToName.set(inst.entityId, inst.defName);
     }
   }
 
+  // Phase 4: Resolve names for all instances
+  const instances: InstanceTransform[] = [];
+  let resolvedDefHeader = 0, resolvedEntityId = 0, resolvedDe05 = 0, skippedNoName = 0;
+
+  for (const raw of rawInstances) {
+    let name = raw.defName;
+
+    // Try entity ID → name (same entity ID as a def-header instance)
+    if (!name && raw.entityId) {
+      name = entityIdToName.get(raw.entityId) ?? null;
+      if (name) resolvedEntityId++;
+    }
+
+    // Try de_05 → child ID → definition name
+    if (!name && raw.de05Id) {
+      name = childIdToDefName.get(raw.de05Id) ?? null;
+      if (name) resolvedDe05++;
+    }
+
+    if (!name) {
+      skippedNoName++;
+      continue;
+    }
+
+    if (raw.isDefHeader) resolvedDefHeader++;
+
+    instances.push({
+      defName: name,
+      transform: raw.transform,
+      offset: raw.offset,
+      isDefinitionHeader: raw.isDefHeader,
+    });
+  }
+
   // Log summary
+  const placements = instances.filter(i => !i.isDefinitionHeader);
+  const templates = instances.filter(i => i.isDefinitionHeader);
+  console.log(`SKP: Instance resolution: ${resolvedDefHeader} def-headers, ${resolvedEntityId} via entity ID, ${resolvedDe05} via de_05→child ID, ${skippedNoName} unresolved`);
+  console.log(`SKP: Total: ${instances.length} instances (${placements.length} placements + ${templates.length} templates)`);
+
   const byName = new Map<string, number>();
-  for (const inst of instances) {
+  for (const inst of placements) {
     byName.set(inst.defName, (byName.get(inst.defName) ?? 0) + 1);
   }
-  console.log(`SKP: Found ${instances.length} instance transforms for ${byName.size} definitions:`);
   const sorted = [...byName.entries()].sort((a, b) => b[1] - a[1]);
   for (const [name, count] of sorted.slice(0, 15)) {
-    console.log(`  "${name}": ${count} instances`);
+    console.log(`  "${name}": ${count} placements`);
   }
   if (sorted.length > 15) console.log(`  ... and ${sorted.length - 15} more`);
 
@@ -689,6 +896,29 @@ function isIdentityTransform(t: number[]): boolean {
          Math.abs(t[1]) < 1e-6 && Math.abs(t[2]) < 1e-6 && Math.abs(t[3]) < 1e-6 &&
          Math.abs(t[5]) < 1e-6 && Math.abs(t[6]) < 1e-6 && Math.abs(t[7]) < 1e-6 &&
          Math.abs(t[9]) < 0.01 && Math.abs(t[10]) < 0.01 && Math.abs(t[11]) < 0.01;
+}
+
+/**
+ * Compose two transforms: p'' = (p * M_inner + t_inner) * M_outer + t_outer
+ * Result: M = M_inner * M_outer, t = t_inner * M_outer + t_outer
+ */
+function composeTransforms(outer: number[], inner: number[]): number[] {
+  const r = new Array(13);
+  // Matrix multiplication: M_composed = M_inner * M_outer
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      r[row * 3 + col] =
+        inner[row * 3 + 0] * outer[0 * 3 + col] +
+        inner[row * 3 + 1] * outer[1 * 3 + col] +
+        inner[row * 3 + 2] * outer[2 * 3 + col];
+    }
+  }
+  // Translation: t_composed = t_inner * M_outer + t_outer
+  r[9]  = inner[9] * outer[0] + inner[10] * outer[3] + inner[11] * outer[6] + outer[9];
+  r[10] = inner[9] * outer[1] + inner[10] * outer[4] + inner[11] * outer[7] + outer[10];
+  r[11] = inner[9] * outer[2] + inner[10] * outer[5] + inner[11] * outer[8] + outer[11];
+  r[12] = 1.0;
+  return r;
 }
 
 /**
@@ -776,6 +1006,84 @@ function buildThreeJSScene(
     instancesByDef.get(inst.defName)!.push(inst);
   }
 
+  // Detect nested instances: instances whose offset falls within a parent definition's range
+  // Build definition section ranges using 7e_15 name offsets for broader, contiguous sections.
+  // A definition's section spans from its 7e_15 name tag to the next definition's name tag.
+  // This ensures 66_19 instance tags (which appear between name and geometry, or after geometry)
+  // are correctly attributed to their parent definition.
+  const defNameStarts = new Map<string, number>();
+  for (const block of definitionBlocks) {
+    if (block.name === '__unassigned__') continue;
+    const existing = defNameStarts.get(block.name);
+    if (!existing || block.nameOffset < existing) {
+      defNameStarts.set(block.name, block.nameOffset);
+    }
+  }
+
+  // Sort definitions by their name offset to compute contiguous section boundaries
+  const sortedDefEntries = [...defNameStarts.entries()].sort((a, b) => a[1] - b[1]);
+  const maxDataEnd = definitionBlocks.reduce((mx, b) => Math.max(mx, b.dataEnd), 0);
+
+  const defSections = new Map<string, { start: number; end: number }>();
+  for (let i = 0; i < sortedDefEntries.length; i++) {
+    const [name, start] = sortedDefEntries[i];
+    const end = i + 1 < sortedDefEntries.length ? sortedDefEntries[i + 1][1] : maxDataEnd;
+    defSections.set(name, { start, end });
+  }
+
+  console.log(`SKP: ${defSections.size} definition sections for nesting detection`);
+  // Log top-5 largest sections
+  const sortedSections = [...defSections.entries()].sort((a, b) => (b[1].end - b[1].start) - (a[1].end - a[1].start));
+  for (const [name, range] of sortedSections.slice(0, 5)) {
+    console.log(`  Section "${name}": offset ${range.start}–${range.end} (${((range.end - range.start) / 1024).toFixed(0)} KB)`);
+  }
+
+  // Classify each instance as root-level or nested (inside another definition)
+  let nestedCount = 0;
+  for (const inst of instanceTransforms) {
+    let bestParent: string | null = null;
+    let bestSize = Infinity;
+    for (const [secName, range] of defSections) {
+      if (secName === inst.defName) continue;
+      if (inst.offset >= range.start && inst.offset <= range.end) {
+        const size = range.end - range.start;
+        if (size < bestSize) {
+          bestSize = size;
+          bestParent = secName;
+        }
+      }
+    }
+    inst.parentDef = bestParent;
+    if (bestParent) nestedCount++;
+  }
+
+  if (nestedCount > 0) {
+    console.log(`SKP: ${nestedCount}/${instanceTransforms.length} instances are nested inside parent definitions`);
+    const byParent = new Map<string, string[]>();
+    for (const inst of instanceTransforms) {
+      if (inst.parentDef) {
+        if (!byParent.has(inst.parentDef)) byParent.set(inst.parentDef, []);
+        const list = byParent.get(inst.parentDef)!;
+        if (!list.includes(inst.defName)) list.push(inst.defName);
+      }
+    }
+    for (const [parent, children] of byParent) {
+      console.log(`  "${parent}" contains: ${children.join(', ')}`);
+    }
+  } else {
+    console.log(`SKP: No nested instances detected — all ${instanceTransforms.length} instances are root-level`);
+  }
+
+  // Log per-definition instance summary (root vs nested)
+  for (const [defName, instances] of instancesByDef) {
+    const rootCount = instances.filter(i => !i.parentDef).length;
+    const nestedInst = instances.filter(i => i.parentDef);
+    if (nestedInst.length > 0) {
+      const parents = [...new Set(nestedInst.map(i => i.parentDef))];
+      console.log(`SKP: "${defName}": ${rootCount} root + ${nestedInst.length} nested (in: ${parents.join(', ')})`);
+    }
+  }
+
   // Step 3: Spatial filtering — determine which identity definitions to render
   // Some definitions (e.g. 3D Warehouse components) have geometry in local coordinates
   // far from the model origin. Without matching instance transforms, rendering them at
@@ -787,7 +1095,9 @@ function buildThreeJSScene(
   const instancedDefEntries: [string, typeof resolvedFaces][] = [];
   for (const [defName, defFaces] of defFacesMap) {
     const instances = instancesByDef.get(defName);
-    if (instances && instances.length > 0) {
+    // Only count placement instances (not definition-header templates)
+    const placementInstances = instances?.filter(i => !i.isDefinitionHeader);
+    if (placementInstances && placementInstances.length > 0) {
       instancedDefEntries.push([defName, defFaces]);
     } else {
       identityDefEntries.push([defName, defFaces]);
@@ -819,24 +1129,48 @@ function buildThreeJSScene(
   if (identityDefEntries.length > 0) refSets.push(identityDefEntries[0][1]);
   const refBBox = computeVertBBox(refSets);
 
-  // Expand reference bbox by 100% of its diagonal in each direction
+  // Expand reference bbox by 25% of its size (was 100% — too permissive)
   const refDiagX = refBBox.maxX - refBBox.minX;
   const refDiagY = refBBox.maxY - refBBox.minY;
   const refDiagZ = refBBox.maxZ - refBBox.minZ;
-  const marginX = Math.max(refDiagX, 1000); // at least ~25m in inches
-  const marginY = Math.max(refDiagY, 1000);
-  const marginZ = Math.max(refDiagZ, 1000);
+  const marginX = Math.max(refDiagX * 0.25, 200); // ~5m in inches
+  const marginY = Math.max(refDiagY * 0.25, 200);
+  const marginZ = Math.max(refDiagZ * 0.25, 200);
+  const hasInstancedDefs = instancedDefEntries.length > 0;
 
-  function defCenterInsideRef(defFaces: typeof resolvedFaces): boolean {
-    // Compute center of definition's geometry
+  function defCenterInsideRef(defFaces: typeof resolvedFaces, defName: string): boolean {
+    // Compute center + bbox of definition's geometry
     let cx = 0, cy = 0, cz = 0, n = 0;
+    let dMinX = Infinity, dMinY = Infinity, dMinZ = Infinity;
+    let dMaxX = -Infinity, dMaxY = -Infinity, dMaxZ = -Infinity;
     for (const rf of defFaces) {
       for (const v of rf.verts) {
         cx += v.x; cy += v.y; cz += v.z; n++;
+        if (v.x < dMinX) dMinX = v.x;
+        if (v.y < dMinY) dMinY = v.y;
+        if (v.z < dMinZ) dMinZ = v.z;
+        if (v.x > dMaxX) dMaxX = v.x;
+        if (v.y > dMaxY) dMaxY = v.y;
+        if (v.z > dMaxZ) dMaxZ = v.z;
       }
     }
     if (n === 0) return false;
     cx /= n; cy /= n; cz /= n;
+
+    // If the model uses instances and this definition is small compared to reference,
+    // it's likely a component that should have had an instance transform → skip it
+    const defSizeX = dMaxX - dMinX;
+    const defSizeY = dMaxY - dMinY;
+    const defSizeZ = dMaxZ - dMinZ;
+    if (hasInstancedDefs && defFaces.length < 500) {
+      const defMaxDim = Math.max(defSizeX, defSizeY, defSizeZ);
+      const refMaxDim = Math.max(refDiagX, refDiagY, refDiagZ);
+      if (defMaxDim < refMaxDim * 0.15) {
+        console.log(`SKP: Skipping small identity def "${defName}" (${defFaces.length} faces, size ${(defMaxDim * 0.0254).toFixed(2)}m, likely missing instance)`);
+        return false;
+      }
+    }
+
     return cx >= refBBox.minX - marginX && cx <= refBBox.maxX + marginX &&
            cy >= refBBox.minY - marginY && cy <= refBBox.maxY + marginY &&
            cz >= refBBox.minZ - marginZ && cz <= refBBox.maxZ + marginZ;
@@ -865,7 +1199,7 @@ function buildThreeJSScene(
   for (const [defName, defFaces] of identityDefEntries) {
     // First/largest definition always included (it IS the reference)
     const isReference = identityDefEntries[0][0] === defName;
-    if (isReference || defCenterInsideRef(defFaces)) {
+    if (isReference || defCenterInsideRef(defFaces, defName)) {
       identityDefs++;
       worldFacesByGroup.set(defName, defFaces.map(rf => ({
         face: rf.face,
@@ -878,20 +1212,78 @@ function buildThreeJSScene(
     }
   }
 
-  // Instanced definitions: render through instance transforms
+  // Instanced definitions: render through instance transforms (placements only, not templates)
+  // Handle nested instances by composing parent + child transforms
   for (const [defName, defFaces] of instancedDefEntries) {
-    const instances = instancesByDef.get(defName)!;
+    const instances = instancesByDef.get(defName)!.filter(i => !i.isDefinitionHeader);
     instancedDefs++;
     const groupFaces: WorldFace[] = [];
+
     for (const inst of instances) {
-      for (const rf of defFaces) {
-        groupFaces.push({
-          face: rf.face,
-          verts: rf.verts,
-          transform: isIdentityTransform(inst.transform) ? null : inst.transform,
-        });
+      if (!inst.parentDef) {
+        // Root-level instance: use transform directly
+        for (const rf of defFaces) {
+          groupFaces.push({
+            face: rf.face,
+            verts: rf.verts,
+            transform: isIdentityTransform(inst.transform) ? null : inst.transform,
+          });
+        }
+      } else {
+        // Nested instance: compose with parent's root-level transforms
+        const parentInstances = instancesByDef.get(inst.parentDef);
+        if (parentInstances) {
+          // Find root-level instances of the parent (non-nested)
+          const parentRoots = parentInstances.filter(pi => !pi.parentDef);
+          if (parentRoots.length > 0) {
+            for (const parentInst of parentRoots) {
+              const composed = composeTransforms(parentInst.transform, inst.transform);
+              for (const rf of defFaces) {
+                groupFaces.push({
+                  face: rf.face,
+                  verts: rf.verts,
+                  transform: isIdentityTransform(composed) ? null : composed,
+                });
+              }
+            }
+          } else {
+            // Parent has no root instances — try composing with parent's nested instances
+            // (handles multi-level nesting, one extra level)
+            for (const parentInst of parentInstances) {
+              if (parentInst.parentDef) {
+                const grandParentInstances = instancesByDef.get(parentInst.parentDef);
+                if (grandParentInstances) {
+                  for (const gpInst of grandParentInstances.filter(g => !g.parentDef)) {
+                    const composed = composeTransforms(
+                      composeTransforms(gpInst.transform, parentInst.transform),
+                      inst.transform,
+                    );
+                    for (const rf of defFaces) {
+                      groupFaces.push({
+                        face: rf.face,
+                        verts: rf.verts,
+                        transform: isIdentityTransform(composed) ? null : composed,
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          // Parent definition has no instances (it's an identity def) — use transform as-is
+          // The parent is rendered at identity, so this transform is already in parent space
+          for (const rf of defFaces) {
+            groupFaces.push({
+              face: rf.face,
+              verts: rf.verts,
+              transform: isIdentityTransform(inst.transform) ? null : inst.transform,
+            });
+          }
+        }
       }
     }
+
     instancedFaces += groupFaces.length;
     worldFacesByGroup.set(defName, groupFaces);
   }
@@ -1015,6 +1407,27 @@ function buildThreeJSScene(
 // Face geometry builder with transform support
 // ============================================================================
 
+/**
+ * Project a 3D polygon onto a 2D plane for ear-clipping triangulation.
+ * Uses the face normal to determine the best projection plane.
+ */
+function projectTo2D(verts: Vec3[], nx: number, ny: number, nz: number): number[] {
+  const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+  const coords: number[] = [];
+
+  if (ax >= ay && ax >= az) {
+    // Drop X, project onto YZ
+    for (const v of verts) { coords.push(v.y, v.z); }
+  } else if (ay >= ax && ay >= az) {
+    // Drop Y, project onto XZ
+    for (const v of verts) { coords.push(v.x, v.z); }
+  } else {
+    // Drop Z, project onto XY
+    for (const v of verts) { coords.push(v.x, v.y); }
+  }
+  return coords;
+}
+
 function buildFaceGeometryWithTransform(
   worldFaces: WorldFace[],
 ): { geometry: THREE.BufferGeometry; vertCount: number; triCount: number } {
@@ -1027,34 +1440,58 @@ function buildFaceGeometryWithTransform(
       ? verts.map(v => applyTransform(v, transform))
       : verts;
 
+    if (tv.length < 3) continue;
+
     // Calculate normal from (transformed) vertices
     let nx: number, ny: number, nz: number;
     if (!transform && face.plane) {
-      // For identity transform, use plane equation normal directly
       nx = face.plane.nx;
       ny = face.plane.ny;
       nz = face.plane.nz;
     } else {
-      // Compute from transformed vertex positions
-      const e1x = tv[1].x - tv[0].x;
-      const e1y = tv[1].y - tv[0].y;
-      const e1z = tv[1].z - tv[0].z;
-      const e2x = tv[2].x - tv[0].x;
-      const e2y = tv[2].y - tv[0].y;
-      const e2z = tv[2].z - tv[0].z;
-      nx = e1y * e2z - e1z * e2y;
-      ny = e1z * e2x - e1x * e2z;
-      nz = e1x * e2y - e1y * e2x;
+      // Newell's method for robust normal computation
+      nx = 0; ny = 0; nz = 0;
+      for (let i = 0; i < tv.length; i++) {
+        const cur = tv[i];
+        const next = tv[(i + 1) % tv.length];
+        nx += (cur.y - next.y) * (cur.z + next.z);
+        ny += (cur.z - next.z) * (cur.x + next.x);
+        nz += (cur.x - next.x) * (cur.y + next.y);
+      }
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-      if (len > 0) { nx /= len; ny /= len; nz /= len; }
+      if (len > 1e-12) { nx /= len; ny /= len; nz /= len; }
       else { nx = 0; ny = 0; nz = 1; }
     }
 
-    // Triangulate using fan from first vertex
-    for (let t = 1; t < tv.length - 1; t++) {
-      const v0 = tv[0];
-      const v1 = tv[t];
-      const v2 = tv[t + 1];
+    // Triangulate: use ear-clipping for 5+ vertices, simple fan for 3-4
+    let triIndices: number[];
+    if (tv.length <= 4) {
+      // Simple fan is safe for triangles and most quads
+      triIndices = [];
+      for (let t = 1; t < tv.length - 1; t++) {
+        triIndices.push(0, t, t + 1);
+      }
+    } else {
+      // Ear-clipping triangulation via 2D projection
+      const coords2D = projectTo2D(tv, nx, ny, nz);
+      const earIndices = Earcut.triangulate(coords2D, undefined, 2);
+      if (earIndices.length === 0) {
+        // Fallback to fan if earcut fails
+        triIndices = [];
+        for (let t = 1; t < tv.length - 1; t++) {
+          triIndices.push(0, t, t + 1);
+        }
+      } else {
+        triIndices = earIndices;
+      }
+    }
+
+    // Emit triangles
+    for (let t = 0; t < triIndices.length; t += 3) {
+      const v0 = tv[triIndices[t]];
+      const v1 = tv[triIndices[t + 1]];
+      const v2 = tv[triIndices[t + 2]];
+      if (!v0 || !v1 || !v2) continue;
 
       // Convert: inches → meters, SketchUp (X,Y,Z) → Three.js (X,Z,-Y)
       positions.push(

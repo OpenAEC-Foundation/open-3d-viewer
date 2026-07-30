@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useAppStore, type UITheme } from '../../state/appStore';
+import { useAppStore, type UITheme, type DisplayUnit } from '../../state/appStore';
 import './SettingsDialog.css';
 
 const THEMES: { value: UITheme; label: string; swatches: string[] }[] = [
@@ -16,6 +16,8 @@ interface SettingsDialogProps {
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
+  const displayUnit = useAppStore((s) => s.displayUnit);
+  const setDisplayUnit = useAppStore((s) => s.setDisplayUnit);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState<{ x: number; y: number } | null>(null);
@@ -96,6 +98,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                     <span className="settings-theme-row-name">{theme.label}</span>
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <h3 className="settings-section-title">Eenheden</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--theme-text-dim)' }}>Afstand</span>
+                <select
+                  value={displayUnit}
+                  onChange={(e) => setDisplayUnit(e.target.value as DisplayUnit)}
+                  className="settings-unit-select"
+                >
+                  <option value="mm">Millimeters (mm)</option>
+                  <option value="cm">Centimeters (cm)</option>
+                  <option value="m">Meters (m)</option>
+                </select>
               </div>
             </div>
           </div>

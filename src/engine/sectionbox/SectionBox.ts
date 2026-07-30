@@ -81,7 +81,7 @@ export class SectionBox {
       // Skip gizmo's own objects
       if (child === this.gizmo.group || this.gizmo.group.getObjectById(child.id)) return;
 
-      if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.Line) {
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         for (const mat of materials) {
           if (this.enabled) {

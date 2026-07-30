@@ -20,6 +20,7 @@ interface FaceHandle {
   id: FaceId;
   mesh: THREE.Mesh;
   normal: THREE.Vector3;
+  handle: THREE.Mesh; // small visible drag handle at face center
 }
 
 export class SectionBoxGizmo {
@@ -57,6 +58,10 @@ export class SectionBoxGizmo {
       { id: '-z', pos: [cx, cy, min.z], rot: [0, Math.PI, 0],      size: [sx, sy], normal: [0, 0, -1] },
     ];
 
+    // Handle size scales with box size
+    const boxDiag = Math.sqrt(sx * sx + sy * sy + sz * sz);
+    const handleRadius = Math.max(0.02, boxDiag * 0.02);
+
     for (const def of faceDefs) {
       const geo = new THREE.PlaneGeometry(def.size[0], def.size[1]);
       const mat = new THREE.MeshBasicMaterial({
@@ -73,12 +78,29 @@ export class SectionBoxGizmo {
       mesh.userData.faceId = def.id;
       mesh.renderOrder = 999;
 
+      // Small circle handle at face center
+      const handleGeo = new THREE.CircleGeometry(handleRadius, 16);
+      const handleMat = new THREE.MeshBasicMaterial({
+        color: FACE_COLOR,
+        transparent: true,
+        opacity: 0.6,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: false,
+      });
+      const handle = new THREE.Mesh(handleGeo, handleMat);
+      handle.position.set(...def.pos);
+      handle.rotation.set(...def.rot);
+      handle.renderOrder = 1001;
+
       this.faces.push({
         id: def.id,
         mesh,
         normal: new THREE.Vector3(...def.normal),
+        handle,
       });
       this.group.add(mesh);
+      this.group.add(handle);
     }
 
     // Edge wireframe
@@ -129,6 +151,9 @@ export class SectionBoxGizmo {
       face.mesh.geometry.dispose();
       (face.mesh.material as THREE.Material).dispose();
       this.group.remove(face.mesh);
+      face.handle.geometry.dispose();
+      (face.handle.material as THREE.Material).dispose();
+      this.group.remove(face.handle);
     }
     this.faces = [];
 
@@ -147,15 +172,22 @@ export class SectionBoxGizmo {
   private updateFaceAppearance(): void {
     for (const face of this.faces) {
       const mat = face.mesh.material as THREE.MeshBasicMaterial;
+      const hMat = face.handle.material as THREE.MeshBasicMaterial;
       if (face.id === this.activeFace) {
         mat.opacity = FACE_ACTIVE_OPACITY;
         mat.color.setHex(0x00ff88);
+        hMat.opacity = 0.9;
+        hMat.color.setHex(0x00ff88);
       } else if (face.id === this.hoveredFace) {
         mat.opacity = FACE_HOVER_OPACITY;
         mat.color.setHex(0x44eeff);
+        hMat.opacity = 0.9;
+        hMat.color.setHex(0x44eeff);
       } else {
         mat.opacity = FACE_OPACITY;
         mat.color.setHex(FACE_COLOR);
+        hMat.opacity = 0.6;
+        hMat.color.setHex(FACE_COLOR);
       }
     }
   }

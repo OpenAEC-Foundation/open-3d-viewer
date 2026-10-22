@@ -99,11 +99,41 @@ registerLoader(['.skp'], async () => {
   return loadSKP;
 });
 
-// STEP/STP (via Assimp WASM — works in browser)
-registerLoader(['.step', '.stp'], async () => {
-  const { loadWithAssimp } = await import('./formats/AssimpLoader');
-  return loadWithAssimp;
+// STEP / IGES / BREP (OpenCascade WASM — exact B-rep tessellation, works in browser)
+registerLoader(['.step', '.stp', '.iges', '.igs', '.brep', '.brp'], async () => {
+  const { loadWithOCCT } = await import('./formats/OCCTLoader');
+  return loadWithOCCT;
 });
+
+// IFC (web-ifc WASM — spatial classes as layers)
+registerLoader(['.ifc'], async () => {
+  const { loadIFC } = await import('./formats/IFCLoader');
+  return loadIFC;
+});
+
+// Rhino 3DM
+registerLoader(['.3dm'], async () => (await import('./formats/ExtraLoaders')).load3DM);
+
+// Universal Scene Description
+registerLoader(['.usd', '.usda', '.usdc', '.usdz'], async () => (await import('./formats/ExtraLoaders')).loadUSD);
+
+// Draco compressed mesh / point cloud
+registerLoader(['.drc'], async () => (await import('./formats/ExtraLoaders')).loadDRC);
+
+// LightWave (native loader)
+registerLoader(['.lwo'], async () => (await import('./formats/ExtraLoaders')).loadLWO);
+
+// Molecules, game models, motion capture
+registerLoader(['.pdb'], async () => (await import('./formats/ExtraLoaders')).loadPDB);
+registerLoader(['.md2'], async () => (await import('./formats/ExtraLoaders')).loadMD2);
+registerLoader(['.bvh'], async () => (await import('./formats/ExtraLoaders')).loadBVH);
+
+// Point clouds
+registerLoader(['.las'], async () => (await import('./formats/ExtraLoaders')).loadLAS);
+registerLoader(['.pts', '.asc', '.csv'], async () => (await import('./formats/ExtraLoaders')).loadTextPoints);
+
+// Archives (opens the largest supported model inside)
+registerLoader(['.zip', '.ifczip'], async () => (await import('./formats/ExtraLoaders')).loadZIP);
 
 // 3MF (native Three.js — better than Assimp route)
 registerLoader(['.3mf'], async () => {
@@ -153,8 +183,14 @@ registerLoader(['.vox'], async () => {
   return loadVOX;
 });
 
-// Additional Assimp-supported formats (DXF, IGES, IFC, BLEND, X3D, LWO, etc.)
-registerLoader(['.x3d', '.blend', '.lwo', '.x', '.dxf', '.igs', '.iges', '.ifc', '.off'], async () => {
+// Everything else Assimp can read
+export const ASSIMP_EXTENSIONS = [
+  '.x3d', '.x3db', '.blend', '.x', '.dxf', '.off', '.ac', '.ac3d', '.acc', '.ase', '.ask', '.b3d', '.cob', '.csm',
+  '.hmp', '.irr', '.irrmesh', '.lws', '.lxo', '.md3', '.md5mesh', '.md5anim', '.mdc', '.mdl', '.mesh',
+  '.ms3d', '.ndo', '.nff', '.ogex', '.pk3', '.bsp', '.pmx', '.q3o', '.q3s', '.raw', '.sib',
+  '.smd', '.ter', '.xgl', '.zgl', '.3d', '.enff',
+];
+registerLoader(ASSIMP_EXTENSIONS, async () => {
   const { loadWithAssimp } = await import('./formats/AssimpLoader');
   return loadWithAssimp;
 });

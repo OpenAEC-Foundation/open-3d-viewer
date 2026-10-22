@@ -9,8 +9,16 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         {
-          src: 'node_modules/assimpjs/dist/assimpjs.wasm',
-          dest: 'assets',
+          src: ['node_modules/rhino3dm/rhino3dm.js', 'node_modules/rhino3dm/rhino3dm.wasm'],
+          dest: 'rhino3dm',
+        },
+        {
+          src: [
+            'node_modules/three/examples/jsm/libs/draco/draco_decoder.js',
+            'node_modules/three/examples/jsm/libs/draco/draco_decoder.wasm',
+            'node_modules/three/examples/jsm/libs/draco/draco_wasm_wrapper.js',
+          ],
+          dest: 'draco',
         },
       ],
     }),
@@ -33,7 +41,7 @@ export default defineConfig({
     format: 'es',
   },
   optimizeDeps: {
-    exclude: ['assimpjs'],
+    exclude: ['web-ifc'],
   },
   build: {
     target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',

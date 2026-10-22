@@ -21,6 +21,11 @@ declare module 'assimpjs' {
     ConvertFileList(fileList: AssimpFileList, format: string): AssimpResult;
   }
 
-  function assimpjs(): Promise<AssimpJS>;
+  function assimpjs(options?: { locateFile?: (path: string) => string }): Promise<AssimpJS>;
   export default assimpjs;
+}
+
+declare module 'occt-import-js' {
+  function occtimportjs(options?: { locateFile?: (path: string) => string }): Promise<any>;
+  export default occtimportjs;
 }

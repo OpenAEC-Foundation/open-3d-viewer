@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import assimpWasmUrl from 'assimpjs/dist/assimpjs.wasm?url';
 import { t } from '../../../i18n/useTranslation';
 import type { ThreeJSResult, ProgressCallback } from '../types';
 
@@ -33,7 +34,7 @@ export async function loadWithAssimp(
       factory = factory.default;
     }
     if (typeof factory === 'function') {
-      ajs = await factory();
+      ajs = await factory({ locateFile: (path: string) => (path.endsWith('.wasm') ? assimpWasmUrl : path) });
     } else if (factory && typeof factory.FileList === 'function') {
       // Already initialized module
       ajs = factory;

@@ -8,8 +8,7 @@ let dracoLoader: DRACOLoader | null = null;
 function getDracoLoader(): DRACOLoader {
   if (!dracoLoader) {
     dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
-    dracoLoader.setDecoderConfig({ type: 'js' });
+    dracoLoader.setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
   }
   return dracoLoader;
 }

@@ -1,31 +1,31 @@
 import { useRef, useCallback } from 'react';
 import { useAppStore } from '../../../state/appStore';
 import { t } from '../../../i18n/useTranslation';
+import { getSupportedExtensions } from '../../../engine/loaders/LoaderRegistry';
 
 /** Categorized 3D file format filters */
 export const FILE_FILTERS = [
   { name: 'All 3D Files', extensions: [] as string[] }, // populated below
-  { name: 'glTF (*.gltf, *.glb)', extensions: ['gltf', 'glb'] },
+  { name: 'glTF / USD (*.gltf, *.glb, *.usd, *.usdz, *.drc)', extensions: ['gltf', 'glb', 'usd', 'usda', 'usdc', 'usdz', 'drc'] },
   { name: 'Mesh Formats (*.obj, *.stl, *.ply, *.off, *.3mf, *.amf)', extensions: ['obj', 'stl', 'ply', 'off', '3mf', 'amf'] },
-  { name: 'CAD Formats (*.step, *.stp, *.iges, *.igs, *.dxf)', extensions: ['step', 'stp', 'iges', 'igs', 'dxf'] },
-  { name: 'BIM (*.ifc)', extensions: ['ifc'] },
-  { name: 'Scene Formats (*.fbx, *.3ds, *.dae, *.x3d, *.vrml, *.wrl)', extensions: ['fbx', '3ds', 'dae', 'x3d', 'vrml', 'wrl'] },
-  { name: 'Point Cloud (*.pcd, *.xyz)', extensions: ['pcd', 'xyz'] },
+  { name: 'CAD Formats (*.step, *.stp, *.iges, *.igs, *.brep, *.3dm, *.dxf)', extensions: ['step', 'stp', 'iges', 'igs', 'brep', 'brp', '3dm', 'dxf'] },
+  { name: 'BIM (*.ifc, *.ifczip)', extensions: ['ifc', 'ifczip'] },
+  { name: 'Scene Formats (*.fbx, *.3ds, *.dae, *.x3d, *.vrml, *.wrl, *.blend)', extensions: ['fbx', '3ds', 'dae', 'x3d', 'x3db', 'vrml', 'wrl', 'blend', 'lwo', 'lws', 'lxo', 'x', 'ac', 'ase', 'cob', 'ms3d', 'b3d'] },
+  { name: 'Point Cloud (*.las, *.pcd, *.xyz, *.pts, *.asc, *.csv)', extensions: ['las', 'pcd', 'xyz', 'pts', 'asc', 'csv'] },
+  { name: 'Game Formats (*.md2, *.md3, *.md5mesh, *.mdl, *.smd, *.bsp, *.pmx)', extensions: ['md2', 'md3', 'md5mesh', 'mdl', 'mdc', 'smd', 'bsp', 'pk3', 'pmx', 'hmp'] },
   { name: 'Voxel (*.vox)', extensions: ['vox'] },
-  { name: 'Scientific (*.vtk, *.vtp)', extensions: ['vtk', 'vtp'] },
+  { name: 'Scientific (*.vtk, *.vtp, *.pdb)', extensions: ['vtk', 'vtp', 'pdb'] },
   { name: '3D Printing (*.gcode)', extensions: ['gcode'] },
   { name: 'SketchUp (*.skp)', extensions: ['skp'] },
-  { name: 'Blender (*.blend)', extensions: ['blend'] },
-  { name: 'LightWave (*.lwo)', extensions: ['lwo'] },
-  { name: 'DirectX (*.x)', extensions: ['x'] },
   { name: 'Google Earth (*.kmz)', extensions: ['kmz'] },
+  { name: 'Archives (*.zip)', extensions: ['zip'] },
 ];
 
-// Populate "All 3D Files" with every extension from every category
-FILE_FILTERS[0].extensions = FILE_FILTERS.slice(1).flatMap(f => f.extensions);
+// "All 3D Files" lists every extension the loader registry knows about
+FILE_FILTERS[0].extensions = getSupportedExtensions().map(e => e.replace(/^\./, ''));
 
 /** Flat list of all supported extensions (with leading dot) */
-export const SUPPORTED_EXTENSIONS = FILE_FILTERS[0].extensions.map(e => `.${e}`);
+export const SUPPORTED_EXTENSIONS = getSupportedExtensions();
 
 export const FILE_INPUT_ACCEPT = SUPPORTED_EXTENSIONS.join(',');
 

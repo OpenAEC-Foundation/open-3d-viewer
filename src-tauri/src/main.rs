@@ -5,7 +5,7 @@ mod commands;
 mod converter;
 
 use commands::{save_file, load_file, read_file_bytes};
-use converter::commands::{is_rust_convertible, convert_3d_file};
+use converter::commands::{is_rust_convertible, convert_3d_file, convert_rvt};
 use tauri::Emitter;
 
 fn main() {
@@ -36,6 +36,7 @@ fn main() {
             read_file_bytes,
             is_rust_convertible,
             convert_3d_file,
+            convert_rvt,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

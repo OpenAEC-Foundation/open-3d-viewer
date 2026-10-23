@@ -3,7 +3,7 @@
   "gltf": "glTF (*.gltf, *.glb)",
   "mesh": "Mesh Formats (*.obj, *.stl, *.ply, *.off, *.3mf, *.amf)",
   "cad": "CAD Formats (*.step, *.stp, *.iges, *.igs, *.dxf)",
-  "bim": "BIM (*.ifc)",
+  "bim": "BIM (*.ifc, *.rvt)",
   "scene": "Scene Formats (*.fbx, *.3ds, *.dae, *.x3d, *.vrml, *.wrl)",
   "pointCloud": "Point Cloud (*.pcd, *.xyz)",
   "voxel": "Voxel (*.vox)",

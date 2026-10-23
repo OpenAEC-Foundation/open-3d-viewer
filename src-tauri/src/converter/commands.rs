@@ -8,7 +8,34 @@ pub fn is_rust_convertible(extension: String) -> bool {
     manager::is_rust_format(&extension)
 }
 
-/// Convert a 3D file (STEP, SKP) to triangle meshes.
+/// Convert a Revit file (.rvt) to triangle meshes per category.
+///
+/// The request body carries the raw file bytes; the response is the binary scene format of
+/// `rvt_export::mesh::encode` ("RVTM"), parsed by the frontend's RVT loader.
+#[tauri::command]
+pub async fn convert_rvt(request: tauri::ipc::Request<'_>) -> Result<tauri::ipc::Response, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("convert_rvt expects the raw file bytes".to_string());
+    };
+    let bytes = bytes.clone();
+    let encoded = tokio::task::spawn_blocking(move || convert_rvt_bytes(bytes))
+        .await
+        .map_err(|e| format!("Conversion thread error: {}", e))??;
+    Ok(tauri::ipc::Response::new(encoded))
+}
+
+#[cfg(feature = "rvt")]
+fn convert_rvt_bytes(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    let doc = rvt_read::Document::from_bytes(bytes).map_err(|e| format!("Cannot read Revit file: {}", e))?;
+    Ok(rvt_export::mesh::encode(&rvt_export::mesh::scene(&doc)))
+}
+
+#[cfg(not(feature = "rvt"))]
+fn convert_rvt_bytes(_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    Err("This build has no Revit support (feature \"rvt\" disabled)".to_string())
+}
+
+/// Convert a 3D file (STEP) to triangle meshes.
 /// Emits progress events during conversion.
 #[tauri::command]
 pub async fn convert_3d_file(

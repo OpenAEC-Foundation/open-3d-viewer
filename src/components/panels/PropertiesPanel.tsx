@@ -49,7 +49,7 @@ export function PropertiesPanel() {
                 </button>
                 <span className="text-cad-text-muted flex-shrink-0">{m.format}</span>
                 <button
-                  className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-red-500/30 text-cad-text-muted hover:text-red-400 transition-colors"
+                  className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-[var(--theme-hover-strong)] text-cad-text-muted hover:text-[var(--theme-danger-color)] transition-colors"
                   title={t('properties.removeModel')}
                   onClick={(e) => { e.stopPropagation(); handleRemoveModel(m.id); }}
                 >
@@ -68,7 +68,7 @@ export function PropertiesPanel() {
           <div className="flex flex-col gap-1">
             <div className="panel-prop-row">
               <span className="panel-prop-label">{t('properties.name')}</span>
-              <span className="panel-prop-value text-blue-400 text-left flex-1 truncate">{selectedObject.name}</span>
+              <span className="panel-prop-value text-[var(--theme-accent)] text-left flex-1 truncate">{selectedObject.name}</span>
             </div>
             <div className="panel-prop-row">
               <span className="panel-prop-label">{t('properties.triangles')}</span>
@@ -110,7 +110,7 @@ export function PropertiesPanel() {
             {activeModel.loadingProgress < 1.0 && (
               <div className="panel-prop-row">
                 <span className="panel-prop-label">{t('properties.loading')}</span>
-                <span className="panel-prop-value text-yellow-400">
+                <span className="panel-prop-value text-[var(--theme-accent)]">
                   {(activeModel.loadingProgress * 100).toFixed(0)}% - {activeModel.loadingPhase}
                 </span>
               </div>

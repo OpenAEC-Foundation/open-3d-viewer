@@ -25,7 +25,7 @@ const isTauri = !!(window as any).__TAURI_INTERNALS__;
 
 /**
  * Load a file by converting it via the Rust backend.
- * Used for STEP/STP and SKP formats that don't have good JS loaders.
+ * Used for STEP/STP, which has no JS loader in this path.
  *
  * Requires the Tauri desktop app — will throw a clear error in browser mode.
  */

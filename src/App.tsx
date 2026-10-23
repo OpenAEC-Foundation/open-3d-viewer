@@ -87,7 +87,7 @@ function App() {
       <MenuBar onSettingsClick={() => setShowSettings(true)} onFeedbackClick={() => setShowFeedback(true)} />
 
       {/* Ribbon */}
-      <Ribbon />
+      <Ribbon onPreferences={() => setShowSettings(true)} onFeedback={() => setShowFeedback(true)} />
 
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">

@@ -23,10 +23,14 @@ tokio = { version = "1", features = ["rt", "sync", "time"] }
 memmap2 = "0.9"
 rayon = "1.10"
 tauri-plugin-store = "2.4.2"
+# Revit (.rvt) import: OpenAEC rvt reader, a private sibling checkout (../../rvt-reader)
+rvt-read = { path = "../../rvt-reader/crates/rvt-read", optional = true }
+rvt-export = { path = "../../rvt-reader/crates/rvt-export", default-features = false, optional = true }
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "rvt"]
 custom-protocol = ["tauri/custom-protocol"]
+rvt = ["dep:rvt-read", "dep:rvt-export"]
 
 [profile.release]
 panic = "abort"

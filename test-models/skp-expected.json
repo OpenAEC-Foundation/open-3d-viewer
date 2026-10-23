@@ -1,0 +1,131 @@
+{
+  "test-models/2021_lc.skp": {
+    "ok": true,
+    "meshes": 10,
+    "triangles": 3905,
+    "size": [
+      2.774,
+      2.15,
+      1.349
+    ],
+    "glbBytes": 241428
+  },
+  "test-models/SFSASM-test.skp": {
+    "ok": false,
+    "error": "legacy .skp parse failed: class-ref to non-class slot 22 (CLayer) @0x24e0: ...00000000000000E03F00000000001680 | 000000FFFEFF0753007500700070006F007200740000000"
+  },
+  "test-models/TestModel.skp": {
+    "ok": true,
+    "meshes": 3,
+    "triangles": 262,
+    "size": [
+      14,
+      5,
+      17
+    ],
+    "glbBytes": 16928
+  },
+  "test-models/bathroom-3d.skp": {
+    "ok": true,
+    "meshes": 53,
+    "triangles": 38623,
+    "size": [
+      3.274,
+      2.698,
+      2.054
+    ],
+    "glbBytes": 3283164
+  },
+  "test-models/cnc-toolbox.skp": {
+    "ok": true,
+    "meshes": 7,
+    "triangles": 5872,
+    "size": [
+      0.584,
+      0.408,
+      0.281
+    ],
+    "glbBytes": 448280
+  },
+  "test-models/colorize-example.skp": {
+    "ok": true,
+    "meshes": 4,
+    "triangles": 8,
+    "size": [
+      8.705,
+      0,
+      5.705
+    ],
+    "glbBytes": 90844
+  },
+  "test-models/instructor.skp": {
+    "ok": true,
+    "meshes": 2,
+    "triangles": 24,
+    "size": [
+      1.779,
+      1.779,
+      2.882
+    ],
+    "glbBytes": 3660
+  },
+  "test-models/jinyi.skp": {
+    "ok": true,
+    "meshes": 2,
+    "triangles": 1079,
+    "size": [
+      2.294,
+      3.053,
+      0.402
+    ],
+    "glbBytes": 53972
+  },
+  "test-models/skp2gltf-test.skp": {
+    "ok": true,
+    "meshes": 4,
+    "triangles": 1500,
+    "size": [
+      15.704,
+      2.955,
+      16.845
+    ],
+    "glbBytes": 116756
+  },
+  "test-models/solar-north-house.skp": {
+    "ok": false,
+    "error": "legacy .skp parse failed: base probe: anchor resolved to null | stage=legacy_walk"
+  },
+  "test-models/solar-pv-80kw-design.skp": {
+    "ok": true,
+    "meshes": 36,
+    "triangles": 36190,
+    "size": [
+      424.298,
+      21.871,
+      224.6
+    ],
+    "glbBytes": 3470524
+  },
+  "test-models/test-model-project-to-face.skp": {
+    "ok": true,
+    "meshes": 2,
+    "triangles": 1527,
+    "size": [
+      2.08,
+      1.902,
+      1.722
+    ],
+    "glbBytes": 61996
+  },
+  "public/test-kavel.skp": {
+    "ok": true,
+    "meshes": 138,
+    "triangles": 95206,
+    "size": [
+      29.158,
+      10.676,
+      37.254
+    ],
+    "glbBytes": 21797060
+  }
+}

@@ -1,7 +1,29 @@
-import { memo } from 'react';
+import { Fragment, memo, type ReactNode } from 'react';
 import { useAppStore } from '../../../state/appStore';
 import { formatPoints } from '../../../utils/format';
 import { useTranslation } from '../../../i18n/useTranslation';
+import './StatusBar.css';
+
+function Item({ label, value, className = '', valueClass = 'mono', title }: {
+  label?: string; value: ReactNode; className?: string; valueClass?: string; title?: string;
+}) {
+  return (
+    <div className={`status-item ${className}`} title={title}>
+      {label && <span className="status-item-label">{label}:</span>}
+      <span className={`status-item-value ${valueClass}`}>{value}</span>
+    </div>
+  );
+}
+
+/** Joins items with the 1 × 14 px status separator. */
+function withSeparators(items: ReactNode[]) {
+  return items.filter(Boolean).map((it, i) => (
+    <Fragment key={i}>
+      {i > 0 && <div className="status-separator" />}
+      {it}
+    </Fragment>
+  ));
+}
 
 export const StatusBar = memo(function StatusBar() {
   const { t } = useTranslation('statusBar');
@@ -19,79 +41,29 @@ export const StatusBar = memo(function StatusBar() {
   const loading = loadingFiles.filter((f) => !f.error);
   const errors = loadingFiles.filter((f) => f.error);
 
+  const left = withSeparators([
+    activeModel && <Item value={activeModel.fileName} />,
+    <Item label={t('models')} value={models.length} />,
+    <Item label={t('vertices')} value={formatPoints(totalVertices)} />,
+    <Item label={t('triangles')} value={formatPoints(totalTriangles)} />,
+    selectedObject && <Item label={t('selected')} value={selectedObject.name} valueClass="mono accent" />,
+  ]);
+
+  const right = withSeparators([
+    ...errors.map((f) => (
+      <Item className="is-error" value={`${f.fileName}: ${f.error}`} title={f.error ?? ''} />
+    )),
+    ...loading.map((f) => (
+      <Item className="is-loading" label={t('loading')} value={`${f.fileName}: ${(f.progress * 100).toFixed(0)}%`} />
+    )),
+    <Item label={t('fps')} value={fps} />,
+    <Item value={rendererType.toUpperCase()} valueClass={rendererType === 'webgpu' ? 'mono success' : 'mono'} />,
+  ]);
+
   return (
-    <div className="h-6 bg-cad-surface border-t border-cad-border flex items-center px-3 text-xs text-cad-text-dim gap-6">
-      {/* Active file */}
-      {activeModel && (
-        <div className="flex items-center gap-2">
-          <span className="text-cad-text font-mono">{activeModel.fileName}</span>
-        </div>
-      )}
-
-      {/* Models count */}
-      <div className="flex items-center gap-2">
-        <span>{t('models')}:</span>
-        <span className="text-cad-text font-mono">{models.length}</span>
-      </div>
-
-      {/* Total vertices */}
-      <div className="flex items-center gap-2">
-        <span>{t('vertices')}:</span>
-        <span className="text-cad-text font-mono">{formatPoints(totalVertices)}</span>
-      </div>
-
-      {/* Total triangles */}
-      <div className="flex items-center gap-2">
-        <span>{t('triangles')}:</span>
-        <span className="text-cad-text font-mono">{formatPoints(totalTriangles)}</span>
-      </div>
-
-      {/* Selected object */}
-      {selectedObject && (
-        <div className="flex items-center gap-2">
-          <span>{t('selected')}:</span>
-          <span className="text-blue-400 font-mono">{selectedObject.name}</span>
-        </div>
-      )}
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* Error status */}
-      {errors.length > 0 && (
-        <div className="flex items-center gap-2 text-red-400">
-          {errors.map((f) => (
-            <span key={f.id} className="font-mono truncate max-w-[300px]" title={f.error ?? ''}>
-              {f.fileName}: {f.error}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Loading status */}
-      {loading.length > 0 && (
-        <div className="flex items-center gap-2 text-yellow-400">
-          <span>{t('loading')}</span>
-          {loading.map((f) => (
-            <span key={f.id} className="font-mono">
-              {f.fileName}: {(f.progress * 100).toFixed(0)}%
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* FPS */}
-      <div className="flex items-center gap-2">
-        <span>{t('fps')}:</span>
-        <span className="text-cad-text font-mono">{fps}</span>
-      </div>
-
-      {/* Renderer type */}
-      <div className="flex items-center gap-1">
-        <span className={rendererType === 'webgpu' ? 'text-green-400' : 'text-cad-text'}>
-          {rendererType.toUpperCase()}
-        </span>
-      </div>
+    <div className="status-bar">
+      <div className="status-bar-left">{left}</div>
+      <div className="status-bar-right">{right}</div>
     </div>
   );
 });

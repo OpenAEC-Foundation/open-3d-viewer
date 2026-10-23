@@ -5,9 +5,10 @@
   "language": "Language",
   "close": "Close",
   "themes": {
-    "dark": "Dark",
+    "forge": "Deep Forge",
     "light": "Light",
-    "blue": "Blue",
-    "highContrast": "High Contrast"
+    "openaec": "Night Build",
+    "blueprint": "Blueprint",
+    "contrast": "High contrast"
   }
 }

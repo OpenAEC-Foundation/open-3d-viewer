@@ -84,11 +84,11 @@ export class SceneManager {
             tris += geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
           }
         });
-        layers.push({ name: child.name, visible: true, triangles: Math.round(tris) });
+        layers.push({ name: child.name, visible: child.visible, triangles: Math.round(tris) });
       } else if (child instanceof THREE.Mesh) {
         const geo = child.geometry;
         const tris = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
-        layers.push({ name: child.name, visible: true, triangles: Math.round(tris) });
+        layers.push({ name: child.name, visible: child.visible, triangles: Math.round(tris) });
       }
     }
     if (layers.length > 0) {

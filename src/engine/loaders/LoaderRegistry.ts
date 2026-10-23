@@ -93,7 +93,7 @@ registerLoader(['.pcd'], async () => {
   return loadPCD;
 });
 
-// SketchUp SKP (custom reverse-engineered parser — works in browser)
+// SketchUp SKP (openskp: 2013–2026 files; legacy parser as fallback — works in browser)
 registerLoader(['.skp'], async () => {
   const { loadSKP } = await import('./formats/SKPLoader');
   return loadSKP;
@@ -103,6 +103,12 @@ registerLoader(['.skp'], async () => {
 registerLoader(['.step', '.stp', '.iges', '.igs', '.brep', '.brp'], async () => {
   const { loadWithOCCT } = await import('./formats/OCCTLoader');
   return loadWithOCCT;
+});
+
+// Revit RVT (OpenAEC rvt reader in the Tauri backend — categories as layers; desktop app only)
+registerLoader(['.rvt'], async () => {
+  const { loadRVT } = await import('./formats/RVTLoader');
+  return loadRVT;
 });
 
 // IFC (web-ifc WASM — spatial classes as layers)

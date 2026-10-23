@@ -5,10 +5,11 @@ import { SUPPORTED_LANGUAGES } from '../../i18n/config';
 import './SettingsDialog.css';
 
 const THEME_KEYS: { value: UITheme; key: string; swatches: string[] }[] = [
-  { value: 'dark', key: 'dark', swatches: ['#1a1a2e', '#16213e', '#e94560', '#eaeaea'] },
-  { value: 'light', key: 'light', swatches: ['#f5f5f5', '#ffffff', '#e94560', '#1f2937'] },
-  { value: 'blue', key: 'blue', swatches: ['#0d1b2a', '#1b263b', '#00b4d8', '#e0e1dd'] },
-  { value: 'highContrast', key: 'highContrast', swatches: ['#000000', '#0a0a0a', '#ffff00', '#ffffff'] },
+  { value: 'forge', key: 'forge', swatches: ['#36363E', '#44444C', '#D97706', '#FAFAF9'] },
+  { value: 'light', key: 'light', swatches: ['#FAFAF9', '#FFFFFF', '#D97706', '#36363E'] },
+  { value: 'openaec', key: 'openaec', swatches: ['#27272A', '#36363E', '#D97706', '#FAFAF9'] },
+  { value: 'blueprint', key: 'blueprint', swatches: ['#0F1B2D', '#1A2C45', '#60A5FA', '#E0E7FF'] },
+  { value: 'contrast', key: 'contrast', swatches: ['#000000', '#0A0A0A', '#FFD700', '#FFFFFF'] },
 ];
 
 interface SettingsDialogProps {

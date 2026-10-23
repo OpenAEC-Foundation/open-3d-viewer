@@ -682,13 +682,15 @@ export function Viewer3D() {
   const uiTheme = useAppStore((s) => s.uiTheme);
   useEffect(() => {
     if (!sceneRef.current) return;
+    // Viewport colours from the OpenAEC palette (concrete / night build / content backgrounds)
     const colors: Record<string, number> = {
-      dark: 0x1a1a2e,
-      light: 0xf5f5f5,
-      blue: 0x0d1b2a,
-      highContrast: 0x000000,
+      light: 0xf5f5f4,
+      forge: 0x2a2a32,
+      openaec: 0x1c1917,
+      blueprint: 0x0a1320,
+      contrast: 0x000000,
     };
-    sceneRef.current.background = new THREE.Color(colors[uiTheme] ?? 0x1a1a2e);
+    sceneRef.current.background = new THREE.Color(colors[uiTheme] ?? 0x2a2a32);
   }, [uiTheme]);
 
   return (

@@ -1,0 +1,15 @@
+{
+  "file": "File",
+  "open": "Open…",
+  "openHint": "Open one or more 3D files",
+  "preferences": "Preferences",
+  "feedback": "Send feedback",
+  "about": "About",
+  "exit": "Exit",
+  "close": "Close",
+  "aboutTitle": "About Open 3D Viewer Studio",
+  "aboutBody": "A universal viewer for 3D files.",
+  "builtOn": "Built on the OpenAEC platform.",
+  "licence": "Licence",
+  "source": "Source code"
+}

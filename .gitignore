@@ -46,3 +46,7 @@ temp/
 
 # Claude Code
 .claude/
+
+# Rust iced edition (cargo target dir at the worktree root)
+/target/
+iced-app/target/

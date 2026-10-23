@@ -1,0 +1,42 @@
+[package]
+name = "open-3d-viewer-iced"
+version = "0.1.0"
+description = "Open 3D Viewer Studio, pure Rust edition (iced + wgpu)"
+authors = ["Open 3D Viewer Studio Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.88"
+
+# Standalone package, not part of a parent workspace.
+[workspace]
+
+[dependencies]
+# GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "thread-pool", "advanced", "svg"] }
+# Headless renderer for `--screenshot` (MIT)
+iced_test = "0.14"
+glam = { version = "0.30", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+# Native file dialog (MIT)
+rfd = "0.17"
+# Mesh formats
+gltf = { version = "1.4", default-features = false, features = ["import", "names", "utils"] }
+tobj = "4"
+stl_io = "0.11"
+# Revit (.rvt): OpenAEC rvt reader, a private sibling checkout (../../rvt-reader)
+rvt-read = { path = "../../rvt-reader/crates/rvt-read", optional = true }
+rvt-export = { path = "../../rvt-reader/crates/rvt-export", default-features = false, optional = true }
+
+[features]
+default = ["rvt"]
+rvt = ["dep:rvt-read", "dep:rvt-export"]
+
+[profile.release]
+codegen-units = 4
+lto = "thin"
+opt-level = 3
+strip = true
+
+# Mesh import is slow in debug builds; optimise dependencies even in dev.
+[profile.dev.package."*"]
+opt-level = 2

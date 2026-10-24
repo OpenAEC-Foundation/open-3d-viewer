@@ -15,6 +15,8 @@ pub struct Camera {
     pub fov_y: f32,
     /// Scene radius, used for near/far planes.
     pub scene_radius: f32,
+    /// Orthographic instead of perspective projection.
+    pub ortho: bool,
 }
 
 /// Standard views.
@@ -37,6 +39,7 @@ impl Default for Camera {
             pitch: 0.0,
             fov_y: 45f32.to_radians(),
             scene_radius: 10.0,
+            ortho: false,
         };
         c.set_preset(ViewPreset::Iso);
         c
@@ -55,11 +58,18 @@ impl Camera {
     }
 
     pub fn projection(&self, aspect: f32) -> Mat4 {
+        let aspect = aspect.max(1e-3);
+        if self.ortho {
+            // Same framing as the perspective view at the target distance
+            let h = self.distance * (self.fov_y * 0.5).tan();
+            let depth = self.distance + self.scene_radius * 4.0 + 1.0;
+            return Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, -depth, depth);
+        }
         // Near plane relative to the distance keeps depth precision for both small parts and
         // whole buildings.
         let near = (self.distance * 0.002).max(1e-4);
         let far = self.distance + self.scene_radius * 4.0 + 1.0;
-        Mat4::perspective_rh(self.fov_y, aspect.max(1e-3), near, far)
+        Mat4::perspective_rh(self.fov_y, aspect, near, far)
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {

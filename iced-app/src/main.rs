@@ -3,7 +3,7 @@
 //! Usage:
 //!   open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint]
 //!   open-3d-viewer-iced [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
-//!                       [--view iso|top|front|right] [--theme ...]
+//!                       [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
 //!   open-3d-viewer-iced [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer-iced --bench FILE [--frames 300]
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
@@ -36,6 +36,8 @@ struct Args {
     mode: Option<RenderMode>,
     view: Option<ViewPreset>,
     bench: Option<PathBuf>,
+    ortho: bool,
+    view_tab: bool,
     frames: Option<u32>,
 }
 
@@ -71,6 +73,8 @@ fn parse_args() -> Result<Args, String> {
                     _ => return Err("--view iso|top|front|right".into()),
                 })
             }
+            "--ortho" => args.ortho = true,
+            "--view-tab" => args.view_tab = true,
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "-h" | "--help" => {
@@ -112,6 +116,10 @@ fn initial_state(args: &Args) -> App {
     }
     if let Some(m) = args.mode {
         app.mode = m;
+    }
+    app.camera.ortho = args.ortho;
+    if args.view_tab {
+        app.tab = app::RibbonTab::View;
     }
     app
 }

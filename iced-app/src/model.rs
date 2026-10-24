@@ -89,6 +89,7 @@ impl Model {
     /// Builds a model from layers: drops empty layers and computes the bounds.
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
         layers.retain(|l| !l.indices.is_empty() && !l.positions.is_empty());
+        let layers: Vec<Layer> = layers.into_iter().flat_map(|l| split_layer(l, MAX_PART_VERTICES, MAX_PART_TRIANGLES)).collect();
         let mut bounds = Bounds::empty();
         for layer in &layers {
             for p in layer.positions.chunks_exact(3) {
@@ -120,6 +121,66 @@ impl Model {
 
     pub fn triangle_count(&self) -> usize {
         self.layers.iter().map(Layer::triangle_count).sum()
+    }
+}
+
+/// GPU buffer limits (wgpu default `max_buffer_size` is 256 MiB): at 28 bytes per vertex and up
+/// to 6 line indices per triangle, parts stay below that.
+pub const MAX_PART_VERTICES: usize = 8_000_000;
+pub const MAX_PART_TRIANGLES: usize = 10_000_000;
+
+/// Splits a layer that is too big for one GPU buffer into parts named "Name (part n)".
+pub fn split_layer(layer: Layer, max_vertices: usize, max_triangles: usize) -> Vec<Layer> {
+    if layer.vertex_count() <= max_vertices && layer.triangle_count() <= max_triangles {
+        return vec![layer];
+    }
+    let mut parts = Vec::new();
+    let mut remap: Vec<u32> = vec![u32::MAX; layer.vertex_count()];
+    let mut part = empty_like(&layer);
+    let mut used: Vec<u32> = Vec::new();
+    for tri in layer.indices.chunks_exact(3) {
+        if tri.iter().any(|&i| i as usize >= remap.len()) {
+            continue;
+        }
+        if part.vertex_count() + 3 > max_vertices || part.triangle_count() + 1 > max_triangles {
+            for &u in &used {
+                remap[u as usize] = u32::MAX;
+            }
+            used.clear();
+            parts.push(std::mem::replace(&mut part, empty_like(&layer)));
+        }
+        for &i in tri {
+            if remap[i as usize] == u32::MAX {
+                remap[i as usize] = part.vertex_count() as u32;
+                used.push(i);
+                let s = 3 * i as usize;
+                part.positions.extend_from_slice(&layer.positions[s..s + 3]);
+                part.normals.extend_from_slice(layer.normals.get(s..s + 3).unwrap_or(&[0.0; 3]));
+                if let (Some(dst), Some(src)) = (part.colors.as_mut(), layer.colors.as_ref()) {
+                    dst.push(src.get(i as usize).copied().unwrap_or([255; 4]));
+                }
+            }
+            part.indices.push(remap[i as usize]);
+        }
+    }
+    if !part.indices.is_empty() {
+        parts.push(part);
+    }
+    let n = parts.len();
+    for (k, p) in parts.iter_mut().enumerate() {
+        p.name = format!("{} (part {}/{n})", layer.name, k + 1);
+    }
+    parts
+}
+
+fn empty_like(layer: &Layer) -> Layer {
+    Layer {
+        name: layer.name.clone(),
+        color: layer.color,
+        positions: Vec::new(),
+        normals: Vec::new(),
+        colors: layer.colors.as_ref().map(|_| Vec::new()),
+        indices: Vec::new(),
     }
 }
 
@@ -184,6 +245,21 @@ mod tests {
         let mut v = vec![1.0, 2.0, 3.0];
         y_up_to_z_up(&mut v);
         assert_eq!(v, vec![1.0, -3.0, 2.0]);
+    }
+
+    #[test]
+    fn splits_big_layers() {
+        let (positions, normals, indices) = flat_shaded(
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            &[0, 1, 2, 0, 2, 3, 0, 1, 2],
+        );
+        let layer = Layer { name: "L".into(), color: [1.0; 3], positions, normals, colors: None, indices };
+        let parts = split_layer(layer, 6, 100);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].triangle_count(), 2);
+        assert_eq!(parts[1].triangle_count(), 1);
+        assert_eq!(parts[1].name, "L (part 2/2)");
+        assert!(parts.iter().all(|p| p.indices.iter().all(|&i| (i as usize) < p.vertex_count())));
     }
 
     #[test]

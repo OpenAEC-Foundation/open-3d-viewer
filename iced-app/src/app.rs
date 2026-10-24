@@ -68,6 +68,7 @@ pub enum Message {
     Theme(ThemeKind),
     Tab(RibbonTab),
     Preset(ViewPreset),
+    Ortho(bool),
     Fit,
     ToggleLayersPanel,
     TogglePropertiesPanel,
@@ -234,6 +235,7 @@ impl App {
                 self.camera.set_preset(p);
                 self.fit();
             }
+            Message::Ortho(o) => self.camera.ortho = o,
             Message::Fit => self.fit(),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
             Message::TogglePropertiesPanel => self.show_properties = !self.show_properties,
@@ -275,6 +277,8 @@ impl App {
                     Key::Character("o") if modifiers.command() => Some(Message::OpenDialog),
                     Key::Character("f") => Some(Message::Fit),
                     Key::Character("g") => Some(Message::ToggleGrid),
+                    Key::Character("p") => Some(Message::Ortho(false)),
+                    Key::Character("o") => Some(Message::Ortho(true)),
                     Key::Character("w") => Some(Message::Mode(RenderMode::Wireframe)),
                     Key::Character("s") => Some(Message::Mode(RenderMode::Solid)),
                     Key::Character("e") => Some(Message::Mode(RenderMode::SolidEdges)),
@@ -393,6 +397,17 @@ impl App {
                         big_button(p, icons::VIEW_TOP, "Top", Message::Preset(ViewPreset::Top), false),
                         big_button(p, icons::VIEW_FRONT, "Front", Message::Preset(ViewPreset::Front), false),
                         big_button(p, icons::VIEW_RIGHT, "Right", Message::Preset(ViewPreset::Right), false),
+                    ]
+                    .spacing(2)
+                    .into()
+                ),
+                separator(p),
+                group(
+                    p,
+                    "Projection",
+                    row![
+                        big_button(p, icons::PERSPECTIVE, "Perspective", Message::Ortho(false), !self.camera.ortho),
+                        big_button(p, icons::ORTHO, "Orthographic", Message::Ortho(true), self.camera.ortho),
                     ]
                     .spacing(2)
                     .into()
@@ -562,7 +577,7 @@ impl App {
             _ => None,
         };
         let hint = container(
-            text("Left drag: orbit · Right drag: pan · Wheel: zoom · F: fit · 1/2/3/0: views")
+            text("Left drag: orbit · Right drag: pan · Wheel: zoom · F: fit · 1/2/3/0: views · P/O: perspective/ortho")
                 .size(11)
                 .color(p.text_muted),
         )
@@ -749,6 +764,46 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn simulator(app: &App) -> iced_test::Simulator<'_, Message> {
+        iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view())
+    }
+
+    #[test]
+    fn ribbon_buttons_send_messages() {
+        let app = App::default();
+        let mut ui = simulator(&app);
+        ui.click("Wireframe").expect("Wireframe button");
+        ui.click("Grid").expect("Grid button");
+        let messages: Vec<Message> = ui.into_messages().collect();
+        assert!(matches!(messages[0], Message::Mode(RenderMode::Wireframe)), "{messages:?}");
+        assert!(matches!(messages[1], Message::ToggleGrid), "{messages:?}");
+    }
+
+    #[test]
+    fn dragging_and_scrolling_the_viewport_navigates() {
+        use iced::mouse;
+        let mut app = App::default();
+        app.status = Status::Loaded(String::new()); // no overlay over the viewport
+        app.model = None;
+        let mut ui = simulator(&app);
+        let start = iced::Point::new(700.0, 300.0);
+        ui.point_at(start);
+        ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
+        ui.point_at(iced::Point::new(740.0, 310.0));
+        ui.simulate([iced::Event::Mouse(mouse::Event::CursorMoved { position: iced::Point::new(740.0, 310.0) })]);
+        ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+        ui.simulate([iced::Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 } })]);
+        let nav: Vec<Navigate> = ui
+            .into_messages()
+            .filter_map(|m| match m {
+                Message::Navigate(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 40.0 && *dy == 10.0)), "{nav:?}");
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Zoom { steps } if *steps == 1.0)), "{nav:?}");
+    }
 
     #[test]
     fn counts_are_grouped() {

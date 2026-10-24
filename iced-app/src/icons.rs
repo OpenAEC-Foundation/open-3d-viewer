@@ -32,3 +32,5 @@ pub const EYE_OFF: &str = icon!(r#"<path d="M3 3l18 18"/><path d="M10.6 5.1A10 1
 pub fn handle(source: &'static str) -> svg::Handle {
     svg::Handle::from_memory(source.as_bytes())
 }
+pub const PERSPECTIVE: &str = icon!(r#"<path d="M6 4L18 4L21 20H3L6 4Z"/><path d="M12 4v16" stroke-dasharray="3 2"/>"#);
+pub const ORTHO: &str = icon!(r#"<rect x="4" y="4" width="16" height="16"/><path d="M12 4v16" stroke-dasharray="3 2"/>"#);

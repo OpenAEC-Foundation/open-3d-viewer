@@ -1979,6 +1979,7 @@ dependencies = [
  "gltf",
  "iced",
  "iced_test",
+ "png 0.18.1",
  "rfd",
  "rvt-export",
  "rvt-read",

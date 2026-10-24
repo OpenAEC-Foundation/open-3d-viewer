@@ -19,6 +19,8 @@ glam = { version = "0.30", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 # Native file dialog (MIT)
 rfd = "0.17"
+# PNG for the window icon and window screenshots (MIT OR Apache-2.0)
+png = "0.18"
 # Mesh formats
 gltf = { version = "1.4", default-features = false, features = ["import", "names", "utils"] }
 tobj = "4"

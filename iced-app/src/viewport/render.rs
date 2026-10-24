@@ -22,7 +22,7 @@ pub enum RenderMode {
     #[default]
     Solid,
     Wireframe,
-    /// Solid with all triangle edges on top.
+    /// Solid with feature edges (creases and open borders) on top.
     SolidEdges,
 }
 
@@ -94,10 +94,9 @@ struct GpuLayer {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
-    /// Line list over all triangle edges, built on first use.
-    edges: Option<(wgpu::Buffer, u32)>,
-    /// CPU copy of the triangle indices, to build `edges` lazily.
-    tri_indices: Vec<u32>,
+    /// Line lists, built on first use: all triangle edges (wireframe) and feature edges.
+    wire: Option<(wgpu::Buffer, u32)>,
+    features: Option<(wgpu::Buffer, u32)>,
 }
 
 struct Targets {
@@ -124,6 +123,7 @@ pub struct ScenePipeline {
     edge_group: wgpu::BindGroup,
     targets: Option<Targets>,
     model_id: u64,
+    model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
     grid: Option<(wgpu::Buffer, u32, [i64; 6])>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
@@ -317,6 +317,7 @@ impl ScenePipeline {
             edge_group,
             targets: None,
             model_id: 0,
+            model: None,
             layers: Vec::new(),
             grid: None,
             rect: (0, 0, 1, 1),
@@ -360,12 +361,13 @@ impl ScenePipeline {
         self.targets = Some(Targets { size, msaa, resolve, depth, blit_group });
     }
 
-    fn upload_model(&mut self, device: &wgpu::Device, model: Option<&Model>) {
+    fn upload_model(&mut self, device: &wgpu::Device, model: Option<&Arc<Model>>) {
         let id = model.map_or(0, |m| m.id);
         if id == self.model_id {
             return;
         }
         self.model_id = id;
+        self.model = model.cloned();
         self.layers.clear();
         let Some(model) = model else { return };
         for layer in &model.layers {
@@ -396,27 +398,38 @@ impl ScenePipeline {
                 vertices,
                 indices,
                 index_count: layer.indices.len() as u32,
-                edges: None,
-                tri_indices: layer.indices.clone(),
+                wire: None,
+                features: None,
             });
         }
     }
 
-    fn ensure_edges(&mut self, device: &wgpu::Device, visible: &[bool]) {
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            if layer.edges.is_some() || !visible.get(i).copied().unwrap_or(true) {
+    /// Builds the line index buffers for visible layers on first use.
+    fn ensure_edges(&mut self, device: &wgpu::Device, visible: &[bool], all_triangle_edges: bool) {
+        let Some(model) = self.model.clone() else { return };
+        for (i, (gpu, layer)) in self.layers.iter_mut().zip(&model.layers).enumerate() {
+            if !visible.get(i).copied().unwrap_or(true) {
                 continue;
             }
-            let mut lines = Vec::with_capacity(layer.tri_indices.len() * 2);
-            for t in layer.tri_indices.chunks_exact(3) {
-                lines.extend_from_slice(&[t[0], t[1], t[1], t[2], t[2], t[0]]);
+            let slot = if all_triangle_edges { &mut gpu.wire } else { &mut gpu.features };
+            if slot.is_some() {
+                continue;
             }
+            let lines = if all_triangle_edges {
+                let mut lines = Vec::with_capacity(layer.indices.len() * 2);
+                for t in layer.indices.chunks_exact(3) {
+                    lines.extend_from_slice(&[t[0], t[1], t[1], t[2], t[2], t[0]]);
+                }
+                lines
+            } else {
+                feature_edges(&layer.positions, &layer.indices, 25.0)
+            };
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("o3v.layer.edges"),
                 contents: bytemuck::cast_slice(&lines),
                 usage: wgpu::BufferUsages::INDEX,
             });
-            layer.edges = Some((buffer, lines.len() as u32));
+            *slot = Some((buffer, lines.len() as u32));
         }
     }
 
@@ -485,10 +498,10 @@ impl ScenePipeline {
         self.ensure_targets(device, (w, h));
         queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&[x as f32, y as f32, 0.0, 0.0]));
 
-        self.upload_model(device, primitive.model.as_deref());
+        self.upload_model(device, primitive.model.as_ref());
         let settings = &primitive.settings;
         if settings.mode != RenderMode::Solid {
-            self.ensure_edges(device, &primitive.visible);
+            self.ensure_edges(device, &primitive.visible, settings.mode == RenderMode::Wireframe);
         }
         if settings.grid {
             let world_bounds = primitive
@@ -565,7 +578,8 @@ impl ScenePipeline {
             if mode != RenderMode::Solid {
                 pass.set_bind_group(0, &self.edge_group, &[]);
                 for (i, layer) in self.layers.iter().enumerate() {
-                    if let (true, Some((edges, count))) = (visible(i), &layer.edges) {
+                    let edges = if mode == RenderMode::Wireframe { &layer.wire } else { &layer.features };
+                    if let (true, Some((edges, count))) = (visible(i), edges) {
                         pass.set_vertex_buffer(0, layer.vertices.slice(..));
                         pass.set_index_buffer(edges.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..*count, 0, 0..1);
@@ -632,4 +646,87 @@ pub fn transform_bounds(b: &Bounds, m: &Mat4) -> Bounds {
         out.extend(m.transform_point3(p).to_array());
     }
     out
+}
+
+/// Edges where the faces meet at more than `angle_deg`, plus open borders, as a line index
+/// list. Vertices are welded by exact position, so flat-shaded meshes work.
+pub fn feature_edges(positions: &[f32], indices: &[u32], angle_deg: f32) -> Vec<u32> {
+    use std::collections::HashMap;
+    let vertex_count = positions.len() / 3;
+    let at = |i: u32| {
+        let i = i as usize * 3;
+        Vec3::new(positions[i], positions[i + 1], positions[i + 2])
+    };
+    // Weld: position bits -> canonical id
+    let mut weld: HashMap<[u32; 3], u32> = HashMap::with_capacity(vertex_count);
+    let canon: Vec<u32> = (0..vertex_count)
+        .map(|i| {
+            let key = [positions[3 * i].to_bits(), positions[3 * i + 1].to_bits(), positions[3 * i + 2].to_bits()];
+            let next = weld.len() as u32;
+            *weld.entry(key).or_insert(next)
+        })
+        .collect();
+    // Edge (welded) -> first face normal, original endpoints, face count, crease flag
+    struct Edge {
+        normal: Vec3,
+        a: u32,
+        b: u32,
+        faces: u32,
+        crease: bool,
+    }
+    let cos_limit = angle_deg.to_radians().cos();
+    let mut edges: HashMap<(u32, u32), Edge> = HashMap::with_capacity(indices.len());
+    for t in indices.chunks_exact(3) {
+        if t.iter().any(|&i| i as usize >= vertex_count) {
+            continue;
+        }
+        let n = (at(t[1]) - at(t[0])).cross(at(t[2]) - at(t[0]));
+        if n.length_squared() == 0.0 {
+            continue; // degenerate
+        }
+        let n = n.normalize();
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let (ca, cb) = (canon[a as usize], canon[b as usize]);
+            if ca == cb {
+                continue;
+            }
+            let key = (ca.min(cb), ca.max(cb));
+            edges
+                .entry(key)
+                .and_modify(|e| {
+                    e.faces += 1;
+                    // Two-sided: opposite windings count as the same plane
+                    if e.normal.dot(n).abs() < cos_limit {
+                        e.crease = true;
+                    }
+                })
+                .or_insert(Edge { normal: n, a, b, faces: 1, crease: false });
+        }
+    }
+    let mut lines = Vec::new();
+    for e in edges.values() {
+        if e.crease || e.faces != 2 {
+            lines.extend_from_slice(&[e.a, e.b]);
+        }
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quad_diagonal_is_not_a_feature_edge() {
+        // Two coplanar triangles sharing the diagonal 0-2
+        let p = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+        let lines = feature_edges(&p, &[0, 1, 2, 0, 2, 3], 25.0);
+        assert_eq!(lines.len(), 8, "4 border edges, no diagonal");
+    }
+
+    #[test]
+    fn grid_layout_spacing_is_nice() {
+        let (_, _, spacing, _) = grid_layout(&Bounds { min: [0.0, 0.0, 0.0], max: [47.0, 40.0, 18.0] });
+        assert_eq!(spacing, 5.0);
+    }
 }

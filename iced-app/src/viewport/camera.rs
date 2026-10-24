@@ -89,7 +89,7 @@ impl Camera {
         let half_v = self.fov_y * 0.5;
         let half_h = (half_v.tan() * aspect.max(0.1)).atan();
         let half = half_v.min(half_h);
-        self.distance = radius / half.sin() * 1.05;
+        self.distance = radius / half.sin() * 1.15;
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {

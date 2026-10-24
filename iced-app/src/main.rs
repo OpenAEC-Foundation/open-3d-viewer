@@ -4,6 +4,7 @@
 //!   open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint]
 //!   open-3d-viewer-iced [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                       [--view iso|top|front|right] [--theme ...]
+//!   open-3d-viewer-iced [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer-iced --bench FILE [--frames 300]
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
@@ -30,6 +31,7 @@ struct Args {
     file: Option<PathBuf>,
     theme: Option<ThemeKind>,
     screenshot: Option<PathBuf>,
+    window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
     mode: Option<RenderMode>,
     view: Option<ViewPreset>,
@@ -46,6 +48,7 @@ fn parse_args() -> Result<Args, String> {
         match s.as_str() {
             "--theme" => args.theme = Some(ThemeKind::parse(&value()?).ok_or("unknown theme")?),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
+            "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
                 let (w, h) = v.split_once('x').ok_or("--size WxH")?;
@@ -71,7 +74,7 @@ fn parse_args() -> Result<Args, String> {
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(7).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(8).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -118,9 +121,10 @@ fn run_app(args: Args) -> iced::Result {
     let boot = move || {
         let mut app = initial_state(&args);
         app.initial_view = args.view;
+        app.window_shot = args.window_screenshot.clone();
         let task = match &file {
             Some(path) => iced::Task::done(Message::Open(path.clone())),
-            None => iced::Task::none(),
+            None => app.shot_after_delay(),
         };
         (app, task)
     };
@@ -132,7 +136,11 @@ fn run_app(args: Args) -> iced::Result {
         .font(INTER_SEMIBOLD)
         .default_font(app::FONT)
         .antialiasing(true)
-        .window_size((1440.0, 900.0))
+        .window(iced::window::Settings {
+            size: iced::Size::new(1440.0, 900.0),
+            icon: window_icon(),
+            ..Default::default()
+        })
         .run()
 }
 
@@ -174,4 +182,28 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     std::fs::rename(&written, out).map_err(|e| e.to_string())?;
     eprintln!("wrote {}", out.display());
     Ok(())
+}
+
+/// The app icon (same artwork as the Tauri app).
+fn window_icon() -> Option<iced::window::Icon> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!("../../src-tauri/icons/128x128.png")));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+        png::ColorType::Rgb => buf[..info.buffer_size()].chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        _ => return None,
+    };
+    iced::window::icon::from_rgba(rgba, info.width, info.height).ok()
+}
+
+/// Writes RGBA8 pixels as a PNG file.
+pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(rgba).map_err(|e| e.to_string())
 }

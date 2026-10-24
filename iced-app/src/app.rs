@@ -52,6 +52,8 @@ pub struct App {
     pub viewport_size: (f32, f32),
     /// View preset to apply when the next model arrives (command line).
     pub initial_view: Option<ViewPreset>,
+    /// `--window-screenshot`: capture the real window once the model is shown, then exit.
+    pub window_shot: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +75,8 @@ pub enum Message {
     AllLayers(bool),
     LayerFilter(String),
     Navigate(Navigate),
+    TakeShot,
+    Shot(window::Screenshot),
 }
 
 impl From<Navigate> for Message {
@@ -98,6 +102,7 @@ impl Default for App {
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
             initial_view: None,
+            window_shot: None,
         }
     }
 }
@@ -162,6 +167,14 @@ impl App {
         self.fit();
     }
 
+    /// For `--window-screenshot`: give the window time to render, then capture it.
+    pub fn shot_after_delay(&self) -> Task<Message> {
+        if self.window_shot.is_none() {
+            return Task::none();
+        }
+        Task::perform(async { std::thread::sleep(std::time::Duration::from_millis(1500)) }, |_| Message::TakeShot)
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::OpenDialog => {
@@ -189,8 +202,26 @@ impl App {
                 self.status = Status::Loading { file, since: Instant::now() };
                 return load_task(path);
             }
-            Message::Loaded(Ok(model)) => self.set_model(model),
-            Message::Loaded(Err(e)) => self.status = Status::Error(e),
+            Message::Loaded(Ok(model)) => {
+                self.set_model(model);
+                return self.shot_after_delay();
+            }
+            Message::Loaded(Err(e)) => {
+                self.status = Status::Error(e);
+                return self.shot_after_delay();
+            }
+            Message::TakeShot => {
+                return window::latest().and_then(window::screenshot).map(Message::Shot);
+            }
+            Message::Shot(shot) => {
+                if let Some(path) = self.window_shot.take() {
+                    match crate::write_png(&path, shot.size.width, shot.size.height, &shot.rgba) {
+                        Ok(()) => eprintln!("wrote {}", path.display()),
+                        Err(e) => eprintln!("error: {e}"),
+                    }
+                    return iced::exit();
+                }
+            }
             Message::Mode(m) => self.mode = m,
             Message::ToggleGrid => self.grid = !self.grid,
             Message::ToggleFlipUp => {

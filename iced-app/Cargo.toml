@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer-iced"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.44.9"
+version = "2026.44.10"
 description = "Open 3D Viewer Studio, pure Rust edition (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -34,10 +34,10 @@ stl_io = "0.11"
 # SketchUp (.skp): ZIP inflate for the 2021+ container (MIT OR Apache-2.0) and face triangulation (ISC)
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 earcutr = "0.5"
-# Revit (.rvt): OpenAEC rvt reader, a private checkout at C:/Users/AIA12/rvt-reader
-rvt-read = { path = "C:/Users/AIA12/rvt-reader/crates/rvt-read", optional = true }
-rvt-export = { path = "C:/Users/AIA12/rvt-reader/crates/rvt-export", default-features = false, optional = true }
-rvt-model = { path = "C:/Users/AIA12/rvt-reader/crates/rvt-model", optional = true }
+# Revit (.rvt): OpenAEC rvt reader, a private sibling checkout (../../rvt-reader)
+rvt-read = { path = "../../rvt-reader/crates/rvt-read", optional = true }
+rvt-export = { path = "../../rvt-reader/crates/rvt-export", default-features = false, optional = true }
+rvt-model = { path = "../../rvt-reader/crates/rvt-model", optional = true }
 
 [features]
 default = ["rvt"]

@@ -10,7 +10,7 @@ use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
 use openaec_ui::icons::{DomainIcon, Icon};
 use openaec_ui::iced::{Element, Subscription, Task};
-use openaec_ui::{Application, Command, Language, RibbonGroup, RibbonTab, Theme};
+use openaec_ui::{Application, Command, CommandIcon, Language, RibbonGroup, RibbonTab, Theme};
 
 /// Version: OpenAEC calendar versioning (year.ISO week.patch, as `openaec-ui` and Pointcloud).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -49,7 +49,12 @@ impl Application for Studio {
                 groups: vec![
                     RibbonGroup {
                         label: l.text("Bestand", "File").into(),
-                        commands: vec![Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O")],
+                        commands: vec![
+                            Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O"),
+                            Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog)
+                                .enabled(loaded)
+                                .shortcut("Ctrl+Shift+S"),
+                        ],
                     },
                     RibbonGroup {
                         label: l.text("Weergave", "Display").into(),
@@ -113,6 +118,22 @@ impl Application for Studio {
                                 .enabled(app.section_on || app.plane.is_some()),
                         ],
                     },
+                    // the sliders are in the properties pane while it is on, as the section box's
+                    RibbonGroup {
+                        label: l.text("Uit elkaar", "Explode").into(),
+                        commands: vec![Command::new(
+                            l.text("Uit elkaar", "Explode"),
+                            CommandIcon::Svg(crate::icons::EXPLODE.as_bytes()),
+                            Message::ToggleExplode,
+                        )
+                        .selected(app.explode_on)
+                        .enabled(loaded)],
+                    },
+                    RibbonGroup {
+                        label: l.text("Meten", "Measure").into(),
+                        commands: vec![Command::new(l.text("Metingen wissen", "Clear measurements"), Icon::Measure, Message::ClearMeasurements)
+                            .enabled(!app.measurements.is_empty())],
+                    },
                     RibbonGroup {
                         label: l.text("Projectie", "Projection").into(),
                         commands: vec![
@@ -168,13 +189,17 @@ impl Application for Studio {
     }
 
     fn file_commands(&self, l: Language) -> Vec<Command<Message>> {
-        vec![Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog)]
+        vec![
+            Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog),
+            Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog).enabled(self.app.model.is_some()),
+        ]
     }
 
     fn status(&self, l: Language) -> String {
         match &self.app.status {
             Status::Ready => l.text("Gereed", "Ready").into(),
             Status::Loading { file, since, .. } => format!("{} {file}… {:.0} s", l.text("Laden", "Loading"), since.elapsed().as_secs_f32()),
+            Status::Saving { file, since } => format!("{} {file}… {:.0} s", l.text("Opslaan", "Saving"), since.elapsed().as_secs_f32()),
             Status::Loaded(s) => s.clone(),
             Status::Error(e) => format!("{}: {e}", l.text("Fout", "Error")),
         }

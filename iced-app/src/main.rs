@@ -1,20 +1,26 @@
 //! Open 3D Viewer Studio, pure Rust edition (iced + wgpu).
 //!
 //! Usage:
-//!   open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint]
+//!   open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint] [--no-remote]
 //!   open-3d-viewer-iced [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                       [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
+//!                       [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!   open-3d-viewer-iced [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer-iced --bench FILE [--frames 300]
+//!   open-3d-viewer-iced FILE --save-as OUT.ifc   (convert without a window)
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod annotations;
 mod app;
 mod bench;
+mod explode;
+mod export;
 mod icons;
 mod loaders;
 mod measure;
 mod model;
+mod remote;
+mod remote_link;
 mod section;
 mod shell;
 mod theme;
@@ -44,6 +50,12 @@ struct Args {
     ortho: bool,
     view_tab: bool,
     frames: Option<u32>,
+    /// Do not take remote control commands (the MCP server).
+    no_remote: bool,
+    save_as: Option<PathBuf>,
+    /// Exploded view for `--screenshot`: percent per axis, and the mode.
+    explode: Option<[f32; 3]>,
+    explode_mode: Option<explode::ExplodeMode>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -80,10 +92,23 @@ fn parse_args() -> Result<Args, String> {
             }
             "--ortho" => args.ortho = true,
             "--view-tab" => args.view_tab = true,
+            "--no-remote" => args.no_remote = true,
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
+            "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
+            "--explode" => {
+                let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--explode X,Y,Z")).collect::<Result<_, _>>()?;
+                args.explode = Some(<[f32; 3]>::try_from(v).map_err(|_| "--explode X,Y,Z")?);
+            }
+            "--explode-mode" => {
+                args.explode_mode = Some(match value()?.as_str() {
+                    "storeys" => explode::ExplodeMode::Storeys,
+                    "elements" => explode::ExplodeMode::Elements,
+                    _ => return Err("--explode-mode storeys|elements".into()),
+                })
+            }
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(8).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(10).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -103,6 +128,8 @@ fn main() {
     };
     let code = if let Some(file) = &args.bench {
         bench::run(file, args.frames.unwrap_or(300))
+    } else if let Some(out) = &args.save_as {
+        save_as(&args, out)
     } else if let Some(out) = &args.screenshot {
         screenshot(&args, out)
     } else if args.window_screenshot.is_some() {
@@ -114,6 +141,16 @@ fn main() {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// `--save-as`: loads the file and writes it in the format of `out`'s extension.
+fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--save-as needs a FILE to convert")?;
+    let model = loaders::load(file)?;
+    let start = std::time::Instant::now();
+    export::save(&model, out)?;
+    println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
 }
 
 fn initial_state(args: &Args) -> App {
@@ -137,6 +174,8 @@ fn run_app(args: Args) -> iced::Result {
     let mut app = initial_state(&args);
     app.initial_view = args.view;
     app.pending_open = args.file.clone();
+    // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
+    app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
     let prefs = std::env::var_os("APPDATA").map(|d| {
         let dir = PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio");
         let _ = std::fs::create_dir_all(&dir);
@@ -192,6 +231,15 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         );
         app.initial_view = args.view;
         app.set_model(Arc::new(model));
+        // the model pulled apart, framed as F would
+        if let Some(amount) = args.explode {
+            app.explode_mode = args.explode_mode.unwrap_or_default();
+            let _ = app.update(Message::ToggleExplode);
+            for (axis, percent) in amount.into_iter().enumerate() {
+                let _ = app.update(Message::Explode(axis, percent));
+            }
+            app.fit();
+        }
     }
     let theme = app.theme();
     let settings = iced::Settings {

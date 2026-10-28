@@ -199,6 +199,7 @@ impl Model {
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
         let props: HashMap<u64, String> = layers.iter_mut().flat_map(|l| std::mem::take(&mut l.props)).collect();
         layers.retain(|l| !l.indices.is_empty() && !l.positions.is_empty());
+        layers.iter_mut().for_each(unshare_element_vertices);
         let layers: Vec<Layer> = layers.into_iter().flat_map(|l| split_layer(l, MAX_PART_VERTICES, MAX_PART_TRIANGLES)).collect();
         let mut bounds = Bounds::empty();
         for layer in &layers {
@@ -258,7 +259,7 @@ impl Model {
     }
 }
 
-/// GPU buffer limits (wgpu default `max_buffer_size` is 256 MiB): at 28 bytes per vertex and up
+/// GPU buffer limits (wgpu default `max_buffer_size` is 256 MiB): at 32 bytes per vertex and up
 /// to 6 line indices per triangle, parts stay below that.
 pub const MAX_PART_VERTICES: usize = 8_000_000;
 pub const MAX_PART_TRIANGLES: usize = 10_000_000;
@@ -337,6 +338,51 @@ fn empty_like(layer: &Layer) -> Layer {
         colors: layer.colors.as_ref().map(|_| Vec::new()),
         hidden: layer.hidden,
         ..Layer::default()
+    }
+}
+
+/// Gives every element of a layer its own vertices: a vertex used by the triangles of two
+/// elements (or of an element and of no element) is copied, so the exploded view can move an
+/// element without dragging its neighbours along.
+pub fn unshare_element_vertices(layer: &mut Layer) {
+    if layer.elements.is_empty() {
+        return;
+    }
+    // the owner of every triangle: 1 + the element's number in the layer, 0 outside elements
+    let mut number: HashMap<u64, u32> = HashMap::new();
+    let mut owner_of_triangle = vec![0u32; layer.triangle_count()];
+    for &(id, first, count) in &layer.elements {
+        let next = number.len() as u32 + 1;
+        let owner = *number.entry(id).or_insert(next);
+        let end = (((first + count) / 3) as usize).min(owner_of_triangle.len());
+        if let Some(tris) = owner_of_triangle.get_mut(first as usize / 3..end) {
+            tris.fill(owner);
+        }
+    }
+    let n = layer.vertex_count();
+    let mut owner_of_vertex = vec![u32::MAX; n];
+    let mut copies: HashMap<(u32, u32), u32> = HashMap::new();
+    let Layer { positions, normals, colors, indices, .. } = layer;
+    for (k, index) in indices.iter_mut().enumerate() {
+        let (v, Some(&owner)) = (*index as usize, owner_of_triangle.get(k / 3)) else { break };
+        if v >= n || owner_of_vertex[v] == owner {
+            continue;
+        }
+        if owner_of_vertex[v] == u32::MAX {
+            owner_of_vertex[v] = owner;
+            continue;
+        }
+        *index = *copies.entry((*index, owner)).or_insert_with(|| {
+            let copy = (positions.len() / 3) as u32;
+            if normals.len() == positions.len() {
+                normals.extend_from_within(3 * v..3 * v + 3);
+            }
+            if let Some(c) = colors.as_mut().filter(|c| c.len() == copy as usize) {
+                c.push(c[v]);
+            }
+            positions.extend_from_within(3 * v..3 * v + 3);
+            copy
+        });
     }
 }
 
@@ -421,6 +467,31 @@ mod tests {
         assert_eq!(parts[1].triangle_count(), 1);
         assert_eq!(parts[1].name, "L (part 2/2)");
         assert!(parts.iter().all(|p| p.indices.iter().all(|&i| (i as usize) < p.vertex_count())));
+    }
+
+    #[test]
+    fn elements_get_their_own_vertices() {
+        // two triangles sharing the edge 1-2: element 7, element 8; a third triangle outside both
+        let positions = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+        let mut layer = Layer {
+            normals: [0.0, 0.0, 1.0].repeat(4),
+            colors: Some(vec![[1, 2, 3, 255], [4, 5, 6, 255], [7, 8, 9, 255], [0; 4]]),
+            positions: positions.clone(),
+            indices: vec![0, 1, 2, 1, 3, 2, 2, 3, 1],
+            elements: vec![(7, 0, 3), (8, 3, 3)],
+            ..Layer::default()
+        };
+        unshare_element_vertices(&mut layer);
+        // element 8 gets copies of 1 and 2; the free triangle its own copies of 2, 3 and 1
+        assert_eq!(layer.indices, vec![0, 1, 2, 4, 3, 5, 6, 7, 8]);
+        assert_eq!(layer.vertex_count(), 9);
+        assert_eq!(layer.normals.len(), layer.positions.len());
+        assert_eq!(&layer.positions[12..18], &positions[3..9]);
+        assert_eq!(layer.colors.as_ref().map(|c| c[5]), Some([7, 8, 9, 255]));
+        // nothing shared: unchanged
+        let before = layer.clone();
+        unshare_element_vertices(&mut layer);
+        assert_eq!((layer.indices, layer.positions), (before.indices, before.positions));
     }
 
     #[test]

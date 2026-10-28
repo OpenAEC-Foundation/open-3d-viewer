@@ -20,11 +20,14 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+// exploded view: the offset (world) of every unit; unit 0 never moves
+@group(0) @binding(1) var<storage, read> offsets: array<vec4<f32>>;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) unit: u32,
 };
 
 struct VertexOut {
@@ -34,10 +37,15 @@ struct VertexOut {
     @location(2) color: vec4<f32>,
 };
 
+// Where a vertex is drawn: turned by the model matrix, then moved with its unit.
+fn place(v: VertexIn) -> vec4<f32> {
+    return u.model * vec4<f32>(v.position, 1.0) + vec4<f32>(offsets[v.unit].xyz, 0.0);
+}
+
 @vertex
 fn vs_main(v: VertexIn) -> VertexOut {
     var out: VertexOut;
-    let world = u.model * vec4<f32>(v.position, 1.0);
+    let world = place(v);
     out.world = world.xyz;
     out.normal = (u.model * vec4<f32>(v.normal, 0.0)).xyz;
     out.color = v.color;
@@ -177,7 +185,7 @@ fn fs_none() -> @location(0) vec4<f32> {
 @vertex
 fn vs_face(v: VertexIn, @builtin(instance_index) face: u32) -> FaceOut {
     var out: FaceOut;
-    let world = u.model * vec4<f32>(v.position, 1.0);
+    let world = place(v);
     out.world = world.xyz;
     out.face = face;
     out.clip = u.view_proj * world;

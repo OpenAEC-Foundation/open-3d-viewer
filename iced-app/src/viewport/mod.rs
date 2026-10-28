@@ -8,6 +8,7 @@
 pub mod camera;
 pub mod render;
 
+use crate::explode::ExplodeIndex;
 use crate::model::Model;
 use camera::Camera;
 use iced::mouse;
@@ -23,8 +24,9 @@ pub enum Navigate {
     Pan { dx: f32, dy: f32, height: f32 },
     /// Wheel steps at (x, y) in a viewport of width × height (logical pixels).
     Zoom { steps: f32, x: f32, y: f32, width: f32, height: f32 },
-    /// The viewport size changed (logical pixels), for fit-to-view.
-    Resized { width: f32, height: f32 },
+    /// The viewport moved or changed size (logical pixels, origin in the window), for
+    /// fit-to-view and to cut the viewport out of window screenshots.
+    Resized { x: f32, y: f32, width: f32, height: f32 },
     /// Left click at (x, y) in the viewport (logical pixels).
     Pick { x: f32, y: f32, width: f32, height: f32 },
 }
@@ -36,6 +38,9 @@ pub struct Viewport3D<'a> {
     pub selection: &'a [(usize, u32, u32)],
     pub camera: Camera,
     pub settings: RenderSettings,
+    /// The exploded view: the units of the model and the offset (world) of each.
+    pub explode: Option<&'a Arc<ExplodeIndex>>,
+    pub offsets: &'a Arc<Vec<[f32; 4]>>,
 }
 
 #[derive(Default)]
@@ -44,7 +49,7 @@ pub struct State {
     /// Where the left button went down, for click detection.
     press: Option<Point>,
     shift: bool,
-    size: (f32, f32),
+    bounds: Rectangle,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -71,11 +76,13 @@ where
 
         match event {
             Event::Window(iced::window::Event::RedrawRequested(_)) => {
-                if state.size == (bounds.width, bounds.height) {
+                if state.bounds == bounds {
                     return None;
                 }
-                state.size = (bounds.width, bounds.height);
+                state.bounds = bounds;
                 Some(shader::Action::publish(Message::from(Navigate::Resized {
+                    x: bounds.x,
+                    y: bounds.y,
                     width: bounds.width,
                     height: bounds.height,
                 })))
@@ -145,6 +152,8 @@ where
             selection: self.selection.to_vec(),
             camera: self.camera,
             settings: self.settings,
+            explode: self.explode.cloned(),
+            offsets: self.offsets.clone(),
         }
     }
 

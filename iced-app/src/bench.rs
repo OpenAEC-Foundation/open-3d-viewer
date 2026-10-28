@@ -95,6 +95,7 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
             plane: None,
             caps: section.is_some(),
             grids: true,
+            bounds: None,
         };
         let frame = |camera: Camera, pipeline: &mut ScenePipeline| {
             let primitive = ScenePrimitive {
@@ -103,6 +104,8 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
                 selection: Vec::new(),
                 camera,
                 settings,
+                explode: None,
+                offsets: Arc::default(),
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

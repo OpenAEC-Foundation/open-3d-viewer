@@ -58,6 +58,38 @@ impl SectionBox {
         Some(out)
     }
 
+    /// The box round the model (world bounds) with one face on `plane`, when the box can make the
+    /// same cut: a level plane, or an upright one (the box turned to it by at most 45°, so an X or
+    /// Y plane leaves it straight). A sloped plane gives `None`.
+    pub fn from_plane(plane: &SectionPlane, world: &Bounds) -> Option<Self> {
+        let n = plane.normal;
+        let turn = if n.x.abs() < 1e-6 && n.y.abs() < 1e-6 {
+            0.0
+        } else if n.z.abs() < 1e-6 {
+            let quarter = std::f32::consts::FRAC_PI_2;
+            let angle = n.y.atan2(n.x);
+            angle - (angle / quarter).round() * quarter
+        } else {
+            return None;
+        };
+        let middle = Vec3::from_array(world.center());
+        let mut out = SectionBox { min: middle, max: middle, turn, pivot: middle };
+        let r = out.local_bounds(world);
+        let (min, max) = (Vec3::from_array(r.min), Vec3::from_array(r.max));
+        let pad = (max - min).max(Vec3::splat(MIN_SIZE)) * 0.01;
+        out.min = min - pad;
+        out.max = max + pad;
+        // the box axis along the normal: its face on that side goes where the plane is
+        let (axis, along) = (0..3).map(|j| (j, out.axis(j).dot(n))).max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))?;
+        let at = out.pivot[axis] + along.signum() * plane.offset - out.pivot.dot(out.axis(axis));
+        if along > 0.0 {
+            out.max[axis] = at.min(out.max[axis]).max(out.min[axis] + MIN_SIZE);
+        } else {
+            out.min[axis] = at.max(out.min[axis]).min(out.max[axis] - MIN_SIZE);
+        }
+        Some(out)
+    }
+
     /// The box limited to the model (world bounds) plus a margin: views store far planes of
     /// thousands of metres.
     pub fn clamped_to(mut self, world: &Bounds) -> Self {
@@ -690,6 +722,31 @@ mod tests {
         assert_eq!(plane.offset, plane.range(&world).1);
         let (u, v) = SectionPlane { normal: Vec3::new(0.0, 0.6, 0.8), offset: 0.0 }.basis();
         assert!(u.z.abs() < 1e-6 && v.z > 0.0, "{u} {v}");
+    }
+
+    #[test]
+    fn a_level_or_upright_plane_becomes_a_face_of_the_box() {
+        let world = Bounds { min: [0.0, 0.0, 0.0], max: [10.0, 8.0, 3.0] };
+        for plane in [
+            SectionPlane { normal: Vec3::NEG_X, offset: -4.0 },
+            SectionPlane { normal: Vec3::Y, offset: 5.0 },
+            SectionPlane { normal: Vec3::Z, offset: 1.5 },
+            SectionPlane { normal: Vec3::NEG_Z, offset: -1.0 },
+            // a wall at an angle: the box turns to it
+            SectionPlane { normal: Vec3::new(0.6, -0.8, 0.0), offset: 1.0 },
+        ] {
+            let b = SectionBox::from_plane(&plane, &world).expect("box");
+            if plane.normal.x == 0.0 || plane.normal.y == 0.0 {
+                assert_eq!(b.turn, 0.0, "{plane:?}");
+            }
+            // the same cut everywhere in the model
+            for (i, j, k) in (0..10).flat_map(|i| (0..8).flat_map(move |j| (0..3).map(move |k| (i, j, k)))) {
+                let p = Vec3::new(i as f32, j as f32, k as f32) + 0.37;
+                assert_eq!(b.contains(p), !plane.cuts(p), "{plane:?} at {p}");
+            }
+        }
+        // a sloped roof cannot be a face of the box
+        assert!(SectionBox::from_plane(&SectionPlane { normal: Vec3::new(0.0, 0.6, 0.8), offset: 1.0 }, &world).is_none());
     }
 
     fn unit() -> SectionBox {

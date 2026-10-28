@@ -13,6 +13,7 @@ macro_rules! icon {
 }
 
 pub const OPEN: &str = icon!(r#"<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14l3 3 3-3"/>"#);
+pub const SAVE_AS: &str = icon!(r#"<path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h7V3"/><rect x="7" y="13" width="10" height="8" rx="1"/>"#);
 pub const SOLID: &str = icon!(r#"<path d="M12 2L2 7l10 5 10-5-10-5z" fill="black" fill-opacity="0.3"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>"#);
 pub const WIREFRAME: &str = icon!(r#"<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>"#);
 pub const EDGES: &str = icon!(r#"<path d="M4 8L12 4L20 8L12 12Z" fill="black" fill-opacity="0.25"/><path d="M4 8L12 12L20 8"/><path d="M12 12V20"/><path d="M4 8V16L12 20L20 16V8"/>"#);
@@ -34,3 +35,5 @@ pub fn handle(source: &'static str) -> svg::Handle {
 }
 pub const PERSPECTIVE: &str = icon!(r#"<path d="M6 4L18 4L21 20H3L6 4Z"/><path d="M12 4v16" stroke-dasharray="3 2"/>"#);
 pub const ORTHO: &str = icon!(r#"<rect x="4" y="4" width="16" height="16"/><path d="M12 4v16" stroke-dasharray="3 2"/>"#);
+/// Exploded view: a block in four parts, pulled apart.
+pub const EXPLODE: &str = icon!(r#"<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1" fill="black" fill-opacity="0.3"/><path d="M12 10.5v3M10.5 12h3"/>"#);

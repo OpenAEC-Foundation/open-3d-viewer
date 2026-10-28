@@ -1,16 +1,18 @@
 import { useState, memo } from 'react';
 import {
   Download, Sun, Grid3x3, Lightbulb, RotateCcw,
-  Camera, MoveVertical, Gauge,
+  Camera, ArrowUpDown,
 } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, ThemeSelector } from './RibbonComponents';
-import { WireframeIcon, SolidIcon, PointsIcon, HiddenLineIcon, SectionBoxIcon, OrbitIcon, WalkIcon, PerspectiveIcon, OrthoIcon } from './RibbonIcons';
+import { WireframeIcon, SolidIcon, PointsIcon, HiddenLineIcon, SectionBoxIcon, SectionPlaneIcon, OrbitIcon, WalkIcon, PerspectiveIcon, OrthoIcon } from './RibbonIcons';
 import { useViewerActions } from './useViewerActions';
+import { MeasureRibbonTab } from './MeasureRibbonTab';
+import { ExplodeRibbonGroup } from './ExplodeRibbonGroup';
 import { useTranslation } from '../../../i18n/useTranslation';
 import './Ribbon.css';
 
-type RibbonTab = 'home' | 'view' | 'tools';
+type RibbonTab = 'home' | 'view' | 'measure' | 'tools';
 
 export const Ribbon = memo(function Ribbon() {
   const [activeTab, setActiveTab] = useState<RibbonTab>('home');
@@ -30,6 +32,8 @@ export const Ribbon = memo(function Ribbon() {
   const setProjectionMode = useAppStore((s) => s.setProjectionMode);
   const sectionBoxEnabled = useAppStore((s) => s.sectionBoxEnabled);
   const setSectionBoxEnabled = useAppStore((s) => s.setSectionBoxEnabled);
+  const sectionPlaneMode = useAppStore((s) => s.sectionPlaneMode);
+  const setSectionPlaneMode = useAppStore((s) => s.setSectionPlaneMode);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
 
@@ -61,6 +65,12 @@ export const Ribbon = memo(function Ribbon() {
           onClick={() => setActiveTab('view')}
         >
           {t('tabs.view')}
+        </button>
+        <button
+          className={`ribbon-tab ${activeTab === 'measure' ? 'active' : ''}`}
+          onClick={() => setActiveTab('measure')}
+        >
+          {t('tabs.measure')}
         </button>
         <button
           className={`ribbon-tab ${activeTab === 'tools' ? 'active' : ''}`}
@@ -139,15 +149,32 @@ export const Ribbon = memo(function Ribbon() {
                 tooltip={t('buttons.sectionTooltip')}
               />
               <RibbonButton
+                icon={<SectionPlaneIcon />}
+                label={t('buttons.sectionPlane')}
+                onClick={() => setSectionPlaneMode(sectionPlaneMode === 'off' ? 'picking' : 'off')}
+                active={sectionPlaneMode !== 'off'}
+                tooltip={t('buttons.sectionPlaneTooltip')}
+              />
+              <RibbonButton
+                icon={<ArrowUpDown size={20} />}
+                label={t('buttons.flip')}
+                onClick={() => window.dispatchEvent(new CustomEvent('open3d:sectionplane-flip'))}
+                disabled={sectionPlaneMode !== 'placed'}
+                tooltip={t('buttons.flipTooltip')}
+              />
+              <RibbonButton
                 icon={<RotateCcw size={20} />}
                 label={t('buttons.reset')}
                 onClick={() => {
-                  window.dispatchEvent(new CustomEvent('open3d:sectionbox-reset'));
+                  if (sectionBoxEnabled) window.dispatchEvent(new CustomEvent('open3d:sectionbox-reset'));
+                  if (sectionPlaneMode !== 'off') setSectionPlaneMode('picking');
                 }}
-                disabled={!sectionBoxEnabled}
+                disabled={!sectionBoxEnabled && sectionPlaneMode === 'off'}
                 tooltip={t('buttons.resetSectionTooltip')}
               />
             </RibbonGroup>
+
+            <ExplodeRibbonGroup />
 
             <RibbonGroup label={t('groups.camera')}>
               <RibbonButtonStack>
@@ -164,26 +191,14 @@ export const Ribbon = memo(function Ribbon() {
           </div>
         </div>
 
+        {/* Measure tab */}
+        <div className={`ribbon-content ${activeTab === 'measure' ? 'active' : ''}`}>
+          <MeasureRibbonTab />
+        </div>
+
         {/* Tools tab */}
         <div className={`ribbon-content ${activeTab === 'tools' ? 'active' : ''}`}>
           <div className="ribbon-groups">
-            <RibbonGroup label={t('groups.measure')}>
-              <RibbonButton
-                icon={<MoveVertical size={20} />}
-                label={t('buttons.distance')}
-                onClick={() => {}}
-                disabled
-                tooltip={t('buttons.distanceTooltip')}
-              />
-              <RibbonButton
-                icon={<Gauge size={20} />}
-                label={t('buttons.angle')}
-                onClick={() => {}}
-                disabled
-                tooltip={t('buttons.angleTooltip')}
-              />
-            </RibbonGroup>
-
             <RibbonGroup label={t('groups.info')}>
               <RibbonButton
                 icon={<Camera size={20} />}

@@ -17,6 +17,10 @@ import {
   type LoadingActions,
   initialLoadingState,
   createLoadingSlice,
+  type MeasureState,
+  type MeasureActions,
+  initialMeasureState,
+  createMeasureSlice,
 } from './slices';
 
 // ============================================================================
@@ -51,13 +55,15 @@ const initialUIState: UIState = {
 // Combined State
 // ============================================================================
 
-export type AppState = UIState & UIActions & ViewerState & ViewerActions & LoadingState & LoadingActions;
+export type AppState = UIState & UIActions & ViewerState & ViewerActions & LoadingState & LoadingActions
+  & MeasureState & MeasureActions;
 
 export const useAppStore = create<AppState>()(
   immer((set, get) => ({
     ...initialUIState,
     ...initialViewerState,
     ...initialLoadingState,
+    ...initialMeasureState,
 
     // UI actions
     setUITheme: (theme: UITheme) => {
@@ -74,6 +80,9 @@ export const useAppStore = create<AppState>()(
 
     // Loading actions
     ...createLoadingSlice(set as any, get as any),
+
+    // Measure actions
+    ...createMeasureSlice(set as any, get as any),
   }))
 );
 

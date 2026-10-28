@@ -954,6 +954,7 @@ function buildThreeJSScene(
         loadTextureForMaterial(material, zipFiles[matInfo.textureFile], matInfo.textureFile);
       }
 
+      material.name = matName;
       const mesh = new THREE.Mesh(geometry, material);
       mesh.name = matName;
       defGroup.add(mesh);

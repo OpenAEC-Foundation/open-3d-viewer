@@ -13,6 +13,10 @@ export class SectionBox {
   max: THREE.Vector3;
   /** Whether section box is enabled */
   enabled = false;
+  /** Extra clipping planes combined with the box (e.g. the section plane) */
+  extraPlanes: THREE.Plane[] = [];
+  /** Helper objects (other gizmos) that must never be clipped */
+  helpers: THREE.Object3D[] = [];
 
   /** Interactive gizmo with face handles */
   readonly gizmo = new SectionBoxGizmo();
@@ -61,38 +65,42 @@ export class SectionBox {
   }
 
   /**
+   * All planes that currently clip the scene: the box planes (when enabled)
+   * plus any extra planes such as a single section plane.
+   */
+  getActivePlanes(): THREE.Plane[] {
+    return this.enabled ? [...this.planes, ...this.extraPlanes] : [...this.extraPlanes];
+  }
+
+  /**
    * Apply clipping planes to a material.
    */
   applyToMaterial(material: THREE.Material): void {
-    if (this.enabled) {
-      material.clippingPlanes = this.planes;
-      material.clipShadows = true;
-    } else {
-      material.clippingPlanes = [];
-    }
+    const planes = this.getActivePlanes();
+    material.clippingPlanes = planes;
+    material.clipShadows = planes.length > 0;
   }
 
   /**
    * Apply clipping planes to all meshes in the scene.
-   * Excludes the gizmo's own meshes from clipping.
+   * Excludes gizmo/helper objects from clipping.
    */
   applyToScene(): void {
-    this.scene.traverse((child) => {
-      // Skip gizmo's own objects
-      if (child === this.gizmo.group || this.gizmo.group.getObjectById(child.id)) return;
+    const planes = this.getActivePlanes();
+    const helpers = new Set<THREE.Object3D>([this.gizmo.group, ...this.helpers]);
 
+    const visit = (child: THREE.Object3D) => {
+      if (helpers.has(child)) return;
       if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         for (const mat of materials) {
-          if (this.enabled) {
-            mat.clippingPlanes = this.planes;
-            mat.clipShadows = true;
-          } else {
-            mat.clippingPlanes = [];
-          }
+          mat.clippingPlanes = planes;
+          mat.clipShadows = planes.length > 0;
         }
       }
-    });
+      for (const c of child.children) visit(c);
+    };
+    visit(this.scene);
   }
 
   /**

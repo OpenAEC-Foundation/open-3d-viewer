@@ -6,6 +6,9 @@ export {
   type CameraMode,
   type RenderMode,
   type ProjectionMode,
+  type SectionPlaneMode,
+  type ExplodeMode,
+  type ExplodeAxis,
   initialViewerState,
   createViewerSlice,
 } from './viewerSlice';
@@ -18,3 +21,15 @@ export {
   initialLoadingState,
   createLoadingSlice,
 } from './loadingSlice';
+
+export {
+  type MeasureState,
+  type MeasureActions,
+  type MeasureSlice,
+  type MeasureTool,
+  type MeasureSnapSettings,
+  type MeasurementSummary,
+  type TakeoffRow,
+  initialMeasureState,
+  createMeasureSlice,
+} from './measureSlice';

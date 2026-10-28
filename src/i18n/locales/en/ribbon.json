@@ -2,6 +2,7 @@
   "tabs": {
     "home": "Home",
     "view": "View",
+    "measure": "Measure",
     "tools": "Tools"
   },
   "groups": {
@@ -11,9 +12,14 @@
     "settings": "Settings",
     "navigation": "Navigation",
     "sectionBox": "Section Box",
+    "explode": "Explode",
     "camera": "Camera",
-    "measure": "Measure",
-    "info": "Info"
+    "info": "Info",
+    "measureTools": "Measure",
+    "measureSelection": "Selection",
+    "measureSnap": "Snap",
+    "measureDisplay": "Display",
+    "measureManage": "Measurements"
   },
   "buttons": {
     "import": "Import",
@@ -32,20 +38,201 @@
     "speed": "Speed",
     "section": "Section",
     "sectionTooltip": "Toggle section box",
+    "sectionPlane": "Plane",
+    "sectionPlaneTooltip": "Section plane: hover over the model and click a face to cut there",
+    "flip": "Flip",
+    "flipTooltip": "Cut away the other side of the section plane",
     "reset": "Reset",
-    "resetSectionTooltip": "Reset section box to model bounds",
+    "resetSectionTooltip": "Reset section box to model bounds / pick a new plane",
+    "explodeStoreys": "Storeys",
+    "explodeStoreysCount": "Storeys ({{count}})",
+    "explodeElements": "Elements",
     "front": "Front",
     "back": "Back",
     "left": "Left",
     "right": "Right",
     "top": "Top",
     "bottom": "Bottom",
-    "distance": "Distance",
-    "distanceTooltip": "Measure distance (coming soon)",
-    "angle": "Angle",
-    "angleTooltip": "Measure angle (coming soon)",
     "statistics": "Statistics",
     "statisticsTooltip": "Show model statistics"
   },
-  "theme": "Theme"
+  "theme": "Theme",
+  "hints": {
+    "sectionPlanePick": "Click a face to cut through it — Esc to cancel"
+  },
+  "measure": {
+    "categories": {
+      "length": "Length",
+      "area": "Area",
+      "volume": "Volume",
+      "weight": "Weight",
+      "angle": "Angle",
+      "count": "Count"
+    },
+    "methods": {
+      "perpendicular": {
+        "label": "Perpendicular",
+        "description": "Between point, edge and face — perpendicular to edge or face",
+        "hint": "Pick a point, edge or face to measure from",
+        "hintSecond": "Pick the second point, edge or face — measured perpendicular"
+      },
+      "distance": {
+        "label": "Point to point",
+        "description": "Straight distance between two points",
+        "hint": "Click the start point",
+        "hintSecond": "Click the end point"
+      },
+      "point": {
+        "label": "Coordinate",
+        "description": "X, Y and Z of a point",
+        "hint": "Click a point to show its coordinates"
+      },
+      "area": {
+        "label": "Face",
+        "description": "Area of one face (curved too)",
+        "hint": "Click a face to measure its area"
+      },
+      "polygon": {
+        "label": "Custom",
+        "description": "Area between corner points you pick",
+        "hint": "Click corner points ({{n}} picked) — click the first point, double-click or Enter to close, Backspace = undo point"
+      },
+      "areaTotal": {
+        "label": "Whole object",
+        "description": "Area of all faces of an object",
+        "hint": "Click an object for the total area of all its faces"
+      },
+      "volume": {
+        "label": "Object",
+        "description": "Volume of an object",
+        "hint": "Click an object to measure its volume"
+      },
+      "weight": {
+        "label": "Object",
+        "description": "Weight from the file or volume × density",
+        "hint": "Click an object to calculate its weight"
+      },
+      "angle": {
+        "label": "Edges and faces",
+        "description": "Angle between faces, edges or an edge and a face",
+        "hint": "Pick the edge or face the angle starts from",
+        "hintSecond": "Pick the second edge or face"
+      },
+      "angle3": {
+        "label": "Three points",
+        "description": "Angle at the middle point",
+        "hint0": "Click the first point",
+        "hint1": "Click the vertex",
+        "hint2": "Click the third point"
+      },
+      "count": {
+        "label": "Objects",
+        "description": "Click objects to count them",
+        "hint": "Click objects to count them — click again to remove"
+      },
+      "countEntity": {
+        "label": "Points, edges, faces",
+        "description": "Count individual points, edges and faces",
+        "hint": "Click points, edges or faces to count them — click again to remove"
+      }
+    },
+    "snap": {
+      "vertex": "Point",
+      "midpoint": "Midpoint",
+      "edge": "Edge",
+      "face": "Face"
+    },
+    "multi": "Multiple",
+    "multiTooltip": "Multiple selection: measurements stay and are added up at the top. Off: a new measurement replaces the previous one.",
+    "components": "XYZ parts",
+    "removeLast": "Remove last",
+    "clear": "Clear all",
+    "save": "Save",
+    "saveTooltip": "Save the current measurements to the takeoff",
+    "delete": "Remove measurement",
+    "units": {
+      "button": "Units",
+      "tooltip": "Units and decimals",
+      "title": "Units and decimals",
+      "unit": "Unit",
+      "decimals": "Decimals",
+      "example": "Example"
+    },
+    "label": {
+      "perimeter": "Perimeter",
+      "curved": "Curved surface",
+      "total": "Total",
+      "notClosed": "≈ object not closed",
+      "countTotal": "Count"
+    },
+    "weightSource": {
+      "file": "weight from file",
+      "user": "user setting",
+      "preset": "preset",
+      "default": "default"
+    },
+    "hints": {
+      "escape": "Esc to stop"
+    },
+    "materials": {
+      "menu": "Materials and densities…",
+      "menuDescription": "Set the density per material",
+      "title": "Materials and densities",
+      "intro": "The weight is taken from the file when it is stated there (e.g. IFC NetWeight). Otherwise: volume × material density. Recognised materials get a preset automatically; change it here or enter your own value.",
+      "defaultDensity": "Default density (unknown material)",
+      "none": "No materials found in the opened files.",
+      "preset": "Preset",
+      "density": "Density",
+      "auto": "Automatic",
+      "useDefault": "default",
+      "custom": "Custom value",
+      "presets": {
+        "reinforcedConcrete": "Reinforced concrete",
+        "concrete": "Concrete",
+        "stainless": "Stainless steel",
+        "steel": "Steel",
+        "aluminium": "Aluminium",
+        "sandLime": "Sand-lime brick",
+        "aeratedConcrete": "Aerated concrete",
+        "masonry": "Masonry / brick",
+        "naturalStone": "Natural stone",
+        "hardwood": "Hardwood",
+        "softwood": "Softwood",
+        "glass": "Glass",
+        "gypsum": "Gypsum",
+        "insulation": "Insulation",
+        "screed": "Screed / cement",
+        "water": "Water"
+      }
+    },
+    "takeoff": {
+      "button": "Takeoff",
+      "tooltip": "Open the takeoff ({{n}} rows)",
+      "title": "Quantity takeoff",
+      "defaultGroup": "Measurement {{n}}",
+      "empty": "No saved measurements yet.\nMeasure something and click Save in the ribbon.",
+      "columns": {
+        "group": "Group",
+        "name": "Name",
+        "category": "Category",
+        "method": "Method",
+        "value": "Value",
+        "unit": "Unit",
+        "object": "Object",
+        "material": "Material",
+        "detail": "Note",
+        "count": "Count",
+        "total": "Total"
+      },
+      "renameGroup": "Rename group",
+      "exportExcel": "Export to Excel",
+      "clear": "Clear table",
+      "confirmClear": "Remove all rows?",
+      "yesClear": "Yes, clear",
+      "cancel": "Cancel",
+      "sheetMeasurements": "Measurements",
+      "sheetTotals": "Totals",
+      "fileName": "takeoff"
+    }
+  }
 }

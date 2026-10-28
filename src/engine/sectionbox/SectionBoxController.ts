@@ -29,6 +29,14 @@ export class SectionBoxController {
   /** Called when bounds change so clipping planes update */
   private onBoundsChange?: () => void;
 
+  /** Temporarily ignore pointer input (e.g. while picking a section plane) */
+  private suspended = false;
+
+  setSuspended(suspended: boolean): void {
+    this.suspended = suspended;
+    if (suspended) this.gizmo.setHoveredFace(null);
+  }
+
   setCamera(camera: THREE.Camera): void {
     this.camera = camera;
   }
@@ -86,7 +94,7 @@ export class SectionBoxController {
   }
 
   private handlePointerMove(e: PointerEvent): void {
-    if (!this.sectionBox.enabled) return;
+    if (!this.sectionBox.enabled || this.suspended) return;
 
     this.updateMouse(e);
 
@@ -114,7 +122,7 @@ export class SectionBoxController {
   }
 
   private handlePointerDown(e: PointerEvent): void {
-    if (!this.sectionBox.enabled || e.button !== 0) return;
+    if (!this.sectionBox.enabled || this.suspended || e.button !== 0) return;
 
     this.updateMouse(e);
     this.raycaster.setFromCamera(this.mouse, this.camera);

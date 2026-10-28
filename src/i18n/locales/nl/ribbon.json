@@ -2,6 +2,7 @@
   "tabs": {
     "home": "Start",
     "view": "Weergave",
+    "measure": "Metingen",
     "tools": "Hulpmiddelen"
   },
   "groups": {
@@ -11,9 +12,14 @@
     "settings": "Instellingen",
     "navigation": "Navigatie",
     "sectionBox": "Doorsnede",
+    "explode": "Uit elkaar",
     "camera": "Camera",
-    "measure": "Meten",
-    "info": "Info"
+    "info": "Info",
+    "measureTools": "Meten",
+    "measureSelection": "Selectie",
+    "measureSnap": "Snappen",
+    "measureDisplay": "Weergave",
+    "measureManage": "Metingen"
   },
   "buttons": {
     "import": "Importeren",
@@ -32,20 +38,201 @@
     "speed": "Snelheid",
     "section": "Doorsnede",
     "sectionTooltip": "Doorsnede aan/uit",
+    "sectionPlane": "Vlak",
+    "sectionPlaneTooltip": "Doorsnedevlak: beweeg over het model en klik op een vlak om daar door te snijden",
+    "flip": "Omdraaien",
+    "flipTooltip": "Andere kant van het doorsnedevlak wegsnijden",
     "reset": "Herstellen",
-    "resetSectionTooltip": "Doorsnede herstellen naar modelbegrenzingen",
+    "resetSectionTooltip": "Doorsnede herstellen naar modelbegrenzingen / nieuw vlak kiezen",
+    "explodeStoreys": "Verdiepingen",
+    "explodeStoreysCount": "Verdiepingen ({{count}})",
+    "explodeElements": "Elementen",
     "front": "Voor",
     "back": "Achter",
     "left": "Links",
     "right": "Rechts",
     "top": "Boven",
     "bottom": "Onder",
-    "distance": "Afstand",
-    "distanceTooltip": "Afstand meten (binnenkort beschikbaar)",
-    "angle": "Hoek",
-    "angleTooltip": "Hoek meten (binnenkort beschikbaar)",
     "statistics": "Statistieken",
     "statisticsTooltip": "Modelstatistieken tonen"
   },
-  "theme": "Thema"
+  "theme": "Thema",
+  "hints": {
+    "sectionPlanePick": "Klik op een vlak om door te snijden — Esc om te annuleren"
+  },
+  "measure": {
+    "categories": {
+      "length": "Lengte",
+      "area": "Oppervlakte",
+      "volume": "Volume",
+      "weight": "Gewicht",
+      "angle": "Hoek",
+      "count": "Tellen"
+    },
+    "methods": {
+      "perpendicular": {
+        "label": "Loodrecht",
+        "description": "Tussen punt, rand en vlak — loodrecht op rand of vlak",
+        "hint": "Kies een punt, rand of vlak om vanaf te meten",
+        "hintSecond": "Kies het tweede punt, rand of vlak — er wordt loodrecht gemeten"
+      },
+      "distance": {
+        "label": "Punt tot punt",
+        "description": "Rechte afstand tussen twee punten",
+        "hint": "Klik het beginpunt",
+        "hintSecond": "Klik het eindpunt"
+      },
+      "point": {
+        "label": "Coördinaat",
+        "description": "X, Y en Z van een punt",
+        "hint": "Klik een punt om de coördinaten te tonen"
+      },
+      "area": {
+        "label": "Vlak",
+        "description": "Oppervlakte van één vlak (ook gebogen)",
+        "hint": "Klik op een vlak om de oppervlakte te meten"
+      },
+      "polygon": {
+        "label": "Aangepast",
+        "description": "Oppervlakte tussen zelf gekozen hoekpunten",
+        "hint": "Klik hoekpunten ({{n}} gekozen) — klik het eerste punt, dubbelklik of Enter om te sluiten, Backspace = punt terug"
+      },
+      "areaTotal": {
+        "label": "Totaal object",
+        "description": "Oppervlakte van alle zijden van een object",
+        "hint": "Klik op een object voor de totale oppervlakte van alle zijden"
+      },
+      "volume": {
+        "label": "Object",
+        "description": "Volume van een object",
+        "hint": "Klik op een object om het volume te meten"
+      },
+      "weight": {
+        "label": "Object",
+        "description": "Gewicht uit het bestand of volume × dichtheid",
+        "hint": "Klik op een object om het gewicht te berekenen"
+      },
+      "angle": {
+        "label": "Randen en vlakken",
+        "description": "Hoek tussen vlakken, randen of rand en vlak",
+        "hint": "Kies de rand of het vlak waar de hoek begint",
+        "hintSecond": "Kies de tweede rand of het tweede vlak"
+      },
+      "angle3": {
+        "label": "Drie punten",
+        "description": "Hoek bij het middelste punt",
+        "hint0": "Klik het eerste punt",
+        "hint1": "Klik het hoekpunt",
+        "hint2": "Klik het derde punt"
+      },
+      "count": {
+        "label": "Objecten",
+        "description": "Klik objecten om ze te tellen",
+        "hint": "Klik objecten om ze te tellen — nogmaals klikken haalt ze eraf"
+      },
+      "countEntity": {
+        "label": "Punten, randen, vlakken",
+        "description": "Tel losse punten, randen en vlakken",
+        "hint": "Klik punten, randen of vlakken om ze te tellen — nogmaals klikken haalt ze eraf"
+      }
+    },
+    "snap": {
+      "vertex": "Punt",
+      "midpoint": "Middelpunt",
+      "edge": "Rand",
+      "face": "Vlak"
+    },
+    "multi": "Meervoudig",
+    "multiTooltip": "Meervoudige selectie: metingen blijven staan en worden bovenaan opgeteld. Uit: een nieuwe meting vervangt de vorige.",
+    "components": "XYZ-delen",
+    "removeLast": "Laatste wissen",
+    "clear": "Alles wissen",
+    "save": "Opslaan",
+    "saveTooltip": "Huidige metingen opslaan in de uittrekstaat",
+    "delete": "Meting verwijderen",
+    "units": {
+      "button": "Eenheden",
+      "tooltip": "Eenheden en decimalen",
+      "title": "Eenheden en decimalen",
+      "unit": "Eenheid",
+      "decimals": "Decimalen",
+      "example": "Voorbeeld"
+    },
+    "label": {
+      "perimeter": "Omtrek",
+      "curved": "Gebogen oppervlak",
+      "total": "Totaal",
+      "notClosed": "≈ object niet gesloten",
+      "countTotal": "Aantal"
+    },
+    "weightSource": {
+      "file": "gewicht uit bestand",
+      "user": "eigen instelling",
+      "preset": "preset",
+      "default": "standaard"
+    },
+    "hints": {
+      "escape": "Esc om te stoppen"
+    },
+    "materials": {
+      "menu": "Materialen en dichtheden…",
+      "menuDescription": "Dichtheid per materiaal instellen",
+      "title": "Materialen en dichtheden",
+      "intro": "Het gewicht komt uit het bestand als het daar in staat (bijv. IFC NetWeight). Anders: volume × dichtheid van het materiaal. Herkende materialen krijgen automatisch een preset; pas die hier aan of vul zelf een waarde in.",
+      "defaultDensity": "Standaarddichtheid (onbekend materiaal)",
+      "none": "Geen materialen gevonden in de geopende bestanden.",
+      "preset": "Preset",
+      "density": "Dichtheid",
+      "auto": "Automatisch",
+      "useDefault": "standaard",
+      "custom": "Eigen waarde",
+      "presets": {
+        "reinforcedConcrete": "Gewapend beton",
+        "concrete": "Beton",
+        "stainless": "RVS",
+        "steel": "Staal",
+        "aluminium": "Aluminium",
+        "sandLime": "Kalkzandsteen",
+        "aeratedConcrete": "Cellenbeton",
+        "masonry": "Metselwerk / baksteen",
+        "naturalStone": "Natuursteen",
+        "hardwood": "Hardhout",
+        "softwood": "Naaldhout",
+        "glass": "Glas",
+        "gypsum": "Gips",
+        "insulation": "Isolatie",
+        "screed": "Dekvloer / cement",
+        "water": "Water"
+      }
+    },
+    "takeoff": {
+      "button": "Uittrekstaat",
+      "tooltip": "Uittrekstaat openen ({{n}} regels)",
+      "title": "Uittrekstaat",
+      "defaultGroup": "Meting {{n}}",
+      "empty": "Nog geen opgeslagen metingen.\nMeet iets en klik op Opslaan in het lint.",
+      "columns": {
+        "group": "Groep",
+        "name": "Naam",
+        "category": "Categorie",
+        "method": "Methode",
+        "value": "Waarde",
+        "unit": "Eenheid",
+        "object": "Object",
+        "material": "Materiaal",
+        "detail": "Opmerking",
+        "count": "Aantal",
+        "total": "Totaal"
+      },
+      "renameGroup": "Groepsnaam wijzigen",
+      "exportExcel": "Exporteren naar Excel",
+      "clear": "Tabel leegmaken",
+      "confirmClear": "Alle regels verwijderen?",
+      "yesClear": "Ja, leegmaken",
+      "cancel": "Annuleren",
+      "sheetMeasurements": "Metingen",
+      "sheetTotals": "Totalen",
+      "fileName": "uittrekstaat"
+    }
+  }
 }

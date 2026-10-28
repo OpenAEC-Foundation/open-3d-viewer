@@ -330,3 +330,149 @@ export function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProp
     </div>
   );
 }
+
+// ============================================================================
+// Popover helpers
+// ============================================================================
+
+/** Open state for a menu/panel anchored to a button; closes on outside click or Escape */
+function usePopover() {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!anchor) return;
+    const handleDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (wrapperRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setAnchor(null);
+    };
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAnchor(null); };
+    document.addEventListener('mousedown', handleDown);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleDown);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [anchor]);
+
+  const toggle = () => {
+    if (anchor) setAnchor(null);
+    else if (wrapperRef.current) setAnchor(wrapperRef.current.getBoundingClientRect());
+  };
+  const style: React.CSSProperties | undefined = anchor
+    ? { position: 'fixed', top: anchor.bottom + 2, left: Math.max(4, Math.min(anchor.left, window.innerWidth - 300)), zIndex: 9999 }
+    : undefined;
+
+  return { open: !!anchor, toggle, close: () => setAnchor(null), wrapperRef, panelRef, style };
+}
+
+// ============================================================================
+// RibbonSplitButton — large button whose upper part runs the current choice
+// and whose label opens a menu with the alternatives
+// ============================================================================
+
+export interface RibbonMenuItem {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: React.ReactNode;
+  active?: boolean;
+  /** Draw a divider above this item */
+  separator?: boolean;
+  onClick: () => void;
+}
+
+interface RibbonSplitButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  tooltip?: string;
+  active?: boolean;
+  onClick: () => void;
+  items: RibbonMenuItem[];
+}
+
+export function RibbonSplitButton({ icon, label, tooltip, active, onClick, items }: RibbonSplitButtonProps) {
+  const tt = useTooltip();
+  const menu = usePopover();
+  return (
+    <div className="ribbon-split" ref={menu.wrapperRef}>
+      <button
+        ref={tt.ref}
+        className={`ribbon-btn ribbon-split-main ${active ? 'active' : ''}`}
+        onClick={onClick}
+        onMouseEnter={tt.onEnter}
+        onMouseLeave={tt.onLeave}
+      >
+        <span className="ribbon-btn-icon">{icon}</span>
+      </button>
+      <button
+        className={`ribbon-split-arrow ${active ? 'active' : ''} ${menu.open ? 'open' : ''}`}
+        onClick={menu.toggle}
+      >
+        <span>{label}</span>
+        <ChevronDown size={10} />
+      </button>
+      {tt.show && !menu.open && <RibbonTooltip label={tooltip || label} parentRef={tt.ref as React.RefObject<HTMLElement>} />}
+      {menu.open && (
+        <div className="ribbon-menu" ref={menu.panelRef} style={menu.style}>
+          {items.map((item) => (
+            <div key={item.id}>
+              {item.separator && <div className="ribbon-menu-separator" />}
+              <button
+                className={`ribbon-menu-item ${item.active ? 'active' : ''}`}
+                onClick={() => { item.onClick(); menu.close(); }}
+              >
+                <span className="ribbon-menu-check">{item.active && <Check size={12} />}</span>
+                {item.icon && <span className="ribbon-menu-icon">{item.icon}</span>}
+                <span className="ribbon-menu-text">
+                  <span className="ribbon-menu-label">{item.label}</span>
+                  {item.description && <span className="ribbon-menu-description">{item.description}</span>}
+                </span>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// RibbonPanelButton — large button that opens a panel with arbitrary content
+// ============================================================================
+
+interface RibbonPanelButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  tooltip?: string;
+  children: React.ReactNode;
+}
+
+export function RibbonPanelButton({ icon, label, tooltip, children }: RibbonPanelButtonProps) {
+  const tt = useTooltip();
+  const panel = usePopover();
+  return (
+    <div className="ribbon-split" ref={panel.wrapperRef}>
+      <button
+        ref={tt.ref}
+        className={`ribbon-btn ${panel.open ? 'active' : ''}`}
+        onClick={panel.toggle}
+        onMouseEnter={tt.onEnter}
+        onMouseLeave={tt.onLeave}
+      >
+        <span className="ribbon-btn-icon">{icon}</span>
+        <span className="ribbon-btn-label" style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+          {label} <ChevronDown size={10} />
+        </span>
+      </button>
+      {tt.show && !panel.open && <RibbonTooltip label={tooltip || label} parentRef={tt.ref as React.RefObject<HTMLElement>} />}
+      {panel.open && (
+        <div className="ribbon-panel" ref={panel.panelRef} style={panel.style}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}

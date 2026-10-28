@@ -130,6 +130,13 @@ export class SceneManager {
   }
 
   /**
+   * Root groups of all loaded models.
+   */
+  getModelGroups(): THREE.Group[] {
+    return [...this.modelGroups.values()];
+  }
+
+  /**
    * Get bounding box of all models.
    */
   getSceneBounds(): THREE.Box3 {

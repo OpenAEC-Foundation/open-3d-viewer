@@ -5,14 +5,24 @@ import { ControlsManager } from '../../engine/controls/ControlsManager';
 import { SceneManager } from '../../engine/scene/SceneManager';
 import { SectionBox } from '../../engine/sectionbox/SectionBox';
 import { SectionBoxController } from '../../engine/sectionbox/SectionBoxController';
+import { SectionPlane } from '../../engine/sectionplane/SectionPlane';
+import { SectionPlaneController } from '../../engine/sectionplane/SectionPlaneController';
+import { ExplodeManager } from '../../engine/explode/ExplodeManager';
+import { MeasureManager } from '../../engine/measure/MeasureManager';
+import { MeasureController } from '../../engine/measure/MeasureController';
+import { collectMaterials } from '../../engine/measure/measureObjects';
 import { modelLoader } from '../../engine/loaders/ModelLoader';
 import { isSupported } from '../../engine/loaders/LoaderRegistry';
 import { t } from '../../i18n/useTranslation';
+import i18next from '../../i18n/config';
 import { useAppStore } from '../../state/appStore';
 import { ErrorOverlay } from './ErrorOverlay';
 import { ViewCube } from './ViewCube';
 import { AxisIndicator } from './AxisIndicator';
 import { WelcomeScreen } from './WelcomeScreen';
+import { MeasureHud } from '../measure/MeasureHud';
+import { TakeoffDialog } from '../measure/TakeoffDialog';
+import { MaterialsDialog } from '../measure/MaterialsDialog';
 
 export function Viewer3D() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,6 +36,12 @@ export function Viewer3D() {
   const sceneManagerRef = useRef<SceneManager | null>(null);
   const sectionBoxRef = useRef<SectionBox | null>(null);
   const sectionBoxCtrlRef = useRef<SectionBoxController | null>(null);
+  const sectionPlaneRef = useRef<SectionPlane | null>(null);
+  const sectionPlaneCtrlRef = useRef<SectionPlaneController | null>(null);
+  const explodeRef = useRef<ExplodeManager | null>(null);
+  const measureOverlayRef = useRef<HTMLDivElement>(null);
+  const measureMgrRef = useRef<MeasureManager | null>(null);
+  const measureCtrlRef = useRef<MeasureController | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const ambientRef = useRef<THREE.AmbientLight | null>(null);
   const directionalRef = useRef<THREE.DirectionalLight | null>(null);
@@ -43,6 +59,15 @@ export function Viewer3D() {
   const cameraMode = useAppStore((s) => s.cameraMode);
   const walkSpeed = useAppStore((s) => s.walkSpeed);
   const sectionBoxEnabled = useAppStore((s) => s.sectionBoxEnabled);
+  const sectionPlaneMode = useAppStore((s) => s.sectionPlaneMode);
+  const measureTool = useAppStore((s) => s.measureTool);
+  const measureSnap = useAppStore((s) => s.measureSnap);
+  const measureMulti = useAppStore((s) => s.measureMulti);
+  const measureUnits = useAppStore((s) => s.measureUnits);
+  const measureShowComponents = useAppStore((s) => s.measureShowComponents);
+  const weightSettings = useAppStore((s) => s.weightSettings);
+  const takeoffOpen = useAppStore((s) => s.takeoffOpen);
+  const materialsDialogOpen = useAppStore((s) => s.materialsDialogOpen);
 
   // Fit camera to bounding box
   const fitCameraToBox = useCallback((box: THREE.Box3) => {
@@ -96,11 +121,14 @@ export function Viewer3D() {
       });
 
       sceneManager.addModel(id, result);
+      explodeRef.current?.invalidate();
 
       // Fit camera + section box
       const box = sceneManager.getSceneBounds();
       fitCameraToBox(box);
       sectionBoxRef.current?.fitToScene(box);
+      sectionPlaneRef.current?.invalidateBounds();
+      sectionBoxRef.current?.applyToScene();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`Failed to load: ${msg}`);
@@ -125,10 +153,13 @@ export function Viewer3D() {
       });
 
       sceneManager.addModel(id, result);
+      explodeRef.current?.invalidate();
 
       const box = sceneManager.getSceneBounds();
       fitCameraToBox(box);
       sectionBoxRef.current?.fitToScene(box);
+      sectionPlaneRef.current?.invalidateBounds();
+      sectionBoxRef.current?.applyToScene();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`Failed to load: ${msg}`);
@@ -141,7 +172,8 @@ export function Viewer3D() {
   useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
-    if (!container || !canvas) return;
+    const measureOverlay = measureOverlayRef.current;
+    if (!container || !canvas || !measureOverlay) return;
 
     // Scene
     const scene = new THREE.Scene();
@@ -152,9 +184,21 @@ export function Viewer3D() {
     const sceneManager = new SceneManager(scene);
     sceneManagerRef.current = sceneManager;
 
+    // Exploded view (moves meshes of the loaded models apart)
+    const explode = new ExplodeManager(
+      () => sceneManager.getModelGroups(),
+      (count) => useAppStore.getState().setExplodeStoreyCount(count),
+    );
+    explodeRef.current = explode;
+
     // Section Box
     const sectionBox = new SectionBox(scene);
     sectionBoxRef.current = sectionBox;
+
+    // Section Plane (single plane placed by clicking a face); its plane is combined with the box planes
+    const sectionPlane = new SectionPlane(scene, () => sceneManager.getSceneBounds());
+    sectionPlaneRef.current = sectionPlane;
+    sectionBox.helpers.push(sectionPlane.gizmo.group);
 
     // Camera (perspective + orthographic) — Z-up coordinate system
     const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 10000);
@@ -185,6 +229,31 @@ export function Viewer3D() {
     controls.walk.onSpeedChange = (speed) => {
       useAppStore.getState().setWalkSpeed(Math.round(speed * 2) / 2);
     };
+
+    // Section Plane Controller — created before the section box controller and the
+    // selection handler, so it can consume the clicks/drags it handles
+    const spController = new SectionPlaneController(sectionPlane, camera, canvas, {
+      getPickTargets: () => sceneManager.getModelGroups(),
+      getClippingPlanes: () => sectionBox.getActivePlanes(),
+      onDragStart: () => controls.orbit.controls.enabled = false,
+      onDragEnd: () => controls.orbit.controls.enabled = true,
+      onPlace: () => useAppStore.getState().setSectionPlaneMode('placed'),
+      onCancel: () => useAppStore.getState().setSectionPlaneMode(sectionPlane.hasPlane ? 'placed' : 'off'),
+    });
+    sectionPlaneCtrlRef.current = spController;
+
+    // Measurements: visuals are never clipped; the controller consumes clicks while a tool is active
+    const measureManager = new MeasureManager(scene, measureOverlay);
+    measureMgrRef.current = measureManager;
+    sectionBox.helpers.push(measureManager.group);
+    measureManager.onChange = (summaries) => useAppStore.getState().setMeasurements(summaries);
+    const measureController = new MeasureController(measureManager, camera, canvas, {
+      getPickTargets: () => sceneManager.getModelGroups(),
+      getClippingPlanes: () => sectionBox.getActivePlanes(),
+      onStageChange: (stage) => useAppStore.getState().setMeasureStage(stage),
+      onExit: () => useAppStore.getState().setMeasureTool('off'),
+    });
+    measureCtrlRef.current = measureController;
 
     // Section Box Controller (interactive dragging of faces)
     const sbController = new SectionBoxController(sectionBox, sectionBox.gizmo, camera, canvas, {
@@ -220,6 +289,8 @@ export function Viewer3D() {
     const animate = () => {
       rafRef.current = requestAnimationFrame(animate);
       controls.update();
+      sectionPlane.gizmo.updateScreenScale(cameraRef.current!, container.clientHeight);
+      measureManager.update(cameraRef.current!, container.clientWidth, container.clientHeight);
       rendererManager.render(scene, cameraRef.current!);
 
       fpsFrames.current++;
@@ -296,6 +367,25 @@ export function Viewer3D() {
     };
     window.addEventListener('open3d:sectionbox-reset', handleSectionBoxReset);
 
+    // Section plane flip handler
+    const handleSectionPlaneFlip = () => sectionPlane.flip();
+    window.addEventListener('open3d:sectionplane-flip', handleSectionPlaneFlip);
+
+    // Measure handlers
+    const handleMeasureUndo = () => measureManager.removeLast();
+    const handleMeasureClear = () => measureManager.clear();
+    const handleMeasureSaved = (e: Event) => measureManager.markSaved((e as CustomEvent).detail as number[]);
+    const handleMeasureMaterials = (e: Event) => {
+      ((e as CustomEvent).detail as (names: string[]) => void)(collectMaterials(sceneManager.getModelGroups()));
+    };
+    window.addEventListener('open3d:measure-undo', handleMeasureUndo);
+    window.addEventListener('open3d:measure-clear', handleMeasureClear);
+    window.addEventListener('open3d:measure-saved', handleMeasureSaved);
+    window.addEventListener('open3d:measure-materials', handleMeasureMaterials);
+    // Labels are plain DOM: rebuild them in the new language
+    const handleLanguageChanged = () => measureManager.setSettings({});
+    i18next.on('languageChanged', handleLanguageChanged);
+
     // Import handlers
     const handleImport = (e: Event) => {
       const { id, filePath, fileName } = (e as CustomEvent).detail;
@@ -313,6 +403,8 @@ export function Viewer3D() {
     const handleRemoveModel = (e: Event) => {
       const { id } = (e as CustomEvent).detail;
       sceneManager.removeModel(id);
+      explode.invalidate();
+      sectionPlane.invalidateBounds();
     };
     window.addEventListener('open3d:remove-model', handleRemoveModel);
 
@@ -387,12 +479,17 @@ export function Viewer3D() {
         prevMaterialRef.current = null;
       }
 
-      // Find first mesh hit (skip grid, gizmo helpers, lights)
+      // Find first mesh hit (skip grid, gizmo helpers, lights and clipped-away geometry)
+      const helperGroups: THREE.Object3D[] = [sectionBox.gizmo.group, sectionPlane.gizmo.group];
+      const clippingPlanes = sectionBox.getActivePlanes();
       const hit = intersects.find((i) => {
         const obj = i.object;
         if (!(obj instanceof THREE.Mesh)) return false;
-        if (obj.parent?.name === 'SectionBoxGizmo') return false;
+        for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
+          if (helperGroups.includes(o)) return false;
+        }
         if (obj instanceof THREE.GridHelper) return false;
+        if (clippingPlanes.some((p) => p.distanceToPoint(i.point) < 0)) return false;
         return true;
       });
 
@@ -485,6 +582,12 @@ export function Viewer3D() {
       resizeObserver.disconnect();
       window.removeEventListener('open3d:camera', handleCamera);
       window.removeEventListener('open3d:sectionbox-reset', handleSectionBoxReset);
+      window.removeEventListener('open3d:sectionplane-flip', handleSectionPlaneFlip);
+      window.removeEventListener('open3d:measure-undo', handleMeasureUndo);
+      window.removeEventListener('open3d:measure-clear', handleMeasureClear);
+      window.removeEventListener('open3d:measure-saved', handleMeasureSaved);
+      window.removeEventListener('open3d:measure-materials', handleMeasureMaterials);
+      i18next.off('languageChanged', handleLanguageChanged);
       window.removeEventListener('open3d:import', handleImport);
       window.removeEventListener('open3d:import-file', handleImportFile);
       window.removeEventListener('open3d:remove-model', handleRemoveModel);
@@ -495,7 +598,11 @@ export function Viewer3D() {
       window.removeEventListener('keydown', handleKeyDown);
       controls.dispose();
       sbController.dispose();
+      spController.dispose();
+      measureController.dispose();
+      measureManager.dispose();
       sectionBox.dispose();
+      sectionPlane.dispose();
       rendererManager.dispose();
       scene.clear();
     };
@@ -599,6 +706,8 @@ export function Viewer3D() {
   // Update render mode
   useEffect(() => {
     sceneManagerRef.current?.setRenderMode(renderMode);
+    // Render modes may swap materials; re-apply clipping to them
+    sectionBoxRef.current?.applyToScene();
   }, [renderMode]);
 
   // Update camera mode (orbit / walk)
@@ -641,6 +750,8 @@ export function Viewer3D() {
     }
     controls.setCamera(cameraRef.current);
     sbCtrl?.setCamera(cameraRef.current);
+    sectionPlaneCtrlRef.current?.setCamera(cameraRef.current);
+    measureCtrlRef.current?.setCamera(cameraRef.current);
   }, [projectionMode]);
 
   // Update walk speed
@@ -668,6 +779,54 @@ export function Viewer3D() {
     sb.applyToScene();
   }, [sectionBoxEnabled]);
 
+  // Update section plane
+  useEffect(() => {
+    const sp = sectionPlaneRef.current;
+    const sb = sectionBoxRef.current;
+    if (!sp || !sb) return;
+
+    sp.setMode(sectionPlaneMode);
+    sectionBoxCtrlRef.current?.setSuspended(sectionPlaneMode === 'picking' || useAppStore.getState().measureTool !== 'off');
+    if (sectionPlaneMode !== 'picking' && canvasRef.current && useAppStore.getState().measureTool === 'off') canvasRef.current.style.cursor = '';
+    sb.extraPlanes = sp.getActivePlanes();
+    sb.applyToScene();
+    // Picking a section plane and measuring both use clicks on the model
+    if (sectionPlaneMode === 'picking' && useAppStore.getState().measureTool !== 'off') {
+      useAppStore.getState().setMeasureTool('off');
+    }
+  }, [sectionPlaneMode]);
+
+  // Update measure tool
+  useEffect(() => {
+    measureCtrlRef.current?.setTool(measureTool);
+    sectionBoxCtrlRef.current?.setSuspended(measureTool !== 'off' || useAppStore.getState().sectionPlaneMode === 'picking');
+    const state = useAppStore.getState();
+    if (measureTool !== 'off' && state.sectionPlaneMode === 'picking') {
+      state.setSectionPlaneMode(sectionPlaneRef.current?.hasPlane ? 'placed' : 'off');
+    }
+  }, [measureTool]);
+
+  useEffect(() => {
+    measureCtrlRef.current?.setSnapSettings(measureSnap);
+  }, [measureSnap]);
+
+  useEffect(() => {
+    if (measureMgrRef.current) measureMgrRef.current.multi = measureMulti;
+  }, [measureMulti]);
+
+  useEffect(() => {
+    measureMgrRef.current?.setSettings({ units: measureUnits, showComponents: measureShowComponents, weight: weightSettings });
+  }, [measureUnits, measureShowComponents, weightSettings]);
+
+  // Update exploded view
+  const explodeMode = useAppStore((s) => s.explodeMode);
+  const explode = useAppStore((s) => s.explode);
+  useEffect(() => {
+    explodeRef.current?.set(explodeMode, explode.x / 100, explode.y / 100, explode.z / 100);
+    // The section plane is drawn across the (now larger or smaller) scene bounds
+    sectionPlaneRef.current?.invalidateBounds();
+  }, [explodeMode, explode]);
+
   // Update layer visibility
   const layers = useAppStore((s) => s.layers);
   useEffect(() => {
@@ -694,6 +853,10 @@ export function Viewer3D() {
   return (
     <div ref={containerRef} className="w-full h-full relative">
       <canvas ref={canvasRef} className="w-full h-full block" />
+      <div ref={measureOverlayRef} className="measure-overlay" />
+      <MeasureHud />
+      {takeoffOpen && <TakeoffDialog />}
+      {materialsDialogOpen && <MaterialsDialog />}
       <WelcomeScreen />
       <ViewCube cameraRef={cameraRef} />
       <AxisIndicator cameraRef={cameraRef} />
@@ -709,6 +872,24 @@ export function Viewer3D() {
         }}>
           <div style={{ position: 'absolute', width: 20, height: 2, left: -10, top: -1, background: 'rgba(255,255,255,0.4)', borderRadius: 1 }} />
           <div style={{ position: 'absolute', width: 2, height: 20, left: -1, top: -10, background: 'rgba(255,255,255,0.4)', borderRadius: 1 }} />
+        </div>
+      )}
+      {sectionPlaneMode === 'picking' && (
+        <div style={{
+          position: 'absolute',
+          top: 12,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10,
+          pointerEvents: 'none',
+          padding: '6px 12px',
+          borderRadius: 4,
+          background: 'rgba(0, 0, 0, 0.6)',
+          color: '#fff',
+          fontSize: 12,
+          whiteSpace: 'nowrap',
+        }}>
+          {t('ribbon:hints.sectionPlanePick')}
         </div>
       )}
       <ErrorOverlay />

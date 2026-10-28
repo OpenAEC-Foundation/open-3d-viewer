@@ -596,6 +596,50 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// Parses every .skp below `SKP_DIR` and prints one line per file (version, result, triangles,
+    /// size in metres). A survey tool for files outside the repository, hence ignored:
+    /// `SKP_DIR=... cargo test --release skp_dir_survey -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn skp_dir_survey() {
+        fn files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    files(&p, out);
+                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("skp")) {
+                    out.push(p);
+                }
+            }
+        }
+        let root = PathBuf::from(std::env::var("SKP_DIR").expect("SKP_DIR"));
+        let mut all = Vec::new();
+        files(&root, &mut all);
+        all.sort();
+        let (mut ok, mut failed) = (0, 0);
+        for f in &all {
+            let data = std::fs::read(f).unwrap();
+            let ver = legacy::version_major(&data).map_or("?".to_string(), |v| v.to_string());
+            let name = f.strip_prefix(&root).unwrap_or(f).display();
+            match std::panic::catch_unwind(|| parse(&data)) {
+                Ok(Ok(p)) => {
+                    let (single, _, size) = openskp_stats(&p);
+                    ok += 1;
+                    println!("OK   v{ver:<3} {name}  tris {single} size {size:.3?}");
+                }
+                Ok(Err(e)) => {
+                    failed += 1;
+                    println!("FAIL v{ver:<3} {name}  {}", e.chars().take(140).collect::<String>());
+                }
+                Err(_) => {
+                    failed += 1;
+                    println!("PANIC v{ver:<3} {name}");
+                }
+            }
+        }
+        println!("{ok} ok, {failed} failed");
+    }
+
     #[test]
     fn loads_sample_into_tag_layers() {
         let model = super::super::load(&sample("TestModel.skp")).expect("skp");

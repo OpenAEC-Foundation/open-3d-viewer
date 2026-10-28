@@ -26,6 +26,7 @@ open-3d-viewer-iced [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid
                     [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
 open-3d-viewer-iced [FILE] --window-screenshot OUT.png
 open-3d-viewer-iced --bench FILE [--frames 300]
+open-3d-viewer-iced FILE --save-as OUT.ifc      (convert without a window)
 ```
 
 * `--screenshot` renders one frame of the whole UI headlessly (iced_test simulator on an
@@ -64,13 +65,30 @@ open-3d-viewer-iced --bench FILE [--frames 300]
 | Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, path dependency) | one layer per category batch, Y up → Z up |
 | SketchUp `.skp` | own port of openskp 1.3 (MIT) + `flate2`, `earcutr` | 2021+ ZIP container and 2013-2020 MFC archive; one layer per tag (hidden tags start off), material colours per vertex (textures as their average colour), each component/group a pickable element with its dynamic attributes; inches → metres, Z up. Files openskp cannot read fail here too |
 | Tekla Structures `.db1` (beta) | own clean-room reader + `flate2`, `earcutr` | written only from `tekla-cleanroom/spec/SPEC_v0.1.md` (draft; open questions in `spec/QUESTIONS.md`); database versions 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as boxes along their axis in the local frame with the y/z alignment, contour plates (7.82) as their polygon extruded by the thickness; one layer per class, each part a pickable element with name, profile, material and class. Approximation: profile sizes are not in the spec yet, so the box is guessed from the profile name (`PL200*10`, `IPE270` → 270 × 135, else 100 × 100); offsets and rotation are ignored. mm → metres, Z up |
-| glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, base colour × average texture colour, vertex colours, Y up → Z up |
+| glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element with its name, base colour × average texture colour, vertex colours, Y up → Z up |
 | Wavefront `.obj` | `tobj` | one layer per object/group, MTL diffuse colours, vertex colours; treated as Y up |
 | STL `.stl` | `stl_io` | ASCII and binary, flat shaded, kept Z up |
 | PLY `.ply` | own parser | ASCII / binary LE / BE, vertex normals and colours, polygons fan-triangulated; kept Z up |
 
 New formats: implement `loaders::Loader` (name, extensions, `load` → `Vec<Layer>` in Z up,
 optional `source_y_up`) in a new module and add it to `loaders::registry()`.
+
+### Save as
+
+File → Save as (Ctrl+Shift+S) writes the open model in another format; the save dialog has one
+filter per writer.
+
+| Format | Notes |
+| --- | --- |
+| IFC 4 `.ifc` (ADD2 TC1, Reference View) | own writer, any model the viewer opens. Project, site, building and one storey per Revit level (else one storey); each element in its level, or the storey it stands on. One IFC element per model element (Revit elements, Tekla parts, SketchUp components, glTF nodes), one per layer for geometry outside elements. Class from the Revit category (IfcWall, IfcSlab, IfcDoor, IfcWindow, IfcColumn, IfcBeam, IfcDuctSegment, IfcPipeSegment, ...) or the Tekla part name (IfcColumn, IfcBeam, IfcPlate, IfcMember), else IfcBuildingElementProxy. Body: IfcTriangulatedFaceSet per colour relative to the element's placement, welded, degenerate triangles dropped, `Closed` set for closed shells, one shared IfcSurfaceStyle per colour. Properties as a property set named after the source format, materials as IfcMaterial / IfcMaterialConstituentSet, layers as IfcPresentationLayerAssignment. GlobalIds derived from the file name and element id (stable across saves). Metres; OBJ, STL and PLY have no unit, and such a model larger than 500 units is written in millimetres |
+
+Checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds,
+geometry of every element or a sample of 200): `racbasicsampleproject_2026.rvt` (456 elements,
+6 storeys), `rmebasicsampleproject_2022.rvt` (6773 elements, 4 storeys), 11 SketchUp test
+models, OBJ, STL and a three-node glTF, all without issues.
+
+New writers: implement `export::Writer` (name, extensions, `save`) in a new module and add it to
+`export::registry()`.
 
 ## AI agents (MCP server)
 
@@ -107,8 +125,8 @@ wait after every frame.
 
 ## Gaps compared with the Tauri/React app
 
-* **IFC**: the React app uses web-ifc (C++/WASM); there is no mature pure-Rust IFC
-  geometry kernel yet.
+* **IFC import**: the React app opens IFC with web-ifc (C++/WASM); there is no mature pure-Rust
+  IFC geometry kernel yet. IFC export (Save as) is native, see above.
 * **SketchUp `.skp`**: no textures (average colour instead) and no soft-edge smoothing, so
   curved surfaces look faceted.
 * **DWG, DXF, E57, LAS/point clouds**: not ported (DWG/E57 are being added to the Tauri app

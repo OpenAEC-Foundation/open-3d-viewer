@@ -1,8 +1,8 @@
 name: Build
 
 # Tests, the web build check and the desktop app for Windows, Linux and macOS. A tag v* also
-# makes a draft release with the desktop apps. (The Revit build, `revit/`, needs the private
-# rvt-reader and is built locally.)
+# makes a draft release with the desktop apps. The standard desktop app includes Revit
+# through the private rvt-dll library.
 on:
   push:
     branches: [main]
@@ -21,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Read-only access to standalone libraries
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
+          log-public-key: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -53,6 +58,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v5
+      - name: Read-only access to standalone libraries
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
+          log-public-key: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       - name: Linux dependencies

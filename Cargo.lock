@@ -687,6 +687,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "delaunator"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e1ee323c1275374f7e612d3724d12707079fb6a2117349fe144def656f5a880"
+dependencies = [
+ "robust",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2487,7 +2496,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "open-3d-viewer"
-version = "2026.44.10"
+version = "2026.44.11"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -2503,6 +2512,9 @@ dependencies = [
  "tekla-reader",
  "png 0.18.1",
  "rfd",
+ "rvt-export",
+ "rvt-model",
+ "rvt-read",
  "serde_json",
  "stl_io",
  "tobj",
@@ -2516,6 +2528,7 @@ dependencies = [
 [[package]]
 name = "openaec-model"
 version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/openaec-model?rev=2994963fcea8d1240d44801dddd1d3a351f05629#2994963fcea8d1240d44801dddd1d3a351f05629"
 dependencies = [
  "glam 0.30.10",
  "serde_json",
@@ -2655,6 +2668,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "ply-reader"
 version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/ply-reader?rev=589c12ade65e777e13283242ac14cc8943051fe8#589c12ade65e777e13283242ac14cc8943051fe8"
 dependencies = [
  "openaec-model",
 ]
@@ -3087,6 +3101,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "robust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3161,6 +3181,45 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "rvt-core"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=b74ae9aee780981e9fe6dc024b58240b88a35b43#b74ae9aee780981e9fe6dc024b58240b88a35b43"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
+name = "rvt-export"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=b74ae9aee780981e9fe6dc024b58240b88a35b43#b74ae9aee780981e9fe6dc024b58240b88a35b43"
+dependencies = [
+ "delaunator",
+ "earcutr",
+ "rvt-core",
+ "rvt-model",
+ "rvt-read",
+ "serde",
+]
+
+[[package]]
+name = "rvt-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=b74ae9aee780981e9fe6dc024b58240b88a35b43#b74ae9aee780981e9fe6dc024b58240b88a35b43"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "rvt-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=b74ae9aee780981e9fe6dc024b58240b88a35b43#b74ae9aee780981e9fe6dc024b58240b88a35b43"
+dependencies = [
+ "flate2",
+ "rvt-core",
+ "rvt-model",
 ]
 
 [[package]]
@@ -3327,6 +3386,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 [[package]]
 name = "skp-reader"
 version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/skp-reader?rev=1bf1a4ac793ba7d6e01721ad196064ed6bb66a9c#1bf1a4ac793ba7d6e01721ad196064ed6bb66a9c"
 dependencies = [
  "earcutr",
  "flate2",
@@ -3576,6 +3636,7 @@ dependencies = [
 [[package]]
 name = "tekla-reader"
 version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=c7b3839008097ad8f8b872b3bf6630c9d9989ba5#c7b3839008097ad8f8b872b3bf6630c9d9989ba5"
 dependencies = [
  "earcutr",
  "flate2",

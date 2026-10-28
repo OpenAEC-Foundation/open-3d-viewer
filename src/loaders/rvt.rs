@@ -1,11 +1,11 @@
 //! Revit (.rvt) via the OpenAEC rvt reader: one layer per category batch, with material colours
 //! per vertex, the drawn elements (for picking) and their properties.
 
-use open_3d_viewer::loaders::{Loaded, Loader, Phase, Progress, Source};
-use open_3d_viewer::model::{y_up_to_z_up, GridLine, Layer, PlanRange, ProjectData, Room, SavedView, ViewCamera, ViewKind};
+use crate::loaders::{Loaded, Loader, Phase, Progress, Source};
+use crate::model::{y_up_to_z_up, GridLine, Layer, PlanRange, ProjectData, Room, SavedView, ViewCamera, ViewKind};
 use rvt_model::{FieldValue, ObjectView};
 use std::collections::HashMap;
-use open_3d_viewer::section::SectionBox;
+use crate::section::SectionBox;
 use glam::Vec3;
 
 pub struct RvtLoader;
@@ -317,8 +317,7 @@ mod tests {
             eprintln!("skipped: set RVT_SAMPLE to racbasicsampleproject_2026.rvt");
             return;
         };
-        open_3d_viewer::loaders::add(vec![&super::RvtLoader]);
-        let model = open_3d_viewer::loaders::load(&path).expect("rvt");
+        let model = crate::loaders::load(&path).expect("rvt");
         assert!(model.layers.len() > 3, "{} layers", model.layers.len());
         assert!(model.triangle_count() > 1000);
         // Z up: a building is wider than it is tall
@@ -330,7 +329,7 @@ mod tests {
         assert!(elements > 100 && model.props.len() > 100, "{elements} elements, {} props", model.props.len());
         let c = model.bounds.center();
         let t = std::time::Instant::now();
-        let hit = open_3d_viewer::app::pick_triangle(&model, &vec![true; model.layers.len()], glam::Vec3::new(c[0], c[1], model.bounds.max[2] + 10.0), glam::Vec3::new(0.0, 0.0, -1.0), &|_, _| glam::Vec3::ZERO, &|_| true);
+        let hit = crate::app::pick_triangle(&model, &vec![true; model.layers.len()], glam::Vec3::new(c[0], c[1], model.bounds.max[2] + 10.0), glam::Vec3::new(0.0, 0.0, -1.0), &|_, _| glam::Vec3::ZERO, &|_| true);
         let id = hit.and_then(|(l, t)| model.layers[l].element_at(t));
         eprintln!("pick {:?} in {:?}: {:?}", id, t.elapsed(), id.map(|id| model.element_props(id)));
         // material transparency: alpha per vertex
@@ -347,7 +346,7 @@ mod tests {
         }
         assert!(pd.levels.len() >= 2 && !pd.phases.is_empty());
         // the views (beta): racbasicsample has 3D views, plans, sections and elevations
-        assert!(model.views.iter().any(|v| v.kind == open_3d_viewer::model::ViewKind::ThreeD && v.camera.is_some()), "{:?}", model.views);
+        assert!(model.views.iter().any(|v| v.kind == crate::model::ViewKind::ThreeD && v.camera.is_some()), "{:?}", model.views);
         assert!(model.views.iter().any(|v| v.plan.is_some()));
         for v in &model.views {
             eprintln!("view {:?} {:?} camera {} clip {} plan {:?}", v.kind, v.name, v.camera.is_some(), v.clip.is_some(), v.plan);

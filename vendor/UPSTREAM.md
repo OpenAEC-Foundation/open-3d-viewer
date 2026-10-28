@@ -1,7 +1,6 @@
 # Vendored crates
 
-The independent SKP, Tekla and PLY reader crates and their shared scene model are tracked in
-[FORMATS.md](FORMATS.md), including upstream repositories, pinned commits and validation.
+SKP, Tekla, PLY and their shared model are standalone Git dependencies in Cargo.toml.
 
 `openaec-ui/` is a snapshot of `crates/openaec-ui` from the
 [OpenAEC Style Repo](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo), commit `6c9c896`

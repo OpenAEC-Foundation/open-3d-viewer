@@ -1,3 +1,7 @@
 # The web build: an 8 MiB stack (the wasm default is 1 MiB) for the recursive model readers.
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "link-arg=-zstack-size=8388608"]
+
+# Honor Git credential helpers and read-only CI deploy keys for private libraries.
+[net]
+git-fetch-with-cli = true

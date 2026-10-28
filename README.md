@@ -14,14 +14,14 @@ framework.
 | `src/main.rs` | entry point: [`desktop`](src/desktop.rs) natively, [`web`](src/web.rs) in the browser |
 | `src/bin/open-3d-viewer-mcp.rs` | MCP server for AI agents (desktop) |
 | `index.html`, `Trunk.toml` | the web app page, built with [trunk](https://trunkrs.dev) |
-| `revit/` | the desktop app with Revit support (private `rvt-reader`, see below) |
+| `src/loaders/rvt.rs` | desktop Revit adapter using the independent `rvt-dll` crates |
 | `vendor/openaec-ui/` | shared OpenAEC window shell, tokens, widgets and icons (see `vendor/UPSTREAM.md`) |
 | `assets/` | fonts, app icon and logo |
 | `test-models/` | test and sample models |
 
 ## Build and run
 
-Needs a Rust toolchain (1.88+).
+Needs a Rust toolchain (1.88+) and Git read access to the private OpenAEC format libraries.
 
 ```sh
 cargo run --release -- path/to/model.skp    # desktop app, optionally opening a file
@@ -41,17 +41,18 @@ through the file picker, by dropping them onto the page or with a link:
 
 ### Revit
 
-Revit support comes from the private OpenAEC `rvt-reader`
-([OpenAEC-Foundation/rvt-dll](https://github.com/OpenAEC-Foundation/rvt-dll)), so it is not in the
-main package: `revit/` builds the same desktop app with the Revit loader added. It expects the
-rvt-reader checkout next to this repository (`../rvt-reader`).
+The normal desktop application includes Revit support through the independent
+[`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll) library (`rvt-read`, `rvt-export`,
+`rvt-model`). `.rvt` and `.rfa` are registered at startup and appear in File → Open.
 
 ```sh
-cd revit
-cargo build --release      # revit/target/release/open-3d-viewer(.exe)
+cargo run --release -- path/to/model.rvt
+cargo build --release      # target/release/open-3d-viewer(.exe), including Revit
 ```
 
 Revit files open in the desktop app only (the reader opens the file itself).
+The viewer's own source is LGPL-3.0-or-later; the private Revit reader retains its existing
+proprietary license. Desktop binaries include that reader and are not wholly open-source builds.
 
 ### Command line
 
@@ -93,7 +94,7 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 
 | Format | Crate | Notes |
 | --- | --- | --- |
-| Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, `revit/` build only) | one layer per category batch, Y up → Z up; levels, grids, rooms and views |
+| Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, standard desktop build) | one layer per category batch, Y up → Z up; levels, grids, rooms and views |
 | SketchUp `.skp` | [`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader) | existing partial openskp port; 2021+ ZIP container and classic MFC archive (SketchUp 3 to 2020); tags, material colours, pickable groups/components and dynamic attributes; inches → metres, Z up |
 | Tekla Structures `.db1` (beta) | [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader) | clean-room reader; database versions 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as approximate boxes, contour plates as extruded polygons; offsets and rotation ignored; mm → metres, Z up |
 | glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element, base colour × average texture colour, vertex colours, Y up → Z up. In the browser: `.glb` or `.gltf` with embedded buffers |
@@ -107,15 +108,21 @@ without iced or GPU dependencies. The viewer re-exports these types through its 
 so the Revit adapter keeps working with the same types. Revit already uses the existing
 `rvt-read`, `rvt-export` and `rvt-model` crates; glTF, OBJ and STL reuse `gltf`, `tobj` and `stl_io`.
 
-All four extracted repositories are private, matching this repository. This viewer consumes
-pinned source snapshots under `vendor/`; see [vendor/FORMATS.md](vendor/FORMATS.md) for revisions,
-update instructions and standalone crate/corpus tests. Other applications can depend directly
-on the reader repositories with Cargo Git dependencies.
+All four libraries have their own private repositories, independent names, documentation and
+native/wasm CI. This viewer uses them directly as Cargo Git dependencies, pinned to full commit
+hashes in Cargo.toml and Cargo.lock. Parser source is maintained in those repositories.
+CI and web deployment use read-only deploy keys stored in FORMAT_CRATES_SSH_KEYS.
+Other applications use the same Git dependencies without importing this application.
+
+To update a library, change its revision in Cargo.toml and run `cargo update`. Keep the direct
+openaec-model revision equal to the revision used by the reader libraries, so scene types stay
+identical. Each library runs its own tests. The Format crates workflow also runs the SKP corpus
+against this repository's test-models directory; the ignored survey uses SKP_DIR.
 
 New formats: implement `loaders::Loader` (name, extensions, `load` from a `loaders::Source`, a
 file or bytes, → `Vec<Layer>` in Z up, optional `source_y_up`) in a new module and add it to
 `loaders::registry()`. Loaders in other crates are added with `loaders::add` before the app
-starts (as `revit/` does).
+starts.
 
 ### Save as
 

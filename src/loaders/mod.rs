@@ -3,12 +3,14 @@
 //! wraps the result in a [`Model`].
 //!
 //! To add a format (DWG, E57, IFC, ...): implement [`Loader`] in a new module and add it to
-//! [`registry`]. Loaders that live outside this crate (Revit, see `revit/`) are added with
+//! [`registry`]. Additional loaders that live outside this crate are added with
 //! [`add`] before the app starts.
 
 mod gltf;
 mod obj;
 mod stl;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt;
 
 use crate::model::Model;
 use std::path::Path;
@@ -21,7 +23,7 @@ use ply_reader as ply;
 /// Loaders from other crates, see [`add`].
 static EXTRA: OnceLock<Vec<&'static dyn Loader>> = OnceLock::new();
 
-/// Adds loaders that live in other crates (the Revit build). Call once, before the app starts;
+/// Adds additional loaders that live in other crates. Call once, before the app starts;
 /// they come before the built-in loaders.
 pub fn add(loaders: Vec<&'static dyn Loader>) {
     let _ = EXTRA.set(loaders);
@@ -29,8 +31,11 @@ pub fn add(loaders: Vec<&'static dyn Loader>) {
 
 /// All available loaders.
 pub fn registry() -> Vec<&'static dyn Loader> {
-    let builtin: [&'static dyn Loader; 6] =
-        [&skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader];
+    let builtin: Vec<&'static dyn Loader> = vec![
+        &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &rvt::RvtLoader,
+    ];
     EXTRA.get().into_iter().flatten().copied().chain(builtin).collect()
 }
 
@@ -107,6 +112,17 @@ mod tests {
         assert_eq!(file.bounds, bytes.bounds);
         assert_eq!(file.props, bytes.props);
         assert!(bytes.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn default_desktop_registers_revit_in_the_open_dialog() {
+        let extensions = supported_extensions();
+        assert!(extensions.contains(&"rvt"));
+        assert!(extensions.contains(&"rfa"));
+        let source = Source::Bytes { name: "test.RVT".into(), data: Arc::new(Vec::new()) };
+        let error = load_with(&source, &Progress::default()).unwrap_err();
+        assert!(error.contains("Revit files open in the desktop app only"), "{error}");
     }
 
     #[test]

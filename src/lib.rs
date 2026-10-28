@@ -6,7 +6,7 @@
 //! - the web app (`trunk build`, [`web`]): the same UI in the browser on WebGPU, with files
 //!   opened through the browser.
 //!
-//! Formats outside this crate (Revit, `revit/`) plug in through [`loaders::add`].
+//! Independent reader crates provide format support; the desktop build includes Revit.
 
 mod annotations;
 pub mod app;

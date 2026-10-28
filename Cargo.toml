@@ -49,7 +49,7 @@ stl_io = "0.11"
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 openaec-model = { git = "https://github.com/OpenAEC-Foundation/openaec-model", rev = "2994963fcea8d1240d44801dddd1d3a351f05629" }
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "1bf1a4ac793ba7d6e01721ad196064ed6bb66a9c" }
-tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "1e06f8229904e69cb81c8c8f4593d47a1fae31e7" }
+tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "5f0360425661a9ae616f772de1fc2d6e491d964e" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "589c12ade65e777e13283242ac14cc8943051fe8" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

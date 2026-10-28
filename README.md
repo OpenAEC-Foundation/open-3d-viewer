@@ -21,7 +21,7 @@ framework.
 
 ## Build and run
 
-Needs a Rust toolchain (1.88+) and Git read access to the private OpenAEC format libraries.
+Needs a Rust toolchain (1.89+) and Git read access to the private OpenAEC format libraries.
 
 ```sh
 cargo run --release -- path/to/model.skp    # desktop app, optionally opening a file
@@ -95,6 +95,7 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 | Format | Crate | Notes |
 | --- | --- | --- |
 | Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, standard desktop build) | one layer per category batch, Y up → Z up; levels, grids, rooms and views |
+| IFC `.ifc` | [`ifc-lite-processing`](https://github.com/LTplus-AG/ifc-lite) (desktop) | existing IFClite parsing and geometry pipeline, including placements, units and openings; pickable elements with IFC type, GlobalId and available properties; metres, Z up; georeference anchor retained in project information |
 | SketchUp `.skp` | [`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader) | existing partial openskp port; 2021+ ZIP container and classic MFC archive (SketchUp 3 to 2020); tags, material colours, pickable groups/components and dynamic attributes; inches → metres, Z up |
 | Tekla Structures `.db1` (beta) | [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader) | clean-room reader; database versions 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as approximate boxes, contour plates as extruded polygons; offsets and rotation ignored; mm → metres, Z up |
 | glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element, base colour × average texture colour, vertex colours, Y up → Z up. In the browser: `.glb` or `.gltf` with embedded buffers |
@@ -171,12 +172,11 @@ Edges mode.
 
 ## Not there yet
 
-* **IFC import**: there is no mature pure-Rust IFC geometry kernel yet; IFC export is native.
 * **More formats**: DWG, DXF, E57, LAS and other point clouds, FBX, 3DS, Collada, 3MF, AMF,
   VRML, VTK, KMZ, VOX, G-code, STEP/IGES/BREP, XYZ/PCD. PLY files without faces are rejected.
 * **Textures**: glTF/OBJ/SketchUp textures are not mapped (an average tint instead); SketchUp
   soft edges are not smoothed.
-* **Web**: no Revit, preferences are not kept between visits, loading blocks the page while it
+* **Web**: IFC import and Revit are desktop-only; IFC export works on both targets. Preferences are not kept between visits, loading blocks the page while it
   runs (no worker threads yet).
 * Walk mode, points and hidden-line render modes, recent files, multiple models at once.
 
@@ -187,6 +187,7 @@ via iced), glam (MIT OR Apache-2.0), bytemuck (Zlib OR Apache-2.0 OR MIT), rfd (
 (MIT OR Apache-2.0), tobj (MIT), stl_io (MIT), web-time (MIT OR Apache-2.0), wasm-bindgen and
 web-sys (MIT OR Apache-2.0). Inter font: SIL OFL 1.1 (`assets/fonts/Inter-LICENSE.txt`). Theme
 colours: OpenAEC style book (CC BY-SA 4.0). `vendor/openaec-ui`: see its `NOTICE.md`.
+IFClite's independent parsing and geometry libraries are MPL-2.0.
 
 The independent `rvt-dll` crates (OpenAEC) retain their proprietary licence. They are linked
 into the standard desktop app, and excluded from the web build.

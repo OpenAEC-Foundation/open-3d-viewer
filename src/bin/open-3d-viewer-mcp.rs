@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (Revit, SketchUp, glTF, OBJ, STL, PLY). \
+const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
 The scene is Z up, in metres for Revit, SketchUp and glTF. Start with open_file (or get_state to see what is open), \
 then screenshot to look at the viewport. Pixel coordinates (pick, screen points in measure_* and section_plane) are \
 pixels of the last viewport screenshot. Elements (BIM) have ids and properties: find them with find_elements, \
@@ -66,7 +66,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 fn tools() -> Vec<Value> {
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a 3D model file in the viewer (as File > Open) and wait until it is loaded. Formats: .rvt .rfa .skp .gltf .glb .obj .stl .ply. Returns the model summary.",
+        tool("open_file", "Open a 3D model file in the viewer (as File > Open) and wait until it is loaded. Formats: .ifc .rvt .rfa .skp .gltf .glb .obj .stl .ply. Returns the model summary.",
             json!({ "path": { "type": "string", "description": "Absolute path of the file" } }), &["path"], false),
         tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
             json!({

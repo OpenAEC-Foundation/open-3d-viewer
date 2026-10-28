@@ -6,7 +6,7 @@ description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 
 repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
 default-run = "open-3d-viewer"
@@ -53,6 +53,8 @@ tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "589c12ade65e777e13283242ac14cc8943051fe8" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
+ifc-lite-processing = "=25.0.1"
 # Private standalone Revit library; compiled into the normal desktop application.
 rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "b74ae9aee780981e9fe6dc024b58240b88a35b43" }
 rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "b74ae9aee780981e9fe6dc024b58240b88a35b43", default-features = false }

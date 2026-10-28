@@ -11,6 +11,8 @@ mod obj;
 mod stl;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt;
+#[cfg(not(target_arch = "wasm32"))]
+mod ifc;
 
 use crate::model::Model;
 use std::path::Path;
@@ -35,6 +37,8 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &ifc::IfcLoader,
     ];
     EXTRA.get().into_iter().flatten().copied().chain(builtin).collect()
 }

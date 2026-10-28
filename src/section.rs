@@ -11,6 +11,8 @@ use glam::{Mat4, Vec3};
 use iced::widget::canvas::{self, Frame, Path};
 use iced::{mouse, Color, Point, Rectangle};
 
+/// Minimum world-space extent used to scale overlay drag handles.
+const MIN_SIZE: f32 = 1e-3;
 /// Handles react this close to the pointer (logical pixels).
 const HANDLE_REACH: f32 = 10.0;
 

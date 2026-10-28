@@ -43,7 +43,7 @@ through the file picker, by dropping them onto the page or with a link:
 
 The normal desktop application includes Revit support through the independent
 [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll) library (`rvt-read`, `rvt-export`,
-`rvt-model`). `.rvt` and `.rfa` are registered at startup and appear in File â†’ Open.
+`rvt-model`). `.rvt` and `.rfa` are registered at startup and appear in File → Open.
 
 ```sh
 cargo run --release -- path/to/model.rvt
@@ -94,10 +94,10 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 
 | Format | Crate | Notes |
 | --- | --- | --- |
-| Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, standard desktop build) | one layer per category batch, Y up â†’ Z up; levels, grids, rooms and views |
-| SketchUp `.skp` | [`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader) | existing partial openskp port; 2021+ ZIP container and classic MFC archive (SketchUp 3 to 2020); tags, material colours, pickable groups/components and dynamic attributes; inches â†’ metres, Z up |
-| Tekla Structures `.db1` (beta) | [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader) | clean-room reader; database versions 9.08 (TS 2021), 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as approximate boxes; contour plates in 7.82/9.08 as extruded polygons. Cutting operands hidden; cuts, offsets, rotation and chamfers not applied; mm â†’ metres, Z up |
-| glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element, base colour Ã— average texture colour, vertex colours, Y up â†’ Z up. In the browser: `.glb` or `.gltf` with embedded buffers |
+| Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, standard desktop build) | one layer per category batch, Y up → Z up; levels, grids, rooms and views |
+| SketchUp `.skp` | [`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader) | existing partial openskp port; 2021+ ZIP container and classic MFC archive (SketchUp 3 to 2020); tags, material colours, pickable groups/components and dynamic attributes; inches → metres, Z up |
+| Tekla Structures `.db1` (beta) | [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader) | clean-room reader; database versions 9.08 (TS 2021), 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as approximate boxes; contour plates in 7.82/9.08 as extruded polygons. Cutting operands hidden; cuts, offsets, rotation and chamfers not applied; mm → metres, Z up |
+| glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element, base colour × average texture colour, vertex colours, Y up → Z up. In the browser: `.glb` or `.gltf` with embedded buffers |
 | Wavefront `.obj` | `tobj` | one layer per object/group, MTL diffuse colours (desktop), vertex colours; treated as Y up |
 | STL `.stl` | `stl_io` | ASCII and binary, flat shaded, kept Z up |
 | PLY `.ply` | [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader) | ASCII / binary LE / BE, vertex normals and colours, polygons fan-triangulated; kept Z up |
@@ -120,13 +120,13 @@ identical. Each library runs its own tests. The Format crates workflow also runs
 against this repository's test-models directory; the ignored survey uses SKP_DIR.
 
 New formats: implement `loaders::Loader` (name, extensions, `load` from a `loaders::Source`, a
-file or bytes, â†’ `Vec<Layer>` in Z up, optional `source_y_up`) in a new module and add it to
+file or bytes, → `Vec<Layer>` in Z up, optional `source_y_up`) in a new module and add it to
 `loaders::registry()`. Loaders in other crates are added with `loaders::add` before the app
 starts.
 
 ### Save as
 
-File â†’ Save as (Ctrl+Shift+S) writes the open model in another format; on the web the file is
+File → Save as (Ctrl+Shift+S) writes the open model in another format; on the web the file is
 downloaded.
 
 | Format | Notes |

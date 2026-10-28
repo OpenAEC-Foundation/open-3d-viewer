@@ -1,7 +1,7 @@
 //! Open 3D Viewer Studio, pure Rust edition (iced + wgpu).
 //!
 //! Usage:
-//!   open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint]
+//!   open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint] [--no-remote]
 //!   open-3d-viewer-iced [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                       [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
 //!                       [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
@@ -18,6 +18,8 @@ mod export;
 mod icons;
 mod loaders;
 mod model;
+mod remote;
+mod remote_link;
 mod section;
 mod shell;
 mod theme;
@@ -47,6 +49,8 @@ struct Args {
     ortho: bool,
     view_tab: bool,
     frames: Option<u32>,
+    /// Do not take remote control commands (the MCP server).
+    no_remote: bool,
     save_as: Option<PathBuf>,
     /// Exploded view for `--screenshot`: percent per axis, and the mode.
     explode: Option<[f32; 3]>,
@@ -87,6 +91,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--ortho" => args.ortho = true,
             "--view-tab" => args.view_tab = true,
+            "--no-remote" => args.no_remote = true,
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
@@ -168,6 +173,8 @@ fn run_app(args: Args) -> iced::Result {
     let mut app = initial_state(&args);
     app.initial_view = args.view;
     app.pending_open = args.file.clone();
+    // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
+    app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
     let prefs = std::env::var_os("APPDATA").map(|d| {
         let dir = PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio");
         let _ = std::fs::create_dir_all(&dir);

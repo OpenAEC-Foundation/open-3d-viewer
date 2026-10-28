@@ -1,6 +1,6 @@
 //! Datum annotations over the viewport: the bubbles at the ends of the grid lines (the lines
 //! themselves are drawn by the renderer, with depth). As Revit's grid heads: a circle with the
-//! grid's name, just past each end of the line.
+//! grid's name, just past each end of the line. And the measurements, with their values.
 
 use crate::model::GridLine;
 use glam::{Mat4, Vec3};
@@ -80,6 +80,74 @@ impl<Message> canvas::Program<Message> for GridOverlay<'_> {
 
     fn mouse_interaction(&self, _state: &(), _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
         // only drawn: the viewport below handles the pointer
+        mouse::Interaction::None
+    }
+}
+
+/// A measurement shown in the viewport: a distance (two points) or an angle (three points, the
+/// vertex in the middle), world coordinates, with its label.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Measurement {
+    pub points: Vec<Vec3>,
+    pub label: String,
+}
+
+/// The measurements over the viewport: lines with dots at their points and a label in the middle
+/// (at the vertex for an angle).
+pub struct MeasureOverlay<'a> {
+    pub items: &'a [Measurement],
+    pub view_proj: Mat4,
+    pub ink: Color,
+    pub fill: Color,
+    pub text: Color,
+}
+
+impl<Message> canvas::Program<Message> for MeasureOverlay<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let size = (bounds.width, bounds.height);
+        for m in self.items {
+            let Some(points) = m.points.iter().map(|p| project(&self.view_proj, size, *p)).collect::<Option<Vec<Point>>>() else {
+                continue;
+            };
+            let line = Path::new(|b| {
+                b.move_to(points[0]);
+                points[1..].iter().for_each(|p| b.line_to(*p));
+            });
+            frame.stroke(&line, canvas::Stroke::default().with_color(self.ink).with_width(2.0));
+            for p in &points {
+                frame.fill(&Path::circle(*p, 3.5), self.ink);
+            }
+            let (first, last) = (points[0], points[points.len() - 1]);
+            let at = if points.len() == 3 { points[1] } else { Point::new((first.x + last.x) * 0.5, (first.y + last.y) * 0.5) };
+            let width = 7.0 * m.label.chars().count() as f32 + 12.0;
+            let label = Path::rounded_rectangle(Point::new(at.x - width * 0.5, at.y - 22.0), iced::Size::new(width, 18.0), 4.0.into());
+            frame.fill(&label, self.fill);
+            frame.stroke(&label, canvas::Stroke::default().with_color(self.ink).with_width(1.0));
+            frame.fill_text(canvas::Text {
+                content: m.label.clone(),
+                position: Point::new(at.x, at.y - 13.0),
+                align_x: alignment::Horizontal::Center.into(),
+                align_y: alignment::Vertical::Center,
+                size: iced::Pixels(12.0),
+                color: self.text,
+                font: openaec_ui::fonts::MEDIUM,
+                ..canvas::Text::default()
+            });
+        }
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(&self, _state: &(), _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
         mouse::Interaction::None
     }
 }

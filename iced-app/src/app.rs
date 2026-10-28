@@ -352,7 +352,7 @@ impl App {
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
     pub fn set_model(&mut self, model: Arc<Model>) {
-        self.visible = vec![true; model.layers.len()];
+        self.visible = model.layers.iter().map(|l| !l.hidden).collect();
         self.status = Status::Loaded(format!(
             "Loaded {} in {:.2} s",
             model.file_name(),

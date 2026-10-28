@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer-iced"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.44.8"
+version = "2026.44.9"
 description = "Open 3D Viewer Studio, pure Rust edition (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -31,6 +31,9 @@ png = "0.18"
 gltf = { version = "1.4", default-features = false, features = ["import", "names", "utils"] }
 tobj = "4"
 stl_io = "0.11"
+# SketchUp (.skp): ZIP inflate for the 2021+ container (MIT OR Apache-2.0) and face triangulation (ISC)
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+earcutr = "0.5"
 # Revit (.rvt): OpenAEC rvt reader, a private sibling checkout (../../rvt-reader)
 rvt-read = { path = "../../rvt-reader/crates/rvt-read", optional = true }
 rvt-export = { path = "../../rvt-reader/crates/rvt-export", default-features = false, optional = true }

@@ -56,6 +56,7 @@ impl Loader for RvtLoader {
                     indices: b.indices,
                     elements: b.elements,
                     props: b.props,
+                    hidden: false,
                 }
             })
             .collect();

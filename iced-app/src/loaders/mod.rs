@@ -9,6 +9,7 @@ mod obj;
 mod ply;
 #[cfg(feature = "rvt")]
 mod rvt;
+mod skp;
 mod stl;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
@@ -81,6 +82,7 @@ pub fn registry() -> Vec<Box<dyn Loader>> {
     vec![
         #[cfg(feature = "rvt")]
         Box::new(rvt::RvtLoader),
+        Box::new(skp::SkpLoader),
         Box::new(gltf::GltfLoader),
         Box::new(obj::ObjLoader),
         Box::new(stl::StlLoader),

@@ -62,6 +62,7 @@ open-3d-viewer-iced --bench FILE [--frames 300]
 | Format | Crate | Notes |
 | --- | --- | --- |
 | Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, path dependency) | one layer per category batch, Y up → Z up |
+| SketchUp `.skp` | own port of openskp 1.3 (MIT) + `flate2`, `earcutr` | 2021+ ZIP container and 2013-2020 MFC archive; one layer per tag (hidden tags start off), material colours per vertex (textures as their average colour), each component/group a pickable element with its dynamic attributes; inches → metres, Z up. Files openskp cannot read fail here too |
 | glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, base colour × average texture colour, vertex colours, Y up → Z up |
 | Wavefront `.obj` | `tobj` | one layer per object/group, MTL diffuse colours, vertex colours; treated as Y up |
 | STL `.stl` | `stl_io` | ASCII and binary, flat shaded, kept Z up |
@@ -82,7 +83,8 @@ wait after every frame.
 
 * **IFC**: the React app uses web-ifc (C++/WASM); there is no mature pure-Rust IFC
   geometry kernel yet.
-* **SketchUp `.skp`**: the React app uses the JS `openskp` reader; there is no Rust reader.
+* **SketchUp `.skp`**: no textures (average colour instead) and no soft-edge smoothing, so
+  curved surfaces look faceted.
 * **DWG, DXF, E57, LAS/point clouds**: not ported (DWG/E57 are being added to the Tauri app
   separately; they can be added here as `Loader`s). PLY files without faces (point clouds)
   are rejected.

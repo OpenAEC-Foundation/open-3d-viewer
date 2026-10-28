@@ -25,6 +25,8 @@ pub struct Layer {
     pub elements: Vec<(u64, u32, u32)>,
     /// Element properties as flat JSON objects; moved into [`Model::props`] by [`Model::new`].
     pub props: Vec<(u64, String)>,
+    /// Hidden in the file (a hidden SketchUp tag): starts switched off.
+    pub hidden: bool,
 }
 
 impl Layer {
@@ -333,6 +335,7 @@ fn empty_like(layer: &Layer) -> Layer {
         positions: Vec::new(),
         normals: Vec::new(),
         colors: layer.colors.as_ref().map(|_| Vec::new()),
+        hidden: layer.hidden,
         ..Layer::default()
     }
 }

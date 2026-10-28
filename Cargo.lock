@@ -2491,14 +2491,16 @@ version = "2026.44.10"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
- "earcutr",
- "flate2",
  "glam 0.30.10",
  "gltf",
  "iced",
  "iced_test",
  "js-sys",
+ "openaec-model",
  "openaec-ui",
+ "ply-reader",
+ "skp-reader",
+ "tekla-reader",
  "png 0.18.1",
  "rfd",
  "serde_json",
@@ -2509,6 +2511,15 @@ dependencies = [
  "web-sys",
  "web-time",
  "winresource",
+]
+
+[[package]]
+name = "openaec-model"
+version = "0.1.0"
+dependencies = [
+ "glam 0.30.10",
+ "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -2640,6 +2651,13 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "ply-reader"
+version = "0.1.0"
+dependencies = [
+ "openaec-model",
+]
 
 [[package]]
 name = "png"
@@ -3307,6 +3325,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
+name = "skp-reader"
+version = "0.1.0"
+dependencies = [
+ "earcutr",
+ "flate2",
+ "glam 0.30.10",
+ "openaec-model",
+ "serde_json",
+]
+
+[[package]]
 name = "skrifa"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3542,6 +3571,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "tekla-reader"
+version = "0.1.0"
+dependencies = [
+ "earcutr",
+ "flate2",
+ "glam 0.30.10",
+ "openaec-model",
+ "serde_json",
 ]
 
 [[package]]

@@ -11,8 +11,8 @@
 //!
 //! Tekla is Z up in mm; the layers are Z up in metres.
 
-use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{Layer, ProjectData};
+use openaec_model::{Loaded, Loader, Phase, Progress, Source};
+use openaec_model::model::{Layer, ProjectData};
 use glam::DVec3;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
@@ -699,7 +699,7 @@ mod tests {
         assert_eq!(l.name, "Class 3");
         assert_eq!(l.triangle_count(), 12);
         assert_eq!(l.elements, vec![(900, 0, 36)]);
-        assert!(crate::model::encloses_volume(&l.positions, &l.indices));
+        assert!(openaec_model::model::encloses_volume(&l.positions, &l.indices));
         // metres; y = world Z from 0 to 270 mm, z = x × y = −Y, centred: width 135 mm
         let (lo, hi) = bounds(&loaded.layers);
         assert!(close(lo, [0.0, -0.0675, 0.0]) && close(hi, [6.0, 0.0675, 0.27]), "{lo:?} {hi:?}");
@@ -778,7 +778,7 @@ mod tests {
         // plate: x 0.1..1.1, y 0.2..0.7, z from 3.0 − 0.010 to 3.0
         let (lo, hi) = bounds(std::slice::from_ref(plate));
         assert!(close(lo, [0.1, 0.2, 2.99]) && close(hi, [1.1, 0.7, 3.0]), "{lo:?} {hi:?}");
-        assert!(crate::model::encloses_volume(&plate.positions, &plate.indices));
+        assert!(openaec_model::model::encloses_volume(&plate.positions, &plate.indices));
         let props: serde_json::Value = serde_json::from_str(&plate.props[0].1).unwrap();
         assert_eq!((props["Profile"].as_str(), props["Type"].as_str()), (Some("PL10"), Some("Contour plate")));
         // column: 3 m up, 300 along local y = world X, 150 along z = Z × X = Y, centred
@@ -817,7 +817,7 @@ mod tests {
     fn registered_for_db1() {
         let path = std::env::temp_dir().join(format!("o3v-tekla-test-{}.db1", std::process::id()));
         std::fs::write(&path, beam_895().gz()).unwrap();
-        let model = crate::loaders::load(&path);
+        let model = openaec_model::load_with_loader(&TeklaLoader, &Source::from(path.clone()), &Progress::default());
         let _ = std::fs::remove_file(&path);
         let model = model.expect("db1");
         assert_eq!(model.format, "Tekla Structures");

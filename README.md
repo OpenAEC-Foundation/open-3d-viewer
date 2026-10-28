@@ -94,12 +94,23 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 | Format | Crate | Notes |
 | --- | --- | --- |
 | Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, `revit/` build only) | one layer per category batch, Y up → Z up; levels, grids, rooms and views |
-| SketchUp `.skp` | own port of openskp 1.3 (MIT; classic-file reader at 1.4.0) + `flate2`, `earcutr` | 2021+ ZIP container and the classic MFC archive (SketchUp 3 to 2020); one layer per tag (hidden tags start off), material colours per vertex (textures as their average colour), each component/group a pickable element with its dynamic attributes; inches → metres, Z up |
-| Tekla Structures `.db1` (beta) | own clean-room reader + `flate2`, `earcutr` | written only from `tekla-cleanroom/spec/SPEC_v0.1.md`; database versions 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as boxes along their axis, contour plates as their polygon extruded by the thickness; one layer per class, each part a pickable element. Profile sizes are guessed from the profile name; mm → metres, Z up |
+| SketchUp `.skp` | [`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader) | existing partial openskp port; 2021+ ZIP container and classic MFC archive (SketchUp 3 to 2020); tags, material colours, pickable groups/components and dynamic attributes; inches → metres, Z up |
+| Tekla Structures `.db1` (beta) | [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader) | clean-room reader; database versions 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as approximate boxes, contour plates as extruded polygons; offsets and rotation ignored; mm → metres, Z up |
 | glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element, base colour × average texture colour, vertex colours, Y up → Z up. In the browser: `.glb` or `.gltf` with embedded buffers |
 | Wavefront `.obj` | `tobj` | one layer per object/group, MTL diffuse colours (desktop), vertex colours; treated as Y up |
 | STL `.stl` | `stl_io` | ASCII and binary, flat shaded, kept Z up |
-| PLY `.ply` | own parser | ASCII / binary LE / BE, vertex normals and colours, polygons fan-triangulated; kept Z up |
+| PLY `.ply` | [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader) | ASCII / binary LE / BE, vertex normals and colours, polygons fan-triangulated; kept Z up |
+
+The extracted readers share [`openaec-model`](https://github.com/OpenAEC-Foundation/openaec-model):
+scene types, mesh utilities, saved views, clipping geometry and the `Loader` / `Source` contract,
+without iced or GPU dependencies. The viewer re-exports these types through its existing API,
+so the Revit adapter keeps working with the same types. Revit already uses the existing
+`rvt-read`, `rvt-export` and `rvt-model` crates; glTF, OBJ and STL reuse `gltf`, `tobj` and `stl_io`.
+
+All four extracted repositories are private, matching this repository. This viewer consumes
+pinned source snapshots under `vendor/`; see [vendor/FORMATS.md](vendor/FORMATS.md) for revisions,
+update instructions and standalone crate/corpus tests. Other applications can depend directly
+on the reader repositories with Cargo Git dependencies.
 
 New formats: implement `loaders::Loader` (name, extensions, `load` from a `loaders::Source`, a
 file or bytes, → `Vec<Layer>` in Z up, optional `source_y_up`) in a new module and add it to

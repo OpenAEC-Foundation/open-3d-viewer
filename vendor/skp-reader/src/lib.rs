@@ -10,8 +10,8 @@
 mod legacy;
 mod vff;
 
-use super::{Loaded, Loader, Phase, Progress, DEFAULT_COLOR, Source};
-use crate::model::{Layer, ProjectData};
+use openaec_model::{Loaded, Loader, Phase, Progress, DEFAULT_COLOR, Source};
+use openaec_model::model::{Layer, ProjectData};
 use glam::{DMat3, DVec3};
 use std::collections::{HashMap, HashSet};
 
@@ -487,7 +487,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn sample(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models").join(name)
+        std::env::var_os("SKP_TEST_MODELS").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models")).join(name)
     }
 
     /// Statistics as openskp's instanced scene computes them: triangles with each definition
@@ -559,6 +559,7 @@ mod tests {
     /// its triangle count lies between the one- and two-sided count. test-models/legacy holds
     /// SketchUp 3 to 8 and 2018/2020 variants (see its README).
     #[test]
+    #[cfg(feature = "corpus-tests")]
     fn samples_match_openskp() {
         let expected = [
             ("solar-north-house.skp", 29, [10.973, 5.639, 9.449]),
@@ -608,6 +609,7 @@ mod tests {
     /// Files without faces that openskp 1.4.0 cannot read (SFSASM-test: a text whose delimiter
     /// block ends in 0) or reads without geometry: they parse, with their edges and instances.
     #[test]
+    #[cfg(feature = "corpus-tests")]
     fn faceless_samples_parse() {
         let data = std::fs::read(sample("SFSASM-test.skp")).unwrap();
         let p = parse(&data).expect("SFSASM-test.skp");
@@ -664,8 +666,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "corpus-tests")]
     fn loads_sample_into_tag_layers() {
-        let model = super::super::load(&sample("TestModel.skp")).expect("skp");
+        let model = openaec_model::load_with_loader(&SkpLoader, &Source::from(sample("TestModel.skp")), &Progress::default()).expect("skp");
         assert!(model.triangle_count() > 100, "{} triangles", model.triangle_count());
         assert!(model.bounds.is_valid());
         assert!(model.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));

@@ -13,7 +13,7 @@ default-run = "open-3d-viewer"
 
 # Standalone package; `revit/` (the build with Revit support) is a package of its own.
 [workspace]
-exclude = ["revit"]
+exclude = ["revit", "vendor/openaec-model", "vendor/skp-reader", "vendor/tekla-reader", "vendor/ply-reader"]
 
 [lib]
 name = "open_3d_viewer"
@@ -47,9 +47,11 @@ png = "0.18"
 gltf = { version = "1.4", default-features = false, features = ["import", "names", "utils"] }
 tobj = { version = "4", default-features = false }
 stl_io = "0.11"
-# SketchUp (.skp): ZIP inflate for the 2021+ container (MIT OR Apache-2.0) and face triangulation (ISC)
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-earcutr = "0.5"
+# Reusable OpenAEC format crates; pinned upstream snapshots documented in vendor/FORMATS.md.
+openaec-model = { path = "vendor/openaec-model" }
+skp-reader = { path = "vendor/skp-reader" }
+tekla-reader = { path = "vendor/tekla-reader" }
+ply-reader = { path = "vendor/ply-reader" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }

@@ -1,8 +1,8 @@
 //! Stanford PLY (ASCII, binary little/big endian): vertices with optional normals and colours,
 //! polygon faces (fan triangulated). Kept as stored (Z up is the common convention for scans).
 
-use super::{Loader, DEFAULT_COLOR, Source};
-use crate::model::{smooth_normals, Layer};
+use openaec_model::{Loader, DEFAULT_COLOR, Source};
+use openaec_model::model::{smooth_normals, Layer};
 
 pub struct PlyLoader;
 

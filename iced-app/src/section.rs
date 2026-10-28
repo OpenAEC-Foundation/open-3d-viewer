@@ -436,9 +436,261 @@ where
     }
 }
 
+// ---- section plane ---------------------------------------------------------------------------
+
+/// Components of a picked normal smaller than this (about 0.5°) snap to zero, so walls and floors
+/// give clean orthogonal sections.
+const SNAP: f32 = 0.0087;
+
+/// A single cutting plane, placed by clicking a face of the model (any orientation, e.g. a sloped
+/// roof): everything on the side the face points to is cut away. As the web viewer's
+/// `SectionPlane`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionPlane {
+    /// Unit normal pointing to the side that is cut away (world).
+    pub normal: Vec3,
+    /// Position along the normal: points with `normal · p > offset` are cut away.
+    pub offset: f32,
+}
+
+impl SectionPlane {
+    /// The plane on a face at `point` whose normal faces the viewer, just in front of the face so
+    /// that the face itself stays.
+    pub fn on_face(point: Vec3, normal: Vec3, world: &Bounds) -> Option<Self> {
+        let mut n = normal.normalize_or_zero();
+        for c in [&mut n.x, &mut n.y, &mut n.z] {
+            if c.abs() < SNAP {
+                *c = 0.0;
+            }
+        }
+        let normal = n.try_normalize()?;
+        let diag = (Vec3::from_array(world.max) - Vec3::from_array(world.min)).length();
+        Some(Self { normal, offset: normal.dot(point) + (diag * 1e-4).max(1e-4) })
+    }
+
+    /// Cut away the other side instead.
+    pub fn flip(&mut self) {
+        self.normal = -self.normal;
+        self.offset = -self.offset;
+    }
+
+    pub fn cuts(&self, world: Vec3) -> bool {
+        self.normal.dot(world) > self.offset
+    }
+
+    /// The offsets at which the plane just touches the model (world bounds), lowest first.
+    pub fn range(&self, world: &Bounds) -> (f32, f32) {
+        SectionBox::around(world).corners().iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| {
+            let d = self.normal.dot(*c);
+            (lo.min(d), hi.max(d))
+        })
+    }
+
+    /// Move along the normal, kept within (just outside) the model.
+    pub fn move_by(&mut self, delta: f32, world: &Bounds) {
+        let (lo, hi) = self.range(world);
+        self.offset = (self.offset + delta).clamp(lo, hi);
+    }
+
+    /// Axes in the plane: `u` horizontal and `v` upwards for vertical and sloped planes.
+    pub fn basis(&self) -> (Vec3, Vec3) {
+        let up = if self.normal.z.abs() < 0.99 { Vec3::Z } else { Vec3::X };
+        let u = up.cross(self.normal).normalize();
+        (u, self.normal.cross(u).normalize())
+    }
+
+    /// The rectangle on the plane round the model (world bounds), as its four corners.
+    pub fn rectangle(&self, world: &Bounds) -> [Vec3; 4] {
+        let (u, v) = self.basis();
+        let (mut lo, mut hi) = ((f32::MAX, f32::MAX), (f32::MIN, f32::MIN));
+        for c in SectionBox::around(world).corners() {
+            let (a, b) = (u.dot(c), v.dot(c));
+            lo = (lo.0.min(a), lo.1.min(b));
+            hi = (hi.0.max(a), hi.1.max(b));
+        }
+        let pad = ((hi.0 - lo.0).max(hi.1 - lo.1) * 0.05).max(0.05);
+        let base = self.normal * self.offset;
+        let at = |a: f32, b: f32| base + u * a + v * b;
+        [at(lo.0 - pad, lo.1 - pad), at(hi.0 + pad, lo.1 - pad), at(hi.0 + pad, hi.1 + pad), at(lo.0 - pad, hi.1 + pad)]
+    }
+
+    /// The middle of the rectangle, where the handle sits.
+    pub fn handle(&self, world: &Bounds) -> Vec3 {
+        let r = self.rectangle(world);
+        (r[0] + r[2]) * 0.5
+    }
+
+    /// For the shader: normal + offset, rectangle middle + half size (the cut fill is drawn as a
+    /// square on the plane).
+    pub fn uniform(&self, world: &Bounds) -> [[f32; 4]; 2] {
+        let r = self.rectangle(world);
+        let middle = (r[0] + r[2]) * 0.5;
+        let half = (r[1] - r[0]).length().max((r[3] - r[0]).length()) * 0.5;
+        [[self.normal.x, self.normal.y, self.normal.z, self.offset], [middle.x, middle.y, middle.z, half]]
+    }
+}
+
+/// What the section plane overlay reports: a move along the normal (world units).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaneMove(pub f32);
+
+/// How far (world units) a drag of `movement` pixels moves the plane: the part of the movement
+/// along the projected normal; seen end-on, upwards on screen moves it towards the viewer.
+pub fn plane_delta(plane: &SectionPlane, world: &Bounds, view_proj: &Mat4, size: (f32, f32), movement: (f32, f32)) -> Option<f32> {
+    let at = plane.handle(world);
+    let step = (Vec3::from_array(world.max) - Vec3::from_array(world.min)).max_element().max(MIN_SIZE) * 0.01;
+    let before = project(view_proj, size, at)?;
+    let after = project(view_proj, size, at + plane.normal * step)?;
+    let (dx, dy) = (after.x - before.x, after.y - before.y);
+    let squared = dx * dx + dy * dy;
+    if squared > 0.25 {
+        return Some((movement.0 * dx + movement.1 * dy) / squared * step);
+    }
+    // end-on: the depth of a point a step along the normal tells which way faces the viewer
+    let towards = (*view_proj * (at + plane.normal * step).extend(1.0)).w < (*view_proj * at.extend(1.0)).w;
+    Some(if towards { -movement.1 } else { movement.1 } * step / 10.0)
+}
+
+/// The section plane as a canvas overlay: its outline round the model and a handle with an arrow
+/// along the normal (towards the side that is cut away) that moves it. Outside the handle every
+/// event goes through to the viewport.
+pub struct PlaneOverlay {
+    pub plane: SectionPlane,
+    pub world: Bounds,
+    /// World to clip space of the current camera.
+    pub view_proj: Mat4,
+}
+
+#[derive(Default)]
+pub struct PlaneState {
+    hover: bool,
+    drag: Option<Point>,
+}
+
+impl PlaneOverlay {
+    fn handle_at(&self, size: (f32, f32), pointer: Point) -> bool {
+        project(&self.view_proj, size, self.plane.handle(&self.world)).is_some_and(|p| p.distance(pointer) <= HANDLE_REACH)
+    }
+}
+
+impl<Message> canvas::Program<Message> for PlaneOverlay
+where
+    Message: From<PlaneMove>,
+{
+    type State = PlaneState;
+
+    fn update(&self, state: &mut PlaneState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
+        let size = (bounds.width, bounds.height);
+        match event {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if let Some(last) = state.drag {
+                    let p = cursor.position()?;
+                    let now = Point::new(p.x - bounds.x, p.y - bounds.y);
+                    state.drag = Some(now);
+                    let delta = plane_delta(&self.plane, &self.world, &self.view_proj, size, (now.x - last.x, now.y - last.y))?;
+                    return Some(canvas::Action::publish(Message::from(PlaneMove(delta))).and_capture());
+                }
+                let hover = cursor.position_in(bounds).is_some_and(|p| self.handle_at(size, p));
+                if hover != state.hover {
+                    state.hover = hover;
+                    return Some(canvas::Action::request_redraw());
+                }
+                None
+            }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let p = cursor.position_in(bounds)?;
+                if !self.handle_at(size, p) {
+                    return None;
+                }
+                state.drag = Some(p);
+                Some(canvas::Action::capture())
+            }
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.drag.take().map(|_| canvas::Action::capture())
+            }
+            _ => None,
+        }
+    }
+
+    fn draw(&self, state: &PlaneState, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let size = (bounds.width, bounds.height);
+        let at = |w: Vec3| project(&self.view_proj, size, w);
+        let r = self.plane.rectangle(&self.world);
+        let outline = Path::new(|path| {
+            for i in 0..4 {
+                if let (Some(a), Some(b)) = (at(r[i]), at(r[(i + 1) % 4])) {
+                    path.move_to(a);
+                    path.line_to(b);
+                }
+            }
+        });
+        frame.stroke(&outline, canvas::Stroke::default().with_color(AMBER).with_width(1.4));
+
+        let handle = self.plane.handle(&self.world);
+        let Some(p) = at(handle) else { return vec![frame.into_geometry()] };
+        let hot = state.hover || state.drag.is_some();
+        // the arrow, 40 pixels along the projected normal
+        let reach = (Vec3::from_array(self.world.max) - Vec3::from_array(self.world.min)).max_element().max(MIN_SIZE) * 0.01;
+        if let Some(q) = at(handle + self.plane.normal * reach) {
+            let (dx, dy) = (q.x - p.x, q.y - p.y);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 0.5 {
+                let (ux, uy) = (dx / len, dy / len);
+                let tip = Point::new(p.x + ux * 40.0, p.y + uy * 40.0);
+                let arrow = Path::new(|path| {
+                    path.move_to(p);
+                    path.line_to(tip);
+                    path.move_to(Point::new(tip.x - ux * 8.0 - uy * 5.0, tip.y - uy * 8.0 + ux * 5.0));
+                    path.line_to(tip);
+                    path.line_to(Point::new(tip.x - ux * 8.0 + uy * 5.0, tip.y - uy * 8.0 - ux * 5.0));
+                });
+                frame.stroke(
+                    &arrow,
+                    canvas::Stroke::default()
+                        .with_color(if hot { AMBER_LIGHT } else { AMBER })
+                        .with_width(if hot { 2.4 } else { 1.8 })
+                        .with_line_cap(canvas::LineCap::Round),
+                );
+            }
+        }
+        let circle = Path::circle(p, if hot { 7.0 } else { 5.0 });
+        frame.fill(&circle, if hot { AMBER_LIGHT } else { Color::from_rgb8(83, 60, 38) });
+        frame.stroke(&circle, canvas::Stroke::default().with_color(AMBER_LIGHT).with_width(1.3));
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(&self, state: &PlaneState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
+        if state.drag.is_some() {
+            return mouse::Interaction::Grabbing;
+        }
+        match cursor.position_in(bounds) {
+            Some(p) if self.handle_at((bounds.width, bounds.height), p) => mouse::Interaction::Grab,
+            _ => mouse::Interaction::None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plane_on_a_face_cuts_the_side_it_faces() {
+        let world = Bounds { min: [0.0, 0.0, 0.0], max: [10.0, 10.0, 3.0] };
+        // a wall face at x = 4 facing −X (towards a viewer west of it), slightly off
+        let mut plane = SectionPlane::on_face(Vec3::new(4.0, 5.0, 1.0), Vec3::new(-1.0, 0.002, 0.0), &world).expect("plane");
+        assert_eq!(plane.normal, Vec3::NEG_X, "snapped");
+        assert!(plane.cuts(Vec3::new(2.0, 5.0, 1.0)));
+        assert!(!plane.cuts(Vec3::new(6.0, 5.0, 1.0)));
+        assert!(!plane.cuts(Vec3::new(4.0, 5.0, 1.0)), "the face itself stays");
+        plane.flip();
+        assert!(plane.cuts(Vec3::new(6.0, 5.0, 1.0)));
+        plane.move_by(100.0, &world);
+        assert_eq!(plane.offset, plane.range(&world).1);
+        let (u, v) = SectionPlane { normal: Vec3::new(0.0, 0.6, 0.8), offset: 0.0 }.basis();
+        assert!(u.z.abs() < 1e-6 && v.z > 0.0, "{u} {v}");
+    }
 
     fn unit() -> SectionBox {
         SectionBox { min: Vec3::ZERO, max: Vec3::new(4.0, 2.0, 3.0), turn: 0.0, pivot: Vec3::new(2.0, 1.0, 1.5) }

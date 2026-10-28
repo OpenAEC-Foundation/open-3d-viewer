@@ -8,7 +8,7 @@ use crate::theme::{srgb3, srgb4, Palette, ThemeKind};
 use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
 use crate::model::{Bounds, ViewKind};
-use crate::section::{SectionBox, SectionEvent, SectionOverlay};
+use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
 use glam::{Mat4, Vec3};
@@ -73,6 +73,10 @@ pub struct App {
     pub section_on: bool,
     /// Fill the cut faces of solids.
     pub section_fill: bool,
+    /// The section plane (world), when placed.
+    pub plane: Option<SectionPlane>,
+    /// Waiting for a click on a face to place the section plane.
+    pub plane_picking: bool,
     /// The saved view last shown.
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
@@ -116,7 +120,16 @@ pub enum Message {
     SectionSlider(usize, bool, f32),
     /// The turn from the properties pane, degrees.
     SectionTurn(f32),
-    ClearSelection,
+    /// Switch the section plane on (wait for a click on a face) or off.
+    TogglePlane,
+    /// Cut away the other side of the section plane.
+    FlipPlane,
+    /// Move the section plane along its normal (world units).
+    PlaneMove(f32),
+    /// The section plane from the properties pane: percent between its extremes.
+    PlaneSlider(f32),
+    /// Esc: stop placing the section plane, else clear the selection.
+    Escape,
     /// A frame while loading (animates the loading card).
     Tick,
     TakeShot,
@@ -132,6 +145,12 @@ impl From<Navigate> for Message {
 impl From<SectionEvent> for Message {
     fn from(e: SectionEvent) -> Self {
         Message::Section(e)
+    }
+}
+
+impl From<PlaneMove> for Message {
+    fn from(m: PlaneMove) -> Self {
+        Message::PlaneMove(m.0)
     }
 }
 
@@ -169,6 +188,8 @@ impl Default for App {
             section: None,
             section_on: false,
             section_fill: true,
+            plane: None,
+            plane_picking: false,
             active_view: None,
             show_grids: true,
             explorer_open: [true, false, true],
@@ -340,6 +361,8 @@ impl App {
         self.model = Some(model);
         self.section = None;
         self.section_on = false;
+        self.plane = None;
+        self.plane_picking = false;
         self.active_view = None;
         self.selected = None;
         self.selection.clear();
@@ -410,8 +433,9 @@ impl App {
             Message::ToggleGrid => self.grid = !self.grid,
             Message::ToggleFlipUp => {
                 self.flip_up = !self.flip_up;
-                // the box is in world space: start again around the turned model
+                // the box and the plane are in world space: start again around the turned model
                 self.section = None;
+                self.plane = None;
                 if self.section_on {
                     self.section = self.world_bounds().map(|b| SectionBox::around(&b));
                 }
@@ -493,8 +517,13 @@ impl App {
                 self.section_on = !self.section_on && self.section.is_some();
             }
             Message::ResetSection => {
-                self.section = self.world_bounds().map(|b| SectionBox::around(&b));
-                self.section_on = self.section.is_some();
+                if self.section_on {
+                    self.section = self.world_bounds().map(|b| SectionBox::around(&b));
+                }
+                // a placed plane: pick a new face
+                if self.plane.is_some() {
+                    self.plane_picking = true;
+                }
             }
             Message::SectionToSelection => {
                 if let Some(b) = self.selection_bounds() {
@@ -534,7 +563,32 @@ impl App {
                     }
                 }
             }
-            Message::ClearSelection => {
+            Message::TogglePlane => {
+                if self.plane.is_some() || self.plane_picking {
+                    self.plane = None;
+                    self.plane_picking = false;
+                } else {
+                    self.plane_picking = self.model.is_some();
+                }
+            }
+            Message::FlipPlane => {
+                if let Some(plane) = self.plane.as_mut() {
+                    plane.flip();
+                }
+            }
+            Message::PlaneMove(delta) => {
+                if let (Some(world), Some(plane)) = (self.world_bounds(), self.plane.as_mut()) {
+                    plane.move_by(delta, &world);
+                }
+            }
+            Message::PlaneSlider(percent) => {
+                if let (Some(world), Some(plane)) = (self.world_bounds(), self.plane.as_mut()) {
+                    let (lo, hi) = plane.range(&world);
+                    plane.move_by(lo + (hi - lo) * percent / 100.0 - plane.offset, &world);
+                }
+            }
+            Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape => {
                 self.selected = None;
                 self.selection.clear();
             }
@@ -568,7 +622,7 @@ impl App {
                     Key::Character("2") => Some(Message::Preset(ViewPreset::Front)),
                     Key::Character("3") => Some(Message::Preset(ViewPreset::Right)),
                     Key::Character("0") | Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
-                    Key::Named(Named::Escape) => Some(Message::ClearSelection),
+                    Key::Named(Named::Escape) => Some(Message::Escape),
                     _ => None,
                 }
             }
@@ -588,7 +642,8 @@ impl App {
     }
 
     /// Selects what is under the cursor: the nearest visible triangle, then its element (or the
-    /// whole layer when the format has no elements); empty space clears the selection.
+    /// whole layer when the format has no elements); empty space clears the selection. While
+    /// placing the section plane, puts it on the face under the cursor instead.
     fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
@@ -597,9 +652,29 @@ impl App {
         let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
         let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
         let mm = self.model_matrix();
-        let section = self.active_section();
-        let keep = |p: Vec3| section.is_none_or(|s| s.contains(mm.transform_point3(p)));
-        self.selected = pick_triangle(&model, &self.visible, origin, dir, &keep).map(|(l, t)| (l, model.layers[l].element_at(t)));
+        let (section, plane) = (self.active_section(), self.plane);
+        let keep = |p: Vec3| {
+            let w = mm.transform_point3(p);
+            section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
+        };
+        let hit = pick_triangle(&model, &self.visible, origin, dir, &keep);
+        if self.plane_picking {
+            if let (Some((l, t)), Some(world)) = (hit, self.world_bounds()) {
+                if let Some((point, normal)) = face_at(&model.layers[l], t, origin, dir) {
+                    let (point, mut normal) = (mm.transform_point3(point), mm.transform_vector3(normal));
+                    // the face as seen: its normal towards the viewer
+                    if normal.dot(mm.transform_vector3(dir)) > 0.0 {
+                        normal = -normal;
+                    }
+                    if let Some(p) = SectionPlane::on_face(point, normal, &world) {
+                        self.plane = Some(p);
+                        self.plane_picking = false;
+                    }
+                }
+            }
+            return;
+        }
+        self.selected = hit.map(|(l, t)| (l, model.layers[l].element_at(t)));
         self.selection = match self.selected {
             Some((_, Some(id))) => model.element_ranges(id),
             Some((l, None)) => vec![(l, 0, model.layers[l].indices.len() as u32)],
@@ -1017,6 +1092,28 @@ impl App {
                 .push(rule::horizontal(1));
         }
 
+        // the section plane
+        if let (Some(plane), Some(world)) = (self.plane, self.world_bounds()) {
+            let (lo, hi) = plane.range(&world);
+            let percent = ((plane.offset - lo) / (hi - lo).max(1e-6) * 100.0).clamp(0.0, 100.0);
+            let n = plane.normal;
+            content = content
+                .push(section(l.text("Doorsnedevlak", "Section plane")))
+                .push(prop(l.text("Normaal", "Normal"), format!("{:.2}, {:.2}, {:.2}", n.x, n.y, n.z)))
+                .push(
+                    column![
+                        row![
+                            text(l.text("Positie", "Position")).size(12).color(p.text_secondary).width(Fill),
+                            text(format!("{:.2} m", plane.offset)).size(11).color(p.text_muted),
+                        ]
+                        .spacing(6),
+                        slider(0.0..=100.0, percent, Message::PlaneSlider).step(0.1_f32).width(Fill),
+                    ]
+                    .spacing(2),
+                )
+                .push(rule::horizontal(1));
+        }
+
         content = content
             .push(section(l.text("Bestand", "File")))
             .push(prop(l.text("Naam", "Name"), model.file_name()))
@@ -1055,6 +1152,7 @@ impl App {
             grid_major: srgb4(p.grid_major),
             model_matrix: self.model_matrix(),
             section: self.active_section(),
+            plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
             grids: self.show_grids && !self.flip_up,
         };
@@ -1094,6 +1192,23 @@ impl App {
         let section = self.active_section().filter(|_| overlay.is_none()).map(|section| {
             canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
+        let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {
+            canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
+        });
+        let picking = (self.plane_picking && overlay.is_none()).then(|| {
+            container(
+                container(text(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel")).size(12).color(Color::WHITE))
+                    .padding([6, 12])
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.6))),
+                        border: Border { radius: 4.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }),
+            )
+            .padding(12)
+            .align_top(Fill)
+            .center_x(Fill)
+        });
         let grids = self
             .model
             .as_ref()
@@ -1108,7 +1223,7 @@ impl App {
                 .width(Fill)
                 .height(Fill)
             });
-        stack![scene, hint].push(grids).push(section).push(cube).push(overlay).width(Fill).height(Fill).into()
+        stack![scene, hint].push(grids).push(section).push(plane).push(picking).push(cube).push(overlay).width(Fill).height(Fill).into()
     }
 
     fn welcome(&self, p: Palette) -> Element<'_, Message> {
@@ -1209,6 +1324,20 @@ fn load_fraction(phase: loaders::Phase, seconds: f32, slow: bool) -> f32 {
         Phase::Scene => (0.9, 0.09, 0.5),
     };
     start + share * (1.0 - (-seconds / tau).exp())
+}
+
+/// Where the ray `origin + t·dir` meets triangle `t` of `layer`, and the triangle's normal
+/// (model space, not oriented).
+fn face_at(layer: &crate::model::Layer, t: usize, origin: Vec3, dir: Vec3) -> Option<(Vec3, Vec3)> {
+    let tri = layer.indices.get(3 * t..3 * t + 3)?;
+    let at = |i: u32| layer.positions.get(3 * i as usize..3 * i as usize + 3).map(|p| Vec3::new(p[0], p[1], p[2]));
+    let (a, b, c) = (at(tri[0])?, at(tri[1])?, at(tri[2])?);
+    let normal = (b - a).cross(c - a).try_normalize()?;
+    let along = normal.dot(dir);
+    if along.abs() < 1e-12 {
+        return None;
+    }
+    Some((origin + dir * (normal.dot(a - origin) / along), normal))
 }
 
 /// The nearest triangle hit by the ray `origin + t·dir` (t > 0) among the visible layers:

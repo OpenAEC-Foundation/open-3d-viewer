@@ -44,7 +44,9 @@ pub struct RenderSettings {
     pub model_matrix: Mat4,
     /// The section box (world), when on.
     pub section: Option<SectionBox>,
-    /// Fill the cut faces of solids where the box cuts them.
+    /// The section plane, when placed: `SectionPlane::uniform`.
+    pub plane: Option<[[f32; 4]; 2]>,
+    /// Fill the cut faces of solids where the box or the plane cuts them.
     pub caps: bool,
     /// Draw the model's grid lines (Revit grids).
     pub grids: bool,
@@ -67,6 +69,7 @@ struct Uniforms {
     params: [f32; 4],
     clip: [[f32; 4]; 3],
     cap: [f32; 4],
+    plane: [[f32; 4]; 2],
 }
 
 /// One frame of the viewport, created by the widget's `draw`.
@@ -653,7 +656,7 @@ impl ScenePipeline {
         if settings.mode != RenderMode::Solid {
             self.ensure_edges(device, &primitive.visible, settings.mode == RenderMode::Wireframe);
         }
-        if settings.section.is_some() && settings.caps && settings.mode != RenderMode::Wireframe {
+        if (settings.section.is_some() || settings.plane.is_some()) && settings.caps && settings.mode != RenderMode::Wireframe {
             self.ensure_solids(device);
         }
         if settings.grid {
@@ -670,20 +673,22 @@ impl ScenePipeline {
         let eye = camera.eye();
         let srgb = if self.srgb { 1.0 } else { 0.0 };
         let clip = settings.section.map(|s| s.uniform()).unwrap_or([[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]]);
-        let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3]| Uniforms {
+        let plane = settings.plane.unwrap_or([[0.0; 4]; 2]);
+        let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3], plane: [[f32; 4]; 2]| Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
             params: [srgb, line_scale, 0.0, 0.0],
             clip,
             cap: [CAP_COLOR[0], CAP_COLOR[1], CAP_COLOR[2], CAP_HATCH * viewport.scale_factor() as f32],
+            plane,
         };
         let wire_scale = if settings.mode == RenderMode::SolidEdges { 0.35 } else { 0.8 };
-        queue.write_buffer(&self.model_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, 1.0, clip)));
-        queue.write_buffer(&self.edge_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, wire_scale, clip)));
+        queue.write_buffer(&self.model_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, 1.0, clip, plane)));
+        queue.write_buffer(&self.edge_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, wire_scale, clip, plane)));
         // the grid is never cut
         let no_clip = [[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]];
-        queue.write_buffer(&self.world_uniforms, 0, bytemuck::bytes_of(&uniforms(Mat4::IDENTITY, 1.0, no_clip)));
+        queue.write_buffer(&self.world_uniforms, 0, bytemuck::bytes_of(&uniforms(Mat4::IDENTITY, 1.0, no_clip, [[0.0; 4]; 2])));
     }
 
     fn render(
@@ -744,10 +749,14 @@ impl ScenePipeline {
                     }
                 }
             }
-            if let (Some(section), true, false) = (primitive.settings.section, primitive.settings.caps, mode == RenderMode::Wireframe) {
+            if primitive.settings.caps && mode != RenderMode::Wireframe {
                 pass.set_bind_group(0, &self.model_group, &[]);
                 pass.set_stencil_reference(0);
-                for face in cap_faces(&section, &primitive.camera) {
+                let mut faces = primitive.settings.section.map(|s| cap_faces(&s, &primitive.camera)).unwrap_or_default();
+                if primitive.settings.plane.is_some_and(|p| plane_cap_visible(p[0], &primitive.camera)) {
+                    faces.push(6);
+                }
+                for face in faces {
                     pass.set_pipeline(&self.stencil_clear);
                     pass.draw(0..3, 0..1);
                     pass.set_pipeline(&self.face_count);
@@ -869,6 +878,17 @@ fn cap_faces(section: &SectionBox, camera: &Camera) -> Vec<u32> {
             }
         })
         .collect()
+}
+
+/// Whether the cut of the section plane (normal + offset) can be seen: the camera is on the side
+/// it cuts away (perspective), or looks against its normal (orthographic).
+fn plane_cap_visible(plane: [f32; 4], camera: &Camera) -> bool {
+    let n = Vec3::new(plane[0], plane[1], plane[2]);
+    if camera.ortho {
+        n.dot(camera.target - camera.eye()) < 0.0
+    } else {
+        n.dot(camera.eye()) > plane[3]
+    }
 }
 
 /// Grid placement for world bounds: (centre, half extent, spacing, z).

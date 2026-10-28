@@ -13,6 +13,10 @@ struct Uniforms {
     clip_c: vec4<f32>,
     // cut fill: colour (sRGB) + hatch spacing in pixels (0 = solid)
     cap: vec4<f32>,
+    // section plane: normal.xyz + offset (cuts normal · p > offset; on when the normal is not
+    // zero), and the middle of its fill square + half size
+    plane_a: vec4<f32>,
+    plane_b: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -51,12 +55,21 @@ fn box_local(world: vec3<f32>) -> vec3<f32> {
 }
 
 // Outside the section box (when it is on).
-fn clipped(world: vec3<f32>) -> bool {
+fn box_clipped(world: vec3<f32>) -> bool {
     if (u.clip_c.w < 0.5) {
         return false;
     }
     let p = box_local(world);
     return any(p < u.clip_b.xyz) || any(p > u.clip_c.xyz);
+}
+
+// On the side the section plane cuts away (when it is on).
+fn plane_clipped(world: vec3<f32>) -> bool {
+    return dot(u.plane_a.xyz, u.plane_a.xyz) > 0.5 && dot(u.plane_a.xyz, world) > u.plane_a.w;
+}
+
+fn clipped(world: vec3<f32>) -> bool {
+    return box_clipped(world) || plane_clipped(world);
 }
 
 fn to_linear(c: vec3<f32>) -> vec3<f32> {
@@ -173,6 +186,13 @@ fn vs_face(v: VertexIn, @builtin(instance_index) face: u32) -> FaceOut {
 
 @fragment
 fn fs_face_count(in: FaceOut) -> @location(0) vec4<f32> {
+    // face 6: the section plane
+    if (in.face == 6u) {
+        if (plane_clipped(in.world)) {
+            discard;
+        }
+        return vec4<f32>(0.0);
+    }
     let p = box_local(in.world);
     let axis = in.face / 2u;
     var kept = p[axis] >= u.clip_b[axis];
@@ -192,6 +212,22 @@ fn vs_cap(@builtin(vertex_index) vi: u32, @builtin(instance_index) face: u32) ->
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
     );
     let t = corners[vi];
+    if (face == 6u) {
+        // a square on the section plane round the model, axes as `SectionPlane::basis`
+        let n = u.plane_a.xyz;
+        var up = vec3<f32>(0.0, 0.0, 1.0);
+        if (abs(n.z) >= 0.99) {
+            up = vec3<f32>(1.0, 0.0, 0.0);
+        }
+        let a = normalize(cross(up, n));
+        let b = normalize(cross(n, a));
+        let world = u.plane_b.xyz + (a * (2.0 * t.x - 1.0) + b * (2.0 * t.y - 1.0)) * u.plane_b.w;
+        var plane_out: FaceOut;
+        plane_out.world = world;
+        plane_out.face = face;
+        plane_out.clip = u.view_proj * vec4<f32>(world, 1.0);
+        return plane_out;
+    }
     let axis = face / 2u;
     let b = (axis + 1u) % 3u;
     let c = (axis + 2u) % 3u;
@@ -215,6 +251,10 @@ fn vs_cap(@builtin(vertex_index) vi: u32, @builtin(instance_index) face: u32) ->
 
 @fragment
 fn fs_cap(in: FaceOut) -> @location(0) vec4<f32> {
+    // a box face is cut by the plane, the plane by the box
+    if ((in.face == 6u && box_clipped(in.world)) || (in.face < 6u && plane_clipped(in.world))) {
+        discard;
+    }
     var color = to_linear(u.cap.rgb);
     if (u.cap.w > 0.0) {
         // diagonal hatch in screen space, as a cut in a section drawing

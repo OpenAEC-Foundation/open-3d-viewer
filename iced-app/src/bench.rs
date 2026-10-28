@@ -92,6 +92,7 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
             grid_major: srgb4(p.grid_major),
             model_matrix: glam::Mat4::IDENTITY,
             section,
+            plane: None,
             caps: section.is_some(),
             grids: true,
         };

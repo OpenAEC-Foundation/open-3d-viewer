@@ -7,7 +7,7 @@ use crate::app::{App, Message, Status};
 use crate::theme::ThemeKind;
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
-use openaec_ui::icons::Icon;
+use openaec_ui::icons::{DomainIcon, Icon};
 use openaec_ui::iced::{Element, Subscription, Task};
 use openaec_ui::{Application, Command, Language, RibbonGroup, RibbonTab, Theme};
 
@@ -98,12 +98,18 @@ impl Application for Studio {
                             Command::new(l.text("Doorsnedebox", "Section box"), Icon::Cube, Message::ToggleSection)
                                 .selected(app.section_on)
                                 .enabled(loaded),
+                            Command::new(l.text("Doorsnedevlak", "Section plane"), DomainIcon::DrawingTrim, Message::TogglePlane)
+                                .selected(app.plane.is_some() || app.plane_picking)
+                                .enabled(loaded),
+                            Command::new(l.text("Omdraaien", "Flip"), DomainIcon::TransformMirror, Message::FlipPlane)
+                                .enabled(app.plane.is_some()),
                             Command::new(l.text("Om selectie", "To selection"), Icon::FitSelection, Message::SectionToSelection)
                                 .enabled(!app.selection.is_empty()),
                             Command::new(l.text("Snijvlak vullen", "Fill cut"), Icon::Grid, Message::ToggleSectionFill)
                                 .selected(app.section_fill)
-                                .enabled(app.section_on),
-                            Command::new(l.text("Herstellen", "Reset"), Icon::Undo, Message::ResetSection).enabled(app.section_on),
+                                .enabled(app.section_on || app.plane.is_some()),
+                            Command::new(l.text("Herstellen", "Reset"), Icon::Undo, Message::ResetSection)
+                                .enabled(app.section_on || app.plane.is_some()),
                         ],
                     },
                     RibbonGroup {

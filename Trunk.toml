@@ -1,0 +1,7 @@
+# The web app: `trunk serve` (development) or `trunk build --release` (into dist/).
+[build]
+target = "index.html"
+dist = "dist"
+
+[watch]
+ignore = ["test-models", "revit", "dist", "target"]

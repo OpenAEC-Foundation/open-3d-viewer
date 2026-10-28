@@ -83,6 +83,12 @@ pub struct App {
     pub show_grids: bool,
     /// Explorer groups opened: views, rooms, layers.
     pub explorer_open: [bool; 3],
+    /// Measurements shown in the viewport (made through remote control).
+    pub measurements: Vec<crate::annotations::Measurement>,
+    /// Where the viewport sits in the window (logical pixels), to cut it out of screenshots.
+    pub viewport_origin: (f32, f32),
+    /// Remote control (the MCP server): listening, and the calls waiting for an answer.
+    pub remote: crate::remote::RemoteState,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +140,11 @@ pub enum Message {
     Tick,
     TakeShot,
     Shot(window::Screenshot),
+    /// A command from remote control (the MCP server).
+    Remote(crate::remote::RemoteCall),
+    /// The window captured for a remote `screenshot`.
+    RemoteShot(window::Screenshot),
+    ClearMeasurements,
 }
 
 impl From<Navigate> for Message {
@@ -193,6 +204,9 @@ impl Default for App {
             active_view: None,
             show_grids: true,
             explorer_open: [true, false, true],
+            measurements: Vec::new(),
+            viewport_origin: (0.0, 0.0),
+            remote: Default::default(),
         }
     }
 }
@@ -223,7 +237,7 @@ impl App {
         self.theme.theme()
     }
 
-    fn model_matrix(&self) -> Mat4 {
+    pub(crate) fn model_matrix(&self) -> Mat4 {
         match (&self.model, self.flip_up) {
             (Some(m), true) if m.source_y_up => Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             (Some(_), true) => Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -231,7 +245,7 @@ impl App {
         }
     }
 
-    fn aspect(&self) -> f32 {
+    pub(crate) fn aspect(&self) -> f32 {
         self.viewport_size.0 / self.viewport_size.1.max(1.0)
     }
 
@@ -250,12 +264,12 @@ impl App {
     }
 
     /// The model's bounds in world space (after the up-axis override).
-    fn world_bounds(&self) -> Option<Bounds> {
+    pub(crate) fn world_bounds(&self) -> Option<Bounds> {
         self.model.as_ref().map(|m| transform_bounds(&m.bounds, &self.model_matrix()))
     }
 
     /// World bounds of the selected triangles.
-    fn selection_bounds(&self) -> Option<Bounds> {
+    pub(crate) fn selection_bounds(&self) -> Option<Bounds> {
         let model = self.model.as_ref()?;
         let mm = self.model_matrix();
         let mut b = Bounds::empty();
@@ -366,6 +380,7 @@ impl App {
         self.active_view = None;
         self.selected = None;
         self.selection.clear();
+        self.measurements.clear();
         self.flip_up = false;
         self.layer_filter.clear();
         self.camera.set_preset(self.initial_view.take().unwrap_or(ViewPreset::Iso));
@@ -411,12 +426,17 @@ impl App {
             }
             Message::Loaded(Ok(model)) => {
                 self.set_model(model);
+                self.remote_loaded();
                 return self.shot_after_delay();
             }
             Message::Loaded(Err(e)) => {
                 self.status = Status::Error(e);
+                self.remote_loaded();
                 return self.shot_after_delay();
             }
+            Message::Remote(call) => return self.remote(call),
+            Message::RemoteShot(shot) => self.remote_shot(shot),
+            Message::ClearMeasurements => self.measurements.clear(),
             Message::TakeShot => {
                 return window::latest().and_then(window::screenshot).map(Message::Shot);
             }
@@ -500,7 +520,10 @@ impl App {
                     let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
                     self.camera.zoom_at(steps, ndc, width / height.max(1.0));
                 }
-                Navigate::Resized { width, height } => self.viewport_size = (width, height),
+                Navigate::Resized { x, y, width, height } => {
+                    self.viewport_origin = (x, y);
+                    self.viewport_size = (width, height);
+                }
                 Navigate::Pick { x, y, width, height } => self.pick(x, y, width, height),
             },
             Message::ApplyView(i) => self.apply_view(i),
@@ -628,7 +651,8 @@ impl App {
             }
             _ => None,
         });
-        Subscription::batch([events, ticks])
+        let remote = if self.remote.enabled { Subscription::run(crate::remote::serve) } else { Subscription::none() };
+        Subscription::batch([events, ticks, remote])
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -644,7 +668,7 @@ impl App {
     /// Selects what is under the cursor: the nearest visible triangle, then its element (or the
     /// whole layer when the format has no elements); empty space clears the selection. While
     /// placing the section plane, puts it on the face under the cursor instead.
-    fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
+    pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
         let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
@@ -1223,7 +1247,28 @@ impl App {
                 .width(Fill)
                 .height(Fill)
             });
-        stack![scene, hint].push(grids).push(section).push(plane).push(picking).push(cube).push(overlay).width(Fill).height(Fill).into()
+        let measurements = (!self.measurements.is_empty() && overlay.is_none()).then(|| {
+            canvas(crate::annotations::MeasureOverlay {
+                items: &self.measurements,
+                view_proj: self.camera.view_proj(self.aspect()),
+                ink: p.accent,
+                fill: p.surface,
+                text: p.text,
+            })
+            .width(Fill)
+            .height(Fill)
+        });
+        stack![scene, hint]
+            .push(grids)
+            .push(section)
+            .push(plane)
+            .push(measurements)
+            .push(picking)
+            .push(cube)
+            .push(overlay)
+            .width(Fill)
+            .height(Fill)
+            .into()
     }
 
     fn welcome(&self, p: Palette) -> Element<'_, Message> {
@@ -1328,7 +1373,7 @@ fn load_fraction(phase: loaders::Phase, seconds: f32, slow: bool) -> f32 {
 
 /// Where the ray `origin + t·dir` meets triangle `t` of `layer`, and the triangle's normal
 /// (model space, not oriented).
-fn face_at(layer: &crate::model::Layer, t: usize, origin: Vec3, dir: Vec3) -> Option<(Vec3, Vec3)> {
+pub(crate) fn face_at(layer: &crate::model::Layer, t: usize, origin: Vec3, dir: Vec3) -> Option<(Vec3, Vec3)> {
     let tri = layer.indices.get(3 * t..3 * t + 3)?;
     let at = |i: u32| layer.positions.get(3 * i as usize..3 * i as usize + 3).map(|p| Vec3::new(p[0], p[1], p[2]));
     let (a, b, c) = (at(tri[0])?, at(tri[1])?, at(tri[2])?);

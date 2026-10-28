@@ -113,6 +113,11 @@ impl Application for Studio {
                         ],
                     },
                     RibbonGroup {
+                        label: l.text("Meten", "Measure").into(),
+                        commands: vec![Command::new(l.text("Metingen wissen", "Clear measurements"), Icon::Measure, Message::ClearMeasurements)
+                            .enabled(!app.measurements.is_empty())],
+                    },
+                    RibbonGroup {
                         label: l.text("Projectie", "Projection").into(),
                         commands: vec![
                             Command::new(l.text("Perspectief", "Perspective"), Icon::ZoomIn, Message::Ortho(false))

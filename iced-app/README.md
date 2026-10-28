@@ -21,7 +21,7 @@ cargo test --release                  # loader, camera and parser tests
 Command line:
 
 ```
-open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint]
+open-3d-viewer-iced [FILE] [--theme light|forge|night|blueprint] [--no-remote]
 open-3d-viewer-iced [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
                     [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
 open-3d-viewer-iced [FILE] --window-screenshot OUT.png
@@ -71,6 +71,31 @@ open-3d-viewer-iced --bench FILE [--frames 300]
 New formats: implement `loaders::Loader` (name, extensions, `load` → `Vec<Layer>` in Z up,
 optional `source_y_up`) in a new module and add it to `loaders::registry()`.
 
+## AI agents (MCP server)
+
+`cargo build --release` also builds `open-3d-viewer-mcp.exe`, an [MCP](https://modelcontextprotocol.io)
+server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the
+viewer as a person does: open files, take screenshots, orbit / pan / zoom and set the camera,
+standard and saved views, show / hide / isolate layers, find elements by property (and count
+them per level, type, …), select, inspect properties, section box and section plane, render
+mode and display toggles, and measure (distance and angle between points or clicked pixels,
+element size / surface area / volume, clearance between two elements). Measurements are drawn
+in the viewport (View > Measure > Clear measurements removes them).
+
+Install: keep `open-3d-viewer-mcp.exe` next to the viewer `.exe` and register it with the
+client:
+
+```sh
+claude mcp add open-3d-viewer -- "C:\path\to\open-3d-viewer-mcp.exe"   # Claude Code
+open-3d-viewer-mcp --print-config        # the JSON for claude_desktop_config.json and others
+```
+
+How it works: the window listens on a free port on 127.0.0.1 and writes the port and a random
+token to `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`; commands go through the same
+update path as clicks. The MCP server connects to that viewer and starts one when none runs
+(`O3V_VIEWER`, else the viewer next to it). `--no-remote` or `O3V_REMOTE=0` switches the port
+off; `O3V_REMOTE_PORT` fixes the port.
+
 ## Performance (Revit sample, this machine)
 
 `racbasicsampleproject_2026.rvt` (18.8 MB), AMD Radeon integrated GPU (Vulkan), release build:
@@ -91,8 +116,7 @@ wait after every frame.
 * **Other three.js / Assimp / OCCT formats**: FBX, 3DS, Collada, 3MF, AMF, VRML, VTK, KMZ,
   VOX, G-code, STEP/IGES/BREP (OCCT WASM), XYZ/PCD.
 * **Textures**: glTF/OBJ textures are not mapped (only an average tint for glTF).
-* **Tools**: no picking/selection with element properties, section box, measurement
-  (distance/angle), walk mode, view cube / axis gizmo, zoom to cursor, points and
+* **Tools**: no interactive measure tool (measuring goes through the MCP server), walk mode, view cube / axis gizmo, zoom to cursor, points and
   hidden-line render modes, light toggles, settings dialog, backstage (recent files), feedback
   dialog, i18n (UI is English only), multiple models at once.
 * Layer rows are grouped by Revit category / glTF material / OBJ object rather than the

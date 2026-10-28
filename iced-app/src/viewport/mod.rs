@@ -23,8 +23,9 @@ pub enum Navigate {
     Pan { dx: f32, dy: f32, height: f32 },
     /// Wheel steps at (x, y) in a viewport of width × height (logical pixels).
     Zoom { steps: f32, x: f32, y: f32, width: f32, height: f32 },
-    /// The viewport size changed (logical pixels), for fit-to-view.
-    Resized { width: f32, height: f32 },
+    /// The viewport moved or changed size (logical pixels, origin in the window), for
+    /// fit-to-view and to cut the viewport out of window screenshots.
+    Resized { x: f32, y: f32, width: f32, height: f32 },
     /// Left click at (x, y) in the viewport (logical pixels).
     Pick { x: f32, y: f32, width: f32, height: f32 },
 }
@@ -44,7 +45,7 @@ pub struct State {
     /// Where the left button went down, for click detection.
     press: Option<Point>,
     shift: bool,
-    size: (f32, f32),
+    bounds: Rectangle,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -71,11 +72,13 @@ where
 
         match event {
             Event::Window(iced::window::Event::RedrawRequested(_)) => {
-                if state.size == (bounds.width, bounds.height) {
+                if state.bounds == bounds {
                     return None;
                 }
-                state.size = (bounds.width, bounds.height);
+                state.bounds = bounds;
                 Some(shader::Action::publish(Message::from(Navigate::Resized {
+                    x: bounds.x,
+                    y: bounds.y,
                     width: bounds.width,
                     height: bounds.height,
                 })))

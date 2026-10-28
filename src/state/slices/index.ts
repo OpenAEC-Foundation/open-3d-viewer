@@ -6,6 +6,8 @@ export {
   type CameraMode,
   type RenderMode,
   type ProjectionMode,
+  type ExplodeMode,
+  type ExplodeAxis,
   initialViewerState,
   createViewerSlice,
 } from './viewerSlice';

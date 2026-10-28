@@ -95,3 +95,27 @@ export function WalkIcon() {
     </svg>
   );
 }
+
+export function ExplodeStoreysIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {/* Three floor slabs pulled apart */}
+      <path d="M4 5L12 2L20 5L12 8Z" fill="currentColor" fillOpacity="0.25" />
+      <path d="M4 12L12 9L20 12L12 15Z" fill="currentColor" fillOpacity="0.25" />
+      <path d="M4 19L12 16L20 19L12 22Z" fill="currentColor" fillOpacity="0.25" />
+    </svg>
+  );
+}
+
+export function ExplodeElementsIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {/* Four blocks moving away from the centre */}
+      <rect x="2" y="2" width="7" height="7" rx="1" />
+      <rect x="15" y="2" width="7" height="7" rx="1" />
+      <rect x="2" y="15" width="7" height="7" rx="1" />
+      <rect x="15" y="15" width="7" height="7" rx="1" />
+      <path d="M10.5 10.5L12 12M13.5 10.5L12 12M10.5 13.5L12 12M13.5 13.5L12 12" opacity="0.6" />
+    </svg>
+  );
+}

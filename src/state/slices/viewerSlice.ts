@@ -27,6 +27,9 @@ export interface ModelEntry {
 export type CameraMode = 'orbit' | 'walk';
 export type RenderMode = 'solid' | 'wireframe' | 'points' | 'hiddenline';
 export type ProjectionMode = 'perspective' | 'orthographic';
+/** Exploded view: pull elements apart from the centre, or whole building storeys apart */
+export type ExplodeMode = 'elements' | 'storeys';
+export type ExplodeAxis = 'x' | 'y' | 'z';
 
 // ============================================================================
 // State Interface
@@ -44,6 +47,11 @@ export interface ViewerState {
     minX: number; minY: number; minZ: number;
     maxX: number; maxY: number; maxZ: number;
   } | null;
+  explodeMode: ExplodeMode;
+  /** Exploded view amount per axis, 0–100 % */
+  explode: Record<ExplodeAxis, number>;
+  /** Building storeys found in the loaded models (0 = storeys mode unavailable) */
+  explodeStoreyCount: number;
   showGrid: boolean;
   ambientLightEnabled: boolean;
   directionalLightEnabled: boolean;
@@ -83,6 +91,10 @@ export interface ViewerActions {
   setWalkSpeed: (speed: number) => void;
   setSectionBoxEnabled: (enabled: boolean) => void;
   setSectionBoxBounds: (bounds: ViewerState['sectionBoxBounds']) => void;
+  setExplodeMode: (mode: ExplodeMode) => void;
+  setExplode: (axis: ExplodeAxis, value: number) => void;
+  resetExplode: () => void;
+  setExplodeStoreyCount: (count: number) => void;
   setShowGrid: (show: boolean) => void;
   setAmbientLightEnabled: (enabled: boolean) => void;
   setDirectionalLightEnabled: (enabled: boolean) => void;
@@ -111,6 +123,9 @@ export const initialViewerState: ViewerState = {
   walkSpeed: 5,
   sectionBoxEnabled: false,
   sectionBoxBounds: null,
+  explodeMode: 'storeys',
+  explode: { x: 0, y: 0, z: 0 },
+  explodeStoreyCount: 0,
   showGrid: true,
   ambientLightEnabled: true,
   directionalLightEnabled: true,
@@ -204,6 +219,22 @@ export const createViewerSlice = (
 
   setSectionBoxBounds: (bounds: ViewerState['sectionBoxBounds']) => {
     set((s) => { s.sectionBoxBounds = bounds; });
+  },
+
+  setExplodeMode: (mode: ExplodeMode) => {
+    set((s) => { s.explodeMode = mode; });
+  },
+
+  setExplode: (axis: ExplodeAxis, value: number) => {
+    set((s) => { s.explode[axis] = Math.max(0, Math.min(100, value)); });
+  },
+
+  resetExplode: () => {
+    set((s) => { s.explode = { x: 0, y: 0, z: 0 }; });
+  },
+
+  setExplodeStoreyCount: (count: number) => {
+    set((s) => { s.explodeStoreyCount = count; });
   },
 
   setShowGrid: (show: boolean) => {

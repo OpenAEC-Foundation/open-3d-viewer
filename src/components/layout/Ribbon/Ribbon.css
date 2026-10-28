@@ -167,6 +167,16 @@
   user-select: none;
 }
 
+/* Axis letter in front of a slider, coloured like the axis indicator */
+.ribbon-slider-label.axis {
+  width: 10px;
+  font-weight: 600;
+}
+
+.ribbon-slider-label.axis-x { color: #e05555; }
+.ribbon-slider-label.axis-y { color: #55b855; }
+.ribbon-slider-label.axis-z { color: #5580e0; }
+
 .ribbon-slider-value {
   font-size: 10px;
   color: var(--theme-text);

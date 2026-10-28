@@ -6,10 +6,90 @@ import { finalizeScene } from './sceneUtils';
 /**
  * IFCLoader — native IFC (2x3, 4, 4.3) via web-ifc (WASM).
  * Elements are grouped per IFC class (IfcWall, IfcSlab, ...) so each class
- * shows up as a layer; each mesh carries its IFC name, GlobalId and class.
+ * shows up as a layer; each mesh carries its IFC name, GlobalId, class and
+ * building storey.
  */
 
 let apiPromise: Promise<any> | null = null;
+
+/** web-ifc returns Y-up geometry; IFC itself and this viewer are Z-up */
+const Y_UP_TO_Z_UP = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+
+/** Building storey an element belongs to */
+interface StoreyInfo {
+  /** expressID of the IfcBuildingStorey */
+  id: number;
+  name: string;
+  /** Elevation as stated in the file (NaN when missing) */
+  elevation: number;
+}
+
+/** Read a line by expressID or reference; null when it cannot be read */
+function ifcLine(api: any, modelID: number, ref: any): any {
+  const id = typeof ref === 'number' ? ref : ref?.value;
+  if (typeof id !== 'number') return null;
+  try { return api.GetLine(modelID, id); } catch { return null; }
+}
+
+/** expressIDs of all lines of an IFC type */
+function ifcLineIds(api: any, modelID: number, type: number): number[] {
+  const vec = api.GetLineIDsWithType(modelID, type);
+  const out: number[] = [];
+  for (let i = 0; i < vec.size(); i++) out.push(vec.get(i));
+  return out;
+}
+
+/**
+ * Resolve the building storey of every element: directly via
+ * IfcRelContainedInSpatialStructure, or through the parent it is aggregated
+ * into (stair flight → stair, space → storey) via IfcRelAggregates.
+ */
+function readStoreys(
+  api: any,
+  modelID: number,
+  types: { storeys: number; contained: number; aggregates: number },
+): (expressID: number) => StoreyInfo | undefined {
+  const storeys = new Map<number, StoreyInfo>();
+  for (const id of ifcLineIds(api, modelID, types.storeys)) {
+    const s = ifcLine(api, modelID, id);
+    const elevation = s?.Elevation?.value;
+    storeys.set(id, {
+      id,
+      name: s?.Name?.value || s?.LongName?.value || `#${id}`,
+      elevation: typeof elevation === 'number' ? elevation : NaN,
+    });
+  }
+  if (storeys.size === 0) return () => undefined;
+
+  // child → parent; containment wins over aggregation
+  const parentOf = new Map<number, number>();
+  for (const relId of ifcLineIds(api, modelID, types.aggregates)) {
+    const rel = ifcLine(api, modelID, relId);
+    const parent = rel?.RelatingObject?.value;
+    if (typeof parent !== 'number') continue;
+    for (const obj of rel.RelatedObjects ?? []) {
+      if (typeof obj?.value === 'number') parentOf.set(obj.value, parent);
+    }
+  }
+  for (const relId of ifcLineIds(api, modelID, types.contained)) {
+    const rel = ifcLine(api, modelID, relId);
+    const structure = rel?.RelatingStructure?.value;
+    if (typeof structure !== 'number') continue;
+    for (const obj of rel.RelatedElements ?? []) {
+      if (typeof obj?.value === 'number') parentOf.set(obj.value, structure);
+    }
+  }
+
+  return (expressID: number) => {
+    let id: number | undefined = expressID;
+    for (let depth = 0; depth < 16 && id !== undefined; depth++) {
+      const storey = storeys.get(id);
+      if (storey) return storey;
+      id = parentOf.get(id);
+    }
+    return undefined;
+  };
+}
 
 function getApi(): Promise<any> {
   if (!apiPromise) {
@@ -39,6 +119,7 @@ export async function loadIFC(
 ): Promise<ThreeJSResult> {
   onProgress?.(0.25, 'Loading IFC engine...');
   const api = await getApi();
+  const { IFCBUILDINGSTOREY, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELAGGREGATES } = await import('web-ifc');
 
   onProgress?.(0.35, 'Parsing IFC...');
   const modelID: number = api.OpenModel(new Uint8Array(data), { COORDINATE_TO_ORIGIN: true });
@@ -69,6 +150,15 @@ export async function loadIFC(
   };
 
   try {
+    let storeyOf: (expressID: number) => StoreyInfo | undefined = () => undefined;
+    try {
+      storeyOf = readStoreys(api, modelID, {
+        storeys: IFCBUILDINGSTOREY, contained: IFCRELCONTAINEDINSPATIALSTRUCTURE, aggregates: IFCRELAGGREGATES,
+      });
+    } catch (err) {
+      console.warn('IFC: could not read storeys', err);
+    }
+
     api.StreamAllMeshes(modelID, (flatMesh: any, index: number, total: number) => {
       if (total > 0 && index % 50 === 0) {
         onProgress?.(0.35 + 0.55 * (index / total), `Building IFC elements (${index}/${total})...`);
@@ -119,12 +209,18 @@ export async function loadIFC(
         bg.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         bg.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
         bg.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1));
-        matrix.fromArray(pg.flatTransformation);
+        matrix.fromArray(pg.flatTransformation).premultiply(Y_UP_TO_Z_UP);
         bg.applyMatrix4(matrix);
 
         const mesh = new THREE.Mesh(bg, getMaterial(pg.color));
         mesh.name = name || `${className} #${expressID}`;
-        mesh.userData = { ifcClass: className, expressID, globalId };
+        const storey = storeyOf(expressID);
+        mesh.userData = {
+          ifcClass: className, expressID, globalId,
+          storey: storey?.name,
+          storeyId: storey?.id,
+          storeyElevation: storey?.elevation,
+        };
         group.add(mesh);
       }
     });

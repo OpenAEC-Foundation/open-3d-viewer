@@ -1,8 +1,9 @@
 //! SketchUp (.skp): a Rust port of the reader in openskp 1.3 (MIT, Ahsan Mehmood,
 //! https://github.com/iamahsanmehmood/openskp), the library the React app uses. It reads both
-//! containers: the 2021+ ZIP ("VFF") format ([`vff`]) and the 2013-2020 MFC archive
-//! ([`legacy`]). One layer per SketchUp tag, with material colours per vertex (textures as the
-//! material's average colour) and each placed component or group as a pickable element.
+//! containers: the 2021+ ZIP ("VFF") format ([`vff`]) and the classic MFC archive of SketchUp 3
+//! to 2020 ([`legacy`], at openskp 1.4.0). One layer per SketchUp tag, with material colours per
+//! vertex (textures as the material's average colour) and each placed component or group as a
+//! pickable element.
 //!
 //! SketchUp is Z up in inches; the layers are Z up in metres.
 
@@ -46,7 +47,7 @@ fn parse(data: &[u8]) -> Result<Parsed, String> {
         return Err("Not a valid SketchUp file (bad header)".into());
     }
     if legacy::is_legacy(data) {
-        legacy::parse(data).map_err(|e| format!("SketchUp 2013-2020 file: {e}"))
+        legacy::parse(data).map_err(|e| format!("classic SketchUp file: {e}"))
     } else {
         vff::parse(data)
     }
@@ -553,13 +554,22 @@ mod tests {
         (s.single, s.double, [0, 1, 2].map(|k| s.hi[k] - s.lo[k]))
     }
 
-    /// The samples against openskp 1.3's results (test-models/skp-expected.json: triangles and
-    /// glTF size, which is x, z, y here). openskp splits a face in two where its resolved front
-    /// and back colours differ, so its triangle count lies between the one- and two-sided count.
-    /// The two files openskp cannot read are not listed.
+    /// The samples against openskp's results (test-models/skp-expected.json, and openskp 1.4.0
+    /// for solar-north-house and test-models/legacy: triangles and glTF size, which is x, z, y
+    /// here). openskp splits a face in two where its resolved front and back colours differ, so
+    /// its triangle count lies between the one- and two-sided count. test-models/legacy holds
+    /// SketchUp 3 to 8 and 2018/2020 variants (see its README).
     #[test]
     fn samples_match_openskp() {
         let expected = [
+            ("solar-north-house.skp", 29, [10.973, 5.639, 9.449]),
+            ("legacy/openskp_legacy_v3_textured.skp", 4, [0.508, 0.0, 0.508]),
+            ("legacy/openskp_legacy_v4_textured.skp", 4, [0.508, 0.0, 0.508]),
+            ("legacy/openskp_legacy_v5_textured.skp", 4, [0.508, 0.0, 0.508]),
+            ("legacy/openskp_nesting_v6.skp", 6, [1.27, 0.0, 0.254]),
+            ("legacy/testup_skp-v6.skp", 12, [1.001, 0.551, 1.2]),
+            ("legacy/quadface_uv-arch_v8.skp", 220, [13.553, 4.252, 1.05]),
+            ("legacy/openskp_sdk_saved_2020.skp", 2, [0.254, 0.0, 0.254]),
             ("2021_lc.skp", 3905, [2.774, 2.15, 1.349]),
             ("TestModel.skp", 262, [14.0, 5.0, 17.0]),
             ("bathroom-3d.skp", 38623, [3.274, 2.698, 2.054]),
@@ -594,6 +604,64 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Files without faces that openskp 1.4.0 cannot read (SFSASM-test: a text whose delimiter
+    /// block ends in 0) or reads without geometry: they parse, with their edges and instances.
+    #[test]
+    fn faceless_samples_parse() {
+        let data = std::fs::read(sample("SFSASM-test.skp")).unwrap();
+        let p = parse(&data).expect("SFSASM-test.skp");
+        let instances: usize = p.definitions.values().chain([&p.root]).map(|d| d.instances.len()).sum();
+        assert_eq!(instances, 5);
+        let data = std::fs::read(sample("legacy/openskp_zero_material_custom_layer_v18.skp")).unwrap();
+        assert!(parse(&data).is_ok());
+    }
+
+    /// Parses every .skp below `SKP_DIR` and prints one line per file (version, result, triangles,
+    /// size in metres). A survey tool for files outside the repository, hence ignored:
+    /// `SKP_DIR=... cargo test --release skp_dir_survey -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn skp_dir_survey() {
+        fn files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    files(&p, out);
+                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("skp")) {
+                    out.push(p);
+                }
+            }
+        }
+        let root = PathBuf::from(std::env::var("SKP_DIR").expect("SKP_DIR"));
+        let mut all = Vec::new();
+        files(&root, &mut all);
+        all.sort();
+        let (mut ok, mut failed) = (0, 0);
+        for f in &all {
+            let data = std::fs::read(f).unwrap();
+            let ver = legacy::version_major(&data).map_or("?".to_string(), |v| v.to_string());
+            let name = f.strip_prefix(&root).unwrap_or(f).display();
+            match std::panic::catch_unwind(|| parse(&data)) {
+                Ok(Ok(p)) => {
+                    let (single, _, size) = openskp_stats(&p);
+                    let defs = p.definitions.values().chain([&p.root]);
+                    let (edges, instances) = defs.fold((0, 0), |(e, i), d| (e + d.edges.len(), i + d.instances.len()));
+                    ok += 1;
+                    println!("OK   v{ver:<3} {name}  tris {single} edges {edges} instances {instances} size {size:.3?}");
+                }
+                Ok(Err(e)) => {
+                    failed += 1;
+                    println!("FAIL v{ver:<3} {name}  {}", e.chars().take(140).collect::<String>());
+                }
+                Err(_) => {
+                    failed += 1;
+                    println!("PANIC v{ver:<3} {name}");
+                }
+            }
+        }
+        println!("{ok} ok, {failed} failed");
     }
 
     #[test]

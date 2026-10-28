@@ -2,9 +2,11 @@
 //!
 //! The scene is drawn into an own 4x multisampled colour + depth target the size of the
 //! viewport, resolved, and then blitted into iced's frame at the widget bounds. Model geometry
-//! is uploaded once per model (keyed by `Model::id`); each frame only writes the uniforms.
+//! is uploaded once per model (keyed by `Model::id`); each frame only writes the uniforms, and
+//! the offsets of the exploded view when they change.
 
 use super::camera::Camera;
+use crate::explode::ExplodeIndex;
 use crate::model::{Bounds, Model};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
@@ -50,6 +52,9 @@ pub struct RenderSettings {
     pub caps: bool,
     /// Draw the model's grid lines (Revit grids).
     pub grids: bool,
+    /// World bounds of the model as drawn (pulled apart by the exploded view), for the ground
+    /// grid; `None`: the model's own.
+    pub bounds: Option<Bounds>,
 }
 
 #[repr(C)]
@@ -58,6 +63,8 @@ struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
     color: [u8; 4],
+    /// Unit of the exploded view: index into the offsets (0 never moves).
+    unit: u32,
 }
 
 #[repr(C)]
@@ -81,6 +88,10 @@ pub struct ScenePrimitive {
     pub selection: Vec<(usize, u32, u32)>,
     pub camera: Camera,
     pub settings: RenderSettings,
+    /// The units of the exploded view (`crate::explode`), uploaded with the model.
+    pub explode: Option<Arc<ExplodeIndex>>,
+    /// The offset (world) of every unit; written when it is another vector.
+    pub offsets: Arc<Vec<[f32; 4]>>,
 }
 
 impl shader::Primitive for ScenePrimitive {
@@ -142,12 +153,18 @@ pub struct ScenePipeline {
     blit: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
     blit_uniforms: wgpu::Buffer,
+    uniform_layout: wgpu::BindGroupLayout,
     model_uniforms: wgpu::Buffer,
     model_group: wgpu::BindGroup,
     world_uniforms: wgpu::Buffer,
     world_group: wgpu::BindGroup,
     edge_uniforms: wgpu::Buffer,
     edge_group: wgpu::BindGroup,
+    /// Exploded view: the offset of every unit of the model (storage, bound with the uniforms),
+    /// its length in units, and the vector last written into it.
+    offsets: wgpu::Buffer,
+    offsets_len: usize,
+    offsets_written: Option<Arc<Vec<[f32; 4]>>>,
     targets: Option<Targets>,
     model_id: u64,
     model: Option<Arc<Model>>,
@@ -178,34 +195,45 @@ impl ScenePipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("o3v.uniforms.layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // the offsets of the exploded view
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let make_uniforms = |label| {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: std::mem::size_of::<Uniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            });
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &uniform_layout,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
-            });
-            (buffer, group)
+            })
         };
-        let (model_uniforms, model_group) = make_uniforms("o3v.uniforms.model");
-        let (world_uniforms, world_group) = make_uniforms("o3v.uniforms.world");
-        let (edge_uniforms, edge_group) = make_uniforms("o3v.uniforms.edges");
+        let model_uniforms = make_uniforms("o3v.uniforms.model");
+        let world_uniforms = make_uniforms("o3v.uniforms.world");
+        let edge_uniforms = make_uniforms("o3v.uniforms.edges");
+        let offsets = offsets_buffer(device, 1);
+        let model_group = uniform_group(device, &uniform_layout, &model_uniforms, &offsets);
+        let world_group = uniform_group(device, &uniform_layout, &world_uniforms, &offsets);
+        let edge_group = uniform_group(device, &uniform_layout, &edge_uniforms, &offsets);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("o3v.scene.shader"),
@@ -216,7 +244,7 @@ impl ScenePipeline {
             bind_group_layouts: &[&uniform_layout],
             push_constant_ranges: &[],
         });
-        let vertex_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4];
+        let vertex_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Uint32];
         let vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -428,12 +456,16 @@ impl ScenePipeline {
             blit,
             blit_layout,
             blit_uniforms,
+            uniform_layout,
             model_uniforms,
             model_group,
             world_uniforms,
             world_group,
             edge_uniforms,
             edge_group,
+            offsets,
+            offsets_len: 1,
+            offsets_written: None,
             targets: None,
             model_id: 0,
             model: None,
@@ -481,7 +513,17 @@ impl ScenePipeline {
         self.targets = Some(Targets { size, msaa, resolve, depth, blit_group });
     }
 
-    fn upload_model(&mut self, device: &wgpu::Device, model: Option<&Arc<Model>>) {
+    /// Makes room for the offsets of `units` units of the exploded view (all zero) and binds it.
+    fn resize_offsets(&mut self, device: &wgpu::Device, units: usize) {
+        self.offsets = offsets_buffer(device, units);
+        self.offsets_len = units.max(1);
+        self.offsets_written = None;
+        self.model_group = uniform_group(device, &self.uniform_layout, &self.model_uniforms, &self.offsets);
+        self.world_group = uniform_group(device, &self.uniform_layout, &self.world_uniforms, &self.offsets);
+        self.edge_group = uniform_group(device, &self.uniform_layout, &self.edge_uniforms, &self.offsets);
+    }
+
+    fn upload_model(&mut self, device: &wgpu::Device, model: Option<&Arc<Model>>, explode: Option<&ExplodeIndex>) {
         let id = model.map_or(0, |m| m.id);
         if id == self.model_id {
             return;
@@ -490,6 +532,7 @@ impl ScenePipeline {
         self.model = model.cloned();
         self.layers.clear();
         self.datum = None;
+        self.resize_offsets(device, explode.map_or(1, ExplodeIndex::len));
         let Some(model) = model else { return };
         let datum = datum_lines(&model.project.grids);
         if !datum.is_empty() {
@@ -500,9 +543,10 @@ impl ScenePipeline {
             });
             self.datum = Some((buffer, datum.len() as u32));
         }
-        for layer in &model.layers {
+        for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
+            let units = explode.and_then(|e| e.vertex_units.get(l));
             let vertices: Vec<Vertex> = (0..layer.vertex_count())
                 .map(|i| Vertex {
                     position: [layer.positions[3 * i], layer.positions[3 * i + 1], layer.positions[3 * i + 2]],
@@ -512,6 +556,7 @@ impl ScenePipeline {
                         .map(|n| [n[0], n[1], n[2]])
                         .unwrap_or([0.0; 3]),
                     color: layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base),
+                    unit: units.and_then(|u| u.get(i).copied()).unwrap_or(0),
                 })
                 .collect();
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -610,8 +655,8 @@ impl ScenePipeline {
         let cy = (center[1] / spacing).round() as i64;
         let mut vertices = Vec::new();
         let mut push = |a: [f32; 3], b: [f32; 3], color: [u8; 4]| {
-            vertices.push(Vertex { position: a, normal: [0.0; 3], color });
-            vertices.push(Vertex { position: b, normal: [0.0; 3], color });
+            vertices.push(Vertex { position: a, normal: [0.0; 3], color, unit: 0 });
+            vertices.push(Vertex { position: b, normal: [0.0; 3], color, unit: 0 });
         };
         let (x0, x1) = ((cx - n) as f32 * spacing, (cx + n) as f32 * spacing);
         let (y0, y1) = ((cy - n) as f32 * spacing, (cy + n) as f32 * spacing);
@@ -651,7 +696,14 @@ impl ScenePipeline {
         self.ensure_targets(device, (w, h));
         queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&[x as f32, y as f32, 0.0, 0.0]));
 
-        self.upload_model(device, primitive.model.as_ref());
+        self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
+        if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
+            let n = primitive.offsets.len().min(self.offsets_len);
+            if n > 0 {
+                queue.write_buffer(&self.offsets, 0, bytemuck::cast_slice(&primitive.offsets[..n]));
+            }
+            self.offsets_written = Some(primitive.offsets.clone());
+        }
         let settings = &primitive.settings;
         if settings.mode != RenderMode::Solid {
             self.ensure_edges(device, &primitive.visible, settings.mode == RenderMode::Wireframe);
@@ -660,10 +712,9 @@ impl ScenePipeline {
             self.ensure_solids(device);
         }
         if settings.grid {
-            let world_bounds = primitive
-                .model
-                .as_ref()
-                .map(|m| transform_bounds(&m.bounds, &settings.model_matrix))
+            let world_bounds = settings
+                .bounds
+                .or_else(|| primitive.model.as_ref().map(|m| transform_bounds(&m.bounds, &settings.model_matrix)))
                 .unwrap_or(Bounds { min: [-5.0, -5.0, 0.0], max: [5.0, 5.0, 0.0] });
             self.ensure_grid(device, &world_bounds, settings);
         }
@@ -832,12 +883,34 @@ impl ScenePipeline {
     }
 }
 
+/// The offsets of the exploded view for `units` units (at least one), zero.
+fn offsets_buffer(device: &wgpu::Device, units: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("o3v.explode.offsets"),
+        size: (units.max(1) * std::mem::size_of::<[f32; 4]>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// A bind group of the scene shader: its uniforms and the offsets of the exploded view.
+fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: &wgpu::Buffer, offsets: &wgpu::Buffer) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("o3v.uniforms"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: offsets.as_entire_binding() },
+        ],
+    })
+}
+
 /// Grid lines as a dash-dot line list (Revit's grid line pattern: long dash, gap, dot, gap) in
 /// a neutral grey that reads on light and dark backgrounds.
 fn datum_lines(grids: &[crate::model::GridLine]) -> Vec<Vertex> {
     const PATTERN: [(f32, bool); 4] = [(1.6, true), (0.3, false), (0.3, true), (0.3, false)];
     let color = [120, 122, 132, 230];
-    let vertex = |p: Vec3| Vertex { position: p.to_array(), normal: [0.0, 0.0, 1.0], color };
+    let vertex = |p: Vec3| Vertex { position: p.to_array(), normal: [0.0, 0.0, 1.0], color, unit: 0 };
     let mut out = Vec::new();
     for g in grids {
         let (a, b) = (Vec3::from_array(g.a), Vec3::from_array(g.b));

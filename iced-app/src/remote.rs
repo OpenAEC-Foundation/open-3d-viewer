@@ -465,6 +465,7 @@ impl App {
         let (status, message) = match &self.status {
             Status::Ready => ("ready", String::new()),
             Status::Loading { file, since, .. } => ("loading", format!("{file}, {:.0} s", since.elapsed().as_secs_f32())),
+            Status::Saving { file, since } => ("saving", format!("{file}, {:.0} s", since.elapsed().as_secs_f32())),
             Status::Loaded(s) => ("loaded", s.clone()),
             Status::Error(e) => ("error", e.clone()),
         };
@@ -804,9 +805,13 @@ impl App {
             let w = mm.transform_point3(p);
             section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
         };
-        let (layer, triangle) = pick_triangle(&model, &self.visible, origin, dir, &keep)?;
-        let (point, normal) = face_at(&model.layers[layer], triangle, origin, dir)?;
-        let (point, mut normal) = (mm.transform_point3(point), mm.transform_vector3(normal).normalize_or_zero());
+        // the exploded view moves the triangles: their offsets back in model space
+        let back = mm.inverse();
+        let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
+        let (layer, triangle) = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep)?;
+        let s = model.layers[layer].indices.get(3 * triangle).map_or(Vec3::ZERO, |&i| shift(layer, i));
+        let (point, normal) = face_at(&model.layers[layer], triangle, origin - s, dir)?;
+        let (point, mut normal) = (mm.transform_point3(point + s), mm.transform_vector3(normal).normalize_or_zero());
         if normal.dot(mm.transform_vector3(dir)) > 0.0 {
             normal = -normal;
         }
@@ -819,7 +824,7 @@ impl App {
         let layer = &model.layers[hit.layer];
         let mm = self.model_matrix();
         let corners = layer.indices.get(3 * hit.triangle..3 * hit.triangle + 3).unwrap_or(&[]).iter().filter_map(|&i| {
-            layer.positions.get(3 * i as usize..3 * i as usize + 3).map(|p| mm.transform_point3(Vec3::new(p[0], p[1], p[2])))
+            layer.positions.get(3 * i as usize..3 * i as usize + 3).map(|p| mm.transform_point3(Vec3::new(p[0], p[1], p[2])) + self.explode_offset(hit.layer, i))
         });
         corners.min_by(|a, b| a.distance(hit.point).total_cmp(&b.distance(hit.point))).unwrap_or(hit.point)
     }

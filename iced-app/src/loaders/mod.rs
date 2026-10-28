@@ -11,6 +11,7 @@ mod ply;
 mod rvt;
 mod skp;
 mod stl;
+mod tekla;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::path::Path;
@@ -83,6 +84,7 @@ pub fn registry() -> Vec<Box<dyn Loader>> {
         #[cfg(feature = "rvt")]
         Box::new(rvt::RvtLoader),
         Box::new(skp::SkpLoader),
+        Box::new(tekla::TeklaLoader),
         Box::new(gltf::GltfLoader),
         Box::new(obj::ObjLoader),
         Box::new(stl::StlLoader),

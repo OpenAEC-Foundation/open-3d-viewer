@@ -4,6 +4,7 @@
 //! `openaec_ui::Application` around the viewer state (`App`); the viewport is the workspace.
 
 use crate::app::{App, Message, Status};
+use crate::measure::Tool;
 use crate::theme::ThemeKind;
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
@@ -122,6 +123,32 @@ impl Application for Studio {
                                 .selected(app.camera.ortho)
                                 .shortcut("O"),
                         ],
+                    },
+                ],
+            },
+            RibbonTab {
+                id: "measure".into(),
+                label: l.text("Meten", "Measure").into(),
+                groups: vec![
+                    RibbonGroup {
+                        label: l.text("Meten", "Measure").into(),
+                        commands: Tool::ALL
+                            .map(|tool| {
+                                let command = match tool {
+                                    Tool::Distance => Command::new(tool.label(l), DomainIcon::DrawingDimension, Message::Measure(tool)),
+                                    Tool::Angle => Command::new(tool.label(l), DomainIcon::TransformRotate, Message::Measure(tool)),
+                                    Tool::Area => Command::new(tool.label(l), Icon::Measure, Message::Measure(tool)),
+                                    Tool::Volume => Command::new(tool.label(l), Icon::Cube, Message::Measure(tool)),
+                                    Tool::Polygon => Command::new(tool.label(l), DomainIcon::DrawingPolygon, Message::Measure(tool)),
+                                };
+                                command.selected(app.measure.tool == Some(tool)).enabled(loaded)
+                            })
+                            .into(),
+                    },
+                    RibbonGroup {
+                        label: l.text("Metingen", "Measurements").into(),
+                        commands: vec![Command::new(l.text("Alles wissen", "Clear all"), DomainIcon::PdfClearPage, Message::MeasureClear)
+                            .enabled(!app.measure.results.is_empty())],
                     },
                 ],
             },

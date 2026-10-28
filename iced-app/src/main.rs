@@ -13,6 +13,7 @@ mod app;
 mod bench;
 mod icons;
 mod loaders;
+mod measure;
 mod model;
 mod section;
 mod shell;

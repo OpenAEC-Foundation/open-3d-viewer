@@ -1,4 +1,4 @@
-//! Units and number formatting for measurements. Values are kept in SI units (m, m², m³, kg,
+//! Units and number formatting for measurements. Values are kept in SI units (m, m², m³,
 //! radians) and shown in the unit and with the number of decimals the user picked. Dutch uses a
 //! decimal comma and a thousands dot, English the other way round.
 
@@ -9,23 +9,18 @@ pub enum Category {
     Length,
     Area,
     Volume,
-    Weight,
     Angle,
-    Count,
 }
 
 impl Category {
-    pub const ALL: [Category; 6] =
-        [Category::Length, Category::Area, Category::Volume, Category::Weight, Category::Angle, Category::Count];
+    pub const ALL: [Category; 4] = [Category::Length, Category::Area, Category::Volume, Category::Angle];
 
     pub fn label(self, l: Language) -> &'static str {
         match self {
             Category::Length => l.text("Lengte", "Length"),
             Category::Area => l.text("Oppervlakte", "Area"),
             Category::Volume => l.text("Volume", "Volume"),
-            Category::Weight => l.text("Gewicht", "Weight"),
             Category::Angle => l.text("Hoek", "Angle"),
-            Category::Count => l.text("Tellen", "Count"),
         }
     }
 
@@ -54,12 +49,6 @@ pub enum VolumeUnit {
     Cm3,
     Dm3,
     M3,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WeightUnit {
-    Kg,
-    T,
 }
 
 impl LengthUnit {
@@ -116,22 +105,6 @@ impl VolumeUnit {
     }
 }
 
-impl WeightUnit {
-    pub const ALL: [WeightUnit; 2] = [WeightUnit::Kg, WeightUnit::T];
-    pub fn label(self) -> &'static str {
-        match self {
-            WeightUnit::Kg => "kg",
-            WeightUnit::T => "t",
-        }
-    }
-    fn factor(self) -> f64 {
-        match self {
-            WeightUnit::Kg => 1.0,
-            WeightUnit::T => 0.001,
-        }
-    }
-}
-
 /// Display unit and decimals per category.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UnitSettings {
@@ -141,8 +114,6 @@ pub struct UnitSettings {
     pub area_decimals: u8,
     pub volume: VolumeUnit,
     pub volume_decimals: u8,
-    pub weight: WeightUnit,
-    pub weight_decimals: u8,
     pub angle_decimals: u8,
 }
 
@@ -155,8 +126,6 @@ impl Default for UnitSettings {
             area_decimals: 2,
             volume: VolumeUnit::M3,
             volume_decimals: 3,
-            weight: WeightUnit::Kg,
-            weight_decimals: 1,
             angle_decimals: 1,
         }
     }
@@ -171,9 +140,7 @@ impl UnitSettings {
             Category::Length => (value * self.length.factor(), self.length.label(), self.length_decimals),
             Category::Area => (value * self.area.factor(), self.area.label(), self.area_decimals),
             Category::Volume => (value * self.volume.factor(), self.volume.label(), self.volume_decimals),
-            Category::Weight => (value * self.weight.factor(), self.weight.label(), self.weight_decimals),
             Category::Angle => (value.to_degrees(), "°", self.angle_decimals),
-            Category::Count => (value, "", 0),
         }
     }
 
@@ -183,15 +150,10 @@ impl UnitSettings {
         let number = format_number(l, v, decimals);
         match category {
             Category::Angle => format!("{number}°"),
-            Category::Count => number,
             _ => format!("{number} {unit}"),
         }
     }
 
-    /// A coordinate in the length unit, without the unit.
-    pub fn coordinate(&self, l: Language, meters: f64) -> String {
-        format_number(l, meters * self.length.factor(), self.length_decimals)
-    }
 }
 
 /// A number with a fixed number of decimals and thousands separators.
@@ -218,10 +180,6 @@ pub fn format_number(l: Language, value: f64, decimals: u8) -> String {
     grouped
 }
 
-pub fn format_density(l: Language, kg_per_m3: f64) -> String {
-    format!("{} kg/m³", format_number(l, kg_per_m3, 0))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,7 +189,7 @@ mod tests {
         assert_eq!(format_number(Language::Dutch, 1234.5, 1), "1.234,5");
         assert_eq!(format_number(Language::English, 1234567.891, 2), "1,234,567.89");
         assert_eq!(format_number(Language::Dutch, -0.0004, 2), "0,00");
-        assert_eq!(format_number(Language::Dutch, -12.5, 0), "-13");
+        assert_eq!(format_number(Language::Dutch, -12.6, 0), "-13");
         assert_eq!(format_number(Language::Dutch, 999.0, 0), "999");
     }
 

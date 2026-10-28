@@ -22,8 +22,6 @@ const WELD: f32 = 1e4;
 const MAX_REGION_TRIANGLES: usize = 500_000;
 
 pub struct LayerTopology {
-    /// Welded vertex id per index of `layer.indices`.
-    pub corners: Vec<u32>,
     /// Neighbour triangle across edge (corner i → i+1) per index, -1 at an open border.
     pub neighbors: Vec<i32>,
     /// Feature lines (model space).
@@ -103,7 +101,7 @@ impl LayerTopology {
             }
         }
         let lines = merge_collinear(&welded, &segments);
-        Self { corners, neighbors, lines }
+        Self { neighbors, lines }
     }
 }
 

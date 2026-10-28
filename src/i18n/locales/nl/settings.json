@@ -5,9 +5,10 @@
   "language": "Taal",
   "close": "Sluiten",
   "themes": {
-    "dark": "Donker",
+    "forge": "Deep Forge",
     "light": "Licht",
-    "blue": "Blauw",
-    "highContrast": "Hoog contrast"
+    "openaec": "Night Build",
+    "blueprint": "Blueprint",
+    "contrast": "Hoog contrast"
   }
 }

@@ -2,7 +2,7 @@
 .settings-dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--theme-dialog-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -17,7 +17,7 @@
   height: 400px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--theme-dialog-shadow);
   overflow: hidden;
   user-select: none;
 }
@@ -30,27 +30,19 @@
   padding: 0;
   padding-left: 10px;
   border-bottom: 1px solid var(--theme-border-light);
-  background: linear-gradient(to bottom, #ffffff 0%, #f5f5f5 100%);
+  background: var(--theme-dialog-header-bg);
   height: 30px;
   flex-shrink: 0;
 }
 
-[data-theme="dark"] .settings-header {
-  background: linear-gradient(to bottom, var(--theme-surface-elevated) 0%, var(--theme-surface) 100%);
-}
 
-[data-theme="blue"] .settings-header {
-  background: linear-gradient(to bottom, var(--theme-surface-elevated) 0%, var(--theme-surface) 100%);
-}
 
-[data-theme="highContrast"] .settings-header {
-  background: linear-gradient(to bottom, var(--theme-surface-elevated) 0%, var(--theme-surface) 100%);
-}
 
 .settings-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--theme-text);
+  font-family: var(--font-heading);
+  color: var(--theme-dialog-header-text);
   margin: 0;
 }
 
@@ -72,8 +64,8 @@
 }
 
 .settings-close:hover {
-  background: #e81123;
-  color: white;
+  background: var(--theme-danger-color);
+  color: var(--theme-btn-primary-text);
 }
 
 /* ── Body: sidebar + content ── */
@@ -195,7 +187,7 @@
   width: 12px;
   height: 12px;
   border-radius: 2px;
-  border: 1px solid rgba(128, 128, 128, 0.3);
+  border: 1px solid var(--theme-border);
 }
 
 .settings-theme-row-name {

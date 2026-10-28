@@ -70,21 +70,21 @@ export function ErrorOverlay() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className="bg-red-900/90 border border-red-600/50 rounded-lg shadow-lg backdrop-blur-sm p-3 animate-in slide-in-from-right"
+          className="bg-[var(--theme-dialog-bg)] border border-[var(--theme-border)] border-l-4 border-l-[var(--theme-danger-color)] rounded-lg shadow-[var(--theme-popover-shadow)] p-3 animate-in slide-in-from-right"
         >
           <div className="flex items-start gap-2">
-            <AlertTriangle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+            <AlertTriangle size={16} className="text-[var(--theme-danger-color)] mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-200 truncate">
+              <div className="text-sm font-semibold text-[var(--theme-text)] truncate">
                 {toast.fileName}
               </div>
-              <div className="text-xs text-red-300/80 mt-1 whitespace-pre-line break-words">
+              <div className="text-xs text-[var(--theme-text-secondary)] mt-1 whitespace-pre-line break-words">
                 {toast.message}
               </div>
             </div>
             <button
               onClick={() => dismiss(toast.id)}
-              className="text-red-400 hover:text-red-200 flex-shrink-0"
+              className="text-[var(--theme-text-muted)] hover:text-[var(--theme-danger-color)] flex-shrink-0"
             >
               <X size={14} />
             </button>

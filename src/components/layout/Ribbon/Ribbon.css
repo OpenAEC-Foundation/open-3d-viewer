@@ -1,64 +1,74 @@
-/* Ribbon Container - Theme-aware */
+/* Ribbon — OpenAEC style (OpenAEC-style-book, project-templates/Tauri+React/src/components/ribbon/Ribbon.css) */
 .ribbon-container {
-  background: var(--theme-ribbon-bg);
-  border-bottom: 1px solid var(--theme-border-light);
+  background: var(--theme-bg);
+  border-bottom: 1px solid var(--theme-border-subtle);
   flex-shrink: 0;
   user-select: none;
   cursor: default;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Ribbon Tabs */
 .ribbon-tabs {
-  background: var(--theme-ribbon-tab-bg);
-  border-bottom: 1px solid var(--theme-border-light);
+  background: var(--theme-bg-lighter);
+  border-bottom: 1px solid var(--theme-accent);
   display: flex;
   padding: 0 8px;
   gap: 2px;
   height: 28px;
   align-items: flex-end;
+  position: relative;
 }
 
 .ribbon-tab {
   padding: 6px 16px;
   font-size: 12px;
+  font-family: var(--font-body);
   background: transparent;
-  border: none;
-  color: var(--theme-text-dim);
+  color: var(--theme-text);
   font-weight: 500;
   border-radius: 4px 4px 0 0;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   border: 1px solid transparent;
   border-bottom: none;
+  margin-bottom: -1px;
   cursor: default;
 }
 
 .ribbon-tab.file {
   background: var(--theme-file-tab-bg);
-  color: #ffffff;
+  color: var(--theme-file-tab-text);
   font-weight: 600;
+  border-color: var(--theme-file-tab-bg);
 }
 
 .ribbon-tab.file:hover {
   background: var(--theme-file-tab-hover);
-  color: #ffffff;
+  color: var(--theme-file-tab-text);
+  border-color: var(--theme-file-tab-hover);
 }
 
 .ribbon-tab:focus {
   outline: none;
 }
 
-.ribbon-tab:hover {
-  background: var(--theme-hover);
-  color: var(--theme-text);
+.ribbon-tab:focus-visible {
+  outline: 2px solid var(--theme-focus-color);
+  outline-offset: -2px;
+}
+
+.ribbon-tab:not(.file):hover {
+  background: var(--theme-ribbon-btn-hover);
+  color: var(--theme-accent);
 }
 
 .ribbon-tab.active {
-  background: var(--theme-ribbon-content-bg);
-  color: var(--theme-text);
-  border-color: var(--theme-border-light);
-  border-bottom: 1px solid var(--theme-ribbon-content-bg);
-  margin-bottom: -1px;
+  background: var(--theme-bg);
+  color: var(--theme-accent);
+  border-color: var(--theme-accent);
+  border-bottom: 1px solid var(--theme-bg);
 }
 
 /* Ribbon Content Container */
@@ -69,8 +79,8 @@
 
 /* Ribbon Content */
 .ribbon-content {
-  background: var(--theme-ribbon-content-bg);
-  padding: 4px 8px 0 8px;
+  background: var(--theme-bg);
+  padding: 4px 8px 0 2px;
   display: none;
   height: 94px;
   position: absolute;
@@ -82,11 +92,17 @@
 .ribbon-content.active {
   display: flex;
   align-items: stretch;
+  animation: ribbonPanelIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes ribbonPanelIn {
+  from { transform: translateX(16px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
 }
 
 .ribbon-groups {
   display: flex;
-  gap: 2px;
+  gap: 0;
   align-items: stretch;
   height: 100%;
 }
@@ -94,21 +110,19 @@
 .ribbon-group {
   display: flex;
   flex-direction: column;
-  padding: 0 4px;
-  border-right: 1px solid var(--theme-border-light);
+  padding: 0 8px;
+  border-right: 1px solid var(--theme-ribbon-group-separator);
   min-width: 50px;
   height: 100%;
-  margin-right: 4px;
 }
 
 .ribbon-group:last-child {
   border-right: none;
-  margin-right: 0;
 }
 
 .ribbon-group-label {
   font-size: 9px;
-  color: var(--theme-text-muted);
+  color: var(--theme-ribbon-group-label);
   text-align: center;
   font-weight: 500;
   padding: 2px 0;
@@ -116,14 +130,15 @@
   white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  border-top: 1px solid var(--theme-border-subtle);
 }
 
 .ribbon-group-content {
   display: flex;
-  gap: 2px;
+  gap: 1px;
   align-items: flex-start;
   flex: 1;
-  padding: 2px 0;
+  padding: 1px 0;
 }
 
 /* Ribbon Slider Group */
@@ -180,12 +195,12 @@
   height: 16px;
   background: var(--theme-text-muted);
   border: 1px solid var(--theme-border-light);
-  border-radius: 1px;
+  border-radius: 2px;
   cursor: default;
 }
 
 .ribbon-slider::-webkit-slider-thumb:hover {
-  background: var(--theme-text);
+  background: var(--theme-accent);
 }
 
 .ribbon-slider::-moz-range-thumb {
@@ -238,13 +253,13 @@
 }
 
 .ribbon-btn:hover {
-  background: var(--theme-hover);
-  border-color: var(--theme-border-light);
+  background: var(--theme-ribbon-btn-hover);
+  border-color: var(--theme-ribbon-btn-hover-border);
 }
 
 .ribbon-btn.active {
-  background: var(--theme-active);
-  border-color: var(--theme-active-border);
+  background: var(--theme-ribbon-btn-active-bg);
+  border-color: var(--theme-ribbon-btn-active-border);
 }
 
 .ribbon-btn.disabled {
@@ -265,22 +280,22 @@
   justify-content: center;
   flex-shrink: 0;
   overflow: hidden;
-  color: var(--theme-text-dim);
-}
-
-.ribbon-btn:hover .ribbon-btn-icon {
   color: var(--theme-text);
 }
 
+.ribbon-btn:hover .ribbon-btn-icon {
+  color: var(--theme-accent);
+}
+
 .ribbon-btn.active .ribbon-btn-icon {
-  color: #ffffff;
+  color: var(--theme-ribbon-icon-active);
 }
 
 .ribbon-btn-label {
   font-size: 10px;
-  color: var(--theme-text-dim);
+  color: var(--theme-text);
   text-align: center;
-  line-height: 1.1;
+  line-height: 1.15;
   max-width: 58px;
   overflow: hidden;
   display: -webkit-box;
@@ -291,11 +306,12 @@
 }
 
 .ribbon-btn:hover .ribbon-btn-label {
-  color: var(--theme-text);
+  color: var(--theme-accent);
 }
 
 .ribbon-btn.active .ribbon-btn-label {
-  color: #ffffff;
+  color: var(--theme-ribbon-btn-active-text);
+  font-weight: 500;
 }
 
 /* Small ribbon buttons */
@@ -372,7 +388,7 @@
   background: var(--theme-dropdown-bg);
   border: 1px solid var(--theme-border-light);
   border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--theme-popover-shadow);
   z-index: 1000;
   padding: 4px 0;
   margin-top: 2px;
@@ -411,18 +427,18 @@
   align-items: center;
   gap: 8px;
   white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--theme-popover-shadow);
 }
 
 .ribbon-tooltip-label {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-body);
   font-size: 12px;
   color: var(--theme-text);
   font-weight: 400;
 }
 
 .ribbon-tooltip-shortcut {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-body);
   font-size: 11px;
   color: var(--theme-text-dim);
   background: var(--theme-input-bg);
@@ -493,20 +509,24 @@
   border: 1px solid var(--theme-border-light);
 }
 
-.ribbon-theme-swatch.dark {
-  background: linear-gradient(135deg, #1a1a2e 50%, #16213e 50%);
+.ribbon-theme-swatch.forge {
+  background: linear-gradient(135deg, #36363E 50%, #D97706 50%);
 }
 
 .ribbon-theme-swatch.light {
-  background: linear-gradient(135deg, #f5f5f5 50%, #ffffff 50%);
+  background: linear-gradient(135deg, #FAFAF9 50%, #D97706 50%);
 }
 
-.ribbon-theme-swatch.blue {
-  background: linear-gradient(135deg, #0d1b2a 50%, #1b263b 50%);
+.ribbon-theme-swatch.openaec {
+  background: linear-gradient(135deg, #27272A 50%, #D97706 50%);
 }
 
-.ribbon-theme-swatch.highContrast {
-  background: linear-gradient(135deg, #000000 50%, #ffff00 50%);
+.ribbon-theme-swatch.blueprint {
+  background: linear-gradient(135deg, #0F1B2D 50%, #60A5FA 50%);
+}
+
+.ribbon-theme-swatch.contrast {
+  background: linear-gradient(135deg, #000000 50%, #FFD700 50%);
 }
 
 .ribbon-theme-menu {
@@ -518,7 +538,7 @@
   background: var(--theme-dropdown-bg);
   border: 1px solid var(--theme-border-light);
   border-radius: 3px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--theme-popover-shadow);
   z-index: 1000;
   padding: 4px 0;
 }

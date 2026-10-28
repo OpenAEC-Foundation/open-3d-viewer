@@ -5,7 +5,8 @@ use crate::converter::types::{ConversionResult, ConvertedMesh, RustFormat};
 ///
 /// Currently supports:
 /// - STEP/STP: Requires opencascade-rs (planned)
-/// - SKP: Requires assimp-rs (planned)
+///
+/// SketchUp files are read in the frontend (openskp, SKPLoader.ts); Revit files via `convert_rvt`.
 ///
 /// Returns a ConversionResult with geometry data that can be sent to the frontend.
 pub fn convert_file(file_path: &str) -> ConversionResult {
@@ -32,7 +33,6 @@ pub fn convert_file(file_path: &str) -> ConversionResult {
 
     match format {
         RustFormat::Step => convert_step(file_path),
-        RustFormat::Skp => convert_skp(file_path),
     }
 }
 
@@ -68,27 +68,6 @@ fn convert_step(file_path: &str) -> ConversionResult {
     }
 }
 
-/// SketchUp SKP converter.
-///
-/// TODO: Implement using assimp-rs FFI.
-/// For now returns a stub result.
-fn convert_skp(file_path: &str) -> ConversionResult {
-    let _ = file_path;
-
-    ConversionResult {
-        success: false,
-        meshes: vec![],
-        total_vertices: 0,
-        total_triangles: 0,
-        bounds_min: [0.0; 3],
-        bounds_max: [0.0; 3],
-        error: Some(
-            "SKP format support requires assimp-rs. \
-             Install via Cargo.toml: assimp = \"0.3\""
-                .to_string(),
-        ),
-    }
-}
 
 /// Create a simple box mesh for testing the pipeline.
 #[allow(dead_code)]

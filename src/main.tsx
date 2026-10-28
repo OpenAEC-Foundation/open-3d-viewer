@@ -3,6 +3,13 @@ import ReactDOM from 'react-dom/client';
 import './i18n/config';
 import { loadPreferences } from './state/appStore';
 import App from './App';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import '@fontsource/space-grotesk/500.css';
+import '@fontsource/space-grotesk/700.css';
+import '@fontsource/jetbrains-mono/400.css';
 import './styles/globals.css';
 
 loadPreferences();
@@ -24,17 +31,17 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 40, color: '#ff6b6b', background: '#1a1a2e', minHeight: '100vh', fontFamily: 'monospace' }}>
-          <h1 style={{ color: '#ff6b6b' }}>Runtime Error</h1>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 14, color: '#ffa07a' }}>
+        <div style={{ padding: 40, color: 'var(--theme-text)', background: 'var(--theme-bg)', minHeight: '100vh', fontFamily: 'var(--font-mono)' }}>
+          <h1 style={{ color: 'var(--theme-danger-color)' }}>Runtime Error</h1>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 14, color: 'var(--theme-text)' }}>
             {this.state.error.message}
           </pre>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#888', marginTop: 16 }}>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: 'var(--theme-text-muted)', marginTop: 16 }}>
             {this.state.error.stack}
           </pre>
           <button
             onClick={() => this.setState({ error: null })}
-            style={{ marginTop: 20, padding: '8px 16px', background: '#4a90d9', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+            style={{ marginTop: 20, padding: '8px 16px', background: 'var(--theme-btn-primary-bg)', color: 'var(--theme-btn-primary-text)', border: 'none', borderRadius: 8, fontWeight: 600, cursor: 'pointer' }}
           >
             Try Again
           </button>

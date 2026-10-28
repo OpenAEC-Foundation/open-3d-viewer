@@ -40,14 +40,12 @@ pub struct ConversionProgress {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RustFormat {
     Step,
-    Skp,
 }
 
 impl RustFormat {
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_lowercase().as_str() {
             "step" | "stp" => Some(RustFormat::Step),
-            "skp" => Some(RustFormat::Skp),
             _ => None,
         }
     }

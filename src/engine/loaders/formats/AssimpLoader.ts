@@ -10,7 +10,7 @@ import type { ThreeJSResult, ProgressCallback } from '../types';
  *
  * Works entirely in the browser — no Rust backend needed.
  *
- * Supported formats include: SKP, 3MF, AMF, BLEND, BVH, CSM, HMP,
+ * Supported formats include: 3MF, AMF, BLEND, BVH, CSM, HMP,
  * IRR, LWO, LWS, MD2, MD3, MD5, MDC, MDL, MS3D, NDO, NFF, OFF, Q3D,
  * RAW, SIB, SMD, X, X3D, XGL, and many more.
  */

@@ -23,14 +23,24 @@ import {
 // UI Theme
 // ============================================================================
 
-export type UITheme = 'dark' | 'light' | 'blue' | 'highContrast';
+/** OpenAEC theme variants (OpenAEC-style-book themes.css). */
+export type UITheme = 'forge' | 'light' | 'openaec' | 'blueprint' | 'contrast';
 
 export const UI_THEMES: { id: UITheme; label: string }[] = [
-  { id: 'dark', label: 'Dark' },
+  { id: 'forge', label: 'Deep Forge' },
   { id: 'light', label: 'Light' },
-  { id: 'blue', label: 'Blue' },
-  { id: 'highContrast', label: 'High Contrast' },
+  { id: 'openaec', label: 'Night Build' },
+  { id: 'blueprint', label: 'Blueprint' },
+  { id: 'contrast', label: 'High Contrast' },
 ];
+
+/** Themes of earlier versions, mapped to their OpenAEC counterpart. */
+const LEGACY_THEMES: Record<string, UITheme> = { dark: 'forge', blue: 'blueprint', highContrast: 'contrast' };
+
+function toTheme(value: string): UITheme {
+  if (UI_THEMES.some((t) => t.id === value)) return value as UITheme;
+  return LEGACY_THEMES[value] ?? 'forge';
+}
 
 export interface UIState {
   uiTheme: UITheme;
@@ -43,7 +53,7 @@ export interface UIActions {
 }
 
 const initialUIState: UIState = {
-  uiTheme: 'dark',
+  uiTheme: 'forge',
   rightPanelOpen: true,
 };
 
@@ -79,11 +89,11 @@ export const useAppStore = create<AppState>()(
 
 export async function loadPreferences() {
   const [theme, rightPanelOpen, language] = await Promise.all([
-    getPref<UITheme>('uiTheme', 'dark'),
+    getPref<string>('uiTheme', 'forge'),
     getPref<boolean>('rightPanelOpen', true),
     getPref<string>('language', ''),
   ]);
-  useAppStore.setState({ uiTheme: theme, rightPanelOpen });
+  useAppStore.setState({ uiTheme: toTheme(theme), rightPanelOpen });
   if (language) {
     const { default: i18next } = await import('../i18n/config');
     i18next.changeLanguage(language);

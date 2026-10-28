@@ -13,6 +13,7 @@ import enSettings from './locales/en/settings.json';
 import enLoader from './locales/en/loader.json';
 import enFileFilter from './locales/en/fileFilter.json';
 import enFeedback from './locales/en/feedback.json';
+import enBackstage from './locales/en/backstage.json';
 
 // Dutch
 import nlApp from './locales/nl/app.json';
@@ -26,6 +27,7 @@ import nlSettings from './locales/nl/settings.json';
 import nlLoader from './locales/nl/loader.json';
 import nlFileFilter from './locales/nl/fileFilter.json';
 import nlFeedback from './locales/nl/feedback.json';
+import nlBackstage from './locales/nl/backstage.json';
 
 export const SUPPORTED_LANGUAGES = [
   { code: 'en', label: 'English' },
@@ -48,6 +50,7 @@ i18next.use(LanguageDetector).init({
       loader: enLoader,
       fileFilter: enFileFilter,
       feedback: enFeedback,
+      backstage: enBackstage,
     },
     nl: {
       app: nlApp,
@@ -61,11 +64,12 @@ i18next.use(LanguageDetector).init({
       loader: nlLoader,
       fileFilter: nlFileFilter,
       feedback: nlFeedback,
+      backstage: nlBackstage,
     },
   },
   fallbackLng: 'en',
   supportedLngs: ['en', 'nl'],
-  ns: ['app', 'menuBar', 'ribbon', 'panels', 'statusBar', 'viewCube', 'welcome', 'settings', 'loader', 'fileFilter', 'feedback'],
+  ns: ['app', 'menuBar', 'ribbon', 'panels', 'statusBar', 'viewCube', 'welcome', 'settings', 'loader', 'fileFilter', 'feedback', 'backstage'],
   defaultNS: 'app',
   interpolation: {
     escapeValue: false,

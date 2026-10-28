@@ -1,0 +1,141 @@
+/* Backstage (File menu) — OpenAEC style: overlay below the 32 px title bar, 260 px sidebar,
+   items with a 3 px amber left border when active (OpenAEC-style-book migratie-instructies §3.4). */
+.backstage-overlay {
+  position: fixed;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  background: var(--theme-bg);
+  color: var(--theme-text);
+  animation: backstageIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes backstageIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.backstage-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--theme-bg-lighter);
+  border-right: 1px solid var(--theme-border);
+  padding: 8px 0;
+}
+
+.backstage-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: 4px 0 12px 12px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--theme-text);
+  cursor: default;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.backstage-back:hover {
+  background: var(--theme-hover-strong);
+  color: var(--theme-accent);
+}
+
+.backstage-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border: none;
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--theme-text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: default;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.backstage-item:hover {
+  background: var(--theme-hover);
+  color: var(--theme-accent);
+}
+
+.backstage-item.active {
+  border-left-color: var(--theme-accent);
+  background: var(--theme-hover-strong);
+  color: var(--theme-accent);
+}
+
+.backstage-shortcut {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--theme-backstage-item-shortcut);
+}
+
+.backstage-item:hover .backstage-shortcut {
+  color: var(--theme-backstage-item-shortcut-hover);
+}
+
+.backstage-divider {
+  height: 1px;
+  margin: 8px 20px;
+  background: var(--theme-border-subtle);
+}
+
+.backstage-spacer {
+  flex: 1;
+}
+
+.backstage-content {
+  flex: 1;
+  padding: 40px;
+  overflow: auto;
+}
+
+.backstage-about {
+  max-width: 70ch;
+}
+
+.backstage-about h2 {
+  margin: 0 0 4px;
+  font-size: 1.5rem;
+  color: var(--theme-text);
+}
+
+.backstage-about p {
+  margin: 0 0 12px;
+  font-size: 0.875rem;
+  color: var(--theme-text-secondary);
+}
+
+.backstage-about .backstage-version {
+  font-family: var(--font-mono);
+  color: var(--theme-accent);
+}
+
+.backstage-about dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 20px 0 0;
+  font-size: 0.875rem;
+}
+
+.backstage-about dt {
+  color: var(--theme-text-muted);
+}
+
+.backstage-about dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}

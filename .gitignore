@@ -7,6 +7,7 @@ dist-ssr/
 
 # Tauri
 src-tauri/target/
+src-tauri/target-*/
 src-tauri/gen/
 
 # Environment
@@ -45,3 +46,7 @@ temp/
 
 # Claude Code
 .claude/
+
+# Rust iced edition (cargo target dir at the worktree root)
+/target/
+iced-app/target/

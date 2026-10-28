@@ -1,0 +1,15 @@
+{
+  "file": "Bestand",
+  "open": "Openen…",
+  "openHint": "Open een of meer 3D-bestanden",
+  "preferences": "Voorkeuren",
+  "feedback": "Feedback sturen",
+  "about": "Over",
+  "exit": "Afsluiten",
+  "close": "Sluiten",
+  "aboutTitle": "Over Open 3D Viewer Studio",
+  "aboutBody": "Een universele viewer voor 3D-bestanden.",
+  "builtOn": "Gebouwd op het OpenAEC platform.",
+  "licence": "Licentie",
+  "source": "Broncode"
+}

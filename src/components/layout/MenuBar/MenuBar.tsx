@@ -41,7 +41,7 @@ function WindowsControls({
     <div className="flex items-center h-full">
       <button
         onClick={onMinimize}
-        className="w-[46px] h-full flex items-center justify-center hover:bg-[#3d3d3d] transition-colors cursor-default"
+        className="w-[46px] h-full flex items-center justify-center hover:bg-[var(--theme-hover-strong)] transition-colors cursor-default"
         title={t('minimize')}
       >
         <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor">
@@ -50,7 +50,7 @@ function WindowsControls({
       </button>
       <button
         onClick={onMaximize}
-        className="w-[46px] h-full flex items-center justify-center hover:bg-[#3d3d3d] transition-colors cursor-default"
+        className="w-[46px] h-full flex items-center justify-center hover:bg-[var(--theme-hover-strong)] transition-colors cursor-default"
         title={isMaximized ? t('restoreDown') : t('maximize')}
       >
         {isMaximized ? (
@@ -66,7 +66,7 @@ function WindowsControls({
       </button>
       <button
         onClick={onClose}
-        className="w-[46px] h-full flex items-center justify-center hover:bg-[#c42b1c] transition-colors group cursor-default"
+        className="w-[46px] h-full flex items-center justify-center hover:bg-[#e81123] transition-colors group cursor-default"
         title={t('close')}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.2" className="group-hover:stroke-white">
@@ -183,18 +183,18 @@ export const MenuBar = memo(function MenuBar({ onSettingsClick, onFeedbackClick 
   }, []);
 
   return (
-    <div className="h-8 bg-cad-surface border-b border-cad-border flex items-center select-none relative">
+    <div className="h-8 bg-[var(--theme-bg-lighter)] flex items-center select-none relative text-cad-text">
       {/* Logo + Quick Access */}
       <div className="flex items-center gap-2 pr-3">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className="w-5 h-5 ml-3">
           <defs>
             <linearGradient id="menu-bg" x1="0" y1="0" x2="0.3" y2="1">
-              <stop offset="0%" stopColor="#ffc820"/>
-              <stop offset="100%" stopColor="#f5960a"/>
+              <stop offset="0%" stopColor="#F59E0B"/>
+              <stop offset="100%" stopColor="#D97706"/>
             </linearGradient>
           </defs>
           <rect width="512" height="512" rx="90" fill="url(#menu-bg)"/>
-          <text x="256" y="256" textAnchor="middle" dominantBaseline="central" fontFamily="Impact,Arial Black,sans-serif" fontSize="340" fontWeight="900" fill="#281e0f" letterSpacing="-10">3D</text>
+          <text x="256" y="256" textAnchor="middle" dominantBaseline="central" fontFamily="Space Grotesk,system-ui,sans-serif" fontSize="300" fontWeight="700" fill="#36363E" letterSpacing="-12">3D</text>
         </svg>
         <div className="w-px h-4 bg-cad-border" />
         <button
@@ -215,10 +215,10 @@ export const MenuBar = memo(function MenuBar({ onSettingsClick, onFeedbackClick 
 
       {/* App title - fixed center */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <span className="text-cad-text-dim text-sm font-medium">
+        <span className="text-[12px] font-medium text-[var(--theme-accent)]" style={{ fontFamily: 'var(--font-heading)' }}>
           {t('app:title')}
         </span>
-        <span className="text-cad-text-muted text-[10px] ml-1.5">
+        <span className="text-[var(--theme-text-muted)] text-[10px] ml-1.5">
           {t('app:version')}
         </span>
       </div>

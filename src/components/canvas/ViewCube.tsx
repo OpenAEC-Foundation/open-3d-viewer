@@ -272,9 +272,9 @@ export function ViewCube({ cameraRef }: ViewCubeProps) {
               fontWeight: 600,
               letterSpacing: 0.5,
               textTransform: 'uppercase',
-              color: 'rgba(180, 195, 220, 0.9)',
-              background: 'rgba(20, 30, 50, 0.82)',
-              border: '1px solid rgba(70, 110, 170, 0.3)',
+              color: 'var(--theme-text)',
+              background: 'var(--theme-bg-lighter)',
+              border: '1px solid var(--theme-border)',
               borderRadius: 2,
               userSelect: 'none',
               pointerEvents: 'auto',
@@ -286,7 +286,7 @@ export function ViewCube({ cameraRef }: ViewCubeProps) {
               data-hl={face.key}
               style={{
                 position: 'absolute',
-                background: 'rgba(60, 120, 200, 0.45)',
+                background: 'var(--theme-ribbon-btn-active-bg)',
                 opacity: 0,
                 pointerEvents: 'none',
                 borderRadius: 1,

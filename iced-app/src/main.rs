@@ -8,12 +8,16 @@
 //!   open-3d-viewer-iced --bench FILE [--frames 300]
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
+mod annotations;
 mod app;
 mod bench;
 mod icons;
 mod loaders;
 mod model;
+mod section;
+mod shell;
 mod theme;
+mod view_cube;
 mod viewport;
 
 use app::{App, Message};
@@ -100,6 +104,8 @@ fn main() {
         bench::run(file, args.frames.unwrap_or(300))
     } else if let Some(out) = &args.screenshot {
         screenshot(&args, out)
+    } else if args.window_screenshot.is_some() {
+        run_app_standalone(args).map_err(|e| e.to_string())
     } else {
         run_app(args).map_err(|e| e.to_string())
     };
@@ -124,7 +130,23 @@ fn initial_state(args: &Args) -> App {
     app
 }
 
+/// The application window: the viewer inside the shared OpenAEC shell (`openaec-ui`), with the
+/// preferences (theme, language, scale) in %APPDATA%\OpenAEC\Open 3D Viewer Studio.
 fn run_app(args: Args) -> iced::Result {
+    let mut app = initial_state(&args);
+    app.initial_view = args.view;
+    app.pending_open = args.file.clone();
+    let prefs = std::env::var_os("APPDATA").map(|d| {
+        let dir = PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("preferences.json")
+    });
+    openaec_ui::run(shell::Studio { app }, prefs)
+}
+
+/// The earlier stand-alone window (own ribbon and panels); kept for `--window-screenshot`.
+#[allow(dead_code)]
+fn run_app_standalone(args: Args) -> iced::Result {
     let file = args.file.clone();
     let boot = move || {
         let mut app = initial_state(&args);
@@ -157,7 +179,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let mut app = initial_state(args);
     let (w, h) = args.size.unwrap_or((1440.0, 900.0));
     // Viewport area = window minus side panels, ribbon and status bar (see app.rs)
-    app.viewport_size = (w - 2.0 * 270.0, h - 34.0 - 84.0 - 24.0);
+    app.viewport_size = (w - 220.0 - 290.0, h - 34.0 - 84.0 - 24.0);
     if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(

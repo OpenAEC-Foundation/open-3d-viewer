@@ -34,7 +34,7 @@ impl Loader for StlLoader {
             }
         }
         let count = (positions.len() / 3) as u32;
-        Ok(vec![Layer { name, color: DEFAULT_COLOR, positions, normals, colors: None, indices: (0..count).collect() }])
+        Ok(vec![Layer { name, color: DEFAULT_COLOR, positions, normals, indices: (0..count).collect(), ..Layer::default() }])
     }
 }
 

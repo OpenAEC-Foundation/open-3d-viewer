@@ -7,6 +7,12 @@ struct Uniforms {
     // x: 1 = target is sRGB (hardware encodes), 0 = encode in the shader
     // y: colour multiplier for lines (wireframe darkening)
     params: vec4<f32>,
+    // section box: pivot.xyz + cos(turn), min.xyz + sin(turn), max.xyz + on (w > 0.5)
+    clip_a: vec4<f32>,
+    clip_b: vec4<f32>,
+    clip_c: vec4<f32>,
+    // cut fill: colour (sRGB) + hatch spacing in pixels (0 = solid)
+    cap: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -35,6 +41,24 @@ fn vs_main(v: VertexIn) -> VertexOut {
     return out;
 }
 
+// A world point in the frame of the section box (turned back about the vertical through the
+// pivot).
+fn box_local(world: vec3<f32>) -> vec3<f32> {
+    let d = world - u.clip_a.xyz;
+    let c = u.clip_a.w;
+    let s = u.clip_b.w;
+    return u.clip_a.xyz + vec3<f32>(c * d.x + s * d.y, -s * d.x + c * d.y, d.z);
+}
+
+// Outside the section box (when it is on).
+fn clipped(world: vec3<f32>) -> bool {
+    if (u.clip_c.w < 0.5) {
+        return false;
+    }
+    let p = box_local(world);
+    return any(p < u.clip_b.xyz) || any(p > u.clip_c.xyz);
+}
+
 fn to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
@@ -50,8 +74,8 @@ fn encode(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
-@fragment
-fn fs_lit(in: VertexOut) -> @location(0) vec4<f32> {
+// Lit colour in linear space.
+fn shade(in: VertexOut) -> vec3<f32> {
     let view_dir = normalize(u.eye.xyz - in.world);
     var n = in.normal;
     let len = length(n);
@@ -72,10 +96,132 @@ fn fs_lit(in: VertexOut) -> @location(0) vec4<f32> {
         + 0.55 * max(dot(n, key), 0.0)
         + 0.18 * max(dot(n, fill), 0.0)
         + 0.12 * max(dot(n, view_dir), 0.0);
-    return vec4<f32>(encode(base * light), 1.0);
+    return base * light;
+}
+
+@fragment
+fn fs_lit(in: VertexOut) -> @location(0) vec4<f32> {
+    // transparent materials (glass) are drawn in the glass pass
+    if (clipped(in.world) || in.color.a < 0.99) {
+        discard;
+    }
+    return vec4<f32>(encode(shade(in)), 1.0);
+}
+
+// Transparent materials after everything opaque, blended, without writing depth; at least a
+// trace of the surface stays visible.
+@fragment
+fn fs_glass(in: VertexOut) -> @location(0) vec4<f32> {
+    if (clipped(in.world) || in.color.a >= 0.99) {
+        discard;
+    }
+    return vec4<f32>(encode(shade(in)), max(in.color.a, 0.12));
+}
+
+// Selected elements: the lit colour pulled towards the OpenAEC amber (#D97706).
+@fragment
+fn fs_highlight(in: VertexOut) -> @location(0) vec4<f32> {
+    if (clipped(in.world)) {
+        discard;
+    }
+    let amber = to_linear(vec3<f32>(0.851, 0.467, 0.024));
+    let lit = shade(in);
+    let glow = 0.6 + 0.4 * clamp(dot(lit, vec3<f32>(0.333)), 0.0, 1.0);
+    return vec4<f32>(encode(mix(lit, amber * glow, 0.6)), 1.0);
 }
 
 @fragment
 fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
+    if (clipped(in.world)) {
+        discard;
+    }
     return vec4<f32>(encode(to_linear(in.color.rgb) * u.params.y), in.color.a);
+}
+
+// ---- cut fill of the section box ----------------------------------------------------------------
+// Per box face (instance index 0..6: axis * 2 + max): the stencil is cleared, every surface on the
+// side of the face's plane that the box keeps inverts it, and the face is filled where the count is
+// odd, that is where the plane runs inside a closed solid.
+
+struct FaceOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) @interpolate(flat) face: u32,
+};
+
+@vertex
+fn vs_full(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(vi & 2u) * 2.0 - 1.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+
+@fragment
+fn fs_none() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0);
+}
+
+@vertex
+fn vs_face(v: VertexIn, @builtin(instance_index) face: u32) -> FaceOut {
+    var out: FaceOut;
+    let world = u.model * vec4<f32>(v.position, 1.0);
+    out.world = world.xyz;
+    out.face = face;
+    out.clip = u.view_proj * world;
+    return out;
+}
+
+@fragment
+fn fs_face_count(in: FaceOut) -> @location(0) vec4<f32> {
+    let p = box_local(in.world);
+    let axis = in.face / 2u;
+    var kept = p[axis] >= u.clip_b[axis];
+    if (in.face % 2u == 1u) {
+        kept = p[axis] <= u.clip_c[axis];
+    }
+    if (!kept) {
+        discard;
+    }
+    return vec4<f32>(0.0);
+}
+
+@vertex
+fn vs_cap(@builtin(vertex_index) vi: u32, @builtin(instance_index) face: u32) -> FaceOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let t = corners[vi];
+    let axis = face / 2u;
+    let b = (axis + 1u) % 3u;
+    let c = (axis + 2u) % 3u;
+    let lo = u.clip_b.xyz;
+    let hi = u.clip_c.xyz;
+    var p = lo;
+    p[axis] = select(lo[axis], hi[axis], face % 2u == 1u);
+    p[b] = mix(lo[b], hi[b], t.x);
+    p[c] = mix(lo[c], hi[c], t.y);
+    // box frame to world
+    let d = p - u.clip_a.xyz;
+    let cs = u.clip_a.w;
+    let sn = u.clip_b.w;
+    let world = u.clip_a.xyz + vec3<f32>(cs * d.x - sn * d.y, sn * d.x + cs * d.y, d.z);
+    var out: FaceOut;
+    out.world = world;
+    out.face = face;
+    out.clip = u.view_proj * vec4<f32>(world, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_cap(in: FaceOut) -> @location(0) vec4<f32> {
+    var color = to_linear(u.cap.rgb);
+    if (u.cap.w > 0.0) {
+        // diagonal hatch in screen space, as a cut in a section drawing
+        let k = fract((in.clip.x + in.clip.y) / u.cap.w);
+        if (k < 0.18) {
+            color = color * 0.45;
+        }
+    }
+    return vec4<f32>(encode(color), 1.0);
 }

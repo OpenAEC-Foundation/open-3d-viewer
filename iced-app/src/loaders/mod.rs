@@ -11,9 +11,43 @@ mod ply;
 mod rvt;
 mod stl;
 
-use crate::model::{Layer, Model};
+use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::path::Path;
-use std::time::Instant;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// The steps of a load, shown on the loading card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Read = 0,
+    Convert = 1,
+    Scene = 2,
+}
+
+/// Progress of one load, shared by the loader thread and the UI.
+#[derive(Debug)]
+pub struct Progress {
+    state: Mutex<(Phase, Instant)>,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self { state: Mutex::new((Phase::Read, Instant::now())) }
+    }
+}
+
+impl Progress {
+    pub fn set(&self, phase: Phase) {
+        if let Ok(mut s) = self.state.lock() {
+            *s = (phase, Instant::now());
+        }
+    }
+
+    /// The current step and how long it has been running.
+    pub fn get(&self) -> (Phase, Duration) {
+        self.state.lock().map(|s| (s.0, s.1.elapsed())).unwrap_or((Phase::Read, Duration::ZERO))
+    }
+}
 
 /// A file format reader.
 pub trait Loader: Send + Sync {
@@ -23,10 +57,23 @@ pub trait Loader: Send + Sync {
     fn extensions(&self) -> &'static [&'static str];
     /// Reads the file into layers (Z up).
     fn load(&self, path: &Path) -> Result<Vec<Layer>, String>;
+    /// As [`Loader::load`], reporting the read and convert steps (default: one read step), plus
+    /// what else the file holds.
+    fn load_with(&self, path: &Path, progress: &Progress) -> Result<Loaded, String> {
+        progress.set(Phase::Read);
+        self.load(path).map(|layers| Loaded { layers, views: Vec::new(), project: ProjectData::default() })
+    }
     /// True when the format is Y up and `load` converted it to Z up.
     fn source_y_up(&self) -> bool {
         false
     }
+}
+
+/// What a loader read: the layers and the views saved in the file.
+pub struct Loaded {
+    pub layers: Vec<Layer>,
+    pub views: Vec<SavedView>,
+    pub project: ProjectData,
 }
 
 /// All available loaders.
@@ -48,6 +95,11 @@ pub fn supported_extensions() -> Vec<&'static str> {
 
 /// Loads a file with the loader matching its extension.
 pub fn load(path: &Path) -> Result<Model, String> {
+    load_with(path, &Progress::default())
+}
+
+/// As [`load`], reporting the steps to `progress`.
+pub fn load_with(path: &Path, progress: &Progress) -> Result<Model, String> {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -57,8 +109,11 @@ pub fn load(path: &Path) -> Result<Model, String> {
         .find(|l| l.extensions().contains(&ext.as_str()))
         .ok_or_else(|| format!("Unsupported file type: .{ext}"))?;
     let start = Instant::now();
-    let layers = loader.load(path)?;
-    let mut model = Model::new(path.to_path_buf(), loader.name(), layers);
+    let loaded = loader.load_with(path, progress)?;
+    progress.set(Phase::Scene);
+    let mut model = Model::new(path.to_path_buf(), loader.name(), loaded.layers);
+    model.views = loaded.views;
+    model.project = loaded.project;
     model.load_time = start.elapsed();
     model.source_y_up = loader.source_y_up();
     if model.layers.is_empty() {

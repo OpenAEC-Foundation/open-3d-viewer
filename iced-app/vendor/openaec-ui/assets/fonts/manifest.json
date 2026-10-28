@@ -1,0 +1,217 @@
+{
+  "about": "Fontpakket van OpenAEC UI 0.4 (issues #24, #25 en #28). Gemaakt door scripts/build_font_package.py; niet met de hand aanpassen.",
+  "licence": "SIL Open Font License 1.1 voor alle fonts",
+  "fonts": [
+    {
+      "file": "Inter-Regular.ttf",
+      "family": "Inter",
+      "weight": 400,
+      "style": "normal",
+      "name": "Inter Regular",
+      "version": "Version 4.001;git-9221beed3",
+      "bytes": 411640,
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+      "licence": "licenses/Inter-OFL.txt",
+      "woff2": {
+        "file": "Inter-Regular.woff2",
+        "bytes": 140944,
+        "sha256": "338239f6b590b8ced3bf857654d32da3fd3663294cd3003651ed57aa3abd7aa1"
+      }
+    },
+    {
+      "file": "Inter-Medium.ttf",
+      "family": "Inter",
+      "weight": 500,
+      "style": "normal",
+      "name": "Inter Medium Regular",
+      "version": "Version 4.001;git-9221beed3",
+      "bytes": 417300,
+      "sha256": "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872",
+      "licence": "licenses/Inter-OFL.txt",
+      "woff2": {
+        "file": "Inter-Medium.woff2",
+        "bytes": 143664,
+        "sha256": "7e80d9f65861ee6836a0081d4e75d88fb8789e5651d05edbc49640442a9610ee"
+      }
+    },
+    {
+      "file": "Inter-SemiBold.ttf",
+      "family": "Inter",
+      "weight": 600,
+      "style": "normal",
+      "name": "Inter SemiBold Regular",
+      "version": "Version 4.001;git-9221beed3",
+      "bytes": 419744,
+      "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
+      "licence": "licenses/Inter-OFL.txt",
+      "woff2": {
+        "file": "Inter-SemiBold.woff2",
+        "bytes": 144628,
+        "sha256": "5013f48d77ab627b1db7c2415914284ef09abc3f60a8e0d0d8f3cd1bfebefb5e"
+      }
+    },
+    {
+      "file": "SpaceGrotesk-Medium.ttf",
+      "family": "Space Grotesk",
+      "weight": 500,
+      "style": "normal",
+      "name": "Space Grotesk Medium Regular",
+      "version": "Version 2.000; ttfautohint (v1.8.3)",
+      "bytes": 116664,
+      "sha256": "3183b7eb0b4241476360e2cd8e527868616cc16d3ce332c4376505989b772b44",
+      "licence": "licenses/SpaceGrotesk-OFL.txt",
+      "woff2": {
+        "file": "SpaceGrotesk-Medium.woff2",
+        "bytes": 42796,
+        "sha256": "f20a85be4c8a74ddad94d46fcce503666498855e5a87755d75cd728d801bbe58"
+      }
+    },
+    {
+      "file": "SpaceGrotesk-Bold.ttf",
+      "family": "Space Grotesk",
+      "weight": 700,
+      "style": "normal",
+      "name": "Space Grotesk Bold",
+      "version": "Version 2.000; ttfautohint (v1.8.3)",
+      "bytes": 116056,
+      "sha256": "7209bbb75fc0f5c546a5f5773b0db74ffc6abf04c2148c1105cace5765a96bdb",
+      "licence": "licenses/SpaceGrotesk-OFL.txt",
+      "woff2": {
+        "file": "SpaceGrotesk-Bold.woff2",
+        "bytes": 41780,
+        "sha256": "06d705cebbab916f0c0fe82b6c6f4cae06aa07fd6f5ee078421206040326ef63"
+      }
+    },
+    {
+      "file": "JetBrainsMono-Regular.ttf",
+      "family": "JetBrains Mono",
+      "weight": 400,
+      "style": "normal",
+      "name": "JetBrains Mono Regular",
+      "version": "Version 2.304; ttfautohint (v1.8.4.7-5d5b)",
+      "bytes": 273900,
+      "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f",
+      "licence": "licenses/JetBrainsMono-OFL.txt",
+      "woff2": {
+        "file": "JetBrainsMono-Regular.woff2",
+        "bytes": 92164,
+        "sha256": "a9cb1cd82332b23a47e3a1239d25d13c86d16c4220695e34b243effa999f45f2"
+      }
+    },
+    {
+      "file": "InterAEC-Regular.ttf",
+      "family": "Inter AEC",
+      "weight": 400,
+      "style": "normal",
+      "name": "Inter AEC Regular",
+      "version": "Version 4.001;git-9221beed3; OpenAEC ss04 tnum",
+      "bytes": 411996,
+      "sha256": "45c6c8912815bb6d297ba02bf89b3c6ad9987f98290723c25ab2189975173c6b",
+      "licence": "licenses/Inter-OFL.txt",
+      "woff2": {
+        "file": "InterAEC-Regular.woff2",
+        "bytes": 139596,
+        "sha256": "1dd0a73cff64f7827e7d1660a61b374b3a95ce15d46a814d41b09addaeebdb68"
+      },
+      "derived_from": {
+        "file": "Inter-Regular.ttf",
+        "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+        "features": [
+          "ss04",
+          "tnum"
+        ],
+        "script": "scripts/build_inter_aec.py"
+      }
+    },
+    {
+      "file": "InterAEC-Medium.ttf",
+      "family": "Inter AEC",
+      "weight": 500,
+      "style": "normal",
+      "name": "Inter AEC Medium Regular",
+      "version": "Version 4.001;git-9221beed3; OpenAEC ss04 tnum",
+      "bytes": 417620,
+      "sha256": "3a5f3b738aff99f81e9b5b38b584b1dc8be00656c0118f94250418101233efd0",
+      "licence": "licenses/Inter-OFL.txt",
+      "woff2": {
+        "file": "InterAEC-Medium.woff2",
+        "bytes": 143312,
+        "sha256": "88bbf03403ab7acbdba1335a9e70ffe065a769f3bef2cdb0017fa3164f941bba"
+      },
+      "derived_from": {
+        "file": "Inter-Medium.ttf",
+        "sha256": "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872",
+        "features": [
+          "ss04",
+          "tnum"
+        ],
+        "script": "scripts/build_inter_aec.py"
+      }
+    },
+    {
+      "file": "InterAEC-SemiBold.ttf",
+      "family": "Inter AEC",
+      "weight": 600,
+      "style": "normal",
+      "name": "Inter AEC SemiBold Regular",
+      "version": "Version 4.001;git-9221beed3; OpenAEC ss04 tnum",
+      "bytes": 420056,
+      "sha256": "b049e34771d31d30e04f976e51f50b99c908a4fe76706fa66251d1c9716280cb",
+      "licence": "licenses/Inter-OFL.txt",
+      "woff2": {
+        "file": "InterAEC-SemiBold.woff2",
+        "bytes": 143800,
+        "sha256": "8639dd107f1b8f64d84b1c0b180e6c4a91f753b7a282906d93bc0832aedb9201"
+      },
+      "derived_from": {
+        "file": "Inter-SemiBold.ttf",
+        "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
+        "features": [
+          "ss04",
+          "tnum"
+        ],
+        "script": "scripts/build_inter_aec.py"
+      }
+    }
+  ],
+  "fallback": [
+    {
+      "file": "NotoSans-Regular.ttf",
+      "family": "Noto Sans",
+      "weight": 400,
+      "style": "normal",
+      "name": "Noto Sans Regular",
+      "version": "Version 2.015; ttfautohint (v1.8.4.7-5d5b)",
+      "bytes": 621572,
+      "sha256": "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823",
+      "licence": "licenses/NotoSans-OFL.txt",
+      "woff2": {
+        "file": "NotoSans-Regular.woff2",
+        "bytes": 215404,
+        "sha256": "b74ff0c1dc0c06d780b96350f2454d6e398320cb8066bc7afdf654b57021701b"
+      }
+    },
+    {
+      "file": "NotoSansSymbols-Regular.ttf",
+      "family": "Noto Sans Symbols",
+      "weight": 400,
+      "style": "normal",
+      "name": "Noto Sans Symbols Regular",
+      "version": "Version 2.003; ttfautohint (v1.8.4.7-5d5b)",
+      "bytes": 226980,
+      "sha256": "d0e98e9a2c046594c5021437273943be7e79e0fd980fde125279e22302212595",
+      "licence": "licenses/NotoSansSymbols-OFL.txt",
+      "woff2": {
+        "file": "NotoSansSymbols-Regular.woff2",
+        "bytes": 87560,
+        "sha256": "7a43d3d8f05dac82408d885a7a4212e857f36ee288e9b4a36237d19c3a1773b8"
+      }
+    }
+  ],
+  "missing_weights": [
+    "Inter 700",
+    "Space Grotesk 400",
+    "Space Grotesk 600",
+    "JetBrains Mono 500"
+  ]
+}

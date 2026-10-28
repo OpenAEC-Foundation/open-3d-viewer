@@ -23,9 +23,28 @@ pub struct Camera {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewPreset {
     Top,
+    Bottom,
     Front,
+    Back,
     Right,
+    Left,
     Iso,
+}
+
+impl ViewPreset {
+    /// Yaw and pitch of the preset (top and bottom just short of the pole).
+    pub fn orientation(self) -> (f32, f32) {
+        use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        match self {
+            ViewPreset::Top => (-FRAC_PI_2, MAX_PITCH),
+            ViewPreset::Bottom => (-FRAC_PI_2, -MAX_PITCH),
+            ViewPreset::Front => (-FRAC_PI_2, 0.0),
+            ViewPreset::Back => (FRAC_PI_2, 0.0),
+            ViewPreset::Right => (0.0, 0.0),
+            ViewPreset::Left => (PI, 0.0),
+            ViewPreset::Iso => (-FRAC_PI_4, (1.0f32 / 2f32.sqrt()).atan()),
+        }
+    }
 }
 
 const MAX_PITCH: f32 = 89.9 * std::f32::consts::PI / 180.0;
@@ -77,15 +96,9 @@ impl Camera {
     }
 
     pub fn set_preset(&mut self, preset: ViewPreset) {
-        use std::f32::consts::FRAC_PI_2;
-        let (yaw, pitch) = match preset {
-            ViewPreset::Top => (-FRAC_PI_2, MAX_PITCH),
-            ViewPreset::Front => (-FRAC_PI_2, 0.0),
-            ViewPreset::Right => (0.0, 0.0),
-            ViewPreset::Iso => (-std::f32::consts::FRAC_PI_4, (1.0f32 / 2f32.sqrt()).atan()),
-        };
+        let (yaw, pitch) = preset.orientation();
         self.yaw = yaw;
-        self.pitch = pitch;
+        self.pitch = pitch.clamp(-MAX_PITCH, MAX_PITCH);
     }
 
     /// Frames the bounds (assumed in world space) for the given viewport aspect ratio.
@@ -122,6 +135,35 @@ impl Camera {
         let max = self.scene_radius * 100.0 + 10.0;
         self.distance = (self.distance * 0.85f32.powf(steps)).clamp(min.max(1e-4), max);
     }
+
+    /// Zooms towards the point under the cursor (as Revit): `ndc` in -1..1, y up. The view scales
+    /// about the cursor's point on the plane through the target, so that point stays put.
+    pub fn zoom_at(&mut self, steps: f32, ndc: (f32, f32), aspect: f32) {
+        let before = self.distance;
+        self.zoom(steps);
+        let f = self.distance / before;
+        let forward = (self.target - self.eye()).normalize_or(Vec3::Y);
+        let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
+        let up = right.cross(forward);
+        let half_h = before * (self.fov_y * 0.5).tan();
+        let p = self.target + right * (ndc.0 * half_h * aspect.max(1e-3)) + up * (ndc.1 * half_h);
+        self.target = p + (self.target - p) * f;
+    }
+
+    /// The camera between `self` (t = 0) and `to` (t = 1): yaw the short way round, distance
+    /// geometric.
+    pub fn lerp(&self, to: &Camera, t: f32) -> Camera {
+        let tau = std::f32::consts::TAU;
+        let dyaw = (to.yaw - self.yaw + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI;
+        Camera {
+            target: self.target.lerp(to.target, t),
+            distance: self.distance * (to.distance / self.distance.max(1e-6)).powf(t),
+            yaw: self.yaw + dyaw * t,
+            pitch: self.pitch + (to.pitch - self.pitch) * t,
+            scene_radius: to.scene_radius,
+            ..*to
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,6 +175,37 @@ mod tests {
         let mut c = Camera::default();
         c.set_preset(ViewPreset::Top);
         assert!(c.eye().z > c.target.z + c.distance * 0.99);
+    }
+
+    #[test]
+    fn zoom_at_keeps_the_point_under_the_cursor() {
+        let mut c = Camera::default();
+        c.set_preset(ViewPreset::Top);
+        let aspect = 1.5;
+        let ndc = (0.5, -0.25);
+        let world = |c: &Camera| c.view_proj(aspect).inverse().project_point3(Vec3::new(ndc.0, ndc.1, 0.5));
+        let ray = |c: &Camera| {
+            let inv = c.view_proj(aspect).inverse();
+            let a = inv.project_point3(Vec3::new(ndc.0, ndc.1, 0.0));
+            let b = inv.project_point3(Vec3::new(ndc.0, ndc.1, 1.0));
+            // where the cursor ray meets the plane z = target.z
+            a + (b - a) * ((c.target.z - a.z) / (b.z - a.z))
+        };
+        let before = ray(&c);
+        let _ = world(&c);
+        c.zoom_at(2.0, ndc, aspect);
+        let after = ray(&c);
+        assert!((before - after).length() < 1e-3 * c.distance.max(1.0), "{before} vs {after}");
+    }
+
+    #[test]
+    fn lerp_turns_the_short_way() {
+        let mut a = Camera::default();
+        a.yaw = 3.0;
+        let mut b = a;
+        b.yaw = -3.0;
+        let half = a.lerp(&b, 0.5);
+        assert!((half.yaw.rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs() < 1e-3, "{}", half.yaw);
     }
 
     #[test]

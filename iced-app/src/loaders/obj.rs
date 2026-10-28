@@ -50,7 +50,7 @@ impl Loader for ObjLoader {
                 // OBJ is Y up by convention (Blender, 3ds Max and most exporters)
                 y_up_to_z_up(&mut positions);
                 y_up_to_z_up(&mut normals);
-                Layer { name: m.name, color, positions, normals, colors, indices }
+                Layer { name: m.name, color, positions, normals, colors, indices, ..Layer::default() }
             })
             .collect())
     }

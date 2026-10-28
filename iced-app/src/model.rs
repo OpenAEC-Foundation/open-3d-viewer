@@ -1,12 +1,13 @@
 //! The neutral scene model every loader produces: Z-up, metres (or file units), one
 //! triangle mesh per layer.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// One layer: a named triangle mesh with a single base colour (plus optional vertex colours).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Layer {
     pub name: String,
     /// Base colour (sRGB, 0..1).
@@ -19,6 +20,11 @@ pub struct Layer {
     pub colors: Option<Vec<[u8; 4]>>,
     /// Triangle list.
     pub indices: Vec<u32>,
+    /// Pickable elements (BIM formats): element id, first index and index count in `indices`,
+    /// sorted by first index.
+    pub elements: Vec<(u64, u32, u32)>,
+    /// Element properties as flat JSON objects; moved into [`Model::props`] by [`Model::new`].
+    pub props: Vec<(u64, String)>,
 }
 
 impl Layer {
@@ -28,6 +34,28 @@ impl Layer {
 
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
+    }
+
+    /// The triangles of the elements (or the whole layer) that enclose volume, for the cut fill.
+    pub fn solid_indices(&self) -> Vec<u32> {
+        let whole = [(0u64, 0u32, self.indices.len() as u32)];
+        let ranges = if self.elements.is_empty() { &whole[..] } else { &self.elements[..] };
+        let mut out = Vec::new();
+        for &(_, first, count) in ranges {
+            let Some(tris) = self.indices.get(first as usize..(first + count) as usize) else { continue };
+            if tris.iter().all(|&i| 3 * (i as usize) + 2 < self.positions.len()) && encloses_volume(&self.positions, tris) {
+                out.extend_from_slice(tris);
+            }
+        }
+        out
+    }
+
+    /// The element drawn by triangle `tri`, if the layer has elements.
+    pub fn element_at(&self, tri: usize) -> Option<u64> {
+        let at = (3 * tri) as u32;
+        let k = self.elements.partition_point(|e| e.1 <= at).checked_sub(1)?;
+        let (id, first, count) = self.elements[k];
+        (at < first + count).then_some(id)
     }
 }
 
@@ -81,6 +109,85 @@ pub struct Model {
     pub bounds: Bounds,
     /// The file was Y up and the loader turned it to Z up.
     pub source_y_up: bool,
+    /// Element properties (flat JSON object per element id).
+    pub props: HashMap<u64, String>,
+    /// Views saved in the file (Revit), in world coordinates.
+    pub views: Vec<SavedView>,
+    /// What the file says about the project besides geometry (Revit).
+    pub project: ProjectData,
+}
+
+/// Project data besides geometry (Revit): project information, levels, phases, grids, rooms.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectData {
+    /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
+    /// other keys are the captions of the project's own parameters.
+    pub info: Vec<(String, String)>,
+    /// Levels: name and elevation (metres), low to high.
+    pub levels: Vec<(String, f32)>,
+    /// Phases in the order of the project.
+    pub phases: Vec<String>,
+    pub grids: Vec<GridLine>,
+    pub rooms: Vec<Room>,
+}
+
+/// A grid line (world, metres) at the height it is drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridLine {
+    pub name: String,
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+}
+
+/// A room: number, name, level and the values of the project's own room parameters.
+#[derive(Debug, Clone, Default)]
+pub struct Room {
+    pub number: String,
+    pub name: String,
+    pub level: Option<String>,
+    pub extra: Vec<(String, String)>,
+}
+
+/// The kind of a saved view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewKind {
+    ThreeD,
+    Plan,
+    Section,
+    Elevation,
+    Detail,
+}
+
+/// Where a saved view looks from (world, Z up, metres).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewCamera {
+    pub eye: [f32; 3],
+    /// Unit view direction, from the eye into the model.
+    pub forward: [f32; 3],
+    pub perspective: bool,
+    /// Vertical field of view (radians), perspective views.
+    pub fov_y: Option<f32>,
+}
+
+/// The heights a plan shows: from `low` up to the cut plane `high` (a ceiling plan looks up from
+/// its cut plane: `from_below`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlanRange {
+    pub low: f32,
+    pub high: f32,
+    pub from_below: bool,
+}
+
+/// A view saved in the file, as the viewer can show it.
+#[derive(Debug, Clone)]
+pub struct SavedView {
+    pub name: String,
+    pub kind: ViewKind,
+    pub camera: Option<ViewCamera>,
+    /// What the view shows: a 3D view's section box or the crop of a section or elevation.
+    pub clip: Option<crate::section::SectionBox>,
+    pub plan: Option<PlanRange>,
+    pub level: Option<String>,
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -88,6 +195,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 impl Model {
     /// Builds a model from layers: drops empty layers and computes the bounds.
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
+        let props: HashMap<u64, String> = layers.iter_mut().flat_map(|l| std::mem::take(&mut l.props)).collect();
         layers.retain(|l| !l.indices.is_empty() && !l.positions.is_empty());
         let layers: Vec<Layer> = layers.into_iter().flat_map(|l| split_layer(l, MAX_PART_VERTICES, MAX_PART_TRIANGLES)).collect();
         let mut bounds = Bounds::empty();
@@ -108,6 +216,9 @@ impl Model {
             layers,
             bounds,
             source_y_up: false,
+            props,
+            views: Vec::new(),
+            project: ProjectData::default(),
         }
     }
 
@@ -121,6 +232,27 @@ impl Model {
 
     pub fn triangle_count(&self) -> usize {
         self.layers.iter().map(Layer::triangle_count).sum()
+    }
+
+    /// Where an element is drawn: (layer, first index, index count) per range.
+    pub fn element_ranges(&self, id: u64) -> Vec<(usize, u32, u32)> {
+        let mut out = Vec::new();
+        for (i, layer) in self.layers.iter().enumerate() {
+            out.extend(layer.elements.iter().filter(|e| e.0 == id).map(|e| (i, e.1, e.2)));
+        }
+        out
+    }
+
+    /// The properties of an element as (key, value) pairs in file order.
+    pub fn element_props(&self, id: u64) -> Vec<(String, String)> {
+        let Some(json) = self.props.get(&id) else { return Vec::new() };
+        match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json) {
+            Ok(map) => map
+                .into_iter()
+                .map(|(k, v)| (k, v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 
@@ -138,7 +270,9 @@ pub fn split_layer(layer: Layer, max_vertices: usize, max_triangles: usize) -> V
     let mut remap: Vec<u32> = vec![u32::MAX; layer.vertex_count()];
     let mut part = empty_like(&layer);
     let mut used: Vec<u32> = Vec::new();
-    for tri in layer.indices.chunks_exact(3) {
+    // per source triangle: (part, first index in the part), for the element ranges
+    let mut placed: Vec<Option<(usize, u32)>> = vec![None; layer.triangle_count()];
+    for (t, tri) in layer.indices.chunks_exact(3).enumerate() {
         if tri.iter().any(|&i| i as usize >= remap.len()) {
             continue;
         }
@@ -149,6 +283,7 @@ pub fn split_layer(layer: Layer, max_vertices: usize, max_triangles: usize) -> V
             used.clear();
             parts.push(std::mem::replace(&mut part, empty_like(&layer)));
         }
+        placed[t] = Some((parts.len(), part.indices.len() as u32));
         for &i in tri {
             if remap[i as usize] == u32::MAX {
                 remap[i as usize] = part.vertex_count() as u32;
@@ -166,6 +301,24 @@ pub fn split_layer(layer: Layer, max_vertices: usize, max_triangles: usize) -> V
     if !part.indices.is_empty() {
         parts.push(part);
     }
+    for &(id, first, count) in &layer.elements {
+        let mut run: Option<(usize, u32, u32)> = None;
+        for t in (first / 3)..(first + count) / 3 {
+            let Some((p, at)) = placed.get(t as usize).copied().flatten() else { continue };
+            match &mut run {
+                Some((rp, rf, rc)) if *rp == p && *rf + *rc == at => *rc += 3,
+                _ => {
+                    if let Some((rp, rf, rc)) = run.take() {
+                        parts[rp].elements.push((id, rf, rc));
+                    }
+                    run = Some((p, at, 3));
+                }
+            }
+        }
+        if let Some((rp, rf, rc)) = run {
+            parts[rp].elements.push((id, rf, rc));
+        }
+    }
     let n = parts.len();
     for (k, p) in parts.iter_mut().enumerate() {
         p.name = format!("{} (part {}/{n})", layer.name, k + 1);
@@ -180,7 +333,7 @@ fn empty_like(layer: &Layer) -> Layer {
         positions: Vec::new(),
         normals: Vec::new(),
         colors: layer.colors.as_ref().map(|_| Vec::new()),
-        indices: Vec::new(),
+        ..Layer::default()
     }
 }
 
@@ -253,13 +406,30 @@ mod tests {
             &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
             &[0, 1, 2, 0, 2, 3, 0, 1, 2],
         );
-        let layer = Layer { name: "L".into(), color: [1.0; 3], positions, normals, colors: None, indices };
+        let elements = vec![(7, 0, 6), (8, 6, 3)];
+        let layer = Layer { name: "L".into(), color: [1.0; 3], positions, normals, indices, elements, ..Layer::default() };
         let parts = split_layer(layer, 6, 100);
         assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].elements, vec![(7, 0, 6)]);
+        assert_eq!(parts[1].elements, vec![(8, 0, 3)]);
+        assert_eq!(parts[1].element_at(0), Some(8));
+        assert_eq!(parts[0].element_at(1), Some(7));
         assert_eq!(parts[0].triangle_count(), 2);
         assert_eq!(parts[1].triangle_count(), 1);
         assert_eq!(parts[1].name, "L (part 2/2)");
         assert!(parts.iter().all(|p| p.indices.iter().all(|&i| (i as usize) < p.vertex_count())));
+    }
+
+    #[test]
+    fn sheets_do_not_enclose_volume() {
+        // a closed tetrahedron, one face wound the other way
+        let p = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        assert!(encloses_volume(&p, &[0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 2, 3]));
+        // a single sheet of two triangles
+        let q = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+        assert!(!encloses_volume(&q, &[0, 1, 2, 0, 2, 3]));
+        let layer = Layer { positions: q.to_vec(), indices: vec![0, 1, 2, 0, 2, 3], ..Layer::default() };
+        assert!(layer.solid_indices().is_empty());
     }
 
     #[test]
@@ -269,4 +439,58 @@ mod tests {
         assert_eq!(i, vec![0, 1, 2]);
         assert_eq!(&n[0..3], &[0.0, 0.0, 1.0]);
     }
+}
+
+/// Whether a set of triangles encloses volume, for the cut fill of the section box. Only open
+/// sheets (terrain, leaves, entourage) are refused: they make the fill's surface count odd outside
+/// any solid. Seams with T-junctions and faces wound the other way do not disturb the count, so a
+/// set passes when either test says closed: the area vectors nearly cancel (racbasicsample: walls
+/// at most 0.10, mullions 0.22 with some faces wound the other way; terrain 0.98, planting 0.65),
+/// or almost every welded edge is paired (at most 2 %; a large terrain sheet leaves only its
+/// border open, 12 %).
+pub fn encloses_volume(positions: &[f32], indices: &[u32]) -> bool {
+    if openness(positions, indices) <= 0.3 {
+        return true;
+    }
+    let (open, all) = open_edges(positions, indices);
+    open as f32 <= 0.02 * all as f32
+}
+
+/// How far a set of triangles (index triples into `positions`) is from enclosing a volume: the
+/// length of the sum of the area vectors over the sum of the areas. A closed, consistently wound
+/// surface sums to zero (divergence theorem), T-junctions or not; an open sheet such as terrain
+/// is near 1.
+pub fn openness(positions: &[f32], indices: &[u32]) -> f32 {
+    let at = |i: u32| {
+        let i = 3 * i as usize;
+        glam::DVec3::new(positions[i] as f64, positions[i + 1] as f64, positions[i + 2] as f64)
+    };
+    let (mut sum, mut area) = (glam::DVec3::ZERO, 0.0);
+    for tri in indices.chunks_exact(3) {
+        let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
+        let n = (b - a).cross(c - a);
+        sum += n;
+        area += n.length();
+    }
+    if area <= 0.0 { 0.0 } else { (sum.length() / area) as f32 }
+}
+
+/// Open edges and all edges of a set of triangles (index triples into `positions`), with the
+/// vertices welded by position: a closed surface uses every edge an even number of times.
+pub fn open_edges(positions: &[f32], indices: &[u32]) -> (usize, usize) {
+    use std::collections::HashMap;
+    let key = |i: u32| -> [i32; 3] {
+        let i = 3 * i as usize;
+        [0, 1, 2].map(|k| (positions[i + k] * 1e4).round() as i32)
+    };
+    let mut edges: HashMap<([i32; 3], [i32; 3]), u32> = HashMap::with_capacity(indices.len());
+    for tri in indices.chunks_exact(3) {
+        let k = [key(tri[0]), key(tri[1]), key(tri[2])];
+        for (a, b) in [(k[0], k[1]), (k[1], k[2]), (k[2], k[0])] {
+            if a != b {
+                *edges.entry(if a < b { (a, b) } else { (b, a) }).or_default() += 1;
+            }
+        }
+    }
+    (edges.values().filter(|&&n| n % 2 == 1).count(), edges.len())
 }

@@ -7,11 +7,17 @@ use crate::model::Model;
 use crate::theme::{srgb3, srgb4, Palette, ThemeKind};
 use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
+use crate::model::{Bounds, ViewKind};
+use crate::section::{SectionBox, SectionEvent, SectionOverlay};
+use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
+use iced::widget::text::Wrapping;
+use iced::{Background, Border, Color, Padding, Shadow};
+use openaec_ui::Language;
 use iced::alignment::Vertical;
 use iced::widget::{
-    button, center, column, container, row, rule, scrollable, shader, stack, svg, text, text_input, Space,
+    button, canvas, center, column, container, row, rule, scrollable, shader, slider, stack, svg, text, text_input, Space,
 };
 use iced::{event, keyboard, window, Center, Element, Fill, Font, Length, Subscription, Task, Theme};
 use std::path::PathBuf;
@@ -31,7 +37,7 @@ pub enum RibbonTab {
 #[derive(Debug, Clone)]
 pub enum Status {
     Ready,
-    Loading { file: String, since: Instant },
+    Loading { file: String, since: Instant, progress: Arc<loaders::Progress> },
     Loaded(String),
     Error(String),
 }
@@ -54,6 +60,25 @@ pub struct App {
     pub initial_view: Option<ViewPreset>,
     /// `--window-screenshot`: capture the real window once the model is shown, then exit.
     pub window_shot: Option<PathBuf>,
+    /// A file to open once the window runs (command line; the OpenAEC runtime has no boot task).
+    pub pending_open: Option<PathBuf>,
+    /// The picked layer and, for BIM formats, the element in it.
+    pub selected: Option<(usize, Option<u64>)>,
+    /// Index ranges of the selection, for the highlight: (layer, first index, index count).
+    pub selection: Vec<(usize, u32, u32)>,
+    /// A running camera transition: from, to, start.
+    pub anim: Option<(Camera, Camera, Instant)>,
+    /// The section box (world); kept while switched off, so switching on restores it.
+    pub section: Option<SectionBox>,
+    pub section_on: bool,
+    /// Fill the cut faces of solids.
+    pub section_fill: bool,
+    /// The saved view last shown.
+    pub active_view: Option<usize>,
+    /// Show the model's grid lines with their bubbles.
+    pub show_grids: bool,
+    /// Explorer groups opened: views, rooms, layers.
+    pub explorer_open: [bool; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +101,24 @@ pub enum Message {
     AllLayers(bool),
     LayerFilter(String),
     Navigate(Navigate),
+    Cube(CubeEvent),
+    /// Show a view saved in the file.
+    ApplyView(usize),
+    ToggleGrids,
+    /// Open or close an explorer group (0 views, 1 rooms, 2 layers).
+    ToggleExplorer(usize),
+    ToggleSection,
+    ResetSection,
+    SectionToSelection,
+    ToggleSectionFill,
+    Section(SectionEvent),
+    /// A face set from the properties pane: axis, min face, percent of the model.
+    SectionSlider(usize, bool, f32),
+    /// The turn from the properties pane, degrees.
+    SectionTurn(f32),
+    ClearSelection,
+    /// A frame while loading (animates the loading card).
+    Tick,
     TakeShot,
     Shot(window::Screenshot),
 }
@@ -85,6 +128,21 @@ impl From<Navigate> for Message {
         Message::Navigate(n)
     }
 }
+
+impl From<SectionEvent> for Message {
+    fn from(e: SectionEvent) -> Self {
+        Message::Section(e)
+    }
+}
+
+impl From<CubeEvent> for Message {
+    fn from(e: CubeEvent) -> Self {
+        Message::Cube(e)
+    }
+}
+
+/// Length of a camera transition (view cube, presets).
+const ANIM_SECONDS: f32 = 0.45;
 
 impl Default for App {
     fn default() -> Self {
@@ -104,17 +162,27 @@ impl Default for App {
             viewport_size: (1000.0, 700.0),
             initial_view: None,
             window_shot: None,
+            pending_open: None,
+            selected: None,
+            selection: Vec::new(),
+            anim: None,
+            section: None,
+            section_on: false,
+            section_fill: true,
+            active_view: None,
+            show_grids: true,
+            explorer_open: [true, false, true],
         }
     }
 }
 
 /// Loads a file on a worker thread.
-pub fn load_task(path: PathBuf) -> Task<Message> {
+pub fn load_task(path: PathBuf, progress: Arc<loaders::Progress>) -> Task<Message> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(loaders::load(&path).map(Arc::new));
+                let _ = tx.send(loaders::load_with(&path, &progress).map(Arc::new));
             });
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
@@ -147,10 +215,118 @@ impl App {
     }
 
     pub fn fit(&mut self) {
+        self.anim = None;
+        self.camera = self.fitted(self.camera);
+    }
+
+    /// `camera` framing the whole model.
+    fn fitted(&self, mut camera: Camera) -> Camera {
         if let Some(m) = &self.model {
             let b = transform_bounds(&m.bounds, &self.model_matrix());
-            self.camera.fit(&b, self.aspect());
+            camera.fit(&b, self.aspect());
         }
+        camera
+    }
+
+    /// The model's bounds in world space (after the up-axis override).
+    fn world_bounds(&self) -> Option<Bounds> {
+        self.model.as_ref().map(|m| transform_bounds(&m.bounds, &self.model_matrix()))
+    }
+
+    /// World bounds of the selected triangles.
+    fn selection_bounds(&self) -> Option<Bounds> {
+        let model = self.model.as_ref()?;
+        let mm = self.model_matrix();
+        let mut b = Bounds::empty();
+        for &(l, first, count) in &self.selection {
+            let layer = model.layers.get(l)?;
+            for &i in layer.indices.get(first as usize..(first + count) as usize)? {
+                let i = 3 * i as usize;
+                if let Some(p) = layer.positions.get(i..i + 3) {
+                    b.extend(mm.transform_point3(Vec3::new(p[0], p[1], p[2])).to_array());
+                }
+            }
+        }
+        b.is_valid().then_some(b)
+    }
+
+    /// The section box when it is on.
+    pub fn active_section(&self) -> Option<SectionBox> {
+        self.section.filter(|_| self.section_on)
+    }
+
+    /// Shows a saved view, animated: its camera (a 3D view's eye and lens, the direction of a
+    /// section or elevation, from above for a plan) and what it shows (a 3D view's section box,
+    /// a section's crop, a plan's range from the view depth up to the cut plane) as the section
+    /// box.
+    pub fn apply_view(&mut self, i: usize) {
+        let Some(model) = self.model.clone() else { return };
+        let Some(view) = model.views.get(i).cloned() else { return };
+        // views are in the file's coordinates
+        if self.flip_up {
+            self.flip_up = false;
+            self.section = None;
+        }
+        let Some(world) = self.world_bounds() else { return };
+        self.active_view = Some(i);
+        let clip = match (view.plan, view.clip) {
+            (Some(plan), _) => {
+                let mut b = SectionBox::around(&world);
+                b.min.z = plan.low;
+                b.max.z = plan.high.max(plan.low + 0.01);
+                Some(b)
+            }
+            (None, Some(c)) => Some(c.clamped_to(&world)),
+            _ => None,
+        };
+        if clip.is_some() {
+            self.section = clip;
+        }
+        self.section_on = clip.is_some();
+        let frame = clip.map(|c| c.world_bounds()).unwrap_or(world);
+
+        let max_pitch = 89.9f32.to_radians();
+        let (yaw, pitch) = match (view.plan, view.camera) {
+            (Some(plan), _) => if plan.from_below { ViewPreset::Bottom } else { ViewPreset::Top }.orientation(),
+            (None, Some(c)) => {
+                let f = Vec3::from_array(c.forward);
+                ((-f.y).atan2(-f.x), (-f.z).clamp(-1.0, 1.0).asin())
+            }
+            _ => ViewPreset::Iso.orientation(),
+        };
+        let mut to = self.camera;
+        to.yaw = yaw;
+        to.pitch = pitch.clamp(-max_pitch, max_pitch);
+        to.fov_y = 45f32.to_radians();
+        match view.camera.filter(|c| c.perspective) {
+            // a camera: its own eye and lens
+            Some(c) => {
+                let (eye, f) = (Vec3::from_array(c.eye), Vec3::from_array(c.forward));
+                let d = (Vec3::from_array(frame.center()) - eye).dot(f).max(1.0);
+                to.ortho = false;
+                to.target = eye + f * d;
+                to.distance = d;
+                to.scene_radius = world.radius();
+                if let Some(fov) = c.fov_y {
+                    to.fov_y = fov.clamp(10f32.to_radians(), 120f32.to_radians());
+                }
+            }
+            // Revit's other views are orthographic
+            None => {
+                to.ortho = true;
+                to.fit(&frame, self.aspect());
+            }
+        }
+        self.anim = Some((self.camera, to, Instant::now()));
+    }
+
+    /// Turns the camera to (yaw, pitch) and frames the model, animated.
+    fn turn_to(&mut self, yaw: f32, pitch: f32) {
+        let mut to = self.camera;
+        to.yaw = yaw;
+        to.pitch = pitch.clamp(-89.9f32.to_radians(), 89.9f32.to_radians());
+        let to = self.fitted(to);
+        self.anim = Some((self.camera, to, Instant::now()));
     }
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
@@ -162,6 +338,11 @@ impl App {
             model.load_time.as_secs_f32()
         ));
         self.model = Some(model);
+        self.section = None;
+        self.section_on = false;
+        self.active_view = None;
+        self.selected = None;
+        self.selection.clear();
         self.flip_up = false;
         self.layer_filter.clear();
         self.camera.set_preset(self.initial_view.take().unwrap_or(ViewPreset::Iso));
@@ -196,12 +377,14 @@ impl App {
             }
             Message::Picked(None) => {}
             Message::Picked(Some(path)) | Message::Open(path) => {
+                self.pending_open = None;
                 if matches!(self.status, Status::Loading { .. }) {
                     return Task::none();
                 }
                 let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.status = Status::Loading { file, since: Instant::now() };
-                return load_task(path);
+                let progress = Arc::new(loaders::Progress::default());
+                self.status = Status::Loading { file, since: Instant::now(), progress: progress.clone() };
+                return load_task(path, progress);
             }
             Message::Loaded(Ok(model)) => {
                 self.set_model(model);
@@ -227,14 +410,38 @@ impl App {
             Message::ToggleGrid => self.grid = !self.grid,
             Message::ToggleFlipUp => {
                 self.flip_up = !self.flip_up;
+                // the box is in world space: start again around the turned model
+                self.section = None;
+                if self.section_on {
+                    self.section = self.world_bounds().map(|b| SectionBox::around(&b));
+                }
                 self.fit();
             }
             Message::Theme(t) => self.theme = t,
             Message::Tab(t) => self.tab = t,
             Message::Preset(p) => {
-                self.camera.set_preset(p);
-                self.fit();
+                let (yaw, pitch) = p.orientation();
+                self.turn_to(yaw, pitch);
             }
+            Message::Cube(CubeEvent::Orbit { dx, dy }) => {
+                self.anim = None;
+                self.camera.orbit(dx, dy);
+            }
+            Message::Cube(CubeEvent::Snap(target)) => match target {
+                CubeTarget::Face(p) => {
+                    let (yaw, pitch) = p.orientation();
+                    self.turn_to(yaw, pitch);
+                }
+                CubeTarget::Edge(d) | CubeTarget::Corner(d) => {
+                    let (yaw, pitch) = view_from(d);
+                    self.turn_to(yaw, pitch);
+                }
+                CubeTarget::Home => {
+                    let (yaw, pitch) = ViewPreset::Iso.orientation();
+                    self.turn_to(yaw, pitch);
+                }
+                CubeTarget::Lens => self.camera.ortho = !self.camera.ortho,
+            },
             Message::Ortho(o) => self.camera.ortho = o,
             Message::Fit => self.fit(),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
@@ -256,17 +463,92 @@ impl App {
             }
             Message::LayerFilter(f) => self.layer_filter = f,
             Message::Navigate(n) => match n {
-                Navigate::Orbit { dx, dy } => self.camera.orbit(dx, dy),
-                Navigate::Pan { dx, dy, height } => self.camera.pan(dx, dy, height),
-                Navigate::Zoom { steps } => self.camera.zoom(steps),
+                Navigate::Orbit { dx, dy } => {
+                    self.anim = None;
+                    self.camera.orbit(dx, dy)
+                }
+                Navigate::Pan { dx, dy, height } => {
+                    self.anim = None;
+                    self.camera.pan(dx, dy, height)
+                }
+                Navigate::Zoom { steps, x, y, width, height } => {
+                    self.anim = None;
+                    let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
+                    self.camera.zoom_at(steps, ndc, width / height.max(1.0));
+                }
                 Navigate::Resized { width, height } => self.viewport_size = (width, height),
+                Navigate::Pick { x, y, width, height } => self.pick(x, y, width, height),
             },
+            Message::ApplyView(i) => self.apply_view(i),
+            Message::ToggleGrids => self.show_grids = !self.show_grids,
+            Message::ToggleExplorer(i) => {
+                if let Some(open) = self.explorer_open.get_mut(i) {
+                    *open = !*open;
+                }
+            }
+            Message::ToggleSection => {
+                if self.section.is_none() {
+                    self.section = self.world_bounds().map(|b| SectionBox::around(&b));
+                }
+                self.section_on = !self.section_on && self.section.is_some();
+            }
+            Message::ResetSection => {
+                self.section = self.world_bounds().map(|b| SectionBox::around(&b));
+                self.section_on = self.section.is_some();
+            }
+            Message::SectionToSelection => {
+                if let Some(b) = self.selection_bounds() {
+                    self.section = Some(SectionBox::around(&b));
+                    self.section_on = true;
+                }
+            }
+            Message::ToggleSectionFill => self.section_fill = !self.section_fill,
+            Message::Section(event) => {
+                if let Some(s) = self.section.as_mut() {
+                    match event {
+                        SectionEvent::Move { axis, is_min, delta } => s.move_face(axis, is_min, delta),
+                        SectionEvent::Turn(radians) => s.turn_by(radians),
+                    }
+                }
+            }
+            Message::SectionSlider(axis, is_min, percent) => {
+                if let (Some(world), Some(s)) = (self.world_bounds(), self.section.as_mut()) {
+                    let r = s.local_bounds(&world);
+                    let to = r.min[axis] + (r.max[axis] - r.min[axis]) * percent / 100.0;
+                    let now = if is_min { s.min[axis] } else { s.max[axis] };
+                    s.move_face(axis, is_min, to - now);
+                }
+            }
+            Message::SectionTurn(degrees) => {
+                if let Some(s) = self.section.as_mut() {
+                    s.turn_by(degrees.to_radians() - s.turn);
+                }
+            }
+            Message::Tick => {
+                if let Some((from, to, start)) = self.anim {
+                    let t = (start.elapsed().as_secs_f32() / ANIM_SECONDS).min(1.0);
+                    let eased = t * t * (3.0 - 2.0 * t);
+                    self.camera = from.lerp(&to, eased);
+                    if t >= 1.0 {
+                        self.anim = None;
+                    }
+                }
+            }
+            Message::ClearSelection => {
+                self.selected = None;
+                self.selection.clear();
+            }
         }
         Task::none()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, status, _window| match event {
+        let ticks = if matches!(self.status, Status::Loading { .. }) || self.anim.is_some() {
+            window::frames().map(|_| Message::Tick)
+        } else {
+            Subscription::none()
+        };
+        let events = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Open(path)),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
                 if status == event::Status::Ignored =>
@@ -286,21 +568,43 @@ impl App {
                     Key::Character("2") => Some(Message::Preset(ViewPreset::Front)),
                     Key::Character("3") => Some(Message::Preset(ViewPreset::Right)),
                     Key::Character("0") | Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
+                    Key::Named(Named::Escape) => Some(Message::ClearSelection),
                     _ => None,
                 }
             }
             _ => None,
-        })
+        });
+        Subscription::batch([events, ticks])
     }
 
     pub fn view(&self) -> Element<'_, Message> {
         let p = self.theme.palette();
         let body = row![]
             .push(self.show_layers.then(|| self.layers_panel(p)))
-            .push(self.viewport(p))
+            .push(self.viewport_view(p, standalone_language()))
             .push(self.show_properties.then(|| self.properties_panel(p)))
             .height(Fill);
         column![self.ribbon(p), body, self.status_bar(p)].into()
+    }
+
+    /// Selects what is under the cursor: the nearest visible triangle, then its element (or the
+    /// whole layer when the format has no elements); empty space clears the selection.
+    fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        let Some(model) = self.model.clone() else { return };
+        let (width, height) = (width.max(1.0), height.max(1.0));
+        let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
+        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
+        let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
+        let mm = self.model_matrix();
+        let section = self.active_section();
+        let keep = |p: Vec3| section.is_none_or(|s| s.contains(mm.transform_point3(p)));
+        self.selected = pick_triangle(&model, &self.visible, origin, dir, &keep).map(|(l, t)| (l, model.layers[l].element_at(t)));
+        self.selection = match self.selected {
+            Some((_, Some(id))) => model.element_ranges(id),
+            Some((l, None)) => vec![(l, 0, model.layers[l].indices.len() as u32)],
+            None => Vec::new(),
+        };
     }
 
     // ---- ribbon ---------------------------------------------------------------------------
@@ -438,67 +742,174 @@ impl App {
 
     fn layers_panel(&self, p: Palette) -> Element<'_, Message> {
         let header = panel_header(p, "Layers", self.model.as_ref().map(|m| m.layers.len().to_string()));
+        panel(p, header, self.layers_body(p, standalone_language()), 220)
+    }
+
+    /// The explorer pane, organised as Revit's project browser: one search field, then
+    /// collapsible groups (views by kind, rooms by level, layers) with their counts.
+    pub fn layers_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(model) = &self.model else {
-            return panel(p, header, text("No model loaded").size(12).color(p.text_muted).into());
+            return text(l.text("Geen model geopend", "No model loaded")).size(12).color(p.text_muted).into();
         };
-        let filter = self.layer_filter.to_lowercase();
-        let mut order: Vec<usize> = (0..model.layers.len())
-            .filter(|&i| filter.is_empty() || model.layers[i].name.to_lowercase().contains(&filter))
-            .collect();
+        let query = self.layer_filter.to_lowercase();
+        let searching = !query.is_empty();
+        let hit = |s: &str| !searching || s.to_lowercase().contains(&query);
+        let indent = |content: Element<'static, Message>| -> Element<'static, Message> {
+            container(content).padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 14.0 }).width(Fill).into()
+        };
+        let subheader = |label: &str| -> Element<'static, Message> {
+            container(text(label.to_uppercase()).size(10).font(FONT_BOLD).color(p.group_label))
+                .padding(Padding { top: 6.0, right: 0.0, bottom: 2.0, left: 20.0 })
+                .into()
+        };
+        let mut body = column![].spacing(1);
+
+        // views, by kind
+        if !model.views.is_empty() {
+            let kinds = [
+                (ViewKind::ThreeD, l.text("3D-aanzichten", "3D views")),
+                (ViewKind::Plan, l.text("Plattegronden", "Floor plans")),
+                (ViewKind::Section, l.text("Doorsneden", "Sections")),
+                (ViewKind::Elevation, l.text("Aanzichten", "Elevations")),
+                (ViewKind::Detail, l.text("Details", "Details")),
+            ];
+            let shown: Vec<usize> = (0..model.views.len())
+                .filter(|&i| hit(&model.views[i].name) || model.views[i].level.as_deref().is_some_and(|lv| hit(lv)))
+                .collect();
+            let open = self.explorer_open[0] || searching;
+            body = body.push(group_header(p, l.text("Weergaven", "Views"), Some("beta"), shown.len(), open, Message::ToggleExplorer(0)));
+            if open {
+                for (kind, label) in kinds {
+                    let items: Vec<usize> = shown.iter().copied().filter(|&i| model.views[i].kind == kind).collect();
+                    if items.is_empty() {
+                        continue;
+                    }
+                    body = body.push(subheader(label));
+                    for i in items {
+                        let active = self.active_view == Some(i);
+                        let item = button(
+                            text(model.views[i].name.clone())
+                                .size(12)
+                                .color(if active { p.accent } else { p.text })
+                                .wrapping(Wrapping::WordOrGlyph)
+                                .width(Fill),
+                        )
+                        .padding([3, 6])
+                        .width(Fill)
+                        .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
+                        .on_press(Message::ApplyView(i));
+                        body = body.push(indent(item.into()));
+                    }
+                }
+            }
+        }
+
+        // rooms, by level (low to high, then rooms without a level)
+        let rooms = &model.project.rooms;
+        if !rooms.is_empty() {
+            let shown: Vec<&crate::model::Room> = rooms
+                .iter()
+                .filter(|r| hit(&r.name) || hit(&r.number) || r.extra.iter().any(|(_, v)| hit(v)))
+                .collect();
+            let open = self.explorer_open[1] || searching;
+            body = body.push(group_header(p, l.text("Ruimten", "Rooms"), None, shown.len(), open, Message::ToggleExplorer(1)));
+            if open {
+                let mut levels: Vec<Option<String>> = model.project.levels.iter().map(|(n, _)| Some(n.clone())).collect();
+                levels.push(None);
+                for level in levels {
+                    let items: Vec<&&crate::model::Room> = shown.iter().filter(|r| r.level == level).collect();
+                    if items.is_empty() {
+                        continue;
+                    }
+                    body = body.push(subheader(level.as_deref().unwrap_or(l.text("Zonder niveau", "No level"))));
+                    for r in items {
+                        let extra = r.extra.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(" · ");
+                        let item = row![
+                            text(r.number.clone()).size(11).color(p.text_muted).width(30),
+                            column![text(r.name.clone()).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph)]
+                                .push((!extra.is_empty()).then(|| text(extra).size(10).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)))
+                                .width(Fill),
+                        ]
+                        .spacing(4)
+                        .padding([2, 6]);
+                        body = body.push(indent(item.into()));
+                    }
+                }
+            }
+        }
+
+        // layers (categories)
+        let mut order: Vec<usize> = (0..model.layers.len()).filter(|&i| hit(&model.layers[i].name)).collect();
         order.sort_by(|&a, &b| model.layers[a].name.to_lowercase().cmp(&model.layers[b].name.to_lowercase()));
-
-        let rows = column(order.into_iter().map(|i| {
-            let layer = &model.layers[i];
-            let visible = self.visible.get(i).copied().unwrap_or(true);
-            let [r, g, b] = layer.color;
-            let swatch = container(Space::new().width(12).height(12))
-                .style(move |_| Palette::swatch(iced::Color::from_rgb(r, g, b)));
-            let eye = svg(icons::handle(if visible { icons::EYE } else { icons::EYE_OFF }))
-                .width(16)
-                .height(16)
-                .style(move |_, _| svg::Style { color: Some(if visible { p.text_secondary } else { p.text_muted }) });
-            let name_color = if visible { p.text } else { p.text_muted };
-            button(
+        let open = self.explorer_open[2] || searching;
+        body = body.push(group_header(p, l.text("Lagen", "Layers"), None, order.len(), open, Message::ToggleExplorer(2)));
+        if open {
+            let small = |label: &'static str, msg: Message| {
+                button(text(label).size(11)).padding([2, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(msg)
+            };
+            body = body.push(indent(
                 row![
-                    eye,
-                    swatch,
-                    text(layer.name.as_str()).size(12).color(name_color).width(Fill),
-                    text(format_count(layer.triangle_count())).size(11).color(p.text_muted),
+                    small(l.text("Alles tonen", "Show all"), Message::AllLayers(true)),
+                    small(l.text("Alles verbergen", "Hide all"), Message::AllLayers(false)),
                 ]
-                .spacing(8)
-                .align_y(Center),
-            )
-            .padding([3, 6])
-            .width(Fill)
-            .style(move |_, s| p.row_button(s))
-            .on_press(Message::Layer(i, !visible))
+                .spacing(4)
+                .padding([4, 0])
+                .into(),
+            ));
+            for i in order {
+                let layer = &model.layers[i];
+                let visible = self.visible.get(i).copied().unwrap_or(true);
+                let [r, g, b] = layer.color;
+                let swatch = container(Space::new().width(10).height(10)).style(move |_| Palette::swatch(iced::Color::from_rgb(r, g, b)));
+                let eye = svg(icons::handle(if visible { icons::EYE } else { icons::EYE_OFF }))
+                    .width(14)
+                    .height(14)
+                    .style(move |_, _| svg::Style { color: Some(if visible { p.text_secondary } else { p.text_muted }) });
+                let item = button(
+                    row![
+                        eye,
+                        swatch,
+                        text(layer.name.clone())
+                            .size(12)
+                            .color(if visible { p.text } else { p.text_muted })
+                            .wrapping(Wrapping::WordOrGlyph)
+                            .width(Fill),
+                        text(format_count(layer.triangle_count())).size(10).color(p.text_muted),
+                    ]
+                    .spacing(6)
+                    .align_y(Center),
+                )
+                .padding([3, 6])
+                .width(Fill)
+                .style(move |_, s| p.row_button(s))
+                .on_press(Message::Layer(i, !visible));
+                body = body.push(indent(item.into()));
+            }
+        }
+
+        let search = text_input(l.text("Zoeken in verkenner…", "Search explorer…"), &self.layer_filter)
+            .on_input(Message::LayerFilter)
+            .size(12)
+            .padding([5, 8]);
+        column![search, scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4)]
+            .spacing(8)
             .into()
-        }))
-        .spacing(1);
-
-        let small = |label: &'static str, msg: Message| {
-            button(text(label).size(11)).padding([2, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(msg)
-        };
-        let tools = column![
-            text_input("Filter layers…", &self.layer_filter)
-                .on_input(Message::LayerFilter)
-                .size(12)
-                .padding([4, 8]),
-            row![small("Show all", Message::AllLayers(true)), small("Hide all", Message::AllLayers(false))].spacing(4),
-        ]
-        .spacing(6);
-
-        panel(
-            p,
-            header,
-            column![tools, scrollable(rows).height(Fill).spacing(4)].spacing(8).into(),
-        )
     }
 
     fn properties_panel(&self, p: Palette) -> Element<'_, Message> {
         let header = panel_header(p, "Properties", None);
+        panel(p, header, self.properties_body(p, standalone_language()), 290)
+    }
+
+    /// The properties pane: project data (nothing selected) or the selection, the section box,
+    /// then file, geometry and bounds. Labels and values share the width 2 : 3 and wrap, so long
+    /// words never run into each other.
+    pub fn properties_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(model) = &self.model else {
-            return panel(p, header, text("Open a model to see its properties").size(12).color(p.text_muted).into());
+            return text(l.text("Open een model om de eigenschappen te zien", "Open a model to see its properties"))
+                .size(12)
+                .color(p.text_muted)
+                .into();
         };
         let b = transform_bounds(&model.bounds, &self.model_matrix());
         let size = b.size();
@@ -509,42 +920,133 @@ impl App {
             .filter(|(_, v)| **v)
             .map(|(l, _)| l.triangle_count())
             .sum();
-        let section = |title: &'static str| text(title).size(11).font(FONT_BOLD).color(p.group_label);
-        let prop = |k: &'static str, v: String| -> Element<'_, Message> {
-            row![
-                text(k).size(12).color(p.text_secondary).width(84),
-                text(v).size(12).color(p.text).width(Fill),
-            ]
-            .spacing(6)
-            .into()
+        let mut content = column![].spacing(5).padding(Padding { top: 0.0, right: 6.0, bottom: 8.0, left: 0.0 });
+        let section = |title: &str| -> Element<'static, Message> {
+            container(text(title.to_uppercase()).size(11).font(FONT_BOLD).color(p.group_label))
+                .padding(Padding { top: 6.0, right: 0.0, bottom: 2.0, left: 0.0 })
+                .into()
         };
-        let content = column![
-            section("FILE"),
-            prop("Name", model.file_name()),
-            prop("Format", model.format.clone()),
-            prop("Size", format_bytes(model.file_size)),
-            prop("Folder", model.path.parent().map(|d| d.display().to_string()).unwrap_or_default()),
-            prop("Load time", format!("{:.2} s", model.load_time.as_secs_f32())),
-            rule::horizontal(1),
-            section("GEOMETRY"),
-            prop("Layers", model.layers.len().to_string()),
-            prop("Vertices", format_count(model.vertex_count())),
-            prop("Triangles", format_count(model.triangle_count())),
-            prop("Visible", format_count(visible_tris)),
-            rule::horizontal(1),
-            section("BOUNDS (Z UP)"),
-            prop("Min", format_vec(b.min)),
-            prop("Max", format_vec(b.max)),
-            prop("Size", format_vec(size)),
-            prop("Up axis", if model.source_y_up != self.flip_up { "Y (converted)".into() } else { "Z".into() }),
-        ]
-        .spacing(6);
-        panel(p, header, scrollable(content).height(Fill).into())
+        let prop = |k: &str, v: String| prop_row(p, k.to_string(), v);
+
+        // project data while nothing is selected
+        let pd = &model.project;
+        if self.selected.is_none() {
+            if !pd.info.is_empty() {
+                content = content.push(section(l.text("Project", "Project")));
+                for (k, v) in &pd.info {
+                    let label = match k.as_str() {
+                        "number" => l.text("Projectnummer", "Project number"),
+                        "name" => l.text("Projectnaam", "Project name"),
+                        "client" => l.text("Opdrachtgever", "Client"),
+                        "status" => l.text("Status", "Status"),
+                        other => other,
+                    };
+                    content = content.push(prop(label, v.clone()));
+                }
+                content = content.push(rule::horizontal(1));
+            }
+            if !pd.levels.is_empty() {
+                content = content.push(section(l.text("Niveaus", "Levels")));
+                for (name, z) in pd.levels.iter().rev() {
+                    content = content.push(prop(name, format!("{z:+.3} m")));
+                }
+                content = content.push(rule::horizontal(1));
+            }
+            if !pd.phases.is_empty() {
+                content = content
+                    .push(section(l.text("Fasen", "Phases")))
+                    .push(text(pd.phases.join(" → ")).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
+                    .push(rule::horizontal(1));
+            }
+        }
+
+        // the selection
+        if let Some((li, element)) = self.selected {
+            content = content.push(section(l.text("Selectie", "Selection")));
+            let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
+            if props.is_empty() {
+                props.push(("category".into(), model.layers[li].name.clone()));
+                if let Some(id) = element {
+                    props.push(("id".into(), id.to_string()));
+                }
+            }
+            // the order Revit's properties palette uses, unknown keys after
+            props.sort_by_key(|(k, _)| PROP_ORDER.iter().position(|o| o.0 == k).unwrap_or(PROP_ORDER.len()));
+            for (k, v) in props {
+                let label = PROP_ORDER.iter().find(|o| o.0 == k).map_or(k.as_str(), |o| l.text(o.1, o.2)).to_string();
+                content = content.push(prop_row(p, label, v));
+            }
+            content = content.push(rule::horizontal(1));
+        }
+
+        // the section box
+        if let (Some(s), true, Some(world)) = (self.section, self.section_on, self.world_bounds()) {
+            let r = s.local_bounds(&world);
+            content = content.push(section(l.text("Doorsnedebox", "Section box")));
+            let slider_row = |label: String, control: Element<'static, Message>, value: String| -> Element<'static, Message> {
+                column![
+                    row![
+                        text(label).size(12).color(p.text_secondary).width(Fill),
+                        text(value).size(11).color(p.text_muted),
+                    ]
+                    .spacing(6),
+                    control,
+                ]
+                .spacing(2)
+                .into()
+            };
+            for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+                let span = (r.max[axis] - r.min[axis]).max(1e-6);
+                for is_min in [true, false] {
+                    let v = if is_min { s.min[axis] } else { s.max[axis] };
+                    let percent = ((v - r.min[axis]) / span * 100.0).clamp(0.0, 100.0);
+                    content = content.push(slider_row(
+                        format!("{name} {}", if is_min { "min" } else { "max" }),
+                        slider(0.0..=100.0, percent, move |v| Message::SectionSlider(axis, is_min, v)).step(0.1_f32).width(Fill).into(),
+                        format!("{v:.2} m"),
+                    ));
+                }
+            }
+            let degrees = s.turn.to_degrees();
+            content = content
+                .push(slider_row(
+                    l.text("Draaiing", "Turn").to_string(),
+                    slider(-180.0..=180.0, degrees, Message::SectionTurn).step(0.5_f32).width(Fill).into(),
+                    format!("{degrees:.1}°"),
+                ))
+                .push(rule::horizontal(1));
+        }
+
+        content = content
+            .push(section(l.text("Bestand", "File")))
+            .push(prop(l.text("Naam", "Name"), model.file_name()))
+            .push(prop(l.text("Formaat", "Format"), model.format.clone()))
+            .push(prop(l.text("Grootte", "Size"), format_bytes(model.file_size)))
+            .push(prop(l.text("Map", "Folder"), model.path.parent().map(|d| d.display().to_string()).unwrap_or_default()))
+            .push(prop(l.text("Laadtijd", "Load time"), format!("{:.2} s", model.load_time.as_secs_f32())))
+            .push(rule::horizontal(1))
+            .push(section(l.text("Geometrie", "Geometry")))
+            .push(prop(l.text("Lagen", "Layers"), model.layers.len().to_string()))
+            .push(prop(l.text("Hoekpunten", "Vertices"), format_count(model.vertex_count())))
+            .push(prop(l.text("Driehoeken", "Triangles"), format_count(model.triangle_count())))
+            .push(prop(l.text("Zichtbaar", "Visible"), format_count(visible_tris)))
+            .push(rule::horizontal(1))
+            .push(section(l.text("Grenzen (Z omhoog)", "Bounds (Z up)")))
+            .push(prop("Min", format_vec(b.min)))
+            .push(prop("Max", format_vec(b.max)))
+            .push(prop(l.text("Afmeting", "Size"), format_vec(size)))
+            .push(prop(
+                l.text("Opwaartse as", "Up axis"),
+                if model.source_y_up != self.flip_up { l.text("Y (omgezet)", "Y (converted)").into() } else { "Z".into() },
+            ));
+        // the scrollbar gets its own strip next to the text
+        scrollable(content).height(Fill).spacing(4).into()
     }
 
     // ---- viewport -------------------------------------------------------------------------
 
-    fn viewport(&self, p: Palette) -> Element<'_, Message> {
+    /// The 3D viewport with its overlays; the shell's workspace.
+    pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let settings = RenderSettings {
             mode: self.mode,
             grid: self.grid,
@@ -552,39 +1054,61 @@ impl App {
             grid_minor: srgb4(p.grid_minor),
             grid_major: srgb4(p.grid_major),
             model_matrix: self.model_matrix(),
+            section: self.active_section(),
+            caps: self.section_fill,
+            grids: self.show_grids && !self.flip_up,
         };
-        let scene = shader(Viewport3D { model: self.model.as_ref(), visible: &self.visible, camera: self.camera, settings })
+        let scene = shader(Viewport3D {
+            model: self.model.as_ref(),
+            visible: &self.visible,
+            selection: &self.selection,
+            camera: self.camera,
+            settings,
+        })
             .width(Fill)
             .height(Fill);
 
         let overlay: Option<Element<'_, Message>> = match (&self.model, &self.status) {
-            (_, Status::Loading { file, .. }) => Some(
-                center(
-                    container(
-                        column![
-                            text("Loading").size(12).color(p.text_muted),
-                            text(file.as_str()).size(16).font(FONT_BOLD),
-                        ]
-                        .spacing(4)
-                        .align_x(Center),
-                    )
-                    .padding([16, 28])
-                    .style(move |_| p.overlay()),
-                )
-                .into(),
-            ),
+            (_, Status::Loading { file, since, progress }) => {
+                Some(center(loading_card(p, l, file, *since, progress)).into())
+            }
             (None, _) => Some(center(self.welcome(p)).into()),
             _ => None,
         };
         let hint = container(
-            text("Left drag: orbit · Right drag: pan · Wheel: zoom · F: fit · 1/2/3/0: views · P/O: perspective/ortho")
+            text(l.text(
+                "Klik: selecteren · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend",
+                "Click: select · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit",
+            ))
                 .size(11)
                 .color(p.text_muted),
         )
         .padding(8)
         .align_bottom(Fill)
         .align_left(Fill);
-        stack![scene, hint].push(overlay).width(Fill).height(Fill).into()
+        let cube = (self.model.is_some() && overlay.is_none()).then(|| {
+            canvas(CubeOverlay { yaw: self.camera.yaw, pitch: self.camera.pitch, ortho: self.camera.ortho })
+                .width(Fill)
+                .height(Fill)
+        });
+        let section = self.active_section().filter(|_| overlay.is_none()).map(|section| {
+            canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
+        });
+        let grids = self
+            .model
+            .as_ref()
+            .filter(|m| self.show_grids && !self.flip_up && overlay.is_none() && !m.project.grids.is_empty())
+            .map(|m| {
+                canvas(crate::annotations::GridOverlay {
+                    grids: &m.project.grids,
+                    view_proj: self.camera.view_proj(self.aspect()),
+                    fill: p.surface,
+                    ink: p.text_secondary,
+                })
+                .width(Fill)
+                .height(Fill)
+            });
+        stack![scene, hint].push(grids).push(section).push(cube).push(overlay).width(Fill).height(Fill).into()
     }
 
     fn welcome(&self, p: Palette) -> Element<'_, Message> {
@@ -626,7 +1150,7 @@ impl App {
     fn status_bar(&self, p: Palette) -> Element<'_, Message> {
         let (msg, color) = match &self.status {
             Status::Ready => ("Ready".to_string(), p.status_text),
-            Status::Loading { file, since } => {
+            Status::Loading { file, since, .. } => {
                 (format!("Loading {file}… {:.0} s", since.elapsed().as_secs_f32()), p.accent)
             }
             Status::Loaded(s) => (s.clone(), p.status_text),
@@ -664,7 +1188,210 @@ impl App {
     }
 }
 
+/// Element property keys (from the loaders) and their labels, in display order.
+const PROP_ORDER: [(&str, &str, &str); 7] = [
+    ("category", "Categorie", "Category"),
+    ("family", "Familie", "Family"),
+    ("type", "Type", "Type"),
+    ("level", "Niveau", "Level"),
+    ("materials", "Materialen", "Materials"),
+    ("id", "Element-id", "Element id"),
+    ("class", "Klasse", "Class"),
+];
+
+/// Overall progress of a load: each step owns a share of the bar and fills it asymptotically
+/// with its running time (the loaders report steps, not percentages).
+fn load_fraction(phase: loaders::Phase, seconds: f32, slow: bool) -> f32 {
+    use loaders::Phase;
+    let (start, share, tau) = match phase {
+        Phase::Read => (0.0, 0.3, if slow { 3.0 } else { 0.8 }),
+        Phase::Convert => (0.3, 0.6, if slow { 15.0 } else { 1.5 }),
+        Phase::Scene => (0.9, 0.09, 0.5),
+    };
+    start + share * (1.0 - (-seconds / tau).exp())
+}
+
+/// The nearest triangle hit by the ray `origin + t·dir` (t > 0) among the visible layers:
+/// (layer, triangle), skipping hits that `keep` rejects (the section box). Möller–Trumbore,
+/// two-sided.
+pub fn pick_triangle(model: &Model, visible: &[bool], origin: Vec3, dir: Vec3, keep: &dyn Fn(Vec3) -> bool) -> Option<(usize, usize)> {
+    let mut best: Option<(f32, usize, usize)> = None;
+    for (l, layer) in model.layers.iter().enumerate() {
+        if !visible.get(l).copied().unwrap_or(true) {
+            continue;
+        }
+        let pos = &layer.positions;
+        let at = |i: u32| {
+            let i = 3 * i as usize;
+            Vec3::new(pos[i], pos[i + 1], pos[i + 2])
+        };
+        for (t, tri) in layer.indices.chunks_exact(3).enumerate() {
+            if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) {
+                continue;
+            }
+            let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
+            let (e1, e2) = (b - a, c - a);
+            let h = dir.cross(e2);
+            let det = e1.dot(h);
+            if det.abs() < 1e-12 {
+                continue;
+            }
+            let f = 1.0 / det;
+            let s = origin - a;
+            let u = f * s.dot(h);
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let q = s.cross(e1);
+            let v = f * dir.dot(q);
+            if v < 0.0 || u + v > 1.0 {
+                continue;
+            }
+            let d = f * e2.dot(q);
+            if d > 0.0 && best.is_none_or(|(bd, _, _)| d < bd) && keep(origin + dir * d) {
+                best = Some((d, l, t));
+            }
+        }
+    }
+    best.map(|(_, l, t)| (l, t))
+}
+
 // ---- small view helpers ---------------------------------------------------------------------
+
+/// The loading card (as the OpenAEC dialogs: 12 px radius, amber accent): format badge, file name
+/// and elapsed time; the three steps; a bar that eases within the current step with a moving
+/// sheen; the step and percentage; for Revit after a few seconds a hint why it takes a while.
+fn loading_card<'a>(
+    p: Palette,
+    l: Language,
+    file: &'a str,
+    since: Instant,
+    progress: &loaders::Progress,
+) -> Element<'a, Message> {
+    let mono = openaec_ui::fonts::MONO;
+    let (phase, in_phase) = progress.get();
+    let elapsed = since.elapsed().as_secs_f32();
+    let ext = std::path::Path::new(file).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+    let slow = matches!(ext.as_str(), "RVT" | "RFA");
+    let fraction = load_fraction(phase, in_phase.as_secs_f32(), slow);
+
+    let badge = container(text(ext).size(10).font(mono).color(p.accent)).padding([3, 6]).style(move |_| container::Style {
+        background: Some(Background::Color(Color { a: 0.12, ..p.accent })),
+        border: Border { color: Color { a: 0.35, ..p.accent }, width: 1.0, radius: 4.0.into() },
+        ..Default::default()
+    });
+    let name = container(text(file).size(13).font(FONT_BOLD).color(p.text).wrapping(text::Wrapping::None))
+        .width(Fill)
+        .clip(true);
+    let head = row![badge, name, text(format!("{elapsed:.1} s")).size(11).font(mono).color(p.text_muted)]
+        .spacing(10)
+        .align_y(Center);
+
+    let labels = [
+        l.text("Bestand lezen", "Read file"),
+        l.text("Geometrie omzetten", "Convert geometry"),
+        l.text("Scène opbouwen", "Build scene"),
+    ];
+    let current = phase as usize;
+    let steps = row(labels.iter().enumerate().map(|(i, label)| {
+        let (done, active) = (i < current, i == current);
+        let number = text((i + 1).to_string()).size(9).font(mono).color(if done {
+            p.accent_text
+        } else if active {
+            p.accent
+        } else {
+            p.text_muted
+        });
+        let dot = container(number).center(16).style(move |_| container::Style {
+            background: done.then_some(Background::Color(p.accent)),
+            border: Border {
+                color: if done || active { p.accent } else { p.border },
+                width: if active { 2.0 } else { 1.0 },
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        });
+        let color = if active {
+            p.text
+        } else if done {
+            p.text_secondary
+        } else {
+            p.text_muted
+        };
+        row![dot, text(*label).size(11).font(if active { FONT_BOLD } else { FONT }).color(color).wrapping(text::Wrapping::None)]
+            .spacing(6)
+            .align_y(Center)
+            .width(Fill)
+            .into()
+    }))
+    .spacing(6);
+
+    // bar: the fill in thousandths, a sheen sweeping through it every 1.4 s
+    let k = ((fraction * 1000.0).round() as u16).clamp(1, 999);
+    let sweep = ((elapsed / 1.4).fract() * 1300.0) as u16;
+    let sheen = row![
+        Space::new().width(Length::FillPortion(sweep.max(1))),
+        container(Space::new().height(6)).width(Length::FillPortion(300)).style(move |_| container::Style {
+            background: Some(Background::Color(Color { a: 0.35, ..Color::WHITE })),
+            ..Default::default()
+        }),
+        Space::new().width(Length::FillPortion(1300u16.saturating_sub(sweep).max(1))),
+    ];
+    let fill = container(sheen).width(Length::FillPortion(k)).height(6).clip(true).style(move |_| container::Style {
+        background: Some(Background::Color(p.accent)),
+        border: Border { radius: 3.0.into(), ..Default::default() },
+        ..Default::default()
+    });
+    let bar = container(row![fill, Space::new().width(Length::FillPortion(1000 - k))])
+        .height(6)
+        .width(Fill)
+        .clip(true)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(Color { a: 0.6, ..p.border })),
+            border: Border { radius: 3.0.into(), ..Default::default() },
+            ..Default::default()
+        });
+    let step = match phase {
+        loaders::Phase::Read => l.text("Bestand lezen…", "Reading file…"),
+        loaders::Phase::Convert => l.text("Geometrie omzetten…", "Converting geometry…"),
+        loaders::Phase::Scene => l.text("Scène opbouwen…", "Building scene…"),
+    };
+    let foot = row![
+        text(step).size(11).color(p.text_secondary).width(Fill),
+        text(format!("{:.0}%", fraction * 100.0)).size(11).font(mono).color(p.text),
+    ]
+    .align_y(Center);
+
+    let hint = (slow && elapsed > 4.0).then(|| {
+        container(
+            text(l.text(
+                "Revit-modellen worden uit de opgeslagen graphics van het bestand opgebouwd; grote projecten duren tot een minuut.",
+                "Revit models are built from the file's saved graphics; large projects take up to a minute.",
+            ))
+            .size(11)
+            .color(p.text_secondary),
+        )
+        .padding([8, 10])
+        .width(Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(Color { a: 0.08, ..p.text_muted })),
+            border: Border { radius: 8.0.into(), ..Default::default() },
+            ..Default::default()
+        })
+    });
+
+    container(column![head, steps, bar, foot].push(hint).spacing(12))
+        .width(420)
+        .padding([18, 20])
+        .style(move |_| container::Style {
+            text_color: Some(p.text),
+            background: Some(Background::Color(p.surface)),
+            border: Border { color: p.border, width: 1.0, radius: 12.0.into() },
+            shadow: Shadow { color: Color { a: 0.18, ..Color::BLACK }, offset: iced::Vector::new(0.0, 8.0), blur_radius: 28.0 },
+            ..Default::default()
+        })
+        .into()
+}
 
 fn big_button<'a>(p: Palette, icon: &'static str, label: &'static str, msg: Message, active: bool) -> Element<'a, Message> {
     let tint = if active { p.accent } else { p.text };
@@ -684,6 +1411,49 @@ fn big_button<'a>(p: Palette, icon: &'static str, label: &'static str, msg: Mess
     .padding([6, 8])
     .width(Length::Shrink)
     .style(move |_, s| p.ribbon_button(active, s))
+    .on_press(msg)
+    .into()
+}
+
+/// A property: label and value side by side (2 : 3), both wrapping, so long words never overlap;
+/// a long label (a project parameter such as "opdrachtgever_projectmanager") gets its own line
+/// with the value below it, instead of being broken mid-word.
+fn prop_row(p: Palette, label: String, value: String) -> Element<'static, Message> {
+    if label.chars().count() > 16 {
+        return column![
+            text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph),
+            container(text(value).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
+                .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 10.0 }),
+        ]
+        .spacing(1)
+        .into();
+    }
+    row![
+        text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)),
+        text(value).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(3)),
+    ]
+    .spacing(8)
+    .into()
+}
+
+/// The header of an explorer group: open/closed arrow, title, optional tag, count.
+fn group_header(p: Palette, title: &str, tag: Option<&'static str>, count: usize, open: bool, msg: Message) -> Element<'static, Message> {
+    use openaec_ui::icons::Icon;
+    let arrow = svg(svg::Handle::from_memory(if open { Icon::DisclosureExpanded } else { Icon::DisclosureCollapsed }.bytes()))
+        .width(12)
+        .height(12)
+        .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
+    button(
+        row![arrow, text(title.to_string()).size(12).font(FONT_BOLD).color(p.text)]
+            .push(tag.map(|t| text(t).size(10).color(p.accent)))
+            .push(Space::new().width(Fill))
+            .push(text(count.to_string()).size(11).color(p.text_muted))
+            .spacing(6)
+            .align_y(Center),
+    )
+    .padding([6, 4])
+    .width(Fill)
+    .style(move |_, s| p.row_button(s))
     .on_press(msg)
     .into()
 }
@@ -723,9 +1493,19 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
     .into()
 }
 
-fn panel<'a>(p: Palette, header: Element<'a, Message>, content: Element<'a, Message>) -> Element<'a, Message> {
+/// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
+fn standalone_language() -> Language {
+    match std::env::var("O3V_LANG").as_deref() {
+        Ok("nl") => Language::Dutch,
+        _ => Language::English,
+    }
+}
+
+/// A side panel of the stand-alone layout, as wide as the shell's pane (explorer 220, properties
+/// 290), so `--screenshot` shows what the window shows.
+fn panel<'a>(p: Palette, header: Element<'a, Message>, content: Element<'a, Message>, width: u32) -> Element<'a, Message> {
     container(column![header, container(content).padding(10).height(Fill)])
-        .width(270)
+        .width(width)
         .height(Fill)
         .style(move |_| p.panel())
         .into()
@@ -802,7 +1582,50 @@ mod tests {
             })
             .collect();
         assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 40.0 && *dy == 10.0)), "{nav:?}");
-        assert!(nav.iter().any(|n| matches!(n, Navigate::Zoom { steps } if *steps == 1.0)), "{nav:?}");
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Zoom { steps, .. } if *steps == 1.0)), "{nav:?}");
+    }
+
+    #[test]
+    fn picks_the_nearest_triangle_and_its_element() {
+        use crate::model::Layer;
+        // two unit squares facing +Z, at z = 0 (element 10) and z = 1 (element 20)
+        let mut positions = Vec::new();
+        for z in [0.0, 1.0] {
+            positions.extend_from_slice(&[0.0, 0.0, z, 1.0, 0.0, z, 1.0, 1.0, z, 0.0, 1.0, z]);
+        }
+        let indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+        let layer = Layer {
+            name: "Walls".into(),
+            positions,
+            indices,
+            elements: vec![(10, 0, 6), (20, 6, 6)],
+            props: vec![(20, r#"{"id":"20","category":"Walls","level":"00 begane grond"}"#.into())],
+            ..Layer::default()
+        };
+        let model = Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]);
+        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &|_| true);
+        let (l, t) = hit.expect("hit");
+        assert_eq!(model.layers[l].element_at(t), Some(20));
+        assert_eq!(model.element_ranges(20), vec![(0, 6, 6)]);
+        let props = model.element_props(20);
+        assert!(props.contains(&("level".to_string(), "00 begane grond".to_string())), "{props:?}");
+        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &|_| true).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &|_| true).is_none());
+        // a section box below z = 0.5 cuts the upper square away: the lower one is hit
+        let below = |p: Vec3| p.z < 0.5;
+        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &below).expect("hit");
+        assert_eq!(model.layers[l].element_at(t), Some(10));
+    }
+
+    #[test]
+    fn load_fraction_grows_and_stays_below_one() {
+        use loaders::Phase;
+        let mut last = 0.0;
+        for (phase, t) in [(Phase::Read, 0.0), (Phase::Read, 5.0), (Phase::Convert, 0.0), (Phase::Convert, 60.0), (Phase::Scene, 9.0)] {
+            let f = load_fraction(phase, t, true);
+            assert!(f >= last && f < 1.0, "{phase:?} {t}: {f}");
+            last = f;
+        }
     }
 
     #[test]

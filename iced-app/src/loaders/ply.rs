@@ -257,6 +257,7 @@ fn parse(data: &[u8], name: String) -> Result<Vec<Layer>, String> {
         normals,
         colors: has_colors.then_some(colors),
         indices,
+        ..Layer::default()
     }])
 }
 

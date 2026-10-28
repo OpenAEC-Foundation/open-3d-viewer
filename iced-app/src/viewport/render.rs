@@ -12,10 +12,15 @@ use iced::widget::shader::{self, Viewport};
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt;
 use iced::Rectangle;
+use crate::section::SectionBox;
 use std::sync::Arc;
 
 const SAMPLES: u32 = 4;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// With stencil, for the cut fill of the section box.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+/// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
+const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
+const CAP_HATCH: f32 = 9.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
@@ -37,6 +42,12 @@ pub struct RenderSettings {
     pub grid_major: [f32; 4],
     /// Extra model rotation (up-axis override).
     pub model_matrix: Mat4,
+    /// The section box (world), when on.
+    pub section: Option<SectionBox>,
+    /// Fill the cut faces of solids where the box cuts them.
+    pub caps: bool,
+    /// Draw the model's grid lines (Revit grids).
+    pub grids: bool,
 }
 
 #[repr(C)]
@@ -54,6 +65,8 @@ struct Uniforms {
     model: [[f32; 4]; 4],
     eye: [f32; 4],
     params: [f32; 4],
+    clip: [[f32; 4]; 3],
+    cap: [f32; 4],
 }
 
 /// One frame of the viewport, created by the widget's `draw`.
@@ -61,6 +74,8 @@ struct Uniforms {
 pub struct ScenePrimitive {
     pub model: Option<Arc<Model>>,
     pub visible: Vec<bool>,
+    /// Highlighted index ranges: (layer, first index, index count).
+    pub selection: Vec<(usize, u32, u32)>,
     pub camera: Camera,
     pub settings: RenderSettings,
 }
@@ -97,6 +112,10 @@ struct GpuLayer {
     /// Line lists, built on first use: all triangle edges (wireframe) and feature edges.
     wire: Option<(wgpu::Buffer, u32)>,
     features: Option<(wgpu::Buffer, u32)>,
+    /// Triangles that enclose volume (cut fill), built on first use.
+    solid: Option<(wgpu::Buffer, u32)>,
+    /// Some vertices are transparent (glass pass).
+    transparent: bool,
 }
 
 struct Targets {
@@ -111,6 +130,11 @@ pub struct ScenePipeline {
     format: wgpu::TextureFormat,
     srgb: bool,
     lit: wgpu::RenderPipeline,
+    highlight: wgpu::RenderPipeline,
+    glass: wgpu::RenderPipeline,
+    stencil_clear: wgpu::RenderPipeline,
+    face_count: wgpu::RenderPipeline,
+    cap: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
@@ -126,6 +150,8 @@ pub struct ScenePipeline {
     model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
     grid: Option<(wgpu::Buffer, u32, [i64; 6])>,
+    /// The model's grid lines (datum grids), dash-dot, built with the model.
+    datum: Option<(wgpu::Buffer, u32)>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
     rect: (u32, u32, u32, u32),
 }
@@ -193,7 +219,7 @@ impl ScenePipeline {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &vertex_attributes,
         };
-        let make_pipeline = |label, topology, fs: &str, blend, bias: wgpu::DepthBiasState| {
+        let make_pipeline = |label, topology, fs: &str, blend, bias: wgpu::DepthBiasState, depth_write: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -206,7 +232,7 @@ impl ScenePipeline {
                 primitive: wgpu::PrimitiveState { topology, cull_mode: None, ..Default::default() },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: true,
+                    depth_write_enabled: depth_write,
                     depth_compare: wgpu::CompareFunction::LessEqual,
                     stencil: wgpu::StencilState::default(),
                     bias,
@@ -229,6 +255,90 @@ impl ScenePipeline {
             "fs_lit",
             None,
             wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 },
+            true,
+        );
+        let glass = make_pipeline(
+            "o3v.glass",
+            wgpu::PrimitiveTopology::TriangleList,
+            "fs_glass",
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 },
+            false,
+        );
+        // The selection: the same triangles again (equal depth passes), tinted.
+        let highlight = make_pipeline(
+            "o3v.highlight",
+            wgpu::PrimitiveTopology::TriangleList,
+            "fs_highlight",
+            None,
+            wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 },
+            true,
+        );
+        // Cut fill: stencil clear, surface count per box face, the face where the count is odd.
+        let stencil = |compare, pass_op| {
+            let face = wgpu::StencilFaceState {
+                compare,
+                fail_op: wgpu::StencilOperation::Keep,
+                depth_fail_op: wgpu::StencilOperation::Keep,
+                pass_op,
+            };
+            wgpu::StencilState { front: face, back: face, read_mask: 0xff, write_mask: 0xff }
+        };
+        let special = |label, vs: &str, fs: &str, with_vertices: bool, depth: (wgpu::CompareFunction, bool), stencil, colour| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(vs),
+                    buffers: if with_vertices { std::slice::from_ref(&vertex_layout) } else { &[] },
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: depth.1,
+                    depth_compare: depth.0,
+                    stencil,
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fs),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: colour })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let stencil_clear = special(
+            "o3v.stencil_clear",
+            "vs_full",
+            "fs_none",
+            false,
+            (wgpu::CompareFunction::Always, false),
+            stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Zero),
+            wgpu::ColorWrites::empty(),
+        );
+        let face_count = special(
+            "o3v.face_count",
+            "vs_face",
+            "fs_face_count",
+            true,
+            (wgpu::CompareFunction::Always, false),
+            stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Invert),
+            wgpu::ColorWrites::empty(),
+        );
+        let cap = special(
+            "o3v.cap",
+            "vs_cap",
+            "fs_cap",
+            false,
+            (wgpu::CompareFunction::LessEqual, true),
+            stencil(wgpu::CompareFunction::NotEqual, wgpu::StencilOperation::Keep),
+            wgpu::ColorWrites::ALL,
         );
         let lines = make_pipeline(
             "o3v.lines",
@@ -236,6 +346,7 @@ impl ScenePipeline {
             "fs_line",
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::DepthBiasState::default(),
+            true,
         );
 
         // Blit
@@ -305,6 +416,11 @@ impl ScenePipeline {
             format,
             srgb: format.is_srgb(),
             lit,
+            highlight,
+            glass,
+            stencil_clear,
+            face_count,
+            cap,
             lines,
             blit,
             blit_layout,
@@ -320,6 +436,7 @@ impl ScenePipeline {
             model: None,
             layers: Vec::new(),
             grid: None,
+            datum: None,
             rect: (0, 0, 1, 1),
         }
     }
@@ -369,7 +486,17 @@ impl ScenePipeline {
         self.model_id = id;
         self.model = model.cloned();
         self.layers.clear();
+        self.datum = None;
         let Some(model) = model else { return };
+        let datum = datum_lines(&model.project.grids);
+        if !datum.is_empty() {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("o3v.datum"),
+                contents: bytemuck::cast_slice(&datum),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            self.datum = Some((buffer, datum.len() as u32));
+        }
         for layer in &model.layers {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
@@ -400,7 +527,30 @@ impl ScenePipeline {
                 index_count: layer.indices.len() as u32,
                 wire: None,
                 features: None,
+                solid: None,
+                transparent: layer.colors.as_ref().is_some_and(|c| c.iter().any(|c| c[3] < 253)),
             });
+        }
+    }
+
+    /// Builds the index buffers of the triangles that enclose volume, on first use (all layers at
+    /// once, a thread per layer).
+    fn ensure_solids(&mut self, device: &wgpu::Device) {
+        let Some(model) = self.model.clone() else { return };
+        if self.layers.iter().all(|l| l.solid.is_some()) {
+            return;
+        }
+        let solids: Vec<Vec<u32>> = std::thread::scope(|scope| {
+            let jobs: Vec<_> = model.layers.iter().map(|l| scope.spawn(move || l.solid_indices())).collect();
+            jobs.into_iter().map(|j| j.join().unwrap_or_default()).collect()
+        });
+        for (gpu, indices) in self.layers.iter_mut().zip(solids) {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("o3v.layer.solid"),
+                contents: bytemuck::cast_slice(if indices.is_empty() { &[0u32, 0, 0][..] } else { &indices }),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+            gpu.solid = Some((buffer, indices.len() as u32));
         }
     }
 
@@ -503,6 +653,9 @@ impl ScenePipeline {
         if settings.mode != RenderMode::Solid {
             self.ensure_edges(device, &primitive.visible, settings.mode == RenderMode::Wireframe);
         }
+        if settings.section.is_some() && settings.caps && settings.mode != RenderMode::Wireframe {
+            self.ensure_solids(device);
+        }
         if settings.grid {
             let world_bounds = primitive
                 .model
@@ -516,16 +669,21 @@ impl ScenePipeline {
         let view_proj = camera.view_proj(w as f32 / h as f32);
         let eye = camera.eye();
         let srgb = if self.srgb { 1.0 } else { 0.0 };
-        let uniforms = |model: Mat4, line_scale: f32| Uniforms {
+        let clip = settings.section.map(|s| s.uniform()).unwrap_or([[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]]);
+        let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3]| Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
             params: [srgb, line_scale, 0.0, 0.0],
+            clip,
+            cap: [CAP_COLOR[0], CAP_COLOR[1], CAP_COLOR[2], CAP_HATCH * viewport.scale_factor() as f32],
         };
         let wire_scale = if settings.mode == RenderMode::SolidEdges { 0.35 } else { 0.8 };
-        queue.write_buffer(&self.model_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, 1.0)));
-        queue.write_buffer(&self.edge_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, wire_scale)));
-        queue.write_buffer(&self.world_uniforms, 0, bytemuck::bytes_of(&uniforms(Mat4::IDENTITY, 1.0)));
+        queue.write_buffer(&self.model_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, 1.0, clip)));
+        queue.write_buffer(&self.edge_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, wire_scale, clip)));
+        // the grid is never cut
+        let no_clip = [[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]];
+        queue.write_buffer(&self.world_uniforms, 0, bytemuck::bytes_of(&uniforms(Mat4::IDENTITY, 1.0, no_clip)));
     }
 
     fn render(
@@ -554,7 +712,7 @@ impl ScenePipeline {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
-                    stencil_ops: None,
+                    stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }),
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -574,6 +732,49 @@ impl ScenePipeline {
                     }
                 }
             }
+            if !primitive.selection.is_empty() {
+                pass.set_pipeline(&self.highlight);
+                pass.set_bind_group(0, &self.model_group, &[]);
+                for &(i, first, count) in &primitive.selection {
+                    let Some(layer) = self.layers.get(i) else { continue };
+                    if visible(i) && first + count <= layer.index_count {
+                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                        pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(first..first + count, 0, 0..1);
+                    }
+                }
+            }
+            if let (Some(section), true, false) = (primitive.settings.section, primitive.settings.caps, mode == RenderMode::Wireframe) {
+                pass.set_bind_group(0, &self.model_group, &[]);
+                pass.set_stencil_reference(0);
+                for face in cap_faces(&section, &primitive.camera) {
+                    pass.set_pipeline(&self.stencil_clear);
+                    pass.draw(0..3, 0..1);
+                    pass.set_pipeline(&self.face_count);
+                    for (i, layer) in self.layers.iter().enumerate() {
+                        if let (true, Some((solid, count))) = (visible(i), &layer.solid) {
+                            if *count > 0 {
+                                pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                                pass.set_index_buffer(solid.slice(..), wgpu::IndexFormat::Uint32);
+                                pass.draw_indexed(0..*count, 0, face..face + 1);
+                            }
+                        }
+                    }
+                    pass.set_pipeline(&self.cap);
+                    pass.draw(0..6, face..face + 1);
+                }
+            }
+            if mode != RenderMode::Wireframe {
+                pass.set_pipeline(&self.glass);
+                pass.set_bind_group(0, &self.model_group, &[]);
+                for (i, layer) in self.layers.iter().enumerate() {
+                    if visible(i) && layer.transparent {
+                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                        pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..layer.index_count, 0, 0..1);
+                    }
+                }
+            }
             pass.set_pipeline(&self.lines);
             if mode != RenderMode::Solid {
                 pass.set_bind_group(0, &self.edge_group, &[]);
@@ -585,6 +786,11 @@ impl ScenePipeline {
                         pass.draw_indexed(0..*count, 0, 0..1);
                     }
                 }
+            }
+            if let (true, Some((datum, count))) = (primitive.settings.grids, &self.datum) {
+                pass.set_bind_group(0, &self.world_group, &[]);
+                pass.set_vertex_buffer(0, datum.slice(..));
+                pass.draw(0..*count, 0..1);
             }
             if primitive.settings.grid {
                 if let Some((grid, count, _)) = &self.grid {
@@ -615,6 +821,54 @@ impl ScenePipeline {
         pass.set_bind_group(0, &targets.blit_group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// Grid lines as a dash-dot line list (Revit's grid line pattern: long dash, gap, dot, gap) in
+/// a neutral grey that reads on light and dark backgrounds.
+fn datum_lines(grids: &[crate::model::GridLine]) -> Vec<Vertex> {
+    const PATTERN: [(f32, bool); 4] = [(1.6, true), (0.3, false), (0.3, true), (0.3, false)];
+    let color = [120, 122, 132, 230];
+    let vertex = |p: Vec3| Vertex { position: p.to_array(), normal: [0.0, 0.0, 1.0], color };
+    let mut out = Vec::new();
+    for g in grids {
+        let (a, b) = (Vec3::from_array(g.a), Vec3::from_array(g.b));
+        let len = (b - a).length();
+        if len < 1e-3 {
+            continue;
+        }
+        let dir = (b - a) / len;
+        let (mut t, mut k) = (0.0f32, 0usize);
+        while t < len {
+            let (step, draw) = PATTERN[k % PATTERN.len()];
+            let end = (t + step).min(len);
+            if draw {
+                out.push(vertex(a + dir * t));
+                out.push(vertex(a + dir * end));
+            }
+            t = end;
+            k += 1;
+        }
+    }
+    out
+}
+
+/// The box faces (axis * 2 + 1 for the max face) whose cut can be seen: the camera is on the
+/// side the box cuts away (perspective), or looks into the face (orthographic).
+fn cap_faces(section: &SectionBox, camera: &Camera) -> Vec<u32> {
+    let eye = section.to_local(camera.eye());
+    let dir = section.to_local(section.pivot + (camera.target - camera.eye()).normalize_or_zero()) - section.pivot;
+    (0..6u32)
+        .filter(|&face| {
+            let axis = (face / 2) as usize;
+            let is_min = face % 2 == 0;
+            match (camera.ortho, is_min) {
+                (true, true) => dir[axis] > 0.0,
+                (true, false) => dir[axis] < 0.0,
+                (false, true) => eye[axis] < section.min[axis],
+                (false, false) => eye[axis] > section.max[axis],
+            }
+        })
+        .collect()
 }
 
 /// Grid placement for world bounds: (centre, half extent, spacing, z).

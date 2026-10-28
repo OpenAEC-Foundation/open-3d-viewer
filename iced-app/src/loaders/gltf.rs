@@ -122,7 +122,7 @@ fn add_primitive(
         positions: Vec::new(),
         normals: Vec::new(),
         colors: None,
-        indices: Vec::new(),
+        ..Layer::default()
     });
 
     let offset = (layer.positions.len() / 3) as u32;

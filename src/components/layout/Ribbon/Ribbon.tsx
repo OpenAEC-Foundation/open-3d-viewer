@@ -7,6 +7,7 @@ import { useAppStore } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, ThemeSelector } from './RibbonComponents';
 import { WireframeIcon, SolidIcon, PointsIcon, HiddenLineIcon, SectionBoxIcon, OrbitIcon, WalkIcon, PerspectiveIcon, OrthoIcon } from './RibbonIcons';
 import { useViewerActions } from './useViewerActions';
+import { ExplodeRibbonGroup } from './ExplodeRibbonGroup';
 import { useTranslation } from '../../../i18n/useTranslation';
 import { Backstage } from '../Backstage/Backstage';
 import './Ribbon.css';
@@ -179,6 +180,8 @@ export const Ribbon = memo(function Ribbon({ onPreferences, onFeedback }: { onPr
                 tooltip={t('ribbon:buttons.resetSectionTooltip')}
               />
             </RibbonGroup>
+
+            <ExplodeRibbonGroup />
 
             <RibbonGroup label={t('ribbon:groups.camera')}>
               <RibbonButtonStack>

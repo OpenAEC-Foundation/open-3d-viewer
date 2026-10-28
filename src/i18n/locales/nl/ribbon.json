@@ -11,6 +11,7 @@
     "settings": "Instellingen",
     "navigation": "Navigatie",
     "sectionBox": "Doorsnede",
+    "explode": "Uit elkaar",
     "camera": "Camera",
     "measure": "Meten",
     "info": "Info"
@@ -34,6 +35,9 @@
     "sectionTooltip": "Doorsnede aan/uit",
     "reset": "Herstellen",
     "resetSectionTooltip": "Doorsnede herstellen naar modelbegrenzingen",
+    "explodeStoreys": "Verdiepingen",
+    "explodeStoreysCount": "Verdiepingen ({{count}})",
+    "explodeElements": "Elementen",
     "front": "Voor",
     "back": "Achter",
     "left": "Links",

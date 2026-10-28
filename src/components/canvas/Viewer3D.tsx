@@ -5,6 +5,7 @@ import { ControlsManager } from '../../engine/controls/ControlsManager';
 import { SceneManager } from '../../engine/scene/SceneManager';
 import { SectionBox } from '../../engine/sectionbox/SectionBox';
 import { SectionBoxController } from '../../engine/sectionbox/SectionBoxController';
+import { ExplodeManager } from '../../engine/explode/ExplodeManager';
 import { modelLoader } from '../../engine/loaders/ModelLoader';
 import { isSupported } from '../../engine/loaders/LoaderRegistry';
 import { t } from '../../i18n/useTranslation';
@@ -26,6 +27,7 @@ export function Viewer3D() {
   const sceneManagerRef = useRef<SceneManager | null>(null);
   const sectionBoxRef = useRef<SectionBox | null>(null);
   const sectionBoxCtrlRef = useRef<SectionBoxController | null>(null);
+  const explodeRef = useRef<ExplodeManager | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const ambientRef = useRef<THREE.AmbientLight | null>(null);
   const directionalRef = useRef<THREE.DirectionalLight | null>(null);
@@ -96,6 +98,7 @@ export function Viewer3D() {
       });
 
       sceneManager.addModel(id, result);
+      explodeRef.current?.invalidate();
 
       // Fit camera + section box
       const box = sceneManager.getSceneBounds();
@@ -125,6 +128,7 @@ export function Viewer3D() {
       });
 
       sceneManager.addModel(id, result);
+      explodeRef.current?.invalidate();
 
       const box = sceneManager.getSceneBounds();
       fitCameraToBox(box);
@@ -151,6 +155,13 @@ export function Viewer3D() {
     // Scene Manager
     const sceneManager = new SceneManager(scene);
     sceneManagerRef.current = sceneManager;
+
+    // Exploded view (moves meshes of the loaded models apart)
+    const explode = new ExplodeManager(
+      () => sceneManager.getModelGroups(),
+      (count) => useAppStore.getState().setExplodeStoreyCount(count),
+    );
+    explodeRef.current = explode;
 
     // Section Box
     const sectionBox = new SectionBox(scene);
@@ -313,6 +324,7 @@ export function Viewer3D() {
     const handleRemoveModel = (e: Event) => {
       const { id } = (e as CustomEvent).detail;
       sceneManager.removeModel(id);
+      explode.invalidate();
     };
     window.addEventListener('open3d:remove-model', handleRemoveModel);
 
@@ -667,6 +679,13 @@ export function Viewer3D() {
     sb.setEnabled(sectionBoxEnabled);
     sb.applyToScene();
   }, [sectionBoxEnabled]);
+
+  // Update exploded view
+  const explodeMode = useAppStore((s) => s.explodeMode);
+  const explode = useAppStore((s) => s.explode);
+  useEffect(() => {
+    explodeRef.current?.set(explodeMode, explode.x / 100, explode.y / 100, explode.z / 100);
+  }, [explodeMode, explode]);
 
   // Update layer visibility
   const layers = useAppStore((s) => s.layers);

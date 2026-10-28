@@ -1,9 +1,9 @@
-//! The SketchUp 2013-2020 container: an MFC `CArchive`. Objects are written in order, each as
-//! a class tag (a new class with its name, or a reference to a class slot) followed by the
-//! class's own fields; later references to an object are its slot number. The walker reads the
-//! materials, the tags, the component definitions and the root entity list, numbering slots the
-//! way the writer did. The slot numbering does not start at zero: it is found from the file
-//! (see [`walk`]).
+//! The classic SketchUp container (SketchUp 3 to 2020): an MFC `CArchive`. Objects are written
+//! in order, each as a class tag (a new class with its name, or a reference to a class slot)
+//! followed by the class's own fields; later references to an object are its slot number. The
+//! walker reads the materials, the tags, the component definitions and the root entity list,
+//! numbering slots the way the writer did. The slot numbering does not start at zero: it is
+//! found from the file (see [`walk`]). Follows openskp 1.4.0's classic reader.
 
 use super::{
     find_bytes, u16_at, u32_at, Definition, Face, Instance, Material, Matrix, Parsed, Tag, DEFAULT_TAG,
@@ -33,6 +33,14 @@ type Res<T> = Result<T, Error>;
 
 const STR_MARKER: [u8; 3] = [0xFF, 0xFE, 0xFF];
 const MAX_V20_FILLER_PAD: usize = 29;
+
+/// SketchUp 3 predates several fields every later file carries (no attribute container on
+/// vertices, loops, edge-uses, materials and layers; a 5-byte draw block; no layer count).
+const FIRST_V4: u32 = 4;
+/// The texture image is a CDib object from SketchUp 6 on; 3 to 5 write it inline.
+const FIRST_DIB_OBJECT: u32 = 6;
+/// The first version whose instances and groups always carry a name string.
+const FIRST_NAMED_INSTANCE: u32 = 5;
 
 /// The classes the walker can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -170,6 +178,8 @@ struct Archive<'a> {
     class_slot: HashMap<Cls, u32>,
     class_schema: HashMap<Cls, u16>,
     current_class: Option<Cls>,
+    /// The slot of the object being read.
+    current_obj_slot: Option<u32>,
     next_slot: u32,
     walk_base: u32,
     current_loop: Option<u32>,
@@ -200,6 +210,7 @@ impl<'a> Archive<'a> {
             class_slot: HashMap::new(),
             class_schema: HashMap::new(),
             current_class: None,
+            current_obj_slot: None,
             next_slot: base,
             walk_base: base,
             current_loop: None,
@@ -352,8 +363,10 @@ impl<'a> Archive<'a> {
             return parse_err(format!("no reader for class {name} {}", self.ctx()));
         };
         let prev = self.current_class.replace(c);
+        let prev_slot = self.current_obj_slot.replace(slot);
         let value = self.read_fields(c);
         self.current_class = prev;
+        self.current_obj_slot = prev_slot;
         let val = Some(Rc::new(value?));
         self.slots.insert(slot, Slot::Object { cls, val: val.clone() });
         if matches!(c, Cls::DimensionLinear | Cls::Text) {
@@ -405,12 +418,79 @@ impl<'a> Archive<'a> {
         self.class_slot.get(&cls).is_some_and(|&s| tag as u32 == 0x8000 | s)
     }
 
+    /// A CLayer record at `at`: its new-class record, a class-ref to the known CLayer slot, or,
+    /// with `unmatched_class_ref` (the slot-base probe, whose numbering does not match the
+    /// file's), any short class-ref.
+    fn clayer_record_at(&self, at: usize, unmatched_class_ref: bool) -> bool {
+        if at + 2 > self.data.len() {
+            return false;
+        }
+        let tag = u16_at(self.data, at);
+        if tag == 0xFFFF && at + 12 <= self.data.len() && u16_at(self.data, at + 4) == 6 && &self.data[at + 6..at + 12] == b"CLayer" {
+            return true;
+        }
+        if self.class_slot.get(&Cls::Layer).is_some_and(|&s| self.is_class_ref(at, s)) {
+            return true;
+        }
+        unmatched_class_ref && tag & 0x8000 != 0 && tag != 0xFFFF
+    }
+
+    /// Some v18 zero-material files follow a colour layer's tail with 12 zero bytes and a u32,
+    /// then another layer: skip those 16 bytes, but only in front of a layer.
+    fn skip_layer_colour_ext(&mut self) {
+        const EXT: usize = 16;
+        if self.pos + EXT + 2 > self.data.len() || self.data[self.pos..self.pos + 12].iter().any(|&b| b != 0) {
+            return;
+        }
+        if self.clayer_record_at(self.pos + EXT, true) {
+            self.pos += EXT;
+        }
+    }
+
+    /// v18 template Layer0 after a custom tag: <parent u16><active u16><count u32>. Skip the
+    /// parent only when both u16s are layers already read.
+    fn skip_layer_parent_ref(&mut self) {
+        let Some(me) = self.current_obj_slot else { return };
+        if self.pos + 4 > self.data.len() {
+            return;
+        }
+        let (a, b) = (u16_at(self.data, self.pos), u16_at(self.data, self.pos + 2));
+        let plain = |t: u16| t != 0 && t & 0x8000 == 0 && t != 0x7FFF;
+        if !plain(a) || a as u32 == me || !plain(b) {
+            return;
+        }
+        let is_layer = |t: u16| matches!(self.slots.get(&(t as u32)), Some(Slot::Object { cls: Some(Cls::Layer), .. }));
+        if is_layer(a) && is_layer(b) {
+            self.pos += 2;
+        }
+    }
+
+    /// Layer records past the declared count (v18: a custom tag counted, then Layer0), skipping
+    /// null separators, up to the definition-list anchor. Returns (slot, value) per layer.
+    fn trailing_layers(&mut self, unmatched_class_ref: bool) -> Res<Vec<(Option<u32>, Option<Rc<Val>>)>> {
+        let mut out = Vec::new();
+        while self.pos + 2 <= self.data.len() {
+            if self.peek_u16()? == 0 {
+                self.pos += 2;
+                continue;
+            }
+            if !self.clayer_record_at(self.pos, unmatched_class_ref) {
+                break;
+            }
+            let o = self.read_object(Some(Cls::Layer))?;
+            if o.val.is_some() {
+                out.push((o.slot, o.val));
+            }
+        }
+        Ok(out)
+    }
+
     // --- class readers ---
 
     fn read_fields(&mut self, cls: Cls) -> Res<Val> {
         match cls {
             Cls::Vertex => {
-                self.preamble()?;
+                self.early_preamble()?;
                 Ok(Val::Vertex(self.f64s()?))
             }
             Cls::Edge => self.read_edge(),
@@ -431,15 +511,7 @@ impl<'a> Archive<'a> {
             Cls::Face => self.read_face(),
             Cls::Layer => self.read_layer(),
             Cls::Material => self.read_material(),
-            Cls::Dib => {
-                self.u32()?;
-                let len = self.u32()? as usize;
-                if len > self.data.len() {
-                    return parse_err(format!("implausible dib length {len} {}", self.ctx()));
-                }
-                self.raw(len)?;
-                Ok(Val::Dib)
-            }
+            Cls::Dib => self.read_dib(),
             Cls::AttributeContainer => {
                 self.preamble()?;
                 let mut children = Vec::new();
@@ -454,13 +526,21 @@ impl<'a> Archive<'a> {
                 self.raw(137)?;
                 self.u16()?;
                 self.utf16()?;
-                self.raw(33)?;
+                self.raw(if self.ver >= 6 { 33 } else { 10 })?;
                 Ok(Val::Other)
             }
             Cls::Thumbnail => {
                 self.preamble()?;
+                if self.ver < FIRST_V4 {
+                    // SketchUp 3: a fixed camera block, no image
+                    self.raw(129)?;
+                    return Ok(Val::Other);
+                }
                 self.read_object(Some(Cls::Camera))?;
-                self.read_object(Some(Cls::Dib))?;
+                // SketchUp 4 and 5 end the thumbnail with its camera
+                if self.ver >= 6 {
+                    self.read_object(Some(Cls::Dib))?;
+                }
                 Ok(Val::Other)
             }
             Cls::Relationship => {
@@ -517,10 +597,8 @@ impl<'a> Archive<'a> {
                 Ok(Val::Other)
             }
             Cls::SkFont => {
-                self.read_object(Some(Cls::AttributeContainer))?;
-                if self.has_pid {
-                    self.u8()?;
-                }
+                // the attribute container and pid of `preamble`, without its version gate
+                self.preamble()?;
                 self.utf16()?;
                 self.raw(15)?;
                 Ok(Val::Other)
@@ -529,12 +607,18 @@ impl<'a> Archive<'a> {
                 self.preamble()?;
                 self.drawbase()?;
                 self.utf16()?;
-                self.read_object(Some(Cls::SkFont))?;
-                self.raw(37)?;
+                // SketchUp 4 and 5 write no font and a shorter fixed part
+                if self.ver >= 6 {
+                    self.read_object(Some(Cls::SkFont))?;
+                }
+                self.raw(if self.ver >= 6 { 37 } else { 32 })?;
+                // each connection point: a ref, then the instance paths of the anchored entity
                 self.entity_ref()?;
-                self.raw(42)?;
+                self.connection_paths()?;
+                self.raw(32)?;
                 self.entity_ref()?;
-                self.raw(82)?;
+                self.connection_paths()?;
+                self.raw(if self.ver >= 6 { 72 } else { 68 })?;
                 Ok(Val::Other)
             }
             Cls::Text => self.read_text(),
@@ -543,20 +627,72 @@ impl<'a> Archive<'a> {
 
     /// Attribute container and persistent id, in front of most objects.
     fn preamble(&mut self) -> Res<Option<Rc<Val>>> {
-        let attrs = self.read_object(Some(Cls::AttributeContainer))?.val;
+        Ok(self.preamble_ref()?.val)
+    }
+
+    fn preamble_ref(&mut self) -> Res<ObjRef> {
+        let attrs = self.read_object(Some(Cls::AttributeContainer))?;
         if self.has_pid {
             let mask = self.u8()?;
-            for bit in 0..8 {
-                if mask & (1 << bit) != 0 {
-                    self.u8()?;
-                }
-            }
+            self.raw(mask.count_ones() as usize)?;
         }
         Ok(attrs)
     }
 
+    /// `preamble` for the objects that open without one in SketchUp 3: vertex, loop, edge-use,
+    /// material and layer.
+    fn early_preamble(&mut self) -> Res<()> {
+        if self.ver >= FIRST_V4 {
+            self.preamble()?;
+        }
+        Ok(())
+    }
+
+    fn read_dib(&mut self) -> Res<Val> {
+        self.u32()?;
+        let len = self.u32()? as usize;
+        if len > self.data.len() {
+            return parse_err(format!("implausible dib length {len} {}", self.ctx()));
+        }
+        self.raw(len)?;
+        Ok(Val::Dib)
+    }
+
+    /// After a dimension's connection ref: [ref][u32 n1][n1 refs][u32 n2][n2 refs], the instance
+    /// paths of the anchored entity.
+    fn connection_paths(&mut self) -> Res<()> {
+        self.entity_ref()?;
+        for _ in 0..2 {
+            let n = self.u32()?;
+            if n > 1000 {
+                return parse_err(format!("implausible dimension path length {}", self.ctx()));
+            }
+            for _ in 0..n {
+                self.path_ref()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One instance of a dimension's path: a reference, or the object in full when nothing
+    /// pointed at it before (a dimension written before the group it is anchored in).
+    fn path_ref(&mut self) -> Res<()> {
+        let tag = self.peek_u16()?;
+        let new = match tag {
+            0x7FFF => self.pos + 6 <= self.data.len() && u32_at(self.data, self.pos + 2) & 0x8000_0000 != 0,
+            t => t == 0xFFFF || t & 0x8000 != 0,
+        };
+        if new {
+            self.read_object(None)?;
+        } else {
+            self.entity_ref()?;
+        }
+        Ok(())
+    }
+
     fn drawbase(&mut self) -> Res<DrawBase> {
-        let b = self.raw(8)?;
+        // 5 bytes in SketchUp 3, 7 in 4, 8 from 5
+        let b = self.raw(if self.ver < FIRST_V4 { 5 } else if self.ver < 5 { 7 } else { 8 })?;
         let tag = self.peek_u16()?;
         let layer = if self.tag_is_class(tag, Cls::Layer) {
             self.read_object(Some(Cls::Layer))?;
@@ -570,6 +706,11 @@ impl<'a> Archive<'a> {
         } else {
             self.u16()?
         };
+        if self.ver < FIRST_V4 {
+            // nothing in SketchUp 3's draw block is decodable; a face's material comes from its
+            // own pointer (see read_face)
+            return Ok(DrawBase { material: 0, hidden: 0, layer });
+        }
         Ok(DrawBase { material: u16::from_le_bytes([b[0], b[1]]), hidden: b[2], layer })
     }
 
@@ -595,7 +736,7 @@ impl<'a> Archive<'a> {
     }
 
     fn read_edge_use(&mut self) -> Res<Val> {
-        self.preamble()?;
+        self.early_preamble()?;
         let edge = self.read_object(Some(Cls::Edge))?.slot;
         let sense = self.u8()?;
         let p0 = self.pos;
@@ -630,7 +771,7 @@ impl<'a> Archive<'a> {
     fn read_loop(&mut self) -> Res<Val> {
         let me = self.next_slot - 1;
         let prev = self.current_loop.replace(me);
-        self.preamble()?;
+        self.early_preamble()?;
         self.raw(2)?;
         let mut uses = Vec::new();
         while self.peek_u16()? != 0 {
@@ -644,8 +785,12 @@ impl<'a> Archive<'a> {
     }
 
     fn read_face(&mut self) -> Res<Val> {
-        self.preamble()?;
-        let db = self.drawbase()?;
+        let pre = self.preamble_ref()?;
+        let mut db = self.drawbase()?;
+        if self.ver < FIRST_V4 && matches!(pre.val.as_deref(), Some(Val::Material { .. })) {
+            // SketchUp 3: the pointer that opens a face is its front material
+            db.material = pre.slot.unwrap_or(0) as u16;
+        }
         let plane = self.f64s()?;
         let count = self.u32()?;
         if count > 10_000 {
@@ -674,7 +819,10 @@ impl<'a> Archive<'a> {
             let t = self.u8()?;
             entries.push((key, self.typed_value(t)?));
         }
-        self.u32()?;
+        // the trailing u32 is a SketchUp 7 addition; a 6 file ends at the empty key
+        if self.ver >= 7 {
+            self.u32()?;
+        }
         Ok(Val::Dictionary { name, entries })
     }
 
@@ -706,7 +854,7 @@ impl<'a> Archive<'a> {
     }
 
     fn read_layer(&mut self) -> Res<Val> {
-        self.preamble()?;
+        self.early_preamble()?;
         let name = self.utf16()?;
         let mut mid = Vec::new();
         while mid.len() < 8 && !self.at_string() {
@@ -722,15 +870,25 @@ impl<'a> Archive<'a> {
         }
         let rgba = self.raw(4)?.try_into().unwrap();
         self.utf16()?;
-        self.raw(21)?;
+        // SketchUp 3's tail is 4 bytes shorter
+        self.raw(if self.ver < FIRST_V4 { 17 } else { 21 })?;
+        self.skip_layer_colour_ext();
+        self.skip_layer_parent_ref();
         Ok(Val::Layer { name, hidden, rgba })
     }
 
-    /// A texture: (average colour, opacity, use opacity).
+    /// A texture: (average colour, opacity, use opacity). The caller has read the texture flag
+    /// as a u16; its high byte is the first byte of the texture's own preamble. SketchUp 3 to 5
+    /// write the image inline, without preamble or object tag.
     fn texture_block(&mut self) -> Res<([u8; 4], f64, u8)> {
-        self.raw(if self.ver >= 17 { 2 } else { 1 })?;
-        if !matches!(self.read_object(Some(Cls::Dib))?.val.as_deref(), Some(Val::Dib)) {
-            return parse_err(format!("texture object is not a dib {}", self.ctx()));
+        if self.ver < FIRST_DIB_OBJECT {
+            self.read_dib()?;
+        } else {
+            self.pos -= 1;
+            self.preamble()?;
+            if !matches!(self.read_object(Some(Cls::Dib))?.val.as_deref(), Some(Val::Dib)) {
+                return parse_err(format!("texture object is not a dib {}", self.ctx()));
+            }
         }
         match find_bytes(self.data, &STR_MARKER, self.pos, self.pos + 28).map(|m| m - self.pos) {
             Some(20) => {
@@ -750,7 +908,7 @@ impl<'a> Archive<'a> {
     }
 
     fn read_material(&mut self) -> Res<Val> {
-        self.preamble()?;
+        self.early_preamble()?;
         let name = self.utf16()?;
         if self.u16()? == 0 {
             let rgba = self.raw(4)?.try_into().unwrap();
@@ -828,7 +986,9 @@ impl<'a> Archive<'a> {
                 return parse_err(format!("text delimiter not found {}", self.ctx()));
             };
             let blk = &self.data[idx.saturating_sub(11)..idx];
-            if blk.len() == 11 && blk[..4] == [1, 0, 0, 0] && blk[6..10] == [3, 0, 0, 0] && blk[10] == 1 {
+            // `01 00 00 00 ?? 00 <arrow type 0-8> 00 00 00 <0|1>`; openskp requires the last byte
+            // to be 1, but a real SketchUp 2017 text (test-models/SFSASM-test.skp) has 0 there
+            if blk.len() == 11 && blk[..4] == [1, 0, 0, 0] && blk[6] <= 8 && blk[7..10] == [0, 0, 0] && blk[10] <= 1 {
                 break idx;
             }
             p = idx + 3;
@@ -906,7 +1066,13 @@ impl<'a> Archive<'a> {
 
     fn read_definition(&mut self) -> Res<Val> {
         self.preamble()?;
-        self.raw(if self.ver >= 17 { 22 } else { 20 })?;
+        // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22 from 2017
+        self.raw(match self.ver {
+            v if v >= 17 => 22,
+            v if v >= 5 => 20,
+            v if v >= FIRST_V4 => 19,
+            _ => 13,
+        })?;
         let layers = self.u32()?;
         if layers > 10_000 {
             return parse_err(format!("implausible def layer count {}", self.ctx()));
@@ -919,6 +1085,10 @@ impl<'a> Archive<'a> {
             }
             self.read_object(Some(Cls::Layer))?;
             got += 1;
+        }
+        // SketchUp 2019 also follows the last layer with a separator null
+        if self.ver == 19 && layers > 0 && self.peek_u16()? == 0 {
+            self.pos += 2;
         }
         if self.u16()? == 0x7FFF {
             self.u32()?;
@@ -986,7 +1156,6 @@ impl<'a> Archive<'a> {
     }
 
     fn read_instance(&mut self) -> Res<Val> {
-        let cls = self.current_class;
         let attrs = self.preamble()?;
         let db = self.drawbase()?;
         let def = self.read_object(Some(Cls::ComponentDefinition))?;
@@ -994,17 +1163,18 @@ impl<'a> Archive<'a> {
             return parse_err(format!("instance definition ref is {:?} {}", def.kind, self.ctx()));
         }
         let xf = self.f64s()?;
-        let name = self.utf16()?;
-        let min_schema = if cls == Some(Cls::Group) { 1 } else { 5 };
-        let schema = cls.and_then(|c| self.class_schema.get(&c).copied());
-        if schema.is_none_or(|s| s >= min_schema) {
-            self.raw(16)?; // guid
+        // SketchUp 3 and 4 instances carry no name; take one only where a string is
+        let name = if self.ver >= FIRST_NAMED_INSTANCE || self.at_string() { self.utf16()? } else { String::new() };
+        // the trailing guid is a SketchUp 2014 addition, for instances and groups alike (the
+        // class schema does not tell: CGroup reports 1 on every version)
+        if self.ver >= 14 {
+            self.raw(16)?;
         }
         Ok(Val::Instance { db, def: def.slot, xf, name, attrs })
     }
 }
 
-/// True for a 2013-2020 file: no ZIP at the start, and the MFC version map in the header.
+/// True for a classic (pre-2021) file: no ZIP at the start, and the MFC version map in the header.
 pub(super) fn is_legacy(data: &[u8]) -> bool {
     let head = |n: usize| &data[..n.min(data.len())];
     data.starts_with(&[0xFF, 0xFE, 0xFF, 0x0E])
@@ -1013,7 +1183,7 @@ pub(super) fn is_legacy(data: &[u8]) -> bool {
 }
 
 /// The major version from the "{20.0.123}" string in the header.
-fn version_major(data: &[u8]) -> Option<u32> {
+pub(super) fn version_major(data: &[u8]) -> Option<u32> {
     let text: Vec<u8> = data[..96.min(data.len())].iter().copied().filter(|&b| b != 0).collect();
     text.iter().enumerate().filter(|(_, &b)| b == b'{').find_map(|(i, _)| {
         let digits = text[i + 1..].iter().take_while(|b| b.is_ascii_digit()).count();
@@ -1060,14 +1230,19 @@ fn probe_layer_anchor_bases(data: &[u8], ver: u32, start: usize, materials: u32)
     if ver >= 17 {
         ar.u8()?;
     }
-    let count = ar.u32()?;
-    if !(1..=100_000).contains(&count) {
-        return parse_err("implausible layer count in base probe");
+    // SketchUp 3 writes no layer count: the layers run up to the definition-list anchor
+    let mut count = 0;
+    if ver >= FIRST_V4 {
+        count = ar.u32()?;
+        if !(1..=100_000).contains(&count) {
+            return parse_err("implausible layer count in base probe");
+        }
     }
     let mut layer_slots = Vec::new();
     for _ in 0..count {
         layer_slots.push(ar.read_object(Some(Cls::Layer))?.slot);
     }
+    layer_slots.extend(ar.trailing_layers(true)?.into_iter().map(|(s, _)| s));
     let anchor = ar.read_object(None)?;
     if anchor.kind != Kind::Premodel {
         return parse_err(format!("base probe: anchor resolved to {:?}", anchor.kind));
@@ -1109,15 +1284,29 @@ fn walk(data: &[u8]) -> Res<Walk> {
     } else {
         probe_layer_anchor_bases(data, ver, start, materials)?
     };
-    let mut last = None;
+    // A wrong base dies almost at once, the right one only where the file differs from what
+    // the walker knows: report the failure that got furthest into the file.
+    let at = |m: &str| m.split("@0x").nth(1).and_then(|h| usize::from_str_radix(h.split(':').next()?, 16).ok());
+    let mut best: Option<(Option<usize>, String)> = None;
     for base in bases {
         match walk_model(data, ver, start, materials, base) {
             Ok(w) => return Ok(w),
-            Err(Error::Parse(m)) => last = Some(m),
+            Err(Error::Parse(m)) => {
+                let a = at(&m);
+                if best.as_ref().is_none_or(|(b, _)| a > *b) {
+                    best = Some((a, m));
+                }
+            }
             Err(e) => return Err(e),
         }
     }
-    parse_err(last.unwrap_or_else(|| "no viable slot base candidate".into()))
+    parse_err(best.map_or_else(|| "no viable slot base candidate".into(), |(_, m)| m))
+}
+
+/// True when a CComponentDefinition record starts at `at`.
+fn definition_starts_at(ar: &Archive, at: usize) -> bool {
+    (ar.data.get(at..at + 2) == Some(&[0xFF, 0xFF][..]) && ar.data.get(at + 6..at + 26) == Some(&b"CComponentDefinition"[..]))
+        || ar.class_slot.get(&Cls::ComponentDefinition).is_some_and(|&s| ar.is_class_ref(at, s))
 }
 
 fn walk_model(data: &[u8], ver: u32, start: usize, material_count: u32, base: u32) -> Res<Walk> {
@@ -1134,8 +1323,9 @@ fn walk_model(data: &[u8], ver: u32, start: usize, material_count: u32, base: u3
     if ver >= 17 {
         ar.u8()?;
     }
-    let layer_count = ar.u32()?;
-    if layer_count > 100_000 {
+    // SketchUp 3 writes no layer count: the layers run up to the definition-list anchor
+    let layer_count = if ver < FIRST_V4 { u32::MAX } else { ar.u32()? };
+    if layer_count > 100_000 && ver >= FIRST_V4 {
         return parse_err("implausible layer count");
     }
     let mut layers = Vec::new();
@@ -1153,17 +1343,10 @@ fn walk_model(data: &[u8], ver: u32, start: usize, material_count: u32, base: u3
             layers.push((s, v));
         }
     }
-    loop {
-        let tag = ar.peek_u16()?;
-        if tag == 0 {
-            ar.pos += 2;
-        } else if ar.tag_is_class(tag, Cls::Layer) {
-            let o = ar.read_object(Some(Cls::Layer))?;
-            if let (Some(s), Some(v)) = (o.slot, o.val) {
-                layers.push((s, v));
-            }
-        } else {
-            break;
+    // trailing separators and layer records past the declared count
+    for (s, v) in ar.trailing_layers(false)? {
+        if let (Some(s), Some(v)) = (s, v) {
+            layers.push((s, v));
         }
     }
     let anchor = ar.read_object(None)?;
@@ -1174,6 +1357,12 @@ fn walk_model(data: &[u8], ver: u32, start: usize, material_count: u32, base: u3
     if def_count > 1_000_000 {
         if let Some(c) = ar.retry_count_after_v20_filler(ar.pos - 4, 1_000_000) {
             def_count = c;
+            // a model without definitions has no definition count: the count behind the 2020
+            // filler is then the root count, so put it back
+            if !definition_starts_at(&ar, ar.pos) {
+                def_count = 0;
+                ar.pos -= 4;
+            }
         }
     }
     if def_count > 1_000_000 {

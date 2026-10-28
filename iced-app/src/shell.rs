@@ -48,7 +48,12 @@ impl Application for Studio {
                 groups: vec![
                     RibbonGroup {
                         label: l.text("Bestand", "File").into(),
-                        commands: vec![Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O")],
+                        commands: vec![
+                            Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O"),
+                            Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog)
+                                .enabled(loaded)
+                                .shortcut("Ctrl+Shift+S"),
+                        ],
                     },
                     RibbonGroup {
                         label: l.text("Weergave", "Display").into(),
@@ -141,13 +146,17 @@ impl Application for Studio {
     }
 
     fn file_commands(&self, l: Language) -> Vec<Command<Message>> {
-        vec![Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog)]
+        vec![
+            Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog),
+            Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog).enabled(self.app.model.is_some()),
+        ]
     }
 
     fn status(&self, l: Language) -> String {
         match &self.app.status {
             Status::Ready => l.text("Gereed", "Ready").into(),
             Status::Loading { file, since, .. } => format!("{} {file}… {:.0} s", l.text("Laden", "Loading"), since.elapsed().as_secs_f32()),
+            Status::Saving { file, since } => format!("{} {file}… {:.0} s", l.text("Opslaan", "Saving"), since.elapsed().as_secs_f32()),
             Status::Loaded(s) => s.clone(),
             Status::Error(e) => format!("{}: {e}", l.text("Fout", "Error")),
         }

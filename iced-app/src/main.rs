@@ -6,11 +6,13 @@
 //!                       [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
 //!   open-3d-viewer-iced [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer-iced --bench FILE [--frames 300]
+//!   open-3d-viewer-iced FILE --save-as OUT.ifc   (convert without a window)
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod annotations;
 mod app;
 mod bench;
+mod export;
 mod icons;
 mod loaders;
 mod model;
@@ -43,6 +45,7 @@ struct Args {
     ortho: bool,
     view_tab: bool,
     frames: Option<u32>,
+    save_as: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -81,8 +84,9 @@ fn parse_args() -> Result<Args, String> {
             "--view-tab" => args.view_tab = true,
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
+            "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(8).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(9).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -102,6 +106,8 @@ fn main() {
     };
     let code = if let Some(file) = &args.bench {
         bench::run(file, args.frames.unwrap_or(300))
+    } else if let Some(out) = &args.save_as {
+        save_as(&args, out)
     } else if let Some(out) = &args.screenshot {
         screenshot(&args, out)
     } else if args.window_screenshot.is_some() {
@@ -113,6 +119,16 @@ fn main() {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// `--save-as`: loads the file and writes it in the format of `out`'s extension.
+fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--save-as needs a FILE to convert")?;
+    let model = loaders::load(file)?;
+    let start = std::time::Instant::now();
+    export::save(&model, out)?;
+    println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
 }
 
 fn initial_state(args: &Args) -> App {

@@ -1,6 +1,7 @@
 //! Application state, messages and the main window layout:
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
+use crate::export;
 use crate::icons;
 use crate::loaders;
 use crate::model::Model;
@@ -38,6 +39,7 @@ pub enum RibbonTab {
 pub enum Status {
     Ready,
     Loading { file: String, since: Instant, progress: Arc<loaders::Progress> },
+    Saving { file: String, since: Instant },
     Loaded(String),
     Error(String),
 }
@@ -75,6 +77,8 @@ pub struct App {
     pub section_fill: bool,
     /// The section plane (world), when placed.
     pub plane: Option<SectionPlane>,
+    /// The section plane as it was placed, before moves and flips: what Reset brings back.
+    pub plane_placed: Option<SectionPlane>,
     /// Waiting for a click on a face to place the section plane.
     pub plane_picking: bool,
     /// The saved view last shown.
@@ -91,6 +95,10 @@ pub enum Message {
     Open(PathBuf),
     Picked(Option<PathBuf>),
     Loaded(Result<Arc<Model>, String>),
+    SaveDialog,
+    SavePicked(Option<PathBuf>),
+    /// A save finished: the file written and how long it took, or the error.
+    Saved(Result<(PathBuf, f32), String>),
     Mode(RenderMode),
     ToggleGrid,
     ToggleFlipUp,
@@ -189,6 +197,7 @@ impl Default for App {
             section_on: false,
             section_fill: true,
             plane: None,
+            plane_placed: None,
             plane_picking: false,
             active_view: None,
             show_grids: true,
@@ -208,6 +217,21 @@ pub fn load_task(path: PathBuf, progress: Arc<loaders::Progress>) -> Task<Messag
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
         Message::Loaded,
+    )
+}
+
+/// Saves the model on a worker thread.
+pub fn save_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let start = Instant::now();
+                let _ = tx.send(export::save(&model, &path).map(|()| (path, start.elapsed().as_secs_f32())));
+            });
+            rx.await.unwrap_or_else(|_| Err("save thread stopped".to_string()))
+        },
+        Message::Saved,
     )
 }
 
@@ -417,6 +441,41 @@ impl App {
                 self.status = Status::Error(e);
                 return self.shot_after_delay();
             }
+            Message::SaveDialog => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                let writers = export::registry();
+                let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .set_title("Save as")
+                    .set_file_name(format!("{stem}.{}", writers[0].extensions()[0]));
+                if let Some(dir) = model.path.parent() {
+                    dialog = dialog.set_directory(dir);
+                }
+                for w in &writers {
+                    dialog = dialog.add_filter(w.name(), w.extensions());
+                }
+                return Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::SavePicked);
+            }
+            Message::SavePicked(None) => {}
+            Message::SavePicked(Some(mut path)) => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if path.extension().is_none() {
+                    path.set_extension(export::registry()[0].extensions()[0]);
+                }
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Saving { file, since: Instant::now() };
+                return save_task(model, path);
+            }
+            Message::Saved(Ok((path, secs))) => {
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Loaded(format!("Saved {file} in {secs:.2} s"));
+            }
+            Message::Saved(Err(e)) => {
+                self.status = Status::Error(e);
+            }
             Message::TakeShot => {
                 return window::latest().and_then(window::screenshot).map(Message::Shot);
             }
@@ -520,9 +579,9 @@ impl App {
                 if self.section_on {
                     self.section = self.world_bounds().map(|b| SectionBox::around(&b));
                 }
-                // a placed plane: pick a new face
+                // the section plane back where it was placed: moves and flips undone
                 if self.plane.is_some() {
-                    self.plane_picking = true;
+                    self.plane = self.plane_placed;
                 }
             }
             Message::SectionToSelection => {
@@ -597,7 +656,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let ticks = if matches!(self.status, Status::Loading { .. }) || self.anim.is_some() {
+        let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) || self.anim.is_some() {
             window::frames().map(|_| Message::Tick)
         } else {
             Subscription::none()
@@ -668,6 +727,7 @@ impl App {
                     }
                     if let Some(p) = SectionPlane::on_face(point, normal, &world) {
                         self.plane = Some(p);
+                        self.plane_placed = Some(p);
                         self.plane_picking = false;
                     }
                 }
@@ -710,7 +770,16 @@ impl App {
 
         let content: Element<'_, Message> = match self.tab {
             RibbonTab::Home => row![
-                group(p, "File", row![big_button(p, icons::OPEN, "Import", Message::OpenDialog, false)].into()),
+                group(
+                    p,
+                    "File",
+                    row![
+                        big_button(p, icons::OPEN, "Import", Message::OpenDialog, false),
+                        big_button(p, icons::SAVE_AS, "Save as", Message::SaveDialog, false),
+                    ]
+                    .spacing(2)
+                    .into()
+                ),
                 separator(p),
                 group(
                     p,
@@ -1268,6 +1337,7 @@ impl App {
             Status::Loading { file, since, .. } => {
                 (format!("Loading {file}… {:.0} s", since.elapsed().as_secs_f32()), p.accent)
             }
+            Status::Saving { file, since } => (format!("Saving {file}… {:.0} s", since.elapsed().as_secs_f32()), p.accent),
             Status::Loaded(s) => (s.clone(), p.status_text),
             Status::Error(e) => (format!("Error: {e}"), iced::Color::from_rgb8(0xF8, 0x71, 0x71)),
         };
@@ -1684,9 +1754,11 @@ mod tests {
         let mut ui = simulator(&app);
         ui.click("Wireframe").expect("Wireframe button");
         ui.click("Grid").expect("Grid button");
+        ui.click("Save as").expect("Save as button");
         let messages: Vec<Message> = ui.into_messages().collect();
         assert!(matches!(messages[0], Message::Mode(RenderMode::Wireframe)), "{messages:?}");
         assert!(matches!(messages[1], Message::ToggleGrid), "{messages:?}");
+        assert!(matches!(messages[2], Message::SaveDialog), "{messages:?}");
     }
 
     #[test]

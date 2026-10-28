@@ -188,5 +188,5 @@ via iced), glam (MIT OR Apache-2.0), bytemuck (Zlib OR Apache-2.0 OR MIT), rfd (
 web-sys (MIT OR Apache-2.0). Inter font: SIL OFL 1.1 (`assets/fonts/Inter-LICENSE.txt`). Theme
 colours: OpenAEC style book (CC BY-SA 4.0). `vendor/openaec-ui`: see its `NOTICE.md`.
 
-`rvt-reader` (OpenAEC) is a private crate with a proprietary licence. It is linked only into the
-`revit/` build, never into the main package or the web app.
+The independent `rvt-dll` crates (OpenAEC) retain their proprietary licence. They are linked
+into the standard desktop app, and excluded from the web build.

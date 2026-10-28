@@ -146,4 +146,48 @@ mod tests {
         let source = Source::Bytes { name: "wrong.ifc".into(), data: Arc::new(b"not IFC".to_vec()) };
         assert!(IfcLoader.load(&source).unwrap_err().contains("STEP file"));
     }
+
+    #[test]
+    fn tessellates_an_extruded_wall_at_its_ifc_placement() {
+        // Independent SPF fixture: a 2 x 3 rectangle extruded 4 m at (10,20,30).
+        // This exercises IfcLite's solid/placement path, beyond our own tessellated export.
+        let data = br#"ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('ViewDefinition [ReferenceView]'),'2;1');
+FILE_NAME('wall.ifc','2026-10-29T00:00:00',('OpenAEC'),('OpenAEC'),'test','test','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+#1=IFCCARTESIANPOINT((0.,0.,0.));
+#2=IFCDIRECTION((0.,0.,1.));
+#3=IFCDIRECTION((1.,0.,0.));
+#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);
+#5=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-5,#4,$);
+#6=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#7=IFCUNITASSIGNMENT((#6));
+#8=IFCPROJECT('0YvctVUKr0kugbFTf53O9L',$,'Test',$,$,$,$,(#5),#7);
+#9=IFCCARTESIANPOINT((10.,20.,30.));
+#10=IFCAXIS2PLACEMENT3D(#9,#2,#3);
+#11=IFCLOCALPLACEMENT($,#10);
+#12=IFCCARTESIANPOINT((0.,0.));
+#13=IFCAXIS2PLACEMENT2D(#12,$);
+#14=IFCRECTANGLEPROFILEDEF(.AREA.,'Rectangle',#13,2.,3.);
+#15=IFCEXTRUDEDAREASOLID(#14,#4,#2,4.);
+#16=IFCSHAPEREPRESENTATION(#5,'Body','SweptSolid',(#15));
+#17=IFCPRODUCTDEFINITIONSHAPE($,$,(#16));
+#18=IFCWALL('1YvctVUKr0kugbFTf53O9L',$,'Extruded wall',$,$,#11,#17,$,.NOTDEFINED.);
+ENDSEC;
+END-ISO-10303-21;"#;
+        let source = Source::Bytes { name: "wall.ifc".into(), data: Arc::new(data.to_vec()) };
+        let model = crate::loaders::load_with(&source, &Progress::default()).expect("IFC extrusion");
+        assert!(model.triangle_count() >= 12);
+        for (got, expected) in model.bounds.min.into_iter().zip([9., 18.5, 30.]) {
+            assert!((got - expected).abs() < 0.001, "bounds {:?}", model.bounds);
+        }
+        for (got, expected) in model.bounds.max.into_iter().zip([11., 21.5, 34.]) {
+            assert!((got - expected).abs() < 0.001, "bounds {:?}", model.bounds);
+        }
+        let props = model.props.get(&18).expect("pickable IFC wall");
+        assert!(props.contains("Extruded wall") && props.contains("IfcWall"), "{props}");
+    }
 }

@@ -1,5 +1,8 @@
 # Vendored crates
 
+The independent SKP, Tekla and PLY reader crates and their shared scene model are tracked in
+[FORMATS.md](FORMATS.md), including upstream repositories, pinned commits and validation.
+
 `openaec-ui/` is a snapshot of `crates/openaec-ui` from the
 [OpenAEC Style Repo](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo), commit `6c9c896`
 (28 October 2026, crate version 2026.44.1, iced 0.14). The Style Repo is the source of truth;

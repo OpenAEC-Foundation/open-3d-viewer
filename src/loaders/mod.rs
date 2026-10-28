@@ -89,6 +89,27 @@ mod tests {
     }
 
     #[test]
+    fn extracted_readers_remain_registered() {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY")] {
+            let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
+            assert_eq!(loader.name(), name);
+        }
+    }
+
+    #[test]
+    fn extracted_skp_reader_loads_files_and_browser_bytes() {
+        let path = repo_file("test-models/TestModel.skp");
+        let file = load(&path).expect("SketchUp file");
+        let source = Source::Bytes { name: "TestModel.SKP".into(), data: Arc::new(std::fs::read(path).unwrap()) };
+        let bytes = load_with(&source, &Progress::default()).expect("SketchUp browser bytes");
+        assert!(file.triangle_count() > 100);
+        assert_eq!(file.triangle_count(), bytes.triangle_count());
+        assert_eq!(file.bounds, bytes.bounds);
+        assert_eq!(file.props, bytes.props);
+        assert!(bytes.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
+    }
+
+    #[test]
     fn rejects_unknown_extension() {
         assert!(load(Path::new("x.unknownext")).is_err());
     }

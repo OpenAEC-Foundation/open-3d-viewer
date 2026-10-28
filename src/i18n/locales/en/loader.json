@@ -10,7 +10,6 @@
   "errorLoading": "Error loading {{fileName}}: {{error}}",
   "done": "Done",
   "readingFilePhase": "Reading file...",
-
   "assimp": {
     "loadingWasm": "Loading {{ext}} via Assimp WASM...",
     "cannotLoadWasm": "Cannot load Assimp WASM: {{error}}",
@@ -21,7 +20,6 @@
     "loadingGlb": "Loading GLB in Three.js...",
     "buildingScene": "Building scene..."
   },
-
   "rust": {
     "tauriRequired": "{{format}} files can only be opened in the Tauri desktop app.\nThis format requires the Rust backend converter.\nStart the app with \"npm run tauri dev\" to load {{format}} files.",
     "converting": "Converting {{format}} via Rust backend...",
@@ -33,7 +31,6 @@
     "buildingScene": "Building scene...",
     "finishing": "Finishing..."
   },
-
   "skp": {
     "checkingHeader": "Checking SKP header...",
     "invalidFile": "Invalid SKP file: not a ZIP archive",
@@ -48,5 +45,9 @@
     "finishing": "Finishing...",
     "noGeometry": "No geometry found in SKP file",
     "loadFailed": "SKP load failed: {{error}}"
-  }
+  },
+  "stepRead": "Reading",
+  "stepConvert": "Converting",
+  "stepScene": "Building scene",
+  "hintSlowRvt": "Revit models are converted in full; large models can take a minute."
 }

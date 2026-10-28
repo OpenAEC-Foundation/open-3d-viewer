@@ -26,6 +26,15 @@
     "format": "Format",
     "vertices": "Vertices",
     "loading": "Loading",
-    "bounds": "Bounds"
+    "bounds": "Bounds",
+    "prop": {
+      "category": "Category",
+      "family": "Family",
+      "type": "Type",
+      "level": "Level",
+      "materials": "Materials",
+      "id": "Element id",
+      "class": "Class"
+    }
   }
 }

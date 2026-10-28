@@ -57,6 +57,8 @@ export interface ViewerState {
     triangles: number;
     sizeX: number; sizeY: number; sizeZ: number;
     centerX: number; centerY: number; centerZ: number;
+    /** Element properties (Revit: id, category, family, type, level, materials, class) */
+    props?: Record<string, string>;
   } | null;
   /** Scene layers (definition groups) */
   layers: { name: string; visible: boolean; triangles: number }[];

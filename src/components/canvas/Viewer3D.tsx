@@ -10,9 +10,12 @@ import { isSupported } from '../../engine/loaders/LoaderRegistry';
 import { t } from '../../i18n/useTranslation';
 import { useAppStore } from '../../state/appStore';
 import { ErrorOverlay } from './ErrorOverlay';
+import { LoadingOverlay } from './LoadingOverlay';
 import { ViewCube } from './ViewCube';
 import { AxisIndicator } from './AxisIndicator';
 import { WelcomeScreen } from './WelcomeScreen';
+import { InfiniteGrid } from '../../engine/scene/InfiniteGrid';
+import { SectionCaps } from '../../engine/sectionbox/SectionCaps';
 
 export function Viewer3D() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,13 +29,18 @@ export function Viewer3D() {
   const sceneManagerRef = useRef<SceneManager | null>(null);
   const sectionBoxRef = useRef<SectionBox | null>(null);
   const sectionBoxCtrlRef = useRef<SectionBoxController | null>(null);
-  const gridRef = useRef<THREE.GridHelper | null>(null);
+  const gridRef = useRef<InfiniteGrid | null>(null);
+  const capsRef = useRef<SectionCaps | null>(null);
+  /** extent of the loaded models (updated when models change; the caps skip faces outside it) */
+  const modelBoundsRef = useRef(new THREE.Box3());
   const ambientRef = useRef<THREE.AmbientLight | null>(null);
   const directionalRef = useRef<THREE.DirectionalLight | null>(null);
   const rafRef = useRef<number>(0);
   const fpsFrames = useRef(0);
   const fpsLastTime = useRef(performance.now());
   const selectedRef = useRef<THREE.Mesh | null>(null);
+  /** Overlay drawing the selected element of a Revit batch (its index range) */
+  const elementHighlightRef = useRef<THREE.Mesh | null>(null);
   const prevMaterialRef = useRef<THREE.Material | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
 
@@ -197,11 +205,17 @@ export function Viewer3D() {
     });
     sectionBoxCtrlRef.current = sbController;
 
-    // Grid (Z-up: rotate GridHelper from XZ to XY plane)
-    const grid = new THREE.GridHelper(50, 50, 0x3a3a5a, 0x2a2a4a);
-    grid.rotation.x = Math.PI / 2;
+    // Ground grid (XY plane, Z up): an anti-aliased shader grid that follows the camera
+    const grid = new InfiniteGrid();
+    grid.setTheme(useAppStore.getState().uiTheme);
+    grid.visible = useAppStore.getState().showGrid;
     scene.add(grid);
     gridRef.current = grid;
+
+    // Filled cut faces of the section box
+    const caps = new SectionCaps();
+    caps.setTheme(useAppStore.getState().uiTheme);
+    capsRef.current = caps;
 
     // Lights
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
@@ -220,7 +234,11 @@ export function Viewer3D() {
     const animate = () => {
       rafRef.current = requestAnimationFrame(animate);
       controls.update();
+      gridRef.current?.update(cameraRef.current!);
       rendererManager.render(scene, cameraRef.current!);
+      if (sectionBox.enabled) {
+        caps.render(rendererManager.renderer, scene, cameraRef.current!, sectionBox, modelBoundsRef.current);
+      }
 
       fpsFrames.current++;
       const now = performance.now();
@@ -295,6 +313,32 @@ export function Viewer3D() {
       }
     };
     window.addEventListener('open3d:sectionbox-reset', handleSectionBoxReset);
+
+    // Section box around the selection (OpenAEC design: fit box to selection), switched on if off
+    const handleSectionBoxFitSelection = () => {
+      const sel = elementHighlightRef.current ?? selectedRef.current;
+      if (!sel) return;
+      const box = new THREE.Box3();
+      if (sel === elementHighlightRef.current) {
+        const geo = sel.geometry;
+        const pos = geo.attributes.position;
+        const idx = geo.index!;
+        const v = new THREE.Vector3();
+        for (let i = geo.drawRange.start; i < geo.drawRange.start + geo.drawRange.count; i++) {
+          box.expandByPoint(v.fromBufferAttribute(pos, idx.getX(i)));
+        }
+        box.applyMatrix4(sel.matrixWorld);
+      } else {
+        box.setFromObject(sel);
+      }
+      if (box.isEmpty()) return;
+      sectionBox.fitToScene(box, 0.05);
+      useAppStore.getState().setSectionBoxEnabled(true);
+      sectionBox.setEnabled(true);
+      sectionBox.applyToScene();
+      useAppStore.getState().setSectionBoxBounds(sectionBox.getBounds());
+    };
+    window.addEventListener('open3d:sectionbox-fit-selection', handleSectionBoxFitSelection);
 
     // Import handlers
     const handleImport = (e: Event) => {
@@ -386,15 +430,89 @@ export function Viewer3D() {
         selectedRef.current = null;
         prevMaterialRef.current = null;
       }
+      if (elementHighlightRef.current) {
+        elementHighlightRef.current.parent?.remove(elementHighlightRef.current);
+        elementHighlightRef.current.geometry.dispose();
+        (elementHighlightRef.current.material as THREE.Material).dispose();
+        elementHighlightRef.current = null;
+        selectedRef.current = null;
+      }
 
       // Find first mesh hit (skip grid, gizmo helpers, lights)
       const hit = intersects.find((i) => {
         const obj = i.object;
         if (!(obj instanceof THREE.Mesh)) return false;
         if (obj.parent?.name === 'SectionBoxGizmo') return false;
-        if (obj instanceof THREE.GridHelper) return false;
+        if (obj.userData.isGrid) return false;
         return true;
       });
+
+      // A Revit batch knows its elements: select the element under the cursor, not the batch
+      const elements = hit?.object.userData.elements as { id: number; start: number; count: number }[] | undefined;
+      if (hit && hit.object instanceof THREE.Mesh && elements && hit.faceIndex != null) {
+        const mesh = hit.object;
+        const at = hit.faceIndex * 3;
+        let lo = 0;
+        let hi = elements.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (elements[mid].start <= at) lo = mid; else hi = mid - 1;
+        }
+        const el = elements[lo];
+        if (el && at >= el.start && at < el.start + el.count) {
+          const src = mesh.geometry;
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', src.attributes.position);
+          geo.setAttribute('normal', src.attributes.normal);
+          geo.setIndex(src.index);
+          geo.setDrawRange(el.start, el.count);
+          const mat = new THREE.MeshStandardMaterial({
+            color: 0x4488ff,
+            emissive: new THREE.Color(0x4488ff),
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: 0.55,
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: -1,
+            clippingPlanes: (mesh.material as THREE.Material).clippingPlanes ?? [],
+          });
+          const overlay = new THREE.Mesh(geo, mat);
+          overlay.userData.isHighlight = true;
+          overlay.renderOrder = 2;
+          mesh.add(overlay);
+          elementHighlightRef.current = overlay;
+
+          // extent of the element's own triangles
+          const pos = src.attributes.position;
+          const idx = src.index!;
+          const box = new THREE.Box3();
+          const v = new THREE.Vector3();
+          for (let i = el.start; i < el.start + el.count; i++) {
+            box.expandByPoint(v.fromBufferAttribute(pos, idx.getX(i)));
+          }
+          box.applyMatrix4(mesh.matrixWorld);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+          // properties from the model root (RVT loader)
+          let root: THREE.Object3D | null = mesh;
+          while (root && !root.userData.rvtProps) root = root.parent;
+          const props = (root?.userData.rvtProps as Map<number, Record<string, string>> | undefined)?.get(el.id);
+          useAppStore.getState().setSelectedObject({
+            name: props?.type ? `${props.family ?? mesh.name}: ${props.type}` : `${mesh.name} ${el.id}`,
+            triangles: Math.round(el.count / 3),
+            sizeX: parseFloat(size.x.toFixed(2)),
+            sizeY: parseFloat(size.y.toFixed(2)),
+            sizeZ: parseFloat(size.z.toFixed(2)),
+            centerX: parseFloat(center.x.toFixed(2)),
+            centerY: parseFloat(center.y.toFixed(2)),
+            centerZ: parseFloat(center.z.toFixed(2)),
+            props: props ?? { id: String(el.id), category: mesh.name },
+          });
+          return;
+        }
+      }
 
       if (hit && hit.object instanceof THREE.Mesh) {
         const mesh = hit.object;
@@ -485,6 +603,7 @@ export function Viewer3D() {
       resizeObserver.disconnect();
       window.removeEventListener('open3d:camera', handleCamera);
       window.removeEventListener('open3d:sectionbox-reset', handleSectionBoxReset);
+      window.removeEventListener('open3d:sectionbox-fit-selection', handleSectionBoxFitSelection);
       window.removeEventListener('open3d:import', handleImport);
       window.removeEventListener('open3d:import-file', handleImportFile);
       window.removeEventListener('open3d:remove-model', handleRemoveModel);
@@ -494,6 +613,8 @@ export function Viewer3D() {
       canvas.removeEventListener('click', handleClick);
       window.removeEventListener('keydown', handleKeyDown);
       controls.dispose();
+      grid.dispose();
+      caps.dispose();
       sbController.dispose();
       sectionBox.dispose();
       rendererManager.dispose();
@@ -542,15 +663,17 @@ export function Viewer3D() {
       });
   }, [loadFileIntoScene]);
 
-  // Handle file open from OS file association (Tauri backend emits 'open-file')
+  // Open a file passed on the command line (file association): the frontend asks the backend for
+  // it once it is mounted (a timed 'open-file' event raced with start-up and was often missed).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     (async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      unlisten = await listen<string>('open-file', (event) => {
-        const filePath = event.payload;
-        if (!filePath) return;
+      if (!(window as any).__TAURI_INTERNALS__) return;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const filePath = await invoke<string | null>('take_startup_file').catch(() => null);
+      if (cancelled || !filePath) return;
+      {
 
         const fileName = filePath.split(/[/\\]/).pop() || 'unknown';
         const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
@@ -576,16 +699,31 @@ export function Viewer3D() {
         window.dispatchEvent(new CustomEvent('open3d:import', {
           detail: { id, filePath, fileName, format: ext }
         }));
-      });
+      }
     })();
 
-    return () => { unlisten?.(); };
+    return () => { cancelled = true; };
   }, []);
 
   // Update grid visibility
   useEffect(() => {
     if (gridRef.current) gridRef.current.visible = showGrid;
   }, [showGrid]);
+
+  // Grid at the lowest level of the models, cell size from their extent (after the scene update)
+  const models = useAppStore((s) => s.models);
+  useEffect(() => {
+    const fit = () => {
+      const bounds = sceneManagerRef.current?.getSceneBounds();
+      if (bounds) modelBoundsRef.current.copy(bounds);
+      gridRef.current?.fitToBounds(bounds);
+      // newly loaded meshes get the section planes and the cap layer
+      sectionBoxRef.current?.applyToScene();
+    };
+    fit();
+    const id = requestAnimationFrame(fit);
+    return () => cancelAnimationFrame(id);
+  }, [models]);
 
   // Update lights
   useEffect(() => {
@@ -691,6 +829,8 @@ export function Viewer3D() {
       contrast: 0x000000,
     };
     sceneRef.current.background = new THREE.Color(colors[uiTheme] ?? 0x2a2a32);
+    gridRef.current?.setTheme(uiTheme);
+    capsRef.current?.setTheme(uiTheme);
   }, [uiTheme]);
 
   return (
@@ -713,6 +853,7 @@ export function Viewer3D() {
           <div style={{ position: 'absolute', width: 2, height: 20, left: -1, top: -10, background: 'rgba(255,255,255,0.4)', borderRadius: 1 }} />
         </div>
       )}
+      <LoadingOverlay />
       <ErrorOverlay />
     </div>
   );

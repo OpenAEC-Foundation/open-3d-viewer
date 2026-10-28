@@ -3,7 +3,7 @@
     "title": "Lagen",
     "collapseLeft": "Linkerpaneel inklappen",
     "expandLayers": "Lagenpaneel uitklappen",
-    "noLayers": "Geen lagen \u2014 laad een model om lagen te zien",
+    "noLayers": "Geen lagen — laad een model om lagen te zien",
     "hideAll": "Alles verbergen",
     "showAll": "Alles tonen",
     "trianglesVisible": "{{visible}} / {{total}} driehoeken zichtbaar",
@@ -26,6 +26,15 @@
     "format": "Formaat",
     "vertices": "Hoekpunten",
     "loading": "Laden",
-    "bounds": "Begrenzing"
+    "bounds": "Begrenzing",
+    "prop": {
+      "category": "Categorie",
+      "family": "Familie",
+      "type": "Type",
+      "level": "Niveau",
+      "materials": "Materialen",
+      "id": "Element-id",
+      "class": "Klasse"
+    }
   }
 }

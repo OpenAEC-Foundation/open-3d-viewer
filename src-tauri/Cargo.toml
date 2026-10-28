@@ -1,6 +1,6 @@
 [package]
 name = "open-3d-viewer"
-version = "0.2.0"
+version = "0.3.0"
 description = "A universal 3D file viewer"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -26,6 +26,10 @@ tauri-plugin-store = "2.4.2"
 # Revit (.rvt) import: OpenAEC rvt reader, a private sibling checkout (../../rvt-reader)
 rvt-read = { path = "../../rvt-reader/crates/rvt-read", optional = true }
 rvt-export = { path = "../../rvt-reader/crates/rvt-export", default-features = false, optional = true }
+# AutoCAD DWG import (MPL-2.0, used unmodified), ear clipping for ACIS faces (ISC) and E57 point clouds (MIT)
+acadrust = { version = "0.6.6", default-features = false }
+earcutr = "0.5"
+e57 = "0.11"
 
 [features]
 default = ["custom-protocol", "rvt"]
@@ -38,3 +42,12 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Quick test builds of the viewer (rvt-dll loop): the release settings without whole-program LTO,
+# incremental, so a reader change relinks in minutes instead of 12-18 (cargo build --profile fast)
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+opt-level = 2

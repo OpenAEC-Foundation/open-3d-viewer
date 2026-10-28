@@ -111,6 +111,12 @@ registerLoader(['.rvt'], async () => {
   return loadRVT;
 });
 
+// AutoCAD DWG (acadrust in the Tauri backend — 3D model space, layers as layers; desktop app only)
+registerLoader(['.dwg'], async () => (await import('./formats/CadImportLoaders')).loadDWG);
+
+// E57 point clouds (e57 crate in the Tauri backend — scans as layers; desktop app only)
+registerLoader(['.e57'], async () => (await import('./formats/CadImportLoaders')).loadE57);
+
 // IFC (web-ifc WASM — spatial classes as layers)
 registerLoader(['.ifc'], async () => {
   const { loadIFC } = await import('./formats/IFCLoader');

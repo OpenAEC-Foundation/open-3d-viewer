@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+/** App version from package.json (vite.config.ts). */
+declare const __APP_VERSION__: string;
+/** Build tag: yyyymmdd.hhmm.<git commit>[+] (vite.config.ts). */
+declare const __APP_BUILD__: string;
+
 declare module 'assimpjs' {
   interface AssimpFile {
     GetContent(): Uint8Array;

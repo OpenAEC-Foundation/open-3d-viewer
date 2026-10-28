@@ -19,10 +19,11 @@ export class SectionBoxController {
 
   /** Currently dragged face */
   private dragFace: FaceId | null = null;
-  /** Plane used for drag projection */
-  private dragPlane = new THREE.Plane();
-  /** Offset from face center to drag start (to prevent jumping) */
-  private dragOffset = 0;
+  /** The face's axis (positive x, y or z) and the point on it where the drag started */
+  private dragAxis = new THREE.Vector3();
+  private dragOrigin = new THREE.Vector3();
+  /** The face coordinate when the drag started */
+  private dragStartCoord = 0;
   /** Callback to temporarily disable orbit controls during drag */
   private onDragStart?: () => void;
   private onDragEnd?: () => void;
@@ -91,11 +92,11 @@ export class SectionBoxController {
     this.updateMouse(e);
 
     if (this.dragFace) {
-      // Dragging — project mouse onto drag plane
+      // Dragging: the face follows the mouse along its own axis
       this.raycaster.setFromCamera(this.mouse, this.camera);
-      const intersection = new THREE.Vector3();
-      if (this.raycaster.ray.intersectPlane(this.dragPlane, intersection)) {
-        this.applyDrag(this.dragFace, intersection);
+      const t = this.axisParameter(this.raycaster.ray);
+      if (t !== null) {
+        this.applyDrag(this.dragFace, this.dragStartCoord + t);
       }
       return;
     }
@@ -129,17 +130,12 @@ export class SectionBoxController {
     this.gizmo.setActiveFace(face.id);
     this.canvas.style.cursor = 'grabbing';
 
-    // Build a plane perpendicular to the camera's view direction, passing through the hit point.
-    // This gives the best dragging experience regardless of view angle.
-    const hitPoint = hits[0].point;
-    const cameraDir = new THREE.Vector3();
-    this.camera.getWorldDirection(cameraDir);
-    this.dragPlane.setFromNormalAndCoplanarPoint(cameraDir, hitPoint);
-
-    // Store the initial face position along its normal to compute offset
-    const facePos = this.getFacePosition(face.id);
-    const projectedHit = hitPoint.dot(face.normal);
-    this.dragOffset = facePos - projectedHit;
+    // Drag along the face's axis (always the positive x, y or z direction, so the minus faces
+    // move with the mouse too; projecting on their outward normal reversed them), from the hit
+    // point: the face goes to the point of that axis nearest to the mouse ray.
+    this.dragAxis.set(Math.abs(face.normal.x), Math.abs(face.normal.y), Math.abs(face.normal.z));
+    this.dragOrigin.copy(hits[0].point);
+    this.dragStartCoord = this.getFacePosition(face.id);
 
     this.onDragStart?.();
   }
@@ -157,12 +153,23 @@ export class SectionBoxController {
   // Drag logic
   // ============================================================================
 
-  private applyDrag(faceId: FaceId, worldPoint: THREE.Vector3): void {
+  /**
+   * Distance along the drag axis (from where the drag started) of the axis point nearest to the
+   * ray; null when the axis points straight at the viewer (no usable direction).
+   */
+  private axisParameter(ray: THREE.Ray): number | null {
+    const u = this.dragAxis;
+    const v = ray.direction;
+    const w = new THREE.Vector3().subVectors(this.dragOrigin, ray.origin);
+    const b = u.dot(v);
+    const denom = 1 - b * b; // |u| = |v| = 1
+    if (denom < 1e-6) return null;
+    return (b * v.dot(w) - u.dot(w)) / denom;
+  }
+
+  private applyDrag(faceId: FaceId, newPos: number): void {
     const face = this.gizmo.getFaceById(faceId);
     if (!face) return;
-
-    // Project world point onto the face normal axis
-    const newPos = worldPoint.dot(face.normal) + this.dragOffset;
 
     // Clamp to prevent box collapse
     const min = this.sectionBox.min.clone();

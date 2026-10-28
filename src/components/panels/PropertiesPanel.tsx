@@ -3,6 +3,9 @@ import { useAppStore } from '../../state/appStore';
 import { formatPoints } from '../../utils/format';
 import { useTranslation } from '../../i18n/useTranslation';
 
+/** Element properties shown for a selected Revit element, in this order (rvt-dll PROP record). */
+const PROP_ORDER = ['category', 'family', 'type', 'level', 'materials', 'id', 'class'] as const;
+
 export function PropertiesPanel() {
   const { t } = useTranslation('panels');
   const models = useAppStore((s) => s.models);
@@ -70,6 +73,15 @@ export function PropertiesPanel() {
               <span className="panel-prop-label">{t('properties.name')}</span>
               <span className="panel-prop-value text-[var(--theme-accent)] text-left flex-1 truncate">{selectedObject.name}</span>
             </div>
+            {selectedObject.props &&
+              PROP_ORDER.filter((k) => selectedObject.props?.[k]).map((k) => (
+                <div className="panel-prop-row" key={k}>
+                  <span className="panel-prop-label">{t(`properties.prop.${k}`)}</span>
+                  <span className="panel-prop-value text-left flex-1 break-words" title={selectedObject.props?.[k]}>
+                    {selectedObject.props?.[k]}
+                  </span>
+                </div>
+              ))}
             <div className="panel-prop-row">
               <span className="panel-prop-label">{t('properties.triangles')}</span>
               <span className="panel-prop-value">{formatPoints(selectedObject.triangles)}</span>

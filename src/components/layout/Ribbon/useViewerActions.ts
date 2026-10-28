@@ -8,10 +8,10 @@ export const FILE_FILTERS = [
   { name: 'All 3D Files', extensions: [] as string[] }, // populated below
   { name: 'glTF / USD (*.gltf, *.glb, *.usd, *.usdz, *.drc)', extensions: ['gltf', 'glb', 'usd', 'usda', 'usdc', 'usdz', 'drc'] },
   { name: 'Mesh Formats (*.obj, *.stl, *.ply, *.off, *.3mf, *.amf)', extensions: ['obj', 'stl', 'ply', 'off', '3mf', 'amf'] },
-  { name: 'CAD Formats (*.step, *.stp, *.iges, *.igs, *.brep, *.3dm, *.dxf)', extensions: ['step', 'stp', 'iges', 'igs', 'brep', 'brp', '3dm', 'dxf'] },
+  { name: 'CAD Formats (*.step, *.stp, *.iges, *.igs, *.brep, *.3dm, *.dwg, *.dxf)', extensions: ['step', 'stp', 'iges', 'igs', 'brep', 'brp', '3dm', 'dwg', 'dxf'] },
   { name: 'BIM (*.ifc, *.ifczip, *.rvt)', extensions: ['ifc', 'ifczip', 'rvt'] },
   { name: 'Scene Formats (*.fbx, *.3ds, *.dae, *.x3d, *.vrml, *.wrl, *.blend)', extensions: ['fbx', '3ds', 'dae', 'x3d', 'x3db', 'vrml', 'wrl', 'blend', 'lwo', 'lws', 'lxo', 'x', 'ac', 'ase', 'cob', 'ms3d', 'b3d'] },
-  { name: 'Point Cloud (*.las, *.pcd, *.xyz, *.pts, *.asc, *.csv)', extensions: ['las', 'pcd', 'xyz', 'pts', 'asc', 'csv'] },
+  { name: 'Point Cloud (*.e57, *.las, *.pcd, *.xyz, *.pts, *.asc, *.csv)', extensions: ['e57', 'las', 'pcd', 'xyz', 'pts', 'asc', 'csv'] },
   { name: 'Game Formats (*.md2, *.md3, *.md5mesh, *.mdl, *.smd, *.bsp, *.pmx)', extensions: ['md2', 'md3', 'md5mesh', 'mdl', 'mdc', 'smd', 'bsp', 'pk3', 'pmx', 'hmp'] },
   { name: 'Voxel (*.vox)', extensions: ['vox'] },
   { name: 'Scientific (*.vtk, *.vtp, *.pdb)', extensions: ['vtk', 'vtp', 'pdb'] },

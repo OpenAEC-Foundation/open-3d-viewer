@@ -219,7 +219,7 @@ export const MenuBar = memo(function MenuBar({ onSettingsClick, onFeedbackClick 
           {t('app:title')}
         </span>
         <span className="text-[var(--theme-text-muted)] text-[10px] ml-1.5">
-          {t('app:version')}
+          {t('app:version', { version: __APP_VERSION__ })}
         </span>
       </div>
 

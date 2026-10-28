@@ -10,7 +10,6 @@
   "errorLoading": "Fout bij laden van {{fileName}}: {{error}}",
   "done": "Klaar",
   "readingFilePhase": "Bestand lezen...",
-
   "assimp": {
     "loadingWasm": "{{ext}} laden via Assimp WASM...",
     "cannotLoadWasm": "Kan Assimp WASM niet laden: {{error}}",
@@ -21,7 +20,6 @@
     "loadingGlb": "GLB laden in Three.js...",
     "buildingScene": "Scene opbouwen..."
   },
-
   "rust": {
     "tauriRequired": "{{format}}-bestanden kunnen alleen geopend worden in de Tauri desktop-app.\nDit formaat vereist de Rust backend-converter.\nStart de app met \"npm run tauri dev\" om {{format}}-bestanden te laden.",
     "converting": "{{format}} converteren via Rust backend...",
@@ -33,7 +31,6 @@
     "buildingScene": "Scene opbouwen...",
     "finishing": "Afronden..."
   },
-
   "skp": {
     "checkingHeader": "SKP-header controleren...",
     "invalidFile": "Ongeldig SKP-bestand: geen ZIP-archief",
@@ -48,5 +45,9 @@
     "finishing": "Afronden...",
     "noGeometry": "Geen geometrie gevonden in SKP-bestand",
     "loadFailed": "SKP laden mislukt: {{error}}"
-  }
+  },
+  "stepRead": "Lezen",
+  "stepConvert": "Converteren",
+  "stepScene": "Scène opbouwen",
+  "hintSlowRvt": "Revit-modellen worden volledig omgezet; grote modellen kunnen een minuut duren."
 }

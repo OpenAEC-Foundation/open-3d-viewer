@@ -33,6 +33,8 @@
     "section": "Section",
     "sectionTooltip": "Toggle section box",
     "reset": "Reset",
+    "fitSelection": "Fit selection",
+    "fitSelectionTooltip": "Fit the section box around the selection",
     "resetSectionTooltip": "Reset section box to model bounds",
     "front": "Front",
     "back": "Back",

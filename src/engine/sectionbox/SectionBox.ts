@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SectionBoxGizmo } from './SectionBoxGizmo';
+import { CAP_LAYER } from './SectionCaps';
 
 /**
  * 6-plane clipping section box.
@@ -80,6 +81,10 @@ export class SectionBox {
     this.scene.traverse((child) => {
       // Skip gizmo's own objects
       if (child === this.gizmo.group || this.gizmo.group.getObjectById(child.id)) return;
+      // the ground grid is not cut and has no caps
+      if (child.userData.isGrid) return;
+      // model meshes take part in the cap stencil passes (SectionCaps)
+      if (child instanceof THREE.Mesh && !child.userData.isHighlight) child.layers.enable(CAP_LAYER);
 
       if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
         const materials = Array.isArray(child.material) ? child.material : [child.material];

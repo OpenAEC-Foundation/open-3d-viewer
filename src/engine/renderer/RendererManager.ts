@@ -23,9 +23,11 @@ export class RendererManager {
       canvas,
       antialias: true,
       alpha: false,
+      // the section caps count cut solids in the stencil buffer (off by default since r163)
+      stencil: true,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(RendererManager.pixelRatio());
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -34,7 +36,21 @@ export class RendererManager {
     this.rendererType = 'webgl';
   }
 
+  /**
+   * Render resolution per CSS pixel: at least 2 (supersampling). At 100% display scaling a ratio
+   * of 1 left edges visibly jagged in WebView2, whose MSAA alone does not smooth them; the canvas
+   * is drawn at twice the size and scaled down. Capped at 2 for high-DPI screens.
+   */
+  static pixelRatio(): number {
+    return Math.min(Math.max(window.devicePixelRatio || 1, 2), 2);
+  }
+
   setSize(width: number, height: number) {
+    // the window may have moved to a screen with another scaling
+    const ratio = RendererManager.pixelRatio();
+    if (this.renderer.getPixelRatio() !== ratio) {
+      this.renderer.setPixelRatio(ratio);
+    }
     this.renderer.setSize(width, height, false);
   }
 

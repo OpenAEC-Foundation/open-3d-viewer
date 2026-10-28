@@ -33,6 +33,8 @@
     "section": "Doorsnede",
     "sectionTooltip": "Doorsnede aan/uit",
     "reset": "Herstellen",
+    "fitSelection": "Om selectie",
+    "fitSelectionTooltip": "Doorsnedebox om de selectie leggen",
     "resetSectionTooltip": "Doorsnede herstellen naar modelbegrenzingen",
     "front": "Voor",
     "back": "Achter",

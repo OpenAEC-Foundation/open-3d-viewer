@@ -58,6 +58,8 @@ export const StatusBar = memo(function StatusBar() {
     )),
     <Item label={t('fps')} value={fps} />,
     <Item value={rendererType.toUpperCase()} valueClass={rendererType === 'webgpu' ? 'mono success' : 'mono'} />,
+    // version number on the right (OpenAEC status bar), the build tag on hover
+    <Item value={`v${__APP_VERSION__}`} title={`${__APP_VERSION__}+${__APP_BUILD__}`} />,
   ]);
 
   return (

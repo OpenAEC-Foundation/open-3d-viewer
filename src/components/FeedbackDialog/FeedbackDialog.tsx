@@ -121,7 +121,7 @@ export function FeedbackDialog({ onClose }: FeedbackDialogProps) {
         formData.append('category', category);
         formData.append('message', message.trim());
         if (sentiment) formData.append('sentiment', sentiment);
-        formData.append('appVersion', '0.1.0');
+        formData.append('appVersion', `${__APP_VERSION__}+${__APP_BUILD__}`);
         for (const img of images) {
           formData.append('images', img.file);
         }
@@ -133,7 +133,7 @@ export function FeedbackDialog({ onClose }: FeedbackDialogProps) {
           category,
           message: message.trim(),
           sentiment: sentiment ?? undefined,
-          appVersion: '0.1.0',
+          appVersion: `${__APP_VERSION__}+${__APP_BUILD__}`,
         });
       }
 

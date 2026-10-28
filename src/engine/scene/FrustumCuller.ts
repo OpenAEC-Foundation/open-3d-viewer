@@ -42,7 +42,8 @@ export class FrustumCuller {
       if (
         (child instanceof THREE.Mesh || child instanceof THREE.Points) &&
         !child.name.startsWith('section-box') &&
-        !(child.parent instanceof THREE.GridHelper)
+        !(child.parent instanceof THREE.GridHelper) &&
+        !child.userData.isGrid
       ) {
         this.cullableObjects.push(child);
       }

@@ -79,7 +79,9 @@ export const Backstage = memo(function Backstage({
         {panel === 'about' && (
           <div className="backstage-about">
             <h2>{t('backstage:aboutTitle')}</h2>
-            <p className="backstage-version">{t('app:version')}</p>
+            <p className="backstage-version">
+              {t('app:version', { version: __APP_VERSION__ })} · {t('app:build', { build: __APP_BUILD__ })}
+            </p>
             <p>{t('backstage:aboutBody')}</p>
             <p>{t('backstage:builtOn')}</p>
             <dl>

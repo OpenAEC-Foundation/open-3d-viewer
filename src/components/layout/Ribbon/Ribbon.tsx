@@ -1,7 +1,7 @@
 import { useState, useEffect, memo } from 'react';
 import {
   Download, Sun, Grid3x3, Lightbulb, RotateCcw,
-  Camera, MoveVertical, Gauge,
+  Camera, MoveVertical, Gauge, Crosshair,
 } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { RibbonButton, RibbonSmallButton, RibbonGroup, RibbonButtonStack, ThemeSelector } from './RibbonComponents';
@@ -32,6 +32,7 @@ export const Ribbon = memo(function Ribbon({ onPreferences, onFeedback }: { onPr
   const setProjectionMode = useAppStore((s) => s.setProjectionMode);
   const sectionBoxEnabled = useAppStore((s) => s.sectionBoxEnabled);
   const setSectionBoxEnabled = useAppStore((s) => s.setSectionBoxEnabled);
+  const selectedObject = useAppStore((s) => s.selectedObject);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUITheme = useAppStore((s) => s.setUITheme);
 
@@ -177,6 +178,15 @@ export const Ribbon = memo(function Ribbon({ onPreferences, onFeedback }: { onPr
                 }}
                 disabled={!sectionBoxEnabled}
                 tooltip={t('ribbon:buttons.resetSectionTooltip')}
+              />
+              <RibbonButton
+                icon={<Crosshair size={20} />}
+                label={t('ribbon:buttons.fitSelection')}
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('open3d:sectionbox-fit-selection'));
+                }}
+                disabled={!selectedObject}
+                tooltip={t('ribbon:buttons.fitSelectionTooltip')}
               />
             </RibbonGroup>
 

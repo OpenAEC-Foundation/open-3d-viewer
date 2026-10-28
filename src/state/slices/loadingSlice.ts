@@ -8,6 +8,9 @@ export interface FileLoadingEntry {
   progress: number;
   phase: string;
   error: string | null;
+  /** When loading started and when progress last changed (ms; the loading card's time and busy state) */
+  startedAt: number;
+  updatedAt: number;
 }
 
 export interface LoadingState {
@@ -35,7 +38,8 @@ export const createLoadingSlice = (
 ): LoadingActions => ({
   addLoadingFile: (id: string, fileName: string) => {
     set((s) => {
-      s.loadingFiles.push({ id, fileName, progress: 0, phase: 'Starting...', error: null });
+      const now = Date.now();
+      s.loadingFiles.push({ id, fileName, progress: 0, phase: 'Starting...', error: null, startedAt: now, updatedAt: now });
     });
   },
 
@@ -43,6 +47,7 @@ export const createLoadingSlice = (
     set((s) => {
       const f = s.loadingFiles.find((f) => f.id === id);
       if (f) {
+        if (f.progress !== progress) f.updatedAt = Date.now();
         f.progress = progress;
         f.phase = phase;
       }

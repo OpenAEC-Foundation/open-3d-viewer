@@ -1,6 +1,7 @@
 {
   "title": "Open 3D Viewer Studio",
-  "version": "v0.1.0",
+  "version": "v{{version}}",
+  "build": "build {{build}}",
   "runtimeError": "Runtime Error",
   "tryAgain": "Try Again"
 }

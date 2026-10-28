@@ -5,6 +5,8 @@ use crate::explode::{ExplodeIndex, ExplodeMode};
 use crate::export;
 use crate::icons;
 use crate::loaders;
+use crate::measure::format::{AreaUnit, Category, LengthUnit, VolumeUnit, MAX_DECIMALS};
+use crate::measure::{MeasureState, Tool};
 use crate::model::Model;
 use crate::theme::{srgb3, srgb4, Palette, ThemeKind};
 use crate::viewport::camera::{Camera, ViewPreset};
@@ -105,6 +107,8 @@ pub struct App {
     /// the renderer, replaced when they change.
     pub explode_offsets: Arc<Vec<[f32; 4]>>,
     pub explode_bounds: Option<Bounds>,
+    /// The measure tools and their results.
+    pub measure: MeasureState,
 }
 
 #[derive(Debug, Clone)]
@@ -161,7 +165,18 @@ pub enum Message {
     Explode(usize, f32),
     /// All axes of the exploded view back to 0 %.
     ResetExplode,
-    /// Esc: stop placing the section plane, else clear the selection.
+    /// Switch a measure tool on, or off when it is on.
+    Measure(Tool),
+    /// Enter: close the polygon being measured.
+    MeasureFinish,
+    MeasureDelete(usize),
+    MeasureClear,
+    MeasureLength(LengthUnit),
+    MeasureArea(AreaUnit),
+    MeasureVolume(VolumeUnit),
+    /// Decimals shown for a category.
+    MeasureDecimals(Category, u8),
+    /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
     Escape,
     /// A frame while loading (animates the loading card).
     Tick,
@@ -241,6 +256,7 @@ impl Default for App {
             explode_index: None,
             explode_offsets: Arc::default(),
             explode_bounds: None,
+            measure: MeasureState::default(),
         }
     }
 }
@@ -453,6 +469,7 @@ impl App {
         self.active_view = None;
         self.selected = None;
         self.selection.clear();
+        self.measure.reset();
         self.measurements.clear();
         self.flip_up = false;
         self.layer_filter.clear();
@@ -566,9 +583,10 @@ impl App {
             Message::ToggleFlipUp => {
                 self.flip_up = !self.flip_up;
                 self.update_explode();
-                // the box and the plane are in world space: start again around the turned model
+                // the box, the plane and the measurements are in world space: start again
                 self.section = None;
                 self.plane = None;
+                self.measure.reset();
                 if self.section_on {
                     self.section = self.world_bounds().map(|b| SectionBox::around(&b));
                 }
@@ -714,6 +732,8 @@ impl App {
                     self.plane_picking = false;
                 } else {
                     self.plane_picking = self.model.is_some();
+                    self.measure.tool = None;
+                    self.measure.picks.clear();
                 }
             }
             Message::FlipPlane => {
@@ -734,6 +754,11 @@ impl App {
             }
             Message::ToggleExplode => {
                 self.explode_on = !self.explode_on && self.explode_index.is_some();
+                // measurements are on the model as it is, not taken apart
+                if self.explode_on {
+                    self.measure.tool = None;
+                    self.measure.picks.clear();
+                }
                 self.update_explode();
             }
             Message::ExplodeMode(mode) => {
@@ -750,10 +775,45 @@ impl App {
                 self.explode = [0.0; 3];
                 self.update_explode();
             }
+            Message::Measure(tool) => {
+                self.measure.toggle(tool);
+                if self.measure.tool.is_some() {
+                    self.plane_picking = false;
+                    if self.explode_on {
+                        self.explode_on = false;
+                        self.update_explode();
+                    }
+                }
+            }
+            Message::MeasureFinish => self.measure.finish(),
+            Message::MeasureDelete(i) => {
+                if i < self.measure.results.len() {
+                    self.measure.results.remove(i);
+                }
+            }
+            Message::MeasureClear => {
+                self.measure.results.clear();
+                self.measure.picks.clear();
+            }
+            Message::MeasureLength(u) => self.measure.units.length = u,
+            Message::MeasureArea(u) => self.measure.units.area = u,
+            Message::MeasureVolume(u) => self.measure.units.volume = u,
+            Message::MeasureDecimals(category, n) => {
+                let n = n.min(MAX_DECIMALS);
+                let u = &mut self.measure.units;
+                match category {
+                    Category::Length => u.length_decimals = n,
+                    Category::Area => u.area_decimals = n,
+                    Category::Volume => u.volume_decimals = n,
+                    Category::Angle => u.angle_decimals = n,
+                }
+            }
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape => {
-                self.selected = None;
-                self.selection.clear();
+                if !self.measure.escape() {
+                    self.selected = None;
+                    self.selection.clear();
+                }
             }
         }
         Task::none()
@@ -786,6 +846,7 @@ impl App {
                     Key::Character("3") => Some(Message::Preset(ViewPreset::Right)),
                     Key::Character("0") | Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
                     Key::Named(Named::Escape) => Some(Message::Escape),
+                    Key::Named(Named::Enter) => Some(Message::MeasureFinish),
                     _ => None,
                 }
             }
@@ -807,7 +868,8 @@ impl App {
 
     /// Selects what is under the cursor: the nearest visible triangle, then its element (or the
     /// whole layer when the format has no elements); empty space clears the selection. While
-    /// placing the section plane, puts it on the face under the cursor instead.
+    /// placing the section plane, puts it on the face under the cursor instead; while measuring,
+    /// hands the click to the measure tool.
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
@@ -842,6 +904,18 @@ impl App {
                 }
             }
             return;
+        }
+        if let Some(tool) = self.measure.tool {
+            let Some((l, t)) = hit else { return };
+            // the point on the triangle as it is (the exploded view is off while measuring)
+            let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
+            let Some((point, _)) = face_at(&model.layers[l], t, origin - s, dir) else { return };
+            let pixel = crate::measure::pixel_size(&self.camera.view_proj(width / height), (width, height), mm.transform_point3(point));
+            self.measure.click(&model, l, t, point, &mm, pixel);
+            // the measured element is also selected (shows its properties)
+            if tool != Tool::Volume {
+                return;
+            }
         }
         self.selected = hit.map(|(l, t)| (l, model.layers[l].element_at(t)));
         self.selection = match self.selected {
@@ -1234,6 +1308,11 @@ impl App {
             content = content.push(rule::horizontal(1));
         }
 
+        // the measurements
+        if self.measure.tool.is_some() || !self.measure.results.is_empty() {
+            content = content.push(self.measurements_body(p, l)).push(rule::horizontal(1));
+        }
+
         // the section box
         if let (Some(s), true, Some(world)) = (self.section, self.section_on, self.world_bounds()) {
             let r = s.local_bounds(&world);
@@ -1352,6 +1431,91 @@ impl App {
         scrollable(content).height(Fill).spacing(4).into()
     }
 
+    /// The measurements in the properties pane: each result with its details and a delete button,
+    /// the totals, and the units with their decimals.
+    fn measurements_body(&self, p: Palette, l: Language) -> Element<'static, Message> {
+        let m = &self.measure;
+        let units = &m.units;
+        let heading = |title: &str| -> Element<'static, Message> {
+            container(text(title.to_uppercase()).size(11).font(FONT_BOLD).color(p.group_label))
+                .padding(Padding { top: 6.0, right: 0.0, bottom: 2.0, left: 0.0 })
+                .into()
+        };
+        let chip = |label: String, active: bool, msg: Option<Message>| {
+            button(text(label).size(11)).padding([2, 6]).style(move |_, s| p.ribbon_button(active, s)).on_press_maybe(msg)
+        };
+        let mut body = column![heading(l.text("Metingen", "Measurements"))].spacing(5);
+        if m.results.is_empty() {
+            body = body.push(
+                text(l.text("Nog geen metingen", "No measurements yet")).size(12).color(p.text_muted),
+            );
+        }
+        for (i, result) in m.results.iter().enumerate() {
+            body = body.push(
+                row![
+                    text(format!("{}. {}", i + 1, result.title(l)))
+                        .size(12)
+                        .color(p.text_secondary)
+                        .width(Fill)
+                        .wrapping(Wrapping::WordOrGlyph),
+                    text(result.label(units, l)).size(12).font(FONT_BOLD).color(p.text),
+                    chip("×".into(), false, Some(Message::MeasureDelete(i))),
+                ]
+                .spacing(6)
+                .align_y(Center),
+            );
+            for (k, v) in result.details(units, l) {
+                body = body.push(container(prop_row(p, k.to_string(), v)).padding(Padding { left: 14.0, ..Padding::ZERO }));
+            }
+        }
+        for (category, total, count) in m.totals() {
+            if count > 1 {
+                body = body.push(prop_row(
+                    p,
+                    format!("{} {} ({count})", l.text("Totaal", "Total"), category.label(l).to_lowercase()),
+                    units.format(l, category, total),
+                ));
+            }
+        }
+        if !m.results.is_empty() {
+            body = body.push(chip(l.text("Alles wissen", "Clear all").into(), false, Some(Message::MeasureClear)));
+        }
+
+        // units and decimals
+        body = body.push(heading(l.text("Eenheden", "Units")));
+        let unit_row = |category: Category, choices: Element<'static, Message>, decimals: u8| -> Element<'static, Message> {
+            let step = |label: &str, to: Option<u8>| chip(label.into(), false, to.map(|n| Message::MeasureDecimals(category, n)));
+            row![
+                text(category.label(l)).size(12).color(p.text_secondary).width(Fill),
+                choices,
+                step("−", decimals.checked_sub(1)),
+                text(decimals.to_string()).size(11).color(p.text).width(12).align_x(Center),
+                step("+", (decimals < MAX_DECIMALS).then_some(decimals + 1)),
+            ]
+            .spacing(3)
+            .align_y(Center)
+            .into()
+        };
+        body = body
+            .push(unit_row(
+                Category::Length,
+                row(LengthUnit::ALL.map(|u| chip(u.label().into(), units.length == u, Some(Message::MeasureLength(u))).into())).spacing(2).into(),
+                units.length_decimals,
+            ))
+            .push(unit_row(
+                Category::Area,
+                row(AreaUnit::ALL.map(|u| chip(u.label().into(), units.area == u, Some(Message::MeasureArea(u))).into())).spacing(2).into(),
+                units.area_decimals,
+            ))
+            .push(unit_row(
+                Category::Volume,
+                row(VolumeUnit::ALL.map(|u| chip(u.label().into(), units.volume == u, Some(Message::MeasureVolume(u))).into())).spacing(2).into(),
+                units.volume_decimals,
+            ))
+            .push(unit_row(Category::Angle, text("°").size(11).color(p.text_muted).into(), units.angle_decimals));
+        body.into()
+    }
+
     // ---- viewport -------------------------------------------------------------------------
 
     /// The 3D viewport with its overlays; the shell's workspace.
@@ -1410,9 +1574,34 @@ impl App {
         let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {
             canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
-        let picking = (self.plane_picking && overlay.is_none()).then(|| {
+        let banner = if self.plane_picking {
+            Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
+        } else {
+            self.measure.tool.map(|tool| {
+                format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
+            })
+        };
+        // hidden while the model is taken apart: they belong to the model as it is
+        let measures = (overlay.is_none()
+            && !self.explode_on
+            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty()))
+        .then(|| {
+            canvas(crate::measure::overlay::MeasureOverlay {
+                results: &self.measure.results,
+                picks: &self.measure.picks,
+                units: self.measure.units,
+                language: l,
+                view_proj: self.camera.view_proj(self.aspect()),
+                ink: p.accent,
+                label_bg: p.surface,
+                label_text: p.text,
+            })
+            .width(Fill)
+            .height(Fill)
+        });
+        let picking = banner.filter(|_| overlay.is_none()).map(|banner| {
             container(
-                container(text(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel")).size(12).color(Color::WHITE))
+                container(text(banner).size(12).color(Color::WHITE))
                     .padding([6, 12])
                     .style(|_| container::Style {
                         background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.6))),
@@ -1453,6 +1642,7 @@ impl App {
             .push(grids)
             .push(section)
             .push(plane)
+            .push(measures)
             .push(measurements)
             .push(picking)
             .push(cube)
@@ -2054,6 +2244,39 @@ mod tests {
         ui.click("Reset").expect("Reset button");
         let messages: Vec<Message> = ui.into_messages().collect();
         assert!(matches!(messages[..], [Message::ExplodeMode(ExplodeMode::Elements), Message::ResetExplode]), "{messages:?}");
+    }
+
+    #[test]
+    fn measures_between_two_clicked_corners() {
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Plate".into(),
+            positions: vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let vp = app.camera.view_proj(w / h);
+        let screen = |p: Vec3| {
+            let n = vp.project_point3(p);
+            ((n.x + 1.0) * 0.5 * w, (1.0 - n.y) * 0.5 * h)
+        };
+        let _ = app.update(Message::Measure(Tool::Distance));
+        // a few pixels off the corners: they snap
+        for (corner, off) in [(Vec3::new(0.0, 0.0, 0.0), 0.01), (Vec3::new(2.0, 1.0, 0.0), -0.01)] {
+            let (x, y) = screen(corner + Vec3::new(off, off, 0.0));
+            let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        }
+        assert_eq!(app.measure.results.len(), 1);
+        let (_, d) = app.measure.results[0].value();
+        assert!((d - 5f64.sqrt()).abs() < 1e-5, "{d}");
+        assert!(app.selected.is_none(), "measuring does not select");
+        let _ = app.update(Message::Escape);
+        assert!(app.measure.tool.is_none());
     }
 
     #[test]

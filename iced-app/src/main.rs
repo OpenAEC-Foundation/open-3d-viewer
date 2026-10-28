@@ -17,6 +17,7 @@ mod explode;
 mod export;
 mod icons;
 mod loaders;
+mod measure;
 mod model;
 mod remote;
 mod remote_link;

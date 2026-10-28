@@ -1,6 +1,8 @@
 //! Application state, messages and the main window layout:
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
+use crate::explode::{ExplodeIndex, ExplodeMode};
+use crate::export;
 use crate::icons;
 use crate::loaders;
 use crate::model::Model;
@@ -38,6 +40,7 @@ pub enum RibbonTab {
 pub enum Status {
     Ready,
     Loading { file: String, since: Instant, progress: Arc<loaders::Progress> },
+    Saving { file: String, since: Instant },
     Loaded(String),
     Error(String),
 }
@@ -75,6 +78,8 @@ pub struct App {
     pub section_fill: bool,
     /// The section plane (world), when placed.
     pub plane: Option<SectionPlane>,
+    /// The section plane as it was placed, before moves and flips: what Reset brings back.
+    pub plane_placed: Option<SectionPlane>,
     /// Waiting for a click on a face to place the section plane.
     pub plane_picking: bool,
     /// The saved view last shown.
@@ -83,6 +88,17 @@ pub struct App {
     pub show_grids: bool,
     /// Explorer groups opened: views, rooms, layers.
     pub explorer_open: [bool; 3],
+    /// The exploded view: on or off (the amounts are kept while off, as the section box), the
+    /// mode asked for and the amount per axis (percent).
+    pub explode_on: bool,
+    pub explode_mode: ExplodeMode,
+    pub explode: [f32; 3],
+    /// The units of the model for the exploded view, built when it is loaded.
+    pub explode_index: Option<Arc<ExplodeIndex>>,
+    /// The offset (world) of every unit as drawn, and the world bounds while apart; shared with
+    /// the renderer, replaced when they change.
+    pub explode_offsets: Arc<Vec<[f32; 4]>>,
+    pub explode_bounds: Option<Bounds>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +107,10 @@ pub enum Message {
     Open(PathBuf),
     Picked(Option<PathBuf>),
     Loaded(Result<Arc<Model>, String>),
+    SaveDialog,
+    SavePicked(Option<PathBuf>),
+    /// A save finished: the file written and how long it took, or the error.
+    Saved(Result<(PathBuf, f32), String>),
     Mode(RenderMode),
     ToggleGrid,
     ToggleFlipUp,
@@ -128,6 +148,13 @@ pub enum Message {
     PlaneMove(f32),
     /// The section plane from the properties pane: percent between its extremes.
     PlaneSlider(f32),
+    /// Switch the exploded view on or off.
+    ToggleExplode,
+    ExplodeMode(ExplodeMode),
+    /// An axis of the exploded view: axis, percent.
+    Explode(usize, f32),
+    /// All axes of the exploded view back to 0 %.
+    ResetExplode,
     /// Esc: stop placing the section plane, else clear the selection.
     Escape,
     /// A frame while loading (animates the loading card).
@@ -189,10 +216,17 @@ impl Default for App {
             section_on: false,
             section_fill: true,
             plane: None,
+            plane_placed: None,
             plane_picking: false,
             active_view: None,
             show_grids: true,
             explorer_open: [true, false, true],
+            explode_on: false,
+            explode_mode: ExplodeMode::Storeys,
+            explode: [0.0; 3],
+            explode_index: None,
+            explode_offsets: Arc::default(),
+            explode_bounds: None,
         }
     }
 }
@@ -208,6 +242,21 @@ pub fn load_task(path: PathBuf, progress: Arc<loaders::Progress>) -> Task<Messag
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
         Message::Loaded,
+    )
+}
+
+/// Saves the model on a worker thread.
+pub fn save_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let start = Instant::now();
+                let _ = tx.send(export::save(&model, &path).map(|()| (path, start.elapsed().as_secs_f32())));
+            });
+            rx.await.unwrap_or_else(|_| Err("save thread stopped".to_string()))
+        },
+        Message::Saved,
     )
 }
 
@@ -242,16 +291,36 @@ impl App {
 
     /// `camera` framing the whole model.
     fn fitted(&self, mut camera: Camera) -> Camera {
-        if let Some(m) = &self.model {
-            let b = transform_bounds(&m.bounds, &self.model_matrix());
+        if let Some(b) = self.world_bounds() {
             camera.fit(&b, self.aspect());
         }
         camera
     }
 
-    /// The model's bounds in world space (after the up-axis override).
+    /// The model's bounds in world space (after the up-axis override), as drawn: pulled apart
+    /// by the exploded view.
     fn world_bounds(&self) -> Option<Bounds> {
-        self.model.as_ref().map(|m| transform_bounds(&m.bounds, &self.model_matrix()))
+        let model = self.model.as_ref()?;
+        self.explode_bounds.or_else(|| Some(transform_bounds(&model.bounds, &self.model_matrix())))
+    }
+
+    /// The offset (world) of vertex `i` of layer `l` in the exploded view.
+    fn explode_offset(&self, l: usize, i: u32) -> Vec3 {
+        let unit = self.explode_index.as_ref().map_or(0, |e| e.unit(l, i));
+        self.explode_offsets.get(unit).map_or(Vec3::ZERO, |o| Vec3::new(o[0], o[1], o[2]))
+    }
+
+    /// Recomputes where the units of the exploded view are drawn, after its switch, mode or
+    /// amounts, or the up axis changed; the far plane makes room for the model pulled apart.
+    fn update_explode(&mut self) {
+        let Some(index) = self.explode_index.clone() else { return };
+        let amount = if self.explode_on { self.explode.map(|v| v / 100.0) } else { [0.0; 3] };
+        let mm = self.model_matrix();
+        self.explode_offsets = Arc::new(index.offsets(self.explode_mode, amount, &mm));
+        self.explode_bounds = (amount != [0.0; 3]).then(|| index.bounds(&self.explode_offsets, &mm)).filter(Bounds::is_valid);
+        if let Some(b) = self.world_bounds() {
+            self.camera.scene_radius = self.camera.scene_radius.max(b.radius());
+        }
     }
 
     /// World bounds of the selected triangles.
@@ -262,9 +331,9 @@ impl App {
         for &(l, first, count) in &self.selection {
             let layer = model.layers.get(l)?;
             for &i in layer.indices.get(first as usize..(first + count) as usize)? {
-                let i = 3 * i as usize;
-                if let Some(p) = layer.positions.get(i..i + 3) {
-                    b.extend(mm.transform_point3(Vec3::new(p[0], p[1], p[2])).to_array());
+                let at = 3 * i as usize;
+                if let Some(p) = layer.positions.get(at..at + 3) {
+                    b.extend((mm.transform_point3(Vec3::new(p[0], p[1], p[2])) + self.explode_offset(l, i)).to_array());
                 }
             }
         }
@@ -283,10 +352,14 @@ impl App {
     pub fn apply_view(&mut self, i: usize) {
         let Some(model) = self.model.clone() else { return };
         let Some(view) = model.views.get(i).cloned() else { return };
-        // views are in the file's coordinates
+        // views are in the file's coordinates, of the model at rest
         if self.flip_up {
             self.flip_up = false;
             self.section = None;
+        }
+        if self.explode_on {
+            self.explode_on = false;
+            self.update_explode();
         }
         let Some(world) = self.world_bounds() else { return };
         self.active_view = Some(i);
@@ -368,6 +441,10 @@ impl App {
         self.selection.clear();
         self.flip_up = false;
         self.layer_filter.clear();
+        self.explode_index = self.model.as_deref().map(|m| Arc::new(ExplodeIndex::new(m)));
+        self.explode_on = false;
+        self.explode = [0.0; 3];
+        self.update_explode();
         self.camera.set_preset(self.initial_view.take().unwrap_or(ViewPreset::Iso));
         self.fit();
     }
@@ -417,6 +494,41 @@ impl App {
                 self.status = Status::Error(e);
                 return self.shot_after_delay();
             }
+            Message::SaveDialog => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                let writers = export::registry();
+                let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .set_title("Save as")
+                    .set_file_name(format!("{stem}.{}", writers[0].extensions()[0]));
+                if let Some(dir) = model.path.parent() {
+                    dialog = dialog.set_directory(dir);
+                }
+                for w in &writers {
+                    dialog = dialog.add_filter(w.name(), w.extensions());
+                }
+                return Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::SavePicked);
+            }
+            Message::SavePicked(None) => {}
+            Message::SavePicked(Some(mut path)) => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if path.extension().is_none() {
+                    path.set_extension(export::registry()[0].extensions()[0]);
+                }
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Saving { file, since: Instant::now() };
+                return save_task(model, path);
+            }
+            Message::Saved(Ok((path, secs))) => {
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Loaded(format!("Saved {file} in {secs:.2} s"));
+            }
+            Message::Saved(Err(e)) => {
+                self.status = Status::Error(e);
+            }
             Message::TakeShot => {
                 return window::latest().and_then(window::screenshot).map(Message::Shot);
             }
@@ -433,6 +545,7 @@ impl App {
             Message::ToggleGrid => self.grid = !self.grid,
             Message::ToggleFlipUp => {
                 self.flip_up = !self.flip_up;
+                self.update_explode();
                 // the box and the plane are in world space: start again around the turned model
                 self.section = None;
                 self.plane = None;
@@ -511,8 +624,17 @@ impl App {
                 }
             }
             Message::ToggleSection => {
+                let world = self.world_bounds();
+                // switched on over a level or upright section plane: the plane becomes a face of
+                // a box round the model, instead of a second cut
+                if !self.section_on {
+                    if let Some(b) = self.plane.zip(world).and_then(|(plane, world)| SectionBox::from_plane(&plane, &world)) {
+                        self.section = Some(b);
+                        self.plane = None;
+                    }
+                }
                 if self.section.is_none() {
-                    self.section = self.world_bounds().map(|b| SectionBox::around(&b));
+                    self.section = world.map(|b| SectionBox::around(&b));
                 }
                 self.section_on = !self.section_on && self.section.is_some();
             }
@@ -520,9 +642,9 @@ impl App {
                 if self.section_on {
                     self.section = self.world_bounds().map(|b| SectionBox::around(&b));
                 }
-                // a placed plane: pick a new face
+                // the section plane back where it was placed: moves and flips undone
                 if self.plane.is_some() {
-                    self.plane_picking = true;
+                    self.plane = self.plane_placed;
                 }
             }
             Message::SectionToSelection => {
@@ -587,6 +709,24 @@ impl App {
                     plane.move_by(lo + (hi - lo) * percent / 100.0 - plane.offset, &world);
                 }
             }
+            Message::ToggleExplode => {
+                self.explode_on = !self.explode_on && self.explode_index.is_some();
+                self.update_explode();
+            }
+            Message::ExplodeMode(mode) => {
+                self.explode_mode = mode;
+                self.update_explode();
+            }
+            Message::Explode(axis, percent) => {
+                if let Some(a) = self.explode.get_mut(axis) {
+                    *a = percent.clamp(0.0, 100.0);
+                }
+                self.update_explode();
+            }
+            Message::ResetExplode => {
+                self.explode = [0.0; 3];
+                self.update_explode();
+            }
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape => {
                 self.selected = None;
@@ -597,7 +737,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let ticks = if matches!(self.status, Status::Loading { .. }) || self.anim.is_some() {
+        let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) || self.anim.is_some() {
             window::frames().map(|_| Message::Tick)
         } else {
             Subscription::none()
@@ -657,17 +797,22 @@ impl App {
             let w = mm.transform_point3(p);
             section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
         };
-        let hit = pick_triangle(&model, &self.visible, origin, dir, &keep);
+        // the exploded view moves the triangles: their offsets back in model space
+        let back = mm.inverse();
+        let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
+        let hit = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep);
         if self.plane_picking {
             if let (Some((l, t)), Some(world)) = (hit, self.world_bounds()) {
-                if let Some((point, normal)) = face_at(&model.layers[l], t, origin, dir) {
-                    let (point, mut normal) = (mm.transform_point3(point), mm.transform_vector3(normal));
+                let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
+                if let Some((point, normal)) = face_at(&model.layers[l], t, origin - s, dir) {
+                    let (point, mut normal) = (mm.transform_point3(point + s), mm.transform_vector3(normal));
                     // the face as seen: its normal towards the viewer
                     if normal.dot(mm.transform_vector3(dir)) > 0.0 {
                         normal = -normal;
                     }
                     if let Some(p) = SectionPlane::on_face(point, normal, &world) {
                         self.plane = Some(p);
+                        self.plane_placed = Some(p);
                         self.plane_picking = false;
                     }
                 }
@@ -710,7 +855,16 @@ impl App {
 
         let content: Element<'_, Message> = match self.tab {
             RibbonTab::Home => row![
-                group(p, "File", row![big_button(p, icons::OPEN, "Import", Message::OpenDialog, false)].into()),
+                group(
+                    p,
+                    "File",
+                    row![
+                        big_button(p, icons::OPEN, "Import", Message::OpenDialog, false),
+                        big_button(p, icons::SAVE_AS, "Save as", Message::SaveDialog, false),
+                    ]
+                    .spacing(2)
+                    .into()
+                ),
                 separator(p),
                 group(
                     p,
@@ -791,6 +945,8 @@ impl App {
                     .spacing(2)
                     .into()
                 ),
+                separator(p),
+                group(p, "Explode", row![big_button(p, icons::EXPLODE, "Explode", Message::ToggleExplode, self.explode_on)].into()),
                 separator(p),
                 group(
                     p,
@@ -1114,6 +1270,38 @@ impl App {
                 .push(rule::horizontal(1));
         }
 
+        // the exploded view: the mode (storeys only with levels), an amount per axis, reset
+        if let (true, Some(index)) = (self.explode_on, &self.explode_index) {
+            let mode = index.mode(self.explode_mode);
+            let small = |label: &'static str, active: bool, msg: Option<Message>| {
+                button(text(label).size(11)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press_maybe(msg)
+            };
+            let storeys = (index.storeys() > 0).then_some(Message::ExplodeMode(ExplodeMode::Storeys));
+            content = content.push(section(l.text("Uit elkaar", "Exploded view"))).push(
+                row![
+                    small(l.text("Verdiepingen", "Storeys"), mode == ExplodeMode::Storeys, storeys),
+                    small(l.text("Elementen", "Elements"), mode == ExplodeMode::Elements, Some(Message::ExplodeMode(ExplodeMode::Elements))),
+                    Space::new().width(Fill),
+                    small(l.text("Herstellen", "Reset"), false, (self.explode != [0.0; 3]).then_some(Message::ResetExplode)),
+                ]
+                .spacing(4)
+                .align_y(Center),
+            );
+            for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+                let v = self.explode[axis];
+                content = content.push(
+                    row![
+                        text(name).size(12).font(FONT_BOLD).color(AXIS_COLORS[axis]).width(14),
+                        slider(0.0..=100.0, v, move |v| Message::Explode(axis, v)).step(1.0_f32).width(Fill),
+                        text(format!("{v:.0}%")).size(11).color(p.text_muted).width(34).align_x(iced::alignment::Horizontal::Right),
+                    ]
+                    .spacing(8)
+                    .align_y(Center),
+                );
+            }
+            content = content.push(rule::horizontal(1));
+        }
+
         content = content
             .push(section(l.text("Bestand", "File")))
             .push(prop(l.text("Naam", "Name"), model.file_name()))
@@ -1155,6 +1343,7 @@ impl App {
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
             grids: self.show_grids && !self.flip_up,
+            bounds: self.world_bounds(),
         };
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),
@@ -1162,6 +1351,8 @@ impl App {
             selection: &self.selection,
             camera: self.camera,
             settings,
+            explode: self.explode_index.as_ref(),
+            offsets: &self.explode_offsets,
         })
             .width(Fill)
             .height(Fill);
@@ -1268,6 +1459,7 @@ impl App {
             Status::Loading { file, since, .. } => {
                 (format!("Loading {file}… {:.0} s", since.elapsed().as_secs_f32()), p.accent)
             }
+            Status::Saving { file, since } => (format!("Saving {file}… {:.0} s", since.elapsed().as_secs_f32()), p.accent),
             Status::Loaded(s) => (s.clone(), p.status_text),
             Status::Error(e) => (format!("Error: {e}"), iced::Color::from_rgb8(0xF8, 0x71, 0x71)),
         };
@@ -1302,6 +1494,10 @@ impl App {
         .into()
     }
 }
+
+/// The axes on the exploded view's sliders: X and Y as the axis lines of the ground grid (red,
+/// green), Z blue.
+const AXIS_COLORS: [Color; 3] = [Color::from_rgb8(217, 70, 60), Color::from_rgb8(80, 170, 80), Color::from_rgb8(60, 120, 216)];
 
 /// Element property keys (from the loaders) and their labels, in display order.
 const PROP_ORDER: [(&str, &str, &str); 7] = [
@@ -1341,9 +1537,17 @@ fn face_at(layer: &crate::model::Layer, t: usize, origin: Vec3, dir: Vec3) -> Op
 }
 
 /// The nearest triangle hit by the ray `origin + t·dir` (t > 0) among the visible layers:
-/// (layer, triangle), skipping hits that `keep` rejects (the section box). Möller–Trumbore,
-/// two-sided.
-pub fn pick_triangle(model: &Model, visible: &[bool], origin: Vec3, dir: Vec3, keep: &dyn Fn(Vec3) -> bool) -> Option<(usize, usize)> {
+/// (layer, triangle), skipping hits that `keep` rejects (the section box). A triangle is where
+/// `shift` (layer, vertex) moves its first vertex: the exploded view, whose units never share a
+/// vertex. Möller–Trumbore, two-sided.
+pub fn pick_triangle(
+    model: &Model,
+    visible: &[bool],
+    origin: Vec3,
+    dir: Vec3,
+    shift: &dyn Fn(usize, u32) -> Vec3,
+    keep: &dyn Fn(Vec3) -> bool,
+) -> Option<(usize, usize)> {
     let mut best: Option<(f32, usize, usize)> = None;
     for (l, layer) in model.layers.iter().enumerate() {
         if !visible.get(l).copied().unwrap_or(true) {
@@ -1366,7 +1570,8 @@ pub fn pick_triangle(model: &Model, visible: &[bool], origin: Vec3, dir: Vec3, k
                 continue;
             }
             let f = 1.0 / det;
-            let s = origin - a;
+            // the ray moved back instead of the triangle
+            let s = origin - shift(l, tri[0]) - a;
             let u = f * s.dot(h);
             if !(0.0..=1.0).contains(&u) {
                 continue;
@@ -1684,9 +1889,11 @@ mod tests {
         let mut ui = simulator(&app);
         ui.click("Wireframe").expect("Wireframe button");
         ui.click("Grid").expect("Grid button");
+        ui.click("Save as").expect("Save as button");
         let messages: Vec<Message> = ui.into_messages().collect();
         assert!(matches!(messages[0], Message::Mode(RenderMode::Wireframe)), "{messages:?}");
         assert!(matches!(messages[1], Message::ToggleGrid), "{messages:?}");
+        assert!(matches!(messages[2], Message::SaveDialog), "{messages:?}");
     }
 
     #[test]
@@ -1732,18 +1939,76 @@ mod tests {
             ..Layer::default()
         };
         let model = Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]);
-        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &|_| true);
+        let still = |_: usize, _: u32| Vec3::ZERO;
+        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true);
         let (l, t) = hit.expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(20));
         assert_eq!(model.element_ranges(20), vec![(0, 6, 6)]);
         let props = model.element_props(20);
         assert!(props.contains(&("level".to_string(), "00 begane grond".to_string())), "{props:?}");
-        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &|_| true).is_none());
-        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &|_| true).is_none());
+        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true).is_none());
         // a section box below z = 0.5 cuts the upper square away: the lower one is hit
         let below = |p: Vec3| p.z < 0.5;
-        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &below).expect("hit");
+        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below).expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(10));
+    }
+
+    /// Two unit squares facing +Z side by side: element 10 at x 0..1, element 20 at x 2..3.
+    fn two_squares() -> Arc<Model> {
+        use crate::model::Layer;
+        let mut positions = Vec::new();
+        for x in [0.0, 2.0] {
+            positions.extend_from_slice(&[x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x + 1.0, 1.0, 0.0, x, 1.0, 0.0]);
+        }
+        let layer = Layer {
+            name: "Walls".into(),
+            positions,
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            elements: vec![(10, 0, 6), (20, 6, 6)],
+            ..Layer::default()
+        };
+        Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn the_exploded_view_is_picked_and_framed_where_it_is_drawn() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        let model = app.model.clone().unwrap();
+        let _ = app.update(Message::ToggleExplode);
+        let _ = app.update(Message::Explode(0, 100.0));
+        // no levels: elements mode; the middle is x 1.5, so the squares move by -2 and +2
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        let shift = |l: usize, i: u32| app.explode_offset(l, i);
+        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true);
+        assert_eq!(hit.map(|(l, t)| model.layers[l].element_at(t)), Some(Some(20)));
+        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true).is_none());
+        let b = app.world_bounds().unwrap();
+        assert_eq!((b.min[0], b.max[0]), (-2.0, 5.0));
+        app.selection = model.element_ranges(20);
+        let s = app.selection_bounds().unwrap();
+        assert_eq!((s.min[0], s.max[0]), (4.0, 5.0));
+        // off: back at rest, the amounts kept for the next time
+        let _ = app.update(Message::ToggleExplode);
+        let b = app.world_bounds().unwrap();
+        assert_eq!((b.min[0], b.max[0], app.explode[0]), (0.0, 3.0, 100.0));
+        assert!(app.explode_offsets.iter().all(|o| *o == [0.0; 4]));
+    }
+
+    #[test]
+    fn explode_controls_send_messages() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        let _ = app.update(Message::ToggleExplode);
+        let _ = app.update(Message::Explode(2, 40.0));
+        let mut ui = simulator(&app);
+        // no levels: the storeys button is disabled
+        ui.click("Storeys").expect("Storeys button");
+        ui.click("Elements").expect("Elements button");
+        ui.click("Reset").expect("Reset button");
+        let messages: Vec<Message> = ui.into_messages().collect();
+        assert!(matches!(messages[..], [Message::ExplodeMode(ExplodeMode::Elements), Message::ResetExplode]), "{messages:?}");
     }
 
     #[test]
@@ -1755,6 +2020,51 @@ mod tests {
             assert!(f >= last && f < 1.0, "{phase:?} {t}: {f}");
             last = f;
         }
+    }
+
+    #[test]
+    fn the_section_box_takes_over_a_level_or_upright_plane() {
+        use crate::model::Layer;
+        // a unit cube's top and bottom
+        let layer = Layer {
+            name: "Cube".into(),
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        app.plane = Some(SectionPlane { normal: Vec3::Z, offset: 0.4 });
+        let _ = app.update(Message::ToggleSection);
+        let b = app.active_section().expect("box on");
+        assert!(app.plane.is_none());
+        assert!((b.max.z - 0.4).abs() < 1e-6, "{b:?}");
+        // a sloped plane stays next to the box
+        let _ = app.update(Message::ToggleSection);
+        app.plane = Some(SectionPlane { normal: Vec3::new(0.0, 0.6, 0.8), offset: 0.4 });
+        let _ = app.update(Message::ToggleSection);
+        assert!(app.active_section().is_some() && app.plane.is_some());
+    }
+
+    #[test]
+    fn reset_puts_the_section_plane_back_where_it_was_placed() {
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Cube".into(),
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        let placed = SectionPlane { normal: Vec3::new(0.0, 0.6, 0.8), offset: 0.4 };
+        (app.plane, app.plane_placed) = (Some(placed), Some(placed));
+        let _ = app.update(Message::PlaneMove(0.2));
+        let _ = app.update(Message::FlipPlane);
+        assert_ne!(app.plane, Some(placed));
+        let _ = app.update(Message::ResetSection);
+        assert_eq!(app.plane, Some(placed));
+        assert!(!app.plane_picking);
     }
 
     #[test]

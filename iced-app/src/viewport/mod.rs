@@ -8,6 +8,7 @@
 pub mod camera;
 pub mod render;
 
+use crate::explode::ExplodeIndex;
 use crate::model::Model;
 use camera::Camera;
 use iced::mouse;
@@ -36,6 +37,9 @@ pub struct Viewport3D<'a> {
     pub selection: &'a [(usize, u32, u32)],
     pub camera: Camera,
     pub settings: RenderSettings,
+    /// The exploded view: the units of the model and the offset (world) of each.
+    pub explode: Option<&'a Arc<ExplodeIndex>>,
+    pub offsets: &'a Arc<Vec<[f32; 4]>>,
 }
 
 #[derive(Default)]
@@ -145,6 +149,8 @@ where
             selection: self.selection.to_vec(),
             camera: self.camera,
             settings: self.settings,
+            explode: self.explode.cloned(),
+            offsets: self.offsets.clone(),
         }
     }
 

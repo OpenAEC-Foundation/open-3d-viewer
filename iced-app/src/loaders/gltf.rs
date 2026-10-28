@@ -1,6 +1,7 @@
 //! glTF 2.0 (.gltf / .glb). The default scene is flattened to world space and grouped into one
-//! layer per material. glTF is Y up, metres; converted to Z up. Base colour = material factor
-//! times the average colour of its base-colour texture (no texture mapping yet).
+//! layer per material; each node with a mesh is a pickable element with its name. glTF is Y up,
+//! metres; converted to Z up. Base colour = material factor times the average colour of its
+//! base-colour texture (no texture mapping yet).
 
 use super::{Loader, DEFAULT_COLOR};
 use crate::model::{flat_shaded, y_up_to_z_up, Layer};
@@ -39,8 +40,22 @@ impl Loader for GltfLoader {
         while let Some((node, parent)) = stack.pop() {
             let world = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
             if let Some(mesh) = node.mesh() {
+                // element ids start at 1: node index + 1
+                let element = node.index() as u64 + 1;
+                let mut props_in: Option<Option<usize>> = None;
                 for prim in mesh.primitives() {
-                    add_primitive(&prim, world, &buffers, &texture_average, &mut layers);
+                    if add_primitive(&prim, world, &buffers, &texture_average, &mut layers, element) {
+                        props_in.get_or_insert(prim.material().index());
+                    }
+                }
+                if let Some(layer) = props_in.and_then(|m| layers.get_mut(&m)) {
+                    let mut props = serde_json::Map::new();
+                    let name = node.name().or(mesh.name()).map(str::to_owned).unwrap_or_else(|| format!("Node {}", node.index()));
+                    props.insert("Name".into(), name.into());
+                    if let Some(m) = mesh.name() {
+                        props.insert("Mesh".into(), m.into());
+                    }
+                    layer.props.push((element, serde_json::Value::Object(props).to_string()));
                 }
             }
             for child in node.children() {
@@ -63,12 +78,13 @@ fn add_primitive(
     buffers: &[gltf::buffer::Data],
     texture_average: &[[f32; 4]],
     layers: &mut BTreeMap<Option<usize>, Layer>,
-) {
+    element: u64,
+) -> bool {
     if prim.mode() != gltf::mesh::Mode::Triangles {
-        return; // points, lines and strips are not shown yet
+        return false; // points, lines and strips are not shown yet
     }
     let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
-    let Some(positions) = reader.read_positions() else { return };
+    let Some(positions) = reader.read_positions() else { return false };
     let positions: Vec<[f32; 3]> = positions.collect();
     let indices: Vec<u32> = match reader.read_indices() {
         Some(i) => i.into_u32().collect(),
@@ -154,7 +170,13 @@ fn add_primitive(
 
     layer.positions.extend_from_slice(&pos);
     layer.normals.extend_from_slice(&nor);
+    let first = layer.indices.len() as u32;
     layer.indices.extend(idx.into_iter().map(|i| i + offset));
+    let count = layer.indices.len() as u32 - first;
+    if count > 0 {
+        layer.elements.push((element, first, count));
+    }
+    count > 0
 }
 
 fn linear_to_srgb(v: f32) -> f32 {
@@ -234,6 +256,9 @@ mod tests {
         // Y up (0,1,0) -> Z up (0,0,1)
         assert_eq!(model.bounds.max, [1.0, 0.0, 1.0]);
         assert!(model.layers[0].color[0] > 0.99 && model.layers[0].color[1] < 0.01);
+        // the node is a pickable element; unnamed, so "Node <index>"
+        assert_eq!(model.layers[0].elements, vec![(1, 0, 3)]);
+        assert_eq!(model.element_props(1), vec![("Name".to_string(), "Node 0".to_string())]);
     }
 
     fn base64_encode(data: &[u8]) -> String {

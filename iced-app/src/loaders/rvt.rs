@@ -333,7 +333,7 @@ mod tests {
         assert!(elements > 100 && model.props.len() > 100, "{elements} elements, {} props", model.props.len());
         let c = model.bounds.center();
         let t = std::time::Instant::now();
-        let hit = crate::app::pick_triangle(&model, &vec![true; model.layers.len()], glam::Vec3::new(c[0], c[1], model.bounds.max[2] + 10.0), glam::Vec3::new(0.0, 0.0, -1.0), &|_| true);
+        let hit = crate::app::pick_triangle(&model, &vec![true; model.layers.len()], glam::Vec3::new(c[0], c[1], model.bounds.max[2] + 10.0), glam::Vec3::new(0.0, 0.0, -1.0), &|_, _| glam::Vec3::ZERO, &|_| true);
         let id = hit.and_then(|(l, t)| model.layers[l].element_at(t));
         eprintln!("pick {:?} in {:?}: {:?}", id, t.elapsed(), id.map(|id| model.element_props(id)));
         // material transparency: alpha per vertex

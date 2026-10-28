@@ -11,7 +11,7 @@ for name, entry in entries.items():
     directory = root / "vendor" / name
     for relative, expected in entry["files"].items():
         path = directory / relative
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        if not path.is_file() or hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest() != expected:
             errors.append(f"{name}/{relative}: differs from pinned snapshot")
     for path in directory.rglob("*"):
         relative = path.relative_to(directory).as_posix()

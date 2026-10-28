@@ -1,14 +1,9 @@
-# Dependencies
-node_modules/
+# Cargo build output (the viewer and the Revit build)
+/target/
+/revit/target/
 
-# Build output
-dist/
-dist-ssr/
-
-# Tauri
-src-tauri/target/
-src-tauri/target-*/
-src-tauri/gen/
+# Web build output (trunk)
+/dist/
 
 # Environment
 .env
@@ -28,25 +23,13 @@ desktop.ini
 
 # Logs
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Generated types
-*.tsbuildinfo
-
-# WASM
-*.wasm.map
-
-# Samples
+# Local samples and temp files
 samples/
-
-# Temp files
 temp/
+
+# Half-written saves
+*.part
 
 # Claude Code
 .claude/
-
-# Rust iced edition (cargo target dir at the worktree root)
-/target/
-iced-app/target/

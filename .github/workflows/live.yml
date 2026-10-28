@@ -1,5 +1,6 @@
 name: Deploy site
 
+# The web app (Rust → wasm, WebGPU) at open-3d-viewer.open-aec.com, built with trunk.
 on:
   push:
     branches:
@@ -21,9 +22,9 @@ jobs:
       deploy_port: ${{ vars.DEPLOY_PORT }}
       deploy_user: ${{ vars.DEPLOY_USER }}
       deploy_path: /var/www/open-3d-viewer.open-aec.com
-      node_version: "22"
-      install_command: npm ci
-      build_command: npm run build
+      setup_command: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown && rustup default stable
+      install_command: curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.22.1/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C "$HOME/.cargo/bin"
+      build_command: trunk build --release
       deploy_source: dist
     secrets:
       deploy_ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}

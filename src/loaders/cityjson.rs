@@ -63,6 +63,7 @@ struct Scene {
     crs: Option<String>,
     ignored_geometry: usize,
     skipped_lods: usize,
+    triangles: usize,
 }
 
 fn read(bytes: &[u8]) -> Result<Loaded, String> {
@@ -99,7 +100,7 @@ fn read(bytes: &[u8]) -> Result<Loaded, String> {
     }
     let mut info = vec![
         ("CityJSON objects".into(), scene.objects.to_string()),
-        ("CityJSON LoD selection".into(), "Highest available LoD per object".into()),
+        ("CityJSON LoD selection".into(), "Highest supported polygon LoD per object".into()),
         ("CityJSON skipped lower LoD geometries".into(), scene.skipped_lods.to_string()),
         ("CityJSON unsupported geometries".into(), scene.ignored_geometry.to_string()),
     ];
@@ -123,12 +124,13 @@ impl Scene {
         for (key, object) in objects {
             let Some(geometries) = object.get("geometry") else { continue };
             let geometries = array(geometries, "object.geometry")?;
-            let highest = geometries.iter().filter_map(lod).reduce(f64::max);
+            let highest = geometries.iter().filter(|g| polygon_geometry(g)).filter_map(lod).reduce(f64::max);
             let object_type = object["type"].as_str().unwrap_or("CityObject");
             self.next_id += 1;
             let id = self.next_id;
             let mut any = false;
             for geometry in geometries {
+                if !polygon_geometry(geometry) { self.ignored_geometry += 1; continue; }
                 if highest.is_some_and(|max| lod(geometry).is_some_and(|v| v < max)) {
                     self.skipped_lods += 1;
                     continue;
@@ -158,8 +160,10 @@ impl Scene {
                 let (uniform_material, material_values) = material_values(geometry);
                 for (surface_index, surface) in surfaces.iter().enumerate() {
                     let color = material_color(doc, uniform_material.or_else(|| material_values.get(surface_index).copied().flatten()));
-                    append_surface(layer, surface, vertices, t, &mut self.origin, color)
+                    let before = layer.indices.len();
+                    append_surface(layer, surface, vertices, t, &mut self.origin, color, 2_000_000 - self.triangles)
                         .map_err(|e| format!("CityJSON object {key}: {e}"))?;
+                    self.triangles += (layer.indices.len() - before) / 3;
                 }
                 let end = u32::try_from(layer.indices.len()).map_err(|_| "CityJSON: too many indices")?;
                 if end > first {
@@ -186,6 +190,10 @@ fn lod(geometry: &Value) -> Option<f64> {
     geometry["lod"].as_f64().or_else(|| geometry["lod"].as_str()?.parse().ok()).filter(|v| v.is_finite())
 }
 
+fn polygon_geometry(geometry: &Value) -> bool {
+    matches!(geometry["type"].as_str(), Some("MultiSurface" | "CompositeSurface" | "Solid" | "MultiSolid" | "CompositeSolid"))
+}
+
 // Flatten material indices once per geometry, rather than once per polygon.
 fn material_values(geometry: &Value) -> (Option<u64>, Vec<Option<u64>>) {
     let Some(theme) = geometry["material"].as_object().and_then(|t| t.values().next()) else { return (None, Vec::new()) };
@@ -210,7 +218,7 @@ fn material_color(doc: &Value, value: Option<u64>) -> [u8; 4] {
 
 fn append_surface(
     layer: &mut Layer, surface: &Value, vertices: &[Value], transform: Transform,
-    origin: &mut Option<[f64; 3]>, color: [u8; 4],
+    origin: &mut Option<[f64; 3]>, color: [u8; 4], remaining_triangles: usize,
 ) -> Result<(), String> {
     let rings = array(surface, "polygon rings")?;
     if rings.is_empty() { return Err("polygon has no outer ring".into()); }
@@ -250,7 +258,7 @@ fn append_surface(
     let projected: Vec<f64> = local.iter().flat_map(|p| [p[axes[0]], p[axes[1]]]).collect();
     let triangles = earcutr::earcut(&projected, &holes, 2).map_err(|e| format!("cannot triangulate polygon: {e}"))?;
     if triangles.is_empty() { return Err("polygon triangulation produced no faces".into()); }
-    if layer.indices.len().saturating_add(triangles.len()) > 6_000_000 { return Err("layer exceeds the two million triangle import limit".into()); }
+    if triangles.len() / 3 > remaining_triangles { return Err("scene exceeds the two million triangle import limit".into()); }
     let origin = *origin.get_or_insert(anchor);
     for tri in triangles.chunks_exact(3) {
         let mut tri = [tri[0], tri[1], tri[2]];
@@ -320,6 +328,27 @@ mod tests {
         let loaded = load(&doc);
         assert!((area(&loaded.layers)-84.).abs()<1e-8);
         assert_eq!(loaded.layers[0].elements.len(), 1);
+    }
+
+    #[test]
+    fn unsupported_higher_lod_keeps_supported_polygons_and_reports_omission() {
+        let mut doc = document();
+        doc["CityObjects"]["building-1"]["geometry"].as_array_mut().unwrap()
+            .push(json!({"type":"GeometryInstance","lod":"3.0","template":0,"boundaries":[0]}));
+        let loaded = load(&doc);
+        assert!((area(&loaded.layers) - 84.).abs() < 1e-8);
+        assert!(loaded.project.info.iter().any(|(k,v)| k == "CityJSON unsupported geometries" && v == "1"));
+    }
+
+    #[test]
+    fn enforces_remaining_scene_triangle_budget_before_append() {
+        let doc = document();
+        let mut layer = Layer { colors: Some(Vec::new()), ..Layer::default() };
+        let surface = &doc["CityObjects"]["building-1"]["geometry"][0]["boundaries"][0];
+        let mut origin = None;
+        let result = append_surface(&mut layer, surface, doc["vertices"].as_array().unwrap(), Transform::default(), &mut origin, [255;4], 1);
+        assert!(result.unwrap_err().contains("scene exceeds"));
+        assert!(layer.positions.is_empty());
     }
 
     #[test]

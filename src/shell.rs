@@ -137,7 +137,7 @@ pub fn model_ribbon(app: &App, l: Language) -> Vec<RibbonTab<Message>> {
                 Command::new(l.text("Om selectie", "To selection"), Icon::FitSelection, Message::SectionToSelection).enabled(!app.selection.is_empty()),
                 Command::new(l.text("Snijvlak vullen", "Fill cut"), Icon::Grid, Message::ToggleSectionFill).selected(app.section_fill)
                     .enabled(app.section_on || app.plane.is_some()),
-                Command::new(l.text("Herstellen", "Reset"), Icon::Undo, Message::ResetSection).enabled(app.section_on || app.plane.is_some()),
+                Command::new(l.text("Herstel snede", "Reset section"), Icon::Undo, Message::ResetSection).enabled(app.section_on || app.plane.is_some()),
             ]},
             RibbonGroup { label: l.text("Uit elkaar", "Explode").into(), commands: vec![
                 Command::new(l.text("Uit elkaar", "Explode"), CommandIcon::Svg(crate::icons::EXPLODE.as_bytes()), Message::ToggleExplode)

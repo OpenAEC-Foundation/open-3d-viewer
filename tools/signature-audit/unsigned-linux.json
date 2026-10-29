@@ -1,0 +1,18 @@
+[
+  {
+    "tool": "Open 3D Viewer",
+    "repo": "OpenAEC-Foundation/open-3d-viewer",
+    "tag": "v0.1.0-alpha",
+    "name": "Open.3D.Viewer.Studio_0.1.0_amd64.AppImage",
+    "url": "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/download/v0.1.0-alpha/Open.3D.Viewer.Studio_0.1.0_amd64.AppImage",
+    "sha256": "f7c75aeb090078b7f72ff07a751bd165fb172a7f0785cbcc7b9072c143d3fc4d"
+  },
+  {
+    "tool": "Open 3D Viewer",
+    "repo": "OpenAEC-Foundation/open-3d-viewer",
+    "tag": "v0.1.0-alpha",
+    "name": "Open.3D.Viewer.Studio_0.1.0_amd64.deb",
+    "url": "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/download/v0.1.0-alpha/Open.3D.Viewer.Studio_0.1.0_amd64.deb",
+    "sha256": "51e7ad43ca2d5871b88a6a124e2550279b11b40c0ebc0ebe1e48d8ce2636e68c"
+  }
+]

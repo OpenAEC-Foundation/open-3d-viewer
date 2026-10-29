@@ -98,8 +98,10 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 * **Tools**: picking with element properties, section box and section plane (with cut fills),
   exploded view per storey or per element, measuring (distance, angle, polygon, area), saved
   views and grids from Revit models.
-* **Open**: file dialog (Ctrl+O), command line, drag and drop; loading runs on a worker thread
-  on the desktop.
+* **Open**: file dialog (Ctrl+O), command line and drag and drop replace the loaded model.
+  **+ Add** loads an additional model; the Models list shows every loaded file with its own
+  visibility toggle. Each source keeps its element properties, including when source IDs overlap.
+  Loading runs on a worker thread on the desktop.
 * **Keyboard**: Ctrl+O open, F fit, G grid, S/W/E solid/wireframe/edges, 1/2/3/0
   top/front/right/iso, P/O perspective/orthographic.
 

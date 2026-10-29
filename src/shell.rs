@@ -110,6 +110,7 @@ pub fn model_ribbon(app: &App, l: Language) -> Vec<RibbonTab<Message>> {
         groups: vec![
             RibbonGroup { label: l.text("Bestand", "File").into(), commands: vec![
                 Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O"),
+                Command::new(l.text("+ Toevoegen", "+ Add"), CommandIcon::Svg(crate::icons::ADD.as_bytes()), Message::AddDialog),
                 Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog).enabled(loaded).shortcut("Ctrl+Shift+S"),
             ]},
             RibbonGroup { label: l.text("Weergave", "Display").into(), commands: vec![
@@ -186,6 +187,18 @@ mod tests {
         assert!(ui.into_messages().any(|m| matches!(m, ShellMessage::Ui(UiEvent::Settings(true)))));
         state.update(&UiEvent::SettingsEscape);
         assert!(!state.backstage);
+    }
+
+    #[test]
+    fn plus_routes_to_add_without_changing_the_open_action() {
+        use openaec_ui::{ShellState, Message as ShellMessage};
+        let studio = Studio { app: App::default() };
+        let state = ShellState::default();
+        let mut ui = simulator(&studio, &state);
+        ui.click("+ Add").expect("add model action");
+        ui.click("Open").expect("replace model action");
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(matches!(messages.as_slice(), [ShellMessage::Command(Message::AddDialog), ShellMessage::Command(Message::OpenDialog)]));
     }
 
     #[test]

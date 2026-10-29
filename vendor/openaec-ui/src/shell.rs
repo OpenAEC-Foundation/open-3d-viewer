@@ -72,6 +72,7 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
     let tabs = widgets::ribbon_tab_strip(horizontal(tabs), theme);
     let ribbon = active.map(|tab| ribbon_body(theme, &tab.groups).map(Message::Command))
         .unwrap_or_else(|| Space::new().height(u32::from(metrics::RIBBON)).into());
+    let has_documents = !slots.documents.is_empty();
     let mut documents = Row::new().spacing(1).align_y(iced::Alignment::End);
     for doc in slots.documents {
         let selected=slots.active_document.as_ref() == Some(&doc.id);
@@ -162,13 +163,13 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
             documents: None, content: body, status: status.into(),
         })
     } else if matches!(slots.mode, ChromeMode::Workflow | ChromeMode::Sidebar) {
-        crate::frame::workflow_frame(titlebar.into(), (slots.mode == ChromeMode::Workflow).then_some(document_bar.into()), body, status.into())
+        crate::frame::workflow_frame(titlebar.into(), (slots.mode == ChromeMode::Workflow && has_documents).then_some(document_bar.into()), body, status.into())
     } else {
         crate::frame::frame(crate::frame::FrameSlots {
             titlebar: titlebar.into(),
             tabs: tabs.into(),
             ribbon: Some(ribbon.into()),
-            documents: Some(document_bar.into()),
+            documents: has_documents.then_some(document_bar.into()),
             content: body,
             status: status.into(),
         })

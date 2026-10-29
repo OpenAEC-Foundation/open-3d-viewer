@@ -200,7 +200,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let mut app = initial_state(args);
     let (w, h) = args.size.unwrap_or((1440.0, 900.0));
     // Viewport area = window minus side panels, ribbon and status bar (see app.rs)
-    app.viewport_size = (w - 220.0 - 290.0, h - 34.0 - 84.0 - 24.0);
+    app.viewport_size = (w - 220.0 - 290.0, h - 28.0 - 94.0 - 24.0);
     if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(

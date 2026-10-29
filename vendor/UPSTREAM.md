@@ -11,3 +11,10 @@ Open Pointcloud Studio carries a snapshot the same way. Local changes, for the w
 in the browser (`src/shell.rs`). To update, copy the
 crate again from the Style Repo and run its `scripts/check_portable_ui.py` there first.
 Licenses: see `openaec-ui/LICENSE.md` and `openaec-ui/NOTICE.md`.
+
+Viewer UI overlay: the prototype `Theme` roles map onto the existing generated
+`design::tokens` UI 0.4 palette from OpenAEC-Blueprint (`design/ontwerp-0.4/tokens-0.4.json`).
+The generated token files are unchanged. `ribbon_body` lays out actions in compact
+three-row columns and is shared by the normal shell and the headless viewer preview.
+The app supplies one Model ribbon with file, display, camera, section, explode,
+projection and measurement commands. These changes are local to this vendored copy.

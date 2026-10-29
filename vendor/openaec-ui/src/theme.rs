@@ -13,27 +13,102 @@ pub enum Theme {
 }
 impl Theme {
     pub const ALL: [Self; 5] = [Self::Light, Self::Forge, Self::OpenAec, Self::Blueprint, Self::Contrast];
-    /// Four swatches from the pinned Tauri SettingsDialog THEME_OPTIONS.
-    pub fn swatches(self) -> [iced::Color; 4] {
-        let hex = |value: u32| iced::Color::from_rgb8((value >> 16) as u8, (value >> 8) as u8, value as u8);
+    pub fn design(self) -> crate::design::tokens::ThemeId {
+        use crate::design::tokens::ThemeId;
         match self {
-            Self::Light => [hex(0xFAFAF9), hex(0xFFFFFF), hex(0xD97706), hex(0x36363E)],
-            Self::Forge => [hex(0x36363E), hex(0x44444C), hex(0xD97706), hex(0xFAFAF9)],
-            Self::OpenAec => [hex(0x27272A), hex(0x1C1917), hex(0xD97706), hex(0xFAFAF9)],
-            Self::Blueprint => [hex(0x0F1B2D), hex(0x1A2C45), hex(0x60A5FA), hex(0xE0E7FF)],
-            Self::Contrast => [hex(0x000000), hex(0x0A0A0A), hex(0xFFD700), hex(0xFFFFFF)],
+            Self::Light => ThemeId::Light,
+            Self::Forge | Self::OpenAec => ThemeId::Dark,
+            Self::Blueprint => ThemeId::Blueprint,
+            Self::Contrast => ThemeId::HighContrastDark,
         }
+    }
+    pub fn swatches(self) -> [iced::Color; 4] {
+        let c = self.design().tokens().color;
+        [c.frame, c.panel, c.accent, c.text]
     }
     pub fn tokens(self) -> Tokens {
-        match self { Self::Light => tokens::LIGHT, Self::Forge => tokens::FORGE, Self::OpenAec => tokens::OPENAEC, Self::Blueprint => tokens::BLUEPRINT, Self::Contrast => tokens::CONTRAST }
+        let mut t = match self { Self::Light => tokens::LIGHT, Self::Forge => tokens::FORGE, Self::OpenAec => tokens::OPENAEC, Self::Blueprint => tokens::BLUEPRINT, Self::Contrast => tokens::CONTRAST };
+        let c = self.design().tokens().color;
+        t.bg = c.frame;
+        t.bg_lighter = c.panel;
+        t.surface = c.panel;
+        t.content_bg = c.workspace;
+        t.docbar_bg = c.docbar;
+        t.text = c.text;
+        t.text_secondary = c.text_secondary;
+        t.text_muted = c.text_secondary;
+        t.text_faint = c.text_disabled;
+        t.border = c.border;
+        t.border_subtle = c.border;
+        t.accent = c.accent;
+        t.accent_hover = c.accent_hover;
+        t.accent_soft = c.selected;
+        t.accent_tint = c.accent_text;
+        t.accent_text = c.text_on_accent;
+        t.active = c.selected;
+        t.hover = c.hover;
+        t.hover_strong = c.pressed;
+        t.focus_color = c.focus;
+        t.danger_color = c.error;
+        t.danger_hover = c.error;
+        t.file_tab_bg = c.accent;
+        t.file_tab_hover = c.accent_hover;
+        t.file_tab_text = c.text_on_accent;
+        t.ribbon_btn_active_bg = c.selected;
+        t.ribbon_btn_active_border = c.selected_bar;
+        t.ribbon_btn_active_text = c.accent_text;
+        t.ribbon_btn_hover = c.hover;
+        t.ribbon_btn_hover_border = c.border;
+        t.ribbon_icon_active = c.accent_text;
+        t.ribbon_text_hover = c.text;
+        t.ribbon_group_label = c.text_secondary;
+        t.ribbon_group_separator = c.border;
+        t.status_bg = c.statusbar;
+        t.status_border = c.border;
+        t.status_text = c.statusbar_text;
+        t.status_text_label = c.statusbar_text;
+        t.status_hover = c.hover;
+        t.status_separator = c.border;
+        t.btn_primary_bg = c.accent;
+        t.btn_primary_border = c.accent;
+        t.btn_primary_text = c.text_on_accent;
+        t.btn_primary_hover_bg = c.accent_hover;
+        t.btn_primary_hover_text = c.text_on_accent;
+        t.btn_secondary_bg = c.raised;
+        t.btn_secondary_text = c.text;
+        t.btn_secondary_hover_bg = c.hover;
+        t.btn_secondary_hover_border = c.border_strong;
+        t.dialog_bg = c.panel;
+        t.dialog_border = c.border;
+        t.dialog_btn_bg = c.accent;
+        t.dialog_btn_hover = c.accent_hover;
+        t.dialog_btn_text = c.text_on_accent;
+        t.dialog_content_bg = c.panel;
+        t.dialog_content_text = c.text;
+        t.dialog_content_secondary = c.text_secondary;
+        t.dialog_header_bg = c.frame;
+        t.dialog_header_text = c.text;
+        t.dialog_input_bg = c.raised;
+        t.dialog_input_border = c.border;
+        t.dialog_input_text = c.text;
+        t.dialog_sidebar_bg = c.frame;
+        t.dialog_sidebar_border = c.border;
+        t.dialog_tab_active_accent = c.selected_bar;
+        t.dialog_tab_active_bg = c.selected;
+        t.dialog_tab_active_text = c.accent_text;
+        t.dialog_tab_hover = c.hover;
+        t.dialog_tab_hover_text = c.text;
+        t.dialog_tab_text = c.text;
+        t.dialog_section_border = c.border;
+        t.backstage_item_shortcut = c.text_secondary;
+        t.backstage_item_shortcut_hover = c.accent_text;
+        t.placeholder_heading = c.text_secondary;
+        t.placeholder_text = c.text_secondary;
+        t.placeholder_icon = c.accent;
+        t
     }
     /// Brand strong-border token from the pinned Style Book colors.json (light/dark).
-    pub fn border_strong(self) -> iced::Color {
-        match self {
-            Self::Light => iced::Color::from_rgb8(0xD6, 0xD3, 0xD1),
-            _ => iced::Color::from_rgb8(0x3F, 0x3F, 0x46),
-        }
-    }
+    pub fn border_strong(self) -> iced::Color { self.design().tokens().color.border_strong }
     /// Modal.css and themes.css at dfdcd41: 0 4px 16px with a theme-specific color.
     pub fn dialog_shadow(self) -> iced::Shadow {
         let color = match self {

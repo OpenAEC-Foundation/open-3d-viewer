@@ -768,9 +768,9 @@ pub fn ribbon_group<'a, M: 'a>(
         .height(u32::from(metrics::RIBBON))
         .padding(Padding {
             top: 4.0,
-            right: 8.0,
+            right: 6.0,
             bottom: 0.0,
-            left: 8.0,
+            left: 6.0,
         });
     let separator = container(iced::widget::Space::new().width(1).height(90))
         .style(move |_| container::Style::default().background(t.ribbon_group_separator));

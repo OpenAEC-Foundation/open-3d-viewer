@@ -849,6 +849,7 @@ impl App {
             Message::MeasureClear => {
                 self.measure.results.clear();
                 self.measure.picks.clear();
+                self.measurements.clear();
             }
             Message::MeasureLength(u) => self.measure.units.length = u,
             Message::MeasureArea(u) => self.measure.units.area = u,
@@ -986,143 +987,26 @@ impl App {
     // ---- ribbon ---------------------------------------------------------------------------
 
     fn ribbon(&self, p: Palette) -> Element<'_, Message> {
-        let tab = |label: &'static str, t: RibbonTab| {
-            let active = self.tab == t;
-            button(text(label).size(12).font(if active { FONT_BOLD } else { FONT }))
-                .padding([4, 14])
-                .style(move |_, s| p.ribbon_button(active, s))
-                .on_press(Message::Tab(t))
+        let language = standalone_language();
+        let tabs = crate::shell::model_ribbon(self, language);
+        let theme = match self.theme {
+            ThemeKind::Light => openaec_ui::Theme::Light,
+            ThemeKind::Forge => openaec_ui::Theme::Forge,
+            ThemeKind::Night => openaec_ui::Theme::OpenAec,
+            ThemeKind::Blueprint => openaec_ui::Theme::Blueprint,
+            ThemeKind::Contrast => openaec_ui::Theme::Contrast,
         };
-        let file_tab = button(text("Open").size(12).font(FONT_BOLD))
-            .padding([4, 14])
-            .style(move |_, s| p.primary_button(s))
-            .on_press(Message::OpenDialog);
-        let tabs = row![
-            file_tab,
-            tab("Home", RibbonTab::Home),
-            tab("View", RibbonTab::View),
+        let heading = row![
+            button(text(language.text("Openen", "Open")).size(11).font(FONT_BOLD))
+                .padding([4, 10]).style(move |_, status| p.primary_button(status)).on_press(Message::OpenDialog),
+            text("Model").size(11).font(FONT_BOLD).color(p.text),
             Space::new().width(Fill),
-            text("Open 3D Viewer Studio").size(12).font(FONT_BOLD).color(p.accent),
-            text(" · iced").size(12).color(p.text_muted),
-        ]
-        .spacing(4)
-        .align_y(Center)
-        .padding([4, 8]);
-
-        let content: Element<'_, Message> = match self.tab {
-            RibbonTab::Home => row![
-                group(
-                    p,
-                    "File",
-                    row![
-                        big_button(p, icons::OPEN, "Import", Message::OpenDialog, false),
-                        big_button(p, icons::SAVE_AS, "Save as", Message::SaveDialog, false),
-                    ]
-                    .spacing(2)
-                    .into()
-                ),
-                separator(p),
-                group(
-                    p,
-                    "Render mode",
-                    row![
-                        big_button(p, icons::SOLID, "Solid", Message::Mode(RenderMode::Solid), self.mode == RenderMode::Solid),
-                        big_button(
-                            p,
-                            icons::WIREFRAME,
-                            "Wireframe",
-                            Message::Mode(RenderMode::Wireframe),
-                            self.mode == RenderMode::Wireframe
-                        ),
-                        big_button(
-                            p,
-                            icons::EDGES,
-                            "Edges",
-                            Message::Mode(RenderMode::SolidEdges),
-                            self.mode == RenderMode::SolidEdges
-                        ),
-                    ]
-                    .spacing(2)
-                    .into()
-                ),
-                separator(p),
-                group(
-                    p,
-                    "Display",
-                    row![
-                        big_button(p, icons::GRID, "Grid", Message::ToggleGrid, self.grid),
-                        big_button(p, icons::UP_AXIS, "Flip up", Message::ToggleFlipUp, self.flip_up),
-                    ]
-                    .spacing(2)
-                    .into()
-                ),
-                separator(p),
-                group(
-                    p,
-                    "Theme",
-                    row(ThemeKind::ALL.map(|t| {
-                        let active = self.theme == t;
-                        let swatch = container(Space::new().width(14).height(14))
-                            .style(move |_| Palette::swatch(t.palette().viewport));
-                        button(column![swatch, text(t.label()).size(11)].spacing(4).align_x(Center))
-                            .padding([6, 6])
-                            .width(64)
-                            .style(move |_, s| p.ribbon_button(active, s))
-                            .on_press(Message::Theme(t))
-                            .into()
-                    }))
-                    .spacing(2)
-                    .into()
-                ),
-            ]
-            .into(),
-            RibbonTab::View => row![
-                group(
-                    p,
-                    "Camera",
-                    row![
-                        big_button(p, icons::FIT, "Fit", Message::Fit, false),
-                        big_button(p, icons::VIEW_ISO, "Iso", Message::Preset(ViewPreset::Iso), false),
-                        big_button(p, icons::VIEW_TOP, "Top", Message::Preset(ViewPreset::Top), false),
-                        big_button(p, icons::VIEW_FRONT, "Front", Message::Preset(ViewPreset::Front), false),
-                        big_button(p, icons::VIEW_RIGHT, "Right", Message::Preset(ViewPreset::Right), false),
-                    ]
-                    .spacing(2)
-                    .into()
-                ),
-                separator(p),
-                group(
-                    p,
-                    "Projection",
-                    row![
-                        big_button(p, icons::PERSPECTIVE, "Perspective", Message::Ortho(false), !self.camera.ortho),
-                        big_button(p, icons::ORTHO, "Orthographic", Message::Ortho(true), self.camera.ortho),
-                    ]
-                    .spacing(2)
-                    .into()
-                ),
-                separator(p),
-                group(p, "Explode", row![big_button(p, icons::EXPLODE, "Explode", Message::ToggleExplode, self.explode_on)].into()),
-                separator(p),
-                group(
-                    p,
-                    "Panels",
-                    row![
-                        big_button(p, icons::LAYERS, "Layers", Message::ToggleLayersPanel, self.show_layers),
-                        big_button(p, icons::INFO, "Properties", Message::TogglePropertiesPanel, self.show_properties),
-                    ]
-                    .spacing(2)
-                    .into()
-                ),
-            ]
-            .into(),
-        };
-
+            text("Open 3D Viewer Studio").size(11).font(FONT_BOLD).color(p.accent),
+        ].spacing(8).align_y(Center).padding([2, 8]);
         column![
-            container(tabs).width(Fill).style(move |_| p.title_bar()),
-            container(content).width(Fill).height(84).padding([4, 6]).style(move |_| p.ribbon()),
-        ]
-        .into()
+            container(heading).height(28).width(Fill).style(move |_| p.title_bar()),
+            openaec_ui::ribbon_body(theme, &tabs[0].groups),
+        ].into()
     }
 
     // ---- panels ---------------------------------------------------------------------------
@@ -2020,28 +1904,6 @@ fn loading_card<'a>(
         .into()
 }
 
-fn big_button<'a>(p: Palette, icon: &'static str, label: &'static str, msg: Message, active: bool) -> Element<'a, Message> {
-    let tint = if active { p.accent } else { p.text };
-    button(
-        column![
-            svg(icons::handle(icon))
-                .width(24)
-                .height(24)
-                .style(move |_, status| svg::Style {
-                    color: Some(if matches!(status, svg::Status::Hovered) { p.accent } else { tint })
-                }),
-            text(label).size(11),
-        ]
-        .spacing(4)
-        .align_x(Center),
-    )
-    .padding([6, 8])
-    .width(Length::Shrink)
-    .style(move |_, s| p.ribbon_button(active, s))
-    .on_press(msg)
-    .into()
-}
-
 /// A property: label and value side by side (2 : 3), both wrapping, so long words never overlap;
 /// a long label (a project parameter such as "opdrachtgever_projectmanager") gets its own line
 /// with the value below it, instead of being broken mid-word.
@@ -2082,29 +1944,6 @@ fn group_header(p: Palette, title: &str, tag: Option<&'static str>, count: usize
     .width(Fill)
     .style(move |_, s| p.row_button(s))
     .on_press(msg)
-    .into()
-}
-
-fn group<'a>(p: Palette, label: &'static str, content: Element<'a, Message>) -> Element<'a, Message> {
-    column![
-        container(content).height(Fill).align_y(Center),
-        text(label).size(10).color(p.group_label).font(FONT_BOLD),
-    ]
-    .spacing(2)
-    .padding([0, 6])
-    .align_x(Center)
-    .into()
-}
-
-fn separator<'a>(p: Palette) -> Element<'a, Message> {
-    container(rule::vertical(1).style(move |_| rule::Style {
-        color: p.border,
-        radius: 0.0.into(),
-        fill_mode: rule::FillMode::Full,
-        snap: true,
-    }))
-    .padding([6, 2])
-    .height(Fill)
     .into()
 }
 

@@ -24,5 +24,5 @@ mod runtime;
 pub use locale::Language;
 pub use model::*;
 pub use runtime::{run, Application};
-pub use shell::{shell, Slots};
+pub use shell::{shell, ribbon_body, Slots};
 pub use theme::Theme;

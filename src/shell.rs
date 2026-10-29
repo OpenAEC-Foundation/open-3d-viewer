@@ -19,12 +19,13 @@ pub struct Studio {
     pub app: App,
 }
 
-/// The viewport palette for an OpenAEC theme (the five shell themes onto the four viewport ones).
+/// Keep the viewport and shell on the same Blueprint colour roles.
 pub fn viewport_theme(theme: Theme) -> ThemeKind {
     match theme {
         Theme::Light => ThemeKind::Light,
         Theme::Forge => ThemeKind::Forge,
-        Theme::OpenAec | Theme::Contrast => ThemeKind::Night,
+        Theme::OpenAec => ThemeKind::Night,
+        Theme::Contrast => ThemeKind::Contrast,
         Theme::Blueprint => ThemeKind::Blueprint,
     }
 }
@@ -40,140 +41,7 @@ impl Application for Studio {
     }
 
     fn ribbon(&self, l: Language) -> Vec<RibbonTab<Message>> {
-        let app = &self.app;
-        let loaded = app.model.is_some();
-        vec![
-            RibbonTab {
-                id: "home".into(),
-                label: l.text("Start", "Home").into(),
-                groups: vec![
-                    RibbonGroup {
-                        label: l.text("Bestand", "File").into(),
-                        commands: vec![
-                            Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O"),
-                            Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog)
-                                .enabled(loaded)
-                                .shortcut("Ctrl+Shift+S"),
-                        ],
-                    },
-                    RibbonGroup {
-                        label: l.text("Weergave", "Display").into(),
-                        commands: vec![
-                            Command::new(l.text("Volledig", "Solid"), Icon::Cube, Message::Mode(RenderMode::Solid))
-                                .selected(app.mode == RenderMode::Solid)
-                                .shortcut("S"),
-                            Command::new(l.text("Draadmodel", "Wireframe"), Icon::Grid, Message::Mode(RenderMode::Wireframe))
-                                .selected(app.mode == RenderMode::Wireframe)
-                                .shortcut("W"),
-                            Command::new(l.text("Randen", "Edges"), Icon::Controls, Message::Mode(RenderMode::SolidEdges))
-                                .selected(app.mode == RenderMode::SolidEdges)
-                                .shortcut("E"),
-                        ],
-                    },
-                    RibbonGroup {
-                        label: l.text("Tonen", "Show").into(),
-                        commands: vec![
-                            Command::new(l.text("Raster", "Grid"), Icon::Grid, Message::ToggleGrid).selected(app.grid).shortcut("G"),
-                            Command::new(l.text("Stramien", "Grid lines"), Icon::Measure, Message::ToggleGrids)
-                                .selected(app.show_grids)
-                                .enabled(app.model.as_ref().is_some_and(|m| !m.project.grids.is_empty())),
-                            Command::new(l.text("Z-as omdraaien", "Flip up"), Icon::Rename, Message::ToggleFlipUp)
-                                .selected(app.flip_up)
-                                .enabled(loaded),
-                        ],
-                    },
-                ],
-            },
-            RibbonTab {
-                id: "view".into(),
-                label: l.text("Beeld", "View").into(),
-                groups: vec![
-                    RibbonGroup {
-                        label: l.text("Camera", "Camera").into(),
-                        commands: vec![
-                            Command::new(l.text("Passend", "Fit"), Icon::Fit, Message::Fit).enabled(loaded).shortcut("F"),
-                            Command::new(l.text("Iso", "Iso"), Icon::Cube, Message::Preset(ViewPreset::Iso)).shortcut("0"),
-                            Command::new(l.text("Boven", "Top"), Icon::Cube, Message::Preset(ViewPreset::Top)).shortcut("1"),
-                            Command::new(l.text("Voor", "Front"), Icon::Cube, Message::Preset(ViewPreset::Front)).shortcut("2"),
-                            Command::new(l.text("Rechts", "Right"), Icon::Cube, Message::Preset(ViewPreset::Right)).shortcut("3"),
-                        ],
-                    },
-                    RibbonGroup {
-                        label: l.text("Doorsnede", "Section").into(),
-                        commands: vec![
-                            Command::new(l.text("Doorsnedebox", "Section box"), Icon::Cube, Message::ToggleSection)
-                                .selected(app.section_on)
-                                .enabled(loaded),
-                            Command::new(l.text("Doorsnedevlak", "Section plane"), DomainIcon::DrawingTrim, Message::TogglePlane)
-                                .selected(app.plane.is_some() || app.plane_picking)
-                                .enabled(loaded),
-                            Command::new(l.text("Omdraaien", "Flip"), DomainIcon::TransformMirror, Message::FlipPlane)
-                                .enabled(app.plane.is_some()),
-                            Command::new(l.text("Om selectie", "To selection"), Icon::FitSelection, Message::SectionToSelection)
-                                .enabled(!app.selection.is_empty()),
-                            Command::new(l.text("Snijvlak vullen", "Fill cut"), Icon::Grid, Message::ToggleSectionFill)
-                                .selected(app.section_fill)
-                                .enabled(app.section_on || app.plane.is_some()),
-                            Command::new(l.text("Herstellen", "Reset"), Icon::Undo, Message::ResetSection)
-                                .enabled(app.section_on || app.plane.is_some()),
-                        ],
-                    },
-                    // the sliders are in the properties pane while it is on, as the section box's
-                    RibbonGroup {
-                        label: l.text("Uit elkaar", "Explode").into(),
-                        commands: vec![Command::new(
-                            l.text("Uit elkaar", "Explode"),
-                            CommandIcon::Svg(crate::icons::EXPLODE.as_bytes()),
-                            Message::ToggleExplode,
-                        )
-                        .selected(app.explode_on)
-                        .enabled(loaded)],
-                    },
-                    RibbonGroup {
-                        label: l.text("Meten", "Measure").into(),
-                        commands: vec![Command::new(l.text("Metingen wissen", "Clear measurements"), Icon::Measure, Message::ClearMeasurements)
-                            .enabled(!app.measurements.is_empty())],
-                    },
-                    RibbonGroup {
-                        label: l.text("Projectie", "Projection").into(),
-                        commands: vec![
-                            Command::new(l.text("Perspectief", "Perspective"), Icon::ZoomIn, Message::Ortho(false))
-                                .selected(!app.camera.ortho)
-                                .shortcut("P"),
-                            Command::new(l.text("Orthografisch", "Orthographic"), Icon::ZoomOut, Message::Ortho(true))
-                                .selected(app.camera.ortho)
-                                .shortcut("O"),
-                        ],
-                    },
-                ],
-            },
-            RibbonTab {
-                id: "measure".into(),
-                label: l.text("Meten", "Measure").into(),
-                groups: vec![
-                    RibbonGroup {
-                        label: l.text("Meten", "Measure").into(),
-                        commands: Tool::ALL
-                            .map(|tool| {
-                                let command = match tool {
-                                    Tool::Distance => Command::new(tool.label(l), DomainIcon::DrawingDimension, Message::Measure(tool)),
-                                    Tool::Angle => Command::new(tool.label(l), DomainIcon::TransformRotate, Message::Measure(tool)),
-                                    Tool::Area => Command::new(tool.label(l), Icon::Measure, Message::Measure(tool)),
-                                    Tool::Volume => Command::new(tool.label(l), Icon::Cube, Message::Measure(tool)),
-                                    Tool::Polygon => Command::new(tool.label(l), DomainIcon::DrawingPolygon, Message::Measure(tool)),
-                                };
-                                command.selected(app.measure.tool == Some(tool)).enabled(loaded)
-                            })
-                            .into(),
-                    },
-                    RibbonGroup {
-                        label: l.text("Metingen", "Measurements").into(),
-                        commands: vec![Command::new(l.text("Alles wissen", "Clear all"), DomainIcon::PdfClearPage, Message::MeasureClear)
-                            .enabled(!app.measure.results.is_empty())],
-                    },
-                ],
-            },
-        ]
+        model_ribbon(&self.app, l)
     }
 
     fn workspace(&self, theme: Theme, _l: Language) -> Element<'_, Message> {
@@ -218,5 +86,91 @@ impl Application for Studio {
             None => Subscription::none(),
         };
         Subscription::batch([self.app.subscription(), open])
+    }
+}
+
+/// One command definition for both the application shell and headless previews.
+pub fn model_ribbon(app: &App, l: Language) -> Vec<RibbonTab<Message>> {
+    let loaded = app.model.is_some();
+    let mut measure: Vec<_> = Tool::ALL.into_iter().map(|tool| {
+        let icon: CommandIcon = match tool {
+            Tool::Distance => DomainIcon::DrawingDimension.into(),
+            Tool::Angle => DomainIcon::TransformRotate.into(),
+            Tool::Area => Icon::Measure.into(),
+            Tool::Volume => Icon::Cube.into(),
+            Tool::Polygon => DomainIcon::DrawingPolygon.into(),
+        };
+        Command::new(tool.label(l), icon, Message::Measure(tool)).selected(app.measure.tool == Some(tool)).enabled(loaded)
+    }).collect();
+    measure.push(Command::new(l.text("Alles wissen", "Clear all"), DomainIcon::PdfClearPage, Message::MeasureClear)
+        .enabled(!app.measure.results.is_empty() || !app.measurements.is_empty()));
+    vec![RibbonTab {
+        id: "model".into(), label: "Model".into(),
+        groups: vec![
+            RibbonGroup { label: l.text("Bestand", "File").into(), commands: vec![
+                Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O"),
+                Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog).enabled(loaded).shortcut("Ctrl+Shift+S"),
+            ]},
+            RibbonGroup { label: l.text("Weergave", "Display").into(), commands: vec![
+                Command::new(l.text("Volledig", "Solid"), Icon::Cube, Message::Mode(RenderMode::Solid)).selected(app.mode == RenderMode::Solid).shortcut("S"),
+                Command::new(l.text("Draadmodel", "Wireframe"), Icon::Grid, Message::Mode(RenderMode::Wireframe)).selected(app.mode == RenderMode::Wireframe).shortcut("W"),
+                Command::new(l.text("Randen", "Edges"), Icon::Controls, Message::Mode(RenderMode::SolidEdges)).selected(app.mode == RenderMode::SolidEdges).shortcut("E"),
+            ]},
+            RibbonGroup { label: l.text("Tonen", "Show").into(), commands: vec![
+                Command::new(l.text("Raster", "Grid"), Icon::Grid, Message::ToggleGrid).selected(app.grid).shortcut("G"),
+                Command::new(l.text("Stramien", "Grid lines"), Icon::Measure, Message::ToggleGrids).selected(app.show_grids)
+                    .enabled(app.model.as_ref().is_some_and(|m| !m.project.grids.is_empty())),
+                Command::new(l.text("Z-as omdraaien", "Flip up"), Icon::Rename, Message::ToggleFlipUp).selected(app.flip_up).enabled(loaded),
+            ]},
+            RibbonGroup { label: l.text("Camera", "Camera").into(), commands: vec![
+                Command::new(l.text("Passend", "Fit"), Icon::Fit, Message::Fit).enabled(loaded).shortcut("F"),
+                Command::new("Iso", Icon::Cube, Message::Preset(ViewPreset::Iso)).shortcut("0"),
+                Command::new(l.text("Boven", "Top"), Icon::Cube, Message::Preset(ViewPreset::Top)).shortcut("1"),
+                Command::new(l.text("Voor", "Front"), Icon::Cube, Message::Preset(ViewPreset::Front)).shortcut("2"),
+                Command::new(l.text("Rechts", "Right"), Icon::Cube, Message::Preset(ViewPreset::Right)).shortcut("3"),
+            ]},
+            RibbonGroup { label: l.text("Doorsnede", "Section").into(), commands: vec![
+                Command::new(l.text("Doorsnedebox", "Section box"), Icon::Cube, Message::ToggleSection).selected(app.section_on).enabled(loaded),
+                Command::new(l.text("Doorsnedevlak", "Section plane"), DomainIcon::DrawingTrim, Message::TogglePlane)
+                    .selected(app.plane.is_some() || app.plane_picking).enabled(loaded),
+                Command::new(l.text("Omdraaien", "Flip"), DomainIcon::TransformMirror, Message::FlipPlane).enabled(app.plane.is_some()),
+                Command::new(l.text("Om selectie", "To selection"), Icon::FitSelection, Message::SectionToSelection).enabled(!app.selection.is_empty()),
+                Command::new(l.text("Snijvlak vullen", "Fill cut"), Icon::Grid, Message::ToggleSectionFill).selected(app.section_fill)
+                    .enabled(app.section_on || app.plane.is_some()),
+                Command::new(l.text("Herstellen", "Reset"), Icon::Undo, Message::ResetSection).enabled(app.section_on || app.plane.is_some()),
+            ]},
+            RibbonGroup { label: l.text("Uit elkaar", "Explode").into(), commands: vec![
+                Command::new(l.text("Uit elkaar", "Explode"), CommandIcon::Svg(crate::icons::EXPLODE.as_bytes()), Message::ToggleExplode)
+                    .selected(app.explode_on).enabled(loaded),
+            ]},
+            RibbonGroup { label: l.text("Projectie", "Projection").into(), commands: vec![
+                Command::new(l.text("Perspectief", "Perspective"), Icon::ZoomIn, Message::Ortho(false)).selected(!app.camera.ortho).shortcut("P"),
+                Command::new(l.text("Orthografisch", "Orthographic"), Icon::ZoomOut, Message::Ortho(true)).selected(app.camera.ortho).shortcut("O"),
+            ]},
+            RibbonGroup { label: l.text("Meten", "Measure").into(), commands: measure },
+        ],
+    }]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_ribbon_keeps_the_viewer_workflow_available() {
+        for language in [Language::Dutch, Language::English] {
+            let app = App::default();
+            let tabs = model_ribbon(&app, language);
+            assert_eq!(tabs.len(), 1);
+            let commands: Vec<_> = tabs[0].groups.iter().flat_map(|g| &g.commands).collect();
+            for required in ["open", "section", "explode", "measure"] {
+                assert!(commands.iter().any(|command| match (required, &command.message) {
+                    ("open", Message::OpenDialog) | ("section", Message::ToggleSection) |
+                    ("explode", Message::ToggleExplode) | ("measure", Message::Measure(Tool::Distance)) => true,
+                    _ => false,
+                }), "missing {required}");
+            }
+            assert!(commands.iter().filter(|c| matches!(c.message, Message::Measure(_))).all(|c| !c.enabled));
+        }
     }
 }

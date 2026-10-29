@@ -1,5 +1,4 @@
-//! OpenAEC themes (colours from `src/styles/openaec-themes.css`, CC BY-SA 4.0 style book) and
-//! the widget styles built from them.
+//! Viewer styles using the canonical OpenAEC Blueprint UI 0.4 colour roles.
 
 use iced::widget::{button, container};
 use iced::{border, Background, Border, Color, Shadow, Theme};
@@ -11,10 +10,11 @@ pub enum ThemeKind {
     Forge,
     Night,
     Blueprint,
+    Contrast,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 4] = [ThemeKind::Light, ThemeKind::Forge, ThemeKind::Night, ThemeKind::Blueprint];
+    pub const ALL: [ThemeKind; 5] = [ThemeKind::Light, ThemeKind::Forge, ThemeKind::Night, ThemeKind::Blueprint, ThemeKind::Contrast];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -22,6 +22,7 @@ impl ThemeKind {
             ThemeKind::Forge => "Forge",
             ThemeKind::Night => "Night",
             ThemeKind::Blueprint => "Blueprint",
+            ThemeKind::Contrast => "Contrast",
         }
     }
 
@@ -33,91 +34,25 @@ impl ThemeKind {
     }
 
     pub fn palette(self) -> Palette {
-        match self {
-            ThemeKind::Light => Palette {
-                bg: hex(0xFAFAF9),
-                surface: hex(0xFFFFFF),
-                docbar: hex(0xF5F5F4),
-                border: rgba(54, 54, 62, 0.12),
-                text: hex(0x36363E),
-                text_secondary: rgba(54, 54, 62, 0.65),
-                text_muted: rgba(54, 54, 62, 0.5),
-                accent: hex(0xD97706),
-                accent_hover: hex(0xEA580C),
-                accent_text: hex(0xFFFFFF),
-                hover: rgba(217, 119, 6, 0.10),
-                active: rgba(217, 119, 6, 0.15),
-                group_label: rgba(217, 119, 6, 0.8),
-                status_bg: hex(0x36363E),
-                status_text: hex(0xA1A1AA),
-                viewport: hex(0xF5F5F4),
-                grid_minor: rgba(54, 54, 62, 0.12),
-                grid_major: rgba(54, 54, 62, 0.28),
-                dark: false,
-            },
-            ThemeKind::Forge => Palette {
-                bg: hex(0x36363E),
-                surface: hex(0x36363E),
-                docbar: hex(0x2E2E36),
-                border: rgba(217, 119, 6, 0.25),
-                text: hex(0xFAFAF9),
-                text_secondary: rgba(250, 250, 249, 0.6),
-                text_muted: rgba(250, 250, 249, 0.5),
-                accent: hex(0xD97706),
-                accent_hover: hex(0xEA580C),
-                accent_text: hex(0x36363E),
-                hover: rgba(217, 119, 6, 0.10),
-                active: rgba(217, 119, 6, 0.18),
-                group_label: rgba(217, 119, 6, 0.8),
-                status_bg: hex(0x27272A),
-                status_text: hex(0xA1A1AA),
-                viewport: hex(0x2A2A32),
-                grid_minor: rgba(250, 250, 249, 0.08),
-                grid_major: rgba(250, 250, 249, 0.2),
-                dark: true,
-            },
-            ThemeKind::Night => Palette {
-                bg: hex(0x27272A),
-                surface: hex(0x27272A),
-                docbar: hex(0x1C1917),
-                border: rgba(217, 119, 6, 0.2),
-                text: hex(0xFAFAF9),
-                text_secondary: rgba(250, 250, 249, 0.6),
-                text_muted: rgba(250, 250, 249, 0.5),
-                accent: hex(0xD97706),
-                accent_hover: hex(0xEA580C),
-                accent_text: hex(0x27272A),
-                hover: rgba(217, 119, 6, 0.10),
-                active: rgba(217, 119, 6, 0.18),
-                group_label: rgba(217, 119, 6, 0.8),
-                status_bg: hex(0x1C1917),
-                status_text: hex(0xA1A1AA),
-                viewport: hex(0x1C1917),
-                grid_minor: rgba(250, 250, 249, 0.07),
-                grid_major: rgba(250, 250, 249, 0.18),
-                dark: true,
-            },
-            ThemeKind::Blueprint => Palette {
-                bg: hex(0x0F1B2D),
-                surface: hex(0x0F1B2D),
-                docbar: hex(0x0A1320),
-                border: rgba(96, 165, 250, 0.20),
-                text: hex(0xE0E7FF),
-                text_secondary: rgba(224, 231, 255, 0.65),
-                text_muted: rgba(224, 231, 255, 0.50),
-                accent: hex(0x60A5FA),
-                accent_hover: hex(0x93C5FD),
-                accent_text: hex(0x0F1B2D),
-                hover: rgba(96, 165, 250, 0.10),
-                active: rgba(96, 165, 250, 0.2),
-                group_label: rgba(96, 165, 250, 0.85),
-                status_bg: hex(0x0A1320),
-                status_text: hex(0x9CA3AF),
-                viewport: hex(0x0A1320),
-                grid_minor: rgba(96, 165, 250, 0.10),
-                grid_major: rgba(96, 165, 250, 0.25),
-                dark: true,
-            },
+        use openaec_ui::design::tokens::ThemeId;
+        let theme = match self {
+            Self::Light => ThemeId::Light,
+            Self::Forge | Self::Night => ThemeId::Dark,
+            Self::Blueprint => ThemeId::Blueprint,
+            Self::Contrast => ThemeId::HighContrastDark,
+        }.tokens();
+        let c = theme.color;
+        let mut grid_minor = c.workspace_text;
+        grid_minor.a = if theme.high_contrast { 0.18 } else { 0.07 };
+        let mut grid_major = c.workspace_text;
+        grid_major.a = if theme.high_contrast { 0.36 } else { 0.18 };
+        Palette {
+            bg: c.frame, surface: c.panel, docbar: c.docbar, border: c.border,
+            text: c.text, text_secondary: c.text_secondary, text_muted: c.text_disabled,
+            accent: c.accent, accent_hover: c.accent_hover, accent_text: c.text_on_accent,
+            hover: c.hover, active: c.selected, group_label: c.text_secondary,
+            status_bg: c.statusbar, status_text: c.statusbar_text,
+            viewport: c.workspace, grid_minor, grid_major, dark: theme.dark,
         }
     }
 

@@ -68,41 +68,8 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
         ));
     }
     let tabs = widgets::ribbon_tab_strip(horizontal(tabs), theme);
-    let mut groups = Row::new().spacing(0);
-    if let Some(active) = active {
-        for group in &active.groups {
-            let mut commands = Row::new().spacing(1);
-            let mut tools_width = 0.0_f32;
-            for command in &group.commands {
-                if let Some(control) = &command.control {
-                    tools_width += control.width();
-                    commands = commands.push(widgets::ribbon_control(theme, command.label.clone(), control.clone()).map(Message::Command));
-                    continue;
-                }
-                let selected = command.selected;
-                let color = if !command.enabled {t.text_faint} else if selected {t.accent} else {t.text};
-                let label = command.label.clone();
-                let control_width = (label.chars().count() as f32 * 7.0 + 20.0).clamp(66.0, 160.0);
-                tools_width += control_width;
-                let hint = format!("{}{}", label, command.shortcut.as_ref().map(|s|format!(" ({s})")).unwrap_or_default());
-                let control = button(column![command.icon.view(24,color),text(label).font(fonts::BODY).size(12)].spacing(6).align_x(iced::Alignment::Center))
-                    .padding([3,10]).width(control_width).height(52).on_press_maybe(command.enabled.then(|| Message::Command(command.message.clone())))
-                    .style(move |_,s| widgets::ribbon_button_style(theme,selected,s));
-                commands=commands.push(widgets::themed_tooltip(control,hint,tooltip::Position::Bottom,theme));
-            }
-            tools_width += group.commands.len().saturating_sub(1) as f32;
-            let caption_width = (group.label.chars().count() as f32 * 6.0 + 8.0).max(50.0);
-            let group_width = tools_width.max(caption_width) + 17.0;
-            groups=groups.push(widgets::ribbon_group(theme, group.label.clone(), commands.into(), group_width));
-        }
-    }
-    let ribbon = container(
-        scrollable(groups)
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::new().width(3).scroller_width(3).margin(0),
-            ))
-            .height(Fill),
-    ).height(u32::from(metrics::RIBBON)).padding(Padding { top: 0.0, right: 8.0, bottom: 0.0, left: 2.0 });
+    let ribbon = active.map(|tab| ribbon_body(theme, &tab.groups).map(Message::Command))
+        .unwrap_or_else(|| Space::new().height(u32::from(metrics::RIBBON)).into());
     let mut documents = Row::new().spacing(1).align_y(iced::Alignment::End);
     for doc in slots.documents {
         let selected=slots.active_document.as_ref() == Some(&doc.id);
@@ -302,4 +269,51 @@ fn reset_confirmation<'a,M:Clone+'a>(state:&'a ShellState) -> Element<'a,Message
         Message::Ui(UiEvent::SettingsReset),
         state.preferences.theme,
     )
+}
+
+/// Compact command groups: up to three labelled 16 px actions per column.
+/// Owns labels and messages, so callers can share one command definition.
+pub fn ribbon_body<'a, M: Clone + 'a>(theme: Theme, groups: &[RibbonGroup<M>]) -> Element<'a, M> {
+    let t = theme.tokens();
+    let mut strip = Row::new().spacing(0);
+    for group in groups {
+        let mut columns = Row::new().spacing(2);
+        let mut tools_width = 0.0f32;
+        for chunk in group.commands.chunks(3) {
+            let width = chunk.iter().map(|command| {
+                command.control.as_ref().map_or_else(
+                    || (command.label.chars().count() as f32 * 5.8 + 28.0).clamp(54.0, 150.0),
+                    |control| control.width(),
+                )
+            }).fold(0.0f32, f32::max);
+            let mut actions = column![].spacing(0);
+            for command in chunk {
+                if let Some(control) = &command.control {
+                    actions = actions.push(widgets::ribbon_control(theme, command.label.clone(), control.clone()));
+                    continue;
+                }
+                let selected = command.selected;
+                let color = if !command.enabled { t.text_faint } else if selected { t.ribbon_icon_active } else { t.text };
+                let hint = format!("{}{}", command.label, command.shortcut.as_ref().map(|s| format!(" ({s})")).unwrap_or_default());
+                let action = button(row![command.icon.view(16, color), text(command.label.clone()).font(fonts::BODY).size(11)]
+                    .spacing(4).align_y(iced::Alignment::Center))
+                    .padding([2, 4]).width(width).height(22)
+                    .on_press_maybe(command.enabled.then(|| command.message.clone()))
+                    .style(move |_, status| widgets::ribbon_button_style(theme, selected, status));
+                actions = actions.push(widgets::themed_tooltip(action, hint, tooltip::Position::Bottom, theme));
+            }
+            tools_width += width;
+            columns = columns.push(actions);
+        }
+        tools_width += group.commands.len().div_ceil(3).saturating_sub(1) as f32 * 2.0;
+        let caption = group.label.chars().count() as f32 * 6.0 + 8.0;
+        strip = strip.push(widgets::ribbon_group(theme, group.label.clone(), columns.into(), tools_width.max(caption) + 13.0));
+    }
+    container(scrollable(strip).direction(scrollable::Direction::Horizontal(
+        scrollable::Scrollbar::new().width(3).scroller_width(3).margin(0),
+    )))
+        .height(u32::from(metrics::RIBBON))
+        .padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 2.0 })
+        .style(move |_| container::Style::default().background(t.surface))
+        .into()
 }

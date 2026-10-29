@@ -56,6 +56,15 @@ Elke release staat op de [releasepagina](https://github.com/OpenAEC-Foundation/o
 
 Als de OpenAEC Installer een nieuwere versie heeft, meldt de titelbalk van de viewer dat, en **Bijwerken** geeft het over aan de installer. Elk bestand is ondertekend: Windows met Authenticode, macOS met een Developer ID en genotariseerd door Apple, Linux met de OpenPGP-sleutel van OpenAEC (een `.asc` naast elk pakket en naast `SHA256SUMS`), en alles met een build-attestatie van GitHub. De release notes zeggen per platform of het ondertekend is; een release waar een handtekening ontbreekt, staat als pre-release.
 
+Zelf een download controleren:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, vingerafdruk 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
+gpg --verify SHA256SUMS.asc SHA256SUMS
+gh attestation verify open-3d-viewer_2026.44.17_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+```
+
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.

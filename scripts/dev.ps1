@@ -73,6 +73,11 @@ try {
                 $viewerProcess = Start-Process -FilePath $viewerExe -ArgumentList $arguments -WorkingDirectory $projectRoot -PassThru
                 Write-DevStatus 'running' 'Dev viewer updated; watching source files.'
             } else {
+                $recentOutput = (Get-Content -LiteralPath $buildLog -Tail 60) -join "`n"
+                if ($recentOutput -match 'os error 4551|Application Control policy') {
+                    Write-DevStatus 'blocked' 'Windows Application Control blocked a build executable; an approved local build environment is required.'
+                    exit $buildExitCode
+                }
                 Write-DevStatus 'error' "Build failed; the previous viewer stays open. See $buildLog"
             }
             if ($Once) { if ($buildExitCode -ne 0) { exit $buildExitCode }; break }
@@ -80,6 +85,9 @@ try {
         Start-Sleep -Seconds 1
     }
 } finally {
-    if (!$Once -and $viewerProcess -and !$viewerProcess.HasExited) { Stop-Process -Id $viewerProcess.Id }
+    if (!$Once -and (Test-Path -LiteralPath $stopFile)) {
+        if ($viewerProcess -and !$viewerProcess.HasExited) { Stop-Process -Id $viewerProcess.Id }
+        Write-DevStatus 'stopped' 'Dev watcher stopped.'
+    }
     $watchLock.Dispose()
 }

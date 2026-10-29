@@ -5,7 +5,7 @@
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{Layer, ProjectData};
 use ifc_lite_processing::{process, run_on_geometry_pool, ProcessingRequest};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct IfcLoader;
 
@@ -42,16 +42,24 @@ impl Loader for IfcLoader {
         let world = result.frame.world_mapper();
         let direction = result.frame.direction_mapper();
         let anchor = result.frame.to_world([0.0; 3]);
-        let mut layers = BTreeMap::<String, Layer>::new();
+        let mut layers = BTreeMap::<(bool, String), Layer>::new();
+        let mut spatial_volume_ids = BTreeSet::new();
         for mesh in result.meshes {
             if mesh.indices.is_empty() || mesh.positions.is_empty() {
                 continue;
             }
-            let name = mesh.presentation_layer.as_ref().filter(|s| !s.is_empty()).unwrap_or(&mesh.ifc_type).clone();
-            let layer = layers.entry(name.clone()).or_insert_with(|| Layer {
+            let is_space = mesh.ifc_type.eq_ignore_ascii_case("IfcSpace")
+                || mesh.ifc_type.eq_ignore_ascii_case("IfcSpatialZone");
+            let base_name = mesh.presentation_layer.as_ref().filter(|s| !s.is_empty()).unwrap_or(&mesh.ifc_type);
+            let name = if is_space { format!("Spaces: {base_name}") } else { base_name.clone() };
+            if is_space { spatial_volume_ids.insert(mesh.express_id); }
+            // A presentation layer may mix physical elements and room volumes. Keep
+            // those in separate toggleable layers, retaining all source geometry.
+            let layer = layers.entry((is_space, name.clone())).or_insert_with(|| Layer {
                 name,
                 color: [mesh.color[0], mesh.color[1], mesh.color[2]],
                 colors: Some(Vec::new()),
+                hidden: is_space,
                 ..Layer::default()
             });
             let base = u32::try_from(layer.vertex_count()).map_err(|_| "IFC: layer exceeds the mesh index limit")?;
@@ -89,10 +97,20 @@ impl Loader for IfcLoader {
         if layers.is_empty() {
             return Err(format!("IFC: no supported geometry found ({})", result.metadata.schema_version));
         }
+        let has_other_geometry = layers.values().any(|layer| !layer.hidden);
+        if !has_other_geometry {
+            // A space-only IFC is still a useful model; do not open a blank scene.
+            for layer in layers.values_mut() { layer.hidden = false; }
+        }
         let project = ProjectData {
             info: vec![
                 ("IFC schema".into(), result.metadata.schema_version),
                 ("IFC world origin (metres)".into(), format!("{}, {}, {}", anchor[0], anchor[1], anchor[2])),
+                ("IFC space/zone elements".into(), spatial_volume_ids.len().to_string()),
+                ("IFC hidden space/zone elements".into(), if has_other_geometry { spatial_volume_ids.len() } else { 0 }.to_string()),
+                ("IFC space visibility".into(), if has_other_geometry {
+                    "Spaces and spatial zones start hidden; enable their layers to inspect them."
+                } else { "Only spatial volumes found; their layers start visible." }.into()),
             ],
             ..ProjectData::default()
         };
@@ -145,6 +163,37 @@ mod tests {
     fn rejects_non_ifc_data() {
         let source = Source::Bytes { name: "wrong.ifc".into(), data: Arc::new(b"not IFC".to_vec()) };
         assert!(IfcLoader.load(&source).unwrap_err().contains("STEP file"));
+    }
+
+    #[test]
+    fn hides_spaces_without_hiding_physical_elements_on_the_same_presentation_layer() {
+        let data = include_bytes!("../../test-models/ifc-shared-space-layer.ifc");
+        let source = Source::Bytes { name: "shared-space-layer.ifc".into(), data: Arc::new(data.to_vec()) };
+        let loaded = IfcLoader.load_with(&source, &Progress::default()).expect("IFC wall and room");
+        assert_eq!(loaded.layers.len(), 2);
+        let wall = loaded.layers.iter().find(|layer| !layer.hidden).expect("visible physical wall");
+        let room = loaded.layers.iter().find(|layer| layer.hidden).expect("hidden room volume");
+        assert_eq!(wall.name, "Shared");
+        assert_eq!(room.name, "Spaces: Shared");
+        assert_eq!(wall.triangle_count(), 12);
+        assert_eq!(room.triangle_count(), 12);
+        assert!(wall.props.iter().any(|(id, props)| *id == 16 && props.contains("IfcWall")));
+        assert!(room.props.iter().any(|(id, props)| *id == 17 && props.contains("IfcSpace")));
+        assert_eq!(wall.positions, room.positions);
+        assert!(loaded.project.info.iter().any(|(key, value)| key == "IFC hidden space/zone elements" && value == "1"));
+    }
+
+    #[test]
+    fn space_only_files_start_visible_instead_of_opening_a_blank_scene() {
+        let text = include_str!("../../test-models/ifc-shared-space-layer.ifc")
+            .lines().filter(|line| !line.starts_with("#16=IFCWALL(")).collect::<Vec<_>>().join("\n");
+        let source = Source::Bytes { name: "spaces-only.ifc".into(), data: Arc::new(text.into_bytes()) };
+        let loaded = IfcLoader.load_with(&source, &Progress::default()).expect("space-only IFC");
+        assert_eq!(loaded.layers.len(), 1);
+        assert!(!loaded.layers[0].hidden);
+        assert_eq!(loaded.layers[0].triangle_count(), 12);
+        assert!(loaded.layers[0].props.iter().any(|(id, _)| *id == 17));
+        assert!(loaded.project.info.iter().any(|(key,value)| key == "IFC hidden space/zone elements" && value == "0"));
     }
 
     #[test]

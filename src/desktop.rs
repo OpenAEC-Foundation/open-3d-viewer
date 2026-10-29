@@ -5,6 +5,7 @@
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
+//!                  [--screen model|file|settings]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
@@ -22,6 +23,7 @@ struct Args {
     file: Option<PathBuf>,
     theme: Option<ThemeKind>,
     screenshot: Option<PathBuf>,
+    screen: Option<String>,
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
     mode: Option<RenderMode>,
@@ -47,6 +49,11 @@ fn parse_args() -> Result<Args, String> {
         match s.as_str() {
             "--theme" => args.theme = Some(ThemeKind::parse(&value()?).ok_or("unknown theme")?),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
+            "--screen" => {
+                let screen = value()?;
+                if !matches!(screen.as_str(), "model" | "file" | "settings") { return Err("--screen model|file|settings".into()); }
+                args.screen = Some(screen);
+            }
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
@@ -199,8 +206,8 @@ fn run_app_standalone(args: Args) -> iced::Result {
 fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let mut app = initial_state(args);
     let (w, h) = args.size.unwrap_or((1440.0, 900.0));
-    // Viewport area = window minus side panels, ribbon and status bar (see app.rs)
-    app.viewport_size = (w - 220.0 - 290.0, h - 28.0 - 94.0 - 24.0);
+    // The normal shell's two side panels and its title, tabs, ribbon and status bands.
+    app.viewport_size = ((w * 0.625 - 4.0).max(300.0), h - 32.0 - 28.0 - 94.0 - 30.0 - 22.0);
     if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(
@@ -222,14 +229,30 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             app.fit();
         }
     }
-    let theme = app.theme();
+    let shell_theme = match app.theme {
+        ThemeKind::Light => openaec_ui::Theme::Light,
+        ThemeKind::Forge => openaec_ui::Theme::Forge,
+        ThemeKind::Night => openaec_ui::Theme::OpenAec,
+        ThemeKind::Blueprint => openaec_ui::Theme::Blueprint,
+        ThemeKind::Contrast => openaec_ui::Theme::Contrast,
+    };
+    let preferences = openaec_ui::Preferences { theme: shell_theme, language: app::standalone_language(), ..Default::default() };
+    let mut state = openaec_ui::ShellState::new(preferences);
+    state.set_window_width(w);
+    match args.screen.as_deref() {
+        Some("file") => state.update(&openaec_ui::UiEvent::Backstage(true)),
+        Some("settings") => state.update(&openaec_ui::UiEvent::Settings(true)),
+        _ => {},
+    }
+    let studio = shell::Studio { app };
+    let theme = shell_theme.iced();
     let settings = iced::Settings {
-        fonts: vec![INTER_REGULAR.into(), INTER_SEMIBOLD.into()],
+        fonts: openaec_ui::fonts::FILES.iter().map(|bytes| (*bytes).into()).collect(),
         default_font: app::FONT,
         antialiasing: true,
         ..Default::default()
     };
-    let mut ui = iced_test::Simulator::with_size(settings, iced::Size::new(w, h), app.view());
+    let mut ui = iced_test::Simulator::with_size(settings, iced::Size::new(w, h), openaec_ui::application_view(&studio, &state, None));
     let snapshot = ui.snapshot(&theme).map_err(|e| e.to_string())?;
     // iced_test names the file "<stem>-<renderer>.png"; write it next to OUT and rename.
     let tmp = out.with_file_name(format!("{}.o3vtmp", out.file_stem().unwrap_or_default().to_string_lossy()));

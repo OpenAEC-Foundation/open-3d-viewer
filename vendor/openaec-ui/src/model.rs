@@ -140,7 +140,7 @@ pub struct Document { pub id: String, pub title: String, pub dirty: bool }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentEvent { Activate(String), CloseRequested(String) }
 #[derive(Debug, Clone)]
-pub enum Message<M> { Ui(UiEvent), Command(M), Document(DocumentEvent) }
+pub enum Message<M> { Ui(UiEvent), Command(M), FileCommand(M), Document(DocumentEvent) }
 #[derive(Debug, Clone)]
 pub enum UiEvent {
     Tab(String), Backstage(bool), Settings(bool), SettingsSave, SettingsResetPrompt(bool), SettingsReset,
@@ -280,7 +280,10 @@ impl ShellState {
             UiEvent::Tab(id) => { self.active_tab = id.clone(); self.backstage = false; }
             UiEvent::Backstage(open) => { self.cancel_settings(); self.backstage = *open; }
             UiEvent::Settings(true) => {
-                if !self.settings { self.settings_original = Some(SettingsSnapshot::from(&self.preferences)); }
+                if !self.settings {
+                    self.settings_original = Some(SettingsSnapshot::from(&self.preferences));
+                    self.settings_page = SettingsPage::General;
+                }
                 self.settings = true; self.backstage = false; self.settings_theme_open = false;
             }
             UiEvent::Settings(false) => self.cancel_settings(),
@@ -302,6 +305,7 @@ impl ShellState {
             UiEvent::SettingsReset => {}
             UiEvent::SettingsEscape => {
                 if self.settings_reset_confirm { self.settings_reset_confirm = false; }
+                else if self.backstage { self.backstage = false; }
                 else { self.cancel_settings(); }
             }
             UiEvent::SettingsPage(page) => { self.settings_page = *page; self.settings_theme_open = false; }

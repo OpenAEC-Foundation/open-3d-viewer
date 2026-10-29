@@ -36,10 +36,11 @@ struct Runtime<A:Application> { app:A, shell:ShellState, preferences_path:Option
 impl<A:Application> Runtime<A> {
     fn update(&mut self, message: Message<A::Command>) -> Task<Message<A::Command>> {
         match message {
-            Message::Command(command) => {
+            Message::FileCommand(command) => {
                 self.shell.backstage = false;
                 self.app.update(command).map(Message::Command)
             }
+            Message::Command(command) => self.app.update(command).map(Message::Command),
             Message::Document(event) => self.app.document_event(event).map(Message::Command),
             Message::Ui(event) => {
                 if matches!(event, UiEvent::SettingsEscape) && !self.shell.settings {
@@ -70,22 +71,7 @@ impl<A:Application> Runtime<A> {
         }
     }
     fn view(&self) -> Element<'_,Message<A::Command>> {
-        let theme=self.shell.preferences.theme; let language=self.shell.preferences.language;
-        let mode=self.app.chrome_mode();
-        shell(&self.shell, Slots {
-            title:self.app.title(), mode, tabs:self.app.ribbon(language), documents:self.app.documents(),
-            active_document:self.app.active_document(), file_commands:self.app.file_commands(language), file_active_label:self.app.file_active_label(language), quick_commands:self.app.quick_commands(language),
-            status:self.error.clone().unwrap_or_else(||self.app.status(language)),
-            overlay:self.app.overlay(theme,language).map(|element|element.map(Message::Command)),
-            content:Box::new(move |region| match region {
-                Region::Workspace => self.app.workspace(theme,language).map(Message::Command),
-                Region::Explorer if mode == ChromeMode::SidebarCompact => self.app.explorer(theme,language).map(Message::Command),
-                Region::Explorer if matches!(mode, ChromeMode::ThreePaneRibbon { .. } | ChromeMode::ThreePaneFixed { .. }) => self.app.explorer(theme,language).map(Message::Command),
-                Region::Explorer => widgets::panel(if mode == ChromeMode::Workflow { language.text("Werkstroom","Workflow") } else if mode == ChromeMode::Sidebar { language.text("Navigatie","Navigation") } else if mode == ChromeMode::CanvasRibbon { language.text("Eigenschappen","Properties") } else { language.text("Verkenner","Explorer") },self.app.explorer(theme,language).map(Message::Command),theme),
-                Region::Properties if matches!(mode, ChromeMode::ThreePaneRibbon { .. } | ChromeMode::ThreePaneFixed { .. }) => self.app.properties(theme,language).map(Message::Command),
-                Region::Properties => widgets::panel(language.text("Eigenschappen","Properties"),self.app.properties(theme,language).map(Message::Command),theme),
-            }),
-        })
+        application_view(&self.app, &self.shell, self.error.clone())
     }
     fn subscription(&self)->Subscription<Message<A::Command>> {
         Subscription::batch([
@@ -103,6 +89,26 @@ impl<A:Application> Runtime<A> {
         ])
     }
 }
+/// Render the exact application shell for previews and interaction tests.
+pub fn application_view<'a, A: Application>(app: &'a A, state: &'a ShellState, error: Option<String>) -> Element<'a, Message<A::Command>> {
+        let theme=state.preferences.theme; let language=state.preferences.language;
+        let mode=app.chrome_mode();
+        shell(state, Slots {
+            title:app.title(), mode, tabs:app.ribbon(language), documents:app.documents(),
+            active_document:app.active_document(), file_commands:app.file_commands(language), file_active_label:app.file_active_label(language), quick_commands:app.quick_commands(language),
+            status:error.unwrap_or_else(||app.status(language)),
+            overlay:app.overlay(theme,language).map(|element|element.map(Message::Command)),
+            content:Box::new(move |region| match region {
+                Region::Workspace => app.workspace(theme,language).map(Message::Command),
+                Region::Explorer if mode == ChromeMode::SidebarCompact => app.explorer(theme,language).map(Message::Command),
+                Region::Explorer if matches!(mode, ChromeMode::ThreePaneRibbon { .. } | ChromeMode::ThreePaneFixed { .. }) => app.explorer(theme,language).map(Message::Command),
+                Region::Explorer => widgets::panel(if mode == ChromeMode::Workflow { language.text("Werkstroom","Workflow") } else if mode == ChromeMode::Sidebar { language.text("Navigatie","Navigation") } else if mode == ChromeMode::CanvasRibbon { language.text("Eigenschappen","Properties") } else { language.text("Verkenner","Explorer") },app.explorer(theme,language).map(Message::Command),theme),
+                Region::Properties if matches!(mode, ChromeMode::ThreePaneRibbon { .. } | ChromeMode::ThreePaneFixed { .. }) => app.properties(theme,language).map(Message::Command),
+                Region::Properties => widgets::panel(language.text("Eigenschappen","Properties"),app.properties(theme,language).map(Message::Command),theme),
+            }),
+        })
+}
+
 /// Start the same shell in every tool. Pass a per-application preferences path,
 /// or `None` for an ephemeral showcase. All fonts are embedded in this crate.
 pub fn run<A:Application>(app:A, preferences_path:Option<PathBuf>) -> iced::Result {
@@ -148,8 +154,21 @@ mod settings_tests {
             error: None,
         };
         runtime.shell.backstage = true;
-        let _ = runtime.update(Message::Command(()));
+        let _ = runtime.update(Message::FileCommand(()));
         assert!(!runtime.shell.backstage);
+    }
+
+    #[test]
+    fn background_commands_leave_the_file_menu_open() {
+        let mut runtime = Runtime {
+            app: TestApplication,
+            shell: ShellState::default(),
+            preferences_path: None,
+            error: None,
+        };
+        runtime.shell.backstage = true;
+        let _ = runtime.update(Message::Command(()));
+        assert!(runtime.shell.backstage);
     }
 
     #[test]

@@ -48,13 +48,15 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
     let mut tabs = Row::new().spacing(if slots.mode == ChromeMode::CanvasRibbon { 6 } else { 2 });
     if !matches!(slots.mode, ChromeMode::TopNav | ChromeMode::CanvasRibbon | ChromeMode::Plain) {
         let label = l.text("Bestand", "File");
-        tabs = tabs.push(widgets::ribbon_tab(
+        let anchor = widgets::ribbon_tab(
             text(label).font(fonts::STRONG).size(12).into(),
-            Message::Ui(UiEvent::Backstage(true)),
+            Message::Ui(UiEvent::Backstage(!state.backstage)),
             label.chars().count() as f32 * 7.0 + 32.0,
             widgets::RibbonTabKind::File,
             theme,
-        ));
+        );
+        tabs = tabs.push(widgets::popover(anchor, file_menu(&slots.file_commands, theme, l),
+            state.backstage, Message::Ui(UiEvent::Backstage(false))));
     }
     let active = slots.tabs.iter().find(|tab| tab.id == state.active_tab).or(slots.tabs.first());
     for tab in &slots.tabs {
@@ -91,26 +93,7 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
     let document_bar=crate::frame::document_bar(theme, horizontal(documents));
     let compact_sidebar = (slots.mode == ChromeMode::SidebarCompact)
         .then(|| (slots.content)(Region::Explorer));
-    let body: Element<'a,Message<M>> = if state.backstage {
-        let pages = slots.file_commands.into_iter().map(|command| {
-            let active = slots.file_active_label.as_ref() == Some(&command.label);
-            widgets::BackstagePage {
-                label: command.label,
-                message: Message::Command(command.message),
-                active,
-                enabled: command.enabled,
-            }
-        }).collect();
-        let footer = widgets::BackstageFooter {
-            settings: (l.text("Instellingen…", "Settings…").into(), Message::Ui(UiEvent::Settings(true))),
-            back: (l.text("←  Terug naar werkgebied", "←  Return to workspace").into(), Message::Ui(UiEvent::Backstage(false))),
-            exit: (l.text("Afsluiten", "Exit").into(), Message::Ui(UiEvent::CloseWindow)),
-        };
-        row![
-            widgets::backstage_nav_with(pages, Vec::new(), footer, move |_| theme),
-            (slots.content)(Region::Workspace),
-        ].height(Fill).width(Fill).into()
-    } else if matches!(slots.mode, ChromeMode::TopNav | ChromeMode::Plain) {
+    let body: Element<'a,Message<M>> = if matches!(slots.mode, ChromeMode::TopNav | ChromeMode::Plain) {
         (slots.content)(Region::Workspace)
     } else if slots.mode == ChromeMode::RibbonWorkspace {
         (slots.content)(Region::Workspace)
@@ -163,12 +146,7 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
         status_row.align_y(iced::Alignment::Center).height(Fill).into(),
         8,
     );
-    let bands = if state.backstage {
-        crate::frame::frame(crate::frame::FrameSlots {
-            titlebar: titlebar.into(), tabs: tabs.into(), ribbon: None,
-            documents: None, content: body, status: status.into(),
-        })
-    } else if slots.mode == ChromeMode::SidebarCompact {
+    let bands = if slots.mode == ChromeMode::SidebarCompact {
         crate::frame::sidebar_frame(
             crate::frame::SidebarFrameProfile::WORKSPACE_COMPOSER,
             titlebar.into(),
@@ -205,17 +183,54 @@ pub fn shell<'a, M: Clone + 'a>(state: &'a ShellState, slots: Slots<'a,M>) -> El
     if layers.len() == 1 { layers.pop().unwrap() }
     else { stack(layers).width(Fill).height(Fill).into() }
 }
+
+/// A standard File menu keeps the model in view while offering direct actions.
+fn file_menu<'a, M: Clone + 'a>(commands: &[Command<M>], theme: Theme, l: Language) -> Element<'a, Message<M>> {
+    let t = theme.tokens();
+    let mut items = column![].spacing(2);
+    for command in commands {
+        let label = row![command.icon.view(18, if command.enabled { t.text } else { t.text_faint }),
+            text(command.label.clone()).size(13), Space::new().width(Fill),
+            text(command.shortcut.clone().unwrap_or_default()).size(11).color(t.text_secondary)]
+            .spacing(10).align_y(iced::Alignment::Center);
+        items = items.push(button(label).width(Fill).padding([9, 10])
+            .on_press_maybe(command.enabled.then(|| Message::FileCommand(command.message.clone())))
+            .style(move |_, status| widgets::ribbon_button_style(theme, false, status)));
+    }
+    items = items.push(iced::widget::rule::horizontal(1));
+    items = items.push(button(row![Icon::Settings.view(18, t.text), text(l.text("Instellingen…", "Settings…")).size(13)]
+        .spacing(10).align_y(iced::Alignment::Center))
+        .width(Fill).padding([9, 10]).on_press(Message::Ui(UiEvent::Settings(true)))
+        .style(move |_, status| widgets::ribbon_button_style(theme, false, status)));
+    #[cfg(not(target_arch = "wasm32"))]
+    { items = items.push(button(text(l.text("Afsluiten", "Exit")).size(13))
+        .width(Fill).padding([9, 10]).on_press(Message::Ui(UiEvent::CloseWindow))
+        .style(move |_, status| widgets::ribbon_button_style(theme, false, status))); }
+    container(items).width(280).padding(6).style(move |_| container::Style {
+        background: Some(t.surface.into()), text_color: Some(t.text),
+        border: iced::Border { color: t.border, width: 1.0, radius: 6.0.into() },
+        shadow: theme.dialog_shadow(), ..Default::default()
+    }).into()
+}
+
 fn settings<'a,M:Clone+'a>(state:&'a ShellState) -> Element<'a,Message<M>> {
     let p=&state.preferences; let l=p.language;
     let heading = |label: &'static str| widgets::settings_section_heading(label,p.theme);
     let form: Element<'a, Message<M>> = match state.settings_page {
         SettingsPage::General => column![
             heading(l.text("Algemeen","General")),
-            text(l.text("Taal","Language")).size(11),
+            text(l.text("Stel de taal en weergave van de app in.", "Choose the app language and appearance.")).size(12).color(p.theme.tokens().text_secondary),
+            text(l.text("Taal","Language")).size(13),
             pick_list(Language::ALL,Some(p.language),|language|Message::Ui(UiEvent::Language(language)))
                 .style(move |_,status|widgets::pick_list_style(p.theme,status))
                 .menu_style(move |_|widgets::pick_list_menu_style(p.theme)).width(Fill),
-            text(format!("{}: {:.0}%",l.text("Schaal","Scale"),p.scale*100.0)).size(11),
+            text(l.text("Thema", "Theme")).size(13),
+            widgets::settings_theme_picker(
+                Theme::ALL.into_iter().map(|theme| (theme, theme.to_string(), Message::Ui(UiEvent::Theme(theme)))).collect(),
+                p.theme, p.theme, state.settings_theme_open,
+                Message::Ui(UiEvent::SettingsThemeMenu(!state.settings_theme_open)),
+            ),
+            text(format!("{}: {:.0}%",l.text("Interfacegrootte","Interface size"),p.scale*100.0)).size(13),
             slider(0.75..=2.0,p.scale,|scale|Message::Ui(UiEvent::Scale(scale)))
                 .step(0.05).style(move |_,status|widgets::slider_style(p.theme,status)),
         ].spacing(10).into(),

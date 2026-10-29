@@ -890,6 +890,7 @@ impl App {
                 use keyboard::Key;
                 match key.as_ref() {
                     Key::Character("o") if modifiers.command() => Some(Message::OpenDialog),
+                    Key::Character("s") if modifiers.command() && modifiers.shift() => Some(Message::SaveDialog),
                     Key::Character("f") => Some(Message::Fit),
                     Key::Character("g") => Some(Message::ToggleGrid),
                     Key::Character("p") => Some(Message::Ortho(false)),
@@ -1960,7 +1961,7 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
 }
 
 /// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
-fn standalone_language() -> Language {
+pub(crate) fn standalone_language() -> Language {
     match std::env::var("O3V_LANG").as_deref() {
         Ok("nl") => Language::Dutch,
         _ => Language::English,

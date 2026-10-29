@@ -18,3 +18,9 @@ The generated token files are unchanged. `ribbon_body` lays out actions in compa
 three-row columns and is shared by the normal shell and the headless viewer preview.
 The app supplies one Model ribbon with file, display, camera, section, explode,
 projection and measurement commands. These changes are local to this vendored copy.
+
+The File tab uses the existing anchored popover for Open, Save as and Settings.
+The general settings dialog shows language, theme and interface size together.
+Popover widget operations forward to their contents for accessibility and UI tests.
+`application_view` shares the runtime's actual shell with interaction tests and
+the viewer's `--screenshot` command, including File and Settings previews.

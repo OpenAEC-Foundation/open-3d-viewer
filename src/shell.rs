@@ -58,8 +58,8 @@ impl Application for Studio {
 
     fn file_commands(&self, l: Language) -> Vec<Command<Message>> {
         vec![
-            Command::new(l.text("Openen", "Open"), Icon::Open, Message::OpenDialog),
-            Command::new(l.text("Opslaan als", "Save as"), Icon::SaveAs, Message::SaveDialog).enabled(self.app.model.is_some()),
+            Command::new(l.text("Openen…", "Open…"), Icon::Open, Message::OpenDialog).shortcut("Ctrl+O"),
+            Command::new(l.text("Opslaan als…", "Save as…"), Icon::SaveAs, Message::SaveDialog).enabled(self.app.model.is_some()).shortcut("Ctrl+Shift+S"),
         ]
     }
 
@@ -155,6 +155,59 @@ pub fn model_ribbon(app: &App, l: Language) -> Vec<RibbonTab<Message>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn simulator<'a>(studio: &'a Studio, state: &'a openaec_ui::ShellState) -> iced_test::Simulator<'a, openaec_ui::Message<Message>> {
+        iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1280.0, 800.0),
+            openaec_ui::application_view(studio, state, None))
+    }
+
+    #[test]
+    fn file_button_opens_menu_and_routes_open_save_and_settings() {
+        use openaec_ui::{ShellState, UiEvent, Message as ShellMessage};
+        let mut studio = Studio { app: App::default() };
+        let mut state = ShellState::default();
+        let mut ui = simulator(&studio, &state);
+        ui.click("Bestand").expect("File button");
+        assert!(ui.into_messages().any(|m| matches!(m, ShellMessage::Ui(UiEvent::Backstage(true)))));
+        state.update(&UiEvent::Backstage(true));
+        let mut ui = simulator(&studio, &state);
+        ui.click("Openen…").expect("Open in File menu");
+        assert!(ui.into_messages().any(|m| matches!(m, ShellMessage::FileCommand(Message::OpenDialog))));
+        let mut ui = simulator(&studio, &state);
+        ui.click("Opslaan als…").expect("disabled Save as in File menu");
+        assert!(!ui.into_messages().any(|m| matches!(m, ShellMessage::FileCommand(Message::SaveDialog))));
+        studio.app.set_model(std::sync::Arc::new(crate::model::Model::new("demo.obj".into(), "OBJ", Vec::new())));
+        let mut ui = simulator(&studio, &state);
+        ui.click("Opslaan als…").expect("Save as in File menu");
+        assert!(ui.into_messages().any(|m| matches!(m, ShellMessage::FileCommand(Message::SaveDialog))));
+        let mut ui = simulator(&studio, &state);
+        ui.click("Instellingen…").expect("Settings in File menu");
+        assert!(ui.into_messages().any(|m| matches!(m, ShellMessage::Ui(UiEvent::Settings(true)))));
+        state.update(&UiEvent::SettingsEscape);
+        assert!(!state.backstage);
+    }
+
+    #[test]
+    fn settings_dialog_exposes_language_theme_and_size_and_saves_language() {
+        use openaec_ui::{ShellState, UiEvent, Message as ShellMessage};
+        let studio = Studio { app: App::default() };
+        let mut state = ShellState::default();
+        state.update(&UiEvent::Settings(true));
+        let mut ui = simulator(&studio, &state);
+        ui.find("Taal").expect("Language field");
+        ui.find("Thema").expect("Theme field");
+        ui.find("Interfacegrootte: 100%").expect("Interface size field");
+        ui.click("Nederlands").expect("Language picker");
+        ui.click("English").expect("English option");
+        ui.click("Opslaan").expect("Save settings");
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(messages.iter().any(|m| matches!(m, ShellMessage::Ui(UiEvent::Language(Language::English)))));
+        for message in messages {
+            if let ShellMessage::Ui(event) = message { state.update(&event); }
+        }
+        assert_eq!(state.preferences.language, Language::English);
+        assert!(!state.settings);
+    }
 
     #[test]
     fn one_ribbon_keeps_the_viewer_workflow_available() {

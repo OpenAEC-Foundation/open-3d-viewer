@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Open 3D Viewer Studio icon proposal: an open isometric cube">
+  <rect width="128" height="128" rx="28" fill="#2A2A32"/>
+  <path d="M64 20 106 44 64 68 22 44Z" fill="#FBBF24"/>
+  <path d="M22 44 64 68V112L22 88Z" fill="#D97706"/>
+  <path d="M64 68 106 44V88L64 112Z" fill="#92400E"/>
+  <path d="m78 60 28-16v44l-28 16Z" fill="#2A2A32"/>
+  <path d="m78 60 28-16v44l-28 16" fill="none" stroke="#FBBF24" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M64 68v44M22 44l42 24" fill="none" stroke="#2A2A32" stroke-width="3"/>
+  <path d="m78 60-14 8v28l14 8" fill="none" stroke="#EEEAE4" stroke-width="4" stroke-linejoin="round"/>
+</svg>

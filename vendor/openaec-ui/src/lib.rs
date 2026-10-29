@@ -23,6 +23,6 @@ mod shell;
 mod runtime;
 pub use locale::Language;
 pub use model::*;
-pub use runtime::{run, Application};
+pub use runtime::{run, application_view, Application};
 pub use shell::{shell, ribbon_body, Slots};
 pub use theme::Theme;

@@ -1,6 +1,6 @@
 //! A reusable anchored overlay for application-owned controls.
 use iced::{
-    advanced::{layout, mouse, overlay, renderer::{self, Renderer as _}, widget::Tree, Clipboard, Layout, Shell, Widget},
+    advanced::{layout, mouse, overlay, renderer::{self, Renderer as _}, widget::{Tree, Operation}, Clipboard, Layout, Shell, Widget},
     Event,
     Element, Length, Point, Rectangle, Size, Vector,
 };
@@ -42,6 +42,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for Popover<'_, M> {
 
     fn layout(&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits) -> layout::Node {
         self.anchor.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &iced::Renderer, operation: &mut dyn Operation) {
+        self.anchor.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
     }
 
     fn update(&mut self, tree: &mut Tree, event: &Event, layout: Layout<'_>, cursor: mouse::Cursor,
@@ -86,6 +90,10 @@ struct PopoverOverlay<'a, 'b, M> {
 }
 
 impl<M: Clone> overlay::Overlay<M, iced::Theme, iced::Renderer> for PopoverOverlay<'_, '_, M> {
+    fn operate(&mut self, layout: Layout<'_>, renderer: &iced::Renderer, operation: &mut dyn Operation) {
+        self.content.as_widget_mut().operate(self.tree, layout, renderer, operation);
+    }
+
     fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
         let limits = layout::Limits::new(Size::ZERO, bounds);
         let node = self.content.as_widget_mut().layout(self.tree, renderer, &limits);

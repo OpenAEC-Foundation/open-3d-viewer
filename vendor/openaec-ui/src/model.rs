@@ -181,7 +181,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self { theme: Theme::Light, language: Language::English, scale: 1.0,
-            explorer_visible: true, properties_visible: false,
+            explorer_visible: false, properties_visible: true,
             explorer_ratio: metrics::PANEL_DEFAULT as f32 / metrics::WINDOW_DEFAULT_WIDTH as f32,
             properties_ratio: (metrics::WINDOW_DEFAULT_WIDTH - 2 * metrics::PANEL_DEFAULT) as f32
                 / (metrics::WINDOW_DEFAULT_WIDTH - metrics::PANEL_DEFAULT) as f32 }
@@ -333,7 +333,7 @@ mod settings_tests {
 
     #[test]
     fn narrow_window_keeps_panels_legible_and_restores_saved_ratios() {
-        let mut shell = ShellState::new(Preferences { properties_visible: true, ..Default::default() });
+        let mut shell = ShellState::new(Preferences { explorer_visible: true, properties_visible: true, ..Default::default() });
         let saved = (shell.preferences.explorer_ratio, shell.preferences.properties_ratio);
         let pane_widths = |shell: &ShellState, width: f32| {
             let regions = shell.panes.layout().pane_regions(2.0, 50.0, iced::Size::new(width, 480.0));

@@ -141,6 +141,12 @@ fn tools() -> Vec<Value> {
                 "grid": { "type": "boolean" }, "grid_lines": { "type": "boolean" },
                 "flip_up": { "type": "boolean" }, "section_fill": { "type": "boolean" }
             }), &[], false),
+        tool("explode", "The exploded view: pull the model apart per storey (Revit levels) or per element, by a percentage per axis, and switch it on or off. Frame it afterwards with zoom_to.",
+            json!({
+                "enabled": { "type": "boolean" },
+                "mode": { "type": "string", "enum": ["storeys", "elements"] },
+                "percent": { "type": "array", "items": { "type": ["number", "null"] }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] from 0 to 100; null keeps a value" }
+            }), &[], false),
         tool("section_box", "The section box: switch it on or off, fit it around the model, selection or elements, set its limits (min/max [x, y, z] in the box's frame; null keeps a value) or turn it about the vertical. Everything outside the box is cut away.",
             json!({
                 "enabled": { "type": "boolean" },

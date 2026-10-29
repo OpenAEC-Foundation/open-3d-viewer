@@ -64,6 +64,7 @@ struct Scene {
     ignored_geometry: usize,
     skipped_lods: usize,
     triangles: usize,
+    degenerate_surfaces: usize,
 }
 
 fn read(bytes: &[u8]) -> Result<Loaded, String> {
@@ -103,6 +104,7 @@ fn read(bytes: &[u8]) -> Result<Loaded, String> {
         ("CityJSON LoD selection".into(), "Highest supported polygon LoD per object".into()),
         ("CityJSON skipped lower LoD geometries".into(), scene.skipped_lods.to_string()),
         ("CityJSON unsupported geometries".into(), scene.ignored_geometry.to_string()),
+        ("CityJSON skipped degenerate surfaces".into(), scene.degenerate_surfaces.to_string()),
     ];
     if let Some(origin) = scene.origin {
         info.push(("CityJSON world origin (source coordinates)".into(), format!("{}, {}, {}", origin[0], origin[1], origin[2])));
@@ -161,8 +163,9 @@ impl Scene {
                 for (surface_index, surface) in surfaces.iter().enumerate() {
                     let color = material_color(doc, uniform_material.or_else(|| material_values.get(surface_index).copied().flatten()));
                     let before = layer.indices.len();
-                    append_surface(layer, surface, vertices, t, &mut self.origin, color, 2_000_000 - self.triangles)
+                    let rendered = append_surface(layer, surface, vertices, t, &mut self.origin, color, 2_000_000 - self.triangles)
                         .map_err(|e| format!("CityJSON object {key}: {e}"))?;
+                    if !rendered { self.degenerate_surfaces += 1; }
                     self.triangles += (layer.indices.len() - before) / 3;
                 }
                 let end = u32::try_from(layer.indices.len()).map_err(|_| "CityJSON: too many indices")?;
@@ -219,7 +222,7 @@ fn material_color(doc: &Value, value: Option<u64>) -> [u8; 4] {
 fn append_surface(
     layer: &mut Layer, surface: &Value, vertices: &[Value], transform: Transform,
     origin: &mut Option<[f64; 3]>, color: [u8; 4], remaining_triangles: usize,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let rings = array(surface, "polygon rings")?;
     if rings.is_empty() { return Err("polygon has no outer ring".into()); }
     let mut points = Vec::<[f64; 3]>::new();
@@ -237,7 +240,7 @@ fn append_surface(
             if ring_points.last() != Some(&world) { ring_points.push(world); }
         }
         if ring_points.len() > 1 && ring_points.first() == ring_points.last() { ring_points.pop(); }
-        if ring_points.len() < 3 { return Err("polygon ring has fewer than three distinct vertices".into()); }
+        if ring_points.len() < 3 { return Ok(false); }
         if ring_index == 0 { outer_len = ring_points.len(); } else { holes.push(points.len()); }
         points.extend(ring_points);
     }
@@ -253,13 +256,14 @@ fn append_surface(
         normal[2] += (a[0] - b[0]) * (a[1] + b[1]);
     }
     let axis = (0..3).max_by(|&a, &b| normal[a].abs().total_cmp(&normal[b].abs())).unwrap();
-    if normal[axis].abs() < 1e-20 { return Err("degenerate polygon".into()); }
+    if normal[axis].abs() < 1e-20 { return Ok(false); }
     let axes = match axis { 0 => [1, 2], 1 => [0, 2], _ => [0, 1] };
     let projected: Vec<f64> = local.iter().flat_map(|p| [p[axes[0]], p[axes[1]]]).collect();
     let triangles = earcutr::earcut(&projected, &holes, 2).map_err(|e| format!("cannot triangulate polygon: {e}"))?;
-    if triangles.is_empty() { return Err("polygon triangulation produced no faces".into()); }
+    if triangles.is_empty() { return Ok(false); }
     if triangles.len() / 3 > remaining_triangles { return Err("scene exceeds the two million triangle import limit".into()); }
     let origin = *origin.get_or_insert(anchor);
+    let first_index = layer.indices.len();
     for tri in triangles.chunks_exact(3) {
         let mut tri = [tri[0], tri[1], tri[2]];
         let cross = |indices: [usize; 3]| {
@@ -282,7 +286,7 @@ fn append_surface(
             layer.colors.as_mut().unwrap().push(color);
         }
     }
-    Ok(())
+    Ok(layer.indices.len() > first_index)
 }
 
 #[cfg(test)]
@@ -373,12 +377,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_json_bad_indices_and_degenerate_rings() {
+    fn rejects_wrong_json_and_bad_indices() {
         assert!(read(br#"{"hello":1}"#).err().unwrap().contains("expected type"));
         let mut doc = document();
         doc["CityObjects"]["building-1"]["geometry"][0]["boundaries"] = json!([[[0,1,999]]]);
         assert!(read(doc.to_string().as_bytes()).err().unwrap().contains("out of range"));
-        doc["CityObjects"]["building-1"]["geometry"][0]["boundaries"] = json!([[[0,0,1]]]);
-        assert!(read(doc.to_string().as_bytes()).err().unwrap().contains("distinct vertices"));
+    }
+
+    #[test]
+    fn skips_collapsed_surfaces_and_reports_count_without_losing_valid_building() {
+        let mut doc = document();
+        let boundaries = doc["CityObjects"]["building-1"]["geometry"][0]["boundaries"].as_array_mut().unwrap();
+        boundaries.push(json!([[0,1,0]]));
+        boundaries.push(json!([[0,0,1]]));
+        let loaded = load(&doc);
+        assert!((area(&loaded.layers) - 84.).abs() < 1e-8);
+        assert!(loaded.project.info.iter().any(|(k,v)| k == "CityJSON skipped degenerate surfaces" && v == "2"));
     }
 }

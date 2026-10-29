@@ -3934,7 +3934,7 @@ dependencies = [
 [[package]]
 name = "tekla-reader"
 version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=baa4a11dc9646b7224f47592f98c7ed37c0a74c8#baa4a11dc9646b7224f47592f98c7ed37c0a74c8"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=ea6201077c19de709870f2ae55a6dd2eb8befb60#ea6201077c19de709870f2ae55a6dd2eb8befb60"
 dependencies = [
  "earcutr",
  "flate2",

@@ -223,6 +223,11 @@ impl App {
     pub fn remote(&mut self, call: RemoteCall) -> Task<Message> {
         match call.cmd.as_str() {
             "open_file" => return self.remote_open(call),
+            "get_schedule" => {
+                let (answer, task) = self.remote_schedule(&call.args);
+                call.answer(answer);
+                return task;
+            }
             "screenshot" => {
                 self.finish_animation();
                 self.remote.pending_shots.push(call);
@@ -257,6 +262,7 @@ impl App {
             "list_views" => self.list_views(),
             "apply_view" => self.remote_apply_view(a),
             "get_project_info" => self.project_info(),
+            "list_schedules" => self.schedules_json(),
             "find_elements" => self.find_elements(a),
             "get_element" => {
                 let id = a.get("id").and_then(id_of).ok_or("id is required")?;

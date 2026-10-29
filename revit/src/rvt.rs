@@ -2,7 +2,9 @@
 //! per vertex, the drawn elements (for picking) and their properties.
 
 use open_3d_viewer::loaders::{Loaded, Loader, Phase, Progress, Source};
-use open_3d_viewer::model::{y_up_to_z_up, GridLine, Layer, PlanRange, ProjectData, Room, SavedView, ViewCamera, ViewKind};
+use open_3d_viewer::model::{
+    y_up_to_z_up, GridLine, Later, Layer, PlanRange, ProjectData, Room, SavedView, Schedule, ScheduleRow, ViewCamera, ViewKind,
+};
 use rvt_model::{FieldValue, ObjectView};
 use std::collections::HashMap;
 use open_3d_viewer::section::SectionBox;
@@ -36,7 +38,9 @@ impl Loader for RvtLoader {
         // `scene` returns view coordinates: metres, Y up (x, z, -y)
         let scene = rvt_export::mesh::scene(&doc);
         let views = saved_views(&doc);
-        let project = project_data(&doc, &scene.levels);
+        let mut project = project_data(&doc, &scene.levels);
+        // the schedules take seconds on a large project: computed once the model shows
+        project.schedules = Later::new(move || schedules(&doc));
         let layers = scene
             .batches
             .into_iter()
@@ -63,6 +67,32 @@ impl Loader for RvtLoader {
             .collect();
         Ok(Loaded { layers, views, project })
     }
+}
+
+/// The schedules as the viewer shows them: templates left out, the shown columns only.
+fn schedules(doc: &rvt_read::Document) -> Vec<Schedule> {
+    rvt_export::schedules::schedules(doc)
+        .into_iter()
+        .filter(|s| !s.is_template)
+        .map(|s| {
+            let shown: Vec<usize> = (0..s.columns.len()).filter(|&i| !s.columns[i].hidden).collect();
+            Schedule {
+                name: s.name,
+                title: s.title,
+                columns: shown.iter().map(|&i| s.columns[i].heading.clone()).collect(),
+                rows: s
+                    .rows
+                    .into_iter()
+                    .map(|r| ScheduleRow {
+                        cells: shown.iter().map(|&i| r.cells.get(i).cloned().flatten()).collect(),
+                        elements: r.elements,
+                        total: r.total,
+                    })
+                    .collect(),
+                computed: s.computed,
+            }
+        })
+        .collect()
 }
 
 /// A parameter value as stored on an element (internal units: feet, square feet, radians).

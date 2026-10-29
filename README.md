@@ -84,6 +84,11 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 * **Tools**: picking with element properties, section box and section plane (with cut fills),
   exploded view per storey or per element, measuring (distance, angle, polygon, area), saved
   views and grids from Revit models.
+* **Schedules** (Revit, beta): the explorer lists the file's schedules; one opens in its own tab
+  as a table under the 3D view, and a row selects its elements. Revit keeps only the definition
+  of a schedule in the file: the rows are computed from the elements (fields, filters, sorting,
+  grouping, grand total), a few seconds after the model shows. Cells the reader cannot work out
+  yet show `?`; material takeoffs and key schedules have no rows yet.
 * **Open**: file dialog (Ctrl+O), command line, drag and drop; loading runs on a worker thread
   on the desktop.
 * **Keyboard**: Ctrl+O open, F fit, G grid, S/W/E solid/wireframe/edges, 1/2/3/0
@@ -93,7 +98,7 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 
 | Format | Crate | Notes |
 | --- | --- | --- |
-| Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, `revit/` build only) | one layer per category batch, Y up → Z up; levels, grids, rooms and views |
+| Revit `.rvt` / `.rfa` | `rvt-read` + `rvt-export` (OpenAEC, `revit/` build only) | one layer per category batch, Y up → Z up; levels, grids, rooms, views and schedules |
 | SketchUp `.skp` | own port of openskp 1.3 (MIT; classic-file reader at 1.4.0) + `flate2`, `earcutr` | 2021+ ZIP container and the classic MFC archive (SketchUp 3 to 2020); one layer per tag (hidden tags start off), material colours per vertex (textures as their average colour), each component/group a pickable element with its dynamic attributes; inches → metres, Z up |
 | Tekla Structures `.db1` (beta) | own clean-room reader + `flate2`, `earcutr` | written only from `tekla-cleanroom/spec/SPEC_v0.1.md`; database versions 8.95 (TS 2020) and 7.82 (TS 19.0). Profile parts as boxes along their axis, contour plates as their polygon extruded by the thickness; one layer per class, each part a pickable element. Profile sizes are guessed from the profile name; mm → metres, Z up |
 | glTF `.gltf` / `.glb` | `gltf` | default scene flattened, one layer per material, each node with a mesh a pickable element, base colour × average texture colour, vertex colours, Y up → Z up. In the browser: `.glb` or `.gltf` with embedded buffers |
@@ -127,8 +132,9 @@ module and add it to `export::registry()`.
 server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the
 desktop viewer as a person does: open files, take screenshots, orbit / pan / zoom and set the
 camera, standard and saved views, show / hide / isolate layers, find elements by property,
-select, inspect properties, section box and section plane, render mode and display toggles, and
-measure. Measurements are drawn in the viewport (View > Measure > Clear measurements removes
+select, inspect properties, section box and section plane, render mode and display toggles,
+read Revit schedules, and measure.
+ Measurements are drawn in the viewport (View > Measure > Clear measurements removes
 them).
 
 Install: keep `open-3d-viewer-mcp` next to the viewer and register it with the client:

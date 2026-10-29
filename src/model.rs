@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// One layer: a named triangle mesh with a single base colour (plus optional vertex colours).
@@ -131,6 +132,41 @@ pub struct ProjectData {
     pub phases: Vec<String>,
     pub grids: Vec<GridLine>,
     pub rooms: Vec<Room>,
+    /// Schedules: computed after the model shows, as they take seconds on a large project.
+    pub schedules: Later<Vec<Schedule>>,
+}
+
+/// Work a loader leaves for after the model shows; whoever takes it runs it (once).
+pub struct Later<T>(Arc<Mutex<Option<Box<dyn FnOnce() -> T + Send>>>>);
+
+impl<T> Later<T> {
+    pub fn new(work: impl FnOnce() -> T + Send + 'static) -> Self {
+        Self(Arc::new(Mutex::new(Some(Box::new(work)))))
+    }
+
+    /// The work, the first time (`None` when there is none or it was taken).
+    pub fn take(&self) -> Option<Box<dyn FnOnce() -> T + Send>> {
+        self.0.lock().ok()?.take()
+    }
+}
+
+impl<T> Default for Later<T> {
+    fn default() -> Self {
+        Self(Arc::default())
+    }
+}
+
+impl<T> Clone for Later<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> std::fmt::Debug for Later<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let waiting = self.0.lock().is_ok_and(|w| w.is_some());
+        write!(f, "Later({})", if waiting { "waiting" } else { "none" })
+    }
 }
 
 /// A grid line (world, metres) at the height it is drawn.
@@ -150,7 +186,34 @@ pub struct Room {
     pub extra: Vec<(String, String)>,
 }
 
+/// A schedule (Revit): a table of elements the file defines. The file keeps only its
+/// definition; the loader computed the rows.
+#[derive(Debug, Clone, Default)]
+pub struct Schedule {
+    pub name: String,
+    /// The title above the table (the name unless the file sets another).
+    pub title: String,
+    /// Headings of the shown columns.
+    pub columns: Vec<String>,
+    pub rows: Vec<ScheduleRow>,
+    /// The rows could be computed (not yet for material takeoffs and key schedules).
+    pub computed: bool,
+}
+
+/// A row of a schedule: one cell per column, as Revit shows it (empty when there is no value
+/// or the elements of a group differ; `None` when the loader could not work the value out).
+#[derive(Debug, Clone, Default)]
+pub struct ScheduleRow {
+    pub cells: Vec<Option<String>>,
+
+    /// The elements of the row: one when itemized, the group's otherwise.
+    pub elements: Vec<u64>,
+    /// The grand total.
+    pub total: bool,
+}
+
 /// The kind of a saved view.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewKind {
     ThreeD,

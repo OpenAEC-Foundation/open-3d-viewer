@@ -195,12 +195,12 @@ Edges mode.
 ## Not there yet
 
 * **More formats**: full DWG/DXF solids and drawings, CityGML, STEP/IGES, E57, LAS and other point clouds, FBX, 3DS, Collada, 3MF, AMF,
-  VRML, VTK, KMZ, VOX, G-code, STEP/IGES/BREP, XYZ/PCD. PLY files without faces are rejected.
+  VRML, VTK, KMZ, VOX, G-code, BREP, XYZ/PCD. PLY files without faces are rejected.
 * **Textures**: glTF/OBJ/SketchUp textures are not mapped (an average tint instead); SketchUp
   soft edges are not smoothed.
 * **Web**: IFC import and Revit are desktop-only; IFC export works on both targets. Preferences are not kept between visits, loading blocks the page while it
   runs (no worker threads yet).
-* Walk mode, points and hidden-line render modes, recent files, multiple models at once.
+* Walk mode, points and hidden-line render modes, recent files.
 
 ## Licences
 
@@ -210,6 +210,7 @@ via iced), glam (MIT OR Apache-2.0), bytemuck (Zlib OR Apache-2.0 OR MIT), rfd (
 web-sys (MIT OR Apache-2.0). Inter font: SIL OFL 1.1 (`assets/fonts/Inter-LICENSE.txt`). Theme
 colours: OpenAEC style book (CC BY-SA 4.0). `vendor/openaec-ui`: see its `NOTICE.md`.
 IFClite's independent parsing and geometry libraries are MPL-2.0.
+The CAD reader `acadrust` is MPL-2.0; `earcutr` is ISC and `roxmltree` is MIT OR Apache-2.0.
 
 The independent `rvt-dll` crates (OpenAEC) retain their proprietary licence. They are linked
 into the standard desktop app, and excluded from the web build.

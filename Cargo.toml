@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.44.11"
+version = "2026.44.12"
 description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -47,10 +47,9 @@ gltf = { version = "1.4", default-features = false, features = ["import", "names
 tobj = { version = "4", default-features = false }
 stl_io = "0.11"
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
-openaec-model = { git = "https://github.com/OpenAEC-Foundation/openaec-model", rev = "2994963fcea8d1240d44801dddd1d3a351f05629" }
-skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "1bf1a4ac793ba7d6e01721ad196064ed6bb66a9c" }
-tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "c7b3839008097ad8f8b872b3bf6630c9d9989ba5" }
-ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "589c12ade65e777e13283242ac14cc8943051fe8" }
+skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
+tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "24d746cc8ad654593bd605e8b97e54464587b60c" }
+ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "9b972341031fff12f7405f200feb51792bab1ad4" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

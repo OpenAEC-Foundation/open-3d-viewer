@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo metadata --format-version 1 --locked > "$RUNNER_TEMP/model-dependencies.json"
-          for crate in openaec-model skp-reader tekla-reader ply-reader; do
+          for crate in skp-reader tekla-reader ply-reader; do
             manifest=$(python3 -c 'import json,sys; print(next(p["manifest_path"] for p in json.load(open(sys.argv[1]))["packages"] if p["name"] == sys.argv[2]))' "$RUNNER_TEMP/model-dependencies.json" "$crate")
             cargo test --manifest-path "$manifest"
             cargo check --manifest-path "$manifest" --target wasm32-unknown-unknown

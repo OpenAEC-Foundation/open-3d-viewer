@@ -103,21 +103,20 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 | STL `.stl` | `stl_io` | ASCII and binary, flat shaded, kept Z up |
 | PLY `.ply` | [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader) | ASCII / binary LE / BE, vertex normals and colours, polygons fan-triangulated; kept Z up |
 
-The extracted readers share [`openaec-model`](https://github.com/OpenAEC-Foundation/openaec-model):
-scene types, mesh utilities, saved views, clipping geometry and the `Loader` / `Source` contract,
-without iced or GPU dependencies. The viewer re-exports these types through its existing API,
-so the Revit adapter keeps working with the same types. Revit already uses the existing
-`rvt-read`, `rvt-export` and `rvt-model` crates; glTF, OBJ and STL reuse `gltf`, `tobj` and `stl_io`.
+The app owns its scene model, mesh utilities, saved views, clipping geometry and loader
+registry. Each format library returns its own file-reading output; small adapters in
+`src/loaders/` convert that output into the app's `Layer` types. No shared model crate is needed.
+Revit uses the existing `rvt-read`, `rvt-export` and `rvt-model` crates; glTF, OBJ and STL
+reuse `gltf`, `tobj` and `stl_io`.
 
-All four libraries have their own private repositories, independent names, documentation and
+The three extracted readers have their own private repositories, independent names, documentation and
 native/wasm CI. This viewer uses them directly as Cargo Git dependencies, pinned to full commit
 hashes in Cargo.toml and Cargo.lock. Parser source is maintained in those repositories.
 CI and web deployment use read-only deploy keys stored in FORMAT_CRATES_SSH_KEYS.
 Other applications use the same Git dependencies without importing this application.
 
-To update a library, change its revision in Cargo.toml and run `cargo update`. Keep the direct
-openaec-model revision equal to the revision used by the reader libraries, so scene types stay
-identical. Each library runs its own tests. The Format crates workflow also runs the SKP corpus
+To update a library, change its revision in Cargo.toml and run `cargo update`.
+Each library runs its own tests. The Format crates workflow also runs the SKP corpus
 against this repository's test-models directory; the ignored survey uses SKP_DIR.
 
 New formats: implement `loaders::Loader` (name, extensions, `load` from a `loaders::Source`, a

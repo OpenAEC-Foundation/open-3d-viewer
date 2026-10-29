@@ -462,7 +462,7 @@ jobs:
           | Linux: \`SHA256SUMS\`, \`.deb\`, \`.rpm\`, AppImage en \`.tar.gz\` (OpenPGP, \`.asc\`) | $(yes "$GPG_SIGNED") |
           | Alle pakketten: build-attestatie via GitHub | ja |
 
-          Controleren: \`sha256sum -c SHA256SUMS\`, \`gpg --verify SHA256SUMS.asc SHA256SUMS\` (OpenAEC-sleutel \`${OPENAEC_GPG_FINGERPRINT}\`) en \`gh attestation verify BESTAND --repo OpenAEC-Foundation/open-3d-viewer\`.
+          Controleren: \`sha256sum -c SHA256SUMS\`, \`gpg --verify SHA256SUMS.asc SHA256SUMS\` (OpenAEC-sleutel \`${OPENAEC_GPG_FINGERPRINT}\`, publiek in [\`docs/openaec-releases.asc\`](https://github.com/OpenAEC-Foundation/open-3d-viewer/blob/main/docs/openaec-releases.asc)) en \`gh attestation verify BESTAND --repo OpenAEC-Foundation/open-3d-viewer\`.
 
           Alle tests en controles van de repository zijn geslaagd voordat deze release werd gebouwd.
           EOF

@@ -56,6 +56,15 @@ Every release is on the [releases page](https://github.com/OpenAEC-Foundation/op
 
 When the OpenAEC Installer has a newer version, the title bar of the viewer says so, and **Update** hands over to the installer. Every file is signed: Windows with Authenticode, macOS with a Developer ID and notarized by Apple, Linux with the OpenAEC OpenPGP key (`.asc` next to each package and to `SHA256SUMS`), and all of them with a GitHub build attestation. The release notes say per platform whether it is signed; a release that misses a signature is marked as a pre-release.
 
+To check a download yourself:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, fingerprint 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
+gpg --verify SHA256SUMS.asc SHA256SUMS
+gh attestation verify open-3d-viewer_2026.44.17_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+```
+
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.

@@ -153,7 +153,7 @@ impl Builder<'_> {
                 if normal.length_squared() <= 1e-24 { continue; }
                 self.triangles += 1;
                 if self.triangles > MAX_TRIANGLES { return Err("DWG/DXF: triangle limit exceeded".into()); }
-                let origin = *self.origin.get_or_insert(a);
+                let origin = *self.origin.get_or_insert(points[0]);
                 let normal = normal.normalize().as_vec3().to_array();
                 for p in triangle {
                     let local = (p - origin).as_vec3();
@@ -231,7 +231,8 @@ fn metres_per_unit(unit: i16) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acadrust::{DwgWriter, DxfWriter, Face3D, Insert, Mesh, PolyfaceFace, PolyfaceMesh, PolyfaceVertex};
+    use acadrust::{DwgWriter, DxfWriter};
+    use acadrust::entities::{Face3D, Insert, Mesh, PolyfaceFace, PolyfaceMesh, PolyfaceVertex, MeshFace};
     use std::sync::Arc;
 
     fn face(x: f64) -> Face3D {
@@ -296,7 +297,7 @@ mod tests {
         let vertices = vec![Vector3::new(0.,0.,0.), Vector3::new(2.,0.,0.), Vector3::new(2.,2.,0.), Vector3::new(1.,1.,0.), Vector3::new(0.,2.,0.)];
         let mut mesh = Mesh::new();
         mesh.vertices = vertices.clone();
-        mesh.faces.push(acadrust::MeshFace::new(vec![0,1,2,3,4]));
+        mesh.faces.push(MeshFace::new(vec![0,1,2,3,4]));
         doc.add_entity(EntityType::Mesh(mesh)).unwrap();
         let polyface = PolyfaceMesh::from_data(vertices.into_iter().map(PolyfaceVertex::new).collect(), vec![PolyfaceFace::triangle(-1,2,4)]);
         doc.add_entity(EntityType::PolyfaceMesh(polyface)).unwrap();
@@ -340,7 +341,7 @@ mod tests {
         let mut doc = CadDocument::new();
         let mut mesh = Mesh::new();
         mesh.vertices.push(Vector3::ZERO);
-        mesh.faces.push(acadrust::MeshFace::new(vec![0, 1, 2]));
+        mesh.faces.push(MeshFace::new(vec![0, 1, 2]));
         doc.add_entity(EntityType::Mesh(mesh)).unwrap();
         assert!(convert(&doc).err().unwrap().contains("index out of range"));
         let mut doc = CadDocument::new();

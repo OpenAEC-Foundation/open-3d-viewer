@@ -117,6 +117,14 @@ open-3d-viewer FILE --save-as OUT.ifc      (convert without a window)
 | Wavefront `.obj` | `tobj` | one layer per object/group, MTL diffuse colours (desktop), vertex colours; treated as Y up |
 | STL `.stl` | `stl_io` | ASCII and binary, flat shaded, kept Z up |
 | PLY `.ply` | [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader) | ASCII / binary LE / BE, vertex normals and colours, polygons fan-triangulated; kept Z up |
+| CityJSON `.city.json` / `.cityjson`, sequences `.jsonl` / `.cityjsonl` | `serde_json` + `earcutr` | CityJSON 1.0/1.1/2.0 and CityJSONFeature sequences; highest LoD per object; MultiSurface, CompositeSurface, Solid, MultiSolid and CompositeSolid; polygon holes, diffuse material colours and object attributes. No textures, template instances or CRS reprojection. Source axes retained, distances assume metres. |
+| LandXML `.xml` / `.landxml` | `roxmltree` | LandXML 1.x TIN surfaces, sparse point IDs, hidden faces, named surfaces and metric/imperial units converted to metres. Survey points and alignments alone are not displayed. |
+| DWG `.dwg` / DXF `.dxf` (polygon subset) | [`acadrust`](https://github.com/HakanSeven12/acadrust) | native DWG and ASCII/binary DXF; model-space 3DFACE, MESH, polyface and polygon meshes, including ordinary nested INSERTs; layers, colours and insertion units. ACIS solids, curves, annotations and external references are not rendered; omitted entities are reported in project information. |
+
+CityJSON, LandXML and CAD import retain a double-precision world origin in project
+information and display coordinates relative to that origin. Adding files does not
+automatically align different origins or reproject coordinate systems. Example files:
+`test-models/cityjson-building.city.json` and `test-models/landxml-terrain.xml`.
 
 The app owns its scene model, mesh utilities, saved views, clipping geometry and loader
 registry. Each format library returns its own file-reading output; small adapters in
@@ -186,7 +194,7 @@ Edges mode.
 
 ## Not there yet
 
-* **More formats**: DWG, DXF, E57, LAS and other point clouds, FBX, 3DS, Collada, 3MF, AMF,
+* **More formats**: full DWG/DXF solids and drawings, CityGML, STEP/IGES, E57, LAS and other point clouds, FBX, 3DS, Collada, 3MF, AMF,
   VRML, VTK, KMZ, VOX, G-code, STEP/IGES/BREP, XYZ/PCD. PLY files without faces are rejected.
 * **Textures**: glTF/OBJ/SketchUp textures are not mapped (an average tint instead); SketchUp
   soft edges are not smoothed.

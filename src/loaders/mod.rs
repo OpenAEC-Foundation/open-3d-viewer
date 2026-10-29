@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_cityjson_and_landxml_through_file_registry() {
+    fn imports_cityjson_landxml_and_cad_through_file_registry() {
         let city = load(&repo_file("test-models/cityjson-building.city.json")).expect("CityJSON fixture");
         assert_eq!(city.format, "CityJSON");
         assert_eq!(city.triangle_count(), 12);
@@ -250,6 +250,9 @@ mod tests {
         let terrain = load(&repo_file("test-models/landxml-terrain.xml")).expect("LandXML fixture");
         assert_eq!(terrain.format, "LandXML");
         assert_eq!(terrain.triangle_count(), 2);
+        let cad = load(&repo_file("test-models/cad-faces.dxf")).expect("independent DXF fixture");
+        assert_eq!(cad.triangle_count(), 2);
+        assert_eq!(cad.bounds.size(), [1., 1., 0.]);
         for extension in ["dwg", "dxf", "json", "cityjson", "jsonl", "landxml", "xml"] {
             assert!(supported_extensions().contains(&extension), "{extension}");
         }

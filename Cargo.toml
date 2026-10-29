@@ -36,6 +36,7 @@ openaec-ui = { path = "vendor/openaec-ui", features = ["gpu-renderer"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # File dialogs: native dialogs on the desktop, the browser's file picker on the web (MIT)
 rfd = "0.17"
@@ -55,6 +56,8 @@ earcutr = "0.5"
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # Headless renderer for `--screenshot` (MIT)
 iced_test = "0.14"
+# the shell's accessibility test lays it out without a GPU
+iced_tiny_skia = "0.14"
 
 # The web build (`trunk build`): WebGPU in the browser through iced's wgpu renderer
 [target.'cfg(target_arch = "wasm32")'.dependencies]

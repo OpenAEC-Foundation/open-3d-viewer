@@ -149,20 +149,21 @@ fn initial_state(args: &Args) -> App {
     app
 }
 
-/// The application window: the viewer inside the shared OpenAEC shell (`openaec-ui`), with the
-/// preferences (theme, language, scale) in %APPDATA%\OpenAEC\Open 3D Viewer Studio.
+/// The application window: the viewer inside the OpenAEC Blueprint shell (`shell`), with the
+/// preferences and own shortcuts in %APPDATA%\OpenAEC\Open 3D Viewer Studio.
 fn run_app(args: Args) -> iced::Result {
     let mut app = initial_state(&args);
     app.initial_view = args.view;
     app.pending_open = args.file.clone();
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
     app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
-    let prefs = std::env::var_os("APPDATA").map(|d| {
+    let mut studio = shell::Studio::new(app);
+    if let Some(d) = std::env::var_os("APPDATA") {
         let dir = PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio");
         let _ = std::fs::create_dir_all(&dir);
-        dir.join("preferences.json")
-    });
-    openaec_ui::run(shell::Studio { app }, prefs)
+        studio = studio.with_settings_in(dir);
+    }
+    shell::run(studio, window_icon())
 }
 
 /// The earlier stand-alone window (own ribbon and panels); kept for `--window-screenshot`.

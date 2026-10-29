@@ -1,0 +1,457 @@
+# Release of Open 3D Viewer Studio for Windows, macOS and Linux, after OpenAEC Blueprint
+# 2026.44.1: tested first, then built and signed per platform, then published.
+#
+# A tag vYYYY.W.N starts it; Cargo.toml and revit/Cargo.toml must carry YYYY.W.N. The signing
+# keys are the secrets of the OpenAEC organisation, under the same names as in the Blueprint.
+# A platform whose keys are missing is not signed; the release notes say so per file, and such
+# a release is published as a pre-release. The Revit build needs the private rvt-reader and is
+# not part of the release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, such as v2026.44.0"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  # the Blueprint release whose B2 icons are copied into assets/b2
+  BLUEPRINT: v2026.44.1
+
+jobs:
+  check:
+    name: Tests and version
+    runs-on: ubuntu-24.04
+    outputs:
+      number: ${{ steps.version.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: The tag and both packages carry the same version YYYY.W.N
+        id: version
+        run: |
+          number="${TAG#v}"
+          [[ "$number" =~ ^20[0-9]{2}\.([1-9]|[1-4][0-9]|5[0-3])\.(0|[1-9][0-9]*)$ ]] \
+            || { echo "::error::$TAG is not vYYYY.W.N (week without a leading zero)"; exit 1; }
+          for manifest in Cargo.toml revit/Cargo.toml; do
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -1)
+            [[ "$version" == "$number" ]] || { echo "::error::$manifest has $version, the tag says $number"; exit 1; }
+          done
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev libfontconfig1-dev
+      - name: Repository checks
+        run: |
+          python3 scripts/build_readme_images.py --check
+          git clone --quiet --depth 1 --branch "$BLUEPRINT" https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint.git "$RUNNER_TEMP/blueprint"
+          python3 scripts/b2_icons.py "$RUNNER_TEMP/blueprint" --check
+      - name: Rust tests and the web build
+        run: |
+          cargo test --release --locked
+          cargo check --release --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
+
+  linux:
+    name: Linux
+    needs: check
+    runs-on: ubuntu-22.04
+    env:
+      NUMBER: ${{ needs.check.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries and packaging tools
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev libfontconfig1-dev rpm file
+      - name: Build the viewer and the MCP server
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          set -euo pipefail
+          out="$PWD/dist"; mkdir -p "$out"
+          viewer=target/release/open-3d-viewer
+          mcp=target/release/open-3d-viewer-mcp
+          desktop=packaging/linux/org.openaec.Open3DViewer.desktop
+          icon=assets/icons/icon.png
+          stage=$(mktemp -d)
+          # .tar.gz
+          dir="$stage/open-3d-viewer_${NUMBER}_linux-x64"
+          mkdir -p "$dir"
+          cp "$viewer" "$mcp" LICENSE README.md "$dir/"
+          tar -C "$stage" -czf "$out/open-3d-viewer_${NUMBER}_linux-x64.tar.gz" "open-3d-viewer_${NUMBER}_linux-x64"
+          # .deb
+          deb="$stage/deb"
+          install -Dm755 "$viewer" "$deb/usr/bin/open-3d-viewer"
+          install -Dm755 "$mcp" "$deb/usr/bin/open-3d-viewer-mcp"
+          install -Dm644 "$desktop" "$deb/usr/share/applications/org.openaec.Open3DViewer.desktop"
+          install -Dm644 "$icon" "$deb/usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png"
+          install -Dm644 LICENSE "$deb/usr/share/doc/open-3d-viewer/copyright"
+          mkdir -p "$deb/DEBIAN"
+          cat > "$deb/DEBIAN/control" <<EOF
+          Package: open-3d-viewer
+          Version: ${NUMBER}
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Maintainer: OpenAEC Foundation <info@open-aec.com>
+          Homepage: https://github.com/OpenAEC-Foundation/open-3d-viewer
+          Description: 3D model viewer for AEC files
+           Opens SketchUp, Tekla, glTF, OBJ, STL and PLY models, measures and
+           sections them, and saves them as IFC.
+          EOF
+          sed -i 's/^          //' "$deb/DEBIAN/control"
+          dpkg-deb --root-owner-group --build "$deb" "$out/open-3d-viewer_${NUMBER}_amd64.deb"
+          # .rpm
+          rpmtop=$(mktemp -d)
+          mkdir -p "$rpmtop"/{SOURCES,SPECS,RPMS,BUILD,BUILDROOT}
+          cp "$viewer" "$mcp" "$desktop" "$icon" LICENSE "$rpmtop/SOURCES/"
+          rpmbuild -bb --define "_topdir $rpmtop" --define "number $NUMBER" packaging/linux/open-3d-viewer.spec
+          cp "$rpmtop"/RPMS/x86_64/*.rpm "$out/open-3d-viewer_${NUMBER}_x86_64.rpm"
+          # AppImage
+          app="$stage/AppDir"
+          install -Dm755 "$viewer" "$app/usr/bin/open-3d-viewer"
+          install -Dm755 "$mcp" "$app/usr/bin/open-3d-viewer-mcp"
+          cp "$desktop" "$app/"
+          cp "$icon" "$app/org.openaec.Open3DViewer.png"
+          ln -s usr/bin/open-3d-viewer "$app/AppRun"
+          curl -fsSL -o "$stage/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$stage/appimagetool"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$stage/appimagetool" --no-appstream "$app" "$out/open-3d-viewer_${NUMBER}_amd64.AppImage"
+          ls -la "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    needs: check
+    runs-on: windows-2022
+    outputs:
+      signed: ${{ steps.report.outputs.signed }}
+    env:
+      NUMBER: ${{ needs.check.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the viewer and the MCP server
+        shell: bash
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          cargo build --release --locked
+          mkdir -p sign
+          cp target/release/open-3d-viewer.exe target/release/open-3d-viewer-mcp.exe sign/
+      - name: Sign the programs
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\sign
+          files-folder-filter: exe
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }
+          $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $nsis) { $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          New-Item -ItemType Directory -Force installer | Out-Null
+          Copy-Item packaging\windows\installer.nsi, packaging\windows\icon.ico installer\
+          Push-Location installer
+          & $nsis "/DNUMBER=$env:NUMBER" "/DSOURCE=$env:GITHUB_WORKSPACE\sign" installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          Pop-Location
+      - name: Sign the installer
+        continue-on-error: true
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\installer
+          files-folder-filter: exe
+          files-folder-depth: 1
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      # The signing steps may fail without failing the job; this step says what the files really
+      # carry, and the release notes go by it.
+      - name: Report the signatures
+        id: report
+        shell: pwsh
+        run: |
+          $files = @("sign\open-3d-viewer.exe", "sign\open-3d-viewer-mcp.exe", "installer\open-3d-viewer_$($env:NUMBER)_x64-setup.exe")
+          $all = $true
+          "### Windows: Authenticode" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f
+            if ($s.Status -ne 'Valid') { $all = $false }
+            "- $(Split-Path $f -Leaf): $($s.Status) $($s.SignerCertificate.Subject)" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          }
+          "signed=$($all.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "installer\open-3d-viewer_$($env:NUMBER)_x64-setup.exe" dist\
+          $app = "$env:RUNNER_TEMP\open-3d-viewer_$($env:NUMBER)_windows-x64"
+          New-Item -ItemType Directory -Force $app | Out-Null
+          Copy-Item sign\open-3d-viewer.exe, sign\open-3d-viewer-mcp.exe, LICENSE, README.md $app
+          Compress-Archive -Path $app -DestinationPath "dist\open-3d-viewer_$($env:NUMBER)_windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    needs: check
+    runs-on: macos-15
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    env:
+      NUMBER: ${{ needs.check.outputs.number }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build both processor types and join them
+        run: |
+          set -euo pipefail
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$t"
+          done
+          mkdir -p build
+          for bin in open-3d-viewer open-3d-viewer-mcp; do
+            lipo -create -output "build/$bin" "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+          done
+          lipo -archs build/open-3d-viewer
+      - name: Make the application bundle
+        run: |
+          set -euo pipefail
+          app="build/Open 3D Viewer Studio.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp build/open-3d-viewer build/open-3d-viewer-mcp "$app/Contents/MacOS/"
+          sed "s/@NUMBER@/$NUMBER/g" packaging/macos/Info.plist.in > "$app/Contents/Info.plist"
+          cp assets/icons/icon.icns "$app/Contents/Resources/AppIcon.icns"
+      - name: Prepare Developer ID signing and notarization
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE:-}" || -z "${APPLE_SIGNING_IDENTITY:-}" || -z "${APPLE_API_KEY_CONTENT:-}" ]]; then
+            echo "Developer ID secrets are not available; signing ad hoc."
+            exit 0
+          fi
+          cert="$RUNNER_TEMP/id.p12"; key="$RUNNER_TEMP/notary.p8"; kc="$RUNNER_TEMP/sign.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$cert"
+          if [[ "$APPLE_API_KEY_CONTENT" == *"-----BEGIN"* ]]; then printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$key"; else printf '%s' "$APPLE_API_KEY_CONTENT" | base64 -D > "$key"; fi
+          chmod 600 "$cert" "$key"
+          pw=$(uuidgen)
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security import "$cert" -k "$kc" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc"
+          security list-keychains -d user -s "$kc"
+          security find-identity -v -p codesigning "$kc" | grep -Fq "$APPLE_SIGNING_IDENTITY"
+          rm -f "$cert"
+          {
+            echo "SIGN_ID=$APPLE_SIGNING_IDENTITY"; echo "SIGN_KC=$kc"
+            echo "NOTARY_KEY=$key"; echo "NOTARY_KEY_ID=$APPLE_API_KEY"; echo "NOTARY_ISSUER=$APPLE_API_ISSUER"
+          } >> "$GITHUB_ENV"
+      - name: Sign, notarize and package
+        id: sign
+        run: |
+          set -euo pipefail
+          app="build/Open 3D Viewer Studio.app"
+          dmg="build/open-3d-viewer_${NUMBER}_macos-universal.dmg"
+          # hdiutil guesses the size of the image from the folder and on the GitHub runners that
+          # guess is sometimes too small; give it the size of the folder plus room, and retry.
+          make_dmg() {
+            local mb=$(( $(du -sm "$1" | cut -f1) * 2 + 64 ))
+            for attempt in 1 2 3; do
+              rm -f "$2"
+              if hdiutil create -volname "Open 3D Viewer Studio" -srcfolder "$1" -size "${mb}m" -fs HFS+ -ov -format UDZO "$2"; then return; fi
+              echo "hdiutil failed (attempt $attempt), trying again"; sleep 10
+            done
+            return 1
+          }
+          notarize() {
+            for attempt in 1 2 3; do
+              if xcrun notarytool submit "$1" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --output-format json > "$RUNNER_TEMP/notary.json"; then
+                cat "$RUNNER_TEMP/notary.json"
+                python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["status"]; print(s); sys.exit(0 if s=="Accepted" else 1)' "$RUNNER_TEMP/notary.json"
+                return
+              fi
+              echo "notarytool failed (attempt $attempt), trying again"; sleep 20
+            done
+            return 1
+          }
+          if [[ -n "${SIGN_ID:-}" ]]; then
+            # the MCP server first: the bundle's signature covers it
+            codesign --force --options runtime --timestamp --sign "$SIGN_ID" --keychain "$SIGN_KC" "$app/Contents/MacOS/open-3d-viewer-mcp"
+            codesign --force --options runtime --timestamp --sign "$SIGN_ID" --keychain "$SIGN_KC" "$app"
+            stage=$(mktemp -d); cp -R "$app" "$stage/"; ln -s /Applications "$stage/Applications"
+            make_dmg "$stage" "$dmg"
+            codesign --force --timestamp --sign "$SIGN_ID" --keychain "$SIGN_KC" "$dmg"
+            notarize "$dmg"
+            xcrun stapler staple "$dmg"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "### macOS: Developer ID signed and notarized" >> "$GITHUB_STEP_SUMMARY"
+          else
+            codesign --force --deep --sign - "$app"
+            stage=$(mktemp -d); cp -R "$app" "$stage/"; ln -s /Applications "$stage/Applications"
+            make_dmg "$stage" "$dmg"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "### macOS: signed ad hoc (no Developer ID secrets)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          codesign --verify --strict --verbose=2 "$app"
+          mkdir -p dist
+          cp "$dmg" dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [check, linux, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      NUMBER: ${{ needs.check.outputs.number }}
+      WINDOWS_SIGNED: ${{ needs.windows.outputs.signed }}
+      MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd assets
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Sign the checksums and the AppImage with OpenPGP
+        id: gpg
+        env:
+          OPENAEC_GPG_PRIVATE_KEY: ${{ secrets.OPENAEC_GPG_PRIVATE_KEY }}
+          OPENAEC_GPG_PASSPHRASE: ${{ secrets.OPENAEC_GPG_PASSPHRASE }}
+          OPENAEC_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAEC_GPG_PRIVATE_KEY:-}" || -z "${OPENAEC_GPG_PASSPHRASE:-}" || -z "${OPENAEC_GPG_FINGERPRINT:-}" ]]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"; echo "OpenPGP key not available; not signed."; exit 0
+          fi
+          home=$(mktemp -d); export GNUPGHOME="$home"
+          printf '%s\n' "$OPENAEC_GPG_PRIVATE_KEY" | gpg --batch --import
+          fpr=$(tr -d ' ' <<< "$OPENAEC_GPG_FINGERPRINT")
+          gpg --batch --list-secret-keys --with-colons | grep -q "$fpr" || { echo "::error::the imported key is not $fpr"; exit 1; }
+          for f in assets/SHA256SUMS assets/*.AppImage; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$OPENAEC_GPG_PASSPHRASE" --local-user "$fpr" --armor --detach-sign --output "$f.asc" "$f"
+            gpg --batch --verify "$f.asc" "$f"
+          done
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - name: Build attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            assets/*.deb
+            assets/*.rpm
+            assets/*.AppImage
+            assets/*.tar.gz
+            assets/*.zip
+            assets/*.exe
+            assets/*.dmg
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GPG_SIGNED: ${{ steps.gpg.outputs.signed }}
+        run: |
+          set -euo pipefail
+          yes() { [[ "$1" == true ]] && echo "ja" || echo "**nee**"; }
+          cat > notes.md <<EOF
+          **Open 3D Viewer Studio** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
+
+          | Systeem | Bestand |
+          | --- | --- |
+          | Windows 10/11 x64 | \`open-3d-viewer_${NUMBER}_x64-setup.exe\` (installeert zonder beheerdersrechten) of \`_windows-x64.zip\` |
+          | macOS 11+ (Apple silicon en Intel) | \`open-3d-viewer_${NUMBER}_macos-universal.dmg\` |
+          | Ubuntu, Linux Mint | \`open-3d-viewer_${NUMBER}_amd64.deb\` |
+          | Fedora | \`open-3d-viewer_${NUMBER}_x86_64.rpm\` |
+          | Elke Linux | \`open-3d-viewer_${NUMBER}_amd64.AppImage\` of \`_linux-x64.tar.gz\` |
+
+          Revit-bestanden openen alleen in de Revit-versie; die zit niet in deze release.
+
+          ## Ondertekening
+
+          | Wat | Ondertekend |
+          | --- | --- |
+          | Windows: viewer, MCP-server en installer (Authenticode) | $(yes "$WINDOWS_SIGNED") |
+          | macOS: app en schijfkopie (Developer ID, genotariseerd) | $(yes "$MACOS_SIGNED") |
+          | Linux: \`SHA256SUMS\` en AppImage (OpenPGP, \`.asc\`) | $(yes "$GPG_SIGNED") |
+          | Alle pakketten: build-attestatie via GitHub | ja |
+
+          Controleren: \`sha256sum -c SHA256SUMS\`, en \`gh attestation verify BESTAND --repo OpenAEC-Foundation/open-3d-viewer\`.
+
+          Alle tests en controles van de repository zijn geslaagd voordat deze release werd gebouwd.
+          EOF
+          sed -i 's/^          //' notes.md
+          pre=()
+          # The organisation has no OpenPGP key yet; until it has, the Linux packages rely on the
+          # build attestation, and only Windows and macOS decide whether this is a pre-release.
+          if [[ "$WINDOWS_SIGNED" != true || "$MACOS_SIGNED" != true ]]; then
+            pre=(--prerelease)
+            echo "::warning::Windows or macOS is not signed; publishing as a pre-release"
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Open 3D Viewer Studio ${NUMBER}" --notes-file notes.md "${pre[@]}" assets/*

@@ -930,20 +930,11 @@ impl App {
             {
                 use keyboard::key::Named;
                 use keyboard::Key;
+                // the other keys are shortcuts of the shell's commands (`shell::Studio::commands`),
+                // and Escape goes through the shell, which closes a dialog first
+                let _ = modifiers;
                 match key.as_ref() {
-                    Key::Character("o") if modifiers.command() => Some(Message::OpenDialog),
-                    Key::Character("f") => Some(Message::Fit),
-                    Key::Character("g") => Some(Message::ToggleGrid),
-                    Key::Character("p") => Some(Message::Ortho(false)),
-                    Key::Character("o") => Some(Message::Ortho(true)),
-                    Key::Character("w") => Some(Message::Mode(RenderMode::Wireframe)),
-                    Key::Character("s") => Some(Message::Mode(RenderMode::Solid)),
-                    Key::Character("e") => Some(Message::Mode(RenderMode::SolidEdges)),
-                    Key::Character("1") => Some(Message::Preset(ViewPreset::Top)),
-                    Key::Character("2") => Some(Message::Preset(ViewPreset::Front)),
-                    Key::Character("3") => Some(Message::Preset(ViewPreset::Right)),
-                    Key::Character("0") | Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
-                    Key::Named(Named::Escape) => Some(Message::Escape),
+                    Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
                     Key::Named(Named::Enter) => Some(Message::MeasureFinish),
                     _ => None,
                 }

@@ -9,6 +9,7 @@
 //! Formats outside this crate (Revit, `revit/`) plug in through [`loaders::add`].
 
 mod annotations;
+mod b2;
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod bench;

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Open 3D Viewer Studio
+GenericName=3D model viewer
+Comment=View, measure and section 3D models of buildings
+Exec=open-3d-viewer %f
+Icon=org.openaec.Open3DViewer
+Terminal=false
+Categories=Graphics;3DGraphics;Viewer;Engineering;
+MimeType=model/gltf-binary;model/gltf+json;model/obj;model/stl;application/x-ply;
+StartupWMClass=open-3d-viewer

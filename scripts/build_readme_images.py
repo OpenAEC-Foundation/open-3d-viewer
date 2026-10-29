@@ -7,9 +7,8 @@
 
 Rendering runs `open-3d-viewer --screenshot` (the whole window, headless, on the GPU) on the
 test models into target/readme-renders/, so build first: `cargo build --release`. The schedule
-image needs the Revit build (`revit/`, `cargo build --release` there) and a Revit file with a
-door schedule, such as the Autodesk sample snowdon_arch_2025.rvt: pass its path in O3V_SNOWDON
-(and another Revit build in O3V_REVIT_VIEWER). Without them that image is left as it is.
+image needs a Revit file with a door schedule, such as the Autodesk sample
+snowdon_arch_2025.rvt: pass its path in O3V_SNOWDON. Without it that image is left as it is.
 
 An image larger than MAX_BYTES is reduced to 256 colours without dithering, which keeps the
 interface text sharp, and to fewer colours while it is still too large. Writing needs Pillow (`uv run --with pillow python scripts/...`);
@@ -31,12 +30,11 @@ MAX_BYTES = 150 * 1024
 WIDTH = 1440
 EXE = ".exe" if os.name == "nt" else ""
 VIEWER = ROOT / "target" / "release" / f"open-3d-viewer{EXE}"
-REVIT_VIEWER = Path(os.environ.get("O3V_REVIT_VIEWER", ROOT / "revit" / "target" / "release" / f"open-3d-viewer{EXE}"))
 
 KAVEL = "test-models/test-kavel.skp"
 COMMON = ["--size", "1440x900", "--language", "en"]
 
-# Render name -> (Revit build, model, options).
+# Render name -> (needs a Revit file, model, options).
 SHOTS = {
     "kavel-light": (False, KAVEL, ["--mode", "edges"]),
     "kavel-dark": (False, KAVEL, ["--mode", "edges", "--theme", "dark"]),
@@ -67,12 +65,11 @@ IMAGES = {
 def render():
     RENDERS.mkdir(parents=True, exist_ok=True)
     for name, (revit, model, options) in SHOTS.items():
-        exe = REVIT_VIEWER if revit else VIEWER
-        if not exe.exists() or (revit and not (model and Path(model).exists())):
-            print(f"skipped {name}: needs {exe}" + (" and O3V_SNOWDON" if revit else ""))
+        if not VIEWER.exists() or (revit and not (model and Path(model).exists())):
+            print(f"skipped {name}: needs {VIEWER}" + (" and O3V_SNOWDON" if revit else ""))
             continue
         out = RENDERS / f"{name}.png"
-        command = [str(exe)] + ([model] if model else []) + ["--screenshot", str(out)] + COMMON + options
+        command = [str(VIEWER)] + ([model] if model else []) + ["--screenshot", str(out)] + COMMON + options
         subprocess.run(command, cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
         print(f"rendered {out.relative_to(ROOT).as_posix()}")
 

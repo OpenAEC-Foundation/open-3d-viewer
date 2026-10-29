@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.44.16"
+version = "2026.44.17"
 description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"

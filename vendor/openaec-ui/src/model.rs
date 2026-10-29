@@ -181,7 +181,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self { theme: Theme::Light, language: Language::English, scale: 1.0,
-            explorer_visible: true, properties_visible: true,
+            explorer_visible: true, properties_visible: false,
             explorer_ratio: metrics::PANEL_DEFAULT as f32 / metrics::WINDOW_DEFAULT_WIDTH as f32,
             properties_ratio: (metrics::WINDOW_DEFAULT_WIDTH - 2 * metrics::PANEL_DEFAULT) as f32
                 / (metrics::WINDOW_DEFAULT_WIDTH - metrics::PANEL_DEFAULT) as f32 }

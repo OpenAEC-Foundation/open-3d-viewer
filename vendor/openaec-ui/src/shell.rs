@@ -303,7 +303,7 @@ pub fn ribbon_body<'a, M: Clone + 'a>(theme: Theme, groups: &[RibbonGroup<M>]) -
         for chunk in group.commands.chunks(3) {
             let width = chunk.iter().map(|command| {
                 command.control.as_ref().map_or_else(
-                    || (command.label.chars().count() as f32 * 5.8 + 28.0).clamp(54.0, 150.0),
+                    || (command.label.chars().count() as f32 * 5.8 + 36.0).clamp(62.0, 164.0),
                     |control| control.width(),
                 )
             }).fold(0.0f32, f32::max);

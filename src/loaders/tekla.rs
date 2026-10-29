@@ -12,12 +12,17 @@ impl Loader for TeklaLoader {
     }
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
-        let data = source.read()?;
+        // Native projects keep the profile and bolt catalogues beside their DB1.
+        let document = if let Some(path) = source.path() {
+            tekla_reader::read_path(path)?
+        } else {
+            tekla_reader::read(&source.read()?)?
+        };
         progress.set(Phase::Convert);
-        let document = tekla_reader::read(&data)?;
         let mut project = ProjectData::default();
         project.info.push(("Tekla database".into(), document.database_version));
         if let Some(guid) = document.guid { project.info.push(("GUID".into(), guid)); }
+        project.info.extend(document.info);
         let meshes = document.meshes;
         let layers = meshes.into_iter().map(|mesh| Layer {
             name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden

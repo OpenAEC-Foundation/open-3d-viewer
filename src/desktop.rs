@@ -206,8 +206,9 @@ fn run_app_standalone(args: Args) -> iced::Result {
 fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let mut app = initial_state(args);
     let (w, h) = args.size.unwrap_or((1440.0, 900.0));
-    // The normal shell's two side panels and its title, tabs, ribbon and status bands.
-    app.viewport_size = ((w * 0.625 - 4.0).max(300.0), h - 32.0 - 28.0 - 94.0 - 22.0);
+    // The default shell starts with its Models pane and the properties pane closed.
+    let left_width = (w * openaec_ui::Preferences::default().explorer_ratio).max(190.0).min(w - 300.0);
+    app.viewport_size = (w - left_width - 2.0, h - 32.0 - 28.0 - 94.0 - 22.0);
     if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(

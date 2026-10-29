@@ -34,9 +34,10 @@ impl Application for Studio {
     type Command = Message;
 
     fn title(&self) -> String {
+        let dev = if cfg!(debug_assertions) { " · dev" } else { "" };
         match &self.app.model {
-            Some(m) => format!("{} - Open 3D Viewer Studio {VERSION}", m.file_name()),
-            None => format!("Open 3D Viewer Studio {VERSION}"),
+            Some(m) => format!("{} - Open 3D Viewer Studio {VERSION}{dev}", m.file_name()),
+            None => format!("Open 3D Viewer Studio {VERSION}{dev}"),
         }
     }
 

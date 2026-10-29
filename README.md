@@ -28,6 +28,19 @@ cargo run --release -- path/to/model.skp    # desktop app, optionally opening a 
 cargo test --release                        # loader, camera, parser and writer tests
 ```
 
+Windows live development, using an installed Rust/C++ toolchain (or the portable
+GNU tools in `temp/cargo`, `temp/rustup` and `temp/dev-toolchain/mingw64`):
+
+```powershell
+pwsh -File scripts/dev.ps1 -Model path/to/model.rvt
+pwsh -File scripts/dev.ps1 -Stop
+```
+
+The watcher rebuilds incrementally after source changes and restarts its own viewer
+with the same model. A failed build keeps the previous viewer open. Dev windows are
+marked `dev`; status and compiler output are in `target/dev/status.json` and
+`target/dev/build.log`. `-Once` builds and opens once without watching.
+
 Web app (needs `rustup target add wasm32-unknown-unknown` and `cargo install --locked trunk`):
 
 ```sh

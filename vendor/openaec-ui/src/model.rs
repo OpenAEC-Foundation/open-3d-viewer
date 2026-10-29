@@ -180,7 +180,7 @@ pub struct Preferences {
 }
 impl Default for Preferences {
     fn default() -> Self {
-        Self { theme: Theme::Light, language: Language::Dutch, scale: 1.0,
+        Self { theme: Theme::Light, language: Language::English, scale: 1.0,
             explorer_visible: true, properties_visible: true,
             explorer_ratio: metrics::PANEL_DEFAULT as f32 / metrics::WINDOW_DEFAULT_WIDTH as f32,
             properties_ratio: (metrics::WINDOW_DEFAULT_WIDTH - 2 * metrics::PANEL_DEFAULT) as f32
@@ -373,12 +373,12 @@ mod settings_tests {
         let mut shell = ShellState::default();
         shell.update(&UiEvent::Settings(true));
         shell.update(&UiEvent::Theme(Theme::Forge));
-        shell.update(&UiEvent::Language(Language::English));
+        shell.update(&UiEvent::Language(Language::Dutch));
         shell.update(&UiEvent::Scale(1.5));
         assert_eq!(shell.preferences.theme, Theme::Forge);
         shell.update(&UiEvent::Settings(false));
         assert_eq!(shell.preferences.theme, Theme::Light);
-        assert_eq!(shell.preferences.language, Language::Dutch);
+        assert_eq!(shell.preferences.language, Language::English);
         assert_eq!(shell.preferences.scale, 1.0);
 
         shell.update(&UiEvent::Settings(true));

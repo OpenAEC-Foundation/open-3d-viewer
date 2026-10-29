@@ -140,8 +140,8 @@ pub fn model_ribbon(app: &App, l: Language) -> Vec<RibbonTab<Message>> {
                     .enabled(app.section_on || app.plane.is_some()),
                 Command::new(l.text("Herstel snede", "Reset section"), Icon::Undo, Message::ResetSection).enabled(app.section_on || app.plane.is_some()),
             ]},
-            RibbonGroup { label: l.text("Uit elkaar", "Explode").into(), commands: vec![
-                Command::new(l.text("Uit elkaar", "Explode"), CommandIcon::Svg(crate::icons::EXPLODE.as_bytes()), Message::ToggleExplode)
+            RibbonGroup { label: "Explode".into(), commands: vec![
+                Command::new("Explode", CommandIcon::Svg(crate::icons::EXPLODE.as_bytes()), Message::ToggleExplode)
                     .selected(app.explode_on).enabled(loaded),
             ]},
             RibbonGroup { label: l.text("Projectie", "Projection").into(), commands: vec![
@@ -166,7 +166,7 @@ mod tests {
     fn file_button_opens_menu_and_routes_open_save_and_settings() {
         use openaec_ui::{ShellState, UiEvent, Message as ShellMessage};
         let mut studio = Studio { app: App::default() };
-        let mut state = ShellState::default();
+        let mut state = ShellState::new(openaec_ui::Preferences { language: Language::Dutch, ..Default::default() });
         let mut ui = simulator(&studio, &state);
         ui.click("Bestand").expect("File button");
         assert!(ui.into_messages().any(|m| matches!(m, ShellMessage::Ui(UiEvent::Backstage(true)))));
@@ -192,7 +192,7 @@ mod tests {
     fn settings_dialog_exposes_language_theme_and_size_and_saves_language() {
         use openaec_ui::{ShellState, UiEvent, Message as ShellMessage};
         let studio = Studio { app: App::default() };
-        let mut state = ShellState::default();
+        let mut state = ShellState::new(openaec_ui::Preferences { language: Language::Dutch, ..Default::default() });
         state.update(&UiEvent::Settings(true));
         let mut ui = simulator(&studio, &state);
         ui.find("Taal").expect("Language field");

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language { #[default] Dutch, English }
+pub enum Language { Dutch, #[default] English }
 impl Language {
     pub const ALL: [Self; 2] = [Self::Dutch, Self::English];
     pub fn text(self, nl: &'static str, en: &'static str) -> &'static str {

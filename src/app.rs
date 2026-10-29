@@ -246,7 +246,7 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
-            explorer_open: [true, false, true],
+            explorer_open: [false, false, true],
             measurements: Vec::new(),
             viewport_origin: (0.0, 0.0),
             remote: Default::default(),
@@ -545,6 +545,7 @@ impl App {
         self.plane = None;
         self.plane_picking = false;
         self.active_view = None;
+        self.explorer_open[0] = false;
         self.selected = None;
         self.selection.clear();
         self.measure.reset();
@@ -1323,7 +1324,7 @@ impl App {
                 button(text(label).size(11)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press_maybe(msg)
             };
             let storeys = (index.storeys() > 0).then_some(Message::ExplodeMode(ExplodeMode::Storeys));
-            content = content.push(section(l.text("Uit elkaar", "Exploded view"))).push(
+            content = content.push(section("Explode")).push(
                 row![
                     small(l.text("Verdiepingen", "Storeys"), mode == ExplodeMode::Storeys, storeys),
                     small(l.text("Elementen", "Elements"), mode == ExplodeMode::Elements, Some(Message::ExplodeMode(ExplodeMode::Elements))),

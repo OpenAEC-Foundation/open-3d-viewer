@@ -1,5 +1,5 @@
 use crate::{fonts, icons::Icon, model::*, widgets, Language, Theme};
-use iced::{widget::{button, column, container, mouse_area, pane_grid, pick_list, row, scrollable, slider, stack, text, tooltip, Row, Space}, Element, Fill, Padding};
+use iced::{widget::{button, column, container, mouse_area, pane_grid, row, scrollable, slider, stack, text, tooltip, Row, Space}, Element, Fill, Padding};
 
 /// Application-owned contents. Shell layout and styling stay inside the crate.
 pub struct Slots<'a, M> {
@@ -221,9 +221,14 @@ fn settings<'a,M:Clone+'a>(state:&'a ShellState) -> Element<'a,Message<M>> {
             heading(l.text("Algemeen","General")),
             text(l.text("Stel de taal en weergave van de app in.", "Choose the app language and appearance.")).size(12).color(p.theme.tokens().text_secondary),
             text(l.text("Taal","Language")).size(13),
-            pick_list(Language::ALL,Some(p.language),|language|Message::Ui(UiEvent::Language(language)))
-                .style(move |_,status|widgets::pick_list_style(p.theme,status))
-                .menu_style(move |_|widgets::pick_list_menu_style(p.theme)).width(Fill),
+            row![
+                button(text("Nederlands").size(13)).width(Fill).padding([8, 12])
+                    .on_press(Message::Ui(UiEvent::Language(Language::Dutch)))
+                    .style(move |_, status| widgets::ribbon_button_style(p.theme, p.language == Language::Dutch, status)),
+                button(text("English").size(13)).width(Fill).padding([8, 12])
+                    .on_press(Message::Ui(UiEvent::Language(Language::English)))
+                    .style(move |_, status| widgets::ribbon_button_style(p.theme, p.language == Language::English, status)),
+            ].spacing(6),
             text(l.text("Thema", "Theme")).size(13),
             widgets::settings_theme_picker(
                 Theme::ALL.into_iter().map(|theme| (theme, theme.to_string(), Message::Ui(UiEvent::Theme(theme)))).collect(),

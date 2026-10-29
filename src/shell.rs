@@ -197,8 +197,7 @@ mod tests {
         ui.find("Taal").expect("Language field");
         ui.find("Thema").expect("Theme field");
         ui.find("Interfacegrootte: 100%").expect("Interface size field");
-        ui.click("Nederlands").expect("Language picker");
-        ui.click("English").expect("English option");
+        ui.click("English").expect("English language choice");
         ui.click("Opslaan").expect("Save settings");
         let messages: Vec<_> = ui.into_messages().collect();
         assert!(messages.iter().any(|m| matches!(m, ShellMessage::Ui(UiEvent::Language(Language::English)))));

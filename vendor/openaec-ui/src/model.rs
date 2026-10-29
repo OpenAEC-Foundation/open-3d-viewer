@@ -333,7 +333,7 @@ mod settings_tests {
 
     #[test]
     fn narrow_window_keeps_panels_legible_and_restores_saved_ratios() {
-        let mut shell = ShellState::default();
+        let mut shell = ShellState::new(Preferences { properties_visible: true, ..Default::default() });
         let saved = (shell.preferences.explorer_ratio, shell.preferences.properties_ratio);
         let pane_widths = |shell: &ShellState, width: f32| {
             let regions = shell.panes.layout().pane_regions(2.0, 50.0, iced::Size::new(width, 480.0));

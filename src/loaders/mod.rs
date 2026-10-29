@@ -3,15 +3,20 @@
 //! wraps the result in a [`Model`].
 //!
 //! To add a format (DWG, E57, IFC, ...): implement [`Loader`] in a new module and add it to
-//! [`registry`]. Loaders that live outside this crate (Revit, see `revit/`) are added with
+//! [`registry`]. Additional loaders that live outside this crate are added with
 //! [`add`] before the app starts.
 
 mod gltf;
 mod obj;
-mod ply;
-mod skp;
 mod stl;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt;
+#[cfg(not(target_arch = "wasm32"))]
+mod ifc;
+
+mod skp;
 mod tekla;
+mod ply;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::borrow::Cow;
@@ -19,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use web_time::Instant;
+
 
 /// Where a model comes from: a file on disk (desktop, command line, remote control) or the bytes
 /// of a file the browser handed over (web).
@@ -166,7 +172,7 @@ pub struct Loaded {
 /// Loaders from other crates, see [`add`].
 static EXTRA: OnceLock<Vec<&'static dyn Loader>> = OnceLock::new();
 
-/// Adds loaders that live in other crates (the Revit build). Call once, before the app starts;
+/// Adds additional loaders that live in other crates. Call once, before the app starts;
 /// they come before the built-in loaders.
 pub fn add(loaders: Vec<&'static dyn Loader>) {
     let _ = EXTRA.set(loaders);
@@ -174,8 +180,13 @@ pub fn add(loaders: Vec<&'static dyn Loader>) {
 
 /// All available loaders.
 pub fn registry() -> Vec<&'static dyn Loader> {
-    let builtin: [&'static dyn Loader; 6] =
-        [&skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader];
+    let builtin: Vec<&'static dyn Loader> = vec![
+        &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &rvt::RvtLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &ifc::IfcLoader,
+    ];
     EXTRA.get().into_iter().flatten().copied().chain(builtin).collect()
 }
 
@@ -218,6 +229,7 @@ pub const DEFAULT_COLOR: [f32; 3] = [0.72, 0.72, 0.74];
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn repo_file(rel: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -245,6 +257,54 @@ mod tests {
         assert_eq!(m.triangle_count(), 12);
         assert_eq!(m.file_name(), "cube.STL");
         assert!(m.file_size > 0);
+    }
+
+    #[test]
+    fn extracted_readers_remain_registered() {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY")] {
+            let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
+            assert_eq!(loader.name(), name);
+        }
+    }
+
+    #[test]
+    fn loads_ply_bytes_into_the_app_model() {
+        let data = b"ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n1 0 0 0 255 0\n1 1 0 0 0 255\n0 1 0 255 255 255\n4 0 1 2 3\n";
+        let source = Source::Bytes { name: "scan.PLY".into(), data: Arc::new(data.to_vec()) };
+        let model = load_with(&source, &Progress::default()).expect("PLY app adapter");
+        assert_eq!(model.format, "PLY");
+        assert_eq!(model.triangle_count(), 2);
+        assert_eq!(model.bounds.min, [0.0; 3]);
+        assert_eq!(model.bounds.max, [1.0, 1.0, 0.0]);
+        let layer = &model.layers[0];
+        assert_eq!(layer.name, "scan");
+        assert_eq!(layer.normals, [0.0, 0.0, 1.0].repeat(4));
+        assert_eq!(layer.colors.as_ref().unwrap()[0], [255, 0, 0, 255]);
+        assert_eq!(layer.colors.as_ref().unwrap()[2], [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn extracted_skp_reader_loads_files_and_browser_bytes() {
+        let path = repo_file("test-models/TestModel.skp");
+        let file = load(&path).expect("SketchUp file");
+        let source = Source::Bytes { name: "TestModel.SKP".into(), data: Arc::new(std::fs::read(path).unwrap()) };
+        let bytes = load_with(&source, &Progress::default()).expect("SketchUp browser bytes");
+        assert!(file.triangle_count() > 100);
+        assert_eq!(file.triangle_count(), bytes.triangle_count());
+        assert_eq!(file.bounds, bytes.bounds);
+        assert_eq!(file.props, bytes.props);
+        assert!(bytes.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn default_desktop_registers_revit_in_the_open_dialog() {
+        let extensions = supported_extensions();
+        assert!(extensions.contains(&"rvt"));
+        assert!(extensions.contains(&"rfa"));
+        let source = Source::Bytes { name: "test.RVT".into(), data: Arc::new(Vec::new()) };
+        let error = load_with(&source, &Progress::default()).unwrap_err();
+        assert!(error.contains("Revit files open in the desktop app only"), "{error}");
     }
 
     #[test]

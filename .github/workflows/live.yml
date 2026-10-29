@@ -16,15 +16,37 @@ concurrency:
 
 jobs:
   deploy:
-    uses: OpenAEC-Foundation/github/.github/workflows/deploy-site.yml@main
-    with:
-      deploy_host: ${{ vars.DEPLOY_HOST }}
-      deploy_port: ${{ vars.DEPLOY_PORT }}
-      deploy_user: ${{ vars.DEPLOY_USER }}
-      deploy_path: /var/www/open-3d-viewer.open-aec.com
-      setup_command: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown && rustup default stable
-      install_command: curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.22.1/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C "$HOME/.cargo/bin"
-      build_command: trunk build --release
-      deploy_source: dist
-    secrets:
-      deploy_ssh_key: ${{ secrets.DEPLOY_SSH_KEY }}
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST || '167.235.54.105' }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER || 'root' }}
+      DEPLOY_PATH: /var/www/open-3d-viewer.open-aec.com
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read-only access to standalone libraries
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
+          log-public-key: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: swatinem/rust-cache@v2
+      - name: Install trunk
+        run: curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.22.1/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C "$HOME/.cargo/bin"
+      - name: Build web app
+        run: trunk build --release --locked
+      - name: Deployment credentials
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          log-public-key: false
+      - name: Trust deploy host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+      - name: Deploy to existing site
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          rsync -az --delete -e "ssh -p $DEPLOY_PORT" dist/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"

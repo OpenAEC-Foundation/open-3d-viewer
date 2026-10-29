@@ -1,5 +1,8 @@
 # Vendored crates
 
+SKP, Tekla and PLY readers are standalone Git dependencies in Cargo.toml.
+The viewer's scene model and clipping code live in the app itself.
+
 `openaec-ui/` is a snapshot of `crates/openaec-ui` from the
 [OpenAEC Style Repo](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo), commit `6c9c896`
 (28 October 2026, crate version 2026.44.1, iced 0.14). The Style Repo is the source of truth;

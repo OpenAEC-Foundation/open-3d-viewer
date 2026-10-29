@@ -1,5 +1,5 @@
 //! The section box, as in Open Pointcloud Studio: a box turned about the vertical that keeps the
-//! part of the model inside it. Its faces move with handles in the viewport (Xâˆ’/X+, Yâˆ’/Y+, Zâˆ’/Z+)
+//! part of the model inside it. Its faces move with handles in the viewport (X−/X+, Y−/Y+, Z−/Z+)
 //! or with the sliders in the properties pane; the handles on its top edges turn it. The renderer
 //! clips to it in the fragment shader and fills the cut faces of solids (`scene.wgsl`).
 //!
@@ -18,7 +18,7 @@ const HANDLE_REACH: f32 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SectionBox {
-    /// Limits in the frame of the box: the world turned by âˆ’`turn` about the vertical through
+    /// Limits in the frame of the box: the world turned by −`turn` about the vertical through
     /// `pivot`.
     pub min: Vec3,
     pub max: Vec3,
@@ -36,7 +36,7 @@ impl SectionBox {
         Self { min: min - pad, max: max + pad, turn: 0.0, pivot: (min + max) * 0.5 }
     }
 
-    /// The box `origin + xÂ·basis[0] + yÂ·basis[1] + zÂ·basis[2]` for x, y, z within min..max (a
+    /// The box `origin + x·basis[0] + y·basis[1] + z·basis[2]` for x, y, z within min..max (a
     /// Revit section or crop box), when one of its axes is vertical (the box turns only about the
     /// vertical).
     pub fn from_frame(origin: Vec3, basis: [Vec3; 3], min: Vec3, max: Vec3) -> Option<Self> {
@@ -59,7 +59,7 @@ impl SectionBox {
     }
 
     /// The box round the model (world bounds) with one face on `plane`, when the box can make the
-    /// same cut: a level plane, or an upright one (the box turned to it by at most 45Â°, so an X or
+    /// same cut: a level plane, or an upright one (the box turned to it by at most 45°, so an X or
     /// Y plane leaves it straight). A sloped plane gives `None`.
     pub fn from_plane(plane: &SectionPlane, world: &Bounds) -> Option<Self> {
         let n = plane.normal;
@@ -420,7 +420,7 @@ where
                 frame.fill(&circle, if hot { AMBER_LIGHT } else { Color::from_rgb8(83, 60, 38) });
                 frame.stroke(&circle, canvas::Stroke::default().with_color(AMBER_LIGHT).with_width(1.3));
                 frame.fill_text(canvas::Text {
-                    content: format!("{name}{}", if is_min { "âˆ’" } else { "+" }),
+                    content: format!("{name}{}", if is_min { "−" } else { "+" }),
                     position: Point::new(p.x + 8.0, p.y - 12.0),
                     size: iced::Pixels(10.0),
                     color: AMBER,
@@ -470,7 +470,7 @@ where
 
 // ---- section plane ---------------------------------------------------------------------------
 
-/// Components of a picked normal smaller than this (about 0.5Â°) snap to zero, so walls and floors
+/// Components of a picked normal smaller than this (about 0.5°) snap to zero, so walls and floors
 /// give clean orthogonal sections.
 const SNAP: f32 = 0.0087;
 
@@ -481,7 +481,7 @@ const SNAP: f32 = 0.0087;
 pub struct SectionPlane {
     /// Unit normal pointing to the side that is cut away (world).
     pub normal: Vec3,
-    /// Position along the normal: points with `normal Â· p > offset` are cut away.
+    /// Position along the normal: points with `normal · p > offset` are cut away.
     pub offset: f32,
 }
 
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn a_plane_on_a_face_cuts_the_side_it_faces() {
         let world = Bounds { min: [0.0, 0.0, 0.0], max: [10.0, 10.0, 3.0] };
-        // a wall face at x = 4 facing âˆ’X (towards a viewer west of it), slightly off
+        // a wall face at x = 4 facing −X (towards a viewer west of it), slightly off
         let mut plane = SectionPlane::on_face(Vec3::new(4.0, 5.0, 1.0), Vec3::new(-1.0, 0.002, 0.0), &world).expect("plane");
         assert_eq!(plane.normal, Vec3::NEG_X, "snapped");
         assert!(plane.cuts(Vec3::new(2.0, 5.0, 1.0)));
@@ -783,7 +783,7 @@ mod tests {
         assert!(s.contains(Vec3::new(5.0, 7.0, 2.0)));
         assert!(!s.contains(Vec3::new(5.0, 1.0, 2.0)), "behind the cut");
         assert!(!s.contains(Vec3::new(9.0, 7.0, 2.0)), "right of the crop");
-        // looking west (âˆ’X): right = âˆ’Y
+        // looking west (−X): right = −Y
         let s = SectionBox::from_frame(origin, [Vec3::NEG_Y, Vec3::Z, Vec3::NEG_X], Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 3.0, 4.0)).expect("box");
         assert!(s.contains(Vec3::new(3.0, 2.5, 1.0)));
         assert!(!s.contains(Vec3::new(6.0, 2.5, 1.0)));

@@ -2858,7 +2858,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "ply-reader"
 version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/ply-reader?rev=9b972341031fff12f7405f200feb51792bab1ad4#9b972341031fff12f7405f200feb51792bab1ad4"
+source = "git+https://github.com/OpenAEC-Foundation/ply-reader?rev=028c51906cd7d8a0e72d6103afe80ad668d2543d#028c51906cd7d8a0e72d6103afe80ad668d2543d"
 
 [[package]]
 name = "png"

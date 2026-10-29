@@ -268,6 +268,22 @@ mod tests {
     }
 
     #[test]
+    fn loads_ply_bytes_into_the_app_model() {
+        let data = b"ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0 255 0 0\n1 0 0 0 255 0\n1 1 0 0 0 255\n0 1 0 255 255 255\n4 0 1 2 3\n";
+        let source = Source::Bytes { name: "scan.PLY".into(), data: Arc::new(data.to_vec()) };
+        let model = load_with(&source, &Progress::default()).expect("PLY app adapter");
+        assert_eq!(model.format, "PLY");
+        assert_eq!(model.triangle_count(), 2);
+        assert_eq!(model.bounds.min, [0.0; 3]);
+        assert_eq!(model.bounds.max, [1.0, 1.0, 0.0]);
+        let layer = &model.layers[0];
+        assert_eq!(layer.name, "scan");
+        assert_eq!(layer.normals, [0.0, 0.0, 1.0].repeat(4));
+        assert_eq!(layer.colors.as_ref().unwrap()[0], [255, 0, 0, 255]);
+        assert_eq!(layer.colors.as_ref().unwrap()[2], [0, 0, 255, 255]);
+    }
+
+    #[test]
     fn extracted_skp_reader_loads_files_and_browser_bytes() {
         let path = repo_file("test-models/TestModel.skp");
         let file = load(&path).expect("SketchUp file");

@@ -35,6 +35,21 @@ use web_time::Instant;
 pub const FONT: Font = Font::with_name("Inter");
 pub const FONT_BOLD: Font = Font { weight: iced::font::Weight::Semibold, ..FONT };
 
+pub struct ModelEntry {
+    pub model: Arc<Model>,
+    pub visible: bool,
+    pub layers: std::ops::Range<usize>,
+    layer_visibility: Vec<bool>,
+}
+
+impl ModelEntry {
+    fn new(model: Arc<Model>, first_layer: usize) -> Self {
+        let layers = first_layer..first_layer + model.layers.len();
+        let layer_visibility = model.layers.iter().map(|layer| !layer.hidden).collect();
+        Self { model, visible: true, layers, layer_visibility }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RibbonTab {
     #[default]
@@ -54,6 +69,8 @@ pub enum Status {
 pub struct App {
     pub theme: ThemeKind,
     pub model: Option<Arc<Model>>,
+    pub models: Vec<ModelEntry>,
+    adding_model: bool,
     pub visible: Vec<bool>,
     pub camera: Camera,
     pub mode: RenderMode,
@@ -127,8 +144,11 @@ pub struct App {
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenDialog,
+    AddDialog,
     Open(PathBuf),
     Picked(Option<loaders::Source>),
+    AddPicked(Option<loaders::Source>),
+    ModelVisible(usize, bool),
     Loaded(Result<Arc<Model>, String>),
     SaveDialog,
     SavePicked(Option<PathBuf>),
@@ -244,6 +264,8 @@ impl Default for App {
         Self {
             theme: ThemeKind::Light,
             model: None,
+            models: Vec::new(),
+            adding_model: false,
             visible: Vec::new(),
             camera: Camera::default(),
             mode: RenderMode::Solid,
@@ -269,7 +291,7 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
-            explorer_open: [true, false, true, false],
+            explorer_open: [false, false, true, false],
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
@@ -319,13 +341,13 @@ pub fn load_task(source: loaders::Source, progress: Arc<loaders::Progress>) -> T
 
 /// Asks for a model file: the native dialog on the desktop, the browser's file picker on the web
 /// (which hands over the bytes, not a path).
-fn pick_model_task() -> Task<Message> {
+fn pick_model_task(add: bool) -> Task<Message> {
     let mut exts = loaders::supported_extensions();
     exts.sort_unstable();
     Task::perform(
         async move {
             let file = rfd::AsyncFileDialog::new()
-                .set_title("Open 3D model")
+                .set_title(if add { "Add 3D model" } else { "Open 3D model" })
                 .add_filter("3D models", &exts)
                 .add_filter("All files", &["*"])
                 .pick_file()
@@ -335,7 +357,7 @@ fn pick_model_task() -> Task<Message> {
             #[cfg(target_arch = "wasm32")]
             return Some(loaders::Source::Bytes { name: file.file_name(), data: Arc::new(file.read().await) });
         },
-        Message::Picked,
+        move |source| if add { Message::AddPicked(source) } else { Message::Picked(source) },
     )
 }
 
@@ -561,6 +583,45 @@ impl App {
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
     pub fn set_model(&mut self, model: Arc<Model>) {
+        self.models = vec![ModelEntry::new(model.clone(), 0)];
+        self.set_scene(model);
+    }
+
+    pub fn add_model(&mut self, model: Arc<Model>) {
+        if self.model.is_none() { self.set_model(model); return; }
+        if self.models.is_empty() {
+            self.models.push(ModelEntry::new(self.model.as_ref().unwrap().clone(), 0));
+        }
+        let first = self.models.last().map_or(0, |entry| entry.layers.end);
+        self.models.push(ModelEntry::new(model, first));
+        let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
+        self.set_scene(Arc::new(Model::combine(&sources)));
+        self.restore_model_visibility();
+    }
+
+    fn restore_model_visibility(&mut self) {
+        for entry in &self.models {
+            for (layer, shown) in entry.layers.clone().zip(&entry.layer_visibility) {
+                self.visible[layer] = entry.visible && *shown;
+            }
+        }
+    }
+
+    fn set_layer_visible(&mut self, layer: usize, shown: bool) {
+        for entry in &mut self.models {
+            if entry.layers.contains(&layer) {
+                if shown && !entry.visible {
+                    entry.visible = true;
+                    for (i, value) in entry.layers.clone().zip(&entry.layer_visibility) { self.visible[i] = *value; }
+                }
+                entry.layer_visibility[layer - entry.layers.start] = shown;
+                break;
+            }
+        }
+        if let Some(value) = self.visible.get_mut(layer) { *value = shown; }
+    }
+
+    fn set_scene(&mut self, model: Arc<Model>) {
         self.visible = model.layers.iter().map(|l| !l.hidden).collect();
         self.status = Status::Loaded(format!(
             "Loaded {} in {:.2} s",
@@ -577,6 +638,7 @@ impl App {
         self.active_schedule = None;
         self.schedules.clear();
         self.schedules_pending = false;
+        self.explorer_open[0] = false;
         self.selected = None;
         self.selection.clear();
         self.measure.reset();
@@ -600,11 +662,12 @@ impl App {
     }
 
     /// Starts loading a model, unless one is loading already.
-    fn open(&mut self, source: loaders::Source) -> Task<Message> {
+    fn open(&mut self, source: loaders::Source, add: bool) -> Task<Message> {
         self.pending_open = None;
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
         }
+        self.adding_model = add;
         let progress = Arc::new(loaders::Progress::default());
         self.status = Status::Loading { file: source.name(), since: Instant::now(), progress: progress.clone() };
         load_task(source, progress)
@@ -612,16 +675,21 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::OpenDialog => return pick_model_task(),
+            Message::OpenDialog => return pick_model_task(false),
+            Message::AddDialog => return pick_model_task(true),
             Message::Picked(None) => {}
-            Message::Picked(Some(source)) => return self.open(source),
-            Message::Open(path) => return self.open(loaders::Source::File(path)),
+            Message::AddPicked(None) => {}
+            Message::Picked(Some(source)) => return self.open(source, false),
+            Message::AddPicked(Some(source)) => return self.open(source, true),
+            Message::Open(path) => return self.open(loaders::Source::File(path), false),
             Message::Loaded(Ok(model)) => {
-                self.set_model(model);
+                if self.adding_model { self.add_model(model); } else { self.set_model(model); }
+                self.adding_model = false;
                 self.remote_loaded();
                 return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
+                self.adding_model = false;
                 self.status = Status::Error(e);
                 self.remote_loaded();
                 return self.shot_after_delay();
@@ -708,19 +776,20 @@ impl App {
             Message::Fit => self.fit(),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
             Message::TogglePropertiesPanel => self.show_properties = !self.show_properties,
-            Message::Layer(i, v) => {
-                if let Some(slot) = self.visible.get_mut(i) {
-                    *slot = v;
+            Message::Layer(i, v) => self.set_layer_visible(i, v),
+            Message::ModelVisible(i, shown) => {
+                if let Some(entry) = self.models.get_mut(i) {
+                    entry.visible = shown;
+                    self.selection.clear();
+                    self.selected = None;
+                    self.restore_model_visibility();
                 }
             }
             Message::AllLayers(v) => {
                 let filter = self.layer_filter.to_lowercase();
                 if let Some(m) = &self.model {
-                    for (i, layer) in m.layers.iter().enumerate() {
-                        if filter.is_empty() || layer.name.to_lowercase().contains(&filter) {
-                            self.visible[i] = v;
-                        }
-                    }
+                    let layers: Vec<_> = m.layers.iter().enumerate().filter(|(_, layer)| filter.is_empty() || layer.name.to_lowercase().contains(&filter)).map(|(i, _)| i).collect();
+                    for layer in layers { self.set_layer_visible(layer, v); }
                 }
             }
             Message::LayerFilter(f) => self.layer_filter = f,
@@ -892,6 +961,7 @@ impl App {
             Message::MeasureClear => {
                 self.measure.results.clear();
                 self.measure.picks.clear();
+                self.measurements.clear();
             }
             Message::MeasureLength(u) => self.measure.units.length = u,
             Message::MeasureArea(u) => self.measure.units.area = u,
@@ -1185,6 +1255,27 @@ impl App {
         };
         let mut body = column![].spacing(1);
 
+        let plus = svg(icons::handle(icons::ADD)).width(16).height(16).style(move |_, _| svg::Style { color: Some(p.text_secondary) });
+        let add = button(container(plus).center(26)).width(26).height(26).padding(0)
+            .style(move |_, status| p.ribbon_button(false, status)).on_press(Message::AddDialog);
+        body = body.push(container(row![
+            text(l.text("Modellen", "Models")).size(12).font(FONT_BOLD).width(Fill),
+            text(self.models.len().to_string()).size(11).color(p.text_secondary), add,
+        ].spacing(6).align_y(Center)).padding([2, 6]).style(move |_| p.panel_header()));
+        for (i, entry) in self.models.iter().enumerate() {
+            let shown = entry.visible;
+            let eye = svg(icons::handle(if shown { icons::EYE } else { icons::EYE_OFF })).width(16).height(16)
+                .style(move |_, _| svg::Style { color: Some(if shown { p.text_secondary } else { p.text_muted }) });
+            let label = column![
+                text(entry.model.file_name()).size(12).color(if shown { p.text } else { p.text_muted })
+                    .wrapping(Wrapping::WordOrGlyph),
+                text(entry.model.format.clone()).size(10).color(p.text_secondary),
+            ].spacing(2).width(Fill);
+            body = body.push(button(row![eye, label].spacing(8).align_y(Center)).padding([6, 8]).width(Fill)
+                .style(move |_, status| p.row_button(status)).on_press(Message::ModelVisible(i, !shown)));
+        }
+        body = body.push(rule::horizontal(1));
+
         // views, by kind
         if !model.views.is_empty() {
             let kinds = [
@@ -1474,7 +1565,7 @@ impl App {
                 button(text(label).size(11)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press_maybe(msg)
             };
             let storeys = (index.storeys() > 0).then_some(Message::ExplodeMode(ExplodeMode::Storeys));
-            content = content.push(section(l.text("Uit elkaar", "Exploded view"))).push(
+            content = content.push(section("Explode")).push(
                 row![
                     small(l.text("Verdiepingen", "Storeys"), mode == ExplodeMode::Storeys, storeys),
                     small(l.text("Elementen", "Elements"), mode == ExplodeMode::Elements, Some(Message::ExplodeMode(ExplodeMode::Elements))),
@@ -2056,28 +2147,6 @@ fn loading_card<'a>(
         .into()
 }
 
-fn big_button<'a>(p: Palette, icon: &'static str, label: &'static str, msg: Message, active: bool) -> Element<'a, Message> {
-    let tint = if active { p.accent } else { p.text };
-    button(
-        column![
-            svg(icons::handle(icon))
-                .width(24)
-                .height(24)
-                .style(move |_, status| svg::Style {
-                    color: Some(if matches!(status, svg::Status::Hovered) { p.accent } else { tint })
-                }),
-            text(label).size(11),
-        ]
-        .spacing(4)
-        .align_x(Center),
-    )
-    .padding([6, 8])
-    .width(Length::Shrink)
-    .style(move |_, s| p.ribbon_button(active, s))
-    .on_press(msg)
-    .into()
-}
-
 /// A property: label and value side by side (2 : 3), both wrapping, so long words never overlap;
 /// a long label (a project parameter such as "opdrachtgever_projectmanager") gets its own line
 /// with the value below it, instead of being broken mid-word.
@@ -2121,6 +2190,28 @@ fn group_header(p: Palette, title: &str, tag: Option<&'static str>, count: usize
     .into()
 }
 
+fn big_button<'a>(p: Palette, icon: &'static str, label: &'static str, msg: Message, active: bool) -> Element<'a, Message> {
+    let tint = if active { p.accent } else { p.text };
+    button(
+        column![
+            svg(icons::handle(icon))
+                .width(24)
+                .height(24)
+                .style(move |_, status| svg::Style {
+                    color: Some(if matches!(status, svg::Status::Hovered) { p.accent } else { tint })
+                }),
+            text(label).size(11),
+        ]
+        .spacing(4)
+        .align_x(Center),
+    )
+    .padding([6, 8])
+    .width(Length::Shrink)
+    .style(move |_, s| p.ribbon_button(active, s))
+    .on_press(msg)
+    .into()
+}
+
 fn group<'a>(p: Palette, label: &'static str, content: Element<'a, Message>) -> Element<'a, Message> {
     column![
         container(content).height(Fill).align_y(Center),
@@ -2157,7 +2248,7 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
 }
 
 /// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
-fn standalone_language() -> Language {
+pub(crate) fn standalone_language() -> Language {
     match std::env::var("O3V_LANG").as_deref() {
         Ok("nl") => Language::Dutch,
         _ => Language::English,
@@ -2214,7 +2305,8 @@ mod tests {
 
     #[test]
     fn ribbon_buttons_send_messages() {
-        let app = App::default();
+        let mut app = App::default();
+        app.set_model(two_squares());
         let mut ui = simulator(&app);
         ui.click("Wireframe").expect("Wireframe button");
         ui.click("Grid").expect("Grid button");
@@ -2223,6 +2315,47 @@ mod tests {
         assert!(matches!(messages[0], Message::Mode(RenderMode::Wireframe)), "{messages:?}");
         assert!(matches!(messages[1], Message::ToggleGrid), "{messages:?}");
         assert!(matches!(messages[2], Message::SaveDialog), "{messages:?}");
+    }
+
+    #[test]
+    fn add_keeps_models_separate_and_open_replaces_them() {
+        fn source(name: &str, x: f32) -> Arc<Model> {
+            let layer = crate::model::Layer {
+                name: "Walls".into(),
+                positions: vec![x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x, 1.0, 0.0],
+                indices: vec![0, 1, 2],
+                elements: vec![(7, 0, 3)],
+                props: vec![(7, serde_json::json!({"source": name}).to_string())],
+                ..Default::default()
+            };
+            Arc::new(Model::new(name.into(), "OBJ", vec![layer]))
+        }
+        let mut app = App::default();
+        app.set_model(source("first.obj", 0.0));
+        let _ = app.update(Message::Layer(0, false));
+        app.add_model(source("second.obj", 2.0));
+        assert_eq!(app.models.len(), 2);
+        assert_eq!(app.visible, vec![false, true]);
+        let scene = app.model.as_ref().unwrap();
+        let first_id = scene.layers[0].elements[0].0;
+        let second_id = scene.layers[1].elements[0].0;
+        assert_ne!(first_id, second_id, "IDs from separate files must not collide");
+        assert!(scene.props[&first_id].contains("first.obj"));
+        assert!(scene.props[&second_id].contains("second.obj"));
+        let _ = app.update(Message::ModelVisible(1, false));
+        assert_eq!(app.visible, vec![false, false]);
+        let _ = app.update(Message::ModelVisible(1, true));
+        assert_eq!(app.visible, vec![false, true]);
+        let _ = app.update(Message::ModelVisible(0, false));
+        let _ = app.update(Message::ModelVisible(0, true));
+        assert!(!app.visible[0], "a model toggle preserves its hidden layers");
+        let mut ui = simulator(&app);
+        ui.click("second.obj").expect("model visibility row");
+        assert!(ui.into_messages().any(|m| matches!(m, Message::ModelVisible(1, false))));
+        app.set_model(source("replacement.obj", 4.0));
+        assert_eq!(app.models.len(), 1);
+        assert_eq!(app.model.as_ref().unwrap().file_name(), "replacement.obj");
+        assert_eq!(app.visible, vec![true]);
     }
 
     #[test]

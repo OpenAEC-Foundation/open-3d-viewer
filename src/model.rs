@@ -258,6 +258,51 @@ pub struct SavedView {
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Model {
+    /// Compose loaded files in the app, giving each source's element IDs a unique
+    /// namespace. Original IDs remain in their source properties.
+    pub fn combine(models: &[std::sync::Arc<Model>]) -> Self {
+        let mut layers = Vec::new();
+        let mut props = HashMap::new();
+        let mut views = Vec::new();
+        let mut project = ProjectData::default();
+        let mut next_id = 1u64;
+        for model in models {
+            let source = model.file_name();
+            let ids: std::collections::BTreeSet<_> = model.props.keys().copied()
+                .chain(model.layers.iter().flat_map(|layer| layer.elements.iter().map(|e| e.0))).collect();
+            let remap: HashMap<_, _> = ids.into_iter().map(|id| {
+                let mapped = next_id;
+                next_id += 1;
+                (id, mapped)
+            }).collect();
+            for layer in &model.layers {
+                let mut layer = layer.clone();
+                layer.name = format!("{source} / {}", layer.name);
+                for element in &mut layer.elements { element.0 = remap[&element.0]; }
+                layers.push(layer);
+            }
+            props.extend(model.props.iter().map(|(id, value)| (remap[id], value.clone())));
+            views.extend(model.views.iter().cloned().map(|mut view| {
+                view.name = format!("{source} / {}", view.name);
+                view
+            }));
+            project.info.extend(model.project.info.iter().map(|(key, value)| (format!("{source} / {key}"), value.clone())));
+            project.levels.extend(model.project.levels.iter().cloned());
+            project.phases.extend(model.project.phases.iter().cloned());
+            project.grids.extend(model.project.grids.iter().cloned());
+            project.rooms.extend(model.project.rooms.iter().cloned());
+        }
+        project.levels.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        project.levels.dedup();
+        let mut combined = Self::new(format!("{} models", models.len()).into(), "Multiple models", layers);
+        combined.props = props;
+        combined.views = views;
+        combined.project = project;
+        combined.file_size = models.iter().map(|m| m.file_size).sum();
+        combined.load_time = models.iter().map(|m| m.load_time).sum();
+        combined
+    }
+
     /// Builds a model from layers: drops empty layers and computes the bounds.
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
         let props: HashMap<u64, String> = layers.iter_mut().flat_map(|l| std::mem::take(&mut l.props)).collect();

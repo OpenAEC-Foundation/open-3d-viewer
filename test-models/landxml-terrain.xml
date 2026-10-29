@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2">
+  <Units><Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter" temperatureUnit="celsius" pressureUnit="milliBars" angularUnit="decimal degrees" directionUnit="decimal degrees"/></Units>
+  <CoordinateSystem name="RD New + NAP" epsgCode="7415"/>
+  <Surfaces>
+    <Surface name="Sample terrain">
+      <Definition surfType="TIN">
+        <Pnts>
+          <P id="10">487000 121000 2</P>
+          <P id="30">487000 121010 2</P>
+          <P id="20">487020 121000 3</P>
+          <P id="50">487020 121010 4</P>
+        </Pnts>
+        <Faces>
+          <F>10 30 20</F>
+          <F>30 50 20</F>
+        </Faces>
+      </Definition>
+    </Surface>
+  </Surfaces>
+</LandXML>

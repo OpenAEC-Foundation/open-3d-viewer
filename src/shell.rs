@@ -410,6 +410,10 @@ impl Studio {
         let go = |m: Message| Msg::App(m);
         let mut list = vec![
             Command::new("file.open", l.text("Openen…", "Open…"), go(Message::OpenDialog)).icon(small("file.open"), large("file.open")).shortcut(Shortcut::ctrl('o')).dialog(),
+            Command::new("file.add", l.text("Toevoegen…", "Add…"), go(Message::AddDialog))
+                .icon(small("file.import"), large("file.import"))
+                .shortcut(Shortcut::ctrl_shift('o'))
+                .dialog(),
             Command::new("file.save-as", l.text("Opslaan als…", "Save as…"), go(Message::SaveDialog))
                 .icon(small("file.save-as"), large("file.save-as"))
                 .shortcut(Shortcut::ctrl_shift('s'))
@@ -765,7 +769,7 @@ impl Studio {
         let smalls = |ids: &[&str]| -> Element<'_, Msg> { column(ids.iter().map(|id| cm::ribbon_small(look, &self.command(id)))).spacing(2).into() };
         let groups = match self.ribbon_tab {
             0 => vec![
-                w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), large("file.save-as")]),
+                w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), large("file.add"), large("file.save-as")]),
                 w::ribbon_group(look, l.text("Weergave", "Display"), vec![large("view.solid"), large("view.wireframe"), large("view.edges")]),
                 w::ribbon_group(look, l.text("Tonen", "Show"), vec![large("view.grid"), smalls(&["view.grid-lines", "view.flip-up"])]),
                 w::ribbon_group(look, l.text("Panelen", "Panels"), vec![smalls(&["view.left", "view.right"])]),
@@ -802,6 +806,7 @@ impl Studio {
         let loaded = self.app.model.is_some();
         let nav = column![
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
+            t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
             t::file_nav_row(look, small("ui.settings"), l.text("Instellingen", "Settings"), false, Some(Msg::Dialog(Some(Dialog::Settings)))),
         ]

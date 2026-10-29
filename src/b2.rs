@@ -34,7 +34,7 @@ macro_rules! icons {
 
 icons! {
     "window.minimize", "window.maximize", "window.restore", "window.close",
-    "file.open", "file.save-as", "file.examples",
+    "file.open", "file.import", "file.save-as", "file.examples",
     "ui.settings", "ui.about", "ui.close", "ui.help",
     "panel.left", "panel.right", "panel.schedules", "panel.model-tree", "panel.measurements",
     "view.fit", "view.fit-selection", "view.isometric", "view.top", "view.front", "view.right",

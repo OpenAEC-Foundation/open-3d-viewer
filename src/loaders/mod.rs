@@ -17,6 +17,9 @@ mod ifc;
 mod skp;
 mod tekla;
 mod ply;
+mod cityjson;
+mod landxml;
+mod cad;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::borrow::Cow;
@@ -182,6 +185,8 @@ pub fn add(loaders: Vec<&'static dyn Loader>) {
 pub fn registry() -> Vec<&'static dyn Loader> {
     let builtin: Vec<&'static dyn Loader> = vec![
         &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
+        &cityjson::CityJsonLoader, &landxml::LandXmlLoader,
+        &cad::CadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
         #[cfg(not(target_arch = "wasm32"))]
@@ -233,6 +238,24 @@ mod tests {
 
     fn repo_file(rel: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+    }
+
+    #[test]
+    fn imports_cityjson_landxml_and_cad_through_file_registry() {
+        let city = load(&repo_file("test-models/cityjson-building.city.json")).expect("CityJSON fixture");
+        assert_eq!(city.format, "CityJSON");
+        assert_eq!(city.triangle_count(), 12);
+        assert_eq!(city.bounds.size(), [10., 8., 6.]);
+        assert!(city.props.values().any(|value| value.contains("demo-building")));
+        let terrain = load(&repo_file("test-models/landxml-terrain.xml")).expect("LandXML fixture");
+        assert_eq!(terrain.format, "LandXML");
+        assert_eq!(terrain.triangle_count(), 2);
+        let cad = load(&repo_file("test-models/cad-faces.dxf")).expect("independent DXF fixture");
+        assert_eq!(cad.triangle_count(), 2);
+        assert_eq!(cad.bounds.size(), [1., 1., 0.]);
+        for extension in ["dwg", "dxf", "json", "cityjson", "jsonl", "landxml", "xml"] {
+            assert!(supported_extensions().contains(&extension), "{extension}");
+        }
     }
 
     #[test]

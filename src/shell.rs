@@ -36,7 +36,7 @@ const PANEL_MAX: f32 = 520.0;
 const RECENT: usize = 8;
 
 /// The viewport palette for a theme: the 3D background and grid of the nearest viewport theme.
-fn viewport_kind(theme: ThemeId) -> ThemeKind {
+pub(crate) fn viewport_kind(theme: ThemeId) -> ThemeKind {
     match theme {
         ThemeId::Light | ThemeId::HighContrastLight => ThemeKind::Light,
         ThemeId::Dark | ThemeId::HighContrastDark => ThemeKind::Night,
@@ -81,6 +81,55 @@ impl std::fmt::Display for Scale {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:.0} %", self.0 * 100.0)
     }
+}
+
+/// A setting with its name in the language of the interface (the library names them in Dutch).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Named<T> {
+    value: T,
+    label: &'static str,
+}
+
+impl<T> std::fmt::Display for Named<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label)
+    }
+}
+
+const fn named<T>(value: T, label: &'static str) -> Named<T> {
+    Named { value, label }
+}
+
+/// The settings per language: Dutch, English.
+const THEMES: [[Named<ThemeId>; 5]; 2] = [
+    [
+        named(ThemeId::Light, "Licht"),
+        named(ThemeId::Dark, "Donker"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "High contrast donker"),
+        named(ThemeId::HighContrastLight, "High contrast licht"),
+    ],
+    [
+        named(ThemeId::Light, "Light"),
+        named(ThemeId::Dark, "Dark"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "High contrast dark"),
+        named(ThemeId::HighContrastLight, "High contrast light"),
+    ],
+];
+const WORKSPACES: [[Named<WorkspaceSetting>; 3]; 2] = [
+    [named(WorkspaceSetting::Theme, "Volgt thema"), named(WorkspaceSetting::Light, "Altijd licht"), named(WorkspaceSetting::Dark, "Altijd donker")],
+    [named(WorkspaceSetting::Theme, "Follows the theme"), named(WorkspaceSetting::Light, "Always light"), named(WorkspaceSetting::Dark, "Always dark")],
+];
+const STATUSBARS: [[Named<StatusbarSetting>; 2]; 2] = [
+    [named(StatusbarSetting::Theme, "Volgt thema"), named(StatusbarSetting::Dark, "Altijd donker")],
+    [named(StatusbarSetting::Theme, "Follows the theme"), named(StatusbarSetting::Dark, "Always dark")],
+];
+
+/// The options of a setting in `language`, and the one that is chosen.
+fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; 2], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
+    let list = &lists[usize::from(language == Language::English)];
+    (list, list.iter().find(|n| n.value == chosen).copied())
 }
 
 /// What the viewer keeps between sessions (`preferences.json`).
@@ -148,6 +197,39 @@ impl Prefs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialog {
     Settings,
+}
+
+/// What a screenshot shows: the workspace, the Bestand page or a page of the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Page {
+    #[default]
+    Workspace,
+    File,
+    Settings,
+    Shortcuts,
+}
+
+impl Page {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "workspace" => Page::Workspace,
+            "file" => Page::File,
+            "settings" => Page::Settings,
+            "shortcuts" => Page::Shortcuts,
+            _ => return None,
+        })
+    }
+}
+
+/// A theme by its Blueprint key (`light`, `dark`, `blueprint`, `high-contrast-dark`,
+/// `high-contrast-light`) or by the name of an earlier viewer theme.
+pub fn theme_from_arg(s: &str) -> Option<ThemeId> {
+    ThemeId::from_key(s).or(match s.to_ascii_lowercase().as_str() {
+        "night" | "forge" => Some(ThemeId::Dark),
+        "light" => Some(ThemeId::Light),
+        "blueprint" => Some(ThemeId::Blueprint),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +324,57 @@ impl Studio {
         self
     }
 
+    /// Theme and language from the command line, kept until the user changes them; the
+    /// preferences file is not written for them.
+    pub fn set_look(&mut self, theme: Option<ThemeId>, language: Option<Language>) {
+        if let Some(theme) = theme {
+            self.prefs.theme = theme.key().into();
+        }
+        if let Some(language) = language {
+            self.prefs.language = language;
+        }
+    }
+
+    /// Shows a page over the workspace, for `--screenshot`.
+    pub fn show(&mut self, page: Page) {
+        self.backstage = page == Page::File;
+        self.dialog = matches!(page, Page::Settings | Page::Shortcuts).then_some(Dialog::Settings);
+        self.settings_page = if page == Page::Shortcuts { SettingsPage::Shortcuts } else { SettingsPage::General };
+    }
+
+    /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
+    pub fn viewport_in(&self, width: f32, height: f32) -> (f32, f32) {
+        use openaec_ui::design::shell::{DOCUMENT_TABS, RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
+        let panels = [(self.prefs.left, self.prefs.left_width), (self.prefs.right, self.prefs.right_width)];
+        let side: f32 = panels.iter().filter(|(shown, _)| *shown).map(|(_, w)| w + 4.0).sum();
+        let bars = TITLEBAR + RIBBON_TABS + RIBBON + DOCUMENT_TABS + STATUSBAR;
+        ((width - side).max(1.0), (height - bars).max(1.0))
+    }
+
+    /// Renders the window without opening it (iced_test on an offscreen wgpu device) and writes
+    /// a PNG to `out`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn snapshot(&self, size: iced::Size, out: &std::path::Path) -> Result<(), String> {
+        let settings = iced::Settings {
+            fonts: [crate::INTER_REGULAR, crate::INTER_SEMIBOLD].into_iter().chain(fonts::FILES.iter().copied()).map(std::borrow::Cow::Borrowed).collect(),
+            default_font: fonts::BODY,
+            antialiasing: true,
+            ..Default::default()
+        };
+        let mut ui = iced_test::Simulator::with_size(settings, size, self.view());
+        let snapshot = ui.snapshot(&self.prefs.theme().iced()).map_err(|e| e.to_string())?;
+        // iced_test writes "<stem>-<renderer>.png" and keeps one that is there; rename it to OUT
+        let stem = out.file_stem().unwrap_or_default().to_string_lossy();
+        let written = out.with_file_name(format!("{stem}-wgpu.png"));
+        let _ = std::fs::remove_file(&written);
+        snapshot.matches_image(out).map_err(|e| e.to_string())?;
+        if !written.exists() {
+            let _ = std::fs::remove_file(out.with_file_name(format!("{stem}-tiny-skia.png")));
+            return Err("no wgpu adapter for the headless renderer (tiny-skia cannot draw the 3D view)".into());
+        }
+        std::fs::rename(&written, out).map_err(|e| e.to_string())
+    }
+
     fn look(&self) -> Look {
         Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar())
     }
@@ -258,7 +391,8 @@ impl Studio {
         }
     }
 
-    fn remember(&mut self, path: PathBuf) {
+    /// Puts a file at the top of the recent files.
+    pub fn remember(&mut self, path: PathBuf) {
         self.prefs.recent.retain(|p| p != &path);
         self.prefs.recent.insert(0, path);
         self.prefs.recent.truncate(RECENT);
@@ -779,12 +913,15 @@ impl Studio {
                     ("measure", l.text("Meten", "Measure")),
                     ("app", l.text("Programma", "Application")),
                 ];
+                let themes = options(&THEMES, l, self.prefs.theme());
+                let workspaces = options(&WORKSPACES, l, self.prefs.workspace());
+                let statusbars = options(&STATUSBARS, l, self.prefs.statusbar());
                 let body: Element<'_, Msg> = match self.settings_page {
                     SettingsPage::General => column![
                         w::mono_label(look, l.text("Weergave", "Appearance")),
-                        w::property_row(look, l.text("Thema", "Theme"), w::select(look, &ThemeId::ALL, Some(self.prefs.theme()), Msg::Theme, D::Regular)),
-                        w::property_row(look, l.text("Werkruimte", "Workspace"), w::select(look, &WorkspaceSetting::ALL, Some(self.prefs.workspace()), Msg::Workspace, D::Regular)),
-                        w::property_row(look, l.text("Statusbalk", "Status bar"), w::select(look, &StatusbarSetting::ALL, Some(self.prefs.statusbar()), Msg::Statusbar, D::Regular)),
+                        w::property_row(look, l.text("Thema", "Theme"), w::select(look, themes.0, themes.1, |n| Msg::Theme(n.value), D::Regular)),
+                        w::property_row(look, l.text("Werkruimte", "Workspace"), w::select(look, workspaces.0, workspaces.1, |n| Msg::Workspace(n.value), D::Regular)),
+                        w::property_row(look, l.text("Statusbalk", "Status bar"), w::select(look, statusbars.0, statusbars.1, |n| Msg::Statusbar(n.value), D::Regular)),
                         w::property_row(look, l.text("Interfacegrootte", "Interface size"), w::select(look, &Scale::ALL, scale, |s: Scale| Msg::Scale(s.0), D::Regular)),
                         w::mono_label(look, l.text("Taal", "Language")),
                         w::property_row(look, l.text("Taal", "Language"), w::select(look, &Language::ALL, Some(l), Msg::Language, D::Regular)),
@@ -880,11 +1017,21 @@ mod tests {
             studio.backstage = backstage;
             studio.dialog = dialog;
             studio.settings_page = page;
-            let settings = iced::Settings { fonts: fonts::FILES.iter().map(|f| std::borrow::Cow::Borrowed(*f)).collect(), default_font: fonts::BODY, antialiasing: true, ..Default::default() };
-            let mut ui = iced_test::Simulator::with_size(settings, iced::Size::new(1280.0, 800.0), studio.view());
-            let snapshot = ui.snapshot(&theme.iced()).expect("snapshot");
-            let _ = snapshot.matches_image(dir.join(name));
+            studio.snapshot(iced::Size::new(1280.0, 800.0), &dir.join(format!("{name}.png"))).expect("snapshot");
         }
+    }
+
+    #[test]
+    fn every_setting_has_a_name_in_both_languages() {
+        for i in 0..2 {
+            assert_eq!(THEMES[i].map(|n| n.value), ThemeId::ALL);
+            assert_eq!(WORKSPACES[i].map(|n| n.value), WorkspaceSetting::ALL);
+            assert_eq!(STATUSBARS[i].map(|n| n.value), StatusbarSetting::ALL);
+        }
+        // the Dutch names are the library's
+        assert!(THEMES[0].iter().all(|n| n.label == n.value.name()));
+        assert!(WORKSPACES[0].iter().all(|n| n.label == n.value.name()));
+        assert!(STATUSBARS[0].iter().all(|n| n.label == n.value.name()));
     }
 
     #[test]

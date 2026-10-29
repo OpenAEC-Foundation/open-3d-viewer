@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Open 3D Viewer Studio</string>
+  <key>CFBundleDisplayName</key><string>Open 3D Viewer Studio</string>
+  <key>CFBundleIdentifier</key><string>org.openaec.Open3DViewer</string>
+  <key>CFBundleExecutable</key><string>open-3d-viewer</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@NUMBER@</string>
+  <key>CFBundleVersion</key><string>@NUMBER@</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
+</dict>
+</plist>

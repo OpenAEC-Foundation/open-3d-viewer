@@ -86,6 +86,14 @@ fn tools() -> Vec<Value> {
         tool("apply_view", "Show a saved view: its camera and what it shows (section box, plan range).",
             json!({ "view": { "type": ["integer", "string"], "description": "Index or name of the view" } }), &["view"], false),
         tool("get_project_info", "Project data from the file: project information, levels with elevations, phases, grid lines and rooms.", json!({}), &[], true),
+        tool("list_schedules", "Schedules in the file (Revit): index, name, column headings and row count. They are computed a few seconds after the model is in ('computing': true until then).", json!({}), &[], true),
+        tool("get_schedule", "The rows of a schedule (Revit) as Revit shows them, computed from the elements, with the element ids of each row (usable with select). With show, the table opens under the 3D view.",
+            json!({
+                "schedule": { "type": ["integer", "string"], "description": "Index or name of the schedule" },
+                "offset": { "type": "integer" },
+                "limit": { "type": "integer", "description": "Default 100" },
+                "show": { "type": "boolean", "description": "Open the schedule's table in the window" }
+            }), &["schedule"], false),
         tool("find_elements", "Find BIM elements by their properties (category, family, type, level, name, ... as the properties panel shows them). Matching is case-insensitive and on 'contains'. With group_by, returns counts per value instead (e.g. walls per level).",
             json!({
                 "text": { "type": "string", "description": "Any property value contains this (or the element id)" },

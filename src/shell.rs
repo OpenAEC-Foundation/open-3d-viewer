@@ -10,7 +10,7 @@ use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
 use openaec_ui::icons::{DomainIcon, Icon};
 use openaec_ui::iced::{Element, Subscription, Task};
-use openaec_ui::{Application, Command, CommandIcon, Language, RibbonGroup, RibbonTab, Theme};
+use openaec_ui::{Application, Command, CommandIcon, Document, DocumentEvent, Language, RibbonGroup, RibbonTab, Theme};
 
 /// Version: OpenAEC calendar versioning (year.ISO week.patch, as `openaec-ui` and Pointcloud).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -177,7 +177,32 @@ impl Application for Studio {
     }
 
     fn workspace(&self, theme: Theme, _l: Language) -> Element<'_, Message> {
-        self.app.viewport_view(viewport_theme(theme).palette(), _l)
+        self.app.workspace_view(viewport_theme(theme).palette(), _l)
+    }
+
+    /// The document tabs once a schedule is open: the model (the 3D view) and the schedules.
+    fn documents(&self) -> Vec<Document> {
+        let app = &self.app;
+        let Some(model) = app.model.as_ref().filter(|_| !app.open_schedules.is_empty()) else { return Vec::new() };
+        let schedules = app.open_schedules.iter().filter_map(|&i| {
+            Some(Document { id: crate::app::tab_id(i), title: app.schedules.get(i)?.name.clone(), dirty: false })
+        });
+        std::iter::once(Document { id: crate::app::VIEW_3D.into(), title: model.file_name(), dirty: false }).chain(schedules).collect()
+    }
+
+    fn active_document(&self) -> Option<String> {
+        Some(self.app.active_schedule.map_or_else(|| crate::app::VIEW_3D.into(), crate::app::tab_id))
+    }
+
+    /// Activating a tab shows it; closing a schedule's tab closes it (the 3D view stays).
+    fn document_event(&mut self, event: DocumentEvent) -> Task<Message> {
+        match event {
+            DocumentEvent::Activate(id) => self.app.update(Message::ShowSchedule(crate::app::tab_schedule(&id))),
+            DocumentEvent::CloseRequested(id) => match crate::app::tab_schedule(&id) {
+                Some(i) => self.app.update(Message::CloseSchedule(i)),
+                None => Task::none(),
+            },
+        }
     }
 
     fn explorer(&self, theme: Theme, _l: Language) -> Element<'_, Message> {

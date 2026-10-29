@@ -1,6 +1,10 @@
 //! Application state, messages and the main window layout:
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
+mod schedules;
+
+pub use schedules::{tab_id, tab_schedule, VIEW_3D};
+
 use crate::explode::{ExplodeIndex, ExplodeMode};
 use crate::export;
 use crate::icons;
@@ -88,8 +92,17 @@ pub struct App {
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
     pub show_grids: bool,
-    /// Explorer groups opened: views, rooms, layers.
-    pub explorer_open: [bool; 3],
+    /// Explorer groups opened: views, rooms, layers, schedules.
+    pub explorer_open: [bool; 4],
+    /// Schedules open in a document tab, in tab order, and the one shown under the viewport.
+    pub open_schedules: Vec<usize>,
+    pub active_schedule: Option<usize>,
+    /// The table of the shown schedule: scrolled offset and height (logical pixels).
+    pub schedule_scroll: (f32, f32),
+    /// The schedules of the model, once computed (they follow the model), and whether they are
+    /// being computed.
+    pub schedules: Vec<crate::model::Schedule>,
+    pub schedules_pending: bool,
     /// Measurements shown in the viewport (made through remote control).
     pub measurements: Vec<crate::annotations::Measurement>,
     /// Where the viewport sits in the window (logical pixels), to cut it out of screenshots.
@@ -139,8 +152,18 @@ pub enum Message {
     /// Show a view saved in the file.
     ApplyView(usize),
     ToggleGrids,
-    /// Open or close an explorer group (0 views, 1 rooms, 2 layers).
+    /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules).
     ToggleExplorer(usize),
+    /// Open a schedule in its document tab.
+    OpenSchedule(usize),
+    /// Show a schedule's tab (`None`: the 3D view alone).
+    ShowSchedule(Option<usize>),
+    CloseSchedule(usize),
+    /// Select the elements of a schedule row: schedule, row.
+    ScheduleRow(usize, usize),
+    ScheduleScroll(scrollable::Viewport),
+    /// The schedules of a model (by id), computed.
+    Schedules(u64, Vec<crate::model::Schedule>),
     ToggleSection,
     ResetSection,
     SectionToSelection,
@@ -246,7 +269,12 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
-            explorer_open: [true, false, true],
+            explorer_open: [true, false, true, false],
+            open_schedules: Vec::new(),
+            active_schedule: None,
+            schedule_scroll: (0.0, 0.0),
+            schedules: Vec::new(),
+            schedules_pending: false,
             measurements: Vec::new(),
             viewport_origin: (0.0, 0.0),
             remote: Default::default(),
@@ -545,6 +573,10 @@ impl App {
         self.plane = None;
         self.plane_picking = false;
         self.active_view = None;
+        self.open_schedules.clear();
+        self.active_schedule = None;
+        self.schedules.clear();
+        self.schedules_pending = false;
         self.selected = None;
         self.selection.clear();
         self.measure.reset();
@@ -587,7 +619,7 @@ impl App {
             Message::Loaded(Ok(model)) => {
                 self.set_model(model);
                 self.remote_loaded();
-                return self.shot_after_delay();
+                return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
                 self.status = Status::Error(e);
@@ -717,6 +749,17 @@ impl App {
             Message::ToggleExplorer(i) => {
                 if let Some(open) = self.explorer_open.get_mut(i) {
                     *open = !*open;
+                }
+            }
+            Message::OpenSchedule(i) => return self.open_schedule(i),
+            Message::ShowSchedule(i) => return self.show_schedule(i),
+            Message::CloseSchedule(i) => return self.close_schedule(i),
+            Message::ScheduleRow(s, r) => self.select_row(s, r),
+            Message::ScheduleScroll(v) => return self.scrolled(v),
+            Message::Schedules(id, schedules) => {
+                if self.model.as_ref().is_some_and(|m| m.id == id) {
+                    self.schedules = schedules;
+                    self.schedules_pending = false;
                 }
             }
             Message::ToggleSection => {
@@ -918,7 +961,7 @@ impl App {
         let p = self.theme.palette();
         let body = row![]
             .push(self.show_layers.then(|| self.layers_panel(p)))
-            .push(self.viewport_view(p, standalone_language()))
+            .push(self.workspace_view(p, standalone_language()))
             .push(self.show_properties.then(|| self.properties_panel(p)))
             .height(Fill);
         column![self.ribbon(p), body, self.status_bar(p)].into()
@@ -1190,6 +1233,8 @@ impl App {
                 }
             }
         }
+
+        body = self.schedules_group(p, l, &query, body);
 
         // rooms, by level (low to high, then rooms without a level)
         let rooms = &model.project.rooms;

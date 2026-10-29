@@ -1,34 +1,52 @@
 name: Build
 
-# Tests, the web build check and the desktop app for Windows, Linux and macOS. A tag v* also
-# makes a draft release with the desktop apps. (The Revit build, `revit/`, needs the private
-# rvt-reader and is built locally.)
+# Tests, the web build check and the desktop app for Windows, Linux and macOS, on every push to
+# main and every pull request. Releases come from release.yml (a tag vYYYY.W.N). The desktop app
+# includes Revit through the private rvt-dll library.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      sign_build_run_id:
+        description: 'Sign a successful Build run without rebuilding (leave empty for normal builds)'
+        type: string
+        default: ''
+      expected_head_sha:
+        description: 'Full source commit SHA required when signing an existing run'
+        type: string
+        default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
+    if: ${{ !inputs.sign_build_run_id }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Read-only access to standalone libraries
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
+          log-public-key: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: swatinem/rust-cache@v2
       - name: Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev libgtk-3-dev
+      - name: README images
+        run: python3 scripts/build_readme_images.py --check
       - name: Tests
-        run: cargo test --release --locked
+        run: |
+          cargo test --release --locked
+          cargo test --release --locked -p openaec-ui --lib
       - name: Web build (wasm32)
         run: cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
 
@@ -53,6 +71,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v5
+      - name: Read-only access to standalone libraries
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
+          log-public-key: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
       - name: Linux dependencies
@@ -73,17 +96,52 @@ jobs:
           path: ${{ matrix.archive }}
           if-no-files-found: error
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: desktop
-    runs-on: ubuntu-latest
+  sign-windows:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_build_run_id != '' }}
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.sign_build_run_id }}
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT || vars.AZURE_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || secrets.AZURE_ACCOUNT || vars.AZURE_ACCOUNT }}
+      AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME || secrets.AZURE_PROFILE || vars.AZURE_PROFILE }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - name: Check organization signing access
+        shell: pwsh
+        run: ./scripts/windows-sign.ps1 -Check
+      - name: Validate successful build provenance
+        shell: pwsh
+        run: |
+          if ($env:SOURCE_RUN_ID -notmatch '^\d+$' -or $env:EXPECTED_HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw 'A numeric run ID and full source SHA are required.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read source build.' }
+          if ($run.head_sha -ne $env:EXPECTED_HEAD_SHA -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/build.yml' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Source must be the expected successful Build run from this repository.' }
+      - name: Download Windows build
+        shell: pwsh
+        run: |
+          gh run download $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY --name open-3d-viewer-windows-x64.zip --dir unsigned
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot download source artifact.' }
+          Expand-Archive -LiteralPath unsigned/open-3d-viewer-windows-x64.zip -DestinationPath signed -ErrorAction Stop
+      - name: Sign and verify both executables
+        shell: pwsh
+        run: |
+          ./scripts/windows-sign.ps1 -Files signed/open-3d-viewer.exe,signed/open-3d-viewer-mcp.exe
+          $signatures = Get-ChildItem signed/*.exe | ForEach-Object {
+            $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
+            @{ file = $_.Name; status = [string]$signature.Status; subject = $signature.SignerCertificate.Subject; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+          }
+          @{ sourceRun = $env:SOURCE_RUN_ID; sourceCommit = $env:EXPECTED_HEAD_SHA; signatures = @($signatures) } | ConvertTo-Json -Depth 4 | Set-Content signed/BUILD-INFO.json -Encoding utf8
+          Compress-Archive -Path signed/* -DestinationPath open-3d-viewer-windows-x64-signed.zip
+      - uses: actions/upload-artifact@v4
         with:
-          path: artifacts
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: artifacts/*
+          name: open-3d-viewer-windows-x64-signed.zip
+          path: open-3d-viewer-windows-x64-signed.zip
+          if-no-files-found: error

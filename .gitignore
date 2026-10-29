@@ -1,6 +1,5 @@
 # Cargo build output (the viewer and the Revit build)
 /target/
-/revit/target/
 
 # Web build output (trunk)
 /dist/

@@ -1,0 +1,222 @@
+{
+  "product": "Open 3D Viewer Studio",
+  "version": "2026.44.10",
+  "tagline": {
+    "en": "View, measure and section building models, on the desktop and in the browser.",
+    "nl": "Bouwmodellen bekijken, meten en doorsnijden, op de desktop en in de browser."
+  },
+  "interface_language": "en",
+  "size": [
+    1920,
+    1200
+  ],
+  "fps": 30,
+  "duration_s": 40.0,
+  "links": {
+    "web": "https://open-3d-viewer.open-aec.com",
+    "download": "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest",
+    "repository": "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+  },
+  "license": "LGPL-3.0-or-later",
+  "brand": {
+    "accent": "#D97706",
+    "navy": "#0F1B2D",
+    "fonts": [
+      "assets/fonts/Inter-Regular.ttf",
+      "assets/fonts/Inter-SemiBold.ttf"
+    ],
+    "logo": "assets/logo.svg",
+    "app_icon": "assets/icons/icon.png"
+  },
+  "scenes": [
+    {
+      "id": "title",
+      "kind": "card",
+      "start_s": 0.0,
+      "duration_s": 3.0,
+      "still": "stills/01-title.jpg",
+      "title": {
+        "en": "Open 3D Viewer Studio",
+        "nl": "Open 3D Viewer Studio"
+      },
+      "lines": {
+        "en": [
+          "View, measure and section building models,",
+          "on the desktop and in the browser."
+        ],
+        "nl": [
+          "Bouwmodellen bekijken, meten en doorsnijden,",
+          "op de desktop en in de browser."
+        ]
+      }
+    },
+    {
+      "id": "open-and-orbit",
+      "kind": "clip",
+      "start_s": 3.0,
+      "duration_s": 5.0,
+      "still": "stills/02-open-and-orbit.jpg",
+      "clip": "clips/02-open-and-orbit.mp4",
+      "caption": {
+        "en": "Open SketchUp, Tekla, glTF, OBJ, STL and PLY",
+        "nl": "Open SketchUp, Tekla, glTF, OBJ, STL en PLY"
+      },
+      "notes": "test-models/test-kavel.skp, one turn around the model"
+    },
+    {
+      "id": "render-modes",
+      "kind": "still",
+      "start_s": 8.0,
+      "duration_s": 1.2,
+      "still": "stills/03-render-modes.jpg",
+      "caption": {
+        "en": "Solid, wireframe and edges",
+        "nl": "Volledig, draadmodel en randen"
+      }
+    },
+    {
+      "id": "views",
+      "kind": "still",
+      "start_s": 9.2,
+      "duration_s": 1.4,
+      "still": "stills/04-views.jpg",
+      "caption": {
+        "en": "Standard views, perspective or orthographic",
+        "nl": "Standaardaanzichten, perspectief of orthografisch"
+      },
+      "notes": "top view, orthographic"
+    },
+    {
+      "id": "section-box",
+      "kind": "clip",
+      "start_s": 10.6,
+      "duration_s": 5.67,
+      "still": "stills/05-section-box.jpg",
+      "clip": "clips/05-section-box.mp4",
+      "caption": {
+        "en": "Cut it open with a section box",
+        "nl": "Snijd het open met een doorsnedekader"
+      },
+      "notes": "the top of the box goes down from the roof, then the camera turns"
+    },
+    {
+      "id": "explode",
+      "kind": "clip",
+      "start_s": 16.27,
+      "duration_s": 4.23,
+      "still": "stills/06-explode.jpg",
+      "clip": "clips/06-explode.mp4",
+      "caption": {
+        "en": "Pull it apart per storey or per element",
+        "nl": "Uit elkaar per verdieping of per element"
+      },
+      "notes": "test-models/bathroom-3d.skp, from 0 to 70 % per element"
+    },
+    {
+      "id": "measure",
+      "kind": "still",
+      "start_s": 20.5,
+      "duration_s": 2.5,
+      "still": "stills/07-measure.jpg",
+      "caption": {
+        "en": "Measure distances, angles and areas",
+        "nl": "Meet afstanden, hoeken en oppervlakten"
+      },
+      "notes": "height and width of the bathroom, front view"
+    },
+    {
+      "id": "themes",
+      "kind": "still",
+      "start_s": 23.0,
+      "duration_s": 2.5,
+      "still": "stills/08-themes.jpg",
+      "caption": {
+        "en": "Light, Dark, Blueprint and high contrast",
+        "nl": "Licht, Donker, Blueprint en hoog contrast"
+      },
+      "notes": "docs/images/readme/themes.png"
+    },
+    {
+      "id": "revit",
+      "kind": "still",
+      "start_s": 25.5,
+      "duration_s": 2.0,
+      "still": "stills/09-revit.jpg",
+      "caption": {
+        "en": "Revit models: levels, views and schedules",
+        "nl": "Revit-modellen: niveaus, aanzichten en staten"
+      },
+      "notes": "snowdon_arch_2025.rvt (Autodesk sample), Revit build"
+    },
+    {
+      "id": "schedule",
+      "kind": "still",
+      "start_s": 27.5,
+      "duration_s": 2.0,
+      "still": "stills/10-schedule.jpg",
+      "caption": {
+        "en": "A schedule opens as a table under the 3D view",
+        "nl": "Een staat opent als tabel onder de 3D-weergave"
+      },
+      "notes": "Door Schedule"
+    },
+    {
+      "id": "schedule-select",
+      "kind": "still",
+      "start_s": 29.5,
+      "duration_s": 3.0,
+      "still": "stills/11-schedule-select.jpg",
+      "caption": {
+        "en": "A row selects its doors",
+        "nl": "Een rij selecteert de deuren"
+      },
+      "notes": "the first row selected, shown in a section box"
+    },
+    {
+      "id": "mcp",
+      "kind": "card",
+      "start_s": 32.5,
+      "duration_s": 3.5,
+      "still": "stills/12-mcp.jpg",
+      "title": {
+        "en": "Driven by AI agents",
+        "nl": "Bestuurd door AI-agents"
+      },
+      "lines": {
+        "en": [
+          "An MCP server lets Claude and other agents open,",
+          "look around, select and measure.",
+          "This video was made that way."
+        ],
+        "nl": [
+          "Via een MCP-server openen Claude en andere agents",
+          "modellen, kijken rond, selecteren en meten.",
+          "Deze video is zo gemaakt."
+        ]
+      }
+    },
+    {
+      "id": "end",
+      "kind": "card",
+      "start_s": 36.0,
+      "duration_s": 4.0,
+      "still": "stills/13-end.jpg",
+      "title": {
+        "en": "Try it in your browser",
+        "nl": "Probeer het in je browser"
+      },
+      "lines": {
+        "en": [
+          "open-3d-viewer.open-aec.com",
+          "",
+          "Free and open (LGPL-3.0), part of the OpenAEC Foundation."
+        ],
+        "nl": [
+          "open-3d-viewer.open-aec.com",
+          "",
+          "Vrij en open (LGPL-3.0), onderdeel van de OpenAEC Foundation."
+        ]
+      }
+    }
+  ]
+}

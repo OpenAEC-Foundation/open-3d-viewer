@@ -17,7 +17,7 @@ use wasm_bindgen_futures::JsFuture;
 /// Starts the app in the page.
 pub fn main() {
     console_error_panic_hook::set_once();
-    if let Err(e) = openaec_ui::run(shell::Studio { app: App::default() }, None) {
+    if let Err(e) = shell::run(shell::Studio::new(App::default()), None) {
         web_sys::console::error_1(&format!("Open 3D Viewer: {e}").into());
     }
 }

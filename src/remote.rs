@@ -5,6 +5,7 @@
 
 use crate::annotations::Measurement;
 use crate::app::{face_at, pick_triangle, App, Message, Status};
+use crate::explode::ExplodeMode;
 use crate::model::{Bounds, Model, ViewKind};
 use crate::remote_link::{self, Announcement};
 use crate::section::{SectionBox, SectionPlane};
@@ -223,6 +224,11 @@ impl App {
     pub fn remote(&mut self, call: RemoteCall) -> Task<Message> {
         match call.cmd.as_str() {
             "open_file" => return self.remote_open(call),
+            "get_schedule" => {
+                let (answer, task) = self.remote_schedule(&call.args);
+                call.answer(answer);
+                return task;
+            }
             "screenshot" => {
                 self.finish_animation();
                 self.remote.pending_shots.push(call);
@@ -257,6 +263,7 @@ impl App {
             "list_views" => self.list_views(),
             "apply_view" => self.remote_apply_view(a),
             "get_project_info" => self.project_info(),
+            "list_schedules" => self.schedules_json(),
             "find_elements" => self.find_elements(a),
             "get_element" => {
                 let id = a.get("id").and_then(id_of).ok_or("id is required")?;
@@ -273,6 +280,7 @@ impl App {
                 Ok(self.camera_json())
             }
             "set_display" => self.set_display(a),
+            "explode" => self.remote_explode(a),
             "section_box" => self.remote_section_box(a),
             "section_plane" => self.remote_section_plane(a),
             "measure_distance" => self.measure_distance(a),
@@ -988,6 +996,37 @@ impl App {
         }))
     }
 
+    /// The exploded view: on or off, per storey or per element, and how far per axis (percent).
+    fn remote_explode(&mut self, a: &Value) -> Answer {
+        let index = self.explode_index.clone().ok_or("no model is open: call open_file first")?;
+        if let Some(m) = a.get("mode").and_then(Value::as_str) {
+            let mode = match m {
+                "storeys" if index.storeys() == 0 => return Err("this model has no storeys: use mode elements".into()),
+                "storeys" => ExplodeMode::Storeys,
+                "elements" => ExplodeMode::Elements,
+                _ => return Err(format!("unknown mode '{m}': storeys, elements")),
+            };
+            let _ = self.update(Message::ExplodeMode(mode));
+        }
+        if let Some(percent) = a.get("percent").and_then(Value::as_array) {
+            for (axis, value) in percent.iter().enumerate().take(3) {
+                if let Some(v) = value.as_f64() {
+                    let _ = self.update(Message::Explode(axis, v as f32));
+                }
+            }
+        }
+        if let Some(on) = flag(a, "enabled") {
+            if on != self.explode_on {
+                let _ = self.update(Message::ToggleExplode);
+            }
+        }
+        Ok(json!({
+            "enabled": self.explode_on,
+            "mode": match self.explode_mode { ExplodeMode::Storeys => "storeys", ExplodeMode::Elements => "elements" },
+            "percent": self.explode,
+        }))
+    }
+
     // ---- sections ----
 
     fn remote_section_box(&mut self, a: &Value) -> Answer {
@@ -1317,6 +1356,16 @@ mod tests {
         let (call, rx) = RemoteCall::new(cmd, args);
         let _ = app.remote(call);
         rx.try_recv().expect("answered at once")
+    }
+
+    #[test]
+    fn pulls_the_model_apart() {
+        let mut app = app();
+        let on = run(&mut app, "explode", json!({ "enabled": true, "mode": "elements", "percent": [50, null, 20] })).expect("explode");
+        assert_eq!(on, json!({ "enabled": true, "mode": "elements", "percent": [50.0, 0.0, 20.0] }));
+        assert!(run(&mut app, "explode", json!({ "mode": "sideways" })).is_err());
+        let off = run(&mut app, "explode", json!({ "enabled": false })).expect("explode");
+        assert_eq!(off["enabled"], false);
     }
 
     #[test]

@@ -1,26 +1,35 @@
 //! Open 3D Viewer Studio, desktop app (iced + wgpu).
 //!
 //! Usage:
-//!   open-3d-viewer [FILE] [--theme light|forge|night|blueprint] [--no-remote]
+//!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
+//!                  [--language en|nl] [--no-remote]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
-//!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...]
+//!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
+//!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
 
 use crate::app::{self, App, Message};
-use crate::theme::ThemeKind;
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
 use crate::{bench, explode, export, loaders, shell, INTER_REGULAR, INTER_SEMIBOLD};
+use openaec_ui::design::ThemeId;
+use openaec_ui::Language;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Default)]
 struct Args {
     file: Option<PathBuf>,
-    theme: Option<ThemeKind>,
+    theme: Option<ThemeId>,
+    language: Option<Language>,
+    /// For `--screenshot`: the page over the workspace and a schedule to show (Revit).
+    page: shell::Page,
+    schedule: Option<String>,
+    /// For `--screenshot`: recent files, besides FILE.
+    recent: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
@@ -45,7 +54,17 @@ fn parse_args() -> Result<Args, String> {
         let s = a.to_string_lossy().to_string();
         let mut value = || it.next().map(|v| v.to_string_lossy().to_string()).ok_or(format!("{s} needs a value"));
         match s.as_str() {
-            "--theme" => args.theme = Some(ThemeKind::parse(&value()?).ok_or("unknown theme")?),
+            "--theme" => args.theme = Some(shell::theme_from_arg(&value()?).ok_or("unknown theme")?),
+            "--language" => {
+                args.language = Some(match value()?.as_str() {
+                    "en" => Language::English,
+                    "nl" => Language::Dutch,
+                    _ => return Err("--language en|nl".into()),
+                })
+            }
+            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts")?,
+            "--schedule" => args.schedule = Some(value()?),
+            "--recent" => args.recent.push(PathBuf::from(value()?)),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
@@ -88,7 +107,7 @@ fn parse_args() -> Result<Args, String> {
                 })
             }
             "-h" | "--help" => {
-                println!("{}", include_str!("desktop.rs").lines().take(10).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("desktop.rs").lines().take(12).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -137,7 +156,7 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
 fn initial_state(args: &Args) -> App {
     let mut app = App::default();
     if let Some(t) = args.theme {
-        app.theme = t;
+        app.theme = shell::viewport_kind(t);
     }
     if let Some(m) = args.mode {
         app.mode = m;
@@ -149,20 +168,22 @@ fn initial_state(args: &Args) -> App {
     app
 }
 
-/// The application window: the viewer inside the shared OpenAEC shell (`openaec-ui`), with the
-/// preferences (theme, language, scale) in %APPDATA%\OpenAEC\Open 3D Viewer Studio.
+/// The application window: the viewer inside the OpenAEC Blueprint shell (`shell`), with the
+/// preferences and own shortcuts in %APPDATA%\OpenAEC\Open 3D Viewer Studio.
 fn run_app(args: Args) -> iced::Result {
     let mut app = initial_state(&args);
     app.initial_view = args.view;
     app.pending_open = args.file.clone();
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
     app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
-    let prefs = std::env::var_os("APPDATA").map(|d| {
+    let mut studio = shell::Studio::new(app);
+    if let Some(d) = std::env::var_os("APPDATA") {
         let dir = PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio");
         let _ = std::fs::create_dir_all(&dir);
-        dir.join("preferences.json")
-    });
-    openaec_ui::run(shell::Studio { app }, prefs)
+        studio = studio.with_settings_in(dir);
+    }
+    studio.set_look(args.theme, args.language);
+    shell::run(studio, window_icon())
 }
 
 /// The earlier stand-alone window (own ribbon and panels); kept for `--window-screenshot`.
@@ -195,12 +216,18 @@ fn run_app_standalone(args: Args) -> iced::Result {
         .run()
 }
 
-/// Renders one frame of the full UI headlessly (wgpu offscreen) and writes a PNG.
+/// Renders one frame of the whole window headlessly (wgpu offscreen) and writes a PNG.
 fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
-    let mut app = initial_state(args);
     let (w, h) = args.size.unwrap_or((1440.0, 900.0));
-    // Viewport area = window minus side panels, ribbon and status bar (see app.rs)
-    app.viewport_size = (w - 220.0 - 290.0, h - 34.0 - 84.0 - 24.0);
+    let mut studio = shell::Studio::new(initial_state(args));
+    studio.set_look(args.theme, args.language);
+    studio.show(args.page);
+    for path in args.recent.iter().rev().chain(&args.file) {
+        studio.remember(path.clone());
+    }
+    let viewport = studio.viewport_in(w, h);
+    let app = &mut studio.app;
+    app.viewport_size = viewport;
     if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(
@@ -221,25 +248,16 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             }
             app.fit();
         }
+        if let Some(name) = &args.schedule {
+            // the window computes the schedules after the model shows; here, before the frame
+            let model = app.model.clone().ok_or("no model")?;
+            let schedules = model.project.schedules.take().map(|work| work()).unwrap_or_default();
+            let _ = app.update(Message::Schedules(model.id, schedules));
+            let i = app.schedules.iter().position(|s| &s.name == name).ok_or(format!("no schedule {name} in the file"))?;
+            let _ = app.update(Message::OpenSchedule(i));
+        }
     }
-    let theme = app.theme();
-    let settings = iced::Settings {
-        fonts: vec![INTER_REGULAR.into(), INTER_SEMIBOLD.into()],
-        default_font: app::FONT,
-        antialiasing: true,
-        ..Default::default()
-    };
-    let mut ui = iced_test::Simulator::with_size(settings, iced::Size::new(w, h), app.view());
-    let snapshot = ui.snapshot(&theme).map_err(|e| e.to_string())?;
-    // iced_test names the file "<stem>-<renderer>.png"; write it next to OUT and rename.
-    let tmp = out.with_file_name(format!("{}.o3vtmp", out.file_stem().unwrap_or_default().to_string_lossy()));
-    let written = tmp.with_file_name(format!("{}-wgpu.png", tmp.file_stem().unwrap_or_default().to_string_lossy()));
-    let _ = std::fs::remove_file(&written);
-    snapshot.matches_image(&tmp).map_err(|e| e.to_string())?;
-    if !written.exists() {
-        return Err("no wgpu adapter for the headless renderer (tiny-skia cannot draw the 3D viewport)".into());
-    }
-    std::fs::rename(&written, out).map_err(|e| e.to_string())?;
+    studio.snapshot(iced::Size::new(w, h), out)?;
     eprintln!("wrote {}", out.display());
     Ok(())
 }

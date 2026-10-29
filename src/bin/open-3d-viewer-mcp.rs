@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (Revit, SketchUp, glTF, OBJ, STL, PLY). \
+const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
 The scene is Z up, in metres for Revit, SketchUp and glTF. Start with open_file (or get_state to see what is open), \
 then screenshot to look at the viewport. Pixel coordinates (pick, screen points in measure_* and section_plane) are \
 pixels of the last viewport screenshot. Elements (BIM) have ids and properties: find them with find_elements, \
@@ -66,7 +66,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 fn tools() -> Vec<Value> {
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a 3D model file in the viewer (as File > Open) and wait until it is loaded. Formats: .rvt .rfa .skp .gltf .glb .obj .stl .ply. Returns the model summary.",
+        tool("open_file", "Open a 3D model file in the viewer (as File > Open) and wait until it is loaded. Formats: .ifc .rvt .rfa .skp .gltf .glb .obj .stl .ply. Returns the model summary.",
             json!({ "path": { "type": "string", "description": "Absolute path of the file" } }), &["path"], false),
         tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
             json!({
@@ -86,6 +86,14 @@ fn tools() -> Vec<Value> {
         tool("apply_view", "Show a saved view: its camera and what it shows (section box, plan range).",
             json!({ "view": { "type": ["integer", "string"], "description": "Index or name of the view" } }), &["view"], false),
         tool("get_project_info", "Project data from the file: project information, levels with elevations, phases, grid lines and rooms.", json!({}), &[], true),
+        tool("list_schedules", "Schedules in the file (Revit): index, name, column headings and row count. They are computed a few seconds after the model is in ('computing': true until then).", json!({}), &[], true),
+        tool("get_schedule", "The rows of a schedule (Revit) as Revit shows them, computed from the elements, with the element ids of each row (usable with select). With show, the table opens under the 3D view.",
+            json!({
+                "schedule": { "type": ["integer", "string"], "description": "Index or name of the schedule" },
+                "offset": { "type": "integer" },
+                "limit": { "type": "integer", "description": "Default 100" },
+                "show": { "type": "boolean", "description": "Open the schedule's table in the window" }
+            }), &["schedule"], false),
         tool("find_elements", "Find BIM elements by their properties (category, family, type, level, name, ... as the properties panel shows them). Matching is case-insensitive and on 'contains'. With group_by, returns counts per value instead (e.g. walls per level).",
             json!({
                 "text": { "type": "string", "description": "Any property value contains this (or the element id)" },
@@ -132,6 +140,12 @@ fn tools() -> Vec<Value> {
                 "mode": { "type": "string", "enum": ["solid", "wireframe", "edges"] },
                 "grid": { "type": "boolean" }, "grid_lines": { "type": "boolean" },
                 "flip_up": { "type": "boolean" }, "section_fill": { "type": "boolean" }
+            }), &[], false),
+        tool("explode", "The exploded view: pull the model apart per storey (Revit levels) or per element, by a percentage per axis, and switch it on or off. Frame it afterwards with zoom_to.",
+            json!({
+                "enabled": { "type": "boolean" },
+                "mode": { "type": "string", "enum": ["storeys", "elements"] },
+                "percent": { "type": "array", "items": { "type": ["number", "null"] }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] from 0 to 100; null keeps a value" }
             }), &[], false),
         tool("section_box", "The section box: switch it on or off, fit it around the model, selection or elements, set its limits (min/max [x, y, z] in the box's frame; null keeps a value) or turn it about the vertical. Everything outside the box is cut away.",
             json!({

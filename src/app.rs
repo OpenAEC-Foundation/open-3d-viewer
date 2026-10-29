@@ -2017,7 +2017,8 @@ mod tests {
 
     #[test]
     fn ribbon_buttons_send_messages() {
-        let app = App::default();
+        let mut app = App::default();
+        app.set_model(two_squares());
         let mut ui = simulator(&app);
         ui.click("Wireframe").expect("Wireframe button");
         ui.click("Grid").expect("Grid button");

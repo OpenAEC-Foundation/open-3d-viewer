@@ -48,7 +48,7 @@ tobj = { version = "4", default-features = false }
 stl_io = "0.11"
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "24d746cc8ad654593bd605e8b97e54464587b60c" }
+tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "baa4a11dc9646b7224f47592f98c7ed37c0a74c8" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "9b972341031fff12f7405f200feb51792bab1ad4" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

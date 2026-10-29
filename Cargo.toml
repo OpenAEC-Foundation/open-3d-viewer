@@ -52,7 +52,7 @@ roxmltree = "0.20"
 acadrust = { git = "https://github.com/HakanSeven12/acadrust", rev = "299dc758f958b08accc35a10d98b83e228fafc89", default-features = false }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "6feb25348ea2e2c145b369e9797315ac02def12e" }
+tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

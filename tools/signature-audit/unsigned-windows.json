@@ -1,0 +1,10 @@
+[
+  {
+    "tool": "Open 3D Viewer",
+    "repo": "OpenAEC-Foundation/open-3d-viewer",
+    "tag": "v0.1.0-alpha",
+    "name": "Open.3D.Viewer.Studio_0.1.0_x64-setup.exe",
+    "url": "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/download/v0.1.0-alpha/Open.3D.Viewer.Studio_0.1.0_x64-setup.exe",
+    "sha256": "e8937d9e3d7b532bddb9ff2cf8c6ac18efa35c4eb7cf3d8e375d02140c8b5b3e"
+  }
+]

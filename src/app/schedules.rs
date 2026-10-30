@@ -72,6 +72,10 @@ impl App {
 
     /// Shows a schedule's tab, from its top (`None`: the 3D view alone).
     pub(super) fn show_schedule(&mut self, i: Option<usize>) -> Task<Message> {
+        // a schedule's tab replaces a shown sheet
+        if i.is_some() {
+            self.active_sheet = None;
+        }
         if self.active_schedule == i {
             return Task::none();
         }
@@ -138,8 +142,12 @@ impl App {
         body
     }
 
-    /// The workspace: the viewport, with the table of the shown schedule under it.
+    /// The workspace: the shown sheet, or the viewport with the table of the shown schedule
+    /// under it.
     pub fn workspace_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i)) {
+            return self.sheet_view_element(p, l, sheet);
+        }
         let viewport = self.viewport_view(p, l);
         let Some((i, s)) = self.active_schedule.and_then(|i| Some((i, self.schedules.get(i)?))) else {
 

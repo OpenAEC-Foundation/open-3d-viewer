@@ -282,7 +282,6 @@ pub struct Studio {
     keymap_path: Option<PathBuf>,
     keymap: Keymap,
     shortcuts: sc::Editor,
-    ribbon_tab: usize,
     backstage: bool,
     dialog: Option<Dialog>,
     settings_page: SettingsPage,
@@ -302,7 +301,6 @@ impl Studio {
             keymap_path: None,
             keymap: Keymap::default(),
             shortcuts: sc::Editor::default(),
-            ribbon_tab: 0,
             backstage: false,
             dialog: None,
             settings_page: SettingsPage::General,
@@ -525,10 +523,8 @@ impl Studio {
                 }
                 return self.app.update(message).map(Msg::App);
             }
-            Msg::RibbonTab(i) => {
-                self.ribbon_tab = i;
-                self.backstage = false;
-            }
+            // one ribbon tab: choosing it closes Bestand
+            Msg::RibbonTab(_) => self.backstage = false,
             Msg::Backstage(open) => self.backstage = open,
             Msg::OpenRecent(path) => return self.update(Msg::App(Message::Open(path))),
             Msg::Dialog(dialog) => {
@@ -608,12 +604,22 @@ impl Studio {
                     self.save_prefs();
                 }
             }
+            // document tabs: the 3D view, the open schedules, then the open sheets
             Msg::SelectTab(i) => {
+                let schedules = self.app.open_schedules.len();
+                if let Some(&sheet) = i.checked_sub(1 + schedules).and_then(|k| self.app.open_sheets.get(k)) {
+                    return self.update(Msg::App(Message::ShowSheet(Some(sheet))));
+                }
                 let schedule = i.checked_sub(1).and_then(|i| self.app.open_schedules.get(i).copied());
+                self.app.active_sheet = None;
                 return self.update(Msg::App(Message::ShowSchedule(schedule)));
             }
             Msg::CloseTab(i) => {
                 // the 3D view (tab 0) stays open
+                let schedules = self.app.open_schedules.len();
+                if let Some(&sheet) = i.checked_sub(1 + schedules).and_then(|k| self.app.open_sheets.get(k)) {
+                    return self.update(Msg::App(Message::CloseSheet(sheet)));
+                }
                 if let Some(&schedule) = i.checked_sub(1).and_then(|i| self.app.open_schedules.get(i)) {
                     return self.update(Msg::App(Message::CloseSchedule(schedule)));
                 }
@@ -715,14 +721,14 @@ impl Studio {
         let look = self.look();
         let l = self.l();
         let c = look.color;
-        let tabs = [l.text("Start", "Home"), l.text("Beeld", "View"), l.text("Meten", "Measure")];
+        let tabs = [l.text("Start", "Home")];
         let mut left = vec![self.status_text()];
         if !self.app.selection.is_empty() {
             left.push(format!("{} {}", self.app.selection.len(), l.text("geselecteerd", "selected")));
         }
         let screen = column![
             self.title_bar(look),
-            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, self.ribbon_tab, Msg::RibbonTab),
+            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, 0, Msg::RibbonTab),
             // Bestand takes the place of the ribbon and the documents until it closes
             if self.backstage { self.backstage_view(look) } else { column![self.ribbon(look), self.document_area(look)].into() },
             w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]),
@@ -767,25 +773,23 @@ impl Studio {
         let l = self.l();
         let large = |id: &str| cm::ribbon_large(look, &self.command(id));
         let smalls = |ids: &[&str]| -> Element<'_, Msg> { column(ids.iter().map(|id| cm::ribbon_small(look, &self.command(id)))).spacing(2).into() };
-        let groups = match self.ribbon_tab {
-            0 => vec![
-                w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), large("file.add"), large("file.save-as")]),
-                w::ribbon_group(look, l.text("Weergave", "Display"), vec![large("view.solid"), large("view.wireframe"), large("view.edges")]),
-                w::ribbon_group(look, l.text("Tonen", "Show"), vec![large("view.grid"), smalls(&["view.grid-lines", "view.flip-up"])]),
-                w::ribbon_group(look, l.text("Panelen", "Panels"), vec![smalls(&["view.left", "view.right"])]),
-            ],
-            1 => vec![
-                w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right"])]),
-                w::ribbon_group(look, l.text("Projectie", "Projection"), vec![smalls(&["camera.perspective", "camera.ortho"])]),
-                w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
-                w::ribbon_group(look, l.text("Uit elkaar", "Explode"), vec![large("view.explode")]),
-                w::ribbon_group(look, l.text("Meten", "Measure"), vec![large("measure.clear-saved")]),
-            ],
-            _ => vec![
-                w::ribbon_group(look, l.text("Meten", "Measure"), Tool::ALL.iter().map(|t| large(Self::tool_id(*t))).collect()),
-                w::ribbon_group(look, l.text("Metingen", "Measurements"), vec![large("measure.clear")]),
-            ],
-        };
+        // One tab: the main command of a group large, the rest small in columns of three
+        let tools: Vec<&str> = Tool::ALL.iter().map(|t| Self::tool_id(*t)).collect();
+        let (first_tools, more_tools) = tools.split_at(3.min(tools.len()));
+        let mut measure = vec![smalls(first_tools)];
+        if !more_tools.is_empty() {
+            measure.push(smalls(more_tools));
+        }
+        measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
+        let groups = vec![
+            w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+            w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
+            w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
+            w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+            w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
+            w::ribbon_group(look, l.text("Meten", "Measure"), measure),
+            w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
+        ];
         w::ribbon(look, groups)
     }
 
@@ -867,13 +871,20 @@ impl Studio {
         } else {
             app.workspace_view(p, l).map(Msg::App)
         };
-        // document tabs once a schedule is open: the model (the 3D view, pinned) and the schedules
+        // document tabs once a schedule or sheet is open: the model (the 3D view, pinned), the
+        // schedules and the sheets
         let model_name = app.model.as_ref().and_then(|m| m.path.file_name()).and_then(|n| n.to_str()).unwrap_or("3D");
         let mut middle = column![].width(Length::Fill);
-        if app.model.is_some() && !app.open_schedules.is_empty() {
+        let all_sheets = app.model.as_ref().map_or(&[][..], |m| &m.project.sheets[..]);
+        if app.model.is_some() && (!app.open_schedules.is_empty() || !app.open_sheets.is_empty()) {
             let schedules = app.open_schedules.iter().filter_map(|&i| app.schedules.get(i)).map(|s| DocumentTab::new(&s.name, false));
-            let tabs: Vec<DocumentTab<'_>> = std::iter::once(DocumentTab::pinned(model_name)).chain(schedules).collect();
-            let active = app.active_schedule.and_then(|s| app.open_schedules.iter().position(|&o| o == s)).map_or(0, |i| i + 1);
+            let sheets = app.open_sheets.iter().filter_map(|&i| all_sheets.get(i)).map(|s| DocumentTab::new(&s.title, false));
+            let tabs: Vec<DocumentTab<'_>> = std::iter::once(DocumentTab::pinned(model_name)).chain(schedules).chain(sheets).collect();
+            let active = match (app.active_sheet, app.active_schedule) {
+                (Some(s), _) => app.open_sheets.iter().position(|&o| o == s).map_or(0, |i| i + 1 + app.open_schedules.len()),
+                (None, Some(s)) => app.open_schedules.iter().position(|&o| o == s).map_or(0, |i| i + 1),
+                _ => 0,
+            };
             middle = middle.push(w::document_tabs(look, &tabs, active, small("window.close"), Msg::SelectTab, Msg::CloseTab, Msg::SelectTab));
         }
         let middle = middle.push(workspace);
@@ -1047,11 +1058,8 @@ mod tests {
 
     #[test]
     fn every_ribbon_and_title_command_exists() {
-        let mut studio = Studio::new(App::default());
-        for tab in 0..3 {
-            studio.ribbon_tab = tab;
-            let _ = studio.view();
-        }
+        let studio = Studio::new(App::default());
+        let _ = studio.view();
         let _ = studio.backstage_view(studio.look());
     }
 

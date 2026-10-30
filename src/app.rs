@@ -2,6 +2,7 @@
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
 mod schedules;
+mod sheets;
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
@@ -110,8 +111,11 @@ pub struct App {
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
     pub show_grids: bool,
-    /// Explorer groups opened: views, rooms, layers, schedules.
-    pub explorer_open: [bool; 4],
+    /// Explorer groups opened: views, rooms, layers, schedules, sheets.
+    pub explorer_open: [bool; 5],
+    /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
+    pub open_sheets: Vec<usize>,
+    pub active_sheet: Option<usize>,
     /// Schedules open in a document tab, in tab order, and the one shown under the viewport.
     pub open_schedules: Vec<usize>,
     pub active_schedule: Option<usize>,
@@ -184,8 +188,15 @@ pub enum Message {
     /// Show a view saved in the file.
     ApplyView(usize),
     ToggleGrids,
-    /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules).
+    /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules, 4 sheets).
     ToggleExplorer(usize),
+    /// Open a sheet in its document tab.
+    OpenSheet(usize),
+    /// Show a sheet's tab (`None`: not a sheet).
+    ShowSheet(Option<usize>),
+    CloseSheet(usize),
+    /// A view on a sheet clicked: show it (index in `Model::views`).
+    SheetView(usize),
     /// Open a schedule in its document tab.
     OpenSchedule(usize),
     /// Show a schedule's tab (`None`: the 3D view alone).
@@ -305,7 +316,9 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
-            explorer_open: [false, false, true, false],
+            explorer_open: [false, false, true, false, false],
+            open_sheets: Vec::new(),
+            active_sheet: None,
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
@@ -689,6 +702,8 @@ impl App {
         self.active_schedule = None;
         self.schedules.clear();
         self.schedules_pending = false;
+        self.open_sheets.clear();
+        self.active_sheet = None;
         self.explorer_open[0] = false;
         self.selected = None;
         self.selection.clear();
@@ -929,6 +944,10 @@ impl App {
                     *open = !*open;
                 }
             }
+            Message::OpenSheet(i) => return self.open_sheet(i),
+            Message::ShowSheet(i) => return self.show_sheet(i),
+            Message::CloseSheet(i) => return self.close_sheet(i),
+            Message::SheetView(view) => return self.sheet_view(view),
             Message::OpenSchedule(i) => return self.open_schedule(i),
             Message::ShowSchedule(i) => return self.show_schedule(i),
             Message::CloseSchedule(i) => return self.close_schedule(i),
@@ -1504,6 +1523,7 @@ impl App {
         }
 
         body = self.schedules_group(p, l, &query, body);
+        body = self.sheets_group(p, l, &query, body);
 
         // rooms, by level (low to high, then rooms without a level)
         let rooms = &model.project.rooms;

@@ -6,7 +6,8 @@
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
-//!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--recent PATH]...
+//!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER]
+//!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE [--frames 300]
@@ -26,9 +27,11 @@ struct Args {
     file: Option<PathBuf>,
     theme: Option<ThemeId>,
     language: Option<Language>,
-    /// For `--screenshot`: the page over the workspace and a schedule to show (Revit).
+    /// For `--screenshot`: the page over the workspace and a schedule or sheet (by number) to show
+    /// (Revit).
     page: shell::Page,
     schedule: Option<String>,
+    sheet: Option<String>,
     /// For `--screenshot`: recent files, besides FILE.
     recent: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
@@ -68,6 +71,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts")?,
             "--schedule" => args.schedule = Some(value()?),
+            "--sheet" => args.sheet = Some(value()?),
             "--recent" => args.recent.push(PathBuf::from(value()?)),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
@@ -265,6 +269,11 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let _ = app.update(Message::Schedules(model.id, schedules));
             let i = app.schedules.iter().position(|s| &s.name == name).ok_or(format!("no schedule {name} in the file"))?;
             let _ = app.update(Message::OpenSchedule(i));
+        }
+        if let Some(number) = &args.sheet {
+            let model = app.model.clone().ok_or("no model")?;
+            let i = model.project.sheets.iter().position(|s| &s.number == number).ok_or(format!("no sheet {number} in the file"))?;
+            let _ = app.update(Message::OpenSheet(i));
         }
     }
     studio.snapshot(iced::Size::new(w, h), out)?;

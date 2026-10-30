@@ -3,7 +3,8 @@
 
 use crate::loaders::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{
-    y_up_to_z_up, GridLine, Later, Layer, PlanRange, ProjectData, Room, SavedView, Schedule, ScheduleRow, ViewCamera, ViewKind,
+    y_up_to_z_up, GridLine, Later, Layer, PlanRange, ProjectData, Room, SavedView, Schedule, ScheduleRow, Sheet, SheetRect,
+    SheetViewport, ViewCamera, ViewKind,
 };
 use rvt_model::{FieldValue, ObjectView};
 use std::collections::HashMap;
@@ -37,10 +38,8 @@ impl Loader for RvtLoader {
         progress.set(Phase::Convert);
         // `scene` returns view coordinates: metres, Y up (x, z, -y)
         let scene = rvt_export::mesh::scene(&doc);
-        let views = saved_views(&doc);
+        let (view_ids, views): (Vec<u64>, Vec<SavedView>) = saved_views(&doc).into_iter().unzip();
         let mut project = project_data(&doc, &scene.levels);
-        // the schedules take seconds on a large project: computed once the model shows
-        project.schedules = Later::new(move || schedules(&doc));
         let layers = scene
             .batches
             .into_iter()
@@ -64,7 +63,10 @@ impl Loader for RvtLoader {
                     hidden: false,
                 }
             })
-            .collect();
+            .collect::<Vec<Layer>>();
+        project.sheets = sheets(&doc, &view_ids, &views, &layers);
+        // the schedules take seconds on a large project: computed once the model shows
+        project.schedules = Later::new(move || schedules(&doc));
         Ok(Loaded { layers, views, project })
     }
 }
@@ -279,7 +281,7 @@ fn natural_key(s: &str) -> (u64, String) {
 
 /// The model views of the file (beta) in world coordinates: the mesh is in Revit's model
 /// coordinates scaled from feet to metres, Z up, so the views convert the same way.
-fn saved_views(doc: &rvt_read::Document) -> Vec<SavedView> {
+fn saved_views(doc: &rvt_read::Document) -> Vec<(u64, SavedView)> {
     use rvt_export::views::{OrientedBox, ViewKind as K};
     const FT: f32 = 0.3048;
     let v3 = |p: [f64; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
@@ -333,7 +335,73 @@ fn saved_views(doc: &rvt_read::Document) -> Vec<SavedView> {
                     out.clip = frame(crop);
                 }
             }
-            Some(out)
+            Some((v.id, out))
+        })
+        .collect()
+}
+
+/// The sheets (beta) in sheet metres. The paper comes from the title block's size: its
+/// insertion point is the paper's lower right corner (3077 R26), else another corner or the
+/// centre, whichever holds the most viewports. A viewport without an active crop region gets the
+/// size of the building as its view sees it (`estimated`, centred on its position).
+fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer]) -> Vec<Sheet> {
+    use rvt_export::views::ViewKind as K;
+    const FT: f32 = 0.3048;
+    let index: HashMap<u64, usize> = view_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+    // the building without its site: the terrain reaches far beyond what a view shows
+    let mut model = crate::model::Bounds::empty();
+    for p in layers.iter().filter(|l| !l.name.contains("Topograph")).flat_map(|l| l.positions.chunks_exact(3)) {
+        model.extend([p[0], p[1], p[2]]);
+    }
+    let [dx, dy, dz] = if model.is_valid() { model.size() } else { [10.0; 3] };
+    rvt_export::sheets::sheets(doc)
+        .into_iter()
+        .map(|s| {
+            let viewports: Vec<SheetViewport> = s
+                .viewports
+                .iter()
+                .map(|v| {
+                    let view = index.get(&v.view).copied();
+                    let position = [v.position[0] as f32 * FT, v.position[1] as f32 * FT];
+                    let scale = v.scale as f32;
+                    let (rect, estimated) = match v.rect {
+                        Some([lo, hi]) => (SheetRect { min: lo.map(|x| x as f32 * FT), max: hi.map(|x| x as f32 * FT) }, false),
+                        None => {
+                            // the model as the view sees it: from above for a plan, across the view
+                            // direction (and the full height) for the others
+                            let seen = match (&v.view_kind, view.and_then(|i| views[i].camera.as_ref())) {
+                                (k, _) if k.is_plan() => [dx, dy],
+                                (_, Some(c)) => [dx * c.forward[1].abs() + dy * c.forward[0].abs(), dz],
+                                (K::ThreeD, None) => [dx.max(dy), dz],
+                                // legends and drafting views: a label-sized box
+                                _ => [0.12 / scale, 0.08 / scale],
+                            };
+                            (SheetRect::around(position, [seen[0] * scale, seen[1] * scale]), true)
+                        }
+                    };
+                    SheetViewport {
+                        title: v.view_name.clone(),
+                        view,
+                        rect,
+                        estimated,
+                        scale: format!("1:{}", (1.0 / v.scale).round()),
+                        detail: v.detail_number.clone(),
+                    }
+                })
+                .collect();
+            let paper = s.title_block.as_ref().and_then(|t| {
+                let [w, h] = t.size?.map(|x| x as f32 * FT);
+                let [ox, oy] = t.origin.map(|x| x as f32 * FT);
+                let corners = [[ox - w, oy], [ox, oy], [ox - w, oy - h], [ox, oy - h], [ox - w / 2.0, oy - h / 2.0]];
+                let held = |min: [f32; 2]| {
+                    let r = SheetRect { min, max: [min[0] + w, min[1] + h] };
+                    viewports.iter().filter(|v| r.contains(v.rect.center())).count()
+                };
+                // the first corner wins a tie: the observed lower right insertion point
+                let min = corners.into_iter().rev().max_by_key(|&c| held(c))?;
+                Some(SheetRect { min, max: [min[0] + w, min[1] + h] })
+            });
+            Sheet::new(s.number, s.name, paper, viewports)
         })
         .collect()
 }

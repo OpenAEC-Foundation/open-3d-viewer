@@ -120,9 +120,12 @@ pub struct Model {
     pub project: ProjectData,
 }
 
-/// Project data besides geometry (Revit): project information, levels, phases, grids, rooms.
+/// Project data besides geometry (Revit): project information, levels, phases, grids, rooms,
+/// sheets.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectData {
+    /// Sheets (Revit, beta): the paper and the views placed on it.
+    pub sheets: Vec<Sheet>,
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,
@@ -212,6 +215,71 @@ pub struct ScheduleRow {
     pub total: bool,
 }
 
+/// A sheet (Revit, beta): the paper and the views placed on it, in sheet metres (x right, y up)
+/// with the title block's insertion point at the origin.
+#[derive(Debug, Clone, Default)]
+pub struct Sheet {
+    pub number: String,
+    pub name: String,
+    /// Number and name: "CP-21 Constructietekening".
+    pub title: String,
+    /// The paper, when the title block tells its size.
+    pub paper: Option<SheetRect>,
+    pub viewports: Vec<SheetViewport>,
+}
+
+impl Sheet {
+    pub fn new(number: String, name: String, paper: Option<SheetRect>, viewports: Vec<SheetViewport>) -> Self {
+        let title = [number.as_str(), name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
+        Self { number, name, title, paper, viewports }
+    }
+
+    /// What the sheet covers: the paper and every viewport.
+    pub fn extent(&self) -> Option<SheetRect> {
+        self.paper.iter().chain(self.viewports.iter().map(|v| &v.rect)).copied().reduce(SheetRect::union)
+    }
+}
+
+/// A rectangle on a sheet (metres).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SheetRect {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+}
+
+impl SheetRect {
+    pub fn around(center: [f32; 2], size: [f32; 2]) -> Self {
+        Self { min: [center[0] - size[0] / 2.0, center[1] - size[1] / 2.0], max: [center[0] + size[0] / 2.0, center[1] + size[1] / 2.0] }
+    }
+
+    pub fn union(self, o: Self) -> Self {
+        Self { min: [self.min[0].min(o.min[0]), self.min[1].min(o.min[1])], max: [self.max[0].max(o.max[0]), self.max[1].max(o.max[1])] }
+    }
+
+    pub fn contains(&self, p: [f32; 2]) -> bool {
+        (0..2).all(|k| self.min[k] <= p[k] && p[k] <= self.max[k])
+    }
+
+    pub fn center(&self) -> [f32; 2] {
+        [(self.min[0] + self.max[0]) / 2.0, (self.min[1] + self.max[1]) / 2.0]
+    }
+}
+
+/// A view placed on a sheet.
+#[derive(Debug, Clone)]
+pub struct SheetViewport {
+    /// The view's name.
+    pub title: String,
+    /// The view in [`Model::views`], when the viewer can show it (not legends and drafting views).
+    pub view: Option<usize>,
+    pub rect: SheetRect,
+    /// The size is a guess (the view has no active crop region).
+    pub estimated: bool,
+    /// "1:50".
+    pub scale: String,
+    pub detail: Option<String>,
+}
+
 /// The kind of a saved view.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +350,11 @@ impl Model {
                 layers.push(layer);
             }
             props.extend(model.props.iter().map(|(id, value)| (remap[id], value.clone())));
+            let first_view = views.len();
+            project.sheets.extend(model.project.sheets.iter().cloned().map(|mut sheet| {
+                sheet.viewports.iter_mut().for_each(|v| v.view = v.view.map(|i| i + first_view));
+                Sheet::new(format!("{source} / {}", sheet.number), sheet.name, sheet.paper, sheet.viewports)
+            }));
             views.extend(model.views.iter().cloned().map(|mut view| {
                 view.name = format!("{source} / {}", view.name);
                 view

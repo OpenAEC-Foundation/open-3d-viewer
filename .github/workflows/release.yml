@@ -6,6 +6,9 @@
 # are missing is not signed; the release notes say so per file, and such a release is published
 # as a pre-release. The private format readers (rvt-dll and the standalone readers) are fetched
 # with the read-only deploy keys in FORMAT_CRATES_SSH_KEYS, as in build.yml.
+#
+# A dry run (Run workflow on a branch, dry_run on, no tag) builds and signs everything with the
+# version in Cargo.toml and publishes nothing; the signatures are in the job summaries.
 name: Release
 
 on:
@@ -14,8 +17,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build, such as v2026.44.0"
-        required: true
+        description: "Existing tag to build, such as v2026.44.0 (empty for a dry run of the chosen branch)"
+        required: false
+      dry_run:
+        description: "Dry run: build and sign everything, but publish nothing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,6 +34,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  DRY_RUN: ${{ github.event.inputs.dry_run == 'true' }}
   # the Blueprint release whose B2 icons are copied into assets/b2
   BLUEPRINT: v2026.44.1
 
@@ -52,6 +60,12 @@ jobs:
       - name: The tag and Cargo.toml carry the same version YYYY.W.N
         id: version
         run: |
+          if [[ "$DRY_RUN" == true ]]; then
+            number=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+            echo "Dry run of $TAG with the version in Cargo.toml, $number; nothing is published."
+            echo "number=$number" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           number="${TAG#v}"
           [[ "$number" =~ ^20[0-9]{2}\.([1-9]|[1-4][0-9]|5[0-3])\.(0|[1-9][0-9]*)$ ]] \
             || { echo "::error::$TAG is not vYYYY.W.N (week without a leading zero)"; exit 1; }
@@ -194,8 +208,15 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-      - name: Build the installer
+      - name: Build the installer, with a signed uninstaller
         shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
         run: |
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }
           $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
@@ -203,7 +224,17 @@ jobs:
           New-Item -ItemType Directory -Force installer | Out-Null
           Copy-Item packaging\windows\installer.nsi, packaging\windows\icon.ico installer\
           Push-Location installer
-          & $nsis "/DNUMBER=$env:NUMBER" "/DSOURCE=$env:GITHUB_WORKSPACE\sign" installer.nsi
+          $nsisArgs = @("/DNUMBER=$env:NUMBER", "/DSOURCE=$env:GITHUB_WORKSPACE\sign")
+          # makensis signs the uninstaller through windows-sign.ps1 (!uninstfinalize). Without the
+          # keys, or when that signature fails, the uninstaller is built unsigned and the report
+          # below says so, which makes the release a pre-release.
+          # @(...) keeps a one-element array: a bare string would be splatted character by character
+          $sign = @(if ($env:AZURE_CLIENT_SECRET) { "/DSIGN=$env:GITHUB_WORKSPACE\scripts\windows-sign.ps1" })
+          & $nsis @nsisArgs @sign installer.nsi
+          if ($LASTEXITCODE -ne 0 -and $sign) {
+            Write-Warning "signing the uninstaller failed; building it unsigned"
+            & $nsis @nsisArgs installer.nsi
+          }
           if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
           Pop-Location
       - name: Sign the installer
@@ -228,13 +259,27 @@ jobs:
         id: report
         shell: pwsh
         run: |
-          $files = @("sign\open-3d-viewer.exe", "sign\open-3d-viewer-mcp.exe", "installer\open-3d-viewer_$($env:NUMBER)_x64-setup.exe")
+          $setup = "installer\open-3d-viewer_$($env:NUMBER)_x64-setup.exe"
+          # Install it as a user would: the uninstaller only exists once the installer has run, so
+          # its signature is checked on the installed copy.
+          $installed = Join-Path $env:RUNNER_TEMP "installed"
+          $run = Start-Process -FilePath $setup -ArgumentList "/S", "/D=$installed" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the installer ended with code $($run.ExitCode)" }
+          $files = [ordered]@{
+            "open-3d-viewer.exe" = "sign\open-3d-viewer.exe"
+            "open-3d-viewer-mcp.exe" = "sign\open-3d-viewer-mcp.exe"
+            (Split-Path $setup -Leaf) = $setup
+            "installed open-3d-viewer.exe" = "$installed\open-3d-viewer.exe"
+            "installed open-3d-viewer-mcp.exe" = "$installed\open-3d-viewer-mcp.exe"
+            "installed uninstall.exe" = "$installed\uninstall.exe"
+          }
           $all = $true
           "### Windows: Authenticode" >> $env:GITHUB_STEP_SUMMARY
-          foreach ($f in $files) {
-            $s = Get-AuthenticodeSignature $f
-            if ($s.Status -ne 'Valid') { $all = $false }
-            "- $(Split-Path $f -Leaf): $($s.Status) $($s.SignerCertificate.Subject)" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          foreach ($name in $files.Keys) {
+            $s = Get-AuthenticodeSignature -LiteralPath $files[$name]
+            if ($s.Status -ne 'Valid' -or -not $s.TimeStamperCertificate) { $all = $false }
+            $stamp = if ($s.TimeStamperCertificate) { "with timestamp" } else { "no timestamp" }
+            "- ${name}: $($s.Status) $($s.SignerCertificate.Subject) ($stamp)" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
           }
           "signed=$($all.ToString().ToLower())" >> $env:GITHUB_OUTPUT
       - name: Package
@@ -381,6 +426,7 @@ jobs:
 
   publish:
     name: Publish
+    if: ${{ github.event.inputs.dry_run != 'true' }}
     needs: [check, linux, windows, macos]
     runs-on: ubuntu-24.04
     permissions:
@@ -457,7 +503,7 @@ jobs:
 
           | Wat | Ondertekend |
           | --- | --- |
-          | Windows: viewer, MCP-server en installer (Authenticode) | $(yes "$WINDOWS_SIGNED") |
+          | Windows: viewer, MCP-server, installer en uninstaller (Authenticode met tijdstempel) | $(yes "$WINDOWS_SIGNED") |
           | macOS: app en schijfkopie (Developer ID, genotariseerd) | $(yes "$MACOS_SIGNED") |
           | Linux: \`SHA256SUMS\`, \`.deb\`, \`.rpm\`, AppImage en \`.tar.gz\` (OpenPGP, \`.asc\`) | $(yes "$GPG_SIGNED") |
           | Alle pakketten: build-attestatie via GitHub | ja |

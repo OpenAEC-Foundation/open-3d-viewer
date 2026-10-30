@@ -1,7 +1,17 @@
 ; Per-user installer of Open 3D Viewer Studio; no administrator rights needed.
-; makensis /DNUMBER=2026.44.0 /DSOURCE=<folder with open-3d-viewer.exe and open-3d-viewer-mcp.exe> installer.nsi
+; makensis /DNUMBER=2026.44.0 /DSOURCE=<folder with open-3d-viewer.exe and open-3d-viewer-mcp.exe> [/DSIGN=<windows-sign.ps1>] installer.nsi
 Unicode true
 !include "MUI2.nsh"
+
+; With SIGN, makensis hands the uninstaller it builds to the signing script before it goes into
+; the installer, so the uninstall.exe that WriteUninstaller puts on disk is signed as well. A
+; failed signature stops the build.
+!ifdef SIGN
+  !if ${NSIS_PACKEDVERSION} < 0x03008000
+    !error "signing the uninstaller needs NSIS 3.08 or later (!uninstfinalize)"
+  !endif
+  !uninstfinalize 'pwsh -NoProfile -NonInteractive -File "${SIGN}" -Files "%1"' = 0
+!endif
 
 Name "Open 3D Viewer Studio ${NUMBER}"
 OutFile "open-3d-viewer_${NUMBER}_x64-setup.exe"

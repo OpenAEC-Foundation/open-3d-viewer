@@ -228,7 +228,8 @@ jobs:
           # makensis signs the uninstaller through windows-sign.ps1 (!uninstfinalize). Without the
           # keys, or when that signature fails, the uninstaller is built unsigned and the report
           # below says so, which makes the release a pre-release.
-          $sign = if ($env:AZURE_CLIENT_SECRET) { @("/DSIGN=$env:GITHUB_WORKSPACE\scripts\windows-sign.ps1") } else { @() }
+          # @(...) keeps a one-element array: a bare string would be splatted character by character
+          $sign = @(if ($env:AZURE_CLIENT_SECRET) { "/DSIGN=$env:GITHUB_WORKSPACE\scripts\windows-sign.ps1" })
           & $nsis @nsisArgs @sign installer.nsi
           if ($LASTEXITCODE -ne 0 -and $sign) {
             Write-Warning "signing the uninstaller failed; building it unsigned"

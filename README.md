@@ -62,7 +62,7 @@ To check a download yourself:
 sha256sum -c SHA256SUMS --ignore-missing
 gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, fingerprint 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
 gpg --verify SHA256SUMS.asc SHA256SUMS
-gh attestation verify open-3d-viewer_2026.44.17_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+gh attestation verify open-3d-viewer_2026.44.18_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
 ## Why use it?
@@ -191,7 +191,7 @@ open-3d-viewer FILE --save-as OUT.ifc
 open-3d-viewer --bench FILE [--frames 300]
 ```
 
-Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.44.17`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
+Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.44.18`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
 
 Open 3D Viewer Studio is part of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation) family of apps.
 

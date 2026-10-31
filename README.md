@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
+**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, DWG/DXF, MicroStation DGN (V7), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -138,6 +138,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
 | **Allplan** (`.ndw` drawing files, beta) | Yes, 3D bodies | No |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
+| **MicroStation DGN** (`.dgn`, V7) | Yes | No |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
 | **LandXML** (`.xml`, `.landxml`, TIN surfaces) | Yes | No |
 | **glTF** (`.gltf`, `.glb`) | Yes | No |
@@ -149,6 +150,7 @@ What does not come through:
 
 - **IFC export** writes each element as triangles (`IfcTriangulatedFaceSet`), not as parametric geometry. Classes come from the Revit category or the Tekla part name, else `IfcBuildingElementProxy`; elements of an opened IFC file do not keep their class yet. Checked with IfcOpenShell 0.8 on Revit, SketchUp, OBJ, STL and glTF models.
 - **DWG and DXF** show the polygon geometry of model space. ACIS solids, annotations, curves and external references are left out and counted.
+- **MicroStation DGN** opens version 7 design files (V8 files are recognised but not read yet). Lines, arcs and curves are drawn as thin ribbons as wide as their line weight, text as its box with the characters in the element properties; shapes, cones, extruded solids and B-spline surfaces of 3D files are faces. Levels are layers. Dimensions, shared cells, line styles and reference files are left out and counted. The reader is written from Intergraph's public ISFF description and a clean-room analysis.
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
@@ -227,4 +229,4 @@ The viewer's own source is LGPL-3.0-or-later. See [LICENSE](LICENSE). The Inter 
 
 ## Trademarks
 
-SketchUp is a trademark of Trimble Inc., Revit and DWG of Autodesk, Inc., Tekla Structures of Trimble Solutions Corporation, and Allplan of ALLPLAN GmbH (Nemetschek Group). Open 3D Viewer Studio is an independent project and is not affiliated with, endorsed by or sponsored by them.
+SketchUp is a trademark of Trimble Inc., Revit and DWG of Autodesk, Inc., Tekla Structures of Trimble Solutions Corporation, Allplan of ALLPLAN GmbH (Nemetschek Group), and MicroStation of Bentley Systems, Inc. Open 3D Viewer Studio is an independent project and is not affiliated with, endorsed by or sponsored by them.

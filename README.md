@@ -68,7 +68,7 @@ gh attestation verify open-3d-viewer_2026.44.18_amd64.deb --repo OpenAEC-Foundat
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, DWG/DXF, MicroStation DGN (V7), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -114,7 +114,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **SketchUp** (`.skp`, version 3 and later) | Yes | No |
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
-| **MicroStation DGN** (`.dgn`, V7) | Yes | No |
+| **MicroStation DGN** (`.dgn`, V7 and V8) | Yes | No |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
 | **LandXML** (`.xml`, `.landxml`, TIN surfaces) | Yes | No |
 | **glTF** (`.gltf`, `.glb`) | Yes | No |
@@ -126,7 +126,7 @@ What does not come through:
 
 - **IFC export** writes each element as triangles (`IfcTriangulatedFaceSet`), not as parametric geometry. Classes come from the Revit category or the Tekla part name, else `IfcBuildingElementProxy`; elements of an opened IFC file do not keep their class yet. Checked with IfcOpenShell 0.8 on Revit, SketchUp, OBJ, STL and glTF models.
 - **DWG and DXF** show the polygon geometry of model space. ACIS solids, annotations, curves and external references are left out and counted.
-- **MicroStation DGN** opens version 7 design files (V8 files are recognised but not read yet). Lines, arcs and curves are drawn as thin ribbons as wide as their line weight, text as its box with the characters in the element properties; shapes, cones, extruded solids and B-spline surfaces of 3D files are faces. Levels are layers. Dimensions, shared cells, line styles and reference files are left out and counted. The reader is written from Intergraph's public ISFF description and a clean-room analysis.
+- **MicroStation DGN** opens version 7 design files and V8 design files (MicroStation V8, V8i and CONNECT). Lines, arcs and curves are drawn as thin ribbons as wide as their line weight, text as its box with the characters in the element properties; shapes, cones, extruded solids and B-spline surfaces of 3D files are faces. Levels are layers, with their names in V8 files; cells and shared cells are one element each. Dimensions, multi-lines, tags, line styles and reference files, and in V8 files surfaces, solids, cones, B-spline surfaces, meshes and models other than the first, are left out and counted. The V7 reader is written from Intergraph's public ISFF description and a clean-room analysis, the V8 reader from the clean-room specification only.
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.

@@ -95,7 +95,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 
 ## Meten, doorsnijden en uit elkaar halen
 
-- **Meet** afstanden, hoeken, polygonen en oppervlakten door in het model te klikken, of tussen twee elementen. Metingen blijven in beeld tot je ze wist.
+- **Meet** afstanden, hoeken, polygonen en oppervlakten door in het model te klikken, of tussen twee elementen. Voor je klikt licht het punt, de rand of het vlak onder de cursor op, en de cursor springt binnen een paar pixels naar hoekpunten, middens van randen en randen. Metingen blijven in beeld tot je ze wist.
 - **Doorsnedekader en doorsnedevlak** snijden het model open, met gevulde snedes. Het kader kan zich aanpassen aan de selectie.
 - **Uit elkaar** trekt het model per verdieping of per element uit elkaar, met een percentage per as.
 
@@ -144,7 +144,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **119 unittests** in `src/` (118 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **124 unittests** in `src/` (123 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 15 voor de app, 15 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py <Blueprint> --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.

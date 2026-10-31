@@ -163,6 +163,15 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 - **It stays on your computer.** The window listens on `127.0.0.1` only, with a random token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` or `O3V_REMOTE=0` switches it off.
 - **Install:** keep `open-3d-viewer-mcp` next to the viewer (the installers do) and register it, for example `claude mcp add open-3d-viewer -- "C:\path\to\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` prints the JSON for other clients.
 
+## Graphics
+
+The window draws with wgpu. On Windows it uses DirectX 12 when the graphics card is an Intel one, because Intel's Vulkan driver can flash the whole window white while you orbit ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)); other cards keep wgpu's choice. Each start writes what the window got (card, driver, backend, surface format) to `%APPDATA%\OpenAEC\Open 3D Viewer Studio\gpu.log`.
+
+If the window flickers, stays black or is slow, try another backend or present mode, and mention which one helps in an issue together with `gpu.log`:
+
+- **Once:** `open-3d-viewer.exe --gpu-backend vulkan` (or `dx12`, `gl`) and `--present-mode mailbox` (or `fifo`, `fifo_relaxed`, `immediate`, `vsync`, `no_vsync`).
+- **Always:** set the user variable `WGPU_BACKEND` or `ICED_PRESENT_MODE` to one of these values, for example `setx WGPU_BACKEND vulkan` in a command prompt, and start the viewer again.
+
 ## Testing and reliability
 
 - **120 unit tests** in `src/` (119 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.

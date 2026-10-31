@@ -1113,7 +1113,7 @@ impl<'a> V8Element<'a> {
     /// A header with components: flagged, or of a type that always has them.
     fn complex(&self) -> bool { self.flags() & 0x2000 != 0 || matches!(self.kind(), 2 | 7 | 12 | 14 | 18 | 19 | 24 | 27 | 34) }
     /// The number of components a header counts (at +0x68), where the specification gives it.
-    fn component_count(&self) -> Option<u32> { (matches!(self.kind(), 2 | 12 | 14 | 27) && self.len() >= 0x6C).then(|| self.u32(0x68)) }
+    fn component_count(&self) -> Option<u32> { (matches!(self.kind(), 2 | 7 | 12 | 14 | 27) && self.len() >= 0x6C).then(|| self.u32(0x68)) }
     /// The level ID (graphic elements) or kind of table entry (non-graphic elements).
     fn level(&self) -> u32 { self.u32(0x0C) }
     fn graphic(&self) -> bool {
@@ -1169,8 +1169,8 @@ impl<'a> V8Element<'a> {
             (le32(l, 4), linkage_text(l.get(12..l.len().min(12usize.saturating_add(count))).unwrap_or_default()))
         }).collect()
     }
-    /// The name of a cell or shared cell: its first string linkage.
-    fn name(&self) -> Option<String> { self.strings().into_iter().next().map(|(_, name)| name).filter(|name| !name.is_empty()) }
+    /// The name of a cell, shared cell or level: string linkage 1; without it, no name.
+    fn name(&self) -> Option<String> { self.strings().into_iter().find(|(key, _)| *key == 1).map(|(_, name)| name).filter(|name| !name.is_empty()) }
 }
 
 fn latin1(bytes: &[u8]) -> String { bytes.iter().map(|&c| char::from(c)).collect() }
@@ -1216,8 +1216,10 @@ fn v8_elements<'a>(stream: &'a [u8], scene: &mut Scene) -> Result<Vec<V8Element<
 }
 
 /// The index after V8 element `i` and its components, at most `end`. A top-level element owns
-/// all components that follow it; a nested one as many as its header counts (a text node: the
-/// text elements that follow). B-spline headers also own their knot, pole and weight elements.
+/// all components that follow it; a nested one as many as its header counts (cells, text nodes,
+/// complex chains and shapes, B-spline curves). Other nested headers own nothing: their
+/// components are read as their siblings. B-spline headers also own their knot, pole and
+/// weight elements.
 fn v8_span(all: &[V8Element], i: usize, end: usize, depth: usize) -> usize {
     let e = all[i];
     let mut j = i + 1;
@@ -1230,8 +1232,6 @@ fn v8_span(all: &[V8Element], i: usize, end: usize, depth: usize) -> usize {
             if j >= end || !belongs(&all[j]) { break; }
             j = v8_span(all, j, end, depth + 1);
         }
-    } else if e.kind() == 7 {
-        while j < end && all[j].component() && all[j].kind() == 17 { j += 1; }
     }
     j
 }
@@ -1425,6 +1425,9 @@ impl V8Converter<'_> {
         match (e.level(), self.instance_level) { (0, Some(level)) => level, (level, _) => level }
     }
 
+    /// Counts an element whose data is too short or not finite, by type.
+    fn malformed(&mut self, e: &V8Element) { self.omit(&format!("Malformed element ({})", kind_label(e.kind()))); }
+
     /// Converts the top-level element at `i` with its components; returns the next element.
     fn top_level(&mut self, all: &[V8Element], i: usize) -> usize {
         let e = all[i];
@@ -1492,7 +1495,7 @@ impl V8Converter<'_> {
             3 | 4 | 6 | 11 | 15 | 16 | 27 => match v8_outline(all, i, stop) {
                 Some((points, true)) if e.kind() != 3 => self.push(&e, id, closed_shape(points, filled)),
                 Some((points, _)) => self.push(&e, id, Shape::Stroke(points)),
-                None => self.omit("Malformed element"),
+                None => self.malformed(&e),
             },
             17 => self.text(&e, id, texts),
             22 => {
@@ -1504,16 +1507,24 @@ impl V8Converter<'_> {
         }
     }
 
-    /// Text (B.4, B.8): its box from the origin (the lower left) and the size multipliers as an
-    /// outline, the characters in the element's properties.
+    /// Text (B.4, B.8): its box from the origin (the lower left), as wide and high as stored, as an
+    /// outline; the characters in the element's properties.
     fn text(&mut self, e: &V8Element, id: u64, texts: &mut Vec<String>) {
-        let count = usize::from(e.u16(0x6E));
+        // The number of text bytes is the byte at +0x6E.
+        let count = usize::from(e.bytes.get(0x6E).copied().unwrap_or(0));
         let (origin_at, start) = if e.three_d() { (0xB0, 0xCA) } else { (0x98, 0xAA) };
-        let Some(bytes) = e.bytes.get(start..start + count) else { self.omit("Malformed element"); return };
+        let Some(bytes) = e.bytes.get(start..start + count) else { self.malformed(e); return };
         let text = v8_text(bytes);
-        let characters = text.as_ref().map_or(count, |t| t.chars().count()).max(1);
-        // As in V7: the basic character cell is 6 UOR and the multipliers are thousandths.
-        let (width, height) = (e.f64(0x70) / 1000.0 * 6.0 * characters as f64, e.f64(0x78) / 1000.0 * 6.0);
+        // Width and height of the text in UOR at +0x80 and +0x88 (measured on 2D text, assumed for
+        // 3D text); without them, as in V7, a character cell of 6 UOR times the multipliers in
+        // thousandths.
+        let (width, height) = match (e.f64(0x80), e.f64(0x88)) {
+            (width, height) if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 => (width, height),
+            _ => {
+                let characters = text.as_ref().map_or(count, |t| t.chars().count()).max(1);
+                (e.f64(0x70) / 1000.0 * 6.0 * characters as f64, e.f64(0x78) / 1000.0 * 6.0)
+            }
+        };
         self.push(e, id, Shape::Stroke(text_box(e.point(origin_at), e.rotation(0x90), width, height)));
         if let Some(text) = text.filter(|t| !t.trim().is_empty()) { texts.push(text); }
     }
@@ -1521,7 +1532,7 @@ impl V8Converter<'_> {
     /// A shared cell: the components of its definition (among the non-model elements), placed by
     /// the instance's matrix (stored row by row) and origin.
     fn shared_cell(&mut self, e: &V8Element, id: u64, depth: usize, texts: &mut Vec<String>) {
-        if e.len() < 0x100 { self.omit("Malformed element"); return; }
+        if e.len() < 0x100 { self.malformed(e); return; }
         let Some((first, stop)) = e.name().and_then(|name| self.design.definition(&name)) else {
             self.omit("Shared cell without definition");
             return;
@@ -1530,7 +1541,7 @@ impl V8Converter<'_> {
         let rows: [f64; 9] = std::array::from_fn(|k| e.f64(0xA0 + 8 * k));
         let matrix = DMat3::from_cols_array(&rows).transpose();
         let origin = DVec3::new(e.f64(0xE8), e.f64(0xF0), e.f64(0xF8));
-        if !matrix.is_finite() || !origin.is_finite() { self.omit("Malformed element"); return; }
+        if !matrix.is_finite() || !origin.is_finite() { self.malformed(e); return; }
         let saved = (self.placement, self.instance_level);
         let (outer, offset) = self.placement;
         self.placement = (outer * matrix, outer * origin + offset);
@@ -1998,12 +2009,13 @@ mod tests {
         v8(5, 0x0400, 1, None, &data, &[])
     }
 
-    /// Text data (B.4) from +0x68: 2D, at `origin`, with `bytes` as its characters.
-    fn text_data(size: f64, origin: [f64; 2], bytes: &[u8]) -> Vec<u8> {
+    /// Text data (B.4) from +0x68: 2D, at `origin`, `size` (width, height) in UOR, with `bytes` as
+    /// its characters. The multipliers give characters of 6 UOR, so a box from them would be tiny.
+    fn text_data(size: [f64; 2], origin: [f64; 2], bytes: &[u8]) -> Vec<u8> {
         let mut data = 0u32.to_le_bytes().to_vec();
         data.extend(0u16.to_le_bytes());
-        data.extend((bytes.len() as u16).to_le_bytes());
-        data.extend(doubles(&[size, size, 0.0, 0.0, 0.0, origin[0], origin[1]]));
+        data.extend([bytes.len() as u8, 0]);
+        data.extend(doubles(&[1000.0, 1000.0, size[0], size[1], 0.0, origin[0], origin[1]]));
         data.extend(0u16.to_le_bytes());
         data.extend(bytes);
         data
@@ -2145,12 +2157,12 @@ mod tests {
         f.graphic(v8(16, 0x1000, 3, shown(0, 0), &doubles(&[0.0, std::f64::consts::FRAC_PI_2, 1000.0, 1000.0, 0.0, 10_000.0, 0.0]), &[]));
         // A 3D ellipse of 4 x 2 m with the identity quaternion: a filled disc.
         f.graphic(v8(15, 0x1000, 4, shown(D3, 0), &doubles(&[2000.0, 1000.0, 1.0, 0.0, 0.0, 0.0, 20_000.0, 0.0, 0.0]), &[]));
-        // Text in Latin-1 after the marker, characters of 300 UOR.
+        // Text in Latin-1 after the marker, 1800 x 300 UOR.
         let mut characters = vec![0xFF, 0xFE, 0x01, 0x00];
         characters.extend(b"myT\xE9xt");
-        f.graphic(v8(17, 0x1000, 5, shown(0, 0), &text_data(50_000.0, [0.0, 5000.0], &characters), &[]));
+        f.graphic(v8(17, 0x1000, 5, shown(0, 0), &text_data([1800.0, 300.0], [0.0, 5000.0], &characters), &[]));
         // A cell of two lines on levels 6 and 7.
-        f.graphic(v8(2, 0x3000, 6, shown(0, 0), &[2, 0, 0, 0, 0, 0, 0, 0], &[(0, "DOOR")]));
+        f.graphic(v8(2, 0x3000, 6, shown(0, 0), &[2, 0, 0, 0, 0, 0, 0, 0], &[(0, "NOT A NAME"), (1, "DOOR")]));
         f.graphic(v8(3, 0x5000, 6, shown(0, 0), &doubles(&[0.0, 8000.0, 1000.0, 8000.0]), &[]));
         f.graphic(v8(3, 0x5000, 7, shown(0, 2), &doubles(&[0.0, 9000.0, 1000.0, 9000.0]), &[]));
         // A 3D complex shape of two line strings: one triangle.
@@ -2159,10 +2171,13 @@ mod tests {
         f.graphic(v8(4, 0x5000, 8, shown(D3, 0), &counted(3, &[31_000.0, 0.0, 0.0, 31_000.0, 1000.0, 0.0, 30_000.0, 0.0, 0.0]), &[]));
         // A disjoint point string: three point markers.
         f.graphic(v8(22, 0x1000, 9, shown(D3 | HOLE, 0), &counted(3, &[0.0, 12_000.0, 0.0, 500.0, 12_000.0, 0.0, 1000.0, 12_000.0, 0.0]), &[]));
-        // A text node of two texts.
-        f.graphic(v8(7, 0x3000, 10, shown(0, 0), &[0; 8], &[]));
-        f.graphic(v8(17, 0x5000, 10, shown(0, 0), &text_data(50_000.0, [0.0, 14_000.0], b"A"), &[]));
-        f.graphic(v8(17, 0x5000, 10, shown(0, 0), &text_data(50_000.0, [0.0, 15_000.0], b"B\0"), &[]));
+        // A text node of two texts, the second 8-bit text without a marker.
+        f.graphic(v8(7, 0x3000, 10, shown(0, 0), &[2, 0, 0, 0, 1, 0, 0, 0], &[]));
+        f.graphic(v8(17, 0x5000, 10, shown(0, 0), &text_data([300.0, 300.0], [0.0, 14_000.0], b"A"), &[]));
+        f.graphic(v8(17, 0x5000, 10, shown(0, 0), &text_data([600.0, 300.0], [0.0, 15_000.0], b"\xB0C\0"), &[]));
+        // A cell whose only string linkage has another key: no name.
+        f.graphic(v8(2, 0x3000, 12, shown(0, 0), &[1, 0, 0, 0, 0, 0, 0, 0], &[(0, "NOT A NAME")]));
+        f.graphic(v8(3, 0x5000, 12, shown(0, 0), &doubles(&[0.0, 16_000.0, 1000.0, 16_000.0]), &[]));
         // Not described yet: a dimension, an unknown type and a second model.
         f.graphic(v8(33, 0x1000, 11, shown(0, 0), &[0; 64], &[]));
         f.graphic(v8(105, 0x1000, 11, shown(0, 0), &[0; 64], &[]));
@@ -2179,17 +2194,18 @@ mod tests {
         let text = layer("Level 5");
         assert!(text.props[0].1.contains("\"Text\":\"myTéxt\""), "{}", text.props[0].1);
         let (lo, hi) = bounds(text);
-        assert!((hi[0] - lo[0] - 1.8).abs() < 0.05 && (hi[1] - lo[1] - 0.3).abs() < 0.05, "six characters of 0.3 m: {lo:?} {hi:?}");
+        assert!((hi[0] - lo[0] - 1.8).abs() < 0.05 && (hi[1] - lo[1] - 0.3).abs() < 0.05, "the stored width and height: {lo:?} {hi:?}");
         let (door, door_frame) = (layer("Level 6"), layer("Level 7"));
         assert_eq!(door.elements[0].0, door_frame.elements[0].0, "a cell is one pickable element");
         assert!(door.props[0].1.contains("\"Cell\":\"DOOR\""), "{}", door.props[0].1);
         assert_eq!(layer("Level 8").triangle_count(), 1);
         assert_eq!(layer("Level 9").triangle_count(), 12, "three point markers");
-        assert!(layer("Level 10").props[0].1.contains("\"Text\":\"A\\nB\""), "{}", layer("Level 10").props[0].1);
+        assert!(layer("Level 10").props[0].1.contains("\"Text\":\"A\\n°C\""), "{}", layer("Level 10").props[0].1);
+        assert!(!layer("Level 12").props[0].1.contains("\"Cell\":"),"{}", layer("Level 12").props[0].1);
         let ids: BTreeSet<u64> = loaded.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
-        assert_eq!(ids.len(), 9);
+        assert_eq!(ids.len(), 10);
         let elements = info(&loaded, "DGN elements");
-        for drawn in ["Arc: 1", "Cell: 1", "Complex shape: 1", "Ellipse: 1", "Point string: 1", "Shape: 2", "Text: 1", "Text node: 1"] {
+        for drawn in ["Arc: 1", "Cell: 2", "Complex shape: 1", "Ellipse: 1", "Point string: 1", "Shape: 2", "Text: 1", "Text node: 1"] {
             assert!(elements.contains(drawn), "{drawn} in {elements}");
         }
         assert_eq!(info(&loaded, "DGN skipped elements"), "Dimension: 1, Element type 105: 1, Further model (not read): 1");
@@ -2201,13 +2217,15 @@ mod tests {
         let mut f = V8File::new(1000.0, 1.0, 1.0, [0.0; 3]);
         f.table(level_entry(70, "Furniture"));
         // The definition: a line of 1 m along X, on level 0.
-        f.table(v8(34, 0x3000, 0, shown(0, 0), &shared_data(IDENTITY, [0.0; 3]), &[(0, "ARROW")]));
+        f.table(v8(34, 0x3000, 0, shown(0, 0), &shared_data(IDENTITY, [0.0; 3]), &[(1, "ARROW")]));
         f.table(v8(3, 0x5000, 0, shown(0, 0), &doubles(&[0.0, 0.0, 1000.0, 0.0]), &[]));
         // Turned +90 degrees about Z (row by row) and placed at (5, 0) m: the line runs along +Y.
-        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data([0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0], [5000.0, 0.0, 0.0]), &[(0, "ARROW")]));
+        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data([0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0], [5000.0, 0.0, 0.0]), &[(1, "ARROW")]));
         // Twice as long, at (0, 3) m.
-        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data([2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0], [0.0, 3000.0, 0.0]), &[(0, "arrow")]));
-        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data(IDENTITY, [0.0; 3]), &[(0, "MISSING")]));
+        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data([2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0], [0.0, 3000.0, 0.0]), &[(1, "arrow")]));
+        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data(IDENTITY, [0.0; 3]), &[(1, "MISSING")]));
+        // A name under another key is no name.
+        f.graphic(v8(35, 0x1000, 70, shown(0, 0), &shared_data(IDENTITY, [0.0; 3]), &[(0, "ARROW")]));
         let loaded = load(f.bytes()).unwrap();
         assert_eq!(loaded.layers.len(), 1, "components on level 0 take the level of the instance");
         let layer = &loaded.layers[0];
@@ -2220,7 +2238,7 @@ mod tests {
         let (lo, hi) = element_bounds(layer, 1);
         assert!((lo[0] + 5.0).abs() < 0.01 && (hi[0] - lo[0] - 2.0).abs() < 0.01 && (lo[1] - 3.0).abs() < 0.01, "{lo:?} {hi:?}");
         assert_eq!(info(&loaded, "DGN elements"), "Shared cell: 2");
-        assert_eq!(info(&loaded, "DGN skipped elements"), "Shared cell without definition: 1");
+        assert_eq!(info(&loaded, "DGN skipped elements"), "Shared cell without definition: 2");
     }
 
     #[test]
@@ -2240,6 +2258,28 @@ mod tests {
         assert!((lo[0] + 2.0).abs() < 0.01 && hi[0].abs() < 0.01 && (lo[1] + 1.0).abs() < 0.01 && (hi[1] - 1.0).abs() < 0.01, "{lo:?} {hi:?}");
         assert_eq!(info(&loaded, "DGN elements"), "B-spline curve: 1");
         assert_eq!(loaded.layers[0].elements.len(), 1);
+    }
+
+    #[test]
+    fn v8_nested_text_nodes_own_as_many_texts_as_they_count() {
+        // A cell of two components: a text node of one text, then a text of the cell itself.
+        let text = text_data([300.0, 300.0], [0.0, 0.0], b"X");
+        let mut stream = Vec::new();
+        for element in [
+            v8(2, 0x3000, 1, shown(0, 0), &[2, 0, 0, 0, 0, 0, 0, 0], &[]),
+            v8(7, 0x7000, 1, shown(0, 0), &[1, 0, 0, 0, 0, 0, 0, 0], &[]),
+            v8(17, 0x5000, 1, shown(0, 0), &text, &[]),
+            v8(17, 0x5000, 1, shown(0, 0), &text, &[]),
+        ] {
+            stream.extend([0; 4]);
+            stream.extend(element);
+        }
+        let mut scene = Scene::default();
+        let all = v8_elements(&stream, &mut scene).unwrap();
+        assert_eq!(all.len(), 4);
+        assert_eq!(v8_span(&all, 1, all.len(), 1), 3, "the nested text node owns one text");
+        assert_eq!(v8_span(&all, 0, all.len(), 1), 4, "a nested cell owns its two components");
+        assert_eq!(v8_span(&all, 0, all.len(), 0), 4);
     }
 }
 

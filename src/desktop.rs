@@ -3,6 +3,7 @@
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--no-remote]
+//!                  [--gpu-backend dx12|vulkan|gl] [--present-mode fifo|mailbox|immediate|...]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--recent PATH]...
@@ -14,7 +15,7 @@
 use crate::app::{self, App, Message};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
-use crate::{bench, explode, export, loaders, shell, INTER_REGULAR, INTER_SEMIBOLD};
+use crate::{bench, explode, export, gpu, loaders, shell, INTER_REGULAR, INTER_SEMIBOLD};
 use openaec_ui::design::ThemeId;
 use openaec_ui::Language;
 use std::path::PathBuf;
@@ -45,6 +46,9 @@ struct Args {
     /// Exploded view for `--screenshot`: percent per axis, and the mode.
     explode: Option<[f32; 3]>,
     explode_mode: Option<explode::ExplodeMode>,
+    /// The graphics backend and present mode of the window, overriding the default (`gpu`).
+    gpu_backend: Option<String>,
+    present_mode: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -92,6 +96,8 @@ fn parse_args() -> Result<Args, String> {
             "--ortho" => args.ortho = true,
             "--view-tab" => args.view_tab = true,
             "--no-remote" => args.no_remote = true,
+            "--gpu-backend" => args.gpu_backend = Some(gpu::parse_backend(&value()?)?),
+            "--present-mode" => args.present_mode = Some(gpu::parse_present_mode(&value()?)?),
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
@@ -107,7 +113,7 @@ fn parse_args() -> Result<Args, String> {
                 })
             }
             "-h" | "--help" => {
-                println!("{}", include_str!("desktop.rs").lines().take(12).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("desktop.rs").lines().take_while(|l| l.starts_with("//!")).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 std::process::exit(0);
             }
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -171,15 +177,18 @@ fn initial_state(args: &Args) -> App {
 /// The application window: the viewer inside the OpenAEC Blueprint shell (`shell`), with the
 /// preferences and own shortcuts in %APPDATA%\OpenAEC\Open 3D Viewer Studio.
 fn run_app(args: Args) -> iced::Result {
+    let dir = std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio"));
+    if let Some(dir) = &dir {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    gpu::configure(args.gpu_backend.clone(), args.present_mode.clone(), dir.as_deref());
     let mut app = initial_state(&args);
     app.initial_view = args.view;
     app.pending_open = args.file.clone();
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
     app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
     let mut studio = shell::Studio::new(app);
-    if let Some(d) = std::env::var_os("APPDATA") {
-        let dir = PathBuf::from(d).join("OpenAEC").join("Open 3D Viewer Studio");
-        let _ = std::fs::create_dir_all(&dir);
+    if let Some(dir) = dir {
         studio = studio.with_settings_in(dir);
     }
     studio.set_look(args.theme, args.language);

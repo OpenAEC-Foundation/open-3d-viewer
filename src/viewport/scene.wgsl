@@ -240,13 +240,14 @@ fn vs_cap(@builtin(vertex_index) vi: u32, @builtin(instance_index) face: u32) ->
     }
     let axis = face / 2u;
     let b = (axis + 1u) % 3u;
-    let c = (axis + 2u) % 3u;
     let lo = u.clip_b.xyz;
     let hi = u.clip_c.xyz;
-    var p = lo;
-    p[axis] = select(lo[axis], hi[axis], face % 2u == 1u);
-    p[b] = mix(lo[b], hi[b], t.x);
-    p[c] = mix(lo[c], hi[c], t.y);
+    // the corner component by component (the remaining axis first): DirectX 12's shader
+    // compiler cannot write `p[axis]` with an axis known only at run time
+    let i = vec3<u32>(0u, 1u, 2u);
+    var p = mix(lo, hi, t.y);
+    p = select(p, mix(lo, hi, t.x), i == vec3<u32>(b));
+    p = select(p, select(lo, hi, face % 2u == 1u), i == vec3<u32>(axis));
     // box frame to world
     let d = p - u.clip_a.xyz;
     let cs = u.clip_a.w;

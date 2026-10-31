@@ -140,9 +140,18 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 - **It stays on your computer.** The window listens on `127.0.0.1` only, with a random token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` or `O3V_REMOTE=0` switches it off.
 - **Install:** keep `open-3d-viewer-mcp` next to the viewer (the installers do) and register it, for example `claude mcp add open-3d-viewer -- "C:\path\to\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` prints the JSON for other clients.
 
+## Graphics
+
+The window draws with wgpu. On Windows it uses DirectX 12 when the graphics card is an Intel one, because Intel's Vulkan driver can flash the whole window white while you orbit ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)); other cards keep wgpu's choice. Each start writes what the window got (card, driver, backend, surface format) to `%APPDATA%\OpenAEC\Open 3D Viewer Studio\gpu.log`.
+
+If the window flickers, stays black or is slow, try another backend or present mode, and mention which one helps in an issue together with `gpu.log`:
+
+- **Once:** `open-3d-viewer.exe --gpu-backend vulkan` (or `dx12`, `gl`) and `--present-mode mailbox` (or `fifo`, `fifo_relaxed`, `immediate`, `vsync`, `no_vsync`).
+- **Always:** set the user variable `WGPU_BACKEND` or `ICED_PRESENT_MODE` to one of these values, for example `setx WGPU_BACKEND vulkan` in a command prompt, and start the viewer again.
+
 ## Testing and reliability
 
-- **119 unit tests** in `src/` (118 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **120 unit tests** in `src/` (119 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py <Blueprint> --check` fails when an icon differs from the OpenAEC Blueprint release.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.

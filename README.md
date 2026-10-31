@@ -65,6 +65,29 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 gh attestation verify open-3d-viewer_2026.44.18_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
+## OpenAEC Linux (SuperCloud)
+
+The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC SuperCloud in which each user's tools run on the server as regular Linux programs, streamed to the browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). The SuperCloud builds that one image from the AppImage of a release, so this repository publishes no Docker image of its own.
+
+- **Without FUSE:** `./open-3d-viewer_<version>_amd64.AppImage --appimage-extract`, then `squashfs-root/AppRun [FILE]`.
+- **Without a GPU:** the 3D view draws with Mesa's software renderers, lavapipe (Vulkan, `mesa-vulkan-drivers`) or llvmpipe (OpenGL, `libegl-mesa0`). Without either, the window opens but the 3D view stays empty.
+- **Under Wayland**, with a small compositor such as labwc, and without a system tray, notification service, keyring or D-Bus session.
+- **Stopping:** the viewer only reads models and writes exports, so there is no unsaved work; on `SIGTERM` it stops.
+
+| Variable | What it does |
+|----------|--------------|
+| `OPENAEC_BEHEERD=1` | Managed mode: no update notice (the SuperCloud refreshes the image). The viewer never downloads updates itself. |
+| `OPENAEC_MAP` | The work folder (`/openaec` in the SuperCloud): the open and save dialogs start there. |
+| `XDG_CONFIG_HOME` | Settings (preferences, own shortcuts, the MCP link) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, by default under `~/.config`. |
+| `O3V_REMOTE=0` | No control port for the MCP server. `O3V_REMOTE_PORT` fixes its port (otherwise a free one). |
+| `WGPU_BACKEND` | `vulkan` or `gl` to choose the graphics backend; by default the first that works. |
+
+A file to open goes on the command line, as do `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` and `--language en|nl`.
+
+**Network:** the viewer makes no outgoing connections and has no telemetry. It listens only on `127.0.0.1`, for its own MCP server (see [MCP](#mcp)). The file dialogs go through the XDG desktop portal, or `zenity` when there is none.
+
+Every pull request and every release starts the Linux build this way on GitHub Actions ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): the release extracts the AppImage, starts it under labwc without a screen or GPU, checks that the window and a model in the 3D view draw, keeps the screenshots, and puts the memory in use with no file open in the release notes.
+
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
@@ -142,10 +165,11 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **119 unit tests** in `src/` (118 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **120 unit tests** in `src/` (119 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py <Blueprint> --check` fails when an icon differs from the OpenAEC Blueprint release.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
+- **The Linux build starts without a GPU.** On every pull request and release it runs under labwc without a screen, with software rendering, and must draw a model (see [OpenAEC Linux](#openaec-linux-supercloud)).
 - **Releases are built only after the tests pass**, and the release notes state per platform whether the files are signed.
 
 Count sources: `cargo test --release` and `cargo test --release -p openaec-ui --lib`; the release runs the same checks in [`release.yml`](.github/workflows/release.yml).

@@ -17,14 +17,19 @@ pub struct Announcement {
     pub pid: u32,
 }
 
-/// `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json` (next to the preferences), or the same
-/// under `$XDG_CONFIG_HOME` / `~/.config` elsewhere.
-pub fn announcement_path() -> Option<PathBuf> {
+/// The user's settings folder: `%APPDATA%\OpenAEC\Open 3D Viewer Studio`, or the same under
+/// `$XDG_CONFIG_HOME` / `~/.config` elsewhere.
+pub fn settings_dir() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("OpenAEC").join("Open 3D Viewer Studio").join("remote.json"))
+    Some(base.join("OpenAEC").join("Open 3D Viewer Studio"))
+}
+
+/// `remote.json` in the settings folder, next to the preferences.
+pub fn announcement_path() -> Option<PathBuf> {
+    Some(settings_dir()?.join("remote.json"))
 }
 
 #[allow(dead_code)] // the viewer writes, the MCP server reads

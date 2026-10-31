@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
+**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -68,7 +68,7 @@ gh attestation verify open-3d-viewer_2026.44.19_amd64.deb --repo OpenAEC-Foundat
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
-- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
+- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
 - **Meerdere modellen tegelijk.** **Openen** vervangt het model, **Toevoegen** zet er een ander bestand naast, en elk model heeft een eigen zichtbaarheidsknop.
 - **Slaat op als IFC.** Elk model dat de viewer opent, kan als IFC 4 worden opgeslagen, met verdiepingen, klassen, eigenschappen en materialen.
 - **Dezelfde app in de browser en op de desktop.** Eén codebasis; de browserversie hoef je niet te installeren.
@@ -115,6 +115,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **Revit** (`.rvt`, `.rfa`) | Desktop | Nee |
 | **SketchUp** (`.skp`, versie 3 en later) | Ja | Nee |
 | **Tekla Structures** (`.db1`, bèta) | Ja | Nee |
+| **Allplan** (`.ndw`-tekenbestanden, bèta) | Ja, 3D-lichamen | Nee |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Ja, polygoongeometrie | Nee |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Ja | Nee |
 | **LandXML** (`.xml`, `.landxml`, TIN-oppervlakken) | Ja | Nee |
@@ -130,6 +131,7 @@ Wat niet meekomt:
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
+- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in één kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Macro's (3D-meubilair), kleuren en materialen, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 
 Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::registry()`; nieuwe schrijvers implementeren `export::Writer` en gaan in `export::registry()`.
@@ -203,4 +205,4 @@ De eigen broncode van de viewer is LGPL-3.0-or-later. Zie [LICENSE](LICENSE). He
 
 ## Merken
 
-SketchUp is een merk van Trimble Inc., Revit en DWG van Autodesk, Inc., en Tekla Structures van Trimble Solutions Corporation. Open 3D Viewer Studio is een onafhankelijk project en is niet aan hen verbonden, door hen goedgekeurd of gesponsord.
+SketchUp is een merk van Trimble Inc., Revit en DWG van Autodesk, Inc., Tekla Structures van Trimble Solutions Corporation, en Allplan van ALLPLAN GmbH (Nemetschek Group). Open 3D Viewer Studio is een onafhankelijk project en is niet aan hen verbonden, door hen goedgekeurd of gesponsord.

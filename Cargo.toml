@@ -66,6 +66,8 @@ rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "fc9c5
 rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "fc9c5ac7061e22f35d315685d5167aa33cee9ed2", default-features = false }
 rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "fc9c5ac7061e22f35d315685d5167aa33cee9ed2" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
+# `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
+log = "0.4"
 # Headless renderer for `--screenshot` (MIT)
 iced_test = "0.14"
 # the shell's accessibility test lays it out without a GPU
@@ -78,6 +80,10 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlAnchorElement", "Location", "Url", "UrlSearchParams", "Blob", "BlobPropertyBag", "Response", "DragEvent", "DataTransfer", "FileList", "File", "console"] }
 console_error_panic_hook = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+# Which GPU the window gets, before wgpu starts (`gpu`); the version wgpu-hal uses (MIT OR Apache-2.0)
+windows = { version = "0.58", features = ["Win32_Graphics_Dxgi"] }
 
 [target.'cfg(windows)'.build-dependencies]
 # The app icon and version info in the .exe (MIT)

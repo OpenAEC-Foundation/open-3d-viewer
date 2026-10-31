@@ -1,7 +1,7 @@
 //! `--bench FILE`: loads a model and renders frames of the viewport pipeline offscreen
 //! (1920x1080, 4x MSAA, orbiting camera), reporting load time and frame times; the last pass
 //! cuts the model with a section box (lower 60 %, filled cuts). With `O3V_BENCH_PNG=path` the
-//! first section frame is also written as a PNG.
+//! first section frame is also written as a PNG. `WGPU_BACKEND` chooses the backend.
 
 use crate::loaders;
 use crate::theme::{srgb3, srgb4, ThemeKind};
@@ -25,7 +25,8 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
         model.load_time.as_secs_f32()
     );
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    // WGPU_BACKEND picks the backend, as for the window
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,

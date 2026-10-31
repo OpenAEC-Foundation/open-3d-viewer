@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
+**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Archicad, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -68,7 +68,7 @@ gh attestation verify open-3d-viewer_2026.44.19_amd64.deb --repo OpenAEC-Foundat
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
-- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
+- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Archicad (wanden en vloeren), DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
 - **Meerdere modellen tegelijk.** **Openen** vervangt het model, **Toevoegen** zet er een ander bestand naast, en elk model heeft een eigen zichtbaarheidsknop.
 - **Slaat op als IFC.** Elk model dat de viewer opent, kan als IFC 4 worden opgeslagen, met verdiepingen, klassen, eigenschappen en materialen.
 - **Dezelfde app in de browser en op de desktop.** Eén codebasis; de browserversie hoef je niet te installeren.
@@ -90,7 +90,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Draaien, verschuiven en zoomen.** Slepen met links draait, slepen met de middelste knop verschuift, het wiel zoomt naar de cursor. De kijkkubus draait het model naar een zijde; **F** past het model in beeld.
 - **Standaardaanzichten.** Iso, boven, voor en rechts (`0`, `1`, `2`, `3`), perspectief of orthografisch (`P`, `O`), en de opgeslagen aanzichten van een Revit-model.
 - **Weergaven.** Volledig, draadmodel en volledig met randen (`S`, `W`, `E`), het grondraster (`G`) en **Z-as omdraaien** voor bestanden met de andere as omhoog.
-- **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes beginnen verborgen in een eigen laag.
+- **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, Archicad-wanden en -vloeren, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes beginnen verborgen in een eigen laag.
 - **Sneltoetsen.** Elke opdracht staat één keer in één lijst, die het lint, de titelbalk en het toetsenbord gebruiken. In **Instellingen** geef je elke opdracht je eigen toets.
 
 ## Meten, doorsnijden en uit elkaar halen
@@ -115,6 +115,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **Revit** (`.rvt`, `.rfa`) | Desktop | Nee |
 | **SketchUp** (`.skp`, versie 3 en later) | Ja | Nee |
 | **Tekla Structures** (`.db1`, bèta) | Ja | Nee |
+| **Archicad** (`.pln`, `.pla`, Archicad 25 t/m 29, bèta) | Ja, wanden en vloeren | Nee |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Ja, polygoongeometrie | Nee |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Ja | Nee |
 | **LandXML** (`.xml`, `.landxml`, TIN-oppervlakken) | Ja | Nee |
@@ -125,11 +126,12 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 
 Wat niet meekomt:
 
-- **IFC-export** schrijft elk element als driehoeken (`IfcTriangulatedFaceSet`), niet als parametrische geometrie. Klassen komen uit de Revit-categorie of de Tekla-onderdeelnaam, anders `IfcBuildingElementProxy`; elementen uit een geopend IFC-bestand houden hun klasse nog niet. Gecontroleerd met IfcOpenShell 0.8 op Revit-, SketchUp-, OBJ-, STL- en glTF-modellen.
+- **IFC-export** schrijft elk element als driehoeken (`IfcTriangulatedFaceSet`), niet als parametrische geometrie. Klassen komen uit de Revit-categorie, de Tekla-onderdeelnaam of het Archicad-element (wand, vloer), anders `IfcBuildingElementProxy`; elementen uit een geopend IFC-bestand houden hun klasse nog niet. Gecontroleerd met IfcOpenShell 0.8 op Revit-, SketchUp-, OBJ-, STL- en glTF-modellen.
 - **DWG en DXF** tonen de polygoongeometrie van de modelruimte. ACIS-volumes, annotaties, curves en externe verwijzingen vallen weg en worden geteld.
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
+- **Archicad** toont wanden en vloeren als geëxtrudeerde plattegronden op hun verdieping. Kolommen, liggers, daken, openingen (deuren, ramen), bibliotheekobjecten en projecten van vóór Archicad 25 worden nog niet gelezen, en een wandhoogte die het bestand niet opslaat wordt geschat uit de verdiepingspeilen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 
 Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::registry()`; nieuwe schrijvers implementeren `export::Writer` en gaan in `export::registry()`.
@@ -144,7 +146,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **119 unittests** in `src/` (118 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **128 unittests** in `src/` (127 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 50 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 8 voor IFC-export, 7 voor de doorsnedes, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py <Blueprint> --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -203,4 +205,4 @@ De eigen broncode van de viewer is LGPL-3.0-or-later. Zie [LICENSE](LICENSE). He
 
 ## Merken
 
-SketchUp is een merk van Trimble Inc., Revit en DWG van Autodesk, Inc., en Tekla Structures van Trimble Solutions Corporation. Open 3D Viewer Studio is een onafhankelijk project en is niet aan hen verbonden, door hen goedgekeurd of gesponsord.
+SketchUp is een merk van Trimble Inc., Revit en DWG van Autodesk, Inc., Tekla Structures van Trimble Solutions Corporation, en Archicad van Graphisoft SE. Open 3D Viewer Studio is een onafhankelijk project en is niet aan hen verbonden, door hen goedgekeurd of gesponsord.

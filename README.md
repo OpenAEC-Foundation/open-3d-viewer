@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
+**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Archicad, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -68,7 +68,7 @@ gh attestation verify open-3d-viewer_2026.44.19_amd64.deb --repo OpenAEC-Foundat
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Archicad (walls and slabs), DWG/DXF, CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -88,7 +88,7 @@ gh attestation verify open-3d-viewer_2026.44.19_amd64.deb --repo OpenAEC-Foundat
 - **Orbit, pan and zoom.** Left drag orbits, middle drag pans, the wheel zooms to the cursor. The view cube turns the model to a side; **F** fits the model in view.
 - **Standard views.** Iso, top, front and right (`0`, `1`, `2`, `3`), perspective or orthographic (`P`, `O`), and the saved views of a Revit model.
 - **Render modes.** Solid, wireframe and solid with edges (`S`, `W`, `E`), the ground grid (`G`) and **Flip up** for files with the other up axis.
-- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces start hidden in a layer of their own.
+- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Archicad walls and slabs, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces start hidden in a layer of their own.
 - **Shortcuts.** Every command has one entry in one list, used by the ribbon, the title bar and the keyboard. In **Settings** you give any command your own key.
 
 ## Measure, section and explode
@@ -113,6 +113,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **Revit** (`.rvt`, `.rfa`) | Desktop | No |
 | **SketchUp** (`.skp`, version 3 and later) | Yes | No |
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
+| **Archicad** (`.pln`, `.pla`, Archicad 25 to 29, beta) | Yes, walls and slabs | No |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
 | **LandXML** (`.xml`, `.landxml`, TIN surfaces) | Yes | No |
@@ -123,11 +124,12 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 
 What does not come through:
 
-- **IFC export** writes each element as triangles (`IfcTriangulatedFaceSet`), not as parametric geometry. Classes come from the Revit category or the Tekla part name, else `IfcBuildingElementProxy`; elements of an opened IFC file do not keep their class yet. Checked with IfcOpenShell 0.8 on Revit, SketchUp, OBJ, STL and glTF models.
+- **IFC export** writes each element as triangles (`IfcTriangulatedFaceSet`), not as parametric geometry. Classes come from the Revit category, the Tekla part name or the Archicad element (wall, slab), else `IfcBuildingElementProxy`; elements of an opened IFC file do not keep their class yet. Checked with IfcOpenShell 0.8 on Revit, SketchUp, OBJ, STL and glTF models.
 - **DWG and DXF** show the polygon geometry of model space. ACIS solids, annotations, curves and external references are left out and counted.
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
+- **Archicad** shows walls and slabs as extruded footprints on their stories. Columns, beams, roofs, openings (doors, windows), library objects and projects from before Archicad 25 are not read yet, and a wall height the file does not store is estimated from the story levels. The reader is written from a clean-room specification.
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 
 New formats: implement `loaders::Loader` and add it to `loaders::registry()`; new writers implement `export::Writer` and go in `export::registry()`.
@@ -142,7 +144,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **119 unit tests** in `src/` (118 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **128 unit tests** in `src/` (127 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 50 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 8 for IFC export, 7 for the section tools, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py <Blueprint> --check` fails when an icon differs from the OpenAEC Blueprint release.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -201,4 +203,4 @@ The viewer's own source is LGPL-3.0-or-later. See [LICENSE](LICENSE). The Inter 
 
 ## Trademarks
 
-SketchUp is a trademark of Trimble Inc., Revit and DWG of Autodesk, Inc., and Tekla Structures of Trimble Solutions Corporation. Open 3D Viewer Studio is an independent project and is not affiliated with, endorsed by or sponsored by them.
+SketchUp is a trademark of Trimble Inc., Revit and DWG of Autodesk, Inc., Tekla Structures of Trimble Solutions Corporation, and Archicad of Graphisoft SE. Open 3D Viewer Studio is an independent project and is not affiliated with, endorsed by or sponsored by them.

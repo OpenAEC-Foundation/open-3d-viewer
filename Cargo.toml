@@ -57,6 +57,8 @@ acadrust = { git = "https://github.com/HakanSeven12/acadrust", rev = "299dc758f9
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
 tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
+# QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
+quicklz = "0.3.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

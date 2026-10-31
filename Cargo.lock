@@ -2754,7 +2754,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "open-3d-viewer"
-version = "2026.44.18"
+version = "2026.44.19"
 dependencies = [
  "acadrust",
  "bytemuck",
@@ -3461,7 +3461,7 @@ dependencies = [
 [[package]]
 name = "rvt-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=fc9c5ac7061e22f35d315685d5167aa33cee9ed2#fc9c5ac7061e22f35d315685d5167aa33cee9ed2"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=21bc671cadff50882877c8b2e4f945dbb60a0f76#21bc671cadff50882877c8b2e4f945dbb60a0f76"
 dependencies = [
  "flate2",
 ]
@@ -3469,7 +3469,7 @@ dependencies = [
 [[package]]
 name = "rvt-export"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=fc9c5ac7061e22f35d315685d5167aa33cee9ed2#fc9c5ac7061e22f35d315685d5167aa33cee9ed2"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=21bc671cadff50882877c8b2e4f945dbb60a0f76#21bc671cadff50882877c8b2e4f945dbb60a0f76"
 dependencies = [
  "delaunator",
  "earcutr",
@@ -3482,7 +3482,7 @@ dependencies = [
 [[package]]
 name = "rvt-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=fc9c5ac7061e22f35d315685d5167aa33cee9ed2#fc9c5ac7061e22f35d315685d5167aa33cee9ed2"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=21bc671cadff50882877c8b2e4f945dbb60a0f76#21bc671cadff50882877c8b2e4f945dbb60a0f76"
 dependencies = [
  "serde",
 ]
@@ -3490,7 +3490,7 @@ dependencies = [
 [[package]]
 name = "rvt-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=fc9c5ac7061e22f35d315685d5167aa33cee9ed2#fc9c5ac7061e22f35d315685d5167aa33cee9ed2"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=21bc671cadff50882877c8b2e4f945dbb60a0f76#21bc671cadff50882877c8b2e4f945dbb60a0f76"
 dependencies = [
  "flate2",
  "rvt-core",

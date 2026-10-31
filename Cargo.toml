@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.44.18"
+version = "2026.44.19"
 description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -62,9 +62,9 @@ ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
 ifc-lite-processing = "=25.0.1"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "fc9c5ac7061e22f35d315685d5167aa33cee9ed2" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "fc9c5ac7061e22f35d315685d5167aa33cee9ed2", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "fc9c5ac7061e22f35d315685d5167aa33cee9ed2" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # Headless renderer for `--screenshot` (MIT)
 iced_test = "0.14"

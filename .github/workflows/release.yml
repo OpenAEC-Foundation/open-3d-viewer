@@ -136,9 +136,9 @@ jobs:
           Maintainer: OpenAEC Foundation <info@open-aec.com>
           Homepage: https://github.com/OpenAEC-Foundation/open-3d-viewer
           Description: 3D model viewer for AEC files
-           Opens IFC, Revit, SketchUp, Tekla, DWG/DXF, CityJSON, LandXML, glTF,
-           OBJ, STL and PLY models, measures and sections them, and saves them
-           as IFC.
+           Opens IFC, Revit, SketchUp, Tekla, Archicad, DWG/DXF, CityJSON,
+           LandXML, glTF, OBJ, STL and PLY models, measures and sections them,
+           and saves them as IFC.
           EOF
           sed -i 's/^          //' "$deb/DEBIAN/control"
           dpkg-deb --root-owner-group --build "$deb" "$out/open-3d-viewer_${NUMBER}_amd64.deb"

@@ -11,9 +11,9 @@ URL:            https://github.com/OpenAEC-Foundation/open-3d-viewer
 BuildArch:      x86_64
 
 %description
-Open 3D Viewer Studio opens IFC, Revit, SketchUp, Tekla, DWG/DXF, CityJSON,
-LandXML, glTF, OBJ, STL and PLY models, measures and sections them, and saves
-them as IFC.
+Open 3D Viewer Studio opens IFC, Revit, SketchUp, Tekla, Archicad, DWG/DXF,
+CityJSON, LandXML, glTF, OBJ, STL and PLY models, measures and sections them,
+and saves them as IFC.
 
 %install
 install -Dm755 %{_sourcedir}/open-3d-viewer %{buildroot}/usr/bin/open-3d-viewer

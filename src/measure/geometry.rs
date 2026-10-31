@@ -163,6 +163,16 @@ pub struct FaceRegion {
 /// less than 25° from their neighbour. Flat faces stay flat; a tessellated curved surface is
 /// measured as a whole instead of one facet. `allowed` limits the search (the element's triangles).
 pub fn face_region(layer: &Layer, topo: &LayerTopology, start: usize, allowed: std::ops::Range<usize>, mm: &Mat4) -> FaceRegion {
+    grow_face(layer, topo, start, allowed, mm, false)
+}
+
+/// The flat face around triangle `start`: connected triangles within 1° of its plane. On a curved
+/// surface that is the facet (the plane a distance or angle is taken to).
+pub fn flat_face(layer: &Layer, topo: &LayerTopology, start: usize, allowed: std::ops::Range<usize>, mm: &Mat4) -> FaceRegion {
+    grow_face(layer, topo, start, allowed, mm, true)
+}
+
+fn grow_face(layer: &Layer, topo: &LayerTopology, start: usize, allowed: std::ops::Range<usize>, mm: &Mat4, flat: bool) -> FaceRegion {
     let cos_smooth = FEATURE_DEG.to_radians().cos();
     let cos_flat = 1f32.to_radians().cos();
     let world = |t: usize| triangle(layer, t).map(|p| mm.transform_point3(p));
@@ -203,8 +213,9 @@ pub fn face_region(layer: &Layer, topo: &LayerTopology, start: usize, allowed: s
             if !border && !in_region.contains_key(&(nb as usize)) {
                 let nn = normal_of(&world(nb as usize));
                 let len = nn.length();
-                // degenerate slivers are taken along; otherwise the bend must be smooth
-                if len == 0.0 || a == 0.0 || nn.dot(n) / len > cos_smooth {
+                // degenerate slivers are taken along; otherwise the bend must be smooth (or none)
+                let joins = if flat { nn.dot(start_normal) / len > cos_flat } else { nn.dot(n) / len > cos_smooth };
+                if len == 0.0 || a == 0.0 || joins {
                     in_region.insert(nb as usize, ());
                     queue.push(nb as usize);
                 } else {

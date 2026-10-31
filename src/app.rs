@@ -10,6 +10,7 @@ use crate::export;
 use crate::icons;
 use crate::loaders;
 use crate::measure::format::{AreaUnit, Category, LengthUnit, VolumeUnit, MAX_DECIMALS};
+use crate::measure::hover::{Hover, Screen};
 use crate::measure::{MeasureState, Tool};
 use crate::model::Model;
 use crate::theme::{srgb3, srgb4, Palette, ThemeKind};
@@ -19,7 +20,7 @@ use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use iced::widget::text::Wrapping;
 use iced::{Background, Border, Color, Padding, Shadow};
 use openaec_ui::Language;
@@ -33,6 +34,8 @@ use std::sync::Arc;
 use web_time::Instant;
 
 pub const FONT: Font = Font::with_name("Inter");
+/// The longest pause between two looks under the cursor while measuring.
+const MAX_HOVER_PAUSE: std::time::Duration = std::time::Duration::from_millis(200);
 pub const FONT_BOLD: Font = Font { weight: iced::font::Weight::Semibold, ..FONT };
 
 pub struct ModelEntry {
@@ -139,6 +142,10 @@ pub struct App {
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
+    /// Where the cursor rests in the viewport (x, y, width, height), waiting to be looked up for
+    /// the measure tool; when the last lookup ended and how long it took.
+    hover_request: Option<(f32, f32, f32, f32)>,
+    hover_last: Option<(Instant, std::time::Duration)>,
 }
 
 #[derive(Debug, Clone)]
@@ -307,6 +314,8 @@ impl Default for App {
             explode_offsets: Arc::default(),
             explode_bounds: None,
             measure: MeasureState::default(),
+            hover_request: None,
+            hover_last: None,
         }
     }
 }
@@ -796,14 +805,18 @@ impl App {
             Message::Navigate(n) => match n {
                 Navigate::Orbit { dx, dy } => {
                     self.anim = None;
+                    self.measure.hover = None;
                     self.camera.orbit(dx, dy)
                 }
                 Navigate::Pan { dx, dy, height } => {
                     self.anim = None;
+                    self.measure.hover = None;
                     self.camera.pan(dx, dy, height)
                 }
                 Navigate::Zoom { steps, x, y, width, height } => {
                     self.anim = None;
+                    // the viewport looks again on the next frame
+                    self.measure.hover = None;
                     let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
                     self.camera.zoom_at(steps, ndc, width / height.max(1.0));
                 }
@@ -812,6 +825,14 @@ impl App {
                     self.viewport_size = (width, height);
                 }
                 Navigate::Pick { x, y, width, height } => self.pick(x, y, width, height),
+                Navigate::Hover { x, y, width, height } => {
+                    self.hover_request = Some((x, y, width, height));
+                    self.update_hover();
+                }
+                Navigate::HoverOff => {
+                    self.hover_request = None;
+                    self.measure.hover = None;
+                }
             },
             Message::ApplyView(i) => self.apply_view(i),
             Message::ToggleGrids => self.show_grids = !self.show_grids,
@@ -892,6 +913,7 @@ impl App {
                         self.anim = None;
                     }
                 }
+                self.update_hover();
             }
             Message::TogglePlane => {
                 if self.plane.is_some() || self.plane_picking {
@@ -901,6 +923,7 @@ impl App {
                     self.plane_picking = self.model.is_some();
                     self.measure.tool = None;
                     self.measure.picks.clear();
+                    self.measure.hover = None;
                 }
             }
             Message::FlipPlane => {
@@ -925,6 +948,7 @@ impl App {
                 if self.explode_on {
                     self.measure.tool = None;
                     self.measure.picks.clear();
+                    self.measure.hover = None;
                 }
                 self.update_explode();
             }
@@ -988,7 +1012,10 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) || self.anim.is_some() {
+        let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. })
+            || self.anim.is_some()
+            || self.hover_request.is_some()
+        {
             window::frames().map(|_| Message::Tick)
         } else {
             Subscription::none()
@@ -1031,27 +1058,27 @@ impl App {
     /// Selects what is under the cursor: the nearest visible triangle, then its element (or the
     /// whole layer when the format has no elements); empty space clears the selection. While
     /// placing the section plane, puts it on the face under the cursor instead; while measuring,
-    /// hands the click to the measure tool.
+    /// hands the click to the measure tool, with what is highlighted under the cursor.
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
-        let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
-        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
-        let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
-        let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
-        let mm = self.model_matrix();
-        let (section, plane) = (self.active_section(), self.plane);
-        let keep = |p: Vec3| {
-            let w = mm.transform_point3(p);
-            section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
-        };
-        // the exploded view moves the triangles: their offsets back in model space
-        let back = mm.inverse();
-        let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
-        let hit = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep);
+        if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
+            let screen = self.screen(width, height);
+            if !self.measure.hover.as_ref().is_some_and(|h| h.holds_for(&screen, Vec2::new(x, y))) {
+                self.measure.hover = self.measure_hover(&model, x, y, width, height);
+            }
+            let Some(hover) = self.measure.hover.clone() else { return };
+            self.measure.click(&model, &hover, &self.model_matrix());
+            // the measured element is also selected (shows its properties)
+            if tool == Tool::Volume {
+                self.select(&model, Some((hover.layer, hover.triangle)));
+            }
+            return;
+        }
+        let (origin, dir, hit) = self.cast(&model, x, y, width, height);
         if self.plane_picking {
-            if let (Some((l, t)), Some(world)) = (hit, self.world_bounds()) {
-                let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
+            let mm = self.model_matrix();
+            if let (Some((l, t, s)), Some(world)) = (hit, self.world_bounds()) {
                 if let Some((point, normal)) = face_at(&model.layers[l], t, origin - s, dir) {
                     let (point, mut normal) = (mm.transform_point3(point + s), mm.transform_vector3(normal));
                     // the face as seen: its normal towards the viewer
@@ -1067,24 +1094,74 @@ impl App {
             }
             return;
         }
-        if let Some(tool) = self.measure.tool {
-            let Some((l, t)) = hit else { return };
-            // the point on the triangle as it is (the exploded view is off while measuring)
-            let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
-            let Some((point, _)) = face_at(&model.layers[l], t, origin - s, dir) else { return };
-            let pixel = crate::measure::pixel_size(&self.camera.view_proj(width / height), (width, height), mm.transform_point3(point));
-            self.measure.click(&model, l, t, point, &mm, pixel);
-            // the measured element is also selected (shows its properties)
-            if tool != Tool::Volume {
-                return;
-            }
-        }
+        self.select(&model, hit.map(|(l, t, _)| (l, t)));
+    }
+
+    /// Selects the element of triangle `t` of layer `l` (the whole layer without elements), or
+    /// nothing.
+    fn select(&mut self, model: &Model, hit: Option<(usize, usize)>) {
         self.selected = hit.map(|(l, t)| (l, model.layers[l].element_at(t)));
         self.selection = match self.selected {
             Some((_, Some(id))) => model.element_ranges(id),
             Some((l, None)) => vec![(l, 0, model.layers[l].indices.len() as u32)],
             None => Vec::new(),
         };
+    }
+
+    /// The camera's view of a viewport of width × height.
+    fn screen(&self, width: f32, height: f32) -> Screen {
+        Screen { view_proj: self.camera.view_proj(width / height), size: (width, height) }
+    }
+
+    /// The ray through viewport point (x, y) (model space) and the nearest visible triangle it
+    /// hits: (layer, triangle, how far the exploded view moved it (model space)).
+    fn cast(&self, model: &Model, x: f32, y: f32, width: f32, height: f32) -> (Vec3, Vec3, Option<(usize, usize, Vec3)>) {
+        let mm = self.model_matrix();
+        let inv = (self.camera.view_proj(width / height) * mm).inverse();
+        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
+        let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
+        let (section, plane) = (self.active_section(), self.plane);
+        let keep = |p: Vec3| {
+            let w = mm.transform_point3(p);
+            section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
+        };
+        // the exploded view moves the triangles: their offsets back in model space
+        let back = mm.inverse();
+        let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
+        let hit = pick_triangle(model, &self.visible, origin, dir, &shift, &keep).map(|(l, t)| {
+            let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
+            (l, t, s)
+        });
+        (origin, dir, hit)
+    }
+
+    /// What a measure click at (x, y) would take.
+    fn measure_hover(&mut self, model: &Model, x: f32, y: f32, width: f32, height: f32) -> Option<Hover> {
+        let (origin, dir, hit) = self.cast(model, x, y, width, height);
+        let (l, t, s) = hit?;
+        // the point on the triangle as it is (the exploded view is off while measuring)
+        let (point, _) = face_at(&model.layers[l], t, origin - s, dir)?;
+        let screen = self.screen(width, height);
+        self.measure.hover_at(model, l, t, point, &self.model_matrix(), screen, Vec2::new(x, y))
+    }
+
+    /// Looks up what the cursor rests on for the measure tool. A lookup waits twice as long as
+    /// the last one took, so a large model keeps responding (the frame ticks come back for it).
+    fn update_hover(&mut self) {
+        let Some((x, y, width, height)) = self.hover_request else { return };
+        let Some(model) = self.model.clone().filter(|_| self.measure.tool.is_some() && !self.plane_picking) else {
+            self.hover_request = None;
+            self.measure.hover = None;
+            return;
+        };
+        if self.hover_last.is_some_and(|(end, took)| end.elapsed() < 2 * took) {
+            return;
+        }
+        let start = Instant::now();
+        self.measure.hover = self.measure_hover(&model, x, y, width.max(1.0), height.max(1.0));
+        self.hover_last = Some((Instant::now(), start.elapsed().min(MAX_HOVER_PAUSE / 2)));
+        self.hover_request = None;
     }
 
     // ---- ribbon ---------------------------------------------------------------------------
@@ -1726,6 +1803,7 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.explode_offsets,
+            hover: self.measure.tool.is_some() && !self.plane_picking,
         })
             .width(Fill)
             .height(Fill);
@@ -1766,14 +1844,21 @@ impl App {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
             })
         };
+        // what a click would take, found in this view (not one the camera left)
+        let view_proj = self.camera.view_proj(self.aspect());
+        let hover = self.measure.hover.as_ref().filter(|h| {
+            self.measure.tool.is_some_and(|t| t != Tool::Volume) && h.screen.view_proj == view_proj
+        });
         // hidden while the model is taken apart: they belong to the model as it is
         let measures = (overlay.is_none()
             && !self.explode_on
-            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty()))
+            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some()))
         .then(|| {
             canvas(crate::measure::overlay::MeasureOverlay {
                 results: &self.measure.results,
                 picks: &self.measure.picks,
+                hover,
+                tool: self.measure.tool,
                 units: self.measure.units,
                 language: l,
                 view_proj: self.camera.view_proj(self.aspect()),
@@ -2504,6 +2589,55 @@ mod tests {
         assert!(app.selected.is_none(), "measuring does not select");
         let _ = app.update(Message::Escape);
         assert!(app.measure.tool.is_none());
+    }
+
+    #[test]
+    fn hovering_highlights_what_the_click_takes() {
+        use crate::measure::hover::SnapKind;
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Plate".into(),
+            positions: vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let vp = app.camera.view_proj(w / h);
+        let screen = |p: Vec3| {
+            let n = vp.project_point3(p);
+            ((n.x + 1.0) * 0.5 * w, (1.0 - n.y) * 0.5 * h)
+        };
+        let hover = |app: &mut App, x: f32, y: f32| {
+            let _ = app.update(Message::Navigate(Navigate::Hover { x, y, width: w, height: h }));
+            app.hover_last = None; // no pause between the looks of a test
+        };
+        // nothing to measure: nothing highlighted
+        let (x, y) = screen(Vec3::new(1.0, 0.5, 0.0));
+        hover(&mut app, x, y);
+        assert!(app.measure.hover.is_none());
+
+        let _ = app.update(Message::Measure(Tool::Distance));
+        hover(&mut app, x, y);
+        assert_eq!(app.measure.hover.as_ref().map(|h| h.kind), Some(SnapKind::Face));
+        // 3 px from the corner (0, 0): the corner
+        let (cx, cy) = screen(Vec3::ZERO);
+        hover(&mut app, cx + 3.0, cy - 2.0);
+        let highlighted = app.measure.hover.clone().expect("hover");
+        assert_eq!(highlighted.kind, SnapKind::Corner);
+        // the click lands a pixel or two off: it takes the highlighted corner
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: cx + 5.0, y: cy - 3.0, width: w, height: h }));
+        assert_eq!(app.measure.picks, vec![highlighted.snap]);
+        // orbiting drops the highlight; leaving the viewport too
+        hover(&mut app, x, y);
+        let _ = app.update(Message::Navigate(Navigate::Orbit { dx: 5.0, dy: 0.0 }));
+        assert!(app.measure.hover.is_none());
+        hover(&mut app, x, y);
+        let _ = app.update(Message::Navigate(Navigate::HoverOff));
+        assert!(app.measure.hover.is_none());
     }
 
     #[test]

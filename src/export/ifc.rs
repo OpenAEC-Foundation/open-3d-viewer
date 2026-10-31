@@ -5,8 +5,8 @@
 //!   else one storey; each element is contained in its level, or the storey it stands on.
 //! - One IFC element per element of the model (Revit elements, Tekla parts, SketchUp components,
 //!   glTF nodes) and one per layer for geometry outside elements (OBJ objects, STL, PLY). The
-//!   class follows the Revit category or the Tekla part name (IfcWall, IfcSlab, IfcBeam, ...);
-//!   anything else is an IfcBuildingElementProxy.
+//!   class follows the Revit category, the Tekla part name or the Archicad element (IfcWall,
+//!   IfcSlab, IfcBeam, ...); anything else is an IfcBuildingElementProxy.
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
@@ -292,6 +292,11 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             tekla_class(get("Name").unwrap_or(""), get("Type").unwrap_or(""), get("Profile").unwrap_or("")),
             "NOTDEFINED",
         ),
+        "Archicad" => match category {
+            "Wall" => ("IFCWALL", "NOTDEFINED"),
+            "Slab" => ("IFCSLAB", "FLOOR"),
+            _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
+        },
         _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
     };
     let name = match (get("family"), get("type")) {
@@ -776,6 +781,28 @@ mod tests {
         assert_eq!(s.matches("=IFCMATERIAL(").count(), 3);
         assert!(s.contains("IFCPROJECT(") && s.contains("'Caf\\X2\\00E9\\X0\\ ''t Hoekje'"));
         assert!(s.contains("IFCPRESENTATIONLAYERASSIGNMENT('Walls'"));
+    }
+
+    #[test]
+    fn archicad_walls_and_slabs_keep_their_class() {
+        let (positions, indices) = cube([0.0, 0.0, 0.0]);
+        let layer = Layer {
+            name: "Walls".into(),
+            positions,
+            indices: [indices.clone(), indices].concat(),
+            elements: vec![(1, 0, 36), (2, 36, 36)],
+            props: vec![
+                (1, r#"{"Name":"W-001","category":"Wall","level":"Ground Floor"}"#.into()),
+                (2, r#"{"Name":"Slab","category":"Slab","level":"Ground Floor"}"#.into()),
+            ],
+            ..Layer::default()
+        };
+        let mut m = Model::new(PathBuf::from("house.pln"), "Archicad", vec![layer]);
+        m.project.levels = vec![("Ground Floor".into(), 0.0)];
+        let s = ifc(&m);
+        assert_eq!(s.matches("=IFCWALL(").count(), 1);
+        assert!(s.contains("'W-001'") && s.contains(".FLOOR.)"));
+        assert_eq!(s.matches("=IFCSLAB(").count(), 1);
     }
 
     #[test]

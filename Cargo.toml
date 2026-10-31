@@ -71,8 +71,10 @@ iced_test = "0.14"
 # the shell's accessibility test lays it out without a GPU
 iced_tiny_skia = "0.14"
 
-# The web build (`trunk build`): WebGPU in the browser through iced's wgpu renderer
+# The web build (`trunk build`): WebGPU in the browser through iced's wgpu renderer, and WebGL2
+# where the browser has no WebGPU adapter (Chrome on Linux, many phones)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+iced = { version = "0.14", default-features = false, features = ["webgl"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

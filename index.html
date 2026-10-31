@@ -14,11 +14,13 @@
       canvas { display: block; width: 100%; height: 100%; outline: none; }
       #boot {
         position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 16px; font: 15px/1.5 system-ui, sans-serif; color: #d6d6d8; text-align: center; padding: 16px;
+        gap: 16px; font: 15px/1.5 system-ui, sans-serif; background: #1c1c1e; color: #d6d6d8; text-align: center; padding: 16px;
       }
       #boot img { width: 72px; height: 72px; }
       #boot a { color: #f5960a; }
       body.running #boot { display: none; }
+      /* without a GPU the app still opens, but cannot draw the model: keep the message on top */
+      body.unsupported #boot { display: flex; z-index: 1; }
     </style>
   </head>
   <body>
@@ -27,18 +29,37 @@
       <div id="boot-text">Open 3D Viewer Studio is loading…</div>
     </div>
     <script>
-      // The viewer draws with WebGPU; say so plainly where the browser has none.
-      if (!navigator.gpu) {
+      // The viewer draws with WebGPU, or WebGL2 where the browser offers no WebGPU adapter (Chrome on
+      // Linux, many phones). Without either, or when the app stops while starting, say so plainly
+      // instead of leaving "loading" on screen.
+      const unsupported = (reason) => {
+        document.body.classList.add("unsupported");
         document.getElementById("boot-text").innerHTML =
-          "This browser has no WebGPU, which Open 3D Viewer Studio needs.<br>" +
-          "Use a current Chrome, Edge, Firefox or Safari, or the desktop app from " +
+          reason + "<br>" +
+          "Use a current Chrome, Edge, Firefox or Safari with hardware acceleration on, or the desktop app from " +
           '<a href="https://github.com/OpenAEC-Foundation/open-3d-viewer/releases">the releases</a>.';
+      };
+      (async () => {
+        const webgpu = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
+        const webgl2 = !!document.createElement("canvas").getContext("webgl2");
+        if (!webgpu && !webgl2) {
+          unsupported("This browser offers neither WebGPU nor WebGL2, which Open 3D Viewer Studio needs to draw.");
+        }
+      })();
+      for (const type of ["error", "unhandledrejection"]) {
+        addEventListener(type, () => {
+          if (!document.body.classList.contains("started")) {
+            unsupported("Open 3D Viewer Studio could not start its graphics in this browser.");
+          }
+        });
       }
       // iced adds its canvas to the page once the app runs
       new MutationObserver((_, observer) => {
         if (document.querySelector("canvas")) {
           document.body.classList.add("running");
           observer.disconnect();
+          // the app keeps going once it has drawn its first frames
+          setTimeout(() => document.body.classList.add("started"), 3000);
         }
       }).observe(document.body, { childList: true, subtree: true });
     </script>

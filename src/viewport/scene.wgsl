@@ -20,8 +20,10 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-// exploded view: the offset (world) of every unit; unit 0 never moves
-@group(0) @binding(1) var<storage, read> offsets: array<vec4<f32>>;
+// exploded view: the offset (world) of every unit, row by row in a float texture (WebGL2 has no
+// storage buffers); unit 0 never moves
+@group(0) @binding(1) var offsets: texture_2d<f32>;
+const OFFSETS_WIDTH: u32 = 1024u;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -39,7 +41,7 @@ struct VertexOut {
 
 // Where a vertex is drawn: turned by the model matrix, then moved with its unit.
 fn place(v: VertexIn) -> vec4<f32> {
-    return u.model * vec4<f32>(v.position, 1.0) + vec4<f32>(offsets[v.unit].xyz, 0.0);
+    return u.model * vec4<f32>(v.position, 1.0) + vec4<f32>(textureLoad(offsets, vec2<i32>(i32(v.unit % OFFSETS_WIDTH), i32(v.unit / OFFSETS_WIDTH)), 0).xyz, 0.0);
 }
 
 @vertex

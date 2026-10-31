@@ -160,9 +160,9 @@ pub struct ScenePipeline {
     world_group: wgpu::BindGroup,
     edge_uniforms: wgpu::Buffer,
     edge_group: wgpu::BindGroup,
-    /// Exploded view: the offset of every unit of the model (storage, bound with the uniforms),
-    /// its length in units, and the vector last written into it.
-    offsets: wgpu::Buffer,
+    /// Exploded view: the offset of every unit of the model (a float texture, bound with the
+    /// uniforms), its length in units, and the vector last written into it.
+    offsets: wgpu::Texture,
     offsets_len: usize,
     offsets_written: Option<Arc<Vec<[f32; 4]>>>,
     targets: Option<Targets>,
@@ -210,10 +210,10 @@ impl ScenePipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -230,7 +230,7 @@ impl ScenePipeline {
         let model_uniforms = make_uniforms("o3v.uniforms.model");
         let world_uniforms = make_uniforms("o3v.uniforms.world");
         let edge_uniforms = make_uniforms("o3v.uniforms.edges");
-        let offsets = offsets_buffer(device, 1);
+        let offsets = offsets_texture(device, 1);
         let model_group = uniform_group(device, &uniform_layout, &model_uniforms, &offsets);
         let world_group = uniform_group(device, &uniform_layout, &world_uniforms, &offsets);
         let edge_group = uniform_group(device, &uniform_layout, &edge_uniforms, &offsets);
@@ -515,7 +515,7 @@ impl ScenePipeline {
 
     /// Makes room for the offsets of `units` units of the exploded view (all zero) and binds it.
     fn resize_offsets(&mut self, device: &wgpu::Device, units: usize) {
-        self.offsets = offsets_buffer(device, units);
+        self.offsets = offsets_texture(device, units);
         self.offsets_len = units.max(1);
         self.offsets_written = None;
         self.model_group = uniform_group(device, &self.uniform_layout, &self.model_uniforms, &self.offsets);
@@ -704,7 +704,7 @@ impl ScenePipeline {
         if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
             let n = primitive.offsets.len().min(self.offsets_len);
             if n > 0 {
-                queue.write_buffer(&self.offsets, 0, bytemuck::cast_slice(&primitive.offsets[..n]));
+                write_offsets(queue, &self.offsets, &primitive.offsets[..n]);
             }
             self.offsets_written = Some(primitive.offsets.clone());
         }
@@ -887,24 +887,51 @@ impl ScenePipeline {
     }
 }
 
-/// The offsets of the exploded view for `units` units (at least one), zero.
-fn offsets_buffer(device: &wgpu::Device, units: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
+/// Units per row of the offsets texture; `OFFSETS_WIDTH` in scene.wgsl. With WebGL2's 2048 rows
+/// that leaves room for two million units.
+const OFFSETS_WIDTH: usize = 1024;
+
+/// The offsets of the exploded view for `units` units (at least one), zero: a float texture
+/// rather than a storage buffer, so the scene also draws through WebGL2.
+fn offsets_texture(device: &wgpu::Device, units: usize) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
         label: Some("o3v.explode.offsets"),
-        size: (units.max(1) * std::mem::size_of::<[f32; 4]>()) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
+        size: wgpu::Extent3d { width: OFFSETS_WIDTH as u32, height: units.max(1).div_ceil(OFFSETS_WIDTH) as u32, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
     })
 }
 
+/// Writes `offsets` into the texture from unit 0, the last row padded with zeros.
+fn write_offsets(queue: &wgpu::Queue, texture: &wgpu::Texture, offsets: &[[f32; 4]]) {
+    let rows = offsets.len().div_ceil(OFFSETS_WIDTH);
+    let mut data = offsets.to_vec();
+    data.resize(rows * OFFSETS_WIDTH, [0.0; 4]);
+    queue.write_texture(
+        texture.as_image_copy(),
+        bytemuck::cast_slice(&data),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some((OFFSETS_WIDTH * std::mem::size_of::<[f32; 4]>()) as u32),
+            rows_per_image: Some(rows as u32),
+        },
+        wgpu::Extent3d { width: OFFSETS_WIDTH as u32, height: rows as u32, depth_or_array_layers: 1 },
+    );
+}
+
 /// A bind group of the scene shader: its uniforms and the offsets of the exploded view.
-fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: &wgpu::Buffer, offsets: &wgpu::Buffer) -> wgpu::BindGroup {
+fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: &wgpu::Buffer, offsets: &wgpu::Texture) -> wgpu::BindGroup {
+    let offsets = offsets.create_view(&wgpu::TextureViewDescriptor::default());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("o3v.uniforms"),
         layout,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: offsets.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&offsets) },
         ],
     })
 }

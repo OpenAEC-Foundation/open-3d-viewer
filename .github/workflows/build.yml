@@ -96,6 +96,30 @@ jobs:
           path: ${{ matrix.archive }}
           if-no-files-found: error
 
+  # The Linux build without a GPU or a desktop, as OpenAEC Linux runs it (OpenAEC-Blueprint#61);
+  # release.yml does the same with the AppImage.
+  linux-headless:
+    needs: desktop
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: open-3d-viewer-linux-x64.tar.gz
+      - name: labwc, grim and Mesa's software renderers
+        run: sudo apt-get update && sudo apt-get install -y labwc grim mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri vulkan-tools
+      - name: Start without a GPU and take screenshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/app"
+          tar -xzf open-3d-viewer-linux-x64.tar.gz -C "$RUNNER_TEMP/app"
+          packaging/linux/headless-test.sh "$RUNNER_TEMP/app/open-3d-viewer" test-models/test-cube.obj headless
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-headless
+          path: headless/
+          if-no-files-found: ignore
+
   sign-windows:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_build_run_id != '' }}
     runs-on: windows-latest

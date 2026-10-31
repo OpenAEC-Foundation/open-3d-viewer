@@ -65,6 +65,29 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 gh attestation verify open-3d-viewer_2026.44.18_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
+## OpenAEC Linux (SuperCloud)
+
+De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; deze repository publiceert dus geen eigen Docker-image.
+
+- **Zonder FUSE:** `./open-3d-viewer_<versie>_amd64.AppImage --appimage-extract`, dan `squashfs-root/AppRun [BESTAND]`.
+- **Zonder GPU:** het 3D-beeld tekent met de software-renderers van Mesa, lavapipe (Vulkan, `mesa-vulkan-drivers`) of llvmpipe (OpenGL, `libegl-mesa0`). Zonder een van beide opent het venster, maar blijft het 3D-beeld leeg.
+- **Onder Wayland**, met een kleine compositor zoals labwc, en zonder systeemvak, notificatiedienst, keyring of D-Bus-sessie.
+- **Stoppen:** de viewer leest alleen modellen en schrijft exports, dus er is geen onbewaard werk; op `SIGTERM` stopt hij.
+
+| Variabele | Wat hij doet |
+|-----------|--------------|
+| `OPENAEC_BEHEERD=1` | Beheerde modus: geen updatemelding (de SuperCloud ververst het image). De viewer downloadt zelf nooit updates. |
+| `OPENAEC_MAP` | De werkmap (`/openaec` in de SuperCloud): de dialogen voor openen en opslaan beginnen daar. |
+| `XDG_CONFIG_HOME` | Instellingen (voorkeuren, eigen sneltoetsen, de MCP-koppeling) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, standaard onder `~/.config`. |
+| `O3V_REMOTE=0` | Geen bedieningspoort voor de MCP-server. `O3V_REMOTE_PORT` legt de poort vast (anders een vrije). |
+| `WGPU_BACKEND` | `vulkan` of `gl` om de grafische backend te kiezen; standaard de eerste die werkt. |
+
+Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` en `--language en|nl`.
+
+**Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert alleen op `127.0.0.1`, voor zijn eigen MCP-server (zie [MCP](#mcp)). De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
+
+Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): de release pakt de AppImage uit, start hem onder labwc zonder scherm of GPU, controleert dat het venster en een model in het 3D-beeld tekenen, bewaart de schermafbeeldingen en zet het geheugengebruik zonder geopend bestand in de releasenotes.
+
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
@@ -144,10 +167,11 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **119 unittests** in `src/` (118 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **120 unittests** in `src/` (119 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py <Blueprint> --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
+- **De Linux-build start zonder GPU.** Bij elke pull request en release draait hij onder labwc zonder scherm, met software-rendering, en moet hij een model tekenen (zie [OpenAEC Linux](#openaec-linux-supercloud)).
 - **Een release wordt pas gebouwd als de tests slagen**, en de release notes zeggen per platform of de bestanden ondertekend zijn.
 
 Bron van de getallen: `cargo test --release` en `cargo test --release -p openaec-ui --lib`; de release draait dezelfde controles in [`release.yml`](.github/workflows/release.yml).

@@ -19,6 +19,8 @@ mod explode;
 pub mod export;
 mod icons;
 pub mod loaders;
+#[cfg(not(target_arch = "wasm32"))]
+mod managed;
 mod measure;
 pub mod model;
 mod remote;

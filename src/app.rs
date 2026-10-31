@@ -346,12 +346,16 @@ fn pick_model_task(add: bool) -> Task<Message> {
     exts.sort_unstable();
     Task::perform(
         async move {
-            let file = rfd::AsyncFileDialog::new()
+            let dialog = rfd::AsyncFileDialog::new()
                 .set_title(if add { "Add 3D model" } else { "Open 3D model" })
                 .add_filter("3D models", &exts)
-                .add_filter("All files", &["*"])
-                .pick_file()
-                .await?;
+                .add_filter("All files", &["*"]);
+            #[cfg(not(target_arch = "wasm32"))]
+            let dialog = match crate::managed::work_folder() {
+                Some(work) => dialog.set_directory(work),
+                None => dialog,
+            };
+            let file = dialog.pick_file().await?;
             #[cfg(not(target_arch = "wasm32"))]
             return Some(loaders::Source::File(file.path().to_path_buf()));
             #[cfg(target_arch = "wasm32")]
@@ -371,7 +375,7 @@ fn save_name(model: &Model) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn save_dialog_task(model: &Model) -> Task<Message> {
     let mut dialog = rfd::AsyncFileDialog::new().set_title("Save as").set_file_name(save_name(model));
-    if let Some(dir) = model.path.parent() {
+    if let Some(dir) = crate::managed::dialog_folder(model.path.parent().map(PathBuf::from), crate::managed::work_folder()) {
         dialog = dialog.set_directory(dir);
     }
     for w in &export::registry() {

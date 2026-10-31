@@ -131,7 +131,9 @@ for y in range(int(h * 0.35), int(h * 0.65)):
         if sum(abs(a - b) for a, b in zip(empty[i:i + 3], model[i:i + 3])) > 24:
             changed += 1
 print(f"middle of the window: {changed / total:.1%} of the pixels changed with the model open")
-if changed / total < 0.05:
+# the cube fills most of the middle (about 85% changes); without the 3D view only the "No model
+# open" text there goes away (under 10%)
+if changed / total < 0.3:
     sys.exit("::error::the 3D view did not draw the model (no wgpu adapter?)")
 EOF
 echo "memory at rest: $(cat "$out/memory-mb.txt") MB"

@@ -20,6 +20,7 @@ mod ply;
 mod cityjson;
 mod landxml;
 mod cad;
+mod allplan;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::borrow::Cow;
@@ -186,7 +187,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
     let builtin: Vec<&'static dyn Loader> = vec![
         &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
         &cityjson::CityJsonLoader, &landxml::LandXmlLoader,
-        &cad::CadLoader,
+        &cad::CadLoader, &allplan::AllplanLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
         #[cfg(not(target_arch = "wasm32"))]
@@ -284,7 +285,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }

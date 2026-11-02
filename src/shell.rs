@@ -954,9 +954,9 @@ impl Studio {
 /// system title bar (the shell draws its own).
 pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
     fonts::install_fallback();
-    // the installer reports updates; the app only shows them
+    // the installer reports updates; the app only shows them, and not in managed mode
     #[cfg(not(target_arch = "wasm32"))]
-    let studio = Studio { update: upd::check_installed(APP_ID, VERSION), ..studio };
+    let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(APP_ID, VERSION) }, ..studio };
     let initial = std::sync::Mutex::new(Some(studio));
     let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
         .title(Studio::title)

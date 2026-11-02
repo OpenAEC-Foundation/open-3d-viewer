@@ -165,6 +165,38 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The AppImage as OpenAEC Linux, the streamed SuperCloud environment, runs it
+  # (OpenAEC-Blueprint#61): extracted (no FUSE), without a GPU, under labwc without a screen, with
+  # a screenshot. The memory in use with no file open goes in the release notes.
+  linux-headless:
+    name: Linux without a GPU
+    needs: linux
+    runs-on: ubuntu-24.04
+    outputs:
+      memory: ${{ steps.run.outputs.memory }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: dist
+      - name: labwc, grim and Mesa's software renderers
+        run: sudo apt-get update && sudo apt-get install -y labwc grim mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri vulkan-tools
+      - name: Start the extracted AppImage and take screenshots
+        id: run
+        run: |
+          packaging/linux/headless-test.sh dist/*.AppImage test-models/test-cube.obj headless
+          echo "memory=$(cat headless/memory-mb.txt)" >> "$GITHUB_OUTPUT"
+          echo "### Linux without a GPU: started, drawn, $(cat headless/memory-mb.txt) MB at rest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-headless
+          path: headless/
+          if-no-files-found: ignore
+
   windows:
     name: Windows
     needs: check
@@ -427,7 +459,7 @@ jobs:
   publish:
     name: Publish
     if: ${{ github.event.inputs.dry_run != 'true' }}
-    needs: [check, linux, windows, macos]
+    needs: [check, linux, linux-headless, windows, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -437,9 +469,12 @@ jobs:
       NUMBER: ${{ needs.check.outputs.number }}
       WINDOWS_SIGNED: ${{ needs.windows.outputs.signed }}
       MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+      MEMORY_MB: ${{ needs.linux-headless.outputs.memory }}
     steps:
       - uses: actions/download-artifact@v4
         with:
+          # the packages, not the screenshots of linux-headless
+          pattern: "{linux,windows,macos}"
           path: assets
           merge-multiple: true
       - name: Checksums
@@ -498,6 +533,8 @@ jobs:
           | Elke Linux | \`open-3d-viewer_${NUMBER}_amd64.AppImage\` of \`_linux-x64.tar.gz\` |
 
           IFC- en Revit-bestanden openen in de desktopapp; in de browser niet.
+
+          De AppImage draait ook uitgepakt (\`--appimage-extract\`, dan \`AppRun\`) en zonder GPU, zoals in OpenAEC Linux; dat is voor deze release getest onder labwc met software-rendering. Geheugengebruik in rust, zonder geopend bestand: ${MEMORY_MB} MB.
 
           ## Ondertekening
 

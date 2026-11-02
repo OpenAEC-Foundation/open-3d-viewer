@@ -26,8 +26,13 @@ const MAX_TRIANGLES: usize = 4_000_000;
 const MAX_DEPTH: usize = 16;
 /// Elements drawn at most, counting each placement of a shared cell definition again.
 const MAX_VISITS: usize = 4 * MAX_ELEMENTS;
-/// The largest decompressed element stream of a V8 file.
+/// The largest decompressed element stream of a V8 file (less in the browser's 32-bit memory).
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_UNPACKED: usize = 1 << 30;
+#[cfg(target_arch = "wasm32")]
+const MAX_UNPACKED: usize = 256 << 20;
+/// The largest decompressed model header (`Dgn~Mh`, about 4.4 KB).
+const MAX_MODEL_HEADER: usize = 64 << 10;
 const OLE_SIGNATURE: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 /// Fixed-point unit of quaternions, B-spline knots and weights: 2^31 - 1.
 const UNIT: f64 = 2_147_483_647.0;
@@ -938,13 +943,19 @@ struct Compound<'a> {
     entries: Vec<Entry>,
 }
 
-/// The sectors of the chain that starts at `start`; a cycle ends after as many steps as the table has.
-fn chain(table: &[u32], start: u32) -> Vec<u32> {
+/// The sectors of the chain that starts at `start`, at most `limit` of them; a chain that comes
+/// back to a sector ends there.
+fn chain(table: &[u32], start: u32, limit: usize) -> Vec<u32> {
+    let mut seen = vec![false; table.len()];
     let mut out = Vec::new();
     let mut sector = start;
-    while sector <= MAX_SECTOR && out.len() < table.len() {
+    while sector <= MAX_SECTOR && out.len() < limit {
+        let index = sector as usize;
+        if let Some(seen) = seen.get_mut(index) {
+            if std::mem::replace(seen, true) { break; }
+        }
         out.push(sector);
-        sector = table.get(sector as usize).copied().unwrap_or(END_OF_CHAIN);
+        sector = table.get(index).copied().unwrap_or(END_OF_CHAIN);
     }
     out
 }
@@ -964,18 +975,21 @@ impl<'a> Compound<'a> {
             data, shift, fat: Vec::new(), mini_fat: Vec::new(), mini_stream: Vec::new(), cutoff: u64::from(le32(data, 0x38)), entries: Vec::new(),
         };
         // The FAT sectors: 109 in the header, the rest in a chain of DIFAT sectors whose last
-        // number points to the next one.
-        let mut fat_sectors: Vec<u32> = u32s(&data[0x4C..0x200]).collect();
+        // number points to the next one. A file has no more FAT sectors than sectors, and each
+        // DIFAT sector is read once, so a crafted file cannot multiply the table.
+        let sectors = data.len() >> shift;
+        let mut fat_sectors: Vec<u32> = u32s(&data[0x4C..0x200]).filter(|&s| s <= MAX_SECTOR).collect();
+        let mut difat_seen = vec![false; sectors + 1];
         let mut next = le32(data, 0x44);
-        let mut difat = 0;
-        while next <= MAX_SECTOR && difat <= data.len() >> shift {
+        while next <= MAX_SECTOR && fat_sectors.len() < sectors {
+            if difat_seen.get_mut(next as usize).is_none_or(|seen| std::mem::replace(seen, true)) { break; }
             let Some(sector) = file.sector(next) else { break };
             let per = sector.len() / 4 - 1;
-            fat_sectors.extend(u32s(&sector[..4 * per]));
+            fat_sectors.extend(u32s(&sector[..4 * per]).filter(|&s| s <= MAX_SECTOR));
             next = le32(sector, 4 * per);
-            difat += 1;
         }
-        let fat: Vec<u32> = fat_sectors.into_iter().filter(|&s| s <= MAX_SECTOR).filter_map(|s| file.sector(s)).flat_map(|sector| u32s(sector)).collect();
+        fat_sectors.truncate(sectors);
+        let fat: Vec<u32> = fat_sectors.into_iter().filter_map(|s| file.sector(s)).flat_map(|sector| u32s(sector)).collect();
         file.fat = fat;
         let directory = file.regular(le32(data, 0x30), None);
         let version = le16(data, 0x1A);
@@ -1002,11 +1016,11 @@ impl<'a> Compound<'a> {
         data.get(start..data.len().min(start + (1 << self.shift))).filter(|s| s.len() >= 4)
     }
 
-    /// The bytes of a chain of sectors, at most `size`.
+    /// The bytes of a chain of sectors, at most `size` and never more than the file.
     fn regular(&self, start: u32, size: Option<u64>) -> Vec<u8> {
-        let limit = size.map_or(usize::MAX, |s| usize::try_from(s).unwrap_or(usize::MAX));
+        let limit = size.map_or(usize::MAX, |s| usize::try_from(s).unwrap_or(usize::MAX)).min(self.data.len());
         let mut out = Vec::new();
-        for sector in chain(&self.fat, start) {
+        for sector in chain(&self.fat, start, (self.data.len() >> self.shift) + 1) {
             if out.len() >= limit { break; }
             match self.sector(sector) { Some(bytes) => out.extend_from_slice(bytes), None => break }
         }
@@ -1016,9 +1030,9 @@ impl<'a> Compound<'a> {
 
     /// The bytes of a chain of 64-byte sectors in the mini stream.
     fn mini(&self, start: u32, size: u64) -> Vec<u8> {
-        let limit = usize::try_from(size).unwrap_or(usize::MAX);
+        let limit = usize::try_from(size).unwrap_or(usize::MAX).min(self.mini_stream.len());
         let mut out = Vec::new();
-        for sector in chain(&self.mini_fat, start) {
+        for sector in chain(&self.mini_fat, start, self.mini_stream.len().div_ceil(64)) {
             let at = sector as usize * 64;
             match self.mini_stream.get(at..self.mini_stream.len().min(at + 64)) {
                 Some(bytes) if !bytes.is_empty() && out.len() < limit => out.extend_from_slice(bytes),
@@ -1060,15 +1074,27 @@ impl<'a> Compound<'a> {
     }
 }
 
-/// Inflates zlib data onto `out`, up to the stream size limit.
-fn inflate(packed: &[u8], out: &mut Vec<u8>) -> Result<(), &'static str> {
-    let room = MAX_UNPACKED.saturating_sub(out.len());
-    let result = flate2::read::ZlibDecoder::new(packed).take(room as u64 + 1).read_to_end(out);
-    if out.len() > MAX_UNPACKED {
-        out.truncate(MAX_UNPACKED);
-        return Err("Element streams too large (rest of the model)");
+/// Inflates zlib data onto `out` until `out` holds `limit` bytes. Memory is reserved step by
+/// step and never beyond `limit`, so a small compressed bomb or a full memory becomes an error
+/// instead of an abort.
+fn inflate(packed: &[u8], out: &mut Vec<u8>, limit: usize) -> Result<(), &'static str> {
+    let mut decoder = flate2::read::ZlibDecoder::new(packed);
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = match decoder.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err("Unreadable element stream (rest of the model)"),
+        };
+        let kept = read.min(limit.saturating_sub(out.len()));
+        if out.capacity() - out.len() < kept {
+            let capacity = (2 * out.capacity()).max(out.len() + kept).min(limit);
+            out.try_reserve_exact(capacity - out.len()).map_err(|_| "Not enough memory for the element streams (rest of the model)")?;
+        }
+        out.extend_from_slice(&buffer[..kept]);
+        if kept < read { return Err("Element streams too large (rest of the model)"); }
     }
-    result.map(|_| ()).map_err(|_| "Unreadable element stream (rest of the model)")
 }
 
 /// The element streams `$1`, `$2`, ... of a storage, inflated and joined in numeric order: one
@@ -1087,7 +1113,7 @@ fn element_stream(file: &Compound, storage: Option<usize>, scene: &mut Scene) ->
         // stream of only the header is empty.
         let block = file.read(k);
         if block.len() <= 16 { continue; }
-        if let Err(error) = inflate(&block[16..], &mut out) {
+        if let Err(error) = inflate(&block[16..], &mut out, MAX_UNPACKED) {
             scene.omit(error);
             break;
         }
@@ -1308,6 +1334,8 @@ struct V8Design {
     colors: Option<Vec<[u8; 3]>>,
     /// Shared cell definitions by name: the definition and its components in the non-model elements.
     definitions: BTreeMap<String, (usize, usize)>,
+    /// The same by name in ASCII lower case, for instances that spell the name differently.
+    folded: BTreeMap<String, (usize, usize)>,
 }
 
 impl V8Design {
@@ -1331,8 +1359,10 @@ impl V8Design {
             }
             i = next;
         }
+        let mut folded = BTreeMap::new();
+        for (name, &range) in &definitions { folded.entry(name.to_ascii_lowercase()).or_insert(range); }
         let three_d = model.iter().any(|e| e.graphic() && e.three_d());
-        V8Design { origin, metres_per_uor, units, three_d, levels, colors, definitions }
+        V8Design { origin, metres_per_uor, units, three_d, levels, colors, definitions, folded }
     }
 
     /// Design coordinates (UOR) to world metres.
@@ -1346,8 +1376,7 @@ impl V8Design {
     fn level_name(&self, level: u32) -> String { self.levels.get(&level).cloned().unwrap_or_else(|| format!("Level {level}")) }
 
     fn definition(&self, name: &str) -> Option<(usize, usize)> {
-        self.definitions.get(name).copied()
-            .or_else(|| self.definitions.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, &range)| range))
+        self.definitions.get(name).or_else(|| self.folded.get(&name.to_ascii_lowercase())).copied()
     }
 }
 
@@ -1355,7 +1384,7 @@ impl V8Design {
 /// zlib data of 4096 bytes, a 4-byte prefix and an element of type 66.
 fn model_units(packed: Option<&[u8]>) -> Option<(DVec3, f64, String)> {
     let mut unpacked = Vec::new();
-    inflate(packed?, &mut unpacked).ok()?;
+    inflate(packed?, &mut unpacked, MAX_MODEL_HEADER).ok()?;
     let e = V8Element { bytes: unpacked.get(0x1004..)? };
     if e.kind() != 66 { return None; }
     // Units per metre are stored as a numerator and a denominator.
@@ -1856,6 +1885,40 @@ mod tests {
         assert!(load(b"not a design file at all".to_vec()).err().unwrap().contains("not a design file"));
         let header_only = Writer::new(false, "M", "MM", 1000, 1, [0.0; 3]).bytes();
         assert!(load(header_only).err().unwrap().contains("no drawable elements"));
+    }
+
+    #[test]
+    fn crafted_compound_files_cannot_multiply_their_chains() {
+        // 20 KB with 4 KB sectors; the FAT list in the header, the DIFAT chain, the directory and
+        // the mini FAT all point at sector 0, which is zeros: every chain is a cycle on one sector.
+        let mut data = vec![0u8; 20 * 1024];
+        data[..8].copy_from_slice(&OLE_SIGNATURE);
+        for (at, value) in [(0x18, 0x3Eu16), (0x1A, 4), (0x1C, 0xFFFE), (0x1E, 12), (0x20, 6)] { data[at..at + 2].copy_from_slice(&value.to_le_bytes()); }
+        for (at, value) in [(0x2C, 1000u32), (0x38, 4096), (0x40, 1000), (0x48, 1000)] { data[at..at + 4].copy_from_slice(&value.to_le_bytes()); }
+        assert!(load(data.clone()).err().unwrap().contains("no root directory entry"));
+        // The same with a directory in sector 1: a root whose mini stream claims 2^48 bytes.
+        data[0x30..0x34].copy_from_slice(&1u32.to_le_bytes());
+        let root = &mut data[2 * 4096..3 * 4096];
+        root[0x40] = 2;
+        root[0x42] = 5;
+        root[0x4C..0x50].copy_from_slice(&u32::MAX.to_le_bytes());
+        root[0x78..0x80].copy_from_slice(&(1u64 << 48).to_le_bytes());
+        let file = Compound::open(&data).unwrap();
+        assert!(file.fat.len() <= data.len() / 4, "{} FAT entries", file.fat.len());
+        assert!(file.mini_stream.len() <= data.len() && file.mini_fat.len() <= data.len() / 4);
+        assert!(load(data).err().unwrap().contains("no design model"));
+        assert_eq!(chain(&[0; 8], 0, 100), [0], "a chain ends where it comes back");
+        assert_eq!(chain(&[1, 2, 3, 0], 0, 2), [0, 1], "and after its limit");
+    }
+
+    #[test]
+    fn zlib_bombs_stop_at_the_limit() {
+        let packed = zlib(&vec![0u8; 1 << 20], 9);
+        let mut out = Vec::new();
+        assert!(inflate(&packed, &mut out, 1000).is_err());
+        assert_eq!((out.len(), out.capacity() <= 1000), (1000, true));
+        let mut out = Vec::new();
+        assert!(inflate(&packed, &mut out, 1 << 20).is_ok() && out.len() == 1 << 20);
     }
 
     // V8 files, written from the clean-room specification (SPEC_v0.1.md §B) and [MS-CFB].

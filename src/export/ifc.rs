@@ -8,7 +8,8 @@
 //!   class follows the Revit category, the Tekla part name or the Archicad element (IfcWall,
 //!   IfcSlab, IfcBeam, ...); anything else is an IfcBuildingElementProxy.
 //! - Archicad openings (already cut from their walls) are left out; Archicad library objects,
-//!   drawn as boxes of any kind, are IfcBuildingElementProxy.
+//!   drawn as boxes of any kind, are IfcBuildingElementProxy; Archicad meshes are
+//!   IfcGeographicElement (terrain), and zones IfcSpace, part of their storey (IfcRelAggregates).
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
@@ -306,6 +307,8 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             "Beam" => ("IFCBEAM", "BEAM"),
             // a roof plane: IfcRoof is the container of such slabs in IFC 4
             "Roof" => ("IFCSLAB", "ROOF"),
+            "Mesh" => ("IFCGEOGRAPHICELEMENT", "TERRAIN"),
+            "Zone" => ("IFCSPACE", "SPACE"),
             _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
         },
         _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
@@ -411,6 +414,7 @@ pub fn write(model: &Model, file_name: &str, out: &mut impl Write) -> io::Result
     // elements
     let mut styles: HashMap<[u8; 4], u64> = HashMap::new();
     let mut contained: Vec<Vec<u64>> = vec![Vec::new(); storeys.len()];
+    let mut spaces: Vec<Vec<u64>> = vec![Vec::new(); storeys.len()];
     let mut by_material: Vec<(Vec<String>, Vec<u64>)> = Vec::new();
     let mut by_layer: Vec<(String, Vec<u64>)> = Vec::new();
     let mut material_ids: HashMap<String, u64> = HashMap::new();
@@ -495,11 +499,18 @@ pub fn write(model: &Model, file_name: &str, out: &mut impl Write) -> io::Result
             "IFCDOOR" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCWINDOW" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCREINFORCINGBAR" => format!("{head},$,$,$,$,.{}.,$)", who.predefined),
+            // the tag is the long name; an element of its storey, not a composite
+            "IFCSPACE" => format!("{head},.ELEMENT.,.{}.,$)", who.predefined),
             _ => format!("{head},.{}.)", who.predefined),
         })?;
         property_set(&mut f, &ids, &key, &model.format, &props, element)?;
 
-        contained[storey].push(element);
+        // a space is part of its storey (IfcRelAggregates), not contained in it
+        if who.class == "IFCSPACE" {
+            spaces[storey].push(element);
+        } else {
+            contained[storey].push(element);
+        }
         let mats = materials(&props);
         if !mats.is_empty() {
             match by_material.iter_mut().find(|(m, _)| *m == mats) {
@@ -514,6 +525,9 @@ pub fn write(model: &Model, file_name: &str, out: &mut impl Write) -> io::Result
     }
 
     // relations
+    for (i, elements) in spaces.iter().enumerate().filter(|(_, e)| !e.is_empty()) {
+        f.add(format!("IFCRELAGGREGATES({},$,$,$,#{},{})", text(&ids.get(&format!("spaces/{i}"))), storeys[i].0, refs(elements)))?;
+    }
     for (i, elements) in contained.iter().enumerate().filter(|(_, e)| !e.is_empty()) {
         f.add(format!(
             "IFCRELCONTAINEDINSPATIALSTRUCTURE({},$,$,$,{},#{})",
@@ -825,6 +839,37 @@ mod tests {
         // a library object is a box of any kind (furniture, kitchen, text, plant): a proxy
         assert_eq!(s.matches("=IFCBUILDINGELEMENTPROXY(").count(), 1);
         assert!(s.contains("'Sofa Layout 26.gsm'"));
+    }
+
+    #[test]
+    fn archicad_meshes_are_terrain_and_zones_spaces_of_their_storey() {
+        let (positions, indices) = cube([0.0, 0.0, 0.0]);
+        let layer = |name: &str, id: u64, props: &str| Layer {
+            name: name.into(),
+            positions: positions.clone(),
+            indices: indices.clone(),
+            elements: vec![(id, 0, 36)],
+            props: vec![(id, props.into())],
+            ..Layer::default()
+        };
+        let mut m = Model::new(
+            PathBuf::from("house.pln"),
+            "Archicad",
+            vec![
+                layer("Terrain", 1, r#"{"Name":"Ter 0.00","category":"Mesh","level":"Ground Floor"}"#),
+                layer("Zones", 2, r#"{"Name":"01 Living Room","category":"Zone","level":"Ground Floor"}"#),
+            ],
+        );
+        m.project.levels = vec![("Ground Floor".into(), 0.0)];
+        let s = ifc(&m);
+        assert!(s.contains("=IFCGEOGRAPHICELEMENT(") && s.contains(".TERRAIN.)"));
+        let space = s.lines().find(|l| l.contains("=IFCSPACE(")).expect("a space");
+        assert!(space.contains("'01 Living Room'") && space.ends_with(",.ELEMENT.,.SPACE.,$);"), "{space}");
+        // the space is aggregated by the storey, and not in its containment
+        let id = space.split('=').next().unwrap();
+        let storey = s.lines().find(|l| l.contains("=IFCBUILDINGSTOREY(")).unwrap().split('=').next().unwrap();
+        assert!(s.lines().any(|l| l.contains("=IFCRELAGGREGATES(") && l.contains(&format!(",{storey},({id})"))), "{s}");
+        assert!(!s.lines().any(|l| l.contains("=IFCRELCONTAINEDINSPATIALSTRUCTURE(") && l.contains(&format!("{id})")) || l.contains(&format!("{id},"))));
     }
 
     #[test]

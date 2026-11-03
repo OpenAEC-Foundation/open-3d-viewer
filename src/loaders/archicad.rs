@@ -1,9 +1,10 @@
-//! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls, slabs and columns as
-//! extruded footprints, beams along their axis and roof planes, grouped per story. Written from a
-//! clean-room specification of the file structure (SPEC v0.4, section numbers in the comments): a
-//! container of 16-byte items with QuickLZ groups, object records with associations, stories, the
-//! element polygon, the wall fields, columns and beams with their cross-sections, and roof planes.
-//! Openings, library objects, curved roofs and profile cross-sections are not read yet.
+//! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls (with their windows
+//! and doors cut out), slabs and columns as extruded footprints, beams along their axis and roof
+//! planes, grouped per story. Written from a clean-room specification of the file structure (SPEC
+//! v0.5, section numbers in the comments): a container of 16-byte items with QuickLZ groups,
+//! object records with associations, stories, the element polygon, the wall fields, columns and
+//! beams with their cross-sections, roof planes, and windows and doors as openings. Window and door
+//! frames, library objects, curved roofs and profile cross-sections are not read yet.
 //!
 //! Archicad is Z up in metres, as the viewer: coordinates are taken as they are.
 
@@ -87,6 +88,11 @@ const SECTION_LINK: Guid = guid("306cb86321a21c4284fb926c694bf611");
 const COLUMN_TOP_LINK: Guid = guid("2dbcbe5e0bcf51478f557c2353c3fd14");
 /// §5, §8.8 (v0.4): a roof plane (a single-plane roof, or a plane of a multi-plane roof).
 const ROOF: Guid = guid("21764c9de9512345a3baf2121777bcbe");
+/// §5, §8.9 (v0.5): windows and doors, and the associations from a wall to them.
+const WINDOW: Guid = guid("a061f1934e4cf74da1004fd0e8c4f1e1");
+const DOOR: Guid = guid("8976f0d8fa9cbe4faeb40a60b8e667ee");
+const WALL_WINDOWS: Guid = guid("e67943c5d0af9a4b9887af5baeeccf84");
+const WALL_DOORS: Guid = guid("02fe6b1f0cd6ae409ac8c3953ce12814");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -145,6 +151,8 @@ struct Record {
     top_link: Option<Guid>,
     /// Columns and beams: the segment that leads to the cross-section (§8.7).
     segment: Option<Guid>,
+    /// Walls: their windows and doors (§8.9).
+    openings: Vec<Guid>,
     data: Vec<u8>,
 }
 
@@ -195,6 +203,8 @@ struct Records {
     columns: Vec<Record>,
     beams: Vec<Record>,
     roofs: Vec<Record>,
+    /// Windows and doors (§8.9): whether a door, and the data.
+    openings: HashMap<Guid, (bool, Vec<u8>)>,
     /// Column and beam segments (§8.7): the first target of their section association.
     segments: HashMap<Guid, Option<Guid>>,
     sections: HashMap<Guid, Section>,
@@ -401,7 +411,10 @@ impl Records {
     /// §3–§4: one block, kept when it is a record of a class the reader uses.
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
-        let classes = [WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, COLUMN_SEGMENT, BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE];
+        let classes = [
+            WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, COLUMN_SEGMENT, BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND,
+            SECTION_PROFILE,
+        ];
         match payload(b, |class| classes.contains(class)) {
             Payload::Data(p) => self.record(object, &p),
             Payload::Damaged => self.damaged += 1,
@@ -440,7 +453,14 @@ impl Records {
                     *too_large += 1;
                     return;
                 }
-                list.push(Record { guid: object, story, top_link, segment, data: data.to_vec() });
+                // §8.9: the windows and doors of a wall, any op, every target
+                let openings = if class == WALL { links.iter().filter(|l| l.1 == WALL_WINDOWS || l.1 == WALL_DOORS).map(|l| l.2).collect() } else { Vec::new() };
+                list.push(Record { guid: object, story, top_link, segment, openings, data: data.to_vec() });
+            }
+            WINDOW | DOOR => {
+                if data.len() <= MAX_ELEMENT_DATA {
+                    self.openings.insert(object, (class == DOOR, data.to_vec()));
+                }
             }
             COLUMN_SEGMENT | BEAM_SEGMENT => {
                 // §8.7: the first target; the op is not given, any is taken
@@ -1096,6 +1116,13 @@ struct Stats {
     roofs_skipped: usize,
     roofs_no_polygon: usize,
     roofs_unreadable: usize,
+    openings: Vec<OpeningOut>,
+    /// Windows and doors skipped (§8.9): all of them, those whose record is missing, those whose
+    /// fields do not read, and those of a wall that is not drawn.
+    openings_skipped: usize,
+    openings_missing: usize,
+    openings_unreadable: usize,
+    openings_wall_skipped: usize,
 }
 
 /// A column as drawn, for the tests.
@@ -1120,6 +1147,116 @@ struct BeamOut {
     section: Section,
     /// The top at the start and the end.
     top: (f64, f64),
+}
+
+/// A window or door as cut from its wall, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct OpeningOut {
+    name: String,
+    door: bool,
+    wall: String,
+    /// The length of the wall's reference line, and the middle of the opening along it.
+    wall_length: f64,
+    middle: f64,
+    width: f64,
+    height: f64,
+    sill: f64,
+}
+
+/// §8.9: the fields of a window or door.
+#[derive(Debug, Clone)]
+struct OpeningFields {
+    id: String,
+    /// b and h: width and height of the opening.
+    width: f64,
+    height: f64,
+    /// m: the middle of the opening along the wall's reference line, from its start.
+    middle: f64,
+    /// s: the sill, to the level of the wall's story.
+    sill: f64,
+}
+
+/// §8.9: the last ID string candidate with a name; b and h 84 and 76 bytes before its length
+/// field i, m and s 24 and 64 bytes after its end q.
+fn opening_fields(data: &[u8]) -> Option<OpeningFields> {
+    let (id, q) = id_strings(data).filter(|(id, _)| !id.is_empty()).last()?;
+    let i = q - 4 - 2 * id.len();
+    if i < 84 || q + 72 > data.len() {
+        return None;
+    }
+    let (width, height, middle, sill) = (f64_at(data, i - 84)?, f64_at(data, i - 76)?, f64_at(data, q + 24)?, f64_at(data, q + 64)?);
+    let size = 0.0..50.0;
+    let ok = [middle, sill].iter().all(|v| v.is_finite()) && size.contains(&width) && size.contains(&height) && width > 0.0 && height > 0.0;
+    ok.then_some(OpeningFields { id, width, height, middle, sill })
+}
+
+/// The part of a contour where (p − origin) · dir ≤ c (`below`) or ≥ c (Sutherland–Hodgman).
+fn clip(contour: &[[f64; 2]], origin: [f64; 2], dir: [f64; 2], c: f64, below: bool) -> Vec<[f64; 2]> {
+    let inside = |p: [f64; 2]| {
+        let v = (p[0] - origin[0]) * dir[0] + (p[1] - origin[1]) * dir[1] - c;
+        if below { -v } else { v }
+    };
+    let mut out = Vec::with_capacity(contour.len() + 2);
+    for i in 0..contour.len() {
+        let (p, q) = (contour[i], contour[(i + 1) % contour.len()]);
+        let (a, b) = (inside(p), inside(q));
+        if a >= 0.0 {
+            out.push(p);
+        }
+        if (a >= 0.0) != (b >= 0.0) {
+            let t = a / (a - b);
+            out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+        }
+    }
+    out
+}
+
+/// A footprint (outer contour first) clipped to one side of a line square to `dir`: empty when
+/// nothing of the outer contour is left.
+fn clip_footprint(contours: &[Vec<[f64; 2]>], origin: [f64; 2], dir: [f64; 2], c: f64, below: bool) -> Vec<Vec<[f64; 2]>> {
+    let clipped: Vec<Vec<[f64; 2]>> = contours.iter().map(|k| clip(k, origin, dir, c, below)).collect();
+    if clipped.first().is_none_or(|outer| outer.len() < 3) {
+        return Vec::new();
+    }
+    clipped.into_iter().filter(|k| k.len() >= 3).collect()
+}
+
+/// §8.9: a wall body with its openings cut out, as prisms. Each opening is a block from `a` to
+/// `b` along the reference line (from `origin` in direction `dir`), through the whole wall, from
+/// `low` to `high`. The pieces it touches are cut in three square to the line; the middle one
+/// keeps what is below and above the opening.
+fn cut_openings(wall: Prism, origin: [f64; 2], dir: [f64; 2], openings: &[[f64; 4]]) -> Vec<Prism> {
+    let mut pieces = vec![wall];
+    for &[a, b, low, high] in openings {
+        let mut next = Vec::with_capacity(pieces.len() + 3);
+        for piece in pieces {
+            let along = piece.contours[0].iter().map(|p| (p[0] - origin[0]) * dir[0] + (p[1] - origin[1]) * dir[1]);
+            let (first, last) = along.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            let (z0, z1) = piece.z;
+            if last <= a || first >= b || z1 <= low || z0 >= high {
+                next.push(piece);
+                continue;
+            }
+            for (side, c, below) in [(first < a, a, true), (last > b, b, false)] {
+                let contours = if side { clip_footprint(&piece.contours, origin, dir, c, below) } else { Vec::new() };
+                if !contours.is_empty() {
+                    next.push(Prism { contours, z: piece.z });
+                }
+            }
+            let middle = clip_footprint(&clip_footprint(&piece.contours, origin, dir, a, false), origin, dir, b, true);
+            if middle.is_empty() {
+                continue;
+            }
+            for z in [(z0, z1.min(low)), (z0.max(high), z1)] {
+                if z.1 - z.0 > 1e-6 {
+                    next.push(Prism { contours: middle.clone(), z });
+                }
+            }
+        }
+        pieces = next;
+    }
+    pieces
 }
 
 /// A roof plane as drawn, for the tests: x, y and z (lowest underside, highest top) ranges.
@@ -1195,6 +1332,8 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     let mut columns = Layer { name: "Columns".into(), color: [0.78, 0.76, 0.72], ..Layer::default() };
     let mut beams = Layer { name: "Beams".into(), color: [0.74, 0.70, 0.64], ..Layer::default() };
     let mut roofs = Layer { name: "Roofs".into(), color: [0.62, 0.42, 0.36], ..Layer::default() };
+    // §8.9: the opening volumes start hidden, as those of IFC files
+    let mut openings = Layer { name: "Openings".into(), color: [0.55, 0.75, 0.9], hidden: true, ..Layer::default() };
     let mut next_id = 0u64;
     let mut add = |layer: &mut Layer,
                    record: &Record,
@@ -1221,6 +1360,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     for record in &records.walls {
         let Some(f) = wall_fields(&record.data) else {
             stats.walls_skipped += 1;
+            stats.openings_wall_skipped += record.openings.len();
             continue;
         };
         let polygon = find_polygon(&record.data);
@@ -1239,6 +1379,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         if z.1.is_nan() || z.0.is_nan() || z.1 <= z.0 {
             stats.walls_no_height += 1;
             stats.walls_skipped += 1;
+            stats.openings_wall_skipped += record.openings.len();
             continue;
         }
         let footprint = match polygon {
@@ -1255,10 +1396,58 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
             None => "not linked".to_string(),
         };
         props.insert("Top".into(), top.into());
+        // §8.9: the windows and doors, as blocks along the reference line from its start
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let [x1, y1, x2, y2] = f.line;
+        let length = (x2 - x1).hypot(y2 - y1);
+        let dir = [(x2 - x1) / length, (y2 - y1) / length];
+        let mut cuts: Vec<([f64; 4], Guid, bool, OpeningFields)> = Vec::new();
+        for opening in &record.openings {
+            let Some((door, data)) = records.openings.get(opening) else {
+                stats.openings_missing += 1;
+                continue;
+            };
+            match opening_fields(data).filter(|_| length >= 1e-9) {
+                Some(o) => cuts.push(([o.middle - o.width / 2.0, o.middle + o.width / 2.0, e + o.sill, e + o.sill + o.height], *opening, *door, o)),
+                None => stats.openings_unreadable += 1,
+            }
+        }
+        if !cuts.is_empty() {
+            props.insert("Openings".into(), cuts.len().to_string().into());
+        }
+        let wall_name = if f.id.is_empty() { "Wall".to_string() } else { f.id.clone() };
+        let footprint_of_wall = footprint.clone();
         let drawn = footprint.is_some_and(|contours| {
-            let prism = Prism { contours, z };
-            add(&mut walls, record, z, &|layer| push_prism(layer, &prism), props)
+            let boxes: Vec<[f64; 4]> = cuts.iter().map(|c| c.0).collect();
+            let pieces = cut_openings(Prism { contours, z }, [x1, y1], dir, &boxes);
+            add(&mut walls, record, z, &|layer| pieces.iter().fold(false, |any, piece| push_prism(layer, piece) | any), props)
         });
+        if drawn {
+            // the opening volumes: through the wall's footprint, square to its reference line
+            let normal = [-dir[1], dir[0]];
+            let across = footprint_of_wall.iter().flatten().flatten().map(|p| (p[0] - x1) * normal[0] + (p[1] - y1) * normal[1]);
+            let (v0, v1) = across.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            for ([a, b, low, high], guid, door, o) in cuts {
+                let at = |s: f64, v: f64| [x1 + dir[0] * s + normal[0] * v, y1 + dir[1] * s + normal[1] * v];
+                let prism = Prism { contours: vec![vec![at(a, v0), at(b, v0), at(b, v1), at(a, v1)]], z: (low, high) };
+                let mut props = serde_json::Map::new();
+                props.insert("Name".into(), o.id.clone().into());
+                props.insert("category".into(), "Opening".into());
+                props.insert("Type".into(), (if door { "Door" } else { "Window" }).into());
+                props.insert("Size".into(), format!("{:.0} × {:.0} mm", o.width * 1000.0, o.height * 1000.0).into());
+                props.insert("Sill".into(), format!("{:.0} mm", o.sill * 1000.0).into());
+                props.insert("Wall".into(), wall_name.clone().into());
+                let element = Record { guid, story: record.story, top_link: None, segment: None, openings: Vec::new(), data: Vec::new() };
+                if add(&mut openings, &element, (low, high), &|layer| push_prism(layer, &prism), props) {
+                    let (width, height, middle, sill) = (o.width, o.height, o.middle, o.sill);
+                    stats.openings.push(OpeningOut { name: o.id, door, wall: wall_name.clone(), wall_length: length, middle, width, height, sill });
+                } else {
+                    stats.openings_unreadable += 1;
+                }
+            }
+        } else {
+            stats.openings_wall_skipped += cuts.len();
+        }
         if drawn {
             stats.walls += 1;
             stats.walls_polygon += usize::from(has_polygon);
@@ -1397,6 +1586,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         }
     }
 
+    stats.openings_skipped = stats.openings_missing + stats.openings_unreadable + stats.openings_wall_skipped;
     if stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() == 0 {
         // §10: Archicad 17 to 24 share the container but not the records
         return Err(format!(
@@ -1419,9 +1609,11 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ("Archicad columns".into(), skipped_text(stats.columns.len(), stats.columns_skipped, stats.columns_profile, stats.columns_no_section)),
         ("Archicad beams".into(), skipped_text(stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.beams_no_section)),
         ("Archicad roofs".into(), roof_text(&stats)),
+        ("Archicad openings".into(), opening_text(&stats)),
         (
             "Archicad elements not read yet".into(),
-            "Openings, meshes, morphs, library objects, curved roofs and shells, and columns and beams with a profile section"
+            "Window and door frames, glass and leaves, meshes, morphs, library objects, curved roofs and shells, and columns and \
+             beams with a profile section"
                 .into(),
         ),
     ];
@@ -1433,8 +1625,27 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs, columns, beams, roofs].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams, roofs, openings].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
+}
+
+/// "6 doors and 8 windows cut, 1 skipped (1 whose fields do not read)".
+fn opening_text(stats: &Stats) -> String {
+    let doors = stats.openings.iter().filter(|o| o.door).count();
+    let mut out = format!("{doors} doors and {} windows cut, {} skipped", stats.openings.len() - doors, stats.openings_skipped);
+    let why: Vec<String> = [
+        (stats.openings_missing, "without a record"),
+        (stats.openings_unreadable, "whose fields do not read"),
+        (stats.openings_wall_skipped, "in a wall that is not drawn"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    if !why.is_empty() {
+        out += &format!(" ({})", why.join(", "));
+    }
+    out
 }
 
 /// "2 read, 1 skipped (1 without a polygon)".
@@ -1669,6 +1880,26 @@ mod tests {
     /// The single roof plane of `CH04_Part2_Walls.pln` and `CH05_Result.pln`.
     const RT_002: RoofRow = ("RT - 002", 12.0, 0.3, [0.711, 11.311], [5.141, 12.741], [5.372, 7.932]);
 
+    /// An opening of §11 (v0.5): name, wall, wall length, middle, width, height, sill.
+    type OpeningRow = (&'static str, &'static str, f64, f64, f64, f64, f64);
+
+    /// §11 (v0.5): the doors and windows cut, these among them; the openings layer starts hidden
+    /// and the walls stay closed bodies.
+    fn check_openings(stats: &Stats, model: &Model, doors: usize, windows: usize, expected: &[OpeningRow]) {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let found_doors = stats.openings.iter().filter(|o| o.door).count();
+        assert_eq!((found_doors, stats.openings.len() - found_doors, stats.openings_skipped), (doors, windows, 0));
+        for &(name, wall, length, middle, width, height, sill) in expected {
+            let o = stats.openings.iter().find(|o| o.name == name && o.wall == wall && near(o.wall_length, length) && near(o.middle, middle));
+            let o = o.unwrap_or_else(|| panic!("{name} in {wall}: {:?}", stats.openings));
+            assert!(near(o.width, width) && near(o.height, height) && near(o.sill, sill), "{o:?}");
+        }
+        let layer = model.layers.iter().find(|l| l.name == "Openings").expect("openings");
+        assert!(layer.hidden && layer.elements.len() == doors + windows);
+        let walls = model.layers.iter().find(|l| l.name == "Walls").unwrap();
+        assert_eq!(walls.solid_indices().len(), walls.indices.len(), "closed walls");
+    }
+
     /// The expected values of the specification (§11) for `CH04_Part2_Walls.pln`.
     #[test]
     fn sample_ch04_walls_archicad_25() {
@@ -1688,6 +1919,8 @@ mod tests {
         assert!(near(b.min[2], -0.2) && near(model.bounds.min[2], -0.2), "{b:?}");
         check_roofs(&stats, &[RT_002]);
         check_walls(&stats, &model, 16, 4, 9.0, -0.2);
+        // §11 (v0.5): no windows or doors
+        assert_eq!((stats.openings.len(), stats.openings_skipped), (0, 0));
         // §11 (v0.3): no columns or beams
         assert_eq!((stats.columns.len(), stats.columns_skipped, stats.beams.len(), stats.beams_skipped), (0, 0, 0, 0));
         // the walls are on their stories, for the explorer and the exploded view
@@ -1714,6 +1947,7 @@ mod tests {
                 ("SEO 1.01", 11.393, 0.3, [11.023, 11.219], [5.838, 12.582], [7.35, 7.695]),
             ],
         );
+        check_openings(&stats, &model, 6, 7, &[("Di 1.03", "Wai 1.11", 6.6, 5.65, 0.83, 2.115, 0.0), ("We 1.01", "Wae 1.04", 5.303, 2.98, 2.4, 0.95, 1.2)]);
         check_walls(&stats, &model, 32, 24, 7.588, -0.272);
         // §11 (v0.3): two round columns, linked; the four beams have a profile section
         check_columns(&stats, &[("C 0.01", [11.102, 12.373]), ("C 0.02", [11.102, 6.023])], (-0.25, 2.78));
@@ -1770,6 +2004,17 @@ mod tests {
         let (low, high) = z.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
         assert!((low - 2.45).abs() < 1e-3 && (high - 2.85).abs() < 1e-3, "{low} {high}");
         check_roofs(&stats, &[RT_002]);
+        check_openings(
+            &stats,
+            &model,
+            6,
+            8,
+            &[
+                ("DOO - 001", "SW - 002", 11.0, 4.712, 1.0, 2.1, 0.0),
+                ("WD - 004", "SW - 003", 7.0, 5.74, 2.2, 1.2, 0.9),
+                ("WD - 003", "SW - 004", 10.0, 4.84, 0.9, 2.26, -0.2),
+            ],
+        );
         let roofs = model.layers.iter().find(|l| l.name == "Roofs").expect("roofs");
         assert_eq!(roofs.solid_indices().len(), roofs.indices.len(), "a closed roof body");
     }
@@ -1989,7 +2234,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file()] {
             garbage_rounds(&file);
         }
     }
@@ -2307,6 +2552,119 @@ mod tests {
         file.resize(32, 0);
         file.extend(blocks.concat());
         file
+    }
+
+    /// Window or door data (§8.9): b and h at 16 and 24, the ID string at 100, m and s 24 and 64
+    /// bytes after its end.
+    fn opening_data(id: &str, [middle, width, height, sill]: [f64; 4]) -> Vec<u8> {
+        let mut data = vec![0u8; 16];
+        data.extend([width, height].iter().flat_map(|v| v.to_le_bytes()));
+        data.resize(98, 0);
+        data.extend([1, 0]);
+        data.extend((id.len() as u32).to_le_bytes());
+        data.extend(id.encode_utf16().flat_map(u16::to_le_bytes));
+        let q = data.len();
+        data.resize(q + 72, 0);
+        data[q + 24..q + 32].copy_from_slice(&middle.to_le_bytes());
+        data[q + 64..q + 72].copy_from_slice(&sill.to_le_bytes());
+        data
+    }
+
+    /// Walls on the story "Hall" (4.5 m), each 4 m from (1, y) to (5, y), 0.3 thick to the left
+    /// of that line, 2.7 high, with their windows and doors (middle, width, height, sill):
+    /// - W1 (y 0): a door D1 (1, 0.8, 2.1, 0);
+    /// - W2 (y 2): a window N1 (2, 1, 1.2, 0.9);
+    /// - W3 (y 4): a door D2 (1, 0.8, 2.1, 0) and a window N2 (3, 1, 1, 1);
+    /// - W4 (y 6): a window N3 (3.8, 1, 1, 1) that reaches 0.3 past the end of the wall, one
+    ///   whose width is 0 and one whose record is missing.
+    fn openings_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+        ];
+        let openings: [(u8, bool, &str, [f64; 4]); 6] = [
+            (0x81, true, "D1", [1.0, 0.8, 2.1, 0.0]),
+            (0x82, false, "N1", [2.0, 1.0, 1.2, 0.9]),
+            (0x83, true, "D2", [1.0, 0.8, 2.1, 0.0]),
+            (0x84, false, "N2", [3.0, 1.0, 1.0, 1.0]),
+            (0x85, false, "N3", [3.8, 1.0, 1.0, 1.0]),
+            (0x86, false, "N4", [2.0, 0.0, 1.0, 1.0]),
+        ];
+        for (k, door, id, values) in openings {
+            blocks.push(block([k; 16], 0x84, &record(if door { DOOR } else { WINDOW }, &opening_data(id, values), &[0, 0, 0]), 0));
+        }
+        let walls: [(&str, f64, &[u8]); 4] = [("W1", 0.0, &[0x81]), ("W2", 2.0, &[0x82]), ("W3", 4.0, &[0x83, 0x84]), ("W4", 6.0, &[0x85, 0x86, 0x87])];
+        for (k, (id, y, openings)) in walls.into_iter().enumerate() {
+            let mut items = vec![(0x12, ON_STORY, STORY_ID)];
+            let doors: Vec<Guid> = openings.iter().filter(|&&o| o == 0x81 || o == 0x83).map(|&o| [o; 16]).collect();
+            let windows: Vec<Guid> = openings.iter().filter(|&&o| o != 0x81 && o != 0x83).map(|&o| [o; 16]).collect();
+            items.extend(doors.iter().map(|&d| (0x11, WALL_DOORS, d)));
+            let mut assoc = links_of(&items);
+            // the windows of W3 and W4 as one 0x01 item with several targets
+            assoc.pop();
+            if !windows.is_empty() {
+                assoc.push(0x01);
+                assoc.extend(WALL_WINDOWS);
+                assoc.extend((windows.len() as u32).to_le_bytes());
+                assoc.extend(windows.concat());
+            }
+            assoc.push(0);
+            blocks.push(block([0x90 + k as u8; 16], 0x84, &record(WALL, &wall_data(id, y, 2.7), &assoc), 0));
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    /// The volume of an element of a layer (divergence theorem; a closed body).
+    fn volume(layer: &Layer, element: usize) -> f64 {
+        let (_, first, count) = layer.elements[element];
+        let p = |i: u32| glam::DVec3::from_array(std::array::from_fn(|k| layer.positions[3 * i as usize + k] as f64));
+        layer.indices[first as usize..(first + count) as usize].chunks_exact(3).map(|t| p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0).sum()
+    }
+
+    #[test]
+    fn cuts_windows_and_doors_from_walls() {
+        let (loaded, stats) = convert(read_bytes(&openings_file()).expect("container")).expect("walls");
+        let doors = stats.openings.iter().filter(|o| o.door).count();
+        assert_eq!((doors, stats.openings.len() - doors), (2, 3));
+        // N4 has no width, the third target of W4 has no record; W4 is drawn all the same
+        assert_eq!((stats.openings_skipped, stats.openings_unreadable, stats.openings_missing, stats.walls), (2, 1, 1, 4));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad openings" && v == "2 doors and 3 windows cut, 2 skipped (1 without a record, 1 whose fields do not read)"));
+        let walls = &loaded.layers[0];
+        assert_eq!(walls.name, "Walls");
+        // every wall stays one closed body facing out, without the volume of its openings
+        assert_eq!(walls.solid_indices().len(), walls.indices.len());
+        let full = 4.0 * 0.3 * 2.7;
+        let cut = |width: f64, height: f64| width * 0.3 * height;
+        for (k, want) in [full - cut(0.8, 2.1), full - cut(1.0, 1.2), full - cut(0.8, 2.1) - cut(1.0, 1.0), full - cut(0.7, 1.0)].into_iter().enumerate() {
+            assert!((volume(walls, k) - want).abs() < 1e-4, "wall {k}: {} not {want}", volume(walls, k));
+        }
+        assert!(walls.props[2].1.contains("\"Openings\":\"2\""));
+        // the openings: hidden, through the wall, the door from the floor, the window from its sill
+        let openings = loaded.layers.iter().find(|l| l.name == "Openings").expect("openings");
+        assert!(openings.hidden);
+        assert_eq!(openings.elements.len(), 5);
+        let z = |element: usize| {
+            let (_, first, count) = openings.elements[element];
+            openings.indices[first as usize..(first + count) as usize]
+                .iter()
+                .map(|&i| openings.positions[3 * i as usize + 2])
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)))
+        };
+        assert!((z(0).0 - 4.5).abs() < 1e-5 && (z(0).1 - 6.6).abs() < 1e-5, "{:?}", z(0));
+        assert!((z(1).0 - 5.4).abs() < 1e-5 && (z(1).1 - 6.6).abs() < 1e-5, "{:?}", z(1));
+        assert!((volume(openings, 1) - cut(1.0, 1.2)).abs() < 1e-4);
+        let props = &openings.props[0].1;
+        for want in ["\"Name\":\"D1\"", "\"Type\":\"Door\"", "\"Size\":\"800 × 2100 mm\"", "\"Sill\":\"0 mm\"", "\"Wall\":\"W1\"", "\"level\":\"Hall\""] {
+            assert!(props.contains(want), "{want} in {props}");
+        }
     }
 
     #[test]

@@ -1,10 +1,11 @@
 //! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls (with their windows
-//! and doors cut out), slabs and columns as extruded footprints, beams along their axis and roof
-//! planes, grouped per story. Written from a clean-room specification of the file structure (SPEC
-//! v0.5, section numbers in the comments): a container of 16-byte items with QuickLZ groups,
-//! object records with associations, stories, the element polygon, the wall fields, columns and
-//! beams with their cross-sections, roof planes, and windows and doors as openings. Window and door
-//! frames, library objects, curved roofs and profile cross-sections are not read yet.
+//! and doors cut out), slabs and columns as extruded footprints, beams along their axis, roof
+//! planes and library objects as boxes, grouped per story. Written from a clean-room specification
+//! of the file structure (SPEC v0.7, section numbers in the comments): a container of 16-byte items
+//! with QuickLZ groups, object records with associations, stories, the element polygon, the wall
+//! fields, columns and beams with their cross-sections, roof planes, windows and doors as openings,
+//! and the place, size and height of library objects. Window and door frames, the shapes of library
+//! objects (code), curved roofs and profile cross-sections are not read yet.
 //!
 //! Archicad is Z up in metres, as the viewer: coordinates are taken as they are.
 
@@ -93,6 +94,20 @@ const WINDOW: Guid = guid("a061f1934e4cf74da1004fd0e8c4f1e1");
 const DOOR: Guid = guid("8976f0d8fa9cbe4faeb40a60b8e667ee");
 const WALL_WINDOWS: Guid = guid("e67943c5d0af9a4b9887af5baeeccf84");
 const WALL_DOORS: Guid = guid("02fe6b1f0cd6ae409ac8c3953ce12814");
+/// §8.9: more openings in one wall are skipped and counted, so that cutting them stays fast
+/// (open question Q-I25).
+const MAX_OPENINGS: usize = 1000;
+/// §5, §8.10 (v0.6): placed library objects, drawn as boxes.
+const OBJECT: Guid = guid("c3ceefdbbf1b6748b8b3c4f7c859df61");
+/// §8.10: the associations from an object to its 2D outline cache and to its library reference,
+/// and from the library reference to the parameter block.
+const OBJECT_OUTLINE: Guid = guid("bb882d2d03111b4282f1df5f07d5f5ce");
+const OBJECT_LIBRARY: Guid = guid("3e459f182eea384eafe9660d1d25afc6");
+const LIBRARY_PARAMETERS: Guid = guid("a4f0eb76efc23f48a1a828d3adde99a0");
+/// §5 (v0.7): the classes of an object's outline cache, library reference and parameter block.
+const OUTLINE: Guid = guid("d3858d46688b6d48903456beaad7ad95");
+const LIBRARY: Guid = guid("3da3fc2b38bde349bf6d52ac8b850b9f");
+const PARAMETERS: Guid = guid("7d22db11e4dbaf4588b66fddea993f71");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -214,12 +229,40 @@ struct Records {
     columns_too_large: usize,
     beams_too_large: usize,
     roofs_too_large: usize,
+    /// Placed library objects (§8.10): those with a story association; the others are 2D symbols.
+    objects: Vec<ObjectRecord>,
+    objects_too_large: usize,
+    /// §8.10, by identity, only what the objects need (a parameter block runs to ~80 kB, and a
+    /// large project has thousands): of an outline cache its bounds (when they read) and its
+    /// (x, y) bytes; of a library reference its parameter block and name; of a parameter block
+    /// its ZZYZX.
+    outlines: HashMap<Guid, Outline>,
+    libraries: HashMap<Guid, (Option<Guid>, Option<String>)>,
+    heights: HashMap<Guid, Option<f64>>,
     /// Blocks of the classes above whose payload could not be decoded, blocks larger than
     /// [`MAX_BLOCK`] and group chunks that did not decompress.
     damaged: usize,
 }
 
-/// Reads the file as a stream: projects run to hundreds of MB, mostly library content.
+/// A placed library object (§8.10).
+struct ObjectRecord {
+    guid: Guid,
+    story: Guid,
+    /// The 2D outline cache and the library reference, the first target of each association.
+    outline: Option<Guid>,
+    library: Option<Guid>,
+    data: Vec<u8>,
+}
+
+/// §8.10: what the reader keeps of an outline cache.
+struct Outline {
+    /// xmin, xmax, ymin, ymax, when they read.
+    bounds: Option<[f64; 4]>,
+    /// The object's (x, y), as bytes to find in the object's data.
+    xy: [u8; 16],
+}
+
+/// Reads the file as a stream, in one pass: projects run to hundreds of MB, mostly library content.
 fn read_source(source: &Source) -> Result<Records, String> {
     match source {
         Source::File(path) => {
@@ -412,8 +455,8 @@ impl Records {
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
         let classes = [
-            WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, COLUMN_SEGMENT, BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND,
-            SECTION_PROFILE,
+            WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, OBJECT, OUTLINE, LIBRARY, PARAMETERS, COLUMN_SEGMENT,
+            BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE,
         ];
         match payload(b, |class| classes.contains(class)) {
             Payload::Data(p) => self.record(object, &p),
@@ -424,15 +467,20 @@ impl Records {
 
     /// §4: an object record of a class the reader uses.
     fn record(&mut self, object: Guid, p: &[u8]) {
-        let Some(class) = guid_at(p, 0) else { return };
-        let Some(data_len) = u32_at(p, 35).map(|n| n as usize) else { return };
-        let Some(assoc_len) = 39usize.checked_add(data_len).and_then(|at| u32_at(p, at)).map(|n| n as usize) else { return };
-        if 43usize.checked_add(data_len).and_then(|n| n.checked_add(assoc_len)) != Some(p.len()) {
-            return; // not an element record
-        }
-        let data = &p[39..39 + data_len];
-        let links = links(&p[43 + data_len..]);
+        let Some((class, data, assoc)) = record_parts(p) else { return };
+        let links = links(assoc);
         match class {
+            OBJECT => {
+                // §8.10: placed objects have a story; the others are 2D symbols and not counted
+                let Some(story) = links.iter().find(|l| l.0 == 0x12 && l.1 == ON_STORY).map(|l| l.2) else { return };
+                if data.len() > MAX_ELEMENT_DATA {
+                    self.objects_too_large += 1;
+                    return;
+                }
+                let first = |assoc: Guid| links.iter().find(|l| l.1 == assoc).map(|l| l.2);
+                let (outline, library) = (first(OBJECT_OUTLINE), first(OBJECT_LIBRARY));
+                self.objects.push(ObjectRecord { guid: object, story, outline, library, data: data.to_vec() });
+            }
             WALL | SLAB | COLUMN | BEAM | ROOF => {
                 let first = |assoc: Guid, op: &[u8]| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
                 let story = first(ON_STORY, &[0x12]);
@@ -480,8 +528,21 @@ impl Records {
                 let units: Vec<u16> = name.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
                 self.stories.insert(object, (String::from_utf16_lossy(&units), index));
             }
+            // §8.10: only what the objects need, not the records themselves
+            OUTLINE => {
+                if let Some(xy) = data.get(75..91).and_then(|xy| xy.try_into().ok()) {
+                    self.outlines.insert(object, Outline { bounds: object_outline(data), xy });
+                }
+            }
+            LIBRARY => {
+                let parameters = links.iter().find(|l| l.1 == LIBRARY_PARAMETERS).map(|l| l.2);
+                self.libraries.insert(object, (parameters, library_name(data)));
+            }
+            PARAMETERS => {
+                self.heights.insert(object, object_height(data));
+            }
             LINK => {
-                // §8.3: the op of this association is not given; any is taken
+                // §8.3: the op of this association is not given; any is taken (also below)
                 let targets = links.iter().filter(|l| l.1 == LINK_STORY).map(|l| l.2).collect();
                 self.top_links.insert(object, targets);
             }
@@ -492,6 +553,18 @@ impl Records {
             }
         }
     }
+}
+
+
+/// §4: the class, data and associations of an object record, when its lengths add up.
+fn record_parts(p: &[u8]) -> Option<(Guid, &[u8], &[u8])> {
+    let class = guid_at(p, 0)?;
+    let data_len = u32_at(p, 35)? as usize;
+    let assoc_len = u32_at(p, 39usize.checked_add(data_len)?)? as usize;
+    if 43usize.checked_add(data_len)?.checked_add(assoc_len)? != p.len() {
+        return None; // not an element record
+    }
+    Some((class, &p[39..39 + data_len], &p[43 + data_len..]))
 }
 
 /// A block's payload.
@@ -1123,6 +1196,15 @@ struct Stats {
     openings_missing: usize,
     openings_unreadable: usize,
     openings_wall_skipped: usize,
+    /// Openings past the first [`MAX_OPENINGS`] of one wall.
+    openings_too_many: usize,
+    objects: Vec<ObjectOut>,
+    /// Library objects skipped (§8.10): all of them, those without a single place for their
+    /// fields, the 2D ones (ZZYZX 0), and those whose fields do not read.
+    objects_skipped: usize,
+    objects_ambiguous: usize,
+    objects_flat: usize,
+    objects_unreadable: usize,
 }
 
 /// A column as drawn, for the tests.
@@ -1147,6 +1229,19 @@ struct BeamOut {
     section: Section,
     /// The top at the start and the end.
     top: (f64, f64),
+}
+
+/// A library object as drawn, for the tests: A, B, H, whether H is known, and its ranges.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct ObjectOut {
+    name: String,
+    size: [f64; 3],
+    height_known: bool,
+    shape: ObjectShape,
+    x: (f64, f64),
+    y: (f64, f64),
+    z: (f64, f64),
 }
 
 /// A window or door as cut from its wall, for the tests.
@@ -1227,21 +1322,25 @@ fn clip_footprint(contours: &[Vec<[f64; 2]>], origin: [f64; 2], dir: [f64; 2], c
 /// `low` to `high`. The pieces it touches are cut in three square to the line; the middle one
 /// keeps what is below and above the opening.
 fn cut_openings(wall: Prism, origin: [f64; 2], dir: [f64; 2], openings: &[[f64; 4]]) -> Vec<Prism> {
-    let mut pieces = vec![wall];
+    // each piece with its range along the line, so that a piece an opening misses costs a compare
+    let range = |piece: &Prism| {
+        let along = piece.contours[0].iter().map(|p| (p[0] - origin[0]) * dir[0] + (p[1] - origin[1]) * dir[1]);
+        along.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+    };
+    let mut pieces = vec![(range(&wall), wall)];
     for &[a, b, low, high] in openings {
         let mut next = Vec::with_capacity(pieces.len() + 3);
-        for piece in pieces {
-            let along = piece.contours[0].iter().map(|p| (p[0] - origin[0]) * dir[0] + (p[1] - origin[1]) * dir[1]);
-            let (first, last) = along.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        for ((first, last), piece) in pieces {
             let (z0, z1) = piece.z;
             if last <= a || first >= b || z1 <= low || z0 >= high {
-                next.push(piece);
+                next.push(((first, last), piece));
                 continue;
             }
+            let mut keep = |piece: Prism| next.push((range(&piece), piece));
             for (side, c, below) in [(first < a, a, true), (last > b, b, false)] {
                 let contours = if side { clip_footprint(&piece.contours, origin, dir, c, below) } else { Vec::new() };
                 if !contours.is_empty() {
-                    next.push(Prism { contours, z: piece.z });
+                    keep(Prism { contours, z: piece.z });
                 }
             }
             let middle = clip_footprint(&clip_footprint(&piece.contours, origin, dir, a, false), origin, dir, b, true);
@@ -1250,13 +1349,117 @@ fn cut_openings(wall: Prism, origin: [f64; 2], dir: [f64; 2], openings: &[[f64; 
             }
             for z in [(z0, z1.min(low)), (z0.max(high), z1)] {
                 if z.1 - z.0 > 1e-6 {
-                    next.push(Prism { contours: middle.clone(), z });
+                    keep(Prism { contours: middle.clone(), z });
                 }
             }
         }
         pieces = next;
     }
-    pieces
+    pieces.into_iter().map(|(_, piece)| piece).collect()
+}
+
+/// §8.10: the fields of a placed library object.
+#[derive(Debug, Clone, Copy)]
+struct ObjectFields {
+    /// x, y: its anchor point; rotation (rad); z: its bottom above its story; A and B.
+    at: [f64; 2],
+    rotation: f64,
+    z: f64,
+    size: [f64; 2],
+}
+
+/// Why a library object is not drawn (§8.10).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ObjectSkip {
+    /// No single place for its fields.
+    Ambiguous,
+    /// ZZYZX is 0: a 2D object.
+    Flat,
+    Unreadable,
+}
+
+/// §8.10: x, y, rotation, z, A and B at p, all finite.
+fn object_fields_at(data: &[u8], p: usize) -> Option<ObjectFields> {
+    let f: Vec<f64> = (0..6).map(|k| f64_at(data, p + 8 * k)).collect::<Option<_>>()?;
+    f.iter().all(|v| v.is_finite()).then_some(ObjectFields { at: [f[0], f[1]], rotation: f[2], z: f[3], size: [f[4], f[5]] })
+}
+
+/// §8.10: where the fields of an object are. With an outline cache, where its (x, y) (cache @75)
+/// is in the object's data; otherwise (or when it is not there) the only place behind the marks
+/// `01 00 00 00 00 00 01 00` (17 bytes before) with 0 < A, B < 1000 and |rotation| < 7.
+fn object_fields(data: &[u8], outline: Option<&[u8; 16]>) -> Result<ObjectFields, ObjectSkip> {
+    if let Some(xy) = outline {
+        if let Some(f) = data.windows(16).position(|w| w == xy).and_then(|p| object_fields_at(data, p)) {
+            return Ok(f);
+        }
+    }
+    const MARKS: [u8; 8] = [1, 0, 0, 0, 0, 0, 1, 0];
+    let mut found = (17..data.len().saturating_sub(47)).filter(|&p| data[p - 17..p - 9] == MARKS).filter_map(|p| object_fields_at(data, p)).filter(|f| {
+        f.size.iter().all(|v| *v > 0.0 && *v < 1000.0) && f.rotation.abs() < 7.0
+    });
+    match (found.next(), found.next()) {
+        (Some(f), None) => Ok(f),
+        _ => Err(ObjectSkip::Ambiguous),
+    }
+}
+
+/// §8.10: the 2D outline cache: xmin, xmax, ymin, ymax at 9 (data of 91 bytes or more).
+fn object_outline(data: &[u8]) -> Option<[f64; 4]> {
+    if data.len() < 91 {
+        return None;
+    }
+    let v = [9, 17, 25, 33].map(|at| f64_at(data, at).unwrap_or(f64::NAN));
+    (v.iter().all(|x| x.is_finite()) && v[0] <= v[1] && v[2] <= v[3]).then_some(v)
+}
+
+/// §8.10: ZZYZX, the height, in a parameter block: the f64 8 bytes before the name field
+/// `ZZYZX` and 27 zero bytes (at 40 or later). `None` when there is no such name.
+fn object_height(parameters: &[u8]) -> Option<f64> {
+    let mut name = [0u8; 32];
+    name[..5].copy_from_slice(b"ZZYZX");
+    (40..parameters.len().saturating_sub(31)).filter(|&n| parameters[n..n + 32] == name).find_map(|n| f64_at(parameters, n - 8).filter(|h| h.is_finite()))
+}
+
+/// §8.10 (v0.7): the name of a library part, as Archicad shows it. The library reference holds
+/// UTF-16 strings as in §8.2: the file name (ending in `.gsm`), then the same name without
+/// `.gsm`, then the library's name. The second; without it, the first without `.gsm`.
+fn library_name(data: &[u8]) -> Option<String> {
+    let mut names = id_strings(data).map(|(name, _)| name).filter(|name| !name.is_empty());
+    let file = names.find(|name| name.to_ascii_lowercase().ends_with(".gsm"))?;
+    Some(names.next().unwrap_or_else(|| file[..file.len() - 4].to_string()))
+}
+
+/// §8.10: the footprint of an object box. With an outline cache: A × B turned, around the middle
+/// of the cache, when that fits the cache within 1 mm, else the cache itself; without: A × B
+/// turned around (x, y). Also says which.
+fn object_footprint(f: &ObjectFields, outline: Option<[f64; 4]>) -> (Vec<[f64; 2]>, ObjectShape) {
+    let (s, c) = f.rotation.sin_cos();
+    let [a, b] = f.size;
+    let turned = |m: [f64; 2]| {
+        [(-a, -b), (a, -b), (a, b), (-a, b)].iter().map(|&(lx, ly)| [m[0] + lx / 2.0 * c - ly / 2.0 * s, m[1] + lx / 2.0 * s + ly / 2.0 * c]).collect()
+    };
+    match outline {
+        Some([x0, x1, y0, y1]) => {
+            let fits = (a * c.abs() + b * s.abs() - (x1 - x0)).abs() <= 1e-3 && (a * s.abs() + b * c.abs() - (y1 - y0)).abs() <= 1e-3;
+            if fits {
+                (turned([(x0 + x1) / 2.0, (y0 + y1) / 2.0]), ObjectShape::Turned)
+            } else {
+                (vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]], ObjectShape::Outline)
+            }
+        }
+        None => (turned(f.at), ObjectShape::Centred),
+    }
+}
+
+/// How the footprint of an object box was found (§8.10).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ObjectShape {
+    /// A × B turned, fitting the outline cache.
+    Turned,
+    /// The outline cache (larger than A × B).
+    Outline,
+    /// A × B turned around (x, y), without a cache.
+    Centred,
 }
 
 /// A roof plane as drawn, for the tests: x, y and z (lowest underside, highest top) ranges.
@@ -1334,6 +1537,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     let mut roofs = Layer { name: "Roofs".into(), color: [0.62, 0.42, 0.36], ..Layer::default() };
     // §8.9: the opening volumes start hidden, as those of IFC files
     let mut openings = Layer { name: "Openings".into(), color: [0.55, 0.75, 0.9], hidden: true, ..Layer::default() };
+    let mut objects = Layer { name: "Objects".into(), color: [0.72, 0.64, 0.52], ..Layer::default() };
     let mut next_id = 0u64;
     let mut add = |layer: &mut Layer,
                    record: &Record,
@@ -1402,7 +1606,8 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         let length = (x2 - x1).hypot(y2 - y1);
         let dir = [(x2 - x1) / length, (y2 - y1) / length];
         let mut cuts: Vec<([f64; 4], Guid, bool, OpeningFields)> = Vec::new();
-        for opening in &record.openings {
+        stats.openings_too_many += record.openings.len().saturating_sub(MAX_OPENINGS);
+        for opening in record.openings.iter().take(MAX_OPENINGS) {
             let Some((door, data)) = records.openings.get(opening) else {
                 stats.openings_missing += 1;
                 continue;
@@ -1586,13 +1791,63 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         }
     }
 
-    stats.openings_skipped = stats.openings_missing + stats.openings_unreadable + stats.openings_wall_skipped;
-    if stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() == 0 {
+    stats.openings_skipped = stats.openings_missing + stats.openings_unreadable + stats.openings_wall_skipped + stats.openings_too_many;
+
+    // §8.10: placed library objects as boxes
+    stats.objects_unreadable = records.objects_too_large;
+    for object in &records.objects {
+        let outline = object.outline.and_then(|g| records.outlines.get(&g));
+        let library = object.library.and_then(|g| records.libraries.get(&g));
+        let height = library.and_then(|l| l.0).and_then(|p| records.heights.get(&p).copied().flatten());
+        let fields = object_fields(&object.data, outline.map(|o| &o.xy)).and_then(|f| match height {
+            Some(0.0) => Err(ObjectSkip::Flat),
+            Some(h) if h < 0.0 => Err(ObjectSkip::Unreadable),
+            _ => Ok(f),
+        });
+        let f = match fields {
+            Ok(f) => f,
+            Err(why) => {
+                *(match why {
+                    ObjectSkip::Ambiguous => &mut stats.objects_ambiguous,
+                    ObjectSkip::Flat => &mut stats.objects_flat,
+                    ObjectSkip::Unreadable => &mut stats.objects_unreadable,
+                }) += 1;
+                continue;
+            }
+        };
+        // no ZZYZX: a fixed height in the library part's code; drawn 1 m high
+        let h = height.unwrap_or(1.0);
+        let e = level_of.get(&object.story).copied().unwrap_or(0.0);
+        let z = (e + f.z, e + f.z + h);
+        let (footprint, shape) = object_footprint(&f, outline.and_then(|o| o.bounds));
+        let name = library.and_then(|l| l.1.clone()).unwrap_or_else(|| "Object".to_string());
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), name.clone().into());
+        props.insert("category".into(), "Object".into());
+        let mm = |v: f64| format!("{:.0}", v * 1000.0);
+        props.insert("Size".into(), format!("{} × {} × {} mm", mm(f.size[0]), mm(f.size[1]), mm(h)).into());
+        if height.is_none() {
+            props.insert("Height".into(), "unknown (drawn 1000 mm high)".into());
+        }
+        let record = Record { guid: object.guid, story: Some(object.story), top_link: None, segment: None, openings: Vec::new(), data: Vec::new() };
+        let prism = Prism { contours: vec![footprint], z };
+        if add(&mut objects, &record, z, &|layer| push_prism(layer, &prism), props) {
+            let range = |k: usize| prism.contours[0].iter().map(|p| p[k]).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+            stats.objects.push(ObjectOut { name, size: [f.size[0], f.size[1], h], height_known: height.is_some(), shape, x: range(0), y: range(1), z });
+        } else {
+            stats.objects_unreadable += 1;
+        }
+    }
+    stats.objects_skipped = stats.objects_ambiguous + stats.objects_flat + stats.objects_unreadable;
+
+    let elements = stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len();
+    if elements == 0 {
         // §10: Archicad 17 to 24 share the container but not the records
         return Err(format!(
-            "Archicad: no walls, slabs, columns, beams or roofs found ({} walls, {} slabs, {} columns, {} beams and {} roofs \
-             skipped). This reader supports Archicad 25 to 29; projects from Archicad 17 to 24 are not supported yet.",
-            stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped, stats.roofs_skipped
+            "Archicad: no walls, slabs, columns, beams, roofs or library objects found ({} walls, {} slabs, {} columns, {} beams, \
+             {} roofs and {} objects skipped). This reader supports Archicad 25 to 29; projects from Archicad 17 to 24 are not \
+             supported yet.",
+            stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped, stats.roofs_skipped, stats.objects_skipped
         ));
     }
 
@@ -1610,10 +1865,11 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ("Archicad beams".into(), skipped_text(stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.beams_no_section)),
         ("Archicad roofs".into(), roof_text(&stats)),
         ("Archicad openings".into(), opening_text(&stats)),
+        ("Archicad library objects".into(), object_text(&stats)),
         (
             "Archicad elements not read yet".into(),
-            "Window and door frames, glass and leaves, meshes, morphs, library objects, curved roofs and shells, and columns and \
-             beams with a profile section"
+            "Window and door frames, glass and leaves, the shapes of library objects (drawn as boxes), meshes, morphs, curved roofs \
+             and shells, and columns and beams with a profile section"
                 .into(),
         ),
     ];
@@ -1625,8 +1881,27 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs, columns, beams, roofs, openings].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams, roofs, openings, objects].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
+}
+
+/// "8 drawn as boxes (1 with an unknown height), 1 skipped (1 two-dimensional)".
+fn object_text(stats: &Stats) -> String {
+    let unknown = stats.objects.iter().filter(|o| !o.height_known).count();
+    let mut out = format!("{} drawn as boxes ({unknown} with an unknown height), {} skipped", stats.objects.len(), stats.objects_skipped);
+    let why: Vec<String> = [
+        (stats.objects_ambiguous, "without a single place for their fields"),
+        (stats.objects_flat, "two-dimensional"),
+        (stats.objects_unreadable, "whose fields do not read"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    if !why.is_empty() {
+        out += &format!(" ({})", why.join(", "));
+    }
+    out
 }
 
 /// "6 doors and 8 windows cut, 1 skipped (1 whose fields do not read)".
@@ -1637,6 +1912,7 @@ fn opening_text(stats: &Stats) -> String {
         (stats.openings_missing, "without a record"),
         (stats.openings_unreadable, "whose fields do not read"),
         (stats.openings_wall_skipped, "in a wall that is not drawn"),
+        (stats.openings_too_many, "past the first 1000 of one wall"),
     ]
     .iter()
     .filter(|(n, _)| *n > 0)
@@ -1880,6 +2156,18 @@ mod tests {
     /// The single roof plane of `CH04_Part2_Walls.pln` and `CH05_Result.pln`.
     const RT_002: RoofRow = ("RT - 002", 12.0, 0.3, [0.711, 11.311], [5.141, 12.741], [5.372, 7.932]);
 
+    /// §11 (v0.6): the library objects drawn as boxes, those whose ZZYZX is known, none skipped;
+    /// one pickable element each in the visible layer Objects.
+    fn check_objects(stats: &Stats, model: &Model, objects: usize, known: usize) {
+        let with_height = stats.objects.iter().filter(|o| o.height_known).count();
+        assert_eq!((stats.objects.len(), with_height, stats.objects_skipped), (objects, known, 0), "{:?}", stats.objects);
+        let layer = model.layers.iter().find(|l| l.name == "Objects").expect("objects");
+        assert!(!layer.hidden && layer.elements.len() == objects);
+        assert_eq!(layer.solid_indices().len(), layer.indices.len());
+        let unknown = model.props.values().filter(|p| p.contains("\"Height\":\"unknown")).count();
+        assert_eq!(unknown, objects - known);
+    }
+
     /// An opening of §11 (v0.5): name, wall, wall length, middle, width, height, sill.
     type OpeningRow = (&'static str, &'static str, f64, f64, f64, f64, f64);
 
@@ -1921,6 +2209,8 @@ mod tests {
         check_walls(&stats, &model, 16, 4, 9.0, -0.2);
         // §11 (v0.5): no windows or doors
         assert_eq!((stats.openings.len(), stats.openings_skipped), (0, 0));
+        // §11 (v0.6): no library objects
+        assert_eq!((stats.objects.len(), stats.objects_skipped), (0, 0));
         // §11 (v0.3): no columns or beams
         assert_eq!((stats.columns.len(), stats.columns_skipped, stats.beams.len(), stats.beams_skipped), (0, 0, 0, 0));
         // the walls are on their stories, for the explorer and the exploded view
@@ -1948,6 +2238,22 @@ mod tests {
             ],
         );
         check_openings(&stats, &model, 6, 7, &[("Di 1.03", "Wai 1.11", 6.6, 5.65, 0.83, 2.115, 0.0), ("We 1.01", "Wae 1.04", 5.303, 2.98, 2.4, 0.95, 1.2)]);
+        // §11 (v0.6): 8 library objects, 7 with ZZYZX; the examples of the table
+        check_objects(&stats, &model, 8, 7);
+        // the names as Archicad shows them (§8.10 v0.7): without ".gsm"; the one without ZZYZX
+        assert!(stats.objects.iter().all(|o| !o.name.is_empty() && !o.name.ends_with(".gsm")), "{:?}", stats.objects);
+        assert!(stats.objects.iter().any(|o| !o.height_known && o.name.starts_with("Shower Cabin")));
+        for (a, b, h, z, x, y, shape) in [
+            (1.6, 1.381, 0.85, (0.0, 0.85), (3.804, 5.184), (6.567, 8.167), ObjectShape::Turned),
+            (3.0, 2.9, 0.8, (0.0, 0.8), (3.045, 4.945), (8.85, 11.85), ObjectShape::Outline),
+            (2.352, 2.5, 2.25, (0.0, 2.25), (3.027, 5.527), (3.622, 5.973), ObjectShape::Turned),
+            (4.231, 0.1, 0.6, (6.524, 7.124), (11.427, 11.527), (5.991, 10.222), ObjectShape::Turned),
+        ] {
+            let near = |p: f64, q: f64| (p - q).abs() < 1e-3;
+            let pair = |p: (f64, f64), q: (f64, f64)| near(p.0, q.0) && near(p.1, q.1);
+            let o = stats.objects.iter().find(|o| near(o.size[0], a) && near(o.size[1], b)).unwrap_or_else(|| panic!("{a} × {b}: {:?}", stats.objects));
+            assert!(near(o.size[2], h) && pair(o.z, z) && pair(o.x, x) && pair(o.y, y) && o.shape == shape, "{o:?}");
+        }
         check_walls(&stats, &model, 32, 24, 7.588, -0.272);
         // §11 (v0.3): two round columns, linked; the four beams have a profile section
         check_columns(&stats, &[("C 0.01", [11.102, 12.373]), ("C 0.02", [11.102, 6.023])], (-0.25, 2.78));
@@ -2015,6 +2321,8 @@ mod tests {
                 ("WD - 003", "SW - 004", 10.0, 4.84, 0.9, 2.26, -0.2),
             ],
         );
+        // §11 (v0.6): 26 library objects, 17 with ZZYZX
+        check_objects(&stats, &model, 26, 17);
         let roofs = model.layers.iter().find(|l| l.name == "Roofs").expect("roofs");
         assert_eq!(roofs.solid_indices().len(), roofs.indices.len(), "a closed roof body");
     }
@@ -2197,8 +2505,9 @@ mod tests {
         file
     }
 
+    /// All passes of the reader (§8.10), as for a file the browser hands over.
     fn read_bytes(file: &[u8]) -> Result<Records, String> {
-        read(Cursor::new(file), file.len() as u64)
+        read_source(&Source::Bytes { name: "x.pln".into(), data: Arc::new(file.to_vec()) })
     }
 
     #[test]
@@ -2234,7 +2543,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file()] {
             garbage_rounds(&file);
         }
     }
@@ -2627,6 +2936,191 @@ mod tests {
         let (_, first, count) = layer.elements[element];
         let p = |i: u32| glam::DVec3::from_array(std::array::from_fn(|k| layer.positions[3 * i as usize + k] as f64));
         layer.indices[first as usize..(first + count) as usize].chunks_exact(3).map(|t| p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0).sum()
+    }
+
+    /// §8.9: a wall with 1500 openings, each a millimetre wide in a row: the first 1000 are cut,
+    /// quickly, the rest skipped and counted.
+    #[test]
+    fn many_openings_in_one_wall_stay_fast() {
+        let start = web_time::Instant::now();
+        let mut story = vec![0u8; 10];
+        story.extend(0u32.to_le_bytes());
+        story.extend(0i16.to_le_bytes());
+        let mut blocks = vec![block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0)];
+        let count = 1500u32;
+        let id = |k: u32| {
+            let mut g = [0x5A; 16];
+            g[..4].copy_from_slice(&k.to_le_bytes());
+            g
+        };
+        for k in 0..count {
+            let data = opening_data("N", [0.001 + 0.0025 * k as f64, 0.001, 1.0, 0.5]);
+            blocks.push(block(id(k), 0x84, &record(WINDOW, &data, &[0, 0, 0]), 0));
+        }
+        let mut assoc = vec![0, 0, 0x12];
+        assoc.extend(ON_STORY);
+        assoc.extend(STORY_ID);
+        assoc.push(0x01);
+        assoc.extend(WALL_WINDOWS);
+        assoc.extend(count.to_le_bytes());
+        assoc.extend((0..count).flat_map(id));
+        assoc.push(0);
+        blocks.push(block([0x91; 16], 0x84, &record(WALL, &wall_data("W", 0.0, 2.7), &assoc), 0));
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        let (loaded, stats) = convert(read_bytes(&file).unwrap()).unwrap();
+        assert_eq!((stats.openings.len(), stats.openings_skipped, stats.openings_too_many), (1000, 500, 500));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad openings" && v.contains("500 past the first 1000 of one wall")));
+        let walls = &loaded.layers[0];
+        assert_eq!(walls.solid_indices().len(), walls.indices.len());
+        assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+    }
+
+    /// Library-object data (§8.10): x, y, rotation, z, A, B at 64, with the marks 17 bytes before
+    /// them when `marked`; a second set at 150 makes the place ambiguous.
+    fn object_data(fields: [f64; 6], marked: bool, twice: bool) -> Vec<u8> {
+        let mut data = vec![0u8; 40];
+        for p in if twice { vec![64, 150] } else { vec![64] } {
+            data.resize(p - 17, 0);
+            if marked {
+                data.extend([1, 0, 0, 0, 0, 0, 1, 0]);
+            }
+            data.resize(p, 0);
+            data.extend(fields.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        data.resize(data.len() + 20, 0);
+        data
+    }
+
+    /// An outline cache (§8.10): xmin, xmax, ymin, ymax at 9; rotation, x, y at 67.
+    fn outline_data([x0, x1, y0, y1]: [f64; 4], [rotation, x, y]: [f64; 3]) -> Vec<u8> {
+        let mut data = vec![0u8; 91];
+        for (at, v) in [(9, x0), (17, x1), (25, y0), (33, y1), (67, rotation), (75, x), (83, y)] {
+            data[at..at + 8].copy_from_slice(&v.to_le_bytes());
+        }
+        data
+    }
+
+    /// A parameter block (§8.10): items of 72 bytes, the value before a 32-byte name.
+    fn parameters_data(items: &[(&str, f64)]) -> Vec<u8> {
+        let mut data = vec![0u8; 32];
+        for (name, value) in items {
+            data.extend(value.to_le_bytes());
+            let mut field = [0u8; 32];
+            field[..name.len()].copy_from_slice(name.as_bytes());
+            data.extend(field);
+            data.resize(data.len() + 32, 0);
+        }
+        data
+    }
+
+    /// A library reference (§8.10): some bytes, then the library part's file name as a u32
+    /// length and UTF-16 characters.
+    fn library_data(name: &str) -> Vec<u8> {
+        let mut data = vec![7u8; 40];
+        for text in [format!("{name}.gsm"), name.to_string(), "Library 26".to_string()] {
+            data.extend([1, 0]);
+            data.extend((text.encode_utf16().count() as u32).to_le_bytes());
+            data.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+            data.extend([0u8; 6]);
+        }
+        data
+    }
+
+    /// Library objects on the story "Hall" (4.5 m), 0x84 blocks in the outer layer:
+    /// - O1 "Table 26": 2 × 1, z 0.1, ZZYZX 0.8, anchored at its corner (1, 1) and a cache
+    ///   1..3 × 1..2 that A × B fits: drawn around the middle of the cache;
+    /// - O2 "Sofa 26": 1 × 1, ZZYZX 0.7, a larger cache 5..7 × 5..6.5: drawn as the cache;
+    /// - O3 "Lamp 26": no cache, 1 × 0.5 turned 90° around (10, 10), ZZYZX 0.9 in a parameter
+    ///   block that comes before its library reference in the file;
+    /// - O4 "Chair 26": no cache, no ZZYZX: 1 m high, height unknown;
+    /// - O5 "Tree 26": ZZYZX 0: skipped; O6: no story, a 2D symbol: ignored;
+    /// - O7: two places for its fields: skipped.
+    fn objects_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+        ];
+
+        let id = |kind: u8, k: u8| [kind, k, kind, k, kind, k, kind, k, kind, k, kind, k, kind, k, kind, k];
+        // O3's parameter block before everything that refers to it
+        blocks.push(block(id(0xB3, 3), 0x84, &record(PARAMETERS, &parameters_data(&[("A", 1.0), ("ZZYZX", 0.9)]), &[0, 0, 0]), 0));
+        // number, library part, fields, outline cache (bounds, rotation and x, y), ZZYZX, placed
+        // on a story, fields twice
+        type Synthetic = (u8, &'static str, [f64; 6], Option<([f64; 4], [f64; 3])>, Option<f64>, bool, bool);
+        let objects: [Synthetic; 7] = [
+            (1, "Table 26", [1.0, 1.0, 0.0, 0.1, 2.0, 1.0], Some(([1.0, 3.0, 1.0, 2.0], [0.0, 1.0, 1.0])), Some(0.8), true, false),
+            (2, "Sofa 26", [5.0, 5.0, 0.0, 0.0, 1.0, 1.0], Some(([5.0, 7.0, 5.0, 6.5], [0.0, 5.0, 5.0])), Some(0.7), true, false),
+            (3, "Lamp 26", [10.0, 10.0, std::f64::consts::FRAC_PI_2, 0.0, 1.0, 0.5], None, Some(0.9), true, false),
+            (4, "Chair 26", [12.0, 1.0, 0.0, 0.0, 0.5, 0.5], None, None, true, false),
+            (5, "Tree 26", [14.0, 1.0, 0.0, 0.0, 3.0, 3.0], None, Some(0.0), true, false),
+            (6, "Symbol 26", [16.0, 1.0, 0.0, 0.0, 1.0, 1.0], None, Some(1.0), false, false),
+            (7, "Twice 26", [18.0, 1.0, 0.0, 0.0, 1.0, 1.0], None, Some(1.0), true, true),
+        ];
+        for (k, name, fields, outline, height, story, twice) in objects {
+            let mut items = Vec::new();
+            if story {
+                items.push((0x12, ON_STORY, STORY_ID));
+            }
+            if let Some((bounds, at)) = outline {
+                items.push((0x11, OBJECT_OUTLINE, id(0xA0, k)));
+                blocks.push(block(id(0xA0, k), 0x84, &record(OUTLINE, &outline_data(bounds, at), &[0, 0, 0]), 0));
+            }
+            items.push((0x11, OBJECT_LIBRARY, id(0xB0, k)));
+            let data = object_data(fields, outline.is_none(), twice);
+            blocks.push(block(id(0xD0, k), 0x84, &record(OBJECT, &data, &links_of(&items)), 0));
+            let parameters = match height {
+                Some(h) => vec![("A", fields[4]), ("ZZYZX", h)],
+                None => vec![("A", fields[4]), ("B", fields[5])],
+            };
+            blocks.push(block(id(0xB0, k), 0x84, &record(LIBRARY, &library_data(name), &links_of(&[(0x11, LIBRARY_PARAMETERS, id(0xB3, k))])), 0));
+            if k != 3 {
+                blocks.push(block(id(0xB3, k), 0x84, &record(PARAMETERS, &parameters_data(&parameters), &[0, 0, 0]), 0));
+            }
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    #[test]
+    fn draws_library_objects_as_boxes() {
+        let records = read_bytes(&objects_file()).expect("container");
+        // O6 has no story: a 2D symbol, not even counted
+        assert_eq!(records.objects.len(), 6);
+        let (loaded, stats) = convert(records).expect("objects");
+        assert_eq!((stats.objects.len(), stats.objects_skipped, stats.objects_flat, stats.objects_ambiguous), (4, 2, 1, 1));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad library objects"
+            && v == "4 drawn as boxes (1 with an unknown height), 2 skipped (1 without a single place for their fields, 1 two-dimensional)"));
+        let layer = &loaded.layers[0];
+        assert_eq!((layer.name.as_str(), layer.hidden, layer.elements.len()), ("Objects", false, 4));
+        assert_eq!(layer.solid_indices().len(), layer.indices.len());
+        let by = |name: &str| stats.objects.iter().find(|o| o.name == name).unwrap_or_else(|| panic!("{name}: {:?}", stats.objects));
+        let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9;
+        // O1: A × B fits the cache: around its middle, not around the anchor at the corner
+        let o = by("Table 26");
+        assert!(o.shape == ObjectShape::Turned && near(o.x, (1.0, 3.0)) && near(o.y, (1.0, 2.0)) && near(o.z, (4.6, 5.4)), "{o:?}");
+        // O2: the cache is larger than A × B: the cache
+        let o = by("Sofa 26");
+        assert!(o.shape == ObjectShape::Outline && near(o.x, (5.0, 7.0)) && near(o.y, (5.0, 6.5)) && near(o.z, (4.5, 5.2)), "{o:?}");
+        // O3: no cache: 1 × 0.5 turned 90° around (10, 10); its parameter block comes first in the file
+        let o = by("Lamp 26");
+        assert!(o.shape == ObjectShape::Centred && near(o.x, (9.75, 10.25)) && near(o.y, (9.5, 10.5)) && near(o.z, (4.5, 5.4)), "{o:?}");
+        // O4: no ZZYZX: 1 m high, and the properties say the height is unknown
+        let o = by("Chair 26");
+        assert!(!o.height_known && near(o.z, (4.5, 5.5)) && near(o.x, (11.75, 12.25)), "{o:?}");
+        let props = &layer.props.iter().find(|p| p.1.contains("Chair 26")).unwrap().1;
+        for want in ["\"Size\":\"500 × 500 × 1000 mm\"", "\"Height\":\"unknown (drawn 1000 mm high)\"", "\"level\":\"Hall\"", "\"category\":\"Object\""] {
+            assert!(props.contains(want), "{want} in {props}");
+        }
+        assert!(layer.props.iter().find(|p| p.1.contains("Table 26")).unwrap().1.contains("\"Size\":\"2000 × 1000 × 800 mm\""));
     }
 
     #[test]

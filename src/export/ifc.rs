@@ -7,7 +7,8 @@
 //!   glTF nodes) and one per layer for geometry outside elements (OBJ objects, STL, PLY). The
 //!   class follows the Revit category, the Tekla part name or the Archicad element (IfcWall,
 //!   IfcSlab, IfcBeam, ...); anything else is an IfcBuildingElementProxy.
-//! - Archicad openings (already cut from their walls) are left out.
+//! - Archicad openings (already cut from their walls) are left out; Archicad library objects,
+//!   drawn as boxes of any kind, are IfcBuildingElementProxy.
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
@@ -799,14 +800,15 @@ mod tests {
         let layer = Layer {
             name: "Walls".into(),
             positions,
-            indices: [indices.clone(), indices.clone(), indices.clone(), indices.clone(), indices].concat(),
-            elements: vec![(1, 0, 36), (2, 36, 36), (3, 72, 36), (4, 108, 36), (5, 144, 36)],
+            indices: [indices.clone(), indices.clone(), indices.clone(), indices.clone(), indices.clone(), indices].concat(),
+            elements: vec![(1, 0, 36), (2, 36, 36), (3, 72, 36), (4, 108, 36), (5, 144, 36), (6, 180, 36)],
             props: vec![
                 (1, r#"{"Name":"W-001","category":"Wall","level":"Ground Floor"}"#.into()),
                 (2, r#"{"Name":"Slab","category":"Slab","level":"Ground Floor"}"#.into()),
                 (3, r#"{"Name":"CRE - 001","category":"Column","level":"Ground Floor"}"#.into()),
                 (4, r#"{"Name":"BMR - 001","category":"Beam","level":"Ground Floor"}"#.into()),
                 (5, r#"{"Name":"RT - 002","category":"Roof","level":"Ground Floor"}"#.into()),
+                (6, r#"{"Name":"Sofa Layout 26.gsm","category":"Object","level":"Ground Floor"}"#.into()),
             ],
             ..Layer::default()
         };
@@ -820,6 +822,9 @@ mod tests {
         assert_eq!(s.matches("=IFCCOLUMN(").count(), 1);
         assert_eq!(s.matches("=IFCBEAM(").count(), 1);
         assert!(s.contains("'CRE - 001'") && s.contains(".COLUMN.)") && s.contains(".BEAM.)"));
+        // a library object is a box of any kind (furniture, kitchen, text, plant): a proxy
+        assert_eq!(s.matches("=IFCBUILDINGELEMENTPROXY(").count(), 1);
+        assert!(s.contains("'Sofa Layout 26.gsm'"));
     }
 
     #[test]

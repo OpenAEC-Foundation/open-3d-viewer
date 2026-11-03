@@ -7,6 +7,7 @@
 //!   glTF nodes) and one per layer for geometry outside elements (OBJ objects, STL, PLY). The
 //!   class follows the Revit category, the Tekla part name or the Archicad element (IfcWall,
 //!   IfcSlab, IfcBeam, ...); anything else is an IfcBuildingElementProxy.
+//! - Archicad openings (already cut from their walls) are left out.
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
@@ -109,6 +110,11 @@ fn products(model: &Model) -> Vec<Product> {
         out[i].ranges.push(range);
     };
     for (li, layer) in model.layers.iter().enumerate() {
+        // Archicad openings are already cut from their walls. An IfcOpeningElement would need
+        // IfcRelVoidsElement and no storey, which this writer does not write: left out.
+        if model.format == "Archicad" && layer.name == "Openings" {
+            continue;
+        }
         let name = base_layer_name(&layer.name);
         let loose = Key::Layer(name.to_string());
         let mut covered = 0u32;
@@ -814,6 +820,31 @@ mod tests {
         assert_eq!(s.matches("=IFCCOLUMN(").count(), 1);
         assert_eq!(s.matches("=IFCBEAM(").count(), 1);
         assert!(s.contains("'CRE - 001'") && s.contains(".COLUMN.)") && s.contains(".BEAM.)"));
+    }
+
+    #[test]
+    fn archicad_openings_stay_out_of_the_export() {
+        let (positions, indices) = cube([0.0, 0.0, 0.0]);
+        let wall = Layer {
+            name: "Walls".into(),
+            positions: positions.clone(),
+            indices: indices.clone(),
+            elements: vec![(1, 0, 36)],
+            props: vec![(1, r#"{"Name":"SW - 002","category":"Wall"}"#.into())],
+            ..Layer::default()
+        };
+        let opening = Layer {
+            name: "Openings".into(),
+            positions,
+            indices,
+            elements: vec![(2, 0, 36)],
+            props: vec![(2, r#"{"Name":"DOO - 001","category":"Opening","Type":"Door"}"#.into())],
+            hidden: true,
+            ..Layer::default()
+        };
+        let s = ifc(&Model::new(PathBuf::from("house.pln"), "Archicad", vec![wall, opening]));
+        assert_eq!(s.matches("=IFCWALL(").count(), 1);
+        assert!(!s.contains("DOO - 001") && !s.contains("IFCBUILDINGELEMENTPROXY(") && !s.contains("IFCOPENINGELEMENT("));
     }
 
     #[test]

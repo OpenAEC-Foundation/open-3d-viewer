@@ -1,7 +1,7 @@
 //! Archicad projects (.pln) and archives (.pla) of Archicad 24 to 29: walls (with their windows
 //! and doors cut out), slabs and columns as extruded footprints, beams along their axis, roof
 //! planes, library objects as boxes, meshes as terrain bodies and zones, grouped per story. Written
-//! from a clean-room specification of the file structure (SPEC v0.8, section numbers in the
+//! from a clean-room specification of the file structure (SPEC v0.9, section numbers in the
 //! comments): a container of 16-byte items with QuickLZ groups, object records with associations,
 //! stories, the element polygon, the wall fields, columns and beams with their cross-sections
 //! (rectangular, round or an own profile), roof planes, windows and doors as openings, the place,
@@ -750,8 +750,10 @@ struct Polygon {
     z: Option<(f64, f64)>,
 }
 
-/// §7: the first polygon in the data: a bounding box, the counts, the points (point 0 unused), the
-/// contour ends and the arcs, valid when the points span exactly the box.
+/// §7, §8.16.1 (v0.9): the first polygon in the data: a bounding box, the counts, the points (point
+/// 0 unused), then, with arcs, the arcs (an empty item first), and the contour ends. Without arcs
+/// valid when the points span exactly the box; with arcs, when they lie in it (an arc may bulge
+/// past the points). Arcs are drawn as segments (counter-clockwise for a positive angle).
 fn find_polygon(data: &[u8]) -> Option<Polygon> {
     if data.len() > MAX_ELEMENT_DATA {
         return None;
@@ -767,8 +769,9 @@ fn find_polygon(data: &[u8]) -> Option<Polygon> {
             continue;
         }
         let points_at = i + 44;
-        let ends_at = points_at + (n + 1) * 16;
-        let end = ends_at + (subs + 1) * 4 + arcs * 16;
+        let arcs_at = points_at + (n + 1) * 16;
+        let ends_at = if arcs > 0 { arcs_at + 16 * (arcs + 1) } else { arcs_at };
+        let end = ends_at + (subs + 1) * 4;
         if end > data.len() {
             continue;
         }
@@ -779,7 +782,7 @@ fn find_polygon(data: &[u8]) -> Option<Polygon> {
         }
         budget = budget.checked_sub(subs + 2 * n)?;
         let ends: Vec<usize> = (0..=subs).map(end_at).collect();
-        if ends.windows(2).any(|w| w[0] > w[1]) {
+        if ends.windows(2).any(|w| w[0] > w[1]) || (arcs > 0 && data[arcs_at..arcs_at + 16].iter().any(|&b| b != 0)) {
             continue;
         }
         let points: Vec<[f64; 2]> = (0..=n).map(|k| [0, 8].map(|c| f64_at(data, points_at + 16 * k + c).unwrap())).collect();
@@ -791,21 +794,51 @@ fn find_polygon(data: &[u8]) -> Option<Polygon> {
             }
         }
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        if !(close(min[0], bbox[0]) && close(min[1], bbox[1]) && close(max[0], bbox[2]) && close(max[1], bbox[3])) {
+        let fits = if arcs == 0 {
+            close(min[0], bbox[0]) && close(min[1], bbox[1]) && close(max[0], bbox[2]) && close(max[1], bbox[3])
+        } else {
+            min[0] >= bbox[0] - 1e-9 && min[1] >= bbox[1] - 1e-9 && max[0] <= bbox[2] + 1e-9 && max[1] <= bbox[3] + 1e-9
+        };
+        if !fits {
             continue;
         }
-        // contour k: points ends[k]+1 ..= ends[k+1]; the last repeats the first. Arcs (none in the
-        // samples) are drawn straight.
+        // §8.16.1: the arcs, from point `begin` to point `end`
+        let mut bows: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut arcs_fit = true;
+        for k in 1..=arcs {
+            let at = arcs_at + 16 * k;
+            let (from, to, angle) = (u32_at(data, at).unwrap() as usize, u32_at(data, at + 4).unwrap() as usize, f64_at(data, at + 8).unwrap());
+            let fits = |p: usize| (1..=n).contains(&p);
+            arcs_fit &= fits(from) && fits(to) && angle.is_finite() && angle != 0.0 && angle.abs() < std::f64::consts::TAU;
+            bows.insert((from, to), angle);
+        }
+        if !arcs_fit {
+            continue;
+        }
+        // contour k: points ends[k]+1 ..= ends[k+1]; the last repeats the first. The points an arc
+        // adds carry the number of the point it starts at.
         let mut indices = Vec::with_capacity(subs);
         let contours = (0..subs)
             .map(|k| {
                 let mut numbers: Vec<usize> = (ends[k] + 1..=ends[k + 1]).collect();
-                let mut c: Vec<[f64; 2]> = numbers.iter().map(|&j| points[j]).collect();
-                if c.len() > 1 && c.first() == c.last() {
-                    c.pop();
-                    numbers.pop();
+                if numbers.len() > 1 && points[numbers[0]] != points[*numbers.last().unwrap()] {
+                    numbers.push(numbers[0]);
                 }
-                indices.push(numbers);
+                let (mut c, mut at) = (Vec::with_capacity(numbers.len()), Vec::with_capacity(numbers.len()));
+                for w in numbers.windows(2) {
+                    c.push(points[w[0]]);
+                    at.push(w[0]);
+                    let angle = bows.get(&(w[0], w[1])).copied().or_else(|| bows.get(&(w[1], w[0])).map(|a| -a));
+                    for p in angle.map(|a| arc_points(points[w[0]], points[w[1]], a)).unwrap_or_default() {
+                        c.push(p);
+                        at.push(w[0]);
+                    }
+                }
+                if numbers.len() == 1 {
+                    c.push(points[numbers[0]]);
+                    at.push(numbers[0]);
+                }
+                indices.push(at);
                 c
             })
             .collect();
@@ -1018,7 +1051,8 @@ fn roof_fields(data: &[u8], p: usize) -> Option<RoofFields> {
     let (id, q) = id_strings(data).take_while(|&(_, q)| q + 250 <= p).last()?;
     let thickness = f64_at(data, q + 1)?;
     let finite = [pivot_height, pitch, thickness].iter().chain(&line).all(|v| v.is_finite());
-    (finite && thickness > 0.0 && thickness < 5.0 && (0.0..90.0).contains(&pitch)).then_some(RoofFields { id, pivot_height, pitch, line, thickness })
+    // §8.16.2 (v0.9): thickness 0 reads (a helper body), and is skipped by the caller
+    (finite && (0.0..5.0).contains(&thickness) && (0.0..90.0).contains(&pitch)).then_some(RoofFields { id, pivot_height, pitch, line, thickness })
 }
 
 /// §8.8: the underside and the top of a roof plane: the underside through the pivot line at
@@ -1241,6 +1275,9 @@ struct Stats {
     roofs_skipped: usize,
     roofs_no_polygon: usize,
     roofs_unreadable: usize,
+    roofs_zero_thickness: usize,
+    /// The slabs drawn, for the tests.
+    slab_list: Vec<SlabOut>,
     openings: Vec<OpeningOut>,
     /// Windows and doors skipped (§8.9): all of them, those whose record is missing, those whose
     /// fields do not read, and those of a wall that is not drawn.
@@ -1795,6 +1832,17 @@ enum ObjectShape {
     Centred,
 }
 
+/// A slab as drawn, for the tests: its identity, ranges and area (outer edge minus holes).
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct SlabOut {
+    guid: String,
+    x: (f64, f64),
+    y: (f64, f64),
+    z: (f64, f64),
+    area: f64,
+}
+
 /// A roof plane as drawn, for the tests: x, y and z (lowest underside, highest top) ranges.
 #[derive(Debug, Clone)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -2259,6 +2307,11 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         });
         if drawn {
             stats.slabs += 1;
+            if let Some(p) = find_polygon(&record.data) {
+                let [x, y, _] = ranges(p.contours[0].iter().map(|q| [q[0], q[1], 0.0]));
+                let area = p.contours.iter().enumerate().map(|(k, c)| if k == 0 { area(c).abs() } else { -area(c).abs() }).sum();
+                stats.slab_list.push(SlabOut { guid: hex(&record.guid), x, y, z: p.z.unwrap_or_default(), area });
+            }
         } else {
             stats.slabs_skipped += 1;
         }
@@ -2416,6 +2469,12 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
             stats.roofs_skipped += 1;
             continue;
         };
+        // §8.16.2: a roof of thickness 0 is a helper body for solid element operations
+        if f.thickness == 0.0 {
+            stats.roofs_zero_thickness += 1;
+            stats.roofs_skipped += 1;
+            continue;
+        }
         let range = |v: &mut dyn Iterator<Item = f64>| v.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
         let points = || polygon.contours.iter().flatten().copied();
         let z = (range(&mut points().map(|p| planes.bottom(p))).0, range(&mut points().map(|p| planes.top(p))).1);
@@ -2765,7 +2824,11 @@ fn opening_text(stats: &Stats) -> String {
 /// "2 read, 1 skipped (1 without a polygon)".
 fn roof_text(stats: &Stats) -> String {
     let mut out = format!("{} read, {} skipped", stats.roofs.len(), stats.roofs_skipped);
-    let why: Vec<String> = [(stats.roofs_no_polygon, "without a polygon"), (stats.roofs_unreadable, "with fields that do not read")]
+    let why: Vec<String> = [
+        (stats.roofs_no_polygon, "without a polygon"),
+        (stats.roofs_unreadable, "with fields that do not read"),
+        (stats.roofs_zero_thickness, "with thickness 0 (helper bodies)"),
+    ]
         .iter()
         .filter(|(n, _)| *n > 0)
         .map(|(n, what)| format!("{n} {what}"))
@@ -3056,13 +3119,17 @@ mod tests {
     fn sample_demo_archicad_26() {
         let Some((stats, model)) = open("DEMO.pln") else { return };
         assert_eq!((stats.walls, stats.walls_skipped, stats.walls_polygon), (56, 0, 54));
-        // 7 slabs drawn and 1 without polygon skipped: the y range up to 12.698 needs the seventh
-        assert_eq!((stats.slabs, stats.slabs_skipped), (7, 1));
+        // §11 (v0.9): 8 slabs, the one with arcs (§8.16.1) too
+        assert_eq!((stats.slabs, stats.slabs_skipped), (8, 0));
         check_stories(&stats, &model);
         let b = walls_and_slabs_bounds(&model);
-        assert!(near(b.min[0], 1.412) && near(b.max[0], 11.429) && near(b.min[1], 1.076) && near(b.max[1], 12.698), "{b:?}");
-        // the lowest slab at -0.31; the model reaches down to the bottom of the terrain (§8.11)
-        assert!(near(b.min[2], -0.31) && near(model.bounds.min[2], -1.65), "{b:?}");
+        assert!(near(b.min[0], 1.412) && near(b.max[0], 14.667) && near(b.min[1], -1.0) && near(b.max[1], 12.698), "{b:?}");
+        // the lowest slab at -1.089; the model reaches down to the bottom of the terrain (§8.11)
+        assert!(near(b.min[2], -1.089) && near(model.bounds.min[2], -1.65), "{b:?}");
+        let arcs = stats.slab_list.iter().find(|s| s.guid.starts_with("30081d88")).expect("the slab with arcs");
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        assert!(close(arcs.x.0, 7.427) && close(arcs.x.1, 14.667) && close(arcs.y.0, -1.0) && close(arcs.y.1, 12.373), "{arcs:?}");
+        assert!(close(arcs.z.0, -1.089) && close(arcs.z.1, 0.0) && (arcs.area - 52.24).abs() < 0.01, "{arcs:?}");
         check_roofs(
             &stats,
             &[
@@ -3427,7 +3494,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file(), arcs_file()] {
             garbage_rounds(&file);
         }
     }
@@ -4209,6 +4276,62 @@ mod tests {
         file
     }
 
+    /// Slab data with a polygon with arcs (§8.16.1): its bbox, counts, points (point 0 at (0, 0),
+    /// one closed contour), the arcs after an empty item, the contour ends, and the z cache 0..0.3.
+    fn arc_slab_data(points: &[[f64; 2]], arcs: &[(u32, u32, f64)], bbox: [f64; 4]) -> Vec<u8> {
+        let mut data = vec![1u8; 5];
+        let bbox_bytes: Vec<u8> = bbox.iter().flat_map(|v| v.to_le_bytes()).collect();
+        data.extend(&bbox_bytes);
+        data.extend([points.len() as u32, arcs.len() as u32, 1].iter().flat_map(|v| v.to_le_bytes()));
+        data.extend(std::iter::once([0.0, 0.0]).chain(points.iter().copied()).flatten().flat_map(f64::to_le_bytes));
+        data.extend([0u8; 16]);
+        for (from, to, angle) in arcs {
+            data.extend(from.to_le_bytes());
+            data.extend(to.to_le_bytes());
+            data.extend(angle.to_le_bytes());
+        }
+        data.extend([0u32, points.len() as u32].iter().flat_map(|v| v.to_le_bytes()));
+        data.extend([3u8; 7]);
+        data.extend(&bbox_bytes);
+        data.extend([0.0f64, 0.3].iter().flat_map(|v| v.to_le_bytes()));
+        data
+    }
+
+    /// Slabs with arcs (§8.16.1): S1, 4 × 2 whose right edge is an arc of +π/2 (bulging out to
+    /// x = 3 + √2); S2, the same at x 10 with also its left edge an arc of −π/2 (bulging in).
+    fn arcs_file() -> Vec<u8> {
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let out = 3.0 + 2f64.sqrt();
+        let s1 = arc_slab_data(&[[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0], [0.0, 0.0]], &[(2, 3, quarter)], [0.0, 0.0, out, 2.0]);
+        let s2 = arc_slab_data(
+            &[[10.0, 0.0], [14.0, 0.0], [14.0, 2.0], [10.0, 2.0], [10.0, 0.0]],
+            &[(2, 3, quarter), (4, 5, -quarter)],
+            [10.0, 0.0, 10.0 + out, 2.0],
+        );
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(block([0x51; 16], 0x84, &record(SLAB, &s1, &[0, 0, 0]), 0));
+        file.extend(block([0x52; 16], 0x84, &record(SLAB, &s2, &[0, 0, 0]), 0));
+        file
+    }
+
+    #[test]
+    fn draws_polygons_with_arcs() {
+        let (loaded, stats) = convert(read_bytes(&arcs_file()).expect("container")).expect("slabs");
+        assert_eq!((stats.slabs, stats.slabs_skipped), (2, 0));
+        let segment = 0.5 * (std::f64::consts::FRAC_PI_2 - 1.0) * 2.0; // r² / 2 · (φ − sin φ), r = √2
+        let (s1, s2) = (&stats.slab_list[0], &stats.slab_list[1]);
+        // S1: the arc bulges out (positive: counter-clockwise, its middle left of the chord); drawn
+        // as 8 segments, a little less than the arc
+        assert!((s1.x.1 - (3.0 + 2f64.sqrt())).abs() < 1e-9 && s1.area < 8.0 + segment && (s1.area - 8.0 - segment).abs() < 0.02, "{s1:?}");
+        // S2: one arc out, one in (negative: clockwise): the area of the rectangle
+        assert!((s2.area - 8.0).abs() < 1e-9 && (s2.x.0 - 10.0).abs() < 1e-9 && (s2.x.1 - (13.0 + 2f64.sqrt())).abs() < 1e-9, "{s2:?}");
+        let slabs = &loaded.layers[0];
+        let inward = slabs.positions.chunks_exact(3).any(|p| (p[0] as f64 - (9.0 + 2f64.sqrt())).abs() < 1e-5 && (p[1] - 1.0).abs() < 1e-5);
+        assert!(inward, "the left edge of S2 bulges in to 9 + √2");
+        assert_eq!(slabs.solid_indices().len(), slabs.indices.len());
+    }
+
     #[test]
     fn draws_profile_beams_and_columns() {
         let (loaded, stats) = convert(read_bytes(&profiles_file()).expect("container")).expect("elements");
@@ -4369,8 +4492,9 @@ mod tests {
     #[test]
     fn reads_roofs() {
         let (loaded, stats) = convert(read_bytes(&roofs_file()).expect("container")).expect("roofs");
-        assert_eq!((stats.roofs.len(), stats.roofs_skipped, stats.roofs_no_polygon, stats.roofs_unreadable), (4, 3, 2, 1));
-        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad roofs" && v == "4 read, 3 skipped (2 without a polygon, 1 with fields that do not read)"));
+        // R7 has thickness 0: a helper body (§8.16.2), skipped and counted, not an error
+        assert_eq!((stats.roofs.len(), stats.roofs_skipped, stats.roofs_no_polygon, stats.roofs_unreadable, stats.roofs_zero_thickness), (4, 3, 2, 0, 1));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad roofs" && v == "4 read, 3 skipped (2 without a polygon, 1 with thickness 0 (helper bodies))"));
         let roofs = &loaded.layers[0];
         assert_eq!((roofs.name.as_str(), roofs.elements.len()), ("Roofs", 4));
         // every body is closed and faces out

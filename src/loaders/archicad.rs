@@ -120,6 +120,10 @@ const ZONE_TOP_LINK: Guid = guid("563b426cda1e0540be1f6f8942311a7f");
 /// §5, §8.13 (v0.8): the profile object of a profile cross-section, and the association to it.
 const PROFILE: Guid = guid("d72bcdf4b1d4bf4ab13c59001907bbbd");
 const PROFILE_LINK: Guid = guid("443b07ca55067d4097151a019e628139");
+/// §5, §8.16.3 (v0.9): morphs, their body and the association to it.
+const MORPH: Guid = guid("7b3c36e60e94eb4daf958b3b39e86bd2");
+const MORPH_BODY: Guid = guid("ad8c58f158255c49820bf3bcf4651007");
+const MORPH_BODY_LINK: Guid = guid("6bfa7fd50fc17f4fabe60fd52f2cc23e");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -180,7 +184,7 @@ struct Record {
     segment: Option<Guid>,
     /// Walls: their windows and doors (§8.9).
     openings: Vec<Guid>,
-    /// Meshes: their triangulation cache (§8.11).
+    /// Meshes: their triangulation cache (§8.11); morphs: their body (§8.16.3).
     cache: Option<Guid>,
     data: Vec<u8>,
 }
@@ -255,6 +259,11 @@ struct Records {
     mesh_caches: HashMap<Guid, Option<MeshCache>>,
     /// Profile objects (§8.13), read as they come (`None`: a header that does not read).
     profiles: HashMap<Guid, Option<ProfileShape>>,
+    /// Morphs (§8.16.3) and their bodies, read as they come (`None`: one that does not read);
+    /// several morphs may share a body.
+    morphs: Vec<Record>,
+    morphs_too_large: usize,
+    bodies: HashMap<Guid, Option<Body>>,
     /// §8.10, by identity, only what the objects need (a parameter block runs to ~80 kB, and a
     /// large project has thousands): of an outline cache its bounds (when they read) and its
     /// (x, y) bytes; of a library reference its parameter block and name; of a parameter block
@@ -478,7 +487,7 @@ impl Records {
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
         let classes = [
-            MESH, MESH_CACHE, ZONE, PROFILE,
+            MESH, MESH_CACHE, ZONE, PROFILE, MORPH, MORPH_BODY,
             WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, OBJECT, OUTLINE, LIBRARY, PARAMETERS, COLUMN_SEGMENT,
             BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE,
         ];
@@ -505,7 +514,7 @@ impl Records {
                 let (outline, library) = (first(OBJECT_OUTLINE), first(OBJECT_LIBRARY));
                 self.objects.push(ObjectRecord { guid: object, story, outline, library, data: data.to_vec() });
             }
-            WALL | SLAB | COLUMN | BEAM | ROOF | MESH | ZONE => {
+            WALL | SLAB | COLUMN | BEAM | ROOF | MESH | ZONE | MORPH => {
                 let first = |assoc: Guid, op: &[u8]| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
                 let story = first(ON_STORY, &[0x12]);
                 let (top_link, segment) = match class {
@@ -515,7 +524,11 @@ impl Records {
                     ZONE => (first(ZONE_TOP_LINK, &[0x11, 0x12]), None),
                     _ => (None, None),
                 };
-                let cache = if class == MESH { first(MESH_CACHE_LINK, &[0x11, 0x12]) } else { None };
+                let cache = match class {
+                    MESH => first(MESH_CACHE_LINK, &[0x11, 0x12]),
+                    MORPH => first(MORPH_BODY_LINK, &[0x11, 0x12]),
+                    _ => None,
+                };
                 let (list, too_large) = match class {
                     WALL => (&mut self.walls, &mut self.walls_too_large),
                     SLAB => (&mut self.slabs, &mut self.slabs_too_large),
@@ -523,6 +536,7 @@ impl Records {
                     BEAM => (&mut self.beams, &mut self.beams_too_large),
                     MESH => (&mut self.meshes, &mut self.meshes_too_large),
                     ZONE => (&mut self.zones, &mut self.zones_too_large),
+                    MORPH => (&mut self.morphs, &mut self.morphs_too_large),
                     _ => (&mut self.roofs, &mut self.roofs_too_large),
                 };
                 if data.len() > MAX_ELEMENT_DATA {
@@ -552,6 +566,12 @@ impl Records {
                 // §8.13: the profile object, the first target
                 let profile = links.iter().find(|l| (l.0 == 0x11 || l.0 == 0x12) && l.1 == PROFILE_LINK).map(|l| l.2);
                 self.sections.insert(object, Section::Profile(profile));
+            }
+            MORPH_BODY => {
+                // the cap of the other elements (the largest body in the samples: 290 kB); a larger
+                // one counts as a morph without a body that reads
+                let body = if data.len() <= MAX_ELEMENT_DATA { morph_body(data) } else { None };
+                self.bodies.insert(object, body);
             }
             PROFILE => {
                 if data.len() <= MAX_ELEMENT_DATA {
@@ -1311,6 +1331,13 @@ struct Stats {
     zones_no_number: usize,
     zones_unreadable: usize,
     zones_no_height: usize,
+    morphs: Vec<MorphOut>,
+    /// Morphs skipped (§8.16.3): all, without a body that reads, without a placement; and the
+    /// open ones drawn.
+    morphs_skipped: usize,
+    morphs_no_body: usize,
+    morphs_no_matrix: usize,
+    morphs_open: usize,
 }
 
 /// A column as drawn, for the tests.
@@ -1384,6 +1411,18 @@ struct MeshOut {
     /// The lowest and highest point of the top, and the bottom.
     top: (f64, f64),
     bottom: f64,
+}
+
+/// A morph as drawn, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct MorphOut {
+    name: String,
+    faces: usize,
+    open: bool,
+    x: (f64, f64),
+    y: (f64, f64),
+    z: (f64, f64),
 }
 
 /// A zone as drawn, for the tests.
@@ -2000,6 +2039,170 @@ fn arc_points(a: [f64; 2], b: [f64; 2], angle: f64) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// §8.16.3: a morph's body: its vertices (local) and faces, each a list of loops of vertex
+/// indices (the outer loop counter-clockwise seen from outside, then the holes); open when an
+/// edge has only one face.
+#[derive(Debug, Clone)]
+struct Body {
+    vertices: Vec<[f64; 3]>,
+    faces: Vec<Vec<Vec<usize>>>,
+    open: bool,
+}
+
+/// §8.16.3: the body at 156 (else at the first offset from 40 where the whole layout holds; at
+/// most 64 tries).
+fn morph_body(data: &[u8]) -> Option<Body> {
+    if let Some(body) = morph_body_at(data, 156) {
+        return Some(body);
+    }
+    (40..data.len().saturating_sub(4))
+        .filter(|&at| at != 156 && u32_at(data, at).is_some_and(|n| (1..=2_000_000).contains(&n) && at + 4 + 24 * n as usize <= data.len()))
+        .take(64)
+        .find_map(|at| morph_body_at(data, at))
+}
+
+/// §8.16.3: nV vertices, c0 skipped items of 8 bytes, nE edges (-, -, va, vb, f1, f2), nP edge
+/// references (±(k + 1) for edge k, 0 between loops), nN normals and nF faces (-, -, -, -, -,
+/// normal, first, last, -, -), each loop closing.
+fn morph_body_at(data: &[u8], at: usize) -> Option<Body> {
+    let mut r = at;
+    let mut count = |size: usize, max: usize| -> Option<(usize, usize)> {
+        let n = u32_at(data, r)? as usize;
+        if n > max {
+            return None;
+        }
+        let start = r + 4;
+        r = start.checked_add(n.checked_mul(size)?).filter(|&e| e <= data.len())?;
+        Some((n, start))
+    };
+    let (nv, vertices_at) = count(24, 2_000_000)?;
+    let (_, _) = count(8, 64 * nv + 1000)?;
+    let (ne, edges_at) = count(24, 2_000_000)?;
+    let (np, refs_at) = count(4, usize::MAX >> 8)?;
+    let (nn, _) = count(24, usize::MAX >> 8)?;
+    let (nf, faces_at) = count(40, 2_000_000)?;
+    if nv == 0 || ne == 0 || nf == 0 {
+        return None;
+    }
+    let vertices: Vec<[f64; 3]> = (0..nv).map(|k| [0, 8, 16].map(|c| f64_at(data, vertices_at + 24 * k + c).unwrap())).collect();
+    if vertices.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let u = |at: usize| u32_at(data, at).unwrap();
+    let mut open = false;
+    let mut edges = Vec::with_capacity(ne);
+    for k in 0..ne {
+        let at = edges_at + 24 * k;
+        let (a, b) = (u(at + 8) as usize, u(at + 12) as usize);
+        if a >= nv || b >= nv {
+            return None;
+        }
+        open |= u(at + 16) == u32::MAX || u(at + 20) == u32::MAX;
+        edges.push((a, b));
+    }
+    // the faces' ranges of references are contiguous, from 0 to nP − 1 (§8.16.3): each reference
+    // is visited once, nP steps for all faces
+    let mut faces = Vec::with_capacity(nf.min(1 << 16));
+    let mut next = 0usize;
+    for f in 0..nf {
+        let at = faces_at + 40 * f;
+        let (normal, first, last) = (u(at + 20) as usize, u(at + 24) as usize, u(at + 28) as usize);
+        if !(1..=nn).contains(&normal) || first != next || first > last || last >= np {
+            return None;
+        }
+        next = last + 1;
+        let mut loops = Vec::new();
+        let mut directed: Vec<(usize, usize)> = Vec::new();
+        for j in first..=last + 1 {
+            let x = if j <= last { i32_at(data, refs_at + 4 * j).unwrap() } else { 0 };
+            if x != 0 {
+                let k = x.unsigned_abs() as usize - 1;
+                let &(a, b) = edges.get(k)?;
+                directed.push(if x > 0 { (a, b) } else { (b, a) });
+                continue;
+            }
+            // a loop ends: it must close
+            if directed.is_empty() {
+                continue;
+            }
+            if (0..directed.len()).any(|i| directed[i].1 != directed[(i + 1) % directed.len()].0) {
+                return None;
+            }
+            loops.push(directed.iter().map(|d| d.0).collect());
+            directed.clear();
+        }
+        faces.push(loops);
+    }
+    if next != np {
+        return None;
+    }
+    Some(Body { vertices, faces, open })
+}
+
+/// §8.16.3: a morph's name and placement: the first ID string followed (at q+5) by 12 finite
+/// f64 under 1e6 that form [R | t] with R a rotation (orthonormal, det > 0).
+fn morph_fields(data: &[u8]) -> Option<(String, [f64; 12])> {
+    id_strings(data).find_map(|(id, q)| {
+        let m: Vec<f64> = (0..12).map(|k| f64_at(data, q + 5 + 8 * k)).collect::<Option<_>>()?;
+        if !m.iter().all(|v| v.is_finite() && v.abs() < 1e6) {
+            return None;
+        }
+        let r = [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]];
+        let orthonormal = (0..3).all(|i| (0..3).all(|j| ((0..3).map(|k| r[k][i] * r[k][j]).sum::<f64>() - f64::from(u8::from(i == j))).abs() < 1e-6));
+        let det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1]) - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
+            + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
+        (orthonormal && det > 0.0).then(|| (id, m.try_into().unwrap()))
+    })
+}
+
+/// §8.16.3: a morph body placed by its matrix (and the level e of its story): each face
+/// triangulated in its own plane (ear clipping, with holes), facing out. False when nothing could
+/// be drawn.
+fn push_morph(layer: &mut Layer, body: &Body, m: &[f64; 12], e: f64) -> bool {
+    let first = layer.indices.len();
+    let world = |v: [f64; 3]| {
+        [m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[3], m[4] * v[0] + m[5] * v[1] + m[6] * v[2] + m[7], m[8] * v[0] + m[9] * v[1] + m[10] * v[2] + m[11] + e]
+    };
+    let points: Vec<[f64; 3]> = body.vertices.iter().map(|&v| world(v)).collect();
+    for face in &body.faces {
+        let Some(outer) = face.first().filter(|l| l.len() >= 3) else { continue };
+        // Newell's normal of the outer loop: counter-clockwise seen from outside
+        let mut n = [0.0f64; 3];
+        for i in 0..outer.len() {
+            let (a, b) = (points[outer[i]], points[outer[(i + 1) % outer.len()]]);
+            n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+            n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+            n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        if n.iter().map(|v| v * v).sum::<f64>().sqrt() < 1e-15 {
+            continue;
+        }
+        // project on the plane square to the largest component of the normal
+        let axis = (0..3).max_by(|&a, &b| n[a].abs().total_cmp(&n[b].abs())).unwrap();
+        let (u, v) = match axis {
+            0 => (1, 2),
+            1 => (2, 0),
+            _ => (0, 1),
+        };
+        let loops: Vec<&Vec<usize>> = face.iter().filter(|l| l.len() >= 3).collect();
+        let corners: Vec<usize> = loops.iter().flat_map(|l| l.iter().copied()).collect();
+        let origin = points[corners[0]];
+        let mut flat = Vec::with_capacity(2 * corners.len());
+        let mut holes = Vec::new();
+        for (k, l) in loops.iter().enumerate() {
+            if k > 0 {
+                holes.push(flat.len() / 2);
+            }
+            flat.extend(l.iter().flat_map(|&i| [points[i][u] - origin[u], points[i][v] - origin[v]]));
+        }
+        let Ok(triangles) = earcutr::earcut(&flat, &holes, 2) else { continue };
+        for t in triangles.chunks_exact(3) {
+            push_face(layer, &mut [points[corners[t[0]]], points[corners[t[1]]], points[corners[t[2]]]], n);
+        }
+    }
+    layer.indices.len() > first
+}
+
 /// §8.13: a profile beam's point (px, py) at t along its axis: from P1 + s·N along P2 − P1, px
 /// to the right of the axis (to the left when mirrored), py up from the axis heights z1, z2.
 struct ProfileBeam {
@@ -2172,6 +2375,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     // §8.12: zones overlap walls, slabs and roofs: half transparent, and hidden at first as the
     // spaces of IFC files
     let mut zones = Layer { name: "Zones".into(), color: [0.58, 0.74, 0.9], hidden: true, ..Layer::default() };
+    let mut morphs = Layer { name: "Morphs".into(), color: [0.70, 0.70, 0.66], ..Layer::default() };
     let mut next_id = 0u64;
     let mut add = |layer: &mut Layer,
                    record: &Record,
@@ -2684,8 +2888,38 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     stats.zones_skipped = stats.zones_no_polygon + stats.zones_no_number + stats.zones_unreadable + stats.zones_no_height;
     zones.colors = Some(vec![[148, 189, 230, 90]; zones.vertex_count()]);
 
+    // §8.16.3: morphs, their body placed by their matrix; a body may serve several morphs
+    stats.morphs_no_body = records.morphs_too_large;
+    for record in &records.morphs {
+        let Some(body) = record.cache.and_then(|b| records.bodies.get(&b)).and_then(Option::as_ref) else {
+            stats.morphs_no_body += 1;
+            continue;
+        };
+        let Some((name, m)) = morph_fields(&record.data) else {
+            stats.morphs_no_matrix += 1;
+            continue;
+        };
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let world = |v: &[f64; 3]| [m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[3], m[4] * v[0] + m[5] * v[1] + m[6] * v[2] + m[7], m[8] * v[0] + m[9] * v[1] + m[10] * v[2] + m[11] + e];
+        let [x, y, z] = ranges(body.faces.iter().flatten().flatten().map(|&i| world(&body.vertices[i])));
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), (if name.is_empty() { "Morph".to_string() } else { name.clone() }).into());
+        props.insert("category".into(), "Morph".into());
+        props.insert("Faces".into(), body.faces.len().to_string().into());
+        if body.open {
+            props.insert("Body".into(), "open (an edge with one face)".into());
+        }
+        if add(&mut morphs, record, z, &|layer| push_morph(layer, body, &m, e), props) {
+            stats.morphs_open += usize::from(body.open);
+            stats.morphs.push(MorphOut { name, faces: body.faces.len(), open: body.open, x, y, z });
+        } else {
+            stats.morphs_no_body += 1;
+        }
+    }
+    stats.morphs_skipped = stats.morphs_no_body + stats.morphs_no_matrix;
+
     let elements =
-        stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len() + stats.meshes.len() + stats.zones.len();
+        stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len() + stats.meshes.len() + stats.zones.len() + stats.morphs.len();
     if elements == 0 {
         // §10: Archicad 17 to 23 share the container but not the records
         return Err(format!(
@@ -2729,6 +2963,16 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ("Archicad openings".into(), opening_text(&stats)),
         ("Archicad library objects".into(), object_text(&stats)),
         ("Archicad meshes".into(), mesh_text(&stats)),
+        ("Archicad morphs".into(), {
+            let mut text = reasons(stats.morphs.len(), stats.morphs_skipped, &[
+                (stats.morphs_no_body, "without a body that reads"),
+                (stats.morphs_no_matrix, "without a placement"),
+            ]);
+            if stats.morphs_open > 0 {
+                text += &format!("; {} open", stats.morphs_open);
+            }
+            text
+        }),
         ("Archicad zones".into(), reasons(stats.zones.len(), stats.zones_skipped, &[
             (stats.zones_no_polygon, "without a polygon"),
             (stats.zones_no_number, "without a number"),
@@ -2737,7 +2981,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ])),
         (
             "Archicad elements not read yet".into(),
-            "Window and door frames, glass and leaves, the shapes of library objects (drawn as boxes), morphs, curved roofs and \
+            "Window and door frames, glass and leaves, the shapes of library objects (drawn as boxes), morph materials, curved roofs and \
              shells, zones cut by roofs, and columns and beams with a profile section"
                 .into(),
         ),
@@ -2750,7 +2994,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs, columns, beams, roofs, openings, objects, terrain, zones].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams, roofs, openings, objects, terrain, zones, morphs].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
 }
 
@@ -3494,7 +3738,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file(), arcs_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file(), arcs_file(), morphs_file()] {
             garbage_rounds(&file);
         }
     }
@@ -4313,6 +4557,223 @@ mod tests {
         file.extend(block([0x51; 16], 0x84, &record(SLAB, &s1, &[0, 0, 0]), 0));
         file.extend(block([0x52; 16], 0x84, &record(SLAB, &s2, &[0, 0, 0]), 0));
         file
+    }
+
+    /// A morph body (§8.16.3) of these vertices and faces (loops of vertex indices, the outer one
+    /// counter-clockwise seen from outside, holes the other way): the edges and their faces, the
+    /// edge references (0 between loops), a normal per face and the faces.
+    fn body_data(vertices: &[[f64; 3]], faces: &[Vec<Vec<usize>>]) -> Vec<u8> {
+        let mut edges: Vec<(usize, usize, u32, u32)> = Vec::new();
+        let mut refs: Vec<i32> = Vec::new();
+        let mut spans = Vec::new();
+        for (f, loops) in faces.iter().enumerate() {
+            let first = refs.len();
+            for (k, l) in loops.iter().enumerate() {
+                if k > 0 {
+                    refs.push(0);
+                }
+                for i in 0..l.len() {
+                    let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                    let found = edges.iter().position(|e| (e.0, e.1) == (a, b) || (e.0, e.1) == (b, a));
+                    let k = found.unwrap_or_else(|| {
+                        edges.push((a, b, u32::MAX, u32::MAX));
+                        edges.len() - 1
+                    });
+                    let e = &mut edges[k];
+                    if e.2 == u32::MAX { e.2 = f as u32 } else { e.3 = f as u32 }
+                    refs.push(if (e.0, e.1) == (a, b) { k as i32 + 1 } else { -(k as i32 + 1) });
+                }
+            }
+            spans.push((first, refs.len() - 1));
+        }
+        let mut data = 4u16.to_le_bytes().to_vec();
+        data.push(0x83);
+        data.resize(156, 0);
+        data.extend((vertices.len() as u32).to_le_bytes());
+        data.extend(vertices.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        data.extend(0u32.to_le_bytes());
+        data.extend((edges.len() as u32).to_le_bytes());
+        for (a, b, f1, f2) in &edges {
+            data.extend([0x40000u32, 0, *a as u32, *b as u32, *f1, *f2].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        data.extend((refs.len() as u32).to_le_bytes());
+        data.extend(refs.iter().flat_map(|v| v.to_le_bytes()));
+        data.extend((faces.len() as u32).to_le_bytes());
+        data.extend(std::iter::repeat_n([0.0f64, 0.0, 1.0], faces.len()).flatten().flat_map(f64::to_le_bytes));
+        data.extend((faces.len() as u32).to_le_bytes());
+        for (f, (first, last)) in spans.iter().enumerate() {
+            data.extend([2u32, 0, 0, 0, 0, f as u32 + 1, *first as u32, *last as u32, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        data.extend([0u8; 16]);
+        data
+    }
+
+    /// A box from (0, 0, 0) to `size`: 8 vertices, 6 faces facing out.
+    fn box_body(size: [f64; 3]) -> Vec<u8> {
+        let v: Vec<[f64; 3]> = (0..8).map(|i| [0, 1, 2].map(|k| if i >> k & 1 == 1 { size[k] } else { 0.0 })).collect();
+        let middle = size.map(|s| s / 2.0);
+        let faces: Vec<Vec<Vec<usize>>> = [[0, 2, 6, 4], [1, 5, 7, 3], [0, 4, 5, 1], [2, 3, 7, 6], [0, 1, 3, 2], [4, 6, 7, 5]]
+            .iter()
+            .map(|f| {
+                // turned to face away from the middle (counter-clockwise seen from outside)
+                let (a, b, c) = (v[f[0]], v[f[1]], v[f[2]]);
+                let (u, w) = ([0, 1, 2].map(|k| b[k] - a[k]), [0, 1, 2].map(|k| c[k] - a[k]));
+                let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+                let out: f64 = (0..3).map(|k| n[k] * (a[k] - middle[k])).sum();
+                let mut l = f.to_vec();
+                if out < 0.0 {
+                    l.reverse();
+                }
+                vec![l]
+            })
+            .collect();
+        body_data(&v, &faces)
+    }
+
+    /// A 4 × 4 × 1 block with a 2 × 2 hole through it: top and bottom faces with a hole loop.
+    fn frame_body() -> Vec<u8> {
+        let square = |a: f64, b: f64| [[a, a], [b, a], [b, b], [a, b]];
+        let mut v = Vec::new();
+        for (ring, z) in [(square(0.0, 4.0), 0.0), (square(0.0, 4.0), 1.0), (square(1.0, 3.0), 0.0), (square(1.0, 3.0), 1.0)] {
+            v.extend(ring.iter().map(|p| [p[0], p[1], z]));
+        }
+        // outer bottom 0-3, outer top 4-7, inner bottom 8-11, inner top 12-15
+        let mut faces = vec![vec![vec![4, 5, 6, 7], vec![12, 15, 14, 13]], vec![vec![0, 3, 2, 1], vec![8, 9, 10, 11]]];
+        for k in 0..4 {
+            let j = (k + 1) % 4;
+            faces.push(vec![vec![k, j, 4 + j, 4 + k]]);
+            faces.push(vec![vec![8 + j, 8 + k, 12 + k, 12 + j]]);
+        }
+        body_data(&v, &faces)
+    }
+
+    /// Morph data (§8.16.3): its ID string at 40, then 5 bytes and the matrix [R | t].
+    fn morph_data(id: &str, m: [f64; 12]) -> Vec<u8> {
+        let mut data = vec![0u8; 38];
+        data.extend(id_string(id));
+        data.extend([0u8; 5]);
+        data.extend(m.iter().flat_map(|v| v.to_le_bytes()));
+        data.extend([0u8; 8]);
+        data
+    }
+
+    /// Morphs on the story "Hall" (4.5 m): A, a 2 × 1 × 1 box moved to x 10; B, the same body
+    /// turned 90° about z and moved to x 20; C, the block with a hole at x 30; D, an open body (one
+    /// square face) at x 40; E, a body that does not read; F, no placement (a matrix that is not a
+    /// rotation).
+    fn morphs_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+        ];
+        let square = body_data(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]], &[vec![vec![0, 1, 2, 3]]]);
+        let bodies = [box_body([2.0, 1.0, 1.0]), frame_body(), square, vec![0u8; 200]];
+        for (k, body) in bodies.iter().enumerate() {
+            blocks.push(block([0x60 + k as u8; 16], 0x84, &record(MORPH_BODY, body, &[0, 0, 0]), 0));
+        }
+        let moved = |x: f64| [1.0, 0.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let turned = [0.0, -1.0, 0.0, 20.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut skewed = moved(50.0);
+        skewed[1] = 0.5;
+        let morphs = [("A", moved(10.0), 0), ("B", turned, 0), ("C", moved(30.0), 1), ("D", moved(40.0), 2), ("E", moved(45.0), 3), ("F", skewed, 0)];
+        for (k, (name, m, body)) in morphs.into_iter().enumerate() {
+            let items = [(0x12, ON_STORY, STORY_ID), (0x11, MORPH_BODY_LINK, [0x60 + body as u8; 16])];
+            blocks.push(block([0x70 + k as u8; 16], 0x84, &record(MORPH, &morph_data(name, m), &links_of(&items)), 0));
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    /// §8.16.3: face ranges that are not contiguous (overlapping, or adding up to many times the
+    /// references, or leaving a gap) make the body unreadable, quickly: each reference is visited
+    /// once at most.
+    #[test]
+    fn morph_face_ranges_may_not_overlap() {
+        let start = web_time::Instant::now();
+        // a box whose second face starts inside the first face's range
+        let mut overlapping = box_body([1.0, 1.0, 1.0]);
+        let faces_at = overlapping.len() - 16 - 6 * 40;
+        overlapping[faces_at + 40 + 24..faces_at + 40 + 28].copy_from_slice(&0u32.to_le_bytes());
+        assert!(morph_body(&box_body([1.0, 1.0, 1.0])).is_some() && morph_body(&overlapping).is_none());
+        // a gap: the last face ends before the last reference
+        let mut gap = box_body([1.0, 1.0, 1.0]);
+        let last_at = gap.len() - 16 - 40 + 28;
+        let last = u32::from_le_bytes(gap[last_at..last_at + 4].try_into().unwrap());
+        gap[last_at..last_at + 4].copy_from_slice(&(last - 1).to_le_bytes());
+        assert!(morph_body(&gap).is_none());
+        // 10 000 faces, each claiming all 100 000 references: 1e9 steps if each were walked
+        let np = 100_000u32;
+        let nf = 10_000u32;
+        let mut huge = 4u16.to_le_bytes().to_vec();
+        huge.resize(156, 0);
+        huge.extend(4u32.to_le_bytes());
+        huge.extend([[0.0f64, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]].iter().flatten().flat_map(|v| v.to_le_bytes()));
+        huge.extend(0u32.to_le_bytes());
+        huge.extend(4u32.to_le_bytes());
+        for k in 0..4u32 {
+            huge.extend([0x40000, 0, k, (k + 1) % 4, 0, u32::MAX].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        huge.extend(np.to_le_bytes());
+        huge.extend((0..np).flat_map(|k| ((k % 5) as i32 % 5).to_le_bytes()));
+        huge.extend(1u32.to_le_bytes());
+        huge.extend([0.0f64, 0.0, 1.0].iter().flat_map(|v| v.to_le_bytes()));
+        huge.extend(nf.to_le_bytes());
+        for _ in 0..nf {
+            huge.extend([2u32, 0, 0, 0, 0, 1, 0, np - 1, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        assert!(huge.len() <= MAX_ELEMENT_DATA, "{}", huge.len());
+        assert!(morph_body(&huge).is_none());
+        // in a project: the morph is skipped and counted
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(block([0x61; 16], 0x84, &record(MORPH_BODY, &huge, &[0, 0, 0]), 0));
+        file.extend(block([0x62; 16], 0x84, &record(MORPH_BODY, &overlapping, &[0, 0, 0]), 0));
+        for k in 0..2u8 {
+            let m = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+            file.extend(block([0x70 + k; 16], 0x84, &record(MORPH, &morph_data("M", m), &links_of(&[(0x11, MORPH_BODY_LINK, [0x61 + k; 16])])), 0));
+        }
+        file.extend(block([0x51; 16], 0x84, &record(SLAB, &polygon_data(), &[0, 0, 0]), 0));
+        let (_, stats) = convert(read_bytes(&file).unwrap()).unwrap();
+        assert_eq!((stats.morphs.len(), stats.morphs_no_body), (0, 2));
+        assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn draws_morphs() {
+        let records = read_bytes(&morphs_file()).expect("container");
+        assert_eq!((records.morphs.len(), records.bodies.len(), records.bodies.values().filter(|b| b.is_some()).count()), (6, 4, 3));
+        let (loaded, stats) = convert(records).expect("morphs");
+        assert_eq!((stats.morphs.len(), stats.morphs_skipped, stats.morphs_no_body, stats.morphs_no_matrix, stats.morphs_open), (4, 2, 1, 1, 1));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad morphs"
+            && v == "4 read, 2 skipped (1 without a body that reads, 1 without a placement); 1 open"));
+        let layer = &loaded.layers[0];
+        assert_eq!((layer.name.as_str(), layer.elements.len()), ("Morphs", 4));
+        let volume = |element: usize| {
+            let (_, first, count) = layer.elements[element];
+            let p = |i: u32| glam::DVec3::from_array(std::array::from_fn(|k| layer.positions[3 * i as usize + k] as f64));
+            layer.indices[first as usize..(first + count) as usize].chunks_exact(3).map(|t| p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0).sum::<f64>()
+        };
+        let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+        let by = |name: &str| stats.morphs.iter().find(|m| m.name == name).unwrap_or_else(|| panic!("{name}: {:?}", stats.morphs));
+        // A and B share one body: the same volume, B turned 90° about z; both on the story at 4.5
+        let (a, b) = (by("A"), by("B"));
+        assert!(near(a.x, (10.0, 12.0)) && near(a.y, (0.0, 1.0)) && near(a.z, (4.5, 5.5)), "{a:?}");
+        assert!(near(b.x, (19.0, 20.0)) && near(b.y, (0.0, 2.0)) && near(b.z, (4.5, 5.5)), "{b:?}");
+        assert!((volume(0) - 2.0).abs() < 1e-4 && (volume(1) - 2.0).abs() < 1e-4, "{} {}", volume(0), volume(1));
+        // C: the faces with a hole leave it open through: 16 − 4
+        assert!((volume(2) - 12.0).abs() < 1e-4 && by("C").faces == 10, "{}", volume(2));
+        // D: open, drawn all the same
+        assert!(by("D").open && layer.props[3].1.contains("\"Body\":\"open"));
+        // the closed ones are closed and face out
+        let (_, first, _) = layer.elements[3];
+        assert_eq!(layer.solid_indices().len(), first as usize);
     }
 
     #[test]

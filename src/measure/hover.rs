@@ -3,10 +3,11 @@
 //! The snap is measured on screen, in pixels: a corner or the middle of an edge within
 //! [`SNAP_PX`](super::SNAP_PX) of the cursor wins, else a model edge within that distance, else the
 //! face under the cursor. Only edges of the layer under the cursor count, and only where they are
-//! not behind the face under the cursor (a hidden back edge does not catch the cursor). The click
-//! takes the hover as it is, so it picks exactly what was highlighted.
+//! not behind the face under the cursor (a hidden back edge does not catch the cursor) and not cut
+//! away by the section box or plane. The click takes the hover as it is, so it picks exactly what
+//! was highlighted.
 
-use super::geometry::{self, Entity, FaceRegion, LayerTopology};
+use super::geometry::{self, Entity, FaceRegion, LayerTopology, LINE_BLOCK};
 use super::{pixel_size, Snap};
 use crate::model::Layer;
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -47,6 +48,18 @@ impl Screen {
         Some((self.to_pixels(ca), self.to_pixels(cb)))
     }
 
+    /// Whether the box `lo`..`hi` (model space; `mm` takes it to world) lies on screen farther than
+    /// `margin` pixels from `at`. False when part of it is behind the camera.
+    fn box_away(&self, lo: Vec3, hi: Vec3, mm: &Mat4, at: Vec2, margin: f32) -> bool {
+        let (mut min, mut max) = (Vec2::INFINITY, Vec2::NEG_INFINITY);
+        for i in 0..8 {
+            let corner = Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][(i >> 1) & 1], [lo.z, hi.z][i >> 2]);
+            let Some(p) = self.project(mm.transform_point3(corner)) else { return false };
+            (min, max) = (min.min(p), max.max(p));
+        }
+        at.x < min.x - margin || at.y < min.y - margin || at.x > max.x + margin || at.y > max.y + margin
+    }
+
     /// The ray through viewport point `at`: a point on the near plane and the unit direction.
     pub fn ray(&self, at: Vec2) -> (Vec3, Vec3) {
         let (w, h) = (self.size.0.max(1.0), self.size.1.max(1.0));
@@ -56,6 +69,15 @@ impl Screen {
         let far = inv.project_point3(Vec3::new(nx, ny, 1.0));
         (origin, (far - origin).normalize_or_zero())
     }
+}
+
+/// Where the cursor is, and which world points are shown there (not cut away by the section box
+/// or plane).
+pub struct Pointer<'a> {
+    pub screen: Screen,
+    /// Viewport logical pixels.
+    pub cursor: Vec2,
+    pub shown: &'a dyn Fn(Vec3) -> bool,
 }
 
 /// What the cursor snapped to.
@@ -99,29 +121,31 @@ fn nearest_to_ray(a: Vec3, b: Vec3, origin: Vec3, dir: Vec3) -> Vec3 {
     (a.as_dvec3() + u * s.clamp(0.0, 1.0)).as_vec3()
 }
 
-/// Snaps the cursor at `cursor` (viewport pixels), whose ray hits triangle `t` of `layer` at `hit`
-/// (model space; `mm` takes it to world): the nearest corner or edge middle within `tolerance`
-/// pixels, else the nearest model edge within it, else the face.
+/// Snaps the cursor, whose ray hits triangle `t` of `layer` at `hit` (model space; `mm` takes it
+/// to world): the nearest corner or edge middle within `tolerance` pixels, else the nearest model
+/// edge within it, else the face. Without the layer's edges (`topo` still being built) only the
+/// corners of the triangle snap.
 pub fn snap(
     layer: &Layer,
-    topo: &LayerTopology,
+    topo: Option<&LayerTopology>,
     t: usize,
     hit: Vec3,
     mm: &Mat4,
-    screen: &Screen,
-    cursor: Vec2,
+    pointer: &Pointer,
     tolerance: f32,
 ) -> (Snap, SnapKind) {
+    let (screen, cursor) = (&pointer.screen, pointer.cursor);
     let hit = mm.transform_point3(hit);
     let tri = geometry::triangle(layer, t).map(|p| mm.transform_point3(p));
     let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
     let face = Entity::Plane { n, p: hit };
     let (eye, dir) = screen.ray(cursor);
 
-    // seen: on the viewer's side of the face under the cursor, give or take a pixel's depth
+    // seen: on the viewer's side of the face under the cursor, give or take a pixel's depth, and
+    // not cut away
     let toward_viewer = if n.dot(eye - hit) < 0.0 { -n } else { n };
     let slack = pixel_size(&screen.view_proj, screen.size, hit);
-    let seen = |q: Vec3| toward_viewer.dot(q - hit) >= -slack;
+    let seen = |q: Vec3| toward_viewer.dot(q - hit) >= -slack && (pointer.shown)(q);
 
     let mut point: Option<(f32, Vec3, SnapKind)> = None;
     let mut consider = |q: Vec3, kind: SnapKind| {
@@ -132,7 +156,9 @@ pub fn snap(
         }
     };
     let mut edge: Option<(f32, Vec3, Vec3, Vec3)> = None;
-    for &(a, b) in &topo.lines {
+    let (lines, blocks) = topo.map_or((&[][..], &[][..]), |topo| (&topo.lines[..], &topo.blocks[..]));
+    let near = blocks.iter().enumerate().filter(|&(_, &(lo, hi))| !screen.box_away(lo, hi, mm, cursor, tolerance));
+    for &(a, b) in near.flat_map(|(i, _)| &lines[i * LINE_BLOCK..((i + 1) * LINE_BLOCK).min(lines.len())]) {
         let (a, b) = (mm.transform_point3(a), mm.transform_point3(b));
         let Some((sa, sb)) = screen.segment(a, b) else { continue };
         let d = distance_to_segment(cursor, sa, sb);
@@ -231,6 +257,11 @@ mod tests {
 
     /// Hovers the cursor at `cursor` the way the app does: cast the ray, then snap.
     fn hover(layer: &Layer, screen: &Screen, cursor: Vec2) -> Option<(Snap, SnapKind)> {
+        hover_cut(layer, screen, cursor, &|_| true)
+    }
+
+    /// The same with a section that shows only the points `shown` lets through.
+    fn hover_cut(layer: &Layer, screen: &Screen, cursor: Vec2, shown: &dyn Fn(Vec3) -> bool) -> Option<(Snap, SnapKind)> {
         let topo = LayerTopology::build(layer);
         let (origin, dir) = screen.ray(cursor);
         let mut best: Option<(f32, usize)> = None;
@@ -247,12 +278,14 @@ mod tests {
             let q = s.cross(e1);
             let v = dir.dot(q) / det;
             let d = e2.dot(q) / det;
-            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 && d > 0.0 && best.is_none_or(|b| d < b.0) {
+            let shows = shown(origin + dir * d);
+            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 && d > 0.0 && best.is_none_or(|b| d < b.0) && shows {
                 best = Some((d, t));
             }
         }
         let (d, t) = best?;
-        Some(snap(layer, &topo, t, origin + dir * d, &Mat4::IDENTITY, screen, cursor, super::super::SNAP_PX))
+        let pointer = Pointer { screen: *screen, cursor, shown };
+        Some(snap(layer, Some(&topo), t, origin + dir * d, &Mat4::IDENTITY, &pointer, super::super::SNAP_PX))
     }
 
     fn at(screen: &Screen, p: Vec3) -> Vec2 {
@@ -321,6 +354,46 @@ mod tests {
         assert!(front.distance(back) > 12.0, "the back edge shows inside the front face");
         let (s, kind) = hover(&layer, &screen, back + Vec2::new(30.0, 0.0)).unwrap();
         assert_eq!(kind, SnapKind::Face, "{s:?}");
+    }
+
+    /// Boxes from `lo` to `hi` in one layer.
+    fn boxes(spans: &[(Vec3, Vec3)]) -> Layer {
+        let mut layer = Layer::default();
+        for &(lo, hi) in spans {
+            let b = cuboid(lo, hi);
+            let base = (layer.positions.len() / 3) as u32;
+            layer.positions.extend_from_slice(&b.positions);
+            layer.indices.extend(b.indices.iter().map(|i| i + base));
+        }
+        layer
+    }
+
+    #[test]
+    fn corners_cut_away_by_a_section_do_not_snap() {
+        // a facade in front of a wide back wall, seen from the front; the section keeps y > 0.5,
+        // so the cursor looks through the cut facade onto the back wall, right at a facade corner
+        let layer = boxes(&[(Vec3::ZERO, Vec3::new(1.0, 0.1, 1.0)), (Vec3::new(-1.0, 0.9, -1.0), Vec3::new(2.0, 1.0, 2.0))]);
+        let screen = view(Vec3::new(0.5, 0.5, 0.5), -90.0, 0.0, 3.0, false);
+        let corner = at(&screen, Vec3::new(1.0, 0.0, 1.0)) + Vec2::new(-2.0, 2.0);
+        let (s, kind) = hover(&layer, &screen, corner).unwrap();
+        assert_eq!((s.entity, kind), (Entity::Point(Vec3::new(1.0, 0.0, 1.0)), SnapKind::Corner), "uncut");
+        let (s, kind) = hover_cut(&layer, &screen, corner, &|p| p.y > 0.5).unwrap();
+        assert_eq!(kind, SnapKind::Face, "{s:?}");
+        assert!((s.entity.pick().y - 0.9).abs() < 1e-4, "on the back wall: {s:?}");
+    }
+
+    #[test]
+    fn far_blocks_of_edges_are_skipped_not_lost() {
+        // a row of 300 boxes: many blocks of edges; the edge under the cursor still snaps
+        let spans: Vec<_> = (0..300).map(|i| (Vec3::new(2.0 * i as f32, 0.0, 0.0), Vec3::new(2.0 * i as f32 + 1.0, 1.0, 1.0))).collect();
+        let layer = boxes(&spans);
+        let topo = LayerTopology::build(&layer);
+        assert_eq!(topo.lines.len(), 300 * 12);
+        assert!(topo.blocks.len() > 50);
+        let screen = view(Vec3::new(400.5, 0.5, 0.5), -90.0, 20.0, 4.0, false);
+        let edge = at(&screen, Vec3::new(400.3, 0.0, 1.0));
+        let (s, kind) = hover(&layer, &screen, edge + Vec2::new(0.0, 2.0)).unwrap();
+        assert_eq!(kind, SnapKind::Edge, "{s:?}");
     }
 
     #[test]

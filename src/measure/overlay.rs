@@ -250,16 +250,18 @@ impl MeasureOverlay<'_> {
         }
         let mut tag = h.kind.label(self.language).to_string();
         match (h.kind, &h.face) {
-            (SnapKind::Face, Some(face)) => {
-                self.hover_face(frame, pr, face);
-                if self.tool == Some(Tool::Area) {
-                    tag = format!("{tag} · {}", self.units.format(self.language, Category::Area, face.area));
+            (SnapKind::Face, face) => {
+                // the face outline waits for the layer's edges
+                if let Some(face) = face {
+                    self.hover_face(frame, pr, face);
+                    if self.tool == Some(Tool::Area) {
+                        tag = format!("{tag} · {}", self.units.format(self.language, Category::Area, face.area));
+                    }
                 }
                 let square = Path::rectangle(Point::new(c.x - 4.0, c.y - 4.0), Size::new(8.0, 8.0));
                 frame.fill(&square, self.label_bg);
                 frame.stroke(&square, self.stroke(1.5));
             }
-            (SnapKind::Face, None) => {}
             (SnapKind::Edge, _) => {
                 if let Entity::Line { a, b, .. } = h.snap.entity {
                     if let Some(path) = pr.path(&[a, b], false) {

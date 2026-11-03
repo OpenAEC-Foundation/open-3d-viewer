@@ -20,12 +20,40 @@ const COLLINEAR_DEG: f32 = 0.5;
 const WELD: f32 = 1e4;
 /// Faces with more triangles than this are cut off (keeps the UI responsive).
 const MAX_REGION_TRIANGLES: usize = 500_000;
+/// Lines per block of [`LayerTopology::blocks`].
+pub const LINE_BLOCK: usize = 64;
 
 pub struct LayerTopology {
     /// Neighbour triangle across edge (corner i → i+1) per index, -1 at an open border.
     pub neighbors: Vec<i32>,
-    /// Feature lines (model space).
+    /// Feature lines (model space), in blocks of lines near each other.
     pub lines: Vec<(Vec3, Vec3)>,
+    /// The bounding box (min, max) of each [`LINE_BLOCK`] lines, so a snap skips the blocks far
+    /// from the cursor.
+    pub blocks: Vec<(Vec3, Vec3)>,
+}
+
+impl std::fmt::Debug for LayerTopology {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LayerTopology({} lines)", self.lines.len())
+    }
+}
+
+/// The bounding box (min, max) of points.
+pub fn bounds_of(points: impl IntoIterator<Item = Vec3>) -> (Vec3, Vec3) {
+    points.into_iter().fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| (lo.min(p), hi.max(p)))
+}
+
+/// Sorts lines along a Z-order curve of their middles, so consecutive lines lie close together.
+fn sort_spatially(lines: &mut [(Vec3, Vec3)]) {
+    let (lo, hi) = bounds_of(lines.iter().flat_map(|&(a, b)| [a, b]));
+    let scale = 1023.0 / (hi - lo).max_element().max(1e-9);
+    let spread = |v: u32| (0..10).fold(0u32, |out, i| out | ((v >> i) & 1) << (3 * i));
+    let key = |&(a, b): &(Vec3, Vec3)| {
+        let q = (((a + b) / 2.0 - lo) * scale).as_uvec3();
+        spread(q.x) | spread(q.y) << 1 | spread(q.z) << 2
+    };
+    lines.sort_by_cached_key(key);
 }
 
 fn weld_key(p: Vec3) -> (i64, i64, i64) {
@@ -100,8 +128,10 @@ impl LayerTopology {
                 segments.push((a, b));
             }
         }
-        let lines = merge_collinear(&welded, &segments);
-        Self { neighbors, lines }
+        let mut lines = merge_collinear(&welded, &segments);
+        sort_spatially(&mut lines);
+        let blocks = lines.chunks(LINE_BLOCK).map(|c| bounds_of(c.iter().flat_map(|&(a, b)| [a, b]))).collect();
+        Self { neighbors, lines, blocks }
     }
 }
 

@@ -14,8 +14,8 @@ pub mod overlay;
 use crate::model::{Layer, Model};
 use format::{Category, UnitSettings};
 use geometry::{Angle, Distance, Entity, FaceRegion, LayerTopology, Polygon, VolumeResult};
-use glam::{Mat4, Vec2, Vec3};
-use hover::{Hover, Screen, SnapKind};
+use glam::{Mat4, Vec3};
+use hover::{Hover, Pointer, SnapKind};
 use openaec_ui::Language;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -168,8 +168,23 @@ pub struct MeasureState {
     pub units: UnitSettings,
     /// What the cursor is over, as the next click will take it.
     pub hover: Option<Hover>,
-    /// Edges and neighbours per layer of the current model, built on first use.
+    /// Edges and neighbours per layer of the current model: built in the background when a tool
+    /// is chosen (see [`MeasureState::edges_to_build`]), else on first use.
     topology: HashMap<usize, Arc<LayerTopology>>,
+    /// Edges are being built in the background: until then the cursor snaps to triangle corners
+    /// only, instead of building them while it moves.
+    pub building_edges: bool,
+}
+
+/// Edges built in the background for the layers of a model: (model id, (layer, edges)).
+#[derive(Debug, Clone)]
+pub struct Edges(pub u64, pub Vec<(usize, Arc<LayerTopology>)>);
+
+impl Edges {
+    /// Builds the edges of `layers` of `model`.
+    pub fn build(model: &Model, layers: &[usize]) -> Self {
+        Edges(model.id, layers.iter().map(|&l| (l, Arc::new(LayerTopology::build(&model.layers[l])))).collect())
+    }
 }
 
 impl MeasureState {
@@ -186,6 +201,7 @@ impl MeasureState {
         self.results.clear();
         self.hover = None;
         self.topology.clear();
+        self.building_edges = false;
     }
 
     /// Esc: drop the picks in progress, else switch the tool off. False when there was nothing
@@ -204,31 +220,47 @@ impl MeasureState {
         self.topology.entry(l).or_insert_with(|| Arc::new(LayerTopology::build(layer))).clone()
     }
 
-    /// What a click at `cursor` would take: the cursor's ray hits triangle `t` of layer `l` at
-    /// `hit` (model space). The face highlighted with it is kept from the last hover while the
-    /// cursor stays on that face.
-    pub fn hover_at(&mut self, model: &Model, l: usize, t: usize, hit: Vec3, mm: &Mat4, screen: Screen, cursor: Vec2) -> Option<Hover> {
+    /// The layers among `shown` whose edges are not built yet.
+    pub fn edges_to_build(&self, shown: impl IntoIterator<Item = usize>) -> Vec<usize> {
+        shown.into_iter().filter(|l| !self.topology.contains_key(l)).collect()
+    }
+
+    /// Takes edges built in the background.
+    pub fn add_edges(&mut self, edges: Vec<(usize, Arc<LayerTopology>)>) {
+        self.topology.extend(edges);
+        self.building_edges = false;
+    }
+
+    /// What a click at the pointer would take: its ray hits triangle `t` of layer `l` at `hit`
+    /// (model space). The face highlighted with it is kept from the last hover while the cursor
+    /// stays on that face.
+    pub fn hover_at(&mut self, model: &Model, l: usize, t: usize, hit: Vec3, mm: &Mat4, pointer: &Pointer) -> Option<Hover> {
         let tool = self.tool?;
         let layer = model.layers.get(l)?;
-        let topo = self.topology(layer, l);
+        let topo = match self.topology.get(&l) {
+            Some(topo) => Some(topo.clone()),
+            None if self.building_edges => None,
+            None => Some(self.topology(layer, l)),
+        };
+        let (screen, cursor) = (pointer.screen, pointer.cursor);
         let pixel = pixel_size(&screen.view_proj, screen.size, mm.transform_point3(hit));
         let (snap, kind) = match tool {
             Tool::Area | Tool::Volume => {
                 let face = Entity::Plane { n: Vec3::Z, p: mm.transform_point3(hit) };
                 (Snap { entity: face, face }, SnapKind::Face)
             }
-            _ => hover::snap(layer, &topo, t, hit, mm, &screen, cursor, SNAP_PX),
+            _ => hover::snap(layer, topo.as_deref(), t, hit, mm, pointer, SNAP_PX),
         };
-        let face = match (tool, kind) {
-            (Tool::Volume, _) => None,
-            (Tool::Area, _) | (_, SnapKind::Face) => {
+        let face = match (tool, kind, &topo) {
+            (Tool::Volume, ..) | (_, _, None) => None,
+            (Tool::Area, _, Some(topo)) | (_, SnapKind::Face, Some(topo)) => {
                 // the hover is dropped when the tool or the model changes: the same kind of face
                 let kept = self.hover.as_ref().filter(|h| h.layer == l).and_then(|h| h.face.clone());
                 Some(kept.filter(|f| f.faces.contains(&t)).unwrap_or_else(|| {
                     let allowed = element_triangles(layer, t);
                     Arc::new(match tool {
-                        Tool::Area => geometry::face_region(layer, &topo, t, allowed, mm),
-                        _ => geometry::flat_face(layer, &topo, t, allowed, mm),
+                        Tool::Area => geometry::face_region(layer, topo, t, allowed, mm),
+                        _ => geometry::flat_face(layer, topo, t, allowed, mm),
                     })
                 }))
             }
@@ -372,6 +404,8 @@ pub fn pixel_size(view_proj: &Mat4, size: (f32, f32), world: Vec3) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::hover::Screen;
+    use glam::Vec2;
     use super::*;
 
     fn square_layer() -> Layer {
@@ -400,13 +434,15 @@ mod tests {
         let screen = Screen { view_proj: cam.view_proj(1.0), size: (600.0, 600.0) };
         let mm = Mat4::IDENTITY;
         let at = |p: Vec3| screen.project(p).unwrap();
+        let all = |_: Vec3| true;
+        let pointer = |cursor: Vec2| Pointer { screen, cursor, shown: &all };
         let mut m = MeasureState::default();
-        assert!(m.hover_at(&model, 0, 0, Vec3::ZERO, &mm, screen, at(Vec3::ZERO)).is_none(), "no tool, no hover");
+        assert!(m.hover_at(&model, 0, 0, Vec3::ZERO, &mm, &pointer(at(Vec3::ZERO))).is_none(), "no tool, no hover");
 
         m.toggle(Tool::Distance);
         // 3 px off the corner (2, 0): the corner is highlighted, and the click takes it
         let near_corner = Vec3::new(1.99, 0.01, 0.0);
-        let h = m.hover_at(&model, 0, 0, near_corner, &mm, screen, at(near_corner)).unwrap();
+        let h = m.hover_at(&model, 0, 0, near_corner, &mm, &pointer(at(near_corner))).unwrap();
         assert_eq!((h.snap.entity, h.kind), (Entity::Point(Vec3::new(2.0, 0.0, 0.0)), SnapKind::Corner));
         assert!(h.holds_for(&screen, at(near_corner) + Vec2::new(2.0, -1.0)), "a click jitters");
         assert!(!h.holds_for(&screen, at(near_corner) + Vec2::new(9.0, 0.0)));
@@ -415,12 +451,12 @@ mod tests {
 
         // the middle of a face: the flat face is highlighted, the same one over its other triangle
         let inside = Vec3::new(1.5, 0.5, 0.0);
-        m.hover = m.hover_at(&model, 0, 0, inside, &mm, screen, at(inside));
+        m.hover = m.hover_at(&model, 0, 0, inside, &mm, &pointer(at(inside)));
         let h = m.hover.clone().unwrap();
         assert_eq!(h.kind, SnapKind::Face);
         assert_eq!(h.face.as_ref().map(|f| f.faces.len()), Some(2));
         let other = Vec3::new(0.5, 1.5, 0.0);
-        let h2 = m.hover_at(&model, 0, 1, other, &mm, screen, at(other)).unwrap();
+        let h2 = m.hover_at(&model, 0, 1, other, &mm, &pointer(at(other))).unwrap();
         assert!(Arc::ptr_eq(h.face.as_ref().unwrap(), h2.face.as_ref().unwrap()), "kept while on the face");
         m.click(&model, &h, &mm);
         let (_, d) = m.results[0].value();
@@ -428,11 +464,22 @@ mod tests {
 
         // the area tool highlights the face it measures
         m.toggle(Tool::Area);
-        let h = m.hover_at(&model, 0, 0, inside, &mm, screen, at(inside)).unwrap();
+        let h = m.hover_at(&model, 0, 0, inside, &mm, &pointer(at(inside))).unwrap();
         m.click(&model, &h, &mm);
         let (c, area) = m.results[1].value();
         assert_eq!((c, h.face.unwrap().area), (Category::Area, area));
         assert!((area - 4.0).abs() < 1e-6);
+
+        // while the edges are built in the background, only triangle corners snap
+        let mut m = MeasureState { building_edges: true, ..Default::default() };
+        m.toggle(Tool::Distance);
+        let middle = Vec3::new(1.0, 0.01, 0.0);
+        assert_eq!(m.hover_at(&model, 0, 0, middle, &mm, &pointer(at(middle))).unwrap().kind, SnapKind::Face);
+        assert_eq!(m.hover_at(&model, 0, 0, near_corner, &mm, &pointer(at(near_corner))).unwrap().kind, SnapKind::Corner);
+        assert_eq!(m.edges_to_build([0]), vec![0]);
+        m.add_edges(Edges::build(&model, &[0]).1);
+        assert!(m.edges_to_build([0]).is_empty() && !m.building_edges);
+        assert_eq!(m.hover_at(&model, 0, 0, middle, &mm, &pointer(at(middle))).unwrap().kind, SnapKind::Middle);
     }
 
     #[test]

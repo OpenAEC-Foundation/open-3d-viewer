@@ -816,7 +816,7 @@ impl App {
         // the exploded view moves the triangles: their offsets back in model space
         let back = mm.inverse();
         let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
-        let (layer, triangle) = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep)?;
+        let (layer, triangle) = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep, None)?;
         let s = model.layers[layer].indices.get(3 * triangle).map_or(Vec3::ZERO, |&i| shift(layer, i));
         let (point, normal) = face_at(&model.layers[layer], triangle, origin - s, dir)?;
         let (point, mut normal) = (mm.transform_point3(point + s), mm.transform_vector3(normal).normalize_or_zero());

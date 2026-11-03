@@ -305,6 +305,8 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             "Slab" => ("IFCSLAB", "FLOOR"),
             "Column" => ("IFCCOLUMN", "COLUMN"),
             "Beam" => ("IFCBEAM", "BEAM"),
+            "Stair" => ("IFCSTAIR", "NOTDEFINED"),
+            "Railing" => ("IFCRAILING", "NOTDEFINED"),
             // a roof plane: IfcRoof is the container of such slabs in IFC 4
             "Roof" => ("IFCSLAB", "ROOF"),
             "Mesh" => ("IFCGEOGRAPHICELEMENT", "TERRAIN"),

@@ -124,6 +124,18 @@ const PROFILE_LINK: Guid = guid("443b07ca55067d4097151a019e628139");
 const MORPH: Guid = guid("7b3c36e60e94eb4daf958b3b39e86bd2");
 const MORPH_BODY: Guid = guid("ad8c58f158255c49820bf3bcf4651007");
 const MORPH_BODY_LINK: Guid = guid("6bfa7fd50fc17f4fabe60fd52f2cc23e");
+/// §5, §8.14 (v0.9): stairs, their scheme and the association to it.
+const STAIR: Guid = guid("157f0ffab429054980fac6769109847b");
+const STAIR_SCHEME: Guid = guid("9c2b80871011ba4dbf9c9eb8278960b0");
+const STAIR_SCHEME_LINK: Guid = guid("3f141750bd7ce14683e68cf63b89a01c");
+/// §5, §8.15 (v0.9): railings, their segments and caches, and the associations to them.
+const RAILING: Guid = guid("1ae65a4c17af854b93e0005c987d5f5b");
+const RAILING_SEGMENT: Guid = guid("9995f52972f9f744af1d1f24770725c3");
+const SEGMENT_CACHE: Guid = guid("ae19929d03b4784b94ec589f66755d31");
+const RAILING_CACHE: Guid = guid("70d5fb2294540647a3dc818ba797dc96");
+const RAILING_SEGMENTS: Guid = guid("0d60448f1720d848aa573802cf7e9cc0");
+const SEGMENT_CACHE_LINK: Guid = guid("3abf0f62397fd0439062793244e2e5f8");
+const RAILING_CACHE_LINK: Guid = guid("e727811bef815a4c89ec484ca6e0ecbc");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -182,9 +194,10 @@ struct Record {
     top_link: Option<Guid>,
     /// Columns and beams: the segment that leads to the cross-section (§8.7).
     segment: Option<Guid>,
-    /// Walls: their windows and doors (§8.9).
+    /// Walls: their windows and doors (§8.9); railings: their segments (§8.15).
     openings: Vec<Guid>,
-    /// Meshes: their triangulation cache (§8.11); morphs: their body (§8.16.3).
+    /// Meshes: their triangulation cache (§8.11); morphs: their body (§8.16.3); stairs: their
+    /// scheme (§8.14); railings: their cache with the bounding box (§8.15).
     cache: Option<Guid>,
     data: Vec<u8>,
 }
@@ -264,6 +277,17 @@ struct Records {
     morphs: Vec<Record>,
     morphs_too_large: usize,
     bodies: HashMap<Guid, Option<Body>>,
+    /// Stairs (§8.14) and their schemes, read as they come (`None`: one that does not read).
+    stairs: Vec<Record>,
+    stairs_too_large: usize,
+    schemes: HashMap<Guid, Option<StairScheme>>,
+    /// Railings (§8.15); their segments (the cache each refers to), the segment caches (`None`:
+    /// one that does not read) and the railing caches (the bounding box).
+    railings: Vec<Record>,
+    railings_too_large: usize,
+    railing_segments: HashMap<Guid, Option<Guid>>,
+    segment_caches: HashMap<Guid, Option<SegmentLines>>,
+    railing_boxes: HashMap<Guid, Option<[f64; 6]>>,
     /// §8.10, by identity, only what the objects need (a parameter block runs to ~80 kB, and a
     /// large project has thousands): of an outline cache its bounds (when they read) and its
     /// (x, y) bytes; of a library reference its parameter block and name; of a parameter block
@@ -487,7 +511,7 @@ impl Records {
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
         let classes = [
-            MESH, MESH_CACHE, ZONE, PROFILE, MORPH, MORPH_BODY,
+            MESH, MESH_CACHE, ZONE, PROFILE, MORPH, MORPH_BODY, STAIR, STAIR_SCHEME, RAILING, RAILING_SEGMENT, SEGMENT_CACHE, RAILING_CACHE,
             WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, OBJECT, OUTLINE, LIBRARY, PARAMETERS, COLUMN_SEGMENT,
             BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE,
         ];
@@ -514,7 +538,7 @@ impl Records {
                 let (outline, library) = (first(OBJECT_OUTLINE), first(OBJECT_LIBRARY));
                 self.objects.push(ObjectRecord { guid: object, story, outline, library, data: data.to_vec() });
             }
-            WALL | SLAB | COLUMN | BEAM | ROOF | MESH | ZONE | MORPH => {
+            WALL | SLAB | COLUMN | BEAM | ROOF | MESH | ZONE | MORPH | STAIR | RAILING => {
                 let first = |assoc: Guid, op: &[u8]| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
                 let story = first(ON_STORY, &[0x12]);
                 let (top_link, segment) = match class {
@@ -527,6 +551,8 @@ impl Records {
                 let cache = match class {
                     MESH => first(MESH_CACHE_LINK, &[0x11, 0x12]),
                     MORPH => first(MORPH_BODY_LINK, &[0x11, 0x12]),
+                    STAIR => first(STAIR_SCHEME_LINK, &[0x11, 0x12]),
+                    RAILING => first(RAILING_CACHE_LINK, &[0x11, 0x12]),
                     _ => None,
                 };
                 let (list, too_large) = match class {
@@ -537,6 +563,8 @@ impl Records {
                     MESH => (&mut self.meshes, &mut self.meshes_too_large),
                     ZONE => (&mut self.zones, &mut self.zones_too_large),
                     MORPH => (&mut self.morphs, &mut self.morphs_too_large),
+                    STAIR => (&mut self.stairs, &mut self.stairs_too_large),
+                    RAILING => (&mut self.railings, &mut self.railings_too_large),
                     _ => (&mut self.roofs, &mut self.roofs_too_large),
                 };
                 if data.len() > MAX_ELEMENT_DATA {
@@ -544,7 +572,12 @@ impl Records {
                     return;
                 }
                 // §8.9: the windows and doors of a wall, any op, every target
-                let openings = if class == WALL { links.iter().filter(|l| l.1 == WALL_WINDOWS || l.1 == WALL_DOORS).map(|l| l.2).collect() } else { Vec::new() };
+                let openings = match class {
+                    WALL => links.iter().filter(|l| l.1 == WALL_WINDOWS || l.1 == WALL_DOORS).map(|l| l.2).collect(),
+                    // §8.15: the segments of a railing, in order along it (an item with n targets)
+                    RAILING => links.iter().filter(|l| (l.0 == 0x01 || l.0 == 0x02) && l.1 == RAILING_SEGMENTS).map(|l| l.2).collect(),
+                    _ => Vec::new(),
+                };
                 list.push(Record { guid: object, story, top_link, segment, openings, cache, data: data.to_vec() });
             }
             MESH_CACHE => {
@@ -566,6 +599,18 @@ impl Records {
                 // §8.13: the profile object, the first target
                 let profile = links.iter().find(|l| (l.0 == 0x11 || l.0 == 0x12) && l.1 == PROFILE_LINK).map(|l| l.2);
                 self.sections.insert(object, Section::Profile(profile));
+            }
+            STAIR_SCHEME => {
+                self.schemes.insert(object, stair_scheme(data));
+            }
+            RAILING_SEGMENT => {
+                self.railing_segments.insert(object, links.iter().find(|l| (l.0 == 0x11 || l.0 == 0x12) && l.1 == SEGMENT_CACHE_LINK).map(|l| l.2));
+            }
+            SEGMENT_CACHE => {
+                self.segment_caches.insert(object, segment_lines(data));
+            }
+            RAILING_CACHE => {
+                self.railing_boxes.insert(object, railing_box(data));
             }
             MORPH_BODY => {
                 // the cap of the other elements (the largest body in the samples: 290 kB); a larger
@@ -781,90 +826,105 @@ fn find_polygon(data: &[u8]) -> Option<Polygon> {
     // values read for candidates past the cheap checks: a bound on the work for any data
     let mut budget = 1usize << 24;
     for i in 0..data.len().saturating_sub(43) {
-        let Some(n) = u32_at(data, i + 32).map(|n| n as usize).filter(|n| (2..=20_000).contains(n)) else { continue };
-        let Some(arcs) = u32_at(data, i + 36).map(|n| n as usize).filter(|&a| a <= n) else { continue };
-        let Some(subs) = u32_at(data, i + 40).map(|n| n as usize).filter(|&s| (1..=n).contains(&s)) else { continue };
-        let bbox = [0, 8, 16, 24].map(|k| f64_at(data, i + k).unwrap_or(f64::NAN));
-        if !bbox.iter().all(|v| v.is_finite()) || bbox[0] > bbox[2] || bbox[1] > bbox[3] {
-            continue;
+        if let Some(polygon) = polygon_at(data, i, &mut budget) {
+            return Some(polygon);
         }
-        let points_at = i + 44;
-        let arcs_at = points_at + (n + 1) * 16;
-        let ends_at = if arcs > 0 { arcs_at + 16 * (arcs + 1) } else { arcs_at };
-        let end = ends_at + (subs + 1) * 4;
-        if end > data.len() {
-            continue;
+        if budget == 0 {
+            return None;
         }
-        // the first and last contour end before the rest: most offsets fail here
-        let end_at = |k: usize| u32_at(data, ends_at + 4 * k).unwrap() as usize;
-        if end_at(0) != 0 || end_at(subs) != n {
-            continue;
-        }
-        budget = budget.checked_sub(subs + 2 * n)?;
-        let ends: Vec<usize> = (0..=subs).map(end_at).collect();
-        if ends.windows(2).any(|w| w[0] > w[1]) || (arcs > 0 && data[arcs_at..arcs_at + 16].iter().any(|&b| b != 0)) {
-            continue;
-        }
-        let points: Vec<[f64; 2]> = (0..=n).map(|k| [0, 8].map(|c| f64_at(data, points_at + 16 * k + c).unwrap())).collect();
-        let (mut min, mut max) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for p in &points[1..] {
-            for c in 0..2 {
-                min[c] = min[c].min(p[c]);
-                max[c] = max[c].max(p[c]);
-            }
-        }
-        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        let fits = if arcs == 0 {
-            close(min[0], bbox[0]) && close(min[1], bbox[1]) && close(max[0], bbox[2]) && close(max[1], bbox[3])
-        } else {
-            min[0] >= bbox[0] - 1e-9 && min[1] >= bbox[1] - 1e-9 && max[0] <= bbox[2] + 1e-9 && max[1] <= bbox[3] + 1e-9
-        };
-        if !fits {
-            continue;
-        }
-        // §8.16.1: the arcs, from point `begin` to point `end`
-        let mut bows: HashMap<(usize, usize), f64> = HashMap::new();
-        let mut arcs_fit = true;
-        for k in 1..=arcs {
-            let at = arcs_at + 16 * k;
-            let (from, to, angle) = (u32_at(data, at).unwrap() as usize, u32_at(data, at + 4).unwrap() as usize, f64_at(data, at + 8).unwrap());
-            let fits = |p: usize| (1..=n).contains(&p);
-            arcs_fit &= fits(from) && fits(to) && angle.is_finite() && angle != 0.0 && angle.abs() < std::f64::consts::TAU;
-            bows.insert((from, to), angle);
-        }
-        if !arcs_fit {
-            continue;
-        }
-        // contour k: points ends[k]+1 ..= ends[k+1]; the last repeats the first. The points an arc
-        // adds carry the number of the point it starts at.
-        let mut indices = Vec::with_capacity(subs);
-        let contours = (0..subs)
-            .map(|k| {
-                let mut numbers: Vec<usize> = (ends[k] + 1..=ends[k + 1]).collect();
-                if numbers.len() > 1 && points[numbers[0]] != points[*numbers.last().unwrap()] {
-                    numbers.push(numbers[0]);
-                }
-                let (mut c, mut at) = (Vec::with_capacity(numbers.len()), Vec::with_capacity(numbers.len()));
-                for w in numbers.windows(2) {
-                    c.push(points[w[0]]);
-                    at.push(w[0]);
-                    let angle = bows.get(&(w[0], w[1])).copied().or_else(|| bows.get(&(w[1], w[0])).map(|a| -a));
-                    for p in angle.map(|a| arc_points(points[w[0]], points[w[1]], a)).unwrap_or_default() {
-                        c.push(p);
-                        at.push(w[0]);
-                    }
-                }
-                if numbers.len() == 1 {
-                    c.push(points[numbers[0]]);
-                    at.push(numbers[0]);
-                }
-                indices.push(at);
-                c
-            })
-            .collect();
-        return Some(Polygon { at: i, end, contours, indices, coords: n, z: z_cache(data, i, end) });
     }
     None
+}
+
+/// §7, §8.16.1: the polygon at offset i, when there is a valid one (`budget`: values left to read
+/// for the expensive checks; 0 when spent).
+fn polygon_at(data: &[u8], i: usize, budget: &mut usize) -> Option<Polygon> {
+    let n = u32_at(data, i + 32).map(|n| n as usize).filter(|n| (2..=20_000).contains(n))?;
+    let arcs = u32_at(data, i + 36).map(|n| n as usize).filter(|&a| a <= n)?;
+    let subs = u32_at(data, i + 40).map(|n| n as usize).filter(|&s| (1..=n).contains(&s))?;
+    let bbox = [0, 8, 16, 24].map(|k| f64_at(data, i + k).unwrap_or(f64::NAN));
+    if !bbox.iter().all(|v| v.is_finite()) || bbox[0] > bbox[2] || bbox[1] > bbox[3] {
+        return None;
+    }
+    let points_at = i + 44;
+    let arcs_at = points_at + (n + 1) * 16;
+    let ends_at = if arcs > 0 { arcs_at + 16 * (arcs + 1) } else { arcs_at };
+    let end = ends_at + (subs + 1) * 4;
+    if end > data.len() {
+        return None;
+    }
+    // the first and last contour end before the rest: most offsets fail here
+    let end_at = |k: usize| u32_at(data, ends_at + 4 * k).unwrap() as usize;
+    if end_at(0) != 0 || end_at(subs) != n {
+        return None;
+    }
+    let Some(left) = budget.checked_sub(subs + 2 * n) else {
+        *budget = 0;
+        return None;
+    };
+    *budget = left;
+    let ends: Vec<usize> = (0..=subs).map(end_at).collect();
+    if ends.windows(2).any(|w| w[0] > w[1]) || (arcs > 0 && data[arcs_at..arcs_at + 16].iter().any(|&b| b != 0)) {
+        return None;
+    }
+    let points: Vec<[f64; 2]> = (0..=n).map(|k| [0, 8].map(|c| f64_at(data, points_at + 16 * k + c).unwrap())).collect();
+    let (mut min, mut max) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in &points[1..] {
+        for c in 0..2 {
+            min[c] = min[c].min(p[c]);
+            max[c] = max[c].max(p[c]);
+        }
+    }
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    let fits = if arcs == 0 {
+        close(min[0], bbox[0]) && close(min[1], bbox[1]) && close(max[0], bbox[2]) && close(max[1], bbox[3])
+    } else {
+        min[0] >= bbox[0] - 1e-9 && min[1] >= bbox[1] - 1e-9 && max[0] <= bbox[2] + 1e-9 && max[1] <= bbox[3] + 1e-9
+    };
+    if !fits {
+        return None;
+    }
+    // §8.16.1: the arcs, from point `begin` to point `end`
+    let mut bows: HashMap<(usize, usize), f64> = HashMap::new();
+    let mut arcs_fit = true;
+    for k in 1..=arcs {
+        let at = arcs_at + 16 * k;
+        let (from, to, angle) = (u32_at(data, at).unwrap() as usize, u32_at(data, at + 4).unwrap() as usize, f64_at(data, at + 8).unwrap());
+        let fits = |p: usize| (1..=n).contains(&p);
+        arcs_fit &= fits(from) && fits(to) && angle.is_finite() && angle != 0.0 && angle.abs() < std::f64::consts::TAU;
+        bows.insert((from, to), angle);
+    }
+    if !arcs_fit {
+        return None;
+    }
+    // contour k: points ends[k]+1 ..= ends[k+1]; the last repeats the first. The points an arc
+    // adds carry the number of the point it starts at.
+    let mut indices = Vec::with_capacity(subs);
+    let contours = (0..subs)
+        .map(|k| {
+            let mut numbers: Vec<usize> = (ends[k] + 1..=ends[k + 1]).collect();
+            if numbers.len() > 1 && points[numbers[0]] != points[*numbers.last().unwrap()] {
+                numbers.push(numbers[0]);
+            }
+            let (mut c, mut at) = (Vec::with_capacity(numbers.len()), Vec::with_capacity(numbers.len()));
+            for w in numbers.windows(2) {
+                c.push(points[w[0]]);
+                at.push(w[0]);
+                let angle = bows.get(&(w[0], w[1])).copied().or_else(|| bows.get(&(w[1], w[0])).map(|a| -a));
+                for p in angle.map(|a| arc_points(points[w[0]], points[w[1]], a)).unwrap_or_default() {
+                    c.push(p);
+                    at.push(w[0]);
+                }
+            }
+            if numbers.len() == 1 {
+                c.push(points[numbers[0]]);
+                at.push(numbers[0]);
+            }
+            indices.push(at);
+            c
+        })
+        .collect();
+    Some(Polygon { at: i, end, contours, indices, coords: n, z: z_cache(data, i, end) })
 }
 
 /// §7: the z cache: after the polygon, the last place the 32 bounding-box bytes occur again is
@@ -1338,6 +1398,20 @@ struct Stats {
     morphs_no_body: usize,
     morphs_no_matrix: usize,
     morphs_open: usize,
+    stairs: Vec<StairOut>,
+    /// Stairs skipped (§8.14): all, whose fields, scheme or riser and tread sequence do not
+    /// read; and the treads on the floor (the first one of a stair that starts with a tread).
+    stairs_skipped: usize,
+    stairs_fields: usize,
+    stairs_scheme: usize,
+    stairs_sequence: usize,
+    stairs_floor_treads: usize,
+    railings: Vec<RailingOut>,
+    /// Railings skipped (§8.15): all (without a segment that reads, nor a bounding box); those
+    /// drawn as their bounding box; segments that do not read.
+    railings_skipped: usize,
+    railings_boxed: usize,
+    railing_bad_segments: usize,
 }
 
 /// A column as drawn, for the tests.
@@ -1411,6 +1485,41 @@ struct MeshOut {
     /// The lowest and highest point of the top, and the bottom.
     top: (f64, f64),
     bottom: f64,
+}
+
+/// A stair as drawn, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct StairOut {
+    name: String,
+    risers: usize,
+    riser: f64,
+    going: f64,
+    /// Bottom and top of the stair; whether it starts with a riser; the treads (L2).
+    z: (f64, f64),
+    starts_with_riser: bool,
+    treads: usize,
+    /// The top of the first and the last tread.
+    tread_z: (f64, f64),
+    mirrored: bool,
+    x: (f64, f64),
+    y: (f64, f64),
+}
+
+/// A railing as drawn, for the tests: its segments with a cache, the length of its lower lines in
+/// plan, the ranges of its lower and upper lines, and h.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct RailingOut {
+    guid: String,
+    name: String,
+    segments: usize,
+    length: f64,
+    height: f64,
+    boxed: bool,
+    x: (f64, f64),
+    y: (f64, f64),
+    z: (f64, f64),
 }
 
 /// A morph as drawn, for the tests.
@@ -2039,6 +2148,156 @@ fn arc_points(a: [f64; 2], b: [f64; 2], angle: f64) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// §8.14: the fields of a stair.
+#[derive(Debug, Clone)]
+struct StairFields {
+    id: String,
+    /// n risers of r; the going g (for the properties); the height H.
+    risers: usize,
+    riser: f64,
+    going: f64,
+    height: f64,
+    /// The origin of the scheme (world) and its matrix (rows of 3: m0, m1 the local x axis, m3,
+    /// m4 the local y axis).
+    origin: [f64; 2],
+    bottom_offset: f64,
+    m: [f64; 9],
+}
+
+/// §8.14: the first ID string; the anchor a (≥ 29): u32 n (1 to 200) with the riser r (0.01 to 1)
+/// and the going g (0.01 to 2) after it and H = n · r 21 bytes before it; the origin, the bottom
+/// offset and the matrix after it, an orthonormal one (det ±1).
+fn stair_fields(data: &[u8]) -> Option<StairFields> {
+    // the first ID string with a name (an empty one comes first in the samples; Q-I40)
+    let id = id_strings(data).map(|(id, _)| id).find(|id| !id.is_empty()).unwrap_or_default();
+    let a = (29..data.len().saturating_sub(129)).find(|&a| {
+        let n = u32_at(data, a).unwrap();
+        let (r, g, h) = (f64_at(data, a + 4).unwrap(), f64_at(data, a + 12).unwrap(), f64_at(data, a - 21).unwrap());
+        (1..=200).contains(&n) && r > 0.01 && r < 1.0 && g > 0.01 && g < 2.0 && h > 0.0 && (n as f64 * r - h).abs() < 1e-6
+    })?;
+    let f = |at: usize| f64_at(data, at).unwrap();
+    let m: [f64; 9] = std::array::from_fn(|k| f(a + 57 + 8 * k));
+    let values = [f(a - 29), f(a + 25), f(a + 33), f(a + 41), f(a + 49)];
+    let unit = |x: f64, y: f64| (x.hypot(y) - 1.0).abs() < 1e-6;
+    let ok = values.iter().chain(&m).all(|v| v.is_finite())
+        && unit(m[0], m[1])
+        && unit(m[3], m[4])
+        && (m[0] * m[3] + m[1] * m[4]).abs() < 1e-6
+        && [m[2], m[5], m[6], m[7]].iter().all(|&v| v == 0.0)
+        && m[8] == 1.0;
+    ok.then(|| StairFields {
+        id,
+        risers: u32_at(data, a).unwrap() as usize,
+        riser: f(a + 4),
+        going: f(a + 12),
+        height: f(a - 21),
+        origin: [f(a + 33), f(a + 41)],
+        bottom_offset: f(a + 49),
+        m,
+    })
+}
+
+/// §8.14: a stair's scheme in the plan (local): its riser lines and its treads without nosing
+/// (L2), in walking order.
+#[derive(Debug, Clone)]
+struct StairScheme {
+    risers: Vec<[f64; 4]>,
+    treads: Vec<Vec<Vec<[f64; 2]>>>,
+}
+
+/// §8.14: 9 bytes, nR riser lines of 318 bytes (`03 00 3D 00`, x1, y1, x2, y2), then the lists L1
+/// (with nosing) and L2 (without), each a count and items (`02 01`, u32 len, `01 1F 00`, the
+/// polygon at 9) of 6 + len bytes, as many in both.
+fn stair_scheme(data: &[u8]) -> Option<StairScheme> {
+    let nr = u32_at(data, 9)? as usize;
+    let mut at = 13usize;
+    let mut risers = Vec::with_capacity(nr.min(1000));
+    for _ in 0..nr {
+        if data.get(at..at + 4)? != [3, 0, 0x3D, 0] || at + 318 > data.len() {
+            return None;
+        }
+        risers.push(std::array::from_fn(|k| f64_at(data, at + 4 + 8 * k).unwrap()));
+        at += 318;
+    }
+    let mut budget = 1usize << 24;
+    let mut lists = Vec::with_capacity(2);
+    for _ in 0..2 {
+        let count = u32_at(data, at)? as usize;
+        at += 4;
+        let mut polygons = Vec::with_capacity(count.min(1000));
+        for _ in 0..count {
+            let len = u32_at(data, at + 2)? as usize;
+            let end = at.checked_add(6 + len).filter(|&e| e <= data.len())?;
+            if data.get(at..at + 2)? != [2, 1] || data.get(at + 6..at + 9)? != [1, 0x1F, 0] {
+                return None;
+            }
+            polygons.push(polygon_at(data.get(at + 9..end)?, 0, &mut budget)?.contours);
+            at = end;
+        }
+        lists.push(polygons);
+    }
+    let treads = lists.pop()?;
+    (!treads.is_empty() && lists[0].len() == treads.len() && risers.iter().flatten().all(|v| v.is_finite())).then_some(StairScheme { risers, treads })
+}
+
+/// §8.15: the lines of a railing segment (absolute): its reference line (t 0), its lower line
+/// (t 1) and its upper line (t 2, the lower one raised by h), from start to end.
+#[derive(Debug, Clone, Copy)]
+struct SegmentLines {
+    lower: [[f64; 3]; 2],
+    upper: [[f64; 3]; 2],
+}
+
+/// §8.15: from 9, every `u32 t (0..64) · u32 2 · six f64` (finite, under 1e5, not all 0), 56 bytes
+/// on after each; the first line of each t. Lines 0, 1 and 2 must be there, line 2 above line 1
+/// by the same h > 0 at both ends. A missing line 1 or 2 is taken from its copy, line 3 or 5: in
+/// `DEMO.pln` one sloped segment has no line 2 (open question Q-I39).
+fn segment_lines(data: &[u8]) -> Option<SegmentLines> {
+    let mut first: [Option<[[f64; 3]; 2]>; 6] = [None; 6];
+    let mut at = 9;
+    while at + 56 <= data.len() {
+        let t = u32_at(data, at).unwrap();
+        let v: [f64; 6] = std::array::from_fn(|k| f64_at(data, at + 8 + 8 * k).unwrap());
+        if t <= 64 && u32_at(data, at + 4) == Some(2) && v.iter().all(|x| x.is_finite() && x.abs() < 1e5) && v.iter().any(|&x| x != 0.0) {
+            if let Some(slot) = first.get_mut(t as usize).filter(|s| s.is_none()) {
+                *slot = Some([[v[0], v[1], v[2]], [v[3], v[4], v[5]]]);
+            }
+            at += 56;
+        } else {
+            at += 1;
+        }
+    }
+    first[0]?;
+    let (lower, upper) = (first[1].or(first[3])?, first[2].or(first[5])?);
+    let same = |a: [f64; 3], b: [f64; 3]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+    let (h0, h1) = (upper[0][2] - lower[0][2], upper[1][2] - lower[1][2]);
+    (same(lower[0], upper[0]) && same(lower[1], upper[1]) && h0 > 0.0 && (h0 - h1).abs() < 1e-6).then_some(SegmentLines { lower, upper })
+}
+
+/// §8.15: the bounding box of a railing (xmin, ymin, xmax, ymax, zmin, zmax) at 5 (data[0] = 2)
+/// or 9 (data[0] = 1).
+fn railing_box(data: &[u8]) -> Option<[f64; 6]> {
+    let at = match data.first()? {
+        2 => 5,
+        1 => 9,
+        _ => return None,
+    };
+    let b: [f64; 6] = std::array::from_fn(|k| f64_at(data, at + 8 * k).unwrap_or(f64::NAN));
+    (b.iter().all(|v| v.is_finite()) && b[0] <= b[2] && b[1] <= b[3] && b[4] < b[5]).then_some(b)
+}
+
+/// A box along a line from `a` to `b` in plan: `half` to both sides, from `low` to `high` above
+/// the line's own heights (at `a` and at `b`). False when the line has no length in plan.
+fn push_along(layer: &mut Layer, a: [f64; 3], b: [f64; 3], half: f64, (low, high): (f64, f64)) -> bool {
+    let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+    if length.is_nan() || length < 1e-9 {
+        return false;
+    }
+    let n = [-(b[1] - a[1]) / length * half, (b[0] - a[0]) / length * half];
+    let end = |p: [f64; 3]| vec![[p[0] + n[0], p[1] + n[1], p[2] + low], [p[0] - n[0], p[1] - n[1], p[2] + low], [p[0] - n[0], p[1] - n[1], p[2] + high], [p[0] + n[0], p[1] + n[1], p[2] + high]];
+    push_hull(layer, &[end(a), end(b)])
+}
+
 /// §8.16.3: a morph's body: its vertices (local) and faces, each a list of loops of vertex
 /// indices (the outer loop counter-clockwise seen from outside, then the holes); open when an
 /// edge has only one face.
@@ -2376,6 +2635,9 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     // spaces of IFC files
     let mut zones = Layer { name: "Zones".into(), color: [0.58, 0.74, 0.9], hidden: true, ..Layer::default() };
     let mut morphs = Layer { name: "Morphs".into(), color: [0.70, 0.70, 0.66], ..Layer::default() };
+    let mut stairs = Layer { name: "Stairs".into(), color: [0.80, 0.78, 0.74], ..Layer::default() };
+    // §8.15: the band of a railing half transparent, its rail and posts not
+    let mut railings = Layer { name: "Railings".into(), color: [0.60, 0.62, 0.66], colors: Some(Vec::new()), ..Layer::default() };
     let mut next_id = 0u64;
     let mut add = |layer: &mut Layer,
                    record: &Record,
@@ -2918,8 +3180,168 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     }
     stats.morphs_skipped = stats.morphs_no_body + stats.morphs_no_matrix;
 
+    // §8.14: stairs, a block per tread from the scheme, at the heights of the walking order
+    stats.stairs_fields = records.stairs_too_large;
+    for record in &records.stairs {
+        let Some(f) = stair_fields(&record.data) else {
+            stats.stairs_fields += 1;
+            continue;
+        };
+        let scheme = record.cache.and_then(|c| records.schemes.get(&c)).and_then(Option::as_ref).filter(|s| s.risers.len() == f.risers);
+        let Some(scheme) = scheme else {
+            stats.stairs_scheme += 1;
+            continue;
+        };
+        // does the walking order start (f) and end (g') with a riser?
+        let nt = scheme.treads.len();
+        let centroid = |k: usize| {
+            let c = &scheme.treads[k][0];
+            [c.iter().map(|p| p[0]).sum::<f64>() / c.len() as f64, c.iter().map(|p| p[1]).sum::<f64>() / c.len() as f64]
+        };
+        let s = |j: usize, a: usize, b: usize| {
+            let r = scheme.risers[j - 1];
+            let (m, ca, cb) = ([(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0], centroid(a), centroid(b));
+            let d = [cb[0] - ca[0], cb[1] - ca[1]];
+            ((m[0] - ca[0]) * d[0] + (m[1] - ca[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1])
+        };
+        let starts = nt == 1 || s(1, 0, 1) < 0.0;
+        let ends = nt >= 2 && s(f.risers, nt - 2, nt - 1) > 1.0;
+        if f.risers != nt - 1 + usize::from(starts) + usize::from(ends) {
+            stats.stairs_sequence += 1;
+            continue;
+        }
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let bottom = e + f.bottom_offset;
+        let m = f.m;
+        let place = |p: &[f64; 2]| [f.origin[0] + p[0] * m[0] + p[1] * m[3], f.origin[1] + p[0] * m[1] + p[1] * m[4]];
+        let mut blocks = Vec::with_capacity(nt);
+        for (i, tread) in scheme.treads.iter().enumerate() {
+            let top = bottom + (i + usize::from(starts)) as f64 * f.riser;
+            if i == 0 && !starts {
+                // a tread on the floor the stair starts from
+                stats.stairs_floor_treads += 1;
+                continue;
+            }
+            blocks.push(Prism { contours: tread.iter().map(|c| c.iter().map(place).collect()).collect(), z: (top - f.riser, top) });
+        }
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), (if f.id.is_empty() { "Stair" } else { &f.id }).into());
+        props.insert("category".into(), "Stair".into());
+        props.insert("Risers".into(), format!("{} × {:.1} mm", f.risers, f.riser * 1000.0).into());
+        props.insert("Going".into(), format!("{:.1} mm", f.going * 1000.0).into());
+        let top = bottom + f.height;
+        if add(&mut stairs, record, (bottom, top), &|layer| blocks.iter().fold(false, |any, b| push_prism(layer, b) | any), props) {
+            let [x, y, _] = ranges(scheme.treads.iter().flat_map(|t| t[0].iter()).map(|p| {
+                let q = place(p);
+                [q[0], q[1], 0.0]
+            }));
+            let first = bottom + usize::from(starts) as f64 * f.riser;
+            let tread_z = (first, bottom + (nt - 1 + usize::from(starts)) as f64 * f.riser);
+            let mirrored = m[0] * m[4] - m[1] * m[3] < 0.0;
+            let (risers, riser, going) = (f.risers, f.riser, f.going);
+            stats.stairs.push(StairOut { name: f.id, risers, riser, going, z: (bottom, top), starts_with_riser: starts, treads: nt, tread_z, mirrored, x, y });
+        } else {
+            stats.stairs_fields += 1;
+        }
+    }
+    stats.stairs_skipped = stats.stairs_fields + stats.stairs_scheme + stats.stairs_sequence;
+
+    // §8.15: railings, per segment a band, a rail on top and posts, from the segment caches
+    for record in &records.railings {
+        let lines: Vec<SegmentLines> = record
+            .openings
+            .iter()
+            .filter_map(|segment| {
+                let lines = records.railing_segments.get(segment).copied().flatten().and_then(|c| records.segment_caches.get(&c).copied().flatten());
+                if lines.is_none() {
+                    stats.railing_bad_segments += 1;
+                }
+                lines
+            })
+            .collect();
+        let name = id_strings(&record.data).map(|(id, _)| id).find(|id| !id.is_empty()).unwrap_or_else(|| "Railing".to_string());
+        let bbox = record.cache.and_then(|c| records.railing_boxes.get(&c).copied().flatten());
+        if lines.is_empty() && bbox.is_none() {
+            stats.railings_skipped += 1;
+            continue;
+        }
+        let height = lines.first().map(|l| l.upper[0][2] - l.lower[0][2]);
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), name.clone().into());
+        props.insert("category".into(), "Railing".into());
+        if let Some(h) = height {
+            props.insert("Height".into(), format!("{:.0} mm", h * 1000.0).into());
+        } else {
+            props.insert("Body".into(), "its bounding box (no segment that reads)".into());
+        }
+        let points = || lines.iter().flat_map(|l| [l.lower[0], l.lower[1], l.upper[0], l.upper[1]]);
+        let [x, y, z] = match bbox.filter(|_| lines.is_empty()) {
+            Some(b) => [(b[0], b[2]), (b[1], b[3]), (b[4], b[5])],
+            None => ranges(points()),
+        };
+        let draw = |layer: &mut Layer| -> bool {
+            let colour = |layer: &mut Layer, from: usize, alpha: u8| {
+                let new = layer.positions.len() / 3 - from;
+                layer.colors.get_or_insert_with(Vec::new).extend(std::iter::repeat_n([153, 158, 168, alpha], new));
+            };
+            let mut any = false;
+            if lines.is_empty() {
+                let [x0, y0, x1, y1, z0, z1] = bbox.unwrap();
+                let from = layer.positions.len() / 3;
+                any |= push_prism(layer, &Prism { contours: vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], z: (z0, z1) });
+                colour(layer, from, 110);
+                return any;
+            }
+            let mut posts: Vec<[f64; 3]> = Vec::new();
+            for (k, l) in lines.iter().enumerate() {
+                let h = l.upper[0][2] - l.lower[0][2];
+                // the band, 0.02 thick, half transparent; the rail on top, 0.05 × 0.05
+                let from = layer.positions.len() / 3;
+                any |= push_along(layer, l.lower[0], l.lower[1], 0.01, (0.0, h));
+                colour(layer, from, 110);
+                let from = layer.positions.len() / 3;
+                any |= push_along(layer, l.upper[0], l.upper[1], 0.025, (-0.025, 0.025));
+                colour(layer, from, 255);
+                // posts at each segment's start and at the end of the last one, once per point
+                let mut ends = vec![l.lower[0]];
+                if k + 1 == lines.len() {
+                    ends.push(l.lower[1]);
+                }
+                for p in ends {
+                    if posts.iter().any(|q| (0..3).all(|c| (q[c] - p[c]).abs() < 1e-6)) {
+                        continue;
+                    }
+                    posts.push(p);
+                    let square = vec![vec![[p[0] - 0.025, p[1] - 0.025], [p[0] + 0.025, p[1] - 0.025], [p[0] + 0.025, p[1] + 0.025], [p[0] - 0.025, p[1] + 0.025]]];
+                    let from = layer.positions.len() / 3;
+                    any |= push_prism(layer, &Prism { contours: square, z: (p[2], p[2] + h) });
+                    colour(layer, from, 255);
+                }
+            }
+            any
+        };
+        if add(&mut railings, record, z, &draw, props) {
+            let length = lines.iter().map(|l| (l.lower[1][0] - l.lower[0][0]).hypot(l.lower[1][1] - l.lower[0][1])).sum();
+            stats.railings_boxed += usize::from(lines.is_empty());
+            let (segments, boxed) = (lines.len(), lines.is_empty());
+            stats.railings.push(RailingOut { guid: hex(&record.guid), name, segments, length, height: height.unwrap_or(z.1 - z.0), boxed, x, y, z });
+        } else {
+            stats.railings_skipped += 1;
+        }
+    }
+
     let elements =
-        stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len() + stats.meshes.len() + stats.zones.len() + stats.morphs.len();
+        stats.walls
+            + stats.slabs
+            + stats.columns.len()
+            + stats.beams.len()
+            + stats.roofs.len()
+            + stats.objects.len()
+            + stats.meshes.len()
+            + stats.zones.len()
+            + stats.morphs.len()
+            + stats.stairs.len()
+            + stats.railings.len();
     if elements == 0 {
         // §10: Archicad 17 to 23 share the container but not the records
         return Err(format!(
@@ -2963,6 +3385,26 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ("Archicad openings".into(), opening_text(&stats)),
         ("Archicad library objects".into(), object_text(&stats)),
         ("Archicad meshes".into(), mesh_text(&stats)),
+        ("Archicad stairs".into(), {
+            let mut text = reasons(stats.stairs.len(), stats.stairs_skipped, &[
+                (stats.stairs_fields, "whose fields do not read"),
+                (stats.stairs_scheme, "without a scheme that reads"),
+                (stats.stairs_sequence, "whose risers and treads do not add up"),
+            ]);
+            if stats.stairs_floor_treads > 0 {
+                text += &format!("; {} treads on the floor left out", stats.stairs_floor_treads);
+            }
+            text
+        }),
+        ("Archicad railings".into(), {
+            let mut text = reasons(stats.railings.len(), stats.railings_skipped, &[]);
+            for (n, what) in [(stats.railings_boxed, "drawn as their bounding box"), (stats.railing_bad_segments, "segments that do not read")] {
+                if n > 0 {
+                    text += &format!("; {n} {what}");
+                }
+            }
+            text
+        }),
         ("Archicad morphs".into(), {
             let mut text = reasons(stats.morphs.len(), stats.morphs_skipped, &[
                 (stats.morphs_no_body, "without a body that reads"),
@@ -2994,7 +3436,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs, columns, beams, roofs, openings, objects, terrain, zones, morphs].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams, roofs, openings, objects, terrain, zones, morphs, stairs, railings].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
 }
 
@@ -3306,6 +3748,19 @@ mod tests {
         assert_eq!(unknown, objects - known);
     }
 
+    /// §11 (v0.9): the one stair of a file: name, risers, riser, going, bottom and top, the tops of
+    /// its first and last tread, starting with a riser, its treads' x and y range; closed blocks.
+    fn check_stair(stats: &Stats, model: &Model, (name, risers, riser, going): (&str, usize, f64, f64), z: (f64, f64), treads: (f64, f64), x: (f64, f64), y: (f64, f64)) {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let pair = |a: (f64, f64), b: (f64, f64)| near(a.0, b.0) && near(a.1, b.1);
+        assert_eq!((stats.stairs.len(), stats.stairs_skipped, stats.stairs_floor_treads), (1, 0, 0));
+        let s = &stats.stairs[0];
+        assert!(s.name == name && s.risers == risers && s.treads == risers && s.starts_with_riser && !s.mirrored, "{s:?}");
+        assert!(near(s.riser, riser) && near(s.going, going) && pair(s.z, z) && pair(s.tread_z, treads) && pair(s.x, x) && pair(s.y, y), "{s:?}");
+        let layer = model.layers.iter().find(|l| l.name == "Stairs").expect("stairs");
+        assert!(layer.elements.len() == 1 && layer.solid_indices().len() == layer.indices.len());
+    }
+
     /// An opening of §11 (v0.5): name, wall, wall length, middle, width, height, sill.
     type OpeningRow = (&'static str, &'static str, f64, f64, f64, f64, f64);
 
@@ -3347,6 +3802,8 @@ mod tests {
         check_walls(&stats, &model, 16, 4, 9.0, -0.2);
         // §11 (v0.5): no windows or doors
         assert_eq!((stats.openings.len(), stats.openings_skipped), (0, 0));
+        // §11 (v0.9): no stairs or railings
+        assert_eq!((stats.stairs.len(), stats.stairs_skipped, stats.railings.len(), stats.railings_skipped), (0, 0, 0, 0));
         // §11 (v0.6): no library objects; (v0.8) no meshes or zones
         assert_eq!((stats.objects.len(), stats.objects_skipped), (0, 0));
         assert_eq!((stats.meshes.len(), stats.meshes_skipped, stats.zones.len(), stats.zones_skipped), (0, 0, 0, 0));
@@ -3421,6 +3878,23 @@ mod tests {
         check_walls(&stats, &model, 32, 24, 7.588, -0.272);
         // §11 (v0.3): two round columns, linked; the four beams have a profile section
         check_columns(&stats, &[("C 0.01", [11.102, 12.373]), ("C 0.02", [11.102, 6.023])], (-0.25, 2.78));
+        // §11 (v0.9): the stair and the two railings
+        check_stair(&stats, &model, ("St 0.01", 16, 0.1875, 0.25125), (0.0, 3.0), (0.1875, 3.0), (6.127, 7.027), (7.278, 11.298));
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let pair = |a: (f64, f64), b: (f64, f64)| near(a.0, b.0) && near(a.1, b.1);
+        assert_eq!((stats.railings.len(), stats.railings_skipped, stats.railings_boxed, stats.railing_bad_segments), (2, 0, 0, 0));
+        type RailingRow = (&'static str, usize, f64, (f64, f64), (f64, f64), (f64, f64));
+        let rows: [RailingRow; 2] = [
+            ("89af20b0", 4, 5.740, (6.057, 6.177), (7.278, 11.348), (0.1875, 4.0)),
+            ("4923dd38", 3, 4.020, (6.977, 7.027), (7.278, 11.298), (0.0, 4.0)),
+        ];
+        for (guid, segments, length, x, y, z) in rows {
+            let r = stats.railings.iter().find(|r| r.guid.starts_with(guid)).unwrap_or_else(|| panic!("{guid}: {:?}", stats.railings));
+            assert!(r.name == "Ra 0.01" && r.segments == segments && near(r.length, length) && near(r.height, 1.0) && !r.boxed, "{r:?}");
+            assert!(pair(r.x, x) && pair(r.y, y) && pair(r.z, z), "{r:?}");
+        }
+        let railings = model.layers.iter().find(|l| l.name == "Railings").expect("railings");
+        assert_eq!(railings.solid_indices().len(), railings.indices.len());
         // §11 (v0.8): the four profile beams (gutters) are drawn now
         assert_eq!((stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.profile_blocks), (4, 0, 0, 0));
         let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
@@ -3505,6 +3979,9 @@ mod tests {
         );
         // §11 (v0.6): 26 library objects, 17 with ZZYZX
         check_objects(&stats, &model, 26, 17);
+        // §11 (v0.9): the stair, no railings
+        check_stair(&stats, &model, ("STAIR - 002", 17, 0.17647, 0.25), (0.1, 3.1), (0.2765, 3.1), (5.811, 6.609), (6.666, 10.916));
+        assert_eq!(stats.railings.len(), 0);
         // §11 (v0.8): no meshes; 8 zones
         assert_eq!(stats.meshes.len(), 0);
         check_zones(&stats, &model, &[
@@ -3738,7 +4215,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file(), arcs_file(), morphs_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file(), arcs_file(), morphs_file(), stairs_file()] {
             garbage_rounds(&file);
         }
     }
@@ -4743,6 +5220,187 @@ mod tests {
         let (_, stats) = convert(read_bytes(&file).unwrap()).unwrap();
         assert_eq!((stats.morphs.len(), stats.morphs_no_body), (0, 2));
         assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+    }
+
+    /// Stair data (§8.14): its ID string at 40; the width and H, then (29 bytes after the width)
+    /// the anchor: n, r, g, the distance of the walking line, the origin, the bottom offset and
+    /// the matrix.
+    fn stair_data(id: &str, (n, r, g): (u32, f64, f64), origin: [f64; 2], m: [f64; 9]) -> Vec<u8> {
+        let mut data = vec![0u8; 38];
+        data.extend(id_string(id));
+        let width_at = data.len() + 10;
+        data.resize(width_at, 0);
+        data.extend([1.0, n as f64 * r].iter().flat_map(|v| v.to_le_bytes()));
+        let a = width_at + 29;
+        data.resize(a, 0);
+        data.extend(n.to_le_bytes());
+        data.extend([r, g].iter().flat_map(|v| v.to_le_bytes()));
+        data.resize(a + 25, 0);
+        data.extend([0.5, origin[0], origin[1], 0.0].iter().chain(&m).flat_map(|v| v.to_le_bytes()));
+        data.extend([0u8; 12]);
+        data
+    }
+
+    /// A stair scheme (§8.14): 9 bytes, the riser lines (318 bytes each), L1 and L2 (the same
+    /// treads, without nosing), then five empty lists.
+    fn scheme_data(risers: &[[f64; 4]], treads: &[Vec<[f64; 2]>]) -> Vec<u8> {
+        let mut data = vec![0u8; 9];
+        data.extend((risers.len() as u32).to_le_bytes());
+        for line in risers {
+            let start = data.len();
+            data.extend([3, 0, 0x3D, 0]);
+            data.extend(line.iter().flat_map(|v| v.to_le_bytes()));
+            data.resize(start + 318, 0);
+        }
+        for _ in 0..2 {
+            data.extend((treads.len() as u32).to_le_bytes());
+            for tread in treads {
+                let polygon = polygon_bytes(std::slice::from_ref(tread));
+                data.extend([2, 1]);
+                data.extend((3 + polygon.len() as u32 + 4).to_le_bytes());
+                data.extend([1, 0x1F, 0]);
+                data.extend(polygon);
+                data.extend([0u8; 4]);
+            }
+        }
+        data.extend([0u8; 20]);
+        data
+    }
+
+    /// A railing segment cache (§8.15): from 9, the lines t 0 to 5 (the reference line, the lower
+    /// line and the upper one h above it, and their copies), each `u32 t · u32 2 · six f64`;
+    /// `upper` false leaves out lines 2 and 5.
+    fn segment_data(a: [f64; 3], b: [f64; 3], h: f64, upper: bool) -> Vec<u8> {
+        let mut data = vec![0u8; 9];
+        for t in 0u32..6 {
+            let up = if t == 2 || t == 5 { h } else { 0.0 };
+            if !upper && up > 0.0 {
+                continue;
+            }
+            data.extend(t.to_le_bytes());
+            data.extend(2u32.to_le_bytes());
+            data.extend([a[0], a[1], a[2] + up, b[0], b[1], b[2] + up].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        data.extend([0u8; 30]);
+        data
+    }
+
+    /// Stairs and railings on the story "Hall" (4.5 m):
+    /// - S1: 4 risers of 0.2 and 4 treads of 1 × 0.3, a riser at the front of each tread, at
+    ///   (10, 0), not turned;
+    /// - S2: the same mirrored (x turned to −x) at (20, 0);
+    /// - S3: 3 risers and 4 treads: it starts with a tread on the floor, at (30, 0);
+    /// - S4: a scheme with fewer riser lines than the stair has risers: skipped;
+    /// - R1: two segments, (0, 10, 4.5) → (2, 10, 4.5) → (2, 12, 5.0), 1 m high;
+    /// - R2: one segment without upper lines, and a bounding box: drawn as the box;
+    /// - R3: one segment without upper lines and no box: skipped.
+    fn stairs_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+        ];
+        let g = 0.3;
+        let treads: Vec<Vec<[f64; 2]>> = (0..4).map(|i| rectangle(0.0, i as f64 * g, 1.0, (i + 1) as f64 * g)).collect();
+        let riser = |i: usize| [0.0, i as f64 * g, 1.0, i as f64 * g];
+        let schemes = [
+            scheme_data(&(0..4).map(riser).collect::<Vec<_>>(), &treads),
+            scheme_data(&(1..4).map(riser).collect::<Vec<_>>(), &treads),
+        ];
+        for (k, scheme) in schemes.iter().enumerate() {
+            blocks.push(block([0x80 + k as u8; 16], 0x84, &record(STAIR_SCHEME, scheme, &[0, 0, 0]), 0));
+        }
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let mirrored = [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let stairs = [("S1", 4, 10.0, identity, 0), ("S2", 4, 20.0, mirrored, 0), ("S3", 3, 30.0, identity, 1), ("S4", 4, 40.0, identity, 1)];
+        for (k, (id, n, x, m, scheme)) in stairs.into_iter().enumerate() {
+            let data = stair_data(id, (n, 0.2, g), [x, 0.0], m);
+            let items = [(0x12, ON_STORY, STORY_ID), (0x11, STAIR_SCHEME_LINK, [0x80 + scheme as u8; 16])];
+            blocks.push(block([0x88 + k as u8; 16], 0x84, &record(STAIR, &data, &links_of(&items)), 0));
+        }
+        let caches = [
+            segment_data([0.0, 10.0, 4.5], [2.0, 10.0, 4.5], 1.0, true),
+            segment_data([2.0, 10.0, 4.5], [2.0, 12.0, 5.0], 1.0, true),
+            segment_data([0.0, 20.0, 4.5], [2.0, 20.0, 4.5], 1.0, false),
+            segment_data([0.0, 30.0, 4.5], [2.0, 30.0, 4.5], 1.0, false),
+        ];
+        for (k, cache) in caches.iter().enumerate() {
+            blocks.push(block([0x90 + k as u8; 16], 0x84, &record(SEGMENT_CACHE, cache, &[0, 0, 0]), 0));
+            blocks.push(block([0x98 + k as u8; 16], 0x84, &record(RAILING_SEGMENT, &[0; 8], &links_of(&[(0x11, SEGMENT_CACHE_LINK, [0x90 + k as u8; 16])])), 0));
+        }
+        let mut bbox = vec![2u8; 5];
+        bbox.extend([0.0f64, 20.0, 2.0, 20.1, 4.5, 5.5].iter().flat_map(|v| v.to_le_bytes()));
+        blocks.push(block([0xA0; 16], 0x84, &record(RAILING_CACHE, &bbox, &[0, 0, 0]), 0));
+        for (k, (name, segments, cache)) in [("R1", vec![0u8, 1], false), ("R2", vec![2], true), ("R3", vec![3], false)].into_iter().enumerate() {
+            let mut assoc = links_of(&[(0x12, ON_STORY, STORY_ID)]);
+            assoc.pop();
+            assoc.push(0x01);
+            assoc.extend(RAILING_SEGMENTS);
+            assoc.extend((segments.len() as u32).to_le_bytes());
+            assoc.extend(segments.iter().flat_map(|&s| [0x98 + s; 16]));
+            if cache {
+                assoc.push(0x11);
+                assoc.extend(RAILING_CACHE_LINK);
+                assoc.extend([0xA0; 16]);
+            }
+            assoc.push(0);
+            let mut data = vec![0u8; 38];
+            data.extend(id_string(name));
+            data.extend([0u8; 20]);
+            blocks.push(block([0xB0 + k as u8; 16], 0x84, &record(RAILING, &data, &assoc), 0));
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    #[test]
+    fn draws_stairs_and_railings() {
+        let (loaded, stats) = convert(read_bytes(&stairs_file()).expect("container")).expect("elements");
+        assert_eq!((stats.stairs.len(), stats.stairs_skipped, stats.stairs_scheme, stats.stairs_floor_treads), (3, 1, 1, 1));
+        let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+        let by = |name: &str| stats.stairs.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("{name}: {:?}", stats.stairs));
+        // S1: starts with a riser: its first tread one riser up, its last at the top
+        let s1 = by("S1");
+        assert!(s1.starts_with_riser && near(s1.z, (4.5, 5.3)) && near(s1.tread_z, (4.7, 5.3)) && near(s1.x, (10.0, 11.0)) && near(s1.y, (0.0, 1.2)), "{s1:?}");
+        // S2: mirrored: the scheme's x to −x
+        let s2 = by("S2");
+        assert!(s2.mirrored && near(s2.x, (19.0, 20.0)) && near(s2.tread_z, (4.7, 5.3)), "{s2:?}");
+        // S3: starts with a tread on the floor (left out): the next one a riser up
+        let s3 = by("S3");
+        assert!(!s3.starts_with_riser && near(s3.z, (4.5, 5.1)) && near(s3.tread_z, (4.5, 5.1)), "{s3:?}");
+        let stairs = loaded.layers.iter().find(|l| l.name == "Stairs").expect("stairs");
+        assert_eq!(stairs.solid_indices().len(), stairs.indices.len());
+        let (_, _, count) = stairs.elements[2];
+        assert_eq!(count / 3, 3 * 12, "three blocks of 12 triangles");
+        // the volume of S1: 4 blocks of 1 × 0.3 × 0.2
+        let volume = |element: usize| {
+            let (_, first, count) = stairs.elements[element];
+            let p = |i: u32| glam::DVec3::from_array(std::array::from_fn(|k| stairs.positions[3 * i as usize + k] as f64));
+            stairs.indices[first as usize..(first + count) as usize].chunks_exact(3).map(|t| p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0).sum::<f64>()
+        };
+        assert!((volume(0) - 0.24).abs() < 1e-4 && (volume(1) - 0.24).abs() < 1e-4, "{} {}", volume(0), volume(1));
+
+        // railings: R1 from its two segments, R2 as its box, R3 skipped
+        assert_eq!((stats.railings.len(), stats.railings_skipped, stats.railings_boxed, stats.railing_bad_segments), (2, 1, 1, 2));
+        let r1 = stats.railings.iter().find(|r| r.name == "R1").unwrap();
+        assert!(r1.segments == 2 && (r1.length - 4.0).abs() < 1e-9 && (r1.height - 1.0).abs() < 1e-9 && near(r1.z, (4.5, 6.0)), "{r1:?}");
+        let r2 = stats.railings.iter().find(|r| r.name == "R2").unwrap();
+        assert!(r2.boxed && near(r2.y, (20.0, 20.1)), "{r2:?}");
+        let railings = loaded.layers.iter().find(|l| l.name == "Railings").expect("railings");
+        assert_eq!(railings.solid_indices().len(), railings.indices.len());
+        // the bands half transparent, the rails and posts not; R1: 2 bands, 2 rails and 3 posts
+        let colors = railings.colors.as_ref().unwrap();
+        assert_eq!(colors.len(), railings.vertex_count());
+        assert!(colors.iter().any(|c| c[3] < 255) && colors.iter().any(|c| c[3] == 255));
+        let (_, _, count) = railings.elements[0];
+        assert_eq!(count / 3, 7 * 12);
+        assert!(railings.props[0].1.contains("\"Height\":\"1000 mm\""));
     }
 
     #[test]

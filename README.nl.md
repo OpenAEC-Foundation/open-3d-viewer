@@ -158,7 +158,7 @@ Wat niet meekomt:
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
 - **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in één kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Macro's (3D-meubilair), kleuren en materialen, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
-- **Archicad** toont wanden en vloeren als geëxtrudeerde plattegronden op hun verdieping. Kolommen, liggers, daken, openingen (deuren, ramen), bibliotheekobjecten en projecten van vóór Archicad 25 worden nog niet gelezen, en een wandhoogte die het bestand niet opslaat wordt geschat uit de verdiepingspeilen. De lezer is geschreven vanuit een cleanroom-specificatie.
+- **Archicad** toont wanden en vloeren als geëxtrudeerde plattegronden op hun verdieping. Kolommen, liggers, daken, openingen (deuren, ramen), bibliotheekobjecten en projecten van vóór Archicad 25 worden nog niet gelezen. Wandhoogtes volgen de verdieping waaraan de bovenkant van een wand gekoppeld is, of de eigen hoogte van de wand. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 
 Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::registry()`; nieuwe schrijvers implementeren `export::Writer` en gaan in `export::registry()`.

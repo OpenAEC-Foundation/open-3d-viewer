@@ -1,6 +1,6 @@
 //! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls and slabs as extruded
 //! footprints, grouped per story. Written from a clean-room specification of the file structure
-//! (SPEC v0.1, section numbers in the comments): a container of 16-byte items with QuickLZ
+//! (SPEC v0.2, section numbers in the comments): a container of 16-byte items with QuickLZ
 //! groups, object records with associations, stories, the element polygon and the wall fields.
 //! Columns, beams, roofs, openings and library objects are not read yet.
 //!
@@ -63,6 +63,12 @@ const STORY: Guid = guid("256b04bcd6271a46a6e56fa0e8594a95");
 const STORY_LEVEL: Guid = guid("a2ca396b1e60744c9955f90ee308af98");
 /// The association "element stands on story" (op 0x12 in the element, target the story).
 const ON_STORY: Guid = guid("0312b67984ae884da9c620ead705e0bc");
+/// §8.3 (v0.2): the association "top linked" (op 0x11 or 0x12 in a wall, target a link object).
+const TOP_LINK: Guid = guid("47cc487b6772fd4c91339214ea18fb99");
+/// §8.3 (v0.2): the class of the link object between a wall and the story its top is linked to.
+const LINK: Guid = guid("4d04d664e803ec42bd568813cc6481cb");
+/// §8.3 (v0.2): the association of a link object whose target is the top story.
+const LINK_STORY: Guid = guid("805bf9ba56f23249b89103ff66848591");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -117,6 +123,8 @@ fn hex(g: &Guid) -> String {
 struct Record {
     guid: Guid,
     story: Option<Guid>,
+    /// Walls: the link object of a top linked to a story (§8.3).
+    top_link: Option<Guid>,
     data: Vec<u8>,
 }
 
@@ -127,6 +135,8 @@ struct Records {
     stories: HashMap<Guid, (String, i16)>,
     /// Story levels: the targets of their 0x12 associations and the elevation (m).
     levels: Vec<(Vec<Guid>, f64)>,
+    /// Link objects (§8.3): the targets of their story association.
+    top_links: HashMap<Guid, Vec<Guid>>,
     walls: Vec<Record>,
     slabs: Vec<Record>,
     /// Walls and slabs skipped before conversion: data larger than [`MAX_ELEMENT_DATA`].
@@ -329,7 +339,7 @@ impl Records {
     /// §3–§4: one block, kept when it is a record of a class the reader uses.
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
-        match payload(b, |class| [WALL, SLAB, STORY, STORY_LEVEL].contains(class)) {
+        match payload(b, |class| [WALL, SLAB, STORY, STORY_LEVEL, LINK].contains(class)) {
             Payload::Data(p) => self.record(object, &p),
             Payload::Damaged => self.damaged += 1,
             Payload::Other => {}
@@ -348,12 +358,14 @@ impl Records {
         let links = links(&p[43 + data_len..]);
         match class {
             WALL | SLAB => {
-                let story = links.iter().find(|(assoc, _)| *assoc == ON_STORY).map(|(_, target)| *target);
+                let first = |op: &[u8], assoc: Guid| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
+                let story = first(&[0x12], ON_STORY);
+                let top_link = if class == WALL { first(&[0x11, 0x12], TOP_LINK) } else { None };
                 if data.len() > MAX_ELEMENT_DATA {
                     *(if class == WALL { &mut self.walls_too_large } else { &mut self.slabs_too_large }) += 1;
                     return;
                 }
-                let record = Record { guid: object, story, data: data.to_vec() };
+                let record = Record { guid: object, story, top_link, data: data.to_vec() };
                 if class == WALL {
                     self.walls.push(record);
                 } else {
@@ -368,10 +380,15 @@ impl Records {
                 let units: Vec<u16> = name.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
                 self.stories.insert(object, (String::from_utf16_lossy(&units), index));
             }
+            LINK => {
+                // §8.3: the op of this association is not given; any is taken
+                let targets = links.iter().filter(|l| l.1 == LINK_STORY).map(|l| l.2).collect();
+                self.top_links.insert(object, targets);
+            }
             _ => {
-                // §6: the level is the last f64 of the data
+                // §6: the level is the last f64 of the data; the story is a 0x12 target
                 let Some(z) = data.len().checked_sub(8).and_then(|at| f64_at(data, at)).filter(|z| z.is_finite()) else { return };
-                self.levels.push((links.into_iter().map(|(_, target)| target).collect(), z));
+                self.levels.push((links.into_iter().filter(|l| l.0 == 0x12).map(|l| l.2).collect(), z));
             }
         }
     }
@@ -483,9 +500,9 @@ fn unpack(input: &[u8], size: usize, wanted: impl Fn(&[u8]) -> bool) -> Option<V
     (out.len() == size).then_some(out)
 }
 
-/// §4.1: the associations of a record, as (association, target) for the op 0x12 items, the only
-/// ones the reader uses.
-fn links(a: &[u8]) -> Vec<(Guid, Guid)> {
+/// §4.1: the associations of a record, as (op, association, target); an item with k targets
+/// gives k of them.
+fn links(a: &[u8]) -> Vec<(u8, Guid, Guid)> {
     let mut out = Vec::new();
     let mut at = 2;
     while let Some(&op) = a.get(at) {
@@ -493,14 +510,13 @@ fn links(a: &[u8]) -> Vec<(Guid, Guid)> {
         match op {
             0x11 | 0x12 => {
                 let (Some(assoc), Some(target)) = (guid_at(a, at), guid_at(a, at + 16)) else { break };
-                if op == 0x12 {
-                    out.push((assoc, target));
-                }
+                out.push((op, assoc, target));
                 at += 32;
             }
             0x01 | 0x02 => {
-                let Some(k) = u32_at(a, at + 16).map(|k| k as usize) else { break };
+                let (Some(assoc), Some(k)) = (guid_at(a, at), u32_at(a, at + 16).map(|k| k as usize)) else { break };
                 let Some(next) = k.checked_mul(16).and_then(|n| n.checked_add(at + 20)).filter(|&n| n <= a.len()) else { break };
+                out.extend((at + 20..next).step_by(16).filter_map(|t| guid_at(a, t)).map(|target| (op, assoc, target)));
                 at = next;
             }
             // 0x00 ends the list; an unknown op ends what can be read
@@ -649,18 +665,15 @@ struct Prism {
     z: (f64, f64),
 }
 
-/// §8.3: wall bottom and top from the story levels, when the polygon caches none. `e` is the
-/// level of the wall's own story, `levels` all story levels, low to high. A heuristic: the file's
-/// flag for a top linked to a story is not known (open question Q-A1).
-fn wall_heights(f: &WallFields, e: f64, levels: &[f64]) -> (f64, f64) {
+/// §8.3 (v0.2): wall bottom and top when the polygon caches none. `e` is the level of the wall's
+/// own story; `linked` the level of the story its top is linked to, if any. The height B is out of
+/// date for a linked top, so it is used only when the top is not linked.
+fn wall_heights(f: &WallFields, e: f64, linked: Option<f64>) -> (f64, f64) {
     let bottom = e + f.bottom_offset;
-    let top = levels
-        .iter()
-        .filter(|&&l| l > e)
-        .take(3)
-        .map(|l| l + f.top_offset)
-        .find(|&top| top > bottom + 0.05)
-        .unwrap_or(bottom + if f.height > 0.0 { f.height } else { 3.0 });
+    let top = match linked {
+        Some(level) => level + f.top_offset,
+        None => bottom + f.height,
+    };
     (bottom, top)
 }
 
@@ -694,6 +707,11 @@ struct Stats {
     /// Walls with a polygon footprint (§8.4-1), with stored heights (§8.3-1).
     walls_polygon: usize,
     walls_stored_heights: usize,
+    /// Walls whose top is linked to a story (§8.3), and those whose top is not.
+    walls_linked: usize,
+    walls_unlinked: usize,
+    /// Walls skipped as their top is not above their bottom (§8.3), part of `walls_skipped`.
+    walls_no_height: usize,
     slabs: usize,
     slabs_skipped: usize,
     /// The stories shown: name as in the file and level, low to high.
@@ -756,10 +774,21 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         let polygon = find_polygon(&record.data);
         let stored = polygon.as_ref().and_then(|p| p.z);
         let has_polygon = polygon.as_ref().is_some_and(|p| p.coords >= 3);
+        // §8.3: the top story of the link object, when it is a story with a level
+        let linked = record
+            .top_link
+            .and_then(|link| records.top_links.get(&link))
+            .and_then(|targets| targets.iter().find_map(|t| Some((t, *level_of.get(t)?))));
         let z = stored.unwrap_or_else(|| {
             let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
-            wall_heights(&f, e, &levels)
+            wall_heights(&f, e, linked.map(|l| l.1))
         });
+        // a top not above the bottom is damaged or not understood
+        if z.1.is_nan() || z.0.is_nan() || z.1 <= z.0 {
+            stats.walls_no_height += 1;
+            stats.walls_skipped += 1;
+            continue;
+        }
         let footprint = match polygon {
             Some(p) if has_polygon => Some(p.contours),
             _ => wall_rectangle(&f).map(|r| vec![r]),
@@ -769,14 +798,17 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         props.insert("category".into(), "Wall".into());
         let [t0, t1] = f.thickness.map(|t| (t * 1000.0).round());
         props.insert("Thickness".into(), (if t0 == t1 { format!("{t0:.0} mm") } else { format!("{t0:.0}–{t1:.0} mm") }).into());
-        if stored.is_none() {
-            props.insert("Height".into(), "estimated from the story levels".into());
-        }
+        let top = match linked {
+            Some((story, _)) => format!("linked to {}", names.get(story).map_or("the story above the top story", String::as_str)),
+            None => "not linked".to_string(),
+        };
+        props.insert("Top".into(), top.into());
         let drawn = footprint.is_some_and(|contours| add(&mut walls, record, &Prism { contours, z }, props));
         if drawn {
             stats.walls += 1;
             stats.walls_polygon += usize::from(has_polygon);
             stats.walls_stored_heights += usize::from(stored.is_some());
+            *(if linked.is_some() { &mut stats.walls_linked } else { &mut stats.walls_unlinked }) += 1;
         } else {
             stats.walls_skipped += 1;
         }
@@ -811,7 +843,10 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ("Archicad slabs".into(), format!("{} read, {} skipped", stats.slabs, stats.slabs_skipped)),
         (
             "Archicad wall heights".into(),
-            format!("{} stored in the file, {} estimated from the story levels", stats.walls_stored_heights, stats.walls - stats.walls_stored_heights),
+            format!(
+                "{} stored in the file; tops of {} linked to a story, {} not linked",
+                stats.walls_stored_heights, stats.walls_linked, stats.walls_unlinked
+            ),
         ),
         ("Archicad elements not read yet".into(), "Columns, beams, roofs, openings, meshes, morphs and library objects".into()),
     ];
@@ -965,11 +1000,15 @@ mod tests {
         assert_eq!(levels, [("Ground Floor", 0.0), ("Story 1", 3.0), ("Story 2", 6.0)]);
     }
 
-    /// Walls stand between the lowest slab and a few stories up (§8.3 is a heuristic).
-    fn check_walls(model: &Model) {
-        for (bottom, top) in z_ranges(model, "Walls") {
-            assert!(bottom >= -0.5 && top > bottom + 0.05 && top <= 12.0, "wall from {bottom} to {top}");
-        }
+    /// §11 (v0.2): walls with a top linked to a story and without, the highest wall top and the
+    /// lowest wall bottom; no wall with its top at or below its bottom.
+    fn check_walls(stats: &Stats, model: &Model, linked: usize, unlinked: usize, highest: f32, lowest: f32) {
+        assert_eq!((stats.walls_linked, stats.walls_unlinked, stats.walls_no_height), (linked, unlinked, 0));
+        let walls = z_ranges(model, "Walls");
+        assert!(walls.iter().all(|(bottom, top)| top > bottom), "{walls:?}");
+        let top = walls.iter().map(|w| w.1).fold(f32::NEG_INFINITY, f32::max);
+        let bottom = walls.iter().map(|w| w.0).fold(f32::INFINITY, f32::min);
+        assert!(near(top, highest) && near(bottom, lowest), "walls from {bottom} to {top}");
     }
 
     /// The expected values of the specification (§11) for `CH04_Part2_Walls.pln`.
@@ -989,7 +1028,7 @@ mod tests {
         let b = model.bounds;
         assert!(near(b.min[0], 1.011) && near(b.max[0], 11.011) && near(b.min[1], 1.441) && near(b.max[1], 12.441), "{b:?}");
         assert!(near(b.min[2], -0.2), "{b:?}");
-        check_walls(&model);
+        check_walls(&stats, &model, 16, 4, 9.0, -0.2);
         // the walls are on their stories, for the explorer and the exploded view
         assert!(model.props.values().filter(|p| p.contains("\"category\":\"Wall\"")).all(|p| p.contains("\"level\":")));
         assert_eq!(model.layers.iter().map(|l| l.elements.len()).sum::<usize>(), 23);
@@ -1006,7 +1045,7 @@ mod tests {
         let b = model.bounds;
         assert!(near(b.min[0], 1.412) && near(b.max[0], 11.429) && near(b.min[1], 1.076) && near(b.max[1], 12.698), "{b:?}");
         assert!(near(b.min[2], -0.31), "{b:?}");
-        check_walls(&model);
+        check_walls(&stats, &model, 32, 24, 7.588, -0.272);
         assert!(model.props.values().any(|p| p.contains("\"Name\":\"") && p.contains("\"category\":\"Wall\"")));
     }
 
@@ -1109,25 +1148,42 @@ mod tests {
         data
     }
 
-    /// Wall data (§8.2): ID "W1", a 4 m reference line, 0.3 m thick, 2.7 m high, no polygon.
-    fn wall_data() -> Vec<u8> {
+    /// Wall data (§8.2): a 4 m reference line from (1, y), 0.3 m thick, height B, no polygon.
+    fn wall_data(id: &str, y: f64, height: f64) -> Vec<u8> {
         let mut data = vec![0u8; 38];
         data.extend([1, 0]);
-        data.extend(2u32.to_le_bytes());
-        data.extend("W1".encode_utf16().flat_map(u16::to_le_bytes));
+        data.extend((id.len() as u32).to_le_bytes());
+        data.extend(id.encode_utf16().flat_map(u16::to_le_bytes));
         let q = data.len();
-        data.extend([1.0f64, 1.0, 5.0, 1.0].iter().flat_map(|v| v.to_le_bytes()));
+        data.extend([1.0f64, y, 5.0, y].iter().flat_map(|v| v.to_le_bytes()));
         data.extend([1i32; 6].iter().flat_map(|v| v.to_le_bytes()));
         data.resize(q + 169, 0);
-        for (at, v) in [(77, 0.3f64), (85, 0.3), (93, 0.0), (145, 0.0), (153, 2.7), (161, 0.0)] {
+        for (at, v) in [(77, 0.3f64), (85, 0.3), (93, 0.0), (145, 0.0), (153, height), (161, 0.0)] {
             data[q + at..q + at + 8].copy_from_slice(&v.to_le_bytes());
         }
         data
     }
 
-    /// A whole project: a wall (0x85) in the outer layer, then a group in two chunks with a story
-    /// ("Hall", index 2, 0x84), free space, its level (4.5 m, 0x86, across the chunk boundary)
-    /// and a slab (0x84).
+    /// Several association items (§4.1) and the end of the list.
+    fn links_of(items: &[(u8, Guid, Guid)]) -> Vec<u8> {
+        let mut out = vec![0, 0];
+        for (op, assoc, target) in items {
+            out.push(*op);
+            out.extend(assoc);
+            out.extend(target);
+        }
+        out.push(0);
+        out
+    }
+
+    const LINKED_TO_TOP: Guid = guid("0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a");
+    const LINKED_TO_OTHER: Guid = guid("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+
+    /// A whole project: a wall W1 (0x85) in the outer layer, then a group in two chunks with a
+    /// story ("Hall", index 2, 0x84), free space, its level (4.5 m, 0x86, across the chunk
+    /// boundary), the level of the story above the top story (7.5 m), a slab, a wall W2 and a wall
+    /// W3 (0x84), and two link objects (§8.3). W1's top is linked to the story above the top story,
+    /// W2's link object points at something that is not a story, W3 has no link and no height.
     fn synthetic_file() -> Vec<u8> {
         let mut story = vec![0u8; 10];
         story.extend(4u32.to_le_bytes());
@@ -1140,9 +1196,21 @@ mod tests {
         inner.extend([0; 16]);
         inner.extend(block(guid("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"), 0x86, &packed, level.len()));
         inner.extend(block(guid("0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"), 0x84, &record(SLAB, &polygon_data(), &link(ON_STORY, STORY_ID)), 0));
+        let top_level = record(STORY_LEVEL, &7.5f64.to_le_bytes(), &link(other, TOP_STORY));
+        inner.extend(block(guid("0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"), 0x84, &top_level, 0));
+        let linked_wall = |id: &str, y: f64, height: f64, link: Option<Guid>| {
+            let mut items = vec![(0x12, ON_STORY, STORY_ID)];
+            items.extend(link.map(|l| (0x11, TOP_LINK, l)));
+            record(WALL, &wall_data(id, y, height), &links_of(&items))
+        };
+        inner.extend(block(guid("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b01"), 0x84, &linked_wall("W2", 3.0, 2.7, Some(LINKED_TO_OTHER)), 0));
+        inner.extend(block(guid("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b02"), 0x84, &linked_wall("W3", 5.0, 0.0, None), 0));
+        for (object, target) in [(LINKED_TO_TOP, TOP_STORY), (LINKED_TO_OTHER, other)] {
+            inner.extend(block(object, 0x84, &record(LINK, &[0; 16], &links_of(&[(0x11, LINK_STORY, target)])), 0));
+        }
         let mut file = b"ROF FDB ".to_vec();
         file.resize(32, 0);
-        let wall = record(WALL, &wall_data(), &link(ON_STORY, STORY_ID));
+        let wall = linked_wall("W1", 1.0, 2.7, Some(LINKED_TO_TOP));
         file.extend(block(guid("0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"), 0x85, &mask(&wall), wall.len()));
         file.extend(GROUP);
         file.extend((inner.len() as u64).to_le_bytes());
@@ -1167,19 +1235,28 @@ mod tests {
     fn reads_a_synthetic_project() {
         let records = read_bytes(&synthetic_file()).expect("container");
         assert_eq!(records.stories.get(&STORY_ID), Some(&("Hall".to_string(), 2)));
-        assert_eq!(records.levels, [(vec![STORY_ID], 4.5)]);
-        assert_eq!((records.walls.len(), records.slabs.len(), records.damaged), (1, 1, 0));
+        assert_eq!(records.levels, [(vec![STORY_ID], 4.5), (vec![TOP_STORY], 7.5)]);
+        assert_eq!((records.walls.len(), records.slabs.len(), records.top_links.len(), records.damaged), (3, 1, 2, 0));
         let (loaded, stats) = convert(records).expect("elements");
-        assert_eq!((stats.walls, stats.slabs), (1, 1));
+        assert_eq!((stats.walls, stats.walls_skipped, stats.slabs), (2, 1, 1));
+        // W1 linked; W2's link object points at no story, so B counts; W3 has no height
+        assert_eq!((stats.walls_linked, stats.walls_unlinked, stats.walls_no_height), (1, 1, 1));
         assert_eq!(loaded.project.levels, [("Hall".to_string(), 4.5)]);
-        // the wall: left of its reference line, from its story at 4.5 m up 2.7 m (no story above)
         let walls = &loaded.layers[0];
-        let x: Vec<f32> = walls.positions.chunks_exact(3).map(|p| p[0]).collect();
-        let y: Vec<f32> = walls.positions.chunks_exact(3).map(|p| p[1]).collect();
-        let z: Vec<f32> = walls.positions.chunks_exact(3).map(|p| p[2]).collect();
-        let range = |v: &[f32]| v.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
-        assert_eq!((range(&x), range(&y), range(&z)), ((1.0, 5.0), (1.0, 1.3), (4.5, 7.2)));
+        let range = |element: usize, axis: usize| {
+            let (_, first, count) = walls.elements[element];
+            walls.indices[first as usize..(first + count) as usize]
+                .iter()
+                .map(|&i| walls.positions[3 * i as usize + axis])
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)))
+        };
+        // W1, left of its reference line, from its story at 4.5 m up to the linked level 7.5 m + A
+        assert_eq!((range(0, 0), range(0, 1), range(0, 2)), ((1.0, 5.0), (1.0, 1.3), (4.5, 7.5)));
         assert!(walls.props[0].1.contains("\"Name\":\"W1\"") && walls.props[0].1.contains("\"level\":\"Hall\""));
+        assert!(walls.props[0].1.contains("\"Top\":\"linked to the story above the top story\""));
+        // W2: 2.7 m from its bottom
+        assert_eq!((range(1, 1), range(1, 2)), ((3.0, 3.3), (4.5, 7.2)));
+        assert!(walls.props[1].1.contains("\"Name\":\"W2\"") && walls.props[1].1.contains("\"Top\":\"not linked\""));
         assert_eq!(loaded.layers[1].triangle_count(), 2 * 8 + 8 * 2);
     }
 
@@ -1294,8 +1371,8 @@ mod tests {
         assert_eq!(y(1), (0.0, 0.3));
         assert_eq!(y(3), (-0.3, 0.0));
         assert_eq!(y(2), (-0.15, 0.15));
-        // up to the next story; on the top story the stored height
-        assert_eq!(wall_heights(&wall(1), 0.0, &[0.0, 3.0, 6.0]), (0.0, 3.0));
-        assert_eq!(wall_heights(&wall(1), 6.0, &[0.0, 3.0, 6.0]), (6.0, 8.7));
+        // linked: the level of the linked story plus A (B is out of date); not linked: B
+        assert_eq!(wall_heights(&WallFields { top_offset: -0.5, ..wall(1) }, 0.0, Some(3.0)), (0.0, 2.5));
+        assert_eq!(wall_heights(&wall(1), 6.0, None), (6.0, 8.7));
     }
 }

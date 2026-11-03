@@ -91,7 +91,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls and slabs), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls, slabs, columns and beams), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -111,7 +111,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 - **Orbit, pan and zoom.** Left drag orbits, middle drag pans, the wheel zooms to the cursor. The view cube turns the model to a side; **F** fits the model in view.
 - **Standard views.** Iso, top, front and right (`0`, `1`, `2`, `3`), perspective or orthographic (`P`, `O`), and the saved views of a Revit model.
 - **Render modes.** Solid, wireframe and solid with edges (`S`, `W`, `E`), the ground grid (`G`) and **Flip up** for files with the other up axis.
-- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Archicad walls and slabs, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
+- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Archicad walls, slabs, columns and beams, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
 - **Shortcuts.** Every command has one entry in one list, used by the ribbon, the title bar and the keyboard. In **Settings** you give any command your own key.
 
 ## Measure, section and explode
@@ -137,7 +137,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **SketchUp** (`.skp`, version 3 and later) | Yes | No |
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
 | **Allplan** (`.ndw` drawing files, beta) | Yes, 3D bodies | No |
-| **Archicad** (`.pln`, `.pla`, Archicad 25 to 29, beta) | Yes, walls and slabs | No |
+| **Archicad** (`.pln`, `.pla`, Archicad 25 to 29, beta) | Yes, walls, slabs, columns and beams | No |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
 | **MicroStation DGN** (`.dgn`, V7 and V8) | Yes | No |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
@@ -149,14 +149,14 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 
 What does not come through:
 
-- **IFC export** writes each element as triangles (`IfcTriangulatedFaceSet`), not as parametric geometry. Classes come from the Revit category, the Tekla part name or the Archicad element (wall, slab), else `IfcBuildingElementProxy`; elements of an opened IFC file do not keep their class yet. Checked with IfcOpenShell 0.8 on Revit, SketchUp, OBJ, STL and glTF models.
+- **IFC export** writes each element as triangles (`IfcTriangulatedFaceSet`), not as parametric geometry. Classes come from the Revit category, the Tekla part name or the Archicad element (wall, slab, column, beam), else `IfcBuildingElementProxy`; elements of an opened IFC file do not keep their class yet. Checked with IfcOpenShell 0.8 on Revit, SketchUp, OBJ, STL and glTF models.
 - **DWG and DXF** show the polygon geometry of model space. ACIS solids, annotations, curves and external references are left out and counted.
 - **MicroStation DGN** opens version 7 design files and V8 design files (MicroStation V8, V8i and CONNECT). Lines, arcs and curves are drawn as thin ribbons as wide as their line weight, text as its box with the characters in the element properties; shapes, cones, extruded solids and B-spline surfaces of 3D files are faces. Levels are layers, with their names in V8 files; cells and shared cells are one element each; 2D linear dimensions of V8 files are drawn as lines, with the measured values in the element properties. Other dimensions, multi-lines, tags, line styles and reference files, and in V8 files surfaces, solids, cones, B-spline surfaces, meshes and models other than the first, are left out and counted. The V7 reader is written from Intergraph's public ISFF description and a clean-room analysis, the V8 reader from the clean-room specification only.
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
 - **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in one colour; openings and rooms start hidden in a layer of their own. Macros (3D furniture), colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
-- **Archicad** shows walls and slabs as extruded footprints on their stories. Columns, beams, roofs, openings (doors, windows), library objects and projects from before Archicad 25 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
+- **Archicad** shows walls, slabs and columns as extruded footprints on their stories, and beams along their axis, sloped ones too. Roofs, openings (doors, windows), library objects, columns and beams with a profile cross-section, and projects from before Archicad 25 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 
 New formats: implement `loaders::Loader` and add it to `loaders::registry()`; new writers implement `export::Writer` and go in `export::registry()`.
@@ -180,7 +180,7 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## Testing and reliability
 
-- **170 unit tests** in `src/` (168 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 82 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 8 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **172 unit tests** in `src/` (170 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 84 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 8 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.

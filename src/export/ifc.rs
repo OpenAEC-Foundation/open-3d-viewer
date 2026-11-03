@@ -295,6 +295,8 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
         "Archicad" => match category {
             "Wall" => ("IFCWALL", "NOTDEFINED"),
             "Slab" => ("IFCSLAB", "FLOOR"),
+            "Column" => ("IFCCOLUMN", "COLUMN"),
+            "Beam" => ("IFCBEAM", "BEAM"),
             _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
         },
         _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
@@ -784,16 +786,18 @@ mod tests {
     }
 
     #[test]
-    fn archicad_walls_and_slabs_keep_their_class() {
+    fn archicad_elements_keep_their_class() {
         let (positions, indices) = cube([0.0, 0.0, 0.0]);
         let layer = Layer {
             name: "Walls".into(),
             positions,
-            indices: [indices.clone(), indices].concat(),
-            elements: vec![(1, 0, 36), (2, 36, 36)],
+            indices: [indices.clone(), indices.clone(), indices.clone(), indices].concat(),
+            elements: vec![(1, 0, 36), (2, 36, 36), (3, 72, 36), (4, 108, 36)],
             props: vec![
                 (1, r#"{"Name":"W-001","category":"Wall","level":"Ground Floor"}"#.into()),
                 (2, r#"{"Name":"Slab","category":"Slab","level":"Ground Floor"}"#.into()),
+                (3, r#"{"Name":"CRE - 001","category":"Column","level":"Ground Floor"}"#.into()),
+                (4, r#"{"Name":"BMR - 001","category":"Beam","level":"Ground Floor"}"#.into()),
             ],
             ..Layer::default()
         };
@@ -803,6 +807,9 @@ mod tests {
         assert_eq!(s.matches("=IFCWALL(").count(), 1);
         assert!(s.contains("'W-001'") && s.contains(".FLOOR.)"));
         assert_eq!(s.matches("=IFCSLAB(").count(), 1);
+        assert_eq!(s.matches("=IFCCOLUMN(").count(), 1);
+        assert_eq!(s.matches("=IFCBEAM(").count(), 1);
+        assert!(s.contains("'CRE - 001'") && s.contains(".COLUMN.)") && s.contains(".BEAM.)"));
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls and slabs as extruded
 //! footprints, grouped per story. Written from a clean-room specification of the file structure
 //! (SPEC v0.2, section numbers in the comments): a container of 16-byte items with QuickLZ
-//! groups, object records with associations, stories, the element polygon and the wall fields.
-//! Columns, beams, roofs, openings and library objects are not read yet.
+//! groups, object records with associations, stories, the element polygon, the wall fields, and
+//! columns and beams with their cross-sections. Roofs, openings, library objects and profile
+//! cross-sections are not read yet.
 //!
 //! Archicad is Z up in metres, as the viewer: coordinates are taken as they are.
 
@@ -69,6 +70,21 @@ const TOP_LINK: Guid = guid("47cc487b6772fd4c91339214ea18fb99");
 const LINK: Guid = guid("4d04d664e803ec42bd568813cc6481cb");
 /// §8.3 (v0.2): the association of a link object whose target is the top story.
 const LINK_STORY: Guid = guid("805bf9ba56f23249b89103ff66848591");
+// §5, §8.5–§8.7 (v0.3): columns and beams, their segments and cross-sections.
+const COLUMN: Guid = guid("85ebe813335aa347a4d41e05296aec7e");
+const BEAM: Guid = guid("85d2c2a57c5a684a95549eda9d4556ca");
+const COLUMN_SEGMENT: Guid = guid("ab821a7acd69e640a7d876564f981cf9");
+const BEAM_SEGMENT: Guid = guid("c67babcb3ae033419161c28ed3368672");
+const SECTION_RECT: Guid = guid("551919c4c687b64fb0745f094fe9f6a6");
+const SECTION_ROUND: Guid = guid("3929c1d605d9e040aa57f7c8d687dc7b");
+const SECTION_PROFILE: Guid = guid("40ae258827f8574aa1c549d04c687c46");
+/// §8.7: the association from a column, or a beam, to its segment.
+const COLUMN_SEGMENT_LINK: Guid = guid("21864427dc9ae643b5aafc76e4cd62ce");
+const BEAM_SEGMENT_LINK: Guid = guid("a72c76d520d95d45a37328ba6d47152a");
+/// §8.7: the association from a segment to its cross-section.
+const SECTION_LINK: Guid = guid("306cb86321a21c4284fb926c694bf611");
+/// §8.5: the association from a column to the link object of its top (as walls, §8.3).
+const COLUMN_TOP_LINK: Guid = guid("2dbcbe5e0bcf51478f557c2353c3fd14");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -119,13 +135,48 @@ fn hex(g: &Guid) -> String {
     g.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// An element record (wall or slab): its identity, story and data.
+/// An element record (wall, slab, column or beam): its identity, story and data.
 struct Record {
     guid: Guid,
     story: Option<Guid>,
-    /// Walls: the link object of a top linked to a story (§8.3).
+    /// Walls and columns: the link object of a top linked to a story (§8.3, §8.5).
     top_link: Option<Guid>,
+    /// Columns and beams: the segment that leads to the cross-section (§8.7).
+    segment: Option<Guid>,
     data: Vec<u8>,
+}
+
+/// §8.7: the cross-section of a column or beam.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Section {
+    /// Width b and depth d (of a beam: its height).
+    Rect(f64, f64),
+    /// Diameters b and d.
+    Round(f64, f64),
+    /// An own 2D profile: not read yet.
+    Profile,
+    /// Data that does not read as a section.
+    Unreadable,
+}
+
+/// §8.7: a rectangular or round section: b and d at 40 (data[0] = 0x82) or 52 (0x83), both
+/// between 0 and 50 m.
+fn section(class: Guid, data: &[u8]) -> Section {
+    let at = match data.first() {
+        Some(0x82) => 40,
+        Some(0x83) => 52,
+        _ => return Section::Unreadable,
+    };
+    let (Some(b), Some(d)) = (f64_at(data, at), f64_at(data, at + 8)) else { return Section::Unreadable };
+    let size = 0.0..50.0;
+    if !(size.contains(&b) && size.contains(&d) && b > 0.0 && d > 0.0) {
+        return Section::Unreadable;
+    }
+    if class == SECTION_ROUND {
+        Section::Round(b, d)
+    } else {
+        Section::Rect(b, d)
+    }
 }
 
 /// What the reader keeps of the file: the records of the classes it uses.
@@ -139,9 +190,16 @@ struct Records {
     top_links: HashMap<Guid, Vec<Guid>>,
     walls: Vec<Record>,
     slabs: Vec<Record>,
-    /// Walls and slabs skipped before conversion: data larger than [`MAX_ELEMENT_DATA`].
+    columns: Vec<Record>,
+    beams: Vec<Record>,
+    /// Column and beam segments (§8.7): the first target of their section association.
+    segments: HashMap<Guid, Option<Guid>>,
+    sections: HashMap<Guid, Section>,
+    /// Elements skipped before conversion: data larger than [`MAX_ELEMENT_DATA`].
     walls_too_large: usize,
     slabs_too_large: usize,
+    columns_too_large: usize,
+    beams_too_large: usize,
     /// Blocks of the classes above whose payload could not be decoded, blocks larger than
     /// [`MAX_BLOCK`] and group chunks that did not decompress.
     damaged: usize,
@@ -339,7 +397,8 @@ impl Records {
     /// §3–§4: one block, kept when it is a record of a class the reader uses.
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
-        match payload(b, |class| [WALL, SLAB, STORY, STORY_LEVEL, LINK].contains(class)) {
+        let classes = [WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, COLUMN_SEGMENT, BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE];
+        match payload(b, |class| classes.contains(class)) {
             Payload::Data(p) => self.record(object, &p),
             Payload::Damaged => self.damaged += 1,
             Payload::Other => {}
@@ -357,20 +416,36 @@ impl Records {
         let data = &p[39..39 + data_len];
         let links = links(&p[43 + data_len..]);
         match class {
-            WALL | SLAB => {
-                let first = |op: &[u8], assoc: Guid| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
-                let story = first(&[0x12], ON_STORY);
-                let top_link = if class == WALL { first(&[0x11, 0x12], TOP_LINK) } else { None };
+            WALL | SLAB | COLUMN | BEAM => {
+                let first = |assoc: Guid, op: &[u8]| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
+                let story = first(ON_STORY, &[0x12]);
+                let (top_link, segment) = match class {
+                    WALL => (first(TOP_LINK, &[0x11, 0x12]), None),
+                    COLUMN => (first(COLUMN_TOP_LINK, &[0x11, 0x12]), first(COLUMN_SEGMENT_LINK, &[0x11, 0x12])),
+                    BEAM => (None, first(BEAM_SEGMENT_LINK, &[0x11, 0x12])),
+                    _ => (None, None),
+                };
+                let (list, too_large) = match class {
+                    WALL => (&mut self.walls, &mut self.walls_too_large),
+                    SLAB => (&mut self.slabs, &mut self.slabs_too_large),
+                    COLUMN => (&mut self.columns, &mut self.columns_too_large),
+                    _ => (&mut self.beams, &mut self.beams_too_large),
+                };
                 if data.len() > MAX_ELEMENT_DATA {
-                    *(if class == WALL { &mut self.walls_too_large } else { &mut self.slabs_too_large }) += 1;
+                    *too_large += 1;
                     return;
                 }
-                let record = Record { guid: object, story, top_link, data: data.to_vec() };
-                if class == WALL {
-                    self.walls.push(record);
-                } else {
-                    self.slabs.push(record);
-                }
+                list.push(Record { guid: object, story, top_link, segment, data: data.to_vec() });
+            }
+            COLUMN_SEGMENT | BEAM_SEGMENT => {
+                // §8.7: the first target; the op is not given, any is taken
+                self.segments.insert(object, links.iter().find(|l| l.1 == SECTION_LINK).map(|l| l.2));
+            }
+            SECTION_RECT | SECTION_ROUND => {
+                self.sections.insert(object, section(class, data));
+            }
+            SECTION_PROFILE => {
+                self.sections.insert(object, Section::Profile);
             }
             STORY => {
                 // §6: 10 bytes, u32 n, n UTF-16LE units of name, i16 index
@@ -622,31 +697,37 @@ struct WallFields {
     bottom_offset: f64,
 }
 
-/// §8.2: the end q of the ID string is the smallest i ≥ 40 with `01 00` before it, a u32 length
-/// n ≤ 64 at i and n printable ASCII characters in UTF-16LE after it, and six small non-zero i32
-/// at q+32.
-fn wall_fields(data: &[u8]) -> Option<WallFields> {
-    for i in 40..data.len() {
+/// §8.2: the candidates for the ID string of an element, low to high: an i ≥ 40 with `01 00`
+/// before it, a u32 length n ≤ 64 at i and n printable ASCII characters in UTF-16LE after it.
+/// Gives the ID and its end q; the fields after q decide which candidate counts.
+fn id_strings(data: &[u8]) -> impl Iterator<Item = (String, usize)> + '_ {
+    (40..data.len()).filter_map(move |i| {
         if data[i - 2..i] != [1, 0] {
-            continue;
+            return None;
         }
-        let Some(n) = u32_at(data, i).map(|n| n as usize).filter(|&n| n <= 64) else { continue };
-        let Some(text) = bytes_at(data, i + 4, 2 * n) else { continue };
+        let n = u32_at(data, i).map(|n| n as usize).filter(|&n| n <= 64)?;
+        let text = bytes_at(data, i + 4, 2 * n)?;
         if !text.chunks_exact(2).all(|c| (0x20..=0x7E).contains(&c[0]) && c[1] == 0) {
-            continue;
+            return None;
         }
-        let q = i + 4 + 2 * n;
+        Some((text.chunks_exact(2).map(|c| c[0] as char).collect(), i + 4 + 2 * n))
+    })
+}
+
+/// §8.2: the first ID string followed by six small non-zero i32 at q+32.
+fn wall_fields(data: &[u8]) -> Option<WallFields> {
+    id_strings(data).find_map(|(id, q)| {
         // every field must be in the data
         if q + 169 > data.len() {
-            continue;
+            return None;
         }
         let s: Vec<i32> = (0..6).map(|k| i32_at(data, q + 32 + 4 * k).unwrap()).collect();
         if !s.iter().all(|&v| v != 0 && (-8..=8).contains(&v)) {
-            continue;
+            return None;
         }
         let f = |at: usize| f64_at(data, q + at).unwrap();
-        return Some(WallFields {
-            id: text.chunks_exact(2).map(|c| c[0] as char).collect(),
+        Some(WallFields {
+            id,
             line: [f(0), f(8), f(16), f(24)],
             side: s[0],
             thickness: [f(77), f(85)],
@@ -654,9 +735,210 @@ fn wall_fields(data: &[u8]) -> Option<WallFields> {
             top_offset: f(145),
             height: f(153),
             bottom_offset: f(161),
-        });
+        })
+    })
+}
+
+/// Comparisons allowed for the searches of §8.5 and §8.6 in one record: a bound on the work
+/// for any data.
+const SEARCH_BUDGET: usize = 1 << 24;
+
+/// The first offset o in `range` where `a` and, 24 bytes on, `b` are found: the axis of a column
+/// or beam before its ID string. `None` when the budget runs out.
+fn find_axis(data: &[u8], range: std::ops::RangeInclusive<usize>, a: &[u8], b: &[u8], budget: &mut usize) -> Option<Option<usize>> {
+    for o in range {
+        *budget = budget.checked_sub(1)?;
+        if &data[o..o + 16] == a && &data[o + 24..o + 40] == b {
+            return Some(Some(o));
+        }
     }
-    None
+    Some(None)
+}
+
+/// §8.5: the fields of a column.
+#[derive(Debug, Clone)]
+struct ColumnFields {
+    id: String,
+    /// A: top offset to the linked story; H: height (top not linked); C: bottom offset.
+    top_offset: f64,
+    height: f64,
+    bottom_offset: f64,
+    /// The anchor point and the middle of the cross-section.
+    anchor: [f64; 2],
+    center: [f64; 2],
+    /// Rotation of the cross-section (rad, counter-clockwise).
+    rotation: f64,
+}
+
+/// §8.5: the first ID string followed by u32 k ≤ 16 and six finite f64 (A, H, C, -, x, y), with
+/// the axis (x, y, z1, x, y, z2) earlier in the data; the middle of the section follows the axis.
+fn column_fields(data: &[u8]) -> Option<ColumnFields> {
+    let mut budget = SEARCH_BUDGET;
+    id_strings(data).find_map(|(id, q)| {
+        if u32_at(data, q)? > 16 || q + 95 > data.len() {
+            return None;
+        }
+        let f: Vec<f64> = (0..6).map(|k| f64_at(data, q + 4 + 8 * k).unwrap()).collect();
+        let xy = &data[q + 36..q + 52];
+        if !f.iter().all(|v| v.is_finite()) || xy.iter().all(|&b| b == 0) {
+            return None;
+        }
+        let o = find_axis(data, 0..=q.checked_sub(96)?, xy, xy, &mut budget)??;
+        let (cx, cy, rotation) = (f64_at(data, o + 48)?, f64_at(data, o + 56)?, f64_at(data, q + 87)?);
+        // the slope at q+79 is π/2 (vertical) in the samples; a column is drawn vertical
+        Some(ColumnFields {
+            id,
+            top_offset: f[0],
+            height: f[1],
+            bottom_offset: f[2],
+            anchor: [f[4], f[5]],
+            center: [cx, cy],
+            rotation: if rotation.is_finite() { rotation } else { 0.0 },
+        })
+    })
+    .filter(|f| f.center.iter().all(|v| v.is_finite()))
+}
+
+/// §8.6: the fields of a beam.
+#[derive(Debug, Clone)]
+struct BeamFields {
+    id: String,
+    /// s: sideways offset of the axis.
+    offset: f64,
+    /// The axis: x1, y1, x2, y2.
+    line: [f64; 4],
+    /// The top of the beam at the start and the end, to its own story (both zr when the axis
+    /// with its heights is not found: horizontal).
+    top: (f64, f64),
+}
+
+/// §8.6: the first ID string followed by u8 k ≤ 16 and six finite f64 (s, zr, x1, y1, x2, y2);
+/// the heights z1 and z2 are with the axis earlier in the data, or zr for both. The six values
+/// must also be plausible lengths (0, or between 1 nm and 100 km): in the samples an earlier
+/// unnamed candidate passes the checks of the specification with values such as 1e-265 and 1e87
+/// (open question Q-I14).
+fn beam_fields(data: &[u8]) -> Option<BeamFields> {
+    let plausible = |v: &f64| *v == 0.0 || (1e-9..1e5).contains(&v.abs());
+    let mut budget = SEARCH_BUDGET;
+    id_strings(data).find_map(|(id, q)| {
+        if *data.get(q)? > 16 || q + 49 > data.len() {
+            return None;
+        }
+        let f: Vec<f64> = (0..6).map(|k| f64_at(data, q + 1 + 8 * k).unwrap()).collect();
+        let (start, end) = (&data[q + 17..q + 33], &data[q + 33..q + 49]);
+        if !f.iter().all(plausible) || start.iter().all(|&b| b == 0) {
+            return None;
+        }
+        let axis = match q.checked_sub(48) {
+            Some(last) => find_axis(data, 0..=last, start, end, &mut budget)?,
+            None => None,
+        };
+        let top = match axis {
+            Some(o) => (f64_at(data, o + 16)?, f64_at(data, o + 40)?),
+            None => (f[1], f[1]),
+        };
+        (top.0.is_finite() && top.1.is_finite()).then_some(BeamFields {
+            id,
+            offset: f[0],
+            line: [f[2], f[3], f[4], f[5]],
+            top,
+        })
+    })
+}
+
+/// §8.5: the footprint of a column: its section around the middle, turned by the rotation; a
+/// round one as an ellipse of 32 points.
+fn column_footprint(f: &ColumnFields, section: Section) -> Option<Vec<[f64; 2]>> {
+    let (s, c) = f.rotation.sin_cos();
+    let (u, v) = ([c, s], [-s, c]);
+    let at = |a: f64, b: f64| [f.center[0] + u[0] * a + v[0] * b, f.center[1] + u[1] * a + v[1] * b];
+    match section {
+        Section::Rect(b, d) => Some(vec![at(-b / 2.0, -d / 2.0), at(b / 2.0, -d / 2.0), at(b / 2.0, d / 2.0), at(-b / 2.0, d / 2.0)]),
+        Section::Round(b, d) => Some(
+            (0..32)
+                .map(|k| {
+                    let t = k as f64 * std::f64::consts::TAU / 32.0;
+                    at(b / 2.0 * t.cos(), d / 2.0 * t.sin())
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// §8.6: the two end faces of a beam (corners at the start, then at the end, in the same order),
+/// from its top `e` + z1 / `e` + z2 down by its height, s − b/2 to s + b/2 beside its axis; a
+/// round one as a cylinder of 32 points with its middle b/2 below the top.
+fn beam_ends(f: &BeamFields, e: f64, section: Section) -> Option<[Vec<[f64; 3]>; 2]> {
+    let [x1, y1, x2, y2] = f.line;
+    let length = (x2 - x1).hypot(y2 - y1);
+    if length.is_nan() || length < 1e-9 {
+        return None;
+    }
+    let n = [-(y2 - y1) / length, (x2 - x1) / length];
+    let end = |x: f64, y: f64, top: f64| -> Option<Vec<[f64; 3]>> {
+        let at = |side: f64, z: f64| [x + n[0] * (f.offset + side), y + n[1] * (f.offset + side), z];
+        match section {
+            Section::Rect(b, h) => Some(vec![at(-b / 2.0, top), at(b / 2.0, top), at(b / 2.0, top - h), at(-b / 2.0, top - h)]),
+            Section::Round(b, _) => Some(
+                (0..32)
+                    .map(|k| {
+                        let t = k as f64 * std::f64::consts::TAU / 32.0;
+                        at(b / 2.0 * t.cos(), top - b / 2.0 + b / 2.0 * t.sin())
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    };
+    Some([end(x1, y1, e + f.top.0)?, end(x2, y2, e + f.top.1)?])
+}
+
+/// Adds a convex body between two faces with corresponding corners: the two faces and a side
+/// per pair of corners, flat shaded and facing out. False when it has no volume.
+fn push_hull(layer: &mut Layer, ends: &[Vec<[f64; 3]>; 2]) -> bool {
+    let all: Vec<[f64; 3]> = ends.iter().flatten().copied().collect();
+    if all.iter().flatten().any(|v| !v.is_finite()) || ends[0].len() != ends[1].len() || ends[0].len() < 3 {
+        return false;
+    }
+    let mean = |pts: &[[f64; 3]]| [0, 1, 2].map(|k| pts.iter().map(|p| p[k]).sum::<f64>() / pts.len() as f64);
+    let middle = mean(&all);
+    let first = layer.indices.len();
+    let face = |layer: &mut Layer, mut pts: Vec<[f64; 3]>| {
+        // Newell's normal, turned to point away from the middle of the body
+        let mut n = [0.0f64; 3];
+        for i in 0..pts.len() {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+            n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+            n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if length.is_nan() || length <= 1e-12 {
+            return;
+        }
+        let c = mean(&pts);
+        if (0..3).map(|k| n[k] * (c[k] - middle[k])).sum::<f64>() < 0.0 {
+            pts.reverse();
+            n = n.map(|v| -v);
+        }
+        let base = (layer.positions.len() / 3) as u32;
+        for p in &pts {
+            layer.positions.extend(p.map(|v| v as f32));
+            layer.normals.extend(n.map(|v| (v / length) as f32));
+        }
+        for i in 1..pts.len() as u32 - 1 {
+            layer.indices.extend([base, base + i, base + i + 1]);
+        }
+    };
+    face(layer, ends[0].clone());
+    face(layer, ends[1].clone());
+    let k = ends[0].len();
+    for i in 0..k {
+        let j = (i + 1) % k;
+        face(layer, vec![ends[0][i], ends[0][j], ends[1][j], ends[1][i]]);
+    }
+    layer.indices.len() > first
 }
 
 /// An element ready to draw: footprint contours (outer first) extruded from `z.0` to `z.1`.
@@ -718,6 +1000,70 @@ struct Stats {
     stories: Vec<(String, f64)>,
     /// All story levels (§6), with the one above the top story.
     levels: Vec<f64>,
+    columns: Vec<ColumnOut>,
+    columns_skipped: usize,
+    beams: Vec<BeamOut>,
+    beams_skipped: usize,
+    /// Columns and beams skipped for a profile section, or a section that is missing or does not
+    /// read (§8.7); part of the skipped ones.
+    columns_profile: usize,
+    columns_no_section: usize,
+    beams_profile: usize,
+    beams_no_section: usize,
+}
+
+/// A column as drawn, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct ColumnOut {
+    name: String,
+    center: [f64; 2],
+    anchor: [f64; 2],
+    section: Section,
+    z: (f64, f64),
+    linked: bool,
+}
+
+/// A beam as drawn, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct BeamOut {
+    name: String,
+    start: [f64; 2],
+    end: [f64; 2],
+    section: Section,
+    /// The top at the start and the end.
+    top: (f64, f64),
+}
+
+/// What keeps a column or beam from being drawn (§8.7).
+enum NoSection {
+    Profile,
+    Missing,
+}
+
+/// §8.7: element → segment → section, the first target each time.
+fn section_of(records: &Records, segment: Option<Guid>) -> Result<Section, NoSection> {
+    let section = segment
+        .and_then(|s| records.segments.get(&s).copied().flatten())
+        .and_then(|s| records.sections.get(&s).copied())
+        .ok_or(NoSection::Missing)?;
+    match section {
+        Section::Profile => Err(NoSection::Profile),
+        Section::Unreadable => Err(NoSection::Missing),
+        s => Ok(s),
+    }
+}
+
+/// A section for the properties: "200 × 350 mm", "⌀ 200 mm" or "⌀ 200 × 300 mm".
+fn section_text(section: Section) -> String {
+    let mm = |v: f64| format!("{:.0}", v * 1000.0);
+    match section {
+        Section::Rect(b, d) => format!("{} × {} mm", mm(b), mm(d)),
+        Section::Round(b, d) if mm(b) == mm(d) => format!("⌀ {} mm", mm(b)),
+        Section::Round(b, d) => format!("⌀ {} × {} mm", mm(b), mm(d)),
+        _ => String::new(),
+    }
 }
 
 /// §6, §8: the records as layers of walls and slabs, one element each, on their stories.
@@ -748,10 +1094,17 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
 
     let mut walls = Layer { name: "Walls".into(), color: [0.86, 0.84, 0.80], ..Layer::default() };
     let mut slabs = Layer { name: "Slabs".into(), color: [0.66, 0.68, 0.72], ..Layer::default() };
+    let mut columns = Layer { name: "Columns".into(), color: [0.78, 0.76, 0.72], ..Layer::default() };
+    let mut beams = Layer { name: "Beams".into(), color: [0.74, 0.70, 0.64], ..Layer::default() };
     let mut next_id = 0u64;
-    let mut add = |layer: &mut Layer, record: &Record, prism: &Prism, mut props: serde_json::Map<String, serde_json::Value>| -> bool {
+    let mut add = |layer: &mut Layer,
+                   record: &Record,
+                   z: (f64, f64),
+                   draw: &dyn Fn(&mut Layer) -> bool,
+                   mut props: serde_json::Map<String, serde_json::Value>|
+     -> bool {
         let first = layer.indices.len() as u32;
-        if !push_prism(layer, prism) {
+        if !draw(layer) {
             return false;
         }
         next_id += 1;
@@ -760,8 +1113,8 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         if let Some(level) = record.story.and_then(|s| names.get(&s)) {
             props.insert("level".into(), level.clone().into());
         }
-        props.insert("Bottom elevation".into(), format!("{:.0} mm", prism.z.0 * 1000.0).into());
-        props.insert("Top elevation".into(), format!("{:.0} mm", prism.z.1 * 1000.0).into());
+        props.insert("Bottom elevation".into(), format!("{:.0} mm", z.0 * 1000.0).into());
+        props.insert("Top elevation".into(), format!("{:.0} mm", z.1 * 1000.0).into());
         layer.props.push((next_id, serde_json::Value::Object(props).to_string()));
         true
     };
@@ -803,7 +1156,10 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
             None => "not linked".to_string(),
         };
         props.insert("Top".into(), top.into());
-        let drawn = footprint.is_some_and(|contours| add(&mut walls, record, &Prism { contours, z }, props));
+        let drawn = footprint.is_some_and(|contours| {
+            let prism = Prism { contours, z };
+            add(&mut walls, record, z, &|layer| push_prism(layer, &prism), props)
+        });
         if drawn {
             stats.walls += 1;
             stats.walls_polygon += usize::from(has_polygon);
@@ -820,7 +1176,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
             let mut props = serde_json::Map::new();
             props.insert("Name".into(), "Slab".into());
             props.insert("category".into(), "Slab".into());
-            add(&mut slabs, record, &prism, props)
+            add(&mut slabs, record, prism.z, &|layer| push_prism(layer, &prism), props)
         });
         if drawn {
             stats.slabs += 1;
@@ -829,12 +1185,91 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         }
     }
 
-    if stats.walls + stats.slabs == 0 {
+    // §8.5: columns, vertical prisms of their section, with heights as walls (§8.3)
+    stats.columns_skipped = records.columns_too_large;
+    for record in &records.columns {
+        let Some(f) = column_fields(&record.data) else {
+            stats.columns_skipped += 1;
+            continue;
+        };
+        let section = match section_of(&records, record.segment) {
+            Ok(section) => section,
+            Err(why) => {
+                *(if matches!(why, NoSection::Profile) { &mut stats.columns_profile } else { &mut stats.columns_no_section }) += 1;
+                stats.columns_skipped += 1;
+                continue;
+            }
+        };
+        let linked = record
+            .top_link
+            .and_then(|link| records.top_links.get(&link))
+            .and_then(|targets| targets.iter().find_map(|t| Some((t, *level_of.get(t)?))));
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let bottom = e + f.bottom_offset;
+        let top = linked.map_or(bottom + f.height, |(_, level)| level + f.top_offset);
+        let footprint = column_footprint(&f, section);
+        let drawn = top > bottom
+            && footprint.is_some_and(|contour| {
+                let prism = Prism { contours: vec![contour], z: (bottom, top) };
+                let mut props = serde_json::Map::new();
+                props.insert("Name".into(), (if f.id.is_empty() { "Column" } else { &f.id }).into());
+                props.insert("category".into(), "Column".into());
+                props.insert("Section".into(), section_text(section).into());
+                let link = match linked {
+                    Some((story, _)) => format!("linked to {}", names.get(story).map_or("the story above the top story", String::as_str)),
+                    None => "not linked".to_string(),
+                };
+                props.insert("Top".into(), link.into());
+                add(&mut columns, record, (bottom, top), &|layer| push_prism(layer, &prism), props)
+            });
+        if drawn {
+            stats.columns.push(ColumnOut { name: f.id, center: f.center, anchor: f.anchor, section, z: (bottom, top), linked: linked.is_some() });
+        } else {
+            stats.columns_skipped += 1;
+        }
+    }
+
+    // §8.6: beams, from their top along the axis down by their height
+    stats.beams_skipped = records.beams_too_large;
+    for record in &records.beams {
+        let Some(f) = beam_fields(&record.data) else {
+            stats.beams_skipped += 1;
+            continue;
+        };
+        let section = match section_of(&records, record.segment) {
+            Ok(section) => section,
+            Err(why) => {
+                *(if matches!(why, NoSection::Profile) { &mut stats.beams_profile } else { &mut stats.beams_no_section }) += 1;
+                stats.beams_skipped += 1;
+                continue;
+            }
+        };
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let drawn = beam_ends(&f, e, section).is_some_and(|ends| {
+            let z = ends.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[2]), hi.max(p[2])));
+            let mut props = serde_json::Map::new();
+            props.insert("Name".into(), (if f.id.is_empty() { "Beam" } else { &f.id }).into());
+            props.insert("category".into(), "Beam".into());
+            props.insert("Section".into(), section_text(section).into());
+            if f.top.0 != f.top.1 {
+                props.insert("Slope".into(), format!("{:.0} mm over the beam", (f.top.1 - f.top.0) * 1000.0).into());
+            }
+            add(&mut beams, record, z, &|layer| push_hull(layer, &ends), props)
+        });
+        if drawn {
+            let [x1, y1, x2, y2] = f.line;
+            stats.beams.push(BeamOut { name: f.id, start: [x1, y1], end: [x2, y2], section, top: (e + f.top.0, e + f.top.1) });
+        } else {
+            stats.beams_skipped += 1;
+        }
+    }
+
+    if stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() == 0 {
         // §10: Archicad 17 to 24 share the container but not the records
         return Err(format!(
-            "Archicad: no walls or slabs found ({} walls and {} slabs skipped). This reader supports Archicad 25 to 29; \
-             projects from Archicad 17 to 24 are not supported yet.",
-            stats.walls_skipped, stats.slabs_skipped
+            "Archicad: no walls, slabs, columns or beams found ({} walls, {} slabs, {} columns and {} beams skipped). \
+             This reader supports Archicad 25 to 29; projects from Archicad 17 to 24 are not supported yet.",
+            stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped
         ));
     }
 
@@ -848,7 +1283,12 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
                 stats.walls_stored_heights, stats.walls_linked, stats.walls_unlinked
             ),
         ),
-        ("Archicad elements not read yet".into(), "Columns, beams, roofs, openings, meshes, morphs and library objects".into()),
+        ("Archicad columns".into(), skipped_text(stats.columns.len(), stats.columns_skipped, stats.columns_profile, stats.columns_no_section)),
+        ("Archicad beams".into(), skipped_text(stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.beams_no_section)),
+        (
+            "Archicad elements not read yet".into(),
+            "Roofs, openings, meshes, morphs, library objects, and columns and beams with a profile section".into(),
+        ),
     ];
     if records.damaged > 0 {
         info.push(("Archicad damaged blocks".into(), records.damaged.to_string()));
@@ -858,8 +1298,22 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
+}
+
+/// "4 read, 2 skipped (1 with a profile section, 1 without a section)".
+fn skipped_text(read: usize, skipped: usize, profile: usize, no_section: usize) -> String {
+    let mut out = format!("{read} read, {skipped} skipped");
+    let why: Vec<String> = [(profile, "with a profile section"), (no_section, "without a section")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    if !why.is_empty() {
+        out += &format!(" ({})", why.join(", "));
+    }
+    out
 }
 
 /// The signed area of a contour (positive: counter-clockwise).
@@ -954,8 +1408,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    /// The folder with the sample projects `CH04_Part2_Walls.pln` (Archicad 25) and `DEMO.pln`
-    /// (Archicad 26) of PacktPublishing/A-BIM-Professionals-Guide-to-Learning-Archicad (MIT), from
+    /// The folder with the sample projects `CH04_Part2_Walls.pln`, `CH05_Result.pln` (Archicad 25)
+    /// and `DEMO.pln` (Archicad 26) of PacktPublishing/A-BIM-Professionals-Guide-to-Learning-Archicad (MIT), from
     /// `ARCHICAD_SAMPLES`. The samples are not in the repository; without it the tests that need
     /// them pass without checking anything.
     fn sample(name: &str) -> Option<PathBuf> {
@@ -1029,6 +1483,8 @@ mod tests {
         assert!(near(b.min[0], 1.011) && near(b.max[0], 11.011) && near(b.min[1], 1.441) && near(b.max[1], 12.441), "{b:?}");
         assert!(near(b.min[2], -0.2), "{b:?}");
         check_walls(&stats, &model, 16, 4, 9.0, -0.2);
+        // §11 (v0.3): no columns or beams
+        assert_eq!((stats.columns.len(), stats.columns_skipped, stats.beams.len(), stats.beams_skipped), (0, 0, 0, 0));
         // the walls are on their stories, for the explorer and the exploded view
         assert!(model.props.values().filter(|p| p.contains("\"category\":\"Wall\"")).all(|p| p.contains("\"level\":")));
         assert_eq!(model.layers.iter().map(|l| l.elements.len()).sum::<usize>(), 23);
@@ -1046,7 +1502,60 @@ mod tests {
         assert!(near(b.min[0], 1.412) && near(b.max[0], 11.429) && near(b.min[1], 1.076) && near(b.max[1], 12.698), "{b:?}");
         assert!(near(b.min[2], -0.31), "{b:?}");
         check_walls(&stats, &model, 32, 24, 7.588, -0.272);
+        // §11 (v0.3): two round columns, linked; the four beams have a profile section
+        check_columns(&stats, &[("C 0.01", [11.102, 12.373]), ("C 0.02", [11.102, 6.023])], (-0.25, 2.78));
+        assert_eq!((stats.beams.len(), stats.beams_skipped, stats.beams_profile), (0, 4, 4));
+        assert_eq!(model.layers.iter().find(|l| l.name == "Columns").map(|l| l.elements.len()), Some(2));
         assert!(model.props.values().any(|p| p.contains("\"Name\":\"") && p.contains("\"category\":\"Wall\"")));
+    }
+
+    /// Round columns of diameter 0.2, linked, with these middles, from `z.0` to `z.1` (§11 v0.3).
+    fn check_columns(stats: &Stats, expected: &[(&str, [f64; 2])], z: (f64, f64)) {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let mut columns = stats.columns.clone();
+        columns.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(columns.len(), expected.len(), "{columns:?}");
+        assert_eq!(stats.columns_skipped, 0);
+        for (c, (name, center)) in columns.iter().zip(expected) {
+            assert_eq!(&c.name, name);
+            assert!(near(c.center[0], center[0]) && near(c.center[1], center[1]), "{c:?}");
+            assert!(matches!(c.section, Section::Round(b, d) if near(b, 0.2) && near(d, 0.2)), "{c:?}");
+            assert!(near(c.z.0, z.0) && near(c.z.1, z.1) && c.linked, "{c:?}");
+        }
+    }
+
+    /// The specification's values (§11 v0.3) for `CH05_Result.pln`: two round columns and four
+    /// rectangular beams.
+    #[test]
+    fn sample_ch05_columns_and_beams_archicad_25() {
+        let Some((stats, model)) = open("CH05_Result.pln") else { return };
+        check_columns(&stats, &[("CRE - 001", [10.721, 5.731]), ("CRE - 002", [10.721, 12.151])], (0.0, 2.8));
+        // the anchor of the first lies 0.1 left of and above its middle
+        let first = stats.columns.iter().find(|c| c.name == "CRE - 001").unwrap();
+        assert!((first.anchor[0] - 10.621).abs() < 1e-3 && (first.anchor[1] - 5.831).abs() < 1e-3, "{first:?}");
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let mut beams = stats.beams.clone();
+        beams.sort_by(|a, b| a.name.cmp(&b.name));
+        let expected = [
+            ("BMR - 001", [10.721, 5.731], [6.621, 5.731], 0.2, 0.35, 2.8),
+            ("BMR - 002", [10.721, 5.731], [10.721, 12.151], 0.2, 0.35, 2.8),
+            ("BMR - 003", [10.721, 12.151], [6.621, 12.151], 0.2, 0.35, 2.8),
+            ("BMR - 004", [6.621, 5.730], [1.186, 5.730], 0.227, 0.38, 2.85),
+        ];
+        assert_eq!((beams.len(), stats.beams_skipped), (4, 0), "{beams:?}");
+        for (beam, (name, start, end, b, h, top)) in beams.iter().zip(expected) {
+            assert_eq!(beam.name, name);
+            assert!(near(beam.start[0], start[0]) && near(beam.start[1], start[1]), "{beam:?}");
+            assert!(near(beam.end[0], end[0]) && near(beam.end[1], end[1]), "{beam:?}");
+            assert!(matches!(beam.section, Section::Rect(w, d) if near(w, b) && near(d, h)), "{beam:?}");
+            assert!(near(beam.top.0, top) && near(beam.top.1, top), "{beam:?}");
+        }
+        // the beams in the model: from their top down by their height, one element each
+        let layer = model.layers.iter().find(|l| l.name == "Beams").expect("beams");
+        assert_eq!(layer.elements.len(), 4);
+        let z: Vec<f32> = layer.positions.chunks_exact(3).map(|p| p[2]).collect();
+        let (low, high) = z.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
+        assert!((low - 2.45).abs() < 1e-3 && (high - 2.85).abs() < 1e-3, "{low} {high}");
     }
 
     #[test]
@@ -1264,7 +1773,12 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        let file = synthetic_file();
+        for file in [synthetic_file(), columns_and_beams_file()] {
+            garbage_rounds(&file);
+        }
+    }
+
+    fn garbage_rounds(file: &[u8]) {
         for cut in 0..file.len() {
             let _ = read_bytes(&file[..cut]).and_then(convert);
         }
@@ -1288,7 +1802,7 @@ mod tests {
                 garbage[32..48].copy_from_slice(&GROUP);
             }
             let _ = read_bytes(&garbage).and_then(convert);
-            let mut changed = file.clone();
+            let mut changed = file.to_vec();
             for _ in 0..(1 + round % 20) {
                 let at = 32 + (next() as usize) % (file.len() - 32);
                 changed[at] = next() as u8;
@@ -1353,6 +1867,180 @@ mod tests {
         larger.push(0);
         assert!(find_polygon(&larger).is_none());
         assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+    }
+
+    /// Column data (§8.5): the axis at 0 (anchor, bottom offset, anchor, 3 m) and the middle of
+    /// the section, the ID string at 100, then k = 0, A, H, C, 0, the anchor, the slope (vertical)
+    /// and the rotation.
+    fn column_data(id: &str, center: [f64; 2], anchor: [f64; 2], rotation: f64, [a, h, c]: [f64; 3]) -> Vec<u8> {
+        let mut data: Vec<u8> = [anchor[0], anchor[1], c, anchor[0], anchor[1], 3.0, center[0], center[1]].iter().flat_map(|v| v.to_le_bytes()).collect();
+        data.resize(98, 0);
+        data.extend([1, 0]);
+        data.extend((id.len() as u32).to_le_bytes());
+        data.extend(id.encode_utf16().flat_map(u16::to_le_bytes));
+        let q = data.len();
+        data.extend(0u32.to_le_bytes());
+        data.extend([a, h, c, 0.0, anchor[0], anchor[1]].iter().flat_map(|v| v.to_le_bytes()));
+        data.resize(q + 95, 0);
+        data[q + 79..q + 87].copy_from_slice(&std::f64::consts::FRAC_PI_2.to_le_bytes());
+        data[q + 87..q + 95].copy_from_slice(&rotation.to_le_bytes());
+        data
+    }
+
+    /// Beam data (§8.6): the axis with its heights at 0 if given, the ID string at 100, then
+    /// k = 0, s, zr and the axis.
+    fn beam_data(id: &str, offset: f64, zr: f64, line: [f64; 4], heights: Option<(f64, f64)>) -> Vec<u8> {
+        let mut data = Vec::new();
+        if let Some((z1, z2)) = heights {
+            data.extend([line[0], line[1], z1, line[2], line[3], z2].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        data.resize(98, 0);
+        data.extend([1, 0]);
+        data.extend((id.len() as u32).to_le_bytes());
+        data.extend(id.encode_utf16().flat_map(u16::to_le_bytes));
+        data.push(0);
+        data.extend([offset, zr, line[0], line[1], line[2], line[3]].iter().flat_map(|v| v.to_le_bytes()));
+        data
+    }
+
+    /// Section data (§8.7): b and d at 40 (0x82) or 52 (0x83).
+    fn section_data(kind: u8, b: f64, d: f64) -> Vec<u8> {
+        let mut data = vec![kind];
+        data.resize(if kind == 0x82 { 40 } else { 52 }, 0);
+        data.extend(b.to_le_bytes());
+        data.extend(d.to_le_bytes());
+        data
+    }
+
+    /// A project of columns and beams on the story "Hall" (4.5 m), all 0x84 blocks in the outer
+    /// layer:
+    /// - K1: rectangular 0.4 × 0.2, turned 30°, middle (3, 3), anchor (2.9, 3.1), top linked to the
+    ///   story above the top story (7.5 m) with A = -0.3 (its H of 1 m is out of date);
+    /// - K2: round ⌀ 0.3, middle (6, 3), not linked: from C = 0.1 up H = 2;
+    /// - B1: 0.2 × 0.4 from (1, 6) to (5, 6), s = 0.1, its axis from 0.5 to 1.0 above the story;
+    /// - B2: the same section from (1, 8) to (1, 10), no axis: horizontal at zr = 0.8;
+    /// - B3: a profile section, B4: no segment.
+    fn columns_and_beams_file() -> Vec<u8> {
+        let id = |k: u8| [k; 16];
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block(id(0x21), 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+            block(id(0x22), 0x84, &record(STORY_LEVEL, &7.5f64.to_le_bytes(), &link(other, TOP_STORY)), 0),
+            block(LINKED_TO_TOP, 0x84, &record(LINK, &[0; 16], &links_of(&[(0x12, LINK_STORY, TOP_STORY)])), 0),
+        ];
+        // sections S1 (K1), S2 (K2), S3 (B1, B2), S4 (B3, a profile); a segment per element
+        for (section, class, data) in [
+            (id(0x31), SECTION_RECT, section_data(0x82, 0.4, 0.2)),
+            (id(0x32), SECTION_ROUND, section_data(0x83, 0.3, 0.3)),
+            (id(0x33), SECTION_RECT, section_data(0x83, 0.2, 0.4)),
+            (id(0x34), SECTION_PROFILE, vec![0; 8]),
+        ] {
+            blocks.push(block(section, 0x84, &record(class, &data, &[0, 0, 0]), 0));
+        }
+        for (segment, class, section) in [
+            (id(0x41), COLUMN_SEGMENT, id(0x31)),
+            (id(0x42), COLUMN_SEGMENT, id(0x32)),
+            (id(0x43), BEAM_SEGMENT, id(0x33)),
+            (id(0x44), BEAM_SEGMENT, id(0x33)),
+            (id(0x45), BEAM_SEGMENT, id(0x34)),
+        ] {
+            blocks.push(block(segment, 0x84, &record(class, &[0; 8], &links_of(&[(0x12, SECTION_LINK, section)])), 0));
+        }
+        let element = |class: Guid, data: Vec<u8>, segment: Option<Guid>, top: Option<Guid>| {
+            let mut items = vec![(0x12, ON_STORY, STORY_ID)];
+            let segment_link = if class == COLUMN { COLUMN_SEGMENT_LINK } else { BEAM_SEGMENT_LINK };
+            items.extend(segment.map(|s| (0x12, segment_link, s)));
+            items.extend(top.map(|t| (0x12, COLUMN_TOP_LINK, t)));
+            record(class, &data, &links_of(&items))
+        };
+        let k1 = column_data("K1", [3.0, 3.0], [2.9, 3.1], std::f64::consts::FRAC_PI_6, [-0.3, 1.0, 0.0]);
+        let k2 = column_data("K2", [6.0, 3.0], [6.0, 3.0], 0.0, [0.0, 2.0, 0.1]);
+        blocks.push(block(id(0x51), 0x84, &element(COLUMN, k1, Some(id(0x41)), Some(LINKED_TO_TOP)), 0));
+        blocks.push(block(id(0x52), 0x84, &element(COLUMN, k2, Some(id(0x42)), None), 0));
+        let b1 = beam_data("B1", 0.1, 0.5, [1.0, 6.0, 5.0, 6.0], Some((0.5, 1.0)));
+        let b2 = beam_data("B2", 0.0, 0.8, [1.0, 8.0, 1.0, 10.0], None);
+        let b3 = beam_data("B3", 0.0, 0.8, [1.0, 11.0, 4.0, 11.0], None);
+        let b4 = beam_data("B4", 0.0, 0.8, [1.0, 12.0, 4.0, 12.0], None);
+        for (object, data, segment) in [(id(0x61), b1, Some(id(0x43))), (id(0x62), b2, Some(id(0x44))), (id(0x63), b3, Some(id(0x45))), (id(0x64), b4, None)] {
+            blocks.push(block(object, 0x84, &element(BEAM, data, segment, None), 0));
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    /// The corners (x, y) and the bottom and top of an element of a layer.
+    fn element_shape(layer: &Layer, element: usize) -> (Vec<[f32; 2]>, (f32, f32)) {
+        let (_, first, count) = layer.elements[element];
+        let mut xy: Vec<[f32; 2]> = Vec::new();
+        let mut z = (f32::INFINITY, f32::NEG_INFINITY);
+        for &i in &layer.indices[first as usize..(first + count) as usize] {
+            let p = &layer.positions[3 * i as usize..3 * i as usize + 3];
+            if !xy.iter().any(|q| (q[0] - p[0]).abs() < 1e-5 && (q[1] - p[1]).abs() < 1e-5) {
+                xy.push([p[0], p[1]]);
+            }
+            z = (z.0.min(p[2]), z.1.max(p[2]));
+        }
+        (xy, z)
+    }
+
+    #[test]
+    fn reads_columns_and_beams() {
+        let records = read_bytes(&columns_and_beams_file()).expect("container");
+        assert_eq!((records.columns.len(), records.beams.len(), records.segments.len(), records.sections.len()), (2, 4, 5, 4));
+        let (loaded, stats) = convert(records).expect("elements");
+        assert_eq!((stats.columns.len(), stats.columns_skipped), (2, 0));
+        // B3 has a profile section, B4 no segment
+        assert_eq!((stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.beams_no_section), (2, 2, 1, 1));
+        let names: Vec<&str> = loaded.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Columns", "Beams"]);
+        let (columns, beams) = (&loaded.layers[0], &loaded.layers[1]);
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad beams" && v == "2 read, 2 skipped (1 with a profile section, 1 without a section)"));
+
+        // K1: the rectangle turned 30° around its middle, not around the anchor; linked: 7.5 - 0.3
+        let (corners, z) = element_shape(columns, 0);
+        let (s, c) = std::f64::consts::FRAC_PI_6.sin_cos();
+        for (a, b) in [(-0.2, -0.1), (0.2, -0.1), (0.2, 0.1), (-0.2, 0.1)] {
+            let want = [3.0 + c * a - s * b, 3.0 + s * a + c * b];
+            assert!(corners.iter().any(|p| (p[0] as f64 - want[0]).abs() < 1e-5 && (p[1] as f64 - want[1]).abs() < 1e-5), "{want:?} in {corners:?}");
+        }
+        assert_eq!((corners.len(), z), (4, (4.5, 7.2)));
+        assert!(stats.columns[0].linked && !stats.columns[1].linked);
+        assert!(columns.props[0].1.contains("\"Section\":\"400 × 200 mm\"") && columns.props[0].1.contains("linked to the story above"));
+        // K2: a circle of radius 0.15 around (6, 3); not linked: 4.5 + 0.1 up 2 m
+        let (points, z) = element_shape(columns, 1);
+        assert!(points.len() >= 16 && points.iter().all(|p| ((p[0] - 6.0).hypot(p[1] - 3.0) - 0.15).abs() < 1e-5), "{points:?}");
+        assert_eq!(z, (4.6, 6.6));
+        assert!(columns.props[1].1.contains("\"Section\":\"⌀ 300 mm\"") && columns.props[1].1.contains("\"Top\":\"not linked\""));
+
+        // B1: s = 0.1 to the left of its axis, 0.2 wide; its top from 4.5 + 0.5 to 4.5 + 1.0, 0.4 high
+        let (corners, z) = element_shape(beams, 0);
+        assert_eq!(beams.triangle_count(), 2 * 12);
+        let ys: Vec<f32> = corners.iter().map(|p| p[1]).collect();
+        assert!(ys.iter().all(|y| (y - 6.0).abs() < 1e-5 || (y - 6.2).abs() < 1e-5), "{ys:?}");
+        assert_eq!(z, (4.6, 5.5));
+        let end_z = |x: f32| {
+            let (_, first, count) = beams.elements[0];
+            beams.indices[first as usize..(first + count) as usize]
+                .iter()
+                .map(|&i| &beams.positions[3 * i as usize..3 * i as usize + 3])
+                .filter(|p| (p[0] - x).abs() < 1e-5)
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), p| (a.min(p[2]), b.max(p[2])))
+        };
+        assert_eq!((end_z(1.0), end_z(5.0)), ((4.6, 5.0), (5.1, 5.5)));
+        assert_eq!(stats.beams[0].top, (5.0, 5.5));
+        // B2: no axis with heights: horizontal at 4.5 + 0.8, centred on its axis
+        let (corners, z) = element_shape(beams, 1);
+        assert!(corners.iter().all(|p| (p[0] - 0.9).abs() < 1e-5 || (p[0] - 1.1).abs() < 1e-5), "{corners:?}");
+        assert!((z.0 - 4.9).abs() < 1e-5 && (z.1 - 5.3).abs() < 1e-5, "{z:?}");
+        // every face of the bodies points out: the cut fill takes them as closed
+        assert!(!columns.solid_indices().is_empty() && beams.solid_indices().len() == beams.indices.len());
     }
 
     #[test]

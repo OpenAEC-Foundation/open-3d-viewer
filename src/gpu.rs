@@ -3,10 +3,12 @@
 //! wgpu takes Vulkan on Windows when the driver offers it. Intel's Vulkan swapchain shows the
 //! whole window white for single frames while it redraws (issue #28, gfx-rs/wgpu#3452), and DXGI
 //! swapchains behave better on every vendor (gfx-rs/wgpu#2719), so on Windows the window draws
-//! with DirectX 12 when the GPU it gets is an Intel one (asked from DXGI, see `dxgi_gpu`).
+//! with DirectX 12 when the GPU it gets is an Intel one (asked from DXGI, see `dxgi_gpu`), and
+//! with OpenGL on Intel GPUs that wgpu's DX12 backend turns down (Haswell and Broadwell lack
+//! resource binding tier 2), rather than on WARP, the CPU.
 //!
 //! To try another combination: `--gpu-backend dx12|vulkan|gl` or the variable `WGPU_BACKEND`,
-//! and `--present-mode fifo|mailbox|immediate|...` or `ICED_PRESENT_MODE` (both read by
+//! and `--present-mode vsync|no_vsync|fifo|mailbox` or `ICED_PRESENT_MODE` (both read by
 //! iced and wgpu). What the window got is written to `gpu.log` in the settings folder.
 
 use std::io::Write;
@@ -16,8 +18,10 @@ use web_time::Instant;
 
 /// The values of `--gpu-backend`, a comma list as `WGPU_BACKEND` takes it.
 const BACKENDS: [&str; 7] = ["dx12", "d3d12", "vulkan", "vk", "gl", "gles", "opengl"];
-/// The values of `--present-mode`, as `ICED_PRESENT_MODE` takes them.
-const PRESENT_MODES: [&str; 6] = ["vsync", "no_vsync", "fifo", "fifo_relaxed", "mailbox", "immediate"];
+/// The values of `--present-mode`, as `ICED_PRESENT_MODE` takes them. A mode the surface does
+/// not offer stops the app at start, so only these: the automatic ones, Fifo (every backend)
+/// and Mailbox (DirectX 12 and Vulkan; OpenGL on Windows has only Fifo and Immediate).
+const PRESENT_MODES: [&str; 4] = ["vsync", "no_vsync", "fifo", "mailbox"];
 /// Intel's PCI vendor id.
 #[cfg(windows)]
 const INTEL: u32 = 0x8086;
@@ -62,8 +66,8 @@ pub fn configure(backend: Option<String>, present_mode: Option<String>, dir: Opt
         choice = "wgpu default";
         #[cfg(windows)]
         if gpu.as_ref().is_some_and(|g| g.vendor == INTEL) {
-            std::env::set_var("WGPU_BACKEND", "dx12");
-            choice = "DirectX 12 for Intel, whose Vulkan swapchain flickers";
+            std::env::set_var("WGPU_BACKEND", "dx12,gl");
+            choice = "DirectX 12 for Intel, whose Vulkan swapchain flickers; OpenGL where DX12 turns the GPU down";
         }
     }
     install_log(dir);
@@ -190,6 +194,9 @@ mod tests {
         assert!(parse_backend("").is_err());
         assert_eq!(parse_present_mode("Mailbox").as_deref(), Ok("mailbox"));
         assert!(parse_present_mode("adaptive").is_err());
+        // not offered by every surface; asked for anyway, it panics at start
+        assert!(parse_present_mode("fifo_relaxed").is_err());
+        assert!(parse_present_mode("immediate").is_err());
         // the same names as wgpu's own parser
         assert_eq!(wgpu::Backends::from_comma_list("vulkan, gl"), wgpu::Backends::VULKAN | wgpu::Backends::GL);
     }

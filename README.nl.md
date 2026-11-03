@@ -167,16 +167,16 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Grafische kaart
 
-Het venster tekent met wgpu. Op Windows gebruikt het DirectX 12 als de grafische kaart van Intel is, omdat de Vulkan-driver van Intel het hele venster wit kan laten flitsen terwijl je draait ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)); andere kaarten houden de keuze van wgpu. Bij elke start schrijft het venster wat het kreeg (kaart, driver, backend, oppervlakformaat) naar `%APPDATA%\OpenAEC\Open 3D Viewer Studio\gpu.log`.
+Het venster tekent met wgpu. Op Windows gebruikt het DirectX 12 als de grafische kaart van Intel is, omdat de Vulkan-driver van Intel het hele venster wit kan laten flitsen terwijl je draait ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)), en OpenGL op Intel-chips die te oud zijn voor DirectX 12 in wgpu (Haswell, Broadwell); andere kaarten houden de keuze van wgpu. Bij elke start schrijft het venster wat het kreeg (kaart, driver, backend, oppervlakformaat) naar `gpu.log` in de instellingenmap: `%APPDATA%\OpenAEC\Open 3D Viewer Studio` op Windows, `~/.config/OpenAEC/Open 3D Viewer Studio` op Linux en macOS.
 
 Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere backend of presentatiemodus, en meld in een issue welke helpt, samen met `gpu.log`:
 
-- **Eenmalig:** `open-3d-viewer.exe --gpu-backend vulkan` (of `dx12`, `gl`) en `--present-mode mailbox` (of `fifo`, `fifo_relaxed`, `immediate`, `vsync`, `no_vsync`).
+- **Eenmalig:** `open-3d-viewer.exe --gpu-backend vulkan` (of `dx12`, `gl`) en `--present-mode mailbox` (of `fifo`, `vsync`, `no_vsync`). Mailbox werkt met DirectX 12 en Vulkan, niet met OpenGL.
 - **Altijd:** zet de gebruikersvariabele `WGPU_BACKEND` of `ICED_PRESENT_MODE` op een van deze waarden, bijvoorbeeld `setx WGPU_BACKEND vulkan` in een opdrachtprompt, en start de viewer opnieuw.
 
 ## Testen en betrouwbaarheid
 
-- **120 unittests** in `src/` (119 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **121 unittests** in `src/` (120 draaien, 1 vraagt een lokaal voorbeeld), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 42 voor de lezers, 14 voor de app, 11 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py <Blueprint> --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.

@@ -3,7 +3,7 @@
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--no-remote]
-//!                  [--gpu-backend dx12|vulkan|gl] [--present-mode fifo|mailbox|immediate|...]
+//!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--recent PATH]...

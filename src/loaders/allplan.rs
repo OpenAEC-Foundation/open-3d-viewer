@@ -3706,12 +3706,12 @@ mod tests {
                 *codes.entry(format!("{group:02X} {subtype:02X}")).or_insert(0usize) += 1;
             }
         }
-        // §7.2/§7.4 boxes: the drawing's own visible bodies, without macro bodies (v0.3).
+        // §7.2/§7.4 boxes: the drawing's own visible bodies, without macro bodies (v0.3) and 2D lines (v0.6).
         let solid_bounds = build(&drawing, None).ok().map(|loaded| {
             let positions: Vec<f32> = loaded
                 .layers
                 .iter()
-                .filter(|l| !l.hidden && l.name != Category::Macros.name())
+                .filter(|l| !l.hidden && l.name != Category::Macros.name() && l.name != "2D lines")
                 .flat_map(|l| l.positions.iter().copied())
                 .collect();
             bounds(&positions)

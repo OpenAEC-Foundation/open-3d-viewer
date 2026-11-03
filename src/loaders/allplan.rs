@@ -1,6 +1,6 @@
 //! Allplan drawing files (`.ndw`, German "Teilbild"): the 3D bodies of one drawing file.
 //!
-//! Written from the clean-room specification "Allplan-tekenbestand (.ndw) v0.2.1" only. A drawing
+//! Written from the clean-room specification "Allplan-tekenbestand (.ndw) v0.3" only. A drawing
 //! file is a 12-byte header and pages of 32760 bytes; the element stream runs from the third page
 //! to the end of the last page and holds padding, attribute blocks and element records (§2, §3).
 //! Records of class 0xC6 are 3D bodies (§5): a prism (a bottom and a top ring) or an explicit
@@ -8,10 +8,11 @@
 //! the viewer shows them in metres without moving them, so drawing files of one project line up.
 //! Each body links by key to its element record (class 0xEF or 0x6F, §8) for its name, element
 //! type and quantities; visible bodies go in a layer per category (walls, slabs, ...), auxiliary
-//! bodies (openings, rooms) in one layer that starts hidden.
+//! bodies (openings, rooms) in one layer that starts hidden. Macros (§9: furniture, windows,
+//! doors, railings) are read once per definition (0x5A, the bodies of its 3D representations)
+//! and placed by each placement record (0xEB) with its matrix; a placement is one element.
 //!
-//! Not read yet: macros (3D furniture), colours and materials, 2D elements, project folders
-//! and layouts (`.npl`).
+//! Not read yet: colours and materials, 2D elements, project folders and layouts (`.npl`).
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
@@ -48,6 +49,17 @@ const HEADER: usize = 40;
 const MM: f64 = 0.001;
 /// Form of clip and view volumes, not a building part (§5.5).
 const FORM_CLIP: u16 = 0x0701;
+/// Form of an open surface (§9.3).
+const FORM_OPEN: u16 = 0x0201;
+/// Colour of the macro bodies (§9.4).
+const MACRO_COLOR: [f32; 3] = [0.78, 0.64, 0.50];
+/// Most triangles all macro placements of one file may add (a small file can place a large
+/// macro many times).
+const MAX_MACRO_TRIANGLES: usize = 4_000_000;
+/// How far into a macro definition the first representation is searched (§9.1).
+const MACRO_SEARCH: usize = 4096;
+/// Start of the nested records in a representation (§9.1).
+const REPRESENTATION_BODY: usize = 216;
 /// Colour of the auxiliary bodies (openings, rooms).
 const AUXILIARY_COLOR: [f32; 3] = [0.60, 0.76, 0.92];
 /// Classes a strictly valid header may have (§3, resync rule).
@@ -65,6 +77,9 @@ struct Drawing {
     bodies: Vec<Body>,
     /// The element records with data that bodies link to (§8).
     elements: Vec<Element>,
+    /// The macro definitions that placements use (§9.1).
+    macros: Vec<Macro>,
+    placements: Vec<Placement>,
     skipped_clip: usize,
     skipped_no_faces: usize,
     skipped_unreadable: usize,
@@ -81,6 +96,8 @@ struct Body {
     record_type: u16,
     form: u16,
     kind: u8,
+    /// Form 0x0201: an open surface (§9.3).
+    open: bool,
     auxiliary: bool,
     key: Key,
     /// Index into [`Drawing::elements`] when the body is linked (§8.1).
@@ -113,10 +130,12 @@ enum Category {
     Foundations,
     Stairs,
     Other,
+    /// The visible bodies of macro placements (§9.4).
+    Macros,
 }
 
 impl Category {
-    const ALL: [Category; 7] = [
+    const ALL: [Category; 8] = [
         Category::Walls,
         Category::Slabs,
         Category::Columns,
@@ -124,6 +143,7 @@ impl Category {
         Category::Foundations,
         Category::Stairs,
         Category::Other,
+        Category::Macros,
     ];
 
     fn name(self) -> &'static str {
@@ -135,6 +155,7 @@ impl Category {
             Category::Foundations => "Foundations",
             Category::Stairs => "Stairs",
             Category::Other => "Other",
+            Category::Macros => "Macros",
         }
     }
 
@@ -148,6 +169,7 @@ impl Category {
             Category::Foundations => [0.52, 0.52, 0.50],
             Category::Stairs => [0.80, 0.70, 0.55],
             Category::Other => DEFAULT_COLOR,
+            Category::Macros => MACRO_COLOR,
         }
     }
 }
@@ -194,16 +216,210 @@ fn decode_element(r: &[u8], offset: usize) -> Option<Element> {
     if q + 144 > r.len() || r[q + 8..q + 12] != *b"||||" {
         return None;
     }
-    let units: Vec<u16> = (0..36).map_while(|i| u16_at(r, q + 32 + 2 * i)).take_while(|&u| u != 0).collect();
-    let name = String::from_utf16_lossy(&units);
-    let name = name.trim_end_matches([' ', '\0']);
-    let name = name.strip_suffix('\\').unwrap_or(name).to_string();
+    let name = utf16_name(r, q + 32, 36);
     let mut quantities = [0.0; 5];
     for (i, value) in quantities.iter_mut().enumerate() {
         *value = f64_at(r, q + 104 + 8 * i)?;
     }
     let type_code = (q + 284 <= r.len() && matches!(r[q + 280], 0x81 | 0x41)).then(|| (r[q + 282], r[q + 283]));
     Some(Element { offset, class: r[4], name, quantities, type_code })
+}
+
+/// A name of up to `units` UTF-16 units at `at`: cut at the first NUL, trailing spaces removed,
+/// and a trailing `\` (catalogue name) removed (§8.2, §9.1, §9.2).
+fn utf16_name(r: &[u8], at: usize, units: usize) -> String {
+    let units: Vec<u16> = (0..units).map_while(|i| u16_at(r, at + 2 * i)).take_while(|&u| u != 0).collect();
+    let name = String::from_utf16_lossy(&units);
+    let name = name.trim_end_matches(' ');
+    name.strip_suffix('\\').unwrap_or(name).to_string()
+}
+
+/// A macro definition (0x5A, §9.1) with the 3D bodies of its 3D representations, in definition
+/// coordinates; read once, however often it is placed.
+#[derive(Debug)]
+struct Macro {
+    number: u32,
+    name: String,
+    bodies: Vec<Body>,
+    triangles: usize,
+}
+
+/// What became of a macro placement (§9.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placed {
+    /// Index into [`Drawing::macros`].
+    Resolved(usize),
+    /// The macro has no shown 3D body.
+    Without3d,
+    UnknownMacro,
+    /// Too short for its matrix, or a matrix that is not finite.
+    Unreadable,
+    /// Left out: the file's macro placements reached [`MAX_MACRO_TRIANGLES`].
+    OverLimit,
+}
+
+/// A macro placement (0xEB, §9.2).
+#[derive(Debug)]
+struct Placement {
+    offset: usize,
+    number: u32,
+    name: String,
+    /// Column-major 3×3 plus translation (§5.2).
+    matrix: [f64; 12],
+    placed: Placed,
+}
+
+/// Reads a placement record (§9.2).
+fn decode_placement(r: &[u8], offset: usize) -> Option<Placement> {
+    let number = u32_at(r, 28)?;
+    let q = HEADER + 16 * usize::from(u16_at(r, 14)?);
+    let name = if r.get(q + 8..q + 12) == Some(b"||||") { utf16_name(r, q + 16, 32) } else { String::new() };
+    let mut placement = Placement { offset, number, name, matrix: [0.0; 12], placed: Placed::Unreadable };
+    if r.len() >= q + 104 {
+        let at = r.len() - 104;
+        let mut matrix = [0.0; 12];
+        for (i, value) in matrix.iter_mut().enumerate() {
+            *value = f64_at(r, at + 8 * i)?;
+        }
+        if matrix.iter().all(|v| v.is_finite()) {
+            placement.matrix = matrix;
+            placement.placed = Placed::UnknownMacro;
+        }
+    }
+    Some(placement)
+}
+
+/// Reads a macro definition (§9.1): its name and the 0xC6 bodies of its 3D representations.
+fn decode_macro(d: &[u8], offset: usize) -> Macro {
+    let number = u32_at(d, 28).unwrap_or(0);
+    let name = if d.get(48..52) == Some(b"||||") { utf16_name(d, 72, 32) } else { String::new() };
+    let mut bodies = Vec::new();
+    let first = (HEADER..)
+        .step_by(8)
+        .take_while(|&o| o < HEADER + MACRO_SEARCH && o + HEADER <= d.len())
+        .find(|&o| d[o + 4] == 0x50 && d[o + 7] & 0xF0 == 0x50);
+    if let Some(first) = first {
+        walk(d, first, |r, step| {
+            if d[r + 4] == 0x50 && d.get(r + 81) == Some(&1) {
+                let representation = &d[r..r + step];
+                if REPRESENTATION_BODY <= representation.len() {
+                    walk(representation, REPRESENTATION_BODY, |b, step| {
+                        if representation[b + 4] == 0xC6 {
+                            if let Decoded::Body(body) = decode_body(&representation[b..b + step], offset + r + b) {
+                                bodies.push(body);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+    let triangles = bodies.iter().map(|b| b.indices.len() / 3).sum();
+    Macro { number, name, bodies, triangles }
+}
+
+/// Walks the records inside a macro definition (`s`, from `start`) by §3 items 1–3 (padding,
+/// attribute blocks, records), calling `record` with the offset and step of each record; stops
+/// at an invalid header. Inside a macro byte 0 is not checked: nested records mostly have its
+/// low bits set (§9.1).
+fn walk(s: &[u8], start: usize, mut record: impl FnMut(usize, usize)) {
+    let mut p = start;
+    while p + 8 <= s.len() {
+        if is_padding(s, p) {
+            p += 8;
+        } else if is_attribute(s, p) {
+            p += 8 + (2 * usize::from(s[p + 2])).div_ceil(8) * 8;
+        } else if let Some(step) = (p + HEADER <= s.len() && s[p + 7] & 0xF0 == 0x50).then(|| step_of(s, p)).flatten() {
+            record(p, step);
+            p += step;
+        } else {
+            break;
+        }
+    }
+}
+
+/// A placement matrix (§9.2), prepared once per placement: points map by the matrix, normals by
+/// its cofactor matrix (det · M⁻ᵀ), and a mirroring matrix turns the triangles round.
+struct Transform {
+    m: [f64; 12],
+    /// Columns of the cofactor matrix, times the sign of the determinant.
+    k: [[f64; 3]; 3],
+    mirror: bool,
+}
+
+impl Transform {
+    fn new(m: &[f64; 12]) -> Self {
+        let c = [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]];
+        let k = [cross(c[1], c[2]), cross(c[2], c[0]), cross(c[0], c[1])];
+        let mirror = dot(c[0], k[0]) < 0.0;
+        let k = if mirror { k.map(|col| col.map(|v| -v)) } else { k };
+        Self { m: *m, k, mirror }
+    }
+
+    fn point(&self, p: &[f64; 3]) -> [f64; 3] {
+        let m = &self.m;
+        [
+            m[0] * p[0] + m[3] * p[1] + m[6] * p[2] + m[9],
+            m[1] * p[0] + m[4] * p[1] + m[7] * p[2] + m[10],
+            m[2] * p[0] + m[5] * p[1] + m[8] * p[2] + m[11],
+        ]
+    }
+
+    fn normal(&self, n: &[f32; 3]) -> [f32; 3] {
+        let k = &self.k;
+        let (x, y, z) = (f64::from(n[0]), f64::from(n[1]), f64::from(n[2]));
+        let t = [
+            k[0][0] * x + k[1][0] * y + k[2][0] * z,
+            k[0][1] * x + k[1][1] * y + k[2][1] * z,
+            k[0][2] * x + k[1][2] * y + k[2][2] * z,
+        ];
+        let length = dot(t, t).sqrt();
+        if length > 0.0 && length.is_finite() { t.map(|v| (v / length) as f32) } else { *n }
+    }
+
+    /// Appends a placed body to a layer (positions to metres).
+    fn append(&self, layer: &mut Layer, body: &Body) -> Result<(), String> {
+        let base = u32::try_from(layer.vertex_count()).map_err(|_| "Allplan: too many vertices")?;
+        u32::try_from(body.positions.len()).ok().and_then(|n| base.checked_add(n)).ok_or("Allplan: too many vertices")?;
+        layer.positions.reserve(3 * body.positions.len());
+        for p in &body.positions {
+            let w = self.point(p);
+            layer.positions.extend_from_slice(&[(w[0] * MM) as f32, (w[1] * MM) as f32, (w[2] * MM) as f32]);
+        }
+        // The vertices of a face share its normal: map each run once.
+        layer.normals.reserve(3 * body.normals.len());
+        let mut last: Option<([f32; 3], [f32; 3])> = None;
+        for n in &body.normals {
+            let mapped = match last {
+                Some((from, to)) if from == *n => to,
+                _ => {
+                    let to = self.normal(n);
+                    last = Some((*n, to));
+                    to
+                }
+            };
+            layer.normals.extend_from_slice(&mapped);
+        }
+        layer.indices.reserve(body.indices.len());
+        for tri in body.indices.chunks_exact(3) {
+            let tri = if self.mirror { [tri[0], tri[2], tri[1]] } else { [tri[0], tri[1], tri[2]] };
+            layer.indices.extend_from_slice(&[base + tri[0], base + tri[1], base + tri[2]]);
+        }
+        Ok(())
+    }
+}
+
+/// A placed macro body in millimetres (tests: extents and orientation).
+#[cfg(test)]
+fn place(body: &Body, m: &[f64; 12]) -> (Vec<[f64; 3]>, Vec<[f32; 3]>, Vec<u32>) {
+    let t = Transform::new(m);
+    let positions = body.positions.iter().map(|p| t.point(p)).collect();
+    let normals = body.normals.iter().map(|n| t.normal(n)).collect();
+    let mut indices = body.indices.clone();
+    if t.mirror {
+        indices.chunks_exact_mut(3).for_each(|tri| tri.swap(1, 2));
+    }
+    (positions, normals, indices)
 }
 
 fn u16_at(d: &[u8], o: usize) -> Option<u16> {
@@ -254,6 +470,7 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     let mut runs = None;
     // Per key the first element record with data (§8.1); u32@24 = 0 is no key.
     let mut by_key: HashMap<Key, usize> = HashMap::new();
+    let mut definitions: HashMap<u32, (usize, usize)> = HashMap::new();
     while p + 8 <= stream.len() {
         if is_padding(stream, p) {
             p += 8;
@@ -270,6 +487,13 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
                         }
                     }
                 }
+                // The first definition per macro number (§9.1); read when a placement needs it.
+                0x5A => {
+                    if let Some(number) = u32_at(stream, p + 28) {
+                        definitions.entry(number).or_insert((p, step));
+                    }
+                }
+                0xEB => drawing.placements.extend(decode_placement(&stream[p..p + step], p)),
                 _ => {}
             }
             p += step;
@@ -285,6 +509,30 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     // Element records may come before or after their body.
     for body in &mut drawing.bodies {
         body.element = if body.key.0 == 0 { None } else { by_key.get(&body.key).copied() };
+    }
+    // Placements may come before or after their definition; each definition is read once.
+    let mut read: HashMap<u32, Option<usize>> = HashMap::new();
+    let mut triangles = 0usize;
+    for placement in &mut drawing.placements {
+        if placement.placed == Placed::Unreadable {
+            continue;
+        }
+        let Some(&(at, step)) = definitions.get(&placement.number) else { continue };
+        let index = *read.entry(placement.number).or_insert_with(|| {
+            let definition = decode_macro(&stream[at..at + step], at);
+            (!definition.bodies.is_empty()).then(|| {
+                drawing.macros.push(definition);
+                drawing.macros.len() - 1
+            })
+        });
+        placement.placed = match index {
+            None => Placed::Without3d,
+            Some(i) if triangles + drawing.macros[i].triangles > MAX_MACRO_TRIANGLES => Placed::OverLimit,
+            Some(i) => {
+                triangles += drawing.macros[i].triangles;
+                Placed::Resolved(i)
+            }
+        };
     }
     Ok(drawing)
 }
@@ -445,8 +693,10 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
     if f == 0 || v == 0 {
         return Some(Decoded::NoFaces);
     }
-    // Kind 0 is a prism of form 0x0301 only (§5.4, v0.2.1); other forms are not known yet.
-    if kind == 0 && (form != 0x0301 || v > 0) {
+    // An open surface (§9.3): explicit faces, drawn as they are, never turned round.
+    let open = form == FORM_OPEN;
+    // Kind 0 is a prism of form 0x0301 (§5.4) or an open surface; other forms are not known yet.
+    if kind == 0 && !(open || form == 0x0301 && v < 0) {
         return None;
     }
     let count = usize::try_from(v.unsigned_abs()).ok()?;
@@ -475,7 +725,12 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
     if points[used..].iter().flatten().any(|c| !c.is_finite()) {
         return None;
     }
-    let faces = if kind == 4 { explicit_faces(r, topology_at, count, e, f, l)? } else { prism_faces(v, count)? };
+    // Kind 4 keeps slot 0 unused; an open kind-0 surface indexes its |V| vertices from 1 (§9.3).
+    let faces = match (kind, open) {
+        (4, _) => explicit_faces(r, topology_at, count, e, f, l, 0)?,
+        (0, true) => explicit_faces(r, topology_at, count, e, f, l, 1)?,
+        _ => prism_faces(v, count)?,
+    };
     if faces.is_empty() {
         return Some(Decoded::NoFaces);
     }
@@ -503,12 +758,13 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
                 .sum::<f64>()
         })
         .sum();
-    let flip = volume < 0.0;
+    let flip = !open && volume < 0.0;
     let mut body = Body {
         offset,
         record_type: u16_at(r, 4)?,
         form,
         kind,
+        open,
         auxiliary: r[1] & 1 == 1,
         key: key_at(r, 0)?,
         element: None,
@@ -541,8 +797,8 @@ fn prism_faces(v: i64, count: usize) -> Option<Vec<Face>> {
 }
 
 /// Faces of an explicit body (§5.3): `e` edges, `f` face sizes and `l` loop entries after the
-/// bounding box; vertex indices run 1..=`count`.
-fn explicit_faces(r: &[u8], at: usize, count: usize, e: usize, f: usize, l: usize) -> Option<Vec<Face>> {
+/// bounding box; vertex indices run 1..=`count` and point at the stored vertex `index − shift`.
+fn explicit_faces(r: &[u8], at: usize, count: usize, e: usize, f: usize, l: usize, shift: usize) -> Option<Vec<Face>> {
     let sizes_at = at.checked_add(e.checked_mul(8)?)?;
     let entries_at = sizes_at.checked_add(f.checked_mul(8)?)?;
     let end = entries_at.checked_add(l.checked_mul(8)?)?;
@@ -556,7 +812,7 @@ fn explicit_faces(r: &[u8], at: usize, count: usize, e: usize, f: usize, l: usiz
         if !(1..=count).contains(&a) || !(1..=count).contains(&b) {
             return None;
         }
-        edges.push((a, b));
+        edges.push((a - shift, b - shift));
     }
     let mut sizes = Vec::with_capacity(f);
     for i in 0..f {
@@ -703,6 +959,9 @@ fn body_props(drawing: &Drawing, body: &Body) -> String {
         "Kind": match body.kind { 4 => "explicit topology (4)".to_string(), k => format!("prism ({k})") },
         "Auxiliary": body.auxiliary,
     });
+    if body.open {
+        props["Open surface"] = true.into();
+    }
     if let (Some(element), Some(map)) = (body.element.map(|i| &drawing.elements[i]), props.as_object_mut()) {
         if !element.name.is_empty() {
             map.insert("Name".into(), element.name.clone().into());
@@ -723,6 +982,49 @@ fn body_props(drawing: &Drawing, body: &Body) -> String {
     props.to_string()
 }
 
+/// Appends triangles (millimetres) to a layer; returns the first index.
+fn append(layer: &mut Layer, positions: &[[f64; 3]], normals: &[[f32; 3]], indices: &[u32]) -> Result<u32, String> {
+    let base = u32::try_from(layer.vertex_count()).map_err(|_| "Allplan: too many vertices")?;
+    let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
+    layer.positions.extend(positions.iter().flat_map(|p| p.map(|c| (c * MM) as f32)));
+    layer.normals.extend(normals.iter().flatten());
+    for &i in indices {
+        layer.indices.push(base.checked_add(i).ok_or("Allplan: too many vertices")?);
+    }
+    Ok(first)
+}
+
+/// The properties of a macro placement (§9.4).
+fn placement_props(drawing: &Drawing, placement: &Placement, definition: &Macro) -> String {
+    let mut props = serde_json::json!({
+        "Allplan drawing file": drawing.name,
+        "Record offset": format!("0x{:X}", placement.offset),
+        "Record class": "0xEB",
+        "Macro": definition.name,
+        "Macro number": definition.number,
+        "Bodies": definition.bodies.len(),
+    });
+    let name = if placement.name.is_empty() { &definition.name } else { &placement.name };
+    if let (false, Some(map)) = (name.is_empty(), props.as_object_mut()) {
+        map.insert("Name".into(), name.clone().into());
+    }
+    props.to_string()
+}
+
+/// How many placements there are and what became of them.
+fn placement_summary(drawing: &Drawing) -> String {
+    let count = |want: fn(&Placed) -> bool| drawing.placements.iter().filter(|p| want(&p.placed)).count();
+    format!(
+        "{} (shown {}, without 3D {}, unknown macro {}, unreadable {}, over the triangle limit {})",
+        drawing.placements.len(),
+        count(|p| matches!(p, Placed::Resolved(_))),
+        count(|p| *p == Placed::Without3d),
+        count(|p| *p == Placed::UnknownMacro),
+        count(|p| *p == Placed::Unreadable),
+        count(|p| *p == Placed::OverLimit),
+    )
+}
+
 /// The layer of a visible body: the category of its element type, `Other` without one (§8.5).
 fn category(drawing: &Drawing, body: &Body) -> Category {
     body.element
@@ -733,11 +1035,12 @@ fn category(drawing: &Drawing, body: &Body) -> Category {
 
 /// The layers: visible bodies per category, and the auxiliary bodies in one hidden layer.
 fn build(drawing: &Drawing) -> Result<Loaded, String> {
-    if drawing.bodies.is_empty() {
+    let resolved = drawing.placements.iter().filter(|p| matches!(p.placed, Placed::Resolved(_))).count();
+    if drawing.bodies.is_empty() && resolved == 0 {
         let name = if drawing.name.is_empty() { String::new() } else { format!(" \"{}\"", drawing.name) };
         return Err(format!(
-            "Allplan: the drawing file{name} has no 3D bodies. This reader shows 3D bodies only; 2D elements, \
-             macros (3D furniture) and layouts are not read yet."
+            "Allplan: the drawing file{name} has no 3D bodies. This reader shows 3D bodies and macros only; 2D \
+             elements and layouts are not read yet."
         ));
     }
     let mut layers: Vec<(Option<Category>, Layer)> = Category::ALL
@@ -751,17 +1054,32 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
     for body in &drawing.bodies {
         let wanted = if body.auxiliary { None } else { Some(category(drawing, body)) };
         let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
-        let base = u32::try_from(layer.vertex_count()).map_err(|_| "Allplan: too many vertices")?;
-        let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
-        layer.positions.extend(body.positions.iter().flat_map(|p| p.map(|c| (c * MM) as f32)));
-        layer.normals.extend(body.normals.iter().flatten());
-        for &i in &body.indices {
-            layer.indices.push(base.checked_add(i).ok_or("Allplan: too many vertices")?);
-        }
-        let count = u32::try_from(body.indices.len()).map_err(|_| "Allplan: too many triangles")?;
         let id = body.offset as u64;
+        let first = append(layer, &body.positions, &body.normals, &body.indices)?;
+        let count = u32::try_from(body.indices.len()).map_err(|_| "Allplan: too many triangles")?;
         layer.elements.push((id, first, count));
         layer.props.push((id, body_props(drawing, body)));
+    }
+    // A placement is one element: its visible bodies in Macros, its auxiliary ones in the hidden
+    // layer, both under the id of the placement record (§9.4).
+    for placement in &drawing.placements {
+        let Placed::Resolved(index) = placement.placed else { continue };
+        let definition = &drawing.macros[index];
+        let id = placement.offset as u64;
+        let transform = Transform::new(&placement.matrix);
+        let mut props = Some(placement_props(drawing, placement, definition));
+        for (auxiliary, wanted) in [(false, Some(Category::Macros)), (true, None)] {
+            let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
+            let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
+            for body in definition.bodies.iter().filter(|b| b.auxiliary == auxiliary) {
+                transform.append(layer, body)?;
+            }
+            let end = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
+            if end > first {
+                layer.elements.push((id, first, end - first));
+                layer.props.extend(props.take().map(|p| (id, p)));
+            }
+        }
     }
     let visible = drawing.bodies.iter().filter(|b| !b.auxiliary).count();
     let hidden = drawing.bodies.len() - visible;
@@ -773,6 +1091,7 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         ("Allplan 3D bodies".into(), visible.to_string()),
         ("Allplan auxiliary bodies (hidden)".into(), hidden.to_string()),
         ("Allplan bodies linked to an element".into(), linked.to_string()),
+        ("Allplan macro placements".into(), placement_summary(drawing)),
         (
             "Allplan skipped bodies".into(),
             format!(
@@ -782,7 +1101,7 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         ),
         (
             "Allplan import scope".into(),
-            "3D bodies with element name, type and quantities (spec v0.2); no macros, colours, materials or 2D elements"
+            "3D bodies with element name, type and quantities, and 3D macros (spec v0.3); no colours, materials or 2D elements"
                 .into(),
         ),
     ];
@@ -852,7 +1171,11 @@ mod tests {
         b.extend(s.v.to_le_bytes());
         b.extend(s.e.to_le_bytes());
         b.extend(s.f.to_le_bytes());
-        let l = if s.kind == 4 { (s.topology.len() as u32 - 8 * s.e - 8 * s.f) / 8 } else { 4 * s.f.saturating_sub(2) + 2 * s.vertices.len() as u32 / 2 };
+        let l = if !s.topology.is_empty() {
+            (s.topology.len() as u32 - 8 * s.e - 8 * s.f) / 8
+        } else {
+            4 * s.f.saturating_sub(2) + 2 * s.vertices.len() as u32 / 2
+        };
         b.extend(l.to_le_bytes());
         b.extend(0u32.to_le_bytes());
         if s.kind != 0 {
@@ -1091,8 +1414,8 @@ mod tests {
         assert_eq!(kind0.len(), 40 + 8 * 48);
         // 90° about z: x' = −y + tx, y' = x + ty (§7.4).
         let turned = placed_box(1, 0x0301, [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 5000.0, 0.0, 100.0]);
-        // Kind 0 with another form is not known yet: skipped.
-        let unknown = placed_box(0, 0x0201, IDENTITY);
+        // Kind 0 with another form (not 0x0301, 0x0101 or 0x0201) is not known yet: skipped.
+        let unknown = placed_box(0, 0x0401, IDENTITY);
         let mut s = kind0.clone();
         s.extend(&turned);
         s.extend(&unknown);
@@ -1378,7 +1701,285 @@ mod tests {
         assert_eq!(parse(&data).unwrap().bodies.len(), 0);
     }
 
-    /// Checks a real drawing file against the tables of spec §7.2, §7.3 and §7.4, when `ALLPLAN_SAMPLE`
+    /// A kind-0 open surface (form 0x0201) of one triangle: |V| = 3 vertices and edges indexing
+    /// them from 1 (§9.3).
+    fn open_triangle(flags1: u8, corners: [[f64; 3]; 3]) -> Vec<u8> {
+        let mut topology = Vec::new();
+        for (a, b) in [(1i32, 2i32), (2, 3), (3, 1)] {
+            topology.extend(a.to_le_bytes());
+            topology.extend(b.to_le_bytes());
+        }
+        for v in [3.0f64, 1.0, 2.0, 3.0] {
+            topology.extend(v.to_le_bytes());
+        }
+        body(&Spec { flags1, kind: 0, form: FORM_OPEN, v: 3, e: 3, f: 1, translate: [0.0; 3], vertices: &corners, topology: &topology })
+    }
+
+    /// A representation (0x50): 3D (byte 81 = 1) or 2D (byte 80 = 1), nested records from 216.
+    fn representation(three_d: bool, nested: &[u8]) -> Vec<u8> {
+        let len = REPRESENTATION_BODY + nested.len();
+        let mut r = header(0x50, 0, 0, ((len - HEADER) / 8) as u32);
+        r.resize(REPRESENTATION_BODY, 0);
+        r[80] = u8::from(!three_d);
+        r[81] = u8::from(three_d);
+        r.extend_from_slice(nested);
+        r
+    }
+
+    fn utf16_into(r: &mut [u8], at: usize, text: &str, units: usize) {
+        let mut all: Vec<u16> = text.encode_utf16().collect();
+        all.resize(units, 0x20);
+        for (i, u) in all.iter().enumerate() {
+            r[at + 2 * i..at + 2 * i + 2].copy_from_slice(&u.to_le_bytes());
+        }
+    }
+
+    /// A macro definition (0x5A): number, name and representations from offset 376 (§9.1).
+    fn definition(number: u32, name: &str, representations: &[Vec<u8>]) -> Vec<u8> {
+        let start = 376;
+        let len = start + representations.iter().map(Vec::len).sum::<usize>();
+        let mut d = header(0x5A, 0, 0, ((len - HEADER) / 8) as u32);
+        d.resize(start, 0);
+        d[28..32].copy_from_slice(&number.to_le_bytes());
+        d[48..52].copy_from_slice(b"||||");
+        utf16_into(&mut d, 72, name, 32);
+        representations.iter().for_each(|r| d.extend_from_slice(r));
+        d
+    }
+
+    /// A macro placement (0xEB) with a four-point outline, a name and a matrix at [len − 104,
+    /// len − 8) (§9.2).
+    fn placement(number: u32, name: &str, m: [f64; 12]) -> Vec<u8> {
+        let mut r = header(0xEB, 0, 4, 24);
+        r.resize(296, 0);
+        r[28..32].copy_from_slice(&number.to_le_bytes());
+        let q = HEADER + 64;
+        r[q + 8..q + 12].copy_from_slice(b"||||");
+        utf16_into(&mut r, q + 16, name, 32);
+        for (i, v) in m.iter().enumerate() {
+            r[192 + 8 * i..200 + 8 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        r
+    }
+
+    /// Every triangle of a convex mesh faces away from its middle, as its stored normal does.
+    fn assert_outward_mesh(positions: &[[f64; 3]], normals: &[[f32; 3]], indices: &[u32]) {
+        let n = positions.len() as f64;
+        let center: [f64; 3] = std::array::from_fn(|k| positions.iter().map(|p| p[k]).sum::<f64>() / n);
+        for tri in indices.chunks_exact(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| positions[tri[k] as usize]);
+            let n = cross(std::array::from_fn(|k| b[k] - a[k]), std::array::from_fn(|k| c[k] - a[k]));
+            assert!(dot(n, std::array::from_fn(|k| a[k] - center[k])) > 0.0, "inward triangle");
+            assert!(dot(n, normals[tri[0] as usize].map(f64::from)) > 0.0, "normal against winding");
+        }
+    }
+
+    const MOVE: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10000.0, 0.0, 0.0];
+    const TURN: [f64; 12] = [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5000.0, 0.0];
+    const MIRROR: [f64; 12] = [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 20000.0, 0.0, 0.0];
+
+    /// The macro stream of §7.5 plus the other cases; returns it with the placement offsets.
+    fn macro_stream() -> (Vec<u8>, Vec<usize>) {
+        let boxed = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        let triangle = open_triangle(0, [[0.0, 0.0, 3000.0], [1000.0, 0.0, 3000.0], [0.0, 200.0, 3000.0]]);
+        let opening = prism(1, 0x0301, [100.0, 0.0, 100.0], [900.0, 200.0, 900.0]);
+        let mut three_d = boxed.clone();
+        three_d.extend(&triangle);
+        three_d.extend(&opening);
+        let flat = prism(0, 0x0301, [0.0; 3], [5e5, 5e5, 1.0]);
+        let chair = definition(7, "Stuhl", &[representation(false, &flat), representation(true, &three_d)]);
+        let second = definition(7, "Second", &[representation(true, &flat)]);
+        let plan_only = definition(8, "Nur 2D", &[representation(false, &flat)]);
+        let mut short = header(0xEB, 0, 0, 3);
+        short.resize(HEADER + 24, 0);
+        short[28..32].copy_from_slice(&7u32.to_le_bytes());
+
+        let mut s = Vec::new();
+        let mut placements = Vec::new();
+        let mut put = |s: &mut Vec<u8>, record: Vec<u8>, is_placement: bool| {
+            if is_placement {
+                placements.push(STREAM_START + s.len());
+            }
+            s.extend(record);
+        };
+        // 0: placed before its definition.
+        put(&mut s, placement(7, "Chair", MOVE), true);
+        put(&mut s, chair, false);
+        // 1: no name of its own: the macro's name.
+        put(&mut s, placement(7, "", TURN), true);
+        // 2: mirrored.
+        put(&mut s, placement(7, "Mirrored chair", MIRROR), true);
+        // 3: an unknown macro, 4: a macro without 3D, 5: a catalogue name, 6: too short.
+        put(&mut s, placement(99, "Ghost", MOVE), true);
+        put(&mut s, plan_only, false);
+        put(&mut s, placement(8, "Plan", MOVE), true);
+        put(&mut s, placement(7, "ID-WD\\", MOVE), true);
+        put(&mut s, short, true);
+        // A later definition with the same number does not count.
+        put(&mut s, second, false);
+        // An open surface in the drawing itself, its loop running so that a closed body would
+        // turn round.
+        put(&mut s, open_triangle(0, [[0.0, 0.0, 0.0], [1000.0, 0.0, 1000.0], [1000.0, 1000.0, 0.0]]), false);
+        (s, placements)
+    }
+
+    #[test]
+    fn places_macros() {
+        let (s, offsets) = macro_stream();
+        let data = file(3, "Macros", &s);
+        let drawing = parse(&data).unwrap();
+        let placed: Vec<Placed> = drawing.placements.iter().map(|p| p.placed).collect();
+        assert_eq!(
+            placed,
+            [
+                Placed::Resolved(0),
+                Placed::Resolved(0),
+                Placed::Resolved(0),
+                Placed::UnknownMacro,
+                Placed::Without3d,
+                Placed::Resolved(0),
+                Placed::Unreadable
+            ]
+        );
+        assert_eq!(drawing.placements.iter().map(|p| p.offset).collect::<Vec<_>>(), offsets);
+        // One definition read: the 2D representation and the later duplicate are left out.
+        assert_eq!(drawing.macros.len(), 1);
+        let chair = &drawing.macros[0];
+        assert_eq!((chair.number, chair.name.as_str(), chair.bodies.len()), (7, "Stuhl", 3));
+        let kinds: Vec<(u8, bool, bool, usize)> =
+            chair.bodies.iter().map(|b| (b.kind, b.open, b.auxiliary, b.indices.len() / 3)).collect();
+        assert_eq!(kinds, [(1, false, false, 12), (0, true, false, 1), (1, false, true, 12)]);
+
+        // The open surface in the drawing keeps the direction of its loop.
+        assert_eq!(drawing.bodies.len(), 1);
+        let surface = &drawing.bodies[0];
+        assert!(surface.open);
+        let third = 1.0 / 3f32.sqrt();
+        assert!(surface.normals.iter().all(|n| (n[0] + third).abs() < 1e-5 && (n[1] - third).abs() < 1e-5 && (n[2] - third).abs() < 1e-5));
+
+        // Placed: moved, turned 90° about z, mirrored (still facing outwards).
+        let extent = |m: &[f64; 12]| {
+            let (positions, normals, indices) = place(&chair.bodies[0], m);
+            assert_outward_mesh(&positions, &normals, &indices);
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for p in &positions {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+            (lo, hi)
+        };
+        assert_eq!(extent(&MOVE), ([10000.0, 0.0, 0.0], [11000.0, 200.0, 3000.0]));
+        assert_eq!(extent(&TURN), ([-200.0, 5000.0, 0.0], [0.0, 6000.0, 3000.0]));
+        assert_eq!(extent(&MIRROR), ([19000.0, 0.0, 0.0], [20000.0, 200.0, 3000.0]));
+
+        let loaded = build(&drawing).unwrap();
+        let layers: Vec<(&str, usize, usize, bool)> =
+            loaded.layers.iter().map(|l| (l.name.as_str(), l.elements.len(), l.triangle_count(), l.hidden)).collect();
+        assert_eq!(
+            layers,
+            [("Other", 1, 1, false), ("Macros", 4, 4 * 13, false), ("Auxiliary bodies (openings, rooms)", 4, 4 * 12, true)]
+        );
+        let macros = &loaded.layers[1];
+        let ids: Vec<u64> = macros.elements.iter().map(|e| e.0).collect();
+        assert_eq!(ids, [offsets[0], offsets[1], offsets[2], offsets[5]].map(|o| o as u64));
+        let first = props_of(&loaded, offsets[0]);
+        assert_eq!((first["Name"].as_str(), first["Macro"].as_str()), (Some("Chair"), Some("Stuhl")));
+        assert_eq!((first["Macro number"].as_u64(), first["Bodies"].as_u64()), (Some(7), Some(3)));
+        assert_eq!(props_of(&loaded, offsets[1])["Name"], "Stuhl");
+        assert_eq!(props_of(&loaded, offsets[5])["Name"], "ID-WD");
+        let summary = loaded.project.info.iter().find(|(k, _)| k == "Allplan macro placements").map(|(_, v)| v.as_str());
+        assert_eq!(summary, Some("7 (shown 4, without 3D 1, unknown macro 1, unreadable 1, over the triangle limit 0)"));
+    }
+
+    #[test]
+    fn a_large_macro_is_read_once_and_placed_quickly() {
+        // tb000152 places 3268 macro bodies with 25 placements; ten times that: one macro of 1320
+        // boxes, placed 25 times (33 000 bodies).
+        let mut nested = Vec::new();
+        for i in 0..1320 {
+            let x = f64::from(i % 60) * 100.0;
+            let y = f64::from(i / 60) * 100.0;
+            nested.extend(prism(0, 0x0301, [x, y, 0.0], [x + 50.0, y + 50.0, 400.0]));
+        }
+        let mut s = definition(42, "Shelf", &[representation(true, &nested)]);
+        for i in 0..25 {
+            let mut m = MOVE;
+            m[9] = 10000.0 * f64::from(i);
+            s.extend(placement(42, "Shelf", m));
+        }
+        let pages = u16::try_from(s.len() / PAGE + 3).unwrap();
+        let data = file(pages, "Large macro", &s);
+        let started = web_time::Instant::now();
+        let drawing = parse(&data).unwrap();
+        let parsed = started.elapsed();
+        let loaded = build(&drawing).unwrap();
+        let elapsed = started.elapsed();
+        eprintln!("1320 macro bodies placed 25 times in {elapsed:?} (read {parsed:?})");
+        assert!(drawing.bodies.is_empty());
+        assert_eq!(drawing.macros.len(), 1);
+        assert_eq!(drawing.macros[0].bodies.len(), 1320);
+        let macros = loaded.layers.iter().find(|l| l.name == "Macros").unwrap();
+        assert_eq!((macros.elements.len(), macros.triangle_count()), (25, 25 * 1320 * 12));
+        assert!(elapsed < std::time::Duration::from_secs(5), "took {elapsed:?}");
+    }
+
+    #[test]
+    fn macro_records_with_low_bits_in_byte_0_are_read() {
+        // Inside a macro, byte 0 of a header is not checked (§9.1): nested records mostly have
+        // 0x7A or 0x7E there, and some representations too.
+        let mut boxed = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        boxed[0] = 0x7A;
+        let mut container = header(0x64, 0, 0, (boxed.len() / 8) as u32);
+        container[0] = 0x7E;
+        let mut triangle = open_triangle(0, [[0.0, 0.0, 0.0], [500.0, 0.0, 0.0], [0.0, 500.0, 0.0]]);
+        triangle[0] = 0x7E;
+        let mut nested = container;
+        nested.extend(&boxed);
+        nested.extend(&triangle);
+        let mut three_d = representation(true, &nested);
+        three_d[0] = 0x7E;
+        let mut s = definition(5, "Cupboard", &[three_d]);
+        s.extend(placement(5, "Hall cupboard", MOVE));
+        let drawing = parse(&file(3, "Low bits in macros", &s)).unwrap();
+        assert_eq!(drawing.placements[0].placed, Placed::Resolved(0));
+        let bodies: Vec<(u8, usize)> = drawing.macros[0].bodies.iter().map(|b| (b.kind, b.indices.len() / 3)).collect();
+        assert_eq!(bodies, [(1, 12), (0, 1)]);
+        // In the drawing's own stream the rule stays: such a body is no record there.
+        assert!(drawing.bodies.is_empty());
+        let mut alone = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        alone[0] = 0x7A;
+        assert!(parse(&file(3, "Low bits", &alone)).unwrap().bodies.is_empty());
+    }
+
+    #[test]
+    fn broken_macros_do_not_panic() {
+        let (s, _) = macro_stream();
+        let data = file(3, "Macros", &s);
+        let end = STREAM_START + s.len();
+        for cut in (STREAM_START..end + 8).step_by(5) {
+            let _ = parse(&data[..cut]).map(|d| build(&d));
+        }
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for round in 0..300 {
+            let mut fuzz = data.clone();
+            for _ in 0..(1 + round % 30) {
+                let at = STREAM_START + (next() as usize) % (end - STREAM_START);
+                fuzz[at] = next() as u8;
+            }
+            let _ = parse(&fuzz).map(|d| build(&d));
+        }
+    }
+
+    /// Checks a real drawing file against the tables of spec §7.2 to §7.5, when `ALLPLAN_SAMPLE`
     /// holds its path. The samples are not in the repository.
     #[test]
     fn optional_sample_from_env() {
@@ -1397,9 +1998,14 @@ mod tests {
                 *codes.entry(format!("{group:02X} {subtype:02X}")).or_insert(0usize) += 1;
             }
         }
+        // §7.2/§7.4 boxes: the drawing's own visible bodies, without macro bodies (v0.3).
         let solid_bounds = build(&drawing).ok().map(|loaded| {
-            let positions: Vec<f32> =
-                loaded.layers.iter().filter(|l| !l.hidden).flat_map(|l| l.positions.iter().copied()).collect();
+            let positions: Vec<f32> = loaded
+                .layers
+                .iter()
+                .filter(|l| !l.hidden && l.name != Category::Macros.name())
+                .flat_map(|l| l.positions.iter().copied())
+                .collect();
             bounds(&positions)
         });
         eprintln!(
@@ -1459,6 +2065,58 @@ mod tests {
                         && e.quantities.iter().zip(want).all(|(a, b)| (a - b).abs() <= 1e-6)
                 });
                 assert!(found, "no wall {name:?} with quantities {want:?}");
+            }
+        }
+        // §7.5: macro placements, the bodies they place (auxiliary included) and their world box.
+        let count = |want: fn(&Placed) -> bool| drawing.placements.iter().filter(|p| want(&p.placed)).count();
+        let mut bodies = 0;
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        let mut names: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for placement in &drawing.placements {
+            let definition = match placement.placed {
+                Placed::Resolved(i) => Some(&drawing.macros[i]),
+                _ => None,
+            };
+            let name = if placement.name.is_empty() { definition.map(|d| d.name.clone()).unwrap_or_default() } else { placement.name.clone() };
+            *names.entry(name).or_default() += 1;
+            for body in definition.iter().flat_map(|d| &d.bodies) {
+                bodies += 1;
+                for p in place(body, &placement.matrix).0 {
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(p[k]);
+                        hi[k] = hi[k].max(p[k]);
+                    }
+                }
+            }
+        }
+        let (resolved, without, unknown) = (
+            count(|p| matches!(p, Placed::Resolved(_))),
+            count(|p| *p == Placed::Without3d),
+            count(|p| *p == Placed::UnknownMacro),
+        );
+        eprintln!(
+            "{file_name}: {} placements, resolved {resolved}, without 3D {without}, unknown {unknown}, {bodies} macro bodies, box {lo:?}..{hi:?}",
+            drawing.placements.len()
+        );
+        type Box3 = [(f64, f64); 3];
+        let table: [(&str, usize, usize, usize, usize, usize, Box3, &[(&str, usize)]); 3] = [
+            ("tb000152", 25, 25, 0, 0, 3268, [(5176.5, 15513.5), (-15170.0, -5820.0), (-5.0, 2450.0)], &[("Hall cupboard", 4), ("Kitchen chair", 3)]),
+            ("tb000162", 105, 104, 1, 0, 104, [(10290.0, 15830.0), (-21720.0, -20080.0), (2600.0, 3760.0)], &[]),
+            ("tb000141", 13, 13, 0, 0, 463, [(4445.0, 15735.6), (-20070.0, -5580.0), (-3100.0, -350.0)], &[("ID-WD", 4)]),
+        ];
+        if let Some(&(_, want_placements, want_resolved, want_without, want_unknown, want_bodies, range, want_names)) =
+            table.iter().find(|row| file_name.starts_with(row.0))
+        {
+            assert_eq!(
+                (drawing.placements.len(), resolved, without, unknown, bodies),
+                (want_placements, want_resolved, want_without, want_unknown, want_bodies)
+            );
+            for k in 0..3 {
+                assert!((lo[k] - range[k].0).abs() <= 0.5 && (hi[k] - range[k].1).abs() <= 0.5, "axis {k}: {lo:?} {hi:?}");
+            }
+            for &(name, want) in want_names {
+                assert_eq!(names.get(name).copied().unwrap_or(0), want, "placements named {name:?}");
             }
         }
     }

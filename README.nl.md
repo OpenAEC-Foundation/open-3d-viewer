@@ -138,7 +138,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **Revit** (`.rvt`, `.rfa`) | Desktop | Nee |
 | **SketchUp** (`.skp`, versie 3 en later) | Ja | Nee |
 | **Tekla Structures** (`.db1`, bèta) | Ja | Nee |
-| **Allplan** (`.ndw`-tekenbestanden, bèta) | Ja, 3D-lichamen | Nee |
+| **Allplan** (`.ndw`-tekenbestanden, bèta) | Ja, 3D-lichamen en macro's | Nee |
 | **Archicad** (`.pln`, `.pla`, Archicad 25 t/m 29, bèta) | Ja, wanden met sparingen, vloeren, kolommen, liggers en daken | Nee |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Ja, polygoongeometrie | Nee |
 | **MicroStation DGN** (`.dgn`, V7 en V8) | Ja | Nee |
@@ -157,7 +157,7 @@ Wat niet meekomt:
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
-- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in een laag per categorie, elk met een vaste kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Een klik op een lichaam toont de naam, het elementtype en de hoeveelheden (hoogte, dikte, lengte, oppervlakte, inhoud) van het Allplan-element. Macro's (3D-meubilair), de eigen kleuren en materialen van de tekening, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
+- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in een laag per categorie, elk met een vaste kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Een klik op een lichaam toont de naam, het elementtype en de hoeveelheden (hoogte, dikte, lengte, oppervlakte, inhoud) van het Allplan-element. Macro's (meubels, ramen, deuren, leuningen) komen in een laag `Macros`, één element per plaatsing. De eigen kleuren en materialen van de tekening, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **Archicad** toont wanden, vloeren en kolommen als geëxtrudeerde plattegronden op hun verdieping, liggers langs hun as, ook schuine, en elk dakvlak tussen zijn schuine onder- en bovenkant, met verticale randen. Ramen en deuren worden als sparingen uit hun wanden gesneden; de sparingen beginnen verborgen in een eigen laag. Hun kozijnen, glas en bladen, bibliotheekobjecten, gebogen daken en schalen, kolommen en liggers met een profieldoorsnede, en projecten van vóór Archicad 25 worden nog niet gelezen. Wandhoogtes volgen de verdieping waaraan de bovenkant van een wand gekoppeld is, of de eigen hoogte van de wand. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 
@@ -182,7 +182,7 @@ Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere b
 
 ## Testen en betrouwbaarheid
 
-- **182 unittests** in `src/` (180 draaien; 2 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 93 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 9 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **186 unittests** in `src/` (184 draaien; 2 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 97 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 9 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.

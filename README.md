@@ -136,7 +136,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **Revit** (`.rvt`, `.rfa`) | Desktop | No |
 | **SketchUp** (`.skp`, version 3 and later) | Yes | No |
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
-| **Allplan** (`.ndw` drawing files, beta) | Yes, 3D bodies | No |
+| **Allplan** (`.ndw` drawing files, beta) | Yes, 3D bodies and macros | No |
 | **Archicad** (`.pln`, `.pla`, Archicad 25 to 29, beta) | Yes, walls with openings, slabs, columns, beams and roofs | No |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
 | **MicroStation DGN** (`.dgn`, V7 and V8) | Yes | No |
@@ -155,7 +155,7 @@ What does not come through:
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
-- **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category, each with a fixed colour; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (3D furniture), the drawing's own colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
+- **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category, each with a fixed colour; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (furniture, windows, doors, railings) are placed in a `Macros` layer, one element per placement. The drawing's own colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
 - **Archicad** shows walls, slabs and columns as extruded footprints on their stories, beams along their axis, sloped ones too, and each plane of a roof between its sloped underside and top, with vertical edges. Windows and doors are cut from their walls as openings, which start hidden in a layer of their own; their frames, glass and leaves, library objects, curved roofs and shells, columns and beams with a profile cross-section, and projects from before Archicad 25 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 
@@ -180,7 +180,7 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## Testing and reliability
 
-- **182 unit tests** in `src/` (180 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 93 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 9 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **186 unit tests** in `src/` (184 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 97 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 9 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.

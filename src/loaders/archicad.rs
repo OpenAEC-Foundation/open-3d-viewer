@@ -1,9 +1,9 @@
-//! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls and slabs as extruded
-//! footprints, grouped per story. Written from a clean-room specification of the file structure
-//! (SPEC v0.2, section numbers in the comments): a container of 16-byte items with QuickLZ
-//! groups, object records with associations, stories, the element polygon, the wall fields, and
-//! columns and beams with their cross-sections. Roofs, openings, library objects and profile
-//! cross-sections are not read yet.
+//! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls, slabs and columns as
+//! extruded footprints, beams along their axis and roof planes, grouped per story. Written from a
+//! clean-room specification of the file structure (SPEC v0.4, section numbers in the comments): a
+//! container of 16-byte items with QuickLZ groups, object records with associations, stories, the
+//! element polygon, the wall fields, columns and beams with their cross-sections, and roof planes.
+//! Openings, library objects, curved roofs and profile cross-sections are not read yet.
 //!
 //! Archicad is Z up in metres, as the viewer: coordinates are taken as they are.
 
@@ -85,6 +85,8 @@ const BEAM_SEGMENT_LINK: Guid = guid("a72c76d520d95d45a37328ba6d47152a");
 const SECTION_LINK: Guid = guid("306cb86321a21c4284fb926c694bf611");
 /// §8.5: the association from a column to the link object of its top (as walls, §8.3).
 const COLUMN_TOP_LINK: Guid = guid("2dbcbe5e0bcf51478f557c2353c3fd14");
+/// §5, §8.8 (v0.4): a roof plane (a single-plane roof, or a plane of a multi-plane roof).
+const ROOF: Guid = guid("21764c9de9512345a3baf2121777bcbe");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -192,6 +194,7 @@ struct Records {
     slabs: Vec<Record>,
     columns: Vec<Record>,
     beams: Vec<Record>,
+    roofs: Vec<Record>,
     /// Column and beam segments (§8.7): the first target of their section association.
     segments: HashMap<Guid, Option<Guid>>,
     sections: HashMap<Guid, Section>,
@@ -200,6 +203,7 @@ struct Records {
     slabs_too_large: usize,
     columns_too_large: usize,
     beams_too_large: usize,
+    roofs_too_large: usize,
     /// Blocks of the classes above whose payload could not be decoded, blocks larger than
     /// [`MAX_BLOCK`] and group chunks that did not decompress.
     damaged: usize,
@@ -397,7 +401,7 @@ impl Records {
     /// §3–§4: one block, kept when it is a record of a class the reader uses.
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
-        let classes = [WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, COLUMN_SEGMENT, BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE];
+        let classes = [WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, COLUMN_SEGMENT, BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE];
         match payload(b, |class| classes.contains(class)) {
             Payload::Data(p) => self.record(object, &p),
             Payload::Damaged => self.damaged += 1,
@@ -416,7 +420,7 @@ impl Records {
         let data = &p[39..39 + data_len];
         let links = links(&p[43 + data_len..]);
         match class {
-            WALL | SLAB | COLUMN | BEAM => {
+            WALL | SLAB | COLUMN | BEAM | ROOF => {
                 let first = |assoc: Guid, op: &[u8]| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
                 let story = first(ON_STORY, &[0x12]);
                 let (top_link, segment) = match class {
@@ -429,7 +433,8 @@ impl Records {
                     WALL => (&mut self.walls, &mut self.walls_too_large),
                     SLAB => (&mut self.slabs, &mut self.slabs_too_large),
                     COLUMN => (&mut self.columns, &mut self.columns_too_large),
-                    _ => (&mut self.beams, &mut self.beams_too_large),
+                    BEAM => (&mut self.beams, &mut self.beams_too_large),
+                    _ => (&mut self.roofs, &mut self.roofs_too_large),
                 };
                 if data.len() > MAX_ELEMENT_DATA {
                     *too_large += 1;
@@ -604,6 +609,8 @@ fn links(a: &[u8]) -> Vec<(u8, Guid, Guid)> {
 /// §7: the polygon of an element: contour 0 the outer edge, the rest holes (closing point
 /// dropped), and the absolute bottom and top it caches, if any.
 struct Polygon {
+    /// Where it starts in the data (§8.8 reads fields before it).
+    at: usize,
     contours: Vec<Vec<[f64; 2]>>,
     coords: usize,
     z: Option<(f64, f64)>,
@@ -664,7 +671,7 @@ fn find_polygon(data: &[u8]) -> Option<Polygon> {
                 c
             })
             .collect();
-        return Some(Polygon { contours, coords: n, z: z_cache(data, i, end) });
+        return Some(Polygon { at: i, contours, coords: n, z: z_cache(data, i, end) });
     }
     None
 }
@@ -812,38 +819,111 @@ struct BeamFields {
     top: (f64, f64),
 }
 
-/// §8.6: the first ID string followed by u8 k ≤ 16 and six finite f64 (s, zr, x1, y1, x2, y2);
-/// the heights z1 and z2 are with the axis earlier in the data, or zr for both. The six values
-/// must also be plausible lengths (0, or between 1 nm and 100 km): in the samples an earlier
-/// unnamed candidate passes the checks of the specification with values such as 1e-265 and 1e87
-/// (open question Q-I14).
+/// §8.6 (v0.4): an ID string followed by u8 k ≤ 16 and six f64 (s, zr, x1, y1, x2, y2) that are
+/// 0 or between 1e-9 and 1e5; the heights z1 and z2 are with the axis earlier in the data, or zr
+/// for both. The first candidate whose axis is found counts; when none has one, the first that
+/// meets the conditions.
 fn beam_fields(data: &[u8]) -> Option<BeamFields> {
     let plausible = |v: &f64| *v == 0.0 || (1e-9..1e5).contains(&v.abs());
     let mut budget = SEARCH_BUDGET;
-    id_strings(data).find_map(|(id, q)| {
-        if *data.get(q)? > 16 || q + 49 > data.len() {
-            return None;
+    let mut first = None;
+    for (id, q) in id_strings(data) {
+        if data.get(q).is_none_or(|&k| k > 16) || q + 49 > data.len() {
+            continue;
         }
         let f: Vec<f64> = (0..6).map(|k| f64_at(data, q + 1 + 8 * k).unwrap()).collect();
         let (start, end) = (&data[q + 17..q + 33], &data[q + 33..q + 49]);
         if !f.iter().all(plausible) || start.iter().all(|&b| b == 0) {
-            return None;
+            continue;
         }
         let axis = match q.checked_sub(48) {
             Some(last) => find_axis(data, 0..=last, start, end, &mut budget)?,
             None => None,
         };
-        let top = match axis {
-            Some(o) => (f64_at(data, o + 16)?, f64_at(data, o + 40)?),
-            None => (f[1], f[1]),
-        };
-        (top.0.is_finite() && top.1.is_finite()).then_some(BeamFields {
-            id,
-            offset: f[0],
-            line: [f[2], f[3], f[4], f[5]],
-            top,
-        })
-    })
+        let beam = |top: (f64, f64)| BeamFields { id: id.clone(), offset: f[0], line: [f[2], f[3], f[4], f[5]], top };
+        match axis {
+            Some(o) => {
+                let top = (f64_at(data, o + 16)?, f64_at(data, o + 40)?);
+                if top.0.is_finite() && top.1.is_finite() {
+                    return Some(beam(top));
+                }
+            }
+            None if first.is_none() => first = Some(beam((f[1], f[1]))),
+            None => {}
+        }
+    }
+    first
+}
+
+/// §8.8: the fields of a roof plane, before its polygon.
+#[derive(Debug, Clone)]
+struct RoofFields {
+    id: String,
+    /// hp: height of the pivot line above the own story (the underside of the roof).
+    pivot_height: f64,
+    /// α: pitch in degrees (0: flat).
+    pitch: f64,
+    /// The pivot line: x1, y1, x2, y2.
+    line: [f64; 4],
+    /// t: thickness, square to the roof plane.
+    thickness: f64,
+}
+
+/// §8.8: hp at p−62, α at p−53, the pivot line at p−45, and the thickness after the last ID
+/// string candidate that ends 250 bytes or more before the polygon at p.
+fn roof_fields(data: &[u8], p: usize) -> Option<RoofFields> {
+    let f = |back: usize| f64_at(data, p.checked_sub(back)?);
+    let (pivot_height, pitch) = (f(62)?, f(53)?);
+    let line = [f(45)?, f(37)?, f(29)?, f(21)?];
+    let (id, q) = id_strings(data).take_while(|&(_, q)| q + 250 <= p).last()?;
+    let thickness = f64_at(data, q + 1)?;
+    let finite = [pivot_height, pitch, thickness].iter().chain(&line).all(|v| v.is_finite());
+    (finite && thickness > 0.0 && thickness < 5.0 && (0.0..90.0).contains(&pitch)).then_some(RoofFields { id, pivot_height, pitch, line, thickness })
+}
+
+/// §8.8: the underside and the top of a roof plane: the underside through the pivot line at
+/// e + hp, rising by tan α towards the side of the line with the farthest point of the outer
+/// edge; the top t / cos α above it.
+struct RoofPlanes {
+    /// A point of the pivot line, its left normal (0 for a flat roof), and the rise per metre
+    /// along the normal (signed towards the side the roof rises to).
+    origin: [f64; 2],
+    normal: [f64; 2],
+    rise: f64,
+    base: f64,
+    up: f64,
+}
+
+impl RoofPlanes {
+    /// `None` for a sloped roof without a pivot line.
+    fn new(f: &RoofFields, e: f64, outer: &[[f64; 2]]) -> Option<Self> {
+        let [x1, y1, x2, y2] = f.line;
+        let length = (x2 - x1).hypot(y2 - y1);
+        let flat = f.pitch == 0.0;
+        if !flat && (length.is_nan() || length < 1e-9) {
+            return None;
+        }
+        let normal = if flat { [0.0, 0.0] } else { [-(y2 - y1) / length, (x2 - x1) / length] };
+        let mut planes = Self { origin: [x1, y1], normal, rise: f.pitch.to_radians().tan(), base: e + f.pivot_height, up: f.thickness / f.pitch.to_radians().cos() };
+        let (low, high) = outer.iter().map(|&p| planes.distance(p)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+        if high < -low {
+            planes.rise = -planes.rise;
+        }
+        Some(planes)
+    }
+
+    /// d(P): the distance from the pivot line, positive to its left.
+    fn distance(&self, p: [f64; 2]) -> f64 {
+        (p[0] - self.origin[0]) * self.normal[0] + (p[1] - self.origin[1]) * self.normal[1]
+    }
+
+    fn bottom(&self, p: [f64; 2]) -> f64 {
+        self.base + self.distance(p) * self.rise
+    }
+
+    fn top(&self, p: [f64; 2]) -> f64 {
+        self.bottom(p) + self.up
+    }
 }
 
 /// §8.5: the footprint of a column: its section around the middle, turned by the rotation; a
@@ -1010,6 +1090,12 @@ struct Stats {
     columns_no_section: usize,
     beams_profile: usize,
     beams_no_section: usize,
+    roofs: Vec<RoofOut>,
+    /// Roof planes skipped (§8.8): all of them, those without a polygon (or one too near the
+    /// start of the data), and those whose fields do not read.
+    roofs_skipped: usize,
+    roofs_no_polygon: usize,
+    roofs_unreadable: usize,
 }
 
 /// A column as drawn, for the tests.
@@ -1034,6 +1120,18 @@ struct BeamOut {
     section: Section,
     /// The top at the start and the end.
     top: (f64, f64),
+}
+
+/// A roof plane as drawn, for the tests: x, y and z (lowest underside, highest top) ranges.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct RoofOut {
+    name: String,
+    pitch: f64,
+    thickness: f64,
+    x: (f64, f64),
+    y: (f64, f64),
+    z: (f64, f64),
 }
 
 /// What keeps a column or beam from being drawn (§8.7).
@@ -1096,6 +1194,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     let mut slabs = Layer { name: "Slabs".into(), color: [0.66, 0.68, 0.72], ..Layer::default() };
     let mut columns = Layer { name: "Columns".into(), color: [0.78, 0.76, 0.72], ..Layer::default() };
     let mut beams = Layer { name: "Beams".into(), color: [0.74, 0.70, 0.64], ..Layer::default() };
+    let mut roofs = Layer { name: "Roofs".into(), color: [0.62, 0.42, 0.36], ..Layer::default() };
     let mut next_id = 0u64;
     let mut add = |layer: &mut Layer,
                    record: &Record,
@@ -1264,12 +1363,46 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         }
     }
 
-    if stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() == 0 {
+    // §8.8: roof planes, their polygon between two sloped planes
+    stats.roofs_skipped = records.roofs_too_large;
+    for record in &records.roofs {
+        let Some(polygon) = find_polygon(&record.data).filter(|p| p.at >= 300) else {
+            stats.roofs_no_polygon += 1;
+            stats.roofs_skipped += 1;
+            continue;
+        };
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let Some((f, planes)) = roof_fields(&record.data, polygon.at).and_then(|f| {
+            let planes = RoofPlanes::new(&f, e, &polygon.contours[0])?;
+            Some((f, planes))
+        }) else {
+            stats.roofs_unreadable += 1;
+            stats.roofs_skipped += 1;
+            continue;
+        };
+        let range = |v: &mut dyn Iterator<Item = f64>| v.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+        let points = || polygon.contours.iter().flatten().copied();
+        let z = (range(&mut points().map(|p| planes.bottom(p))).0, range(&mut points().map(|p| planes.top(p))).1);
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), (if f.id.is_empty() { "Roof" } else { &f.id }).into());
+        props.insert("category".into(), "Roof".into());
+        props.insert("Pitch".into(), format!("{:.2}°", f.pitch).into());
+        props.insert("Thickness".into(), format!("{:.0} mm", f.thickness * 1000.0).into());
+        if add(&mut roofs, record, z, &|layer| push_solid(layer, &polygon.contours, &|p| planes.bottom(p), &|p| planes.top(p)), props) {
+            let (x, y) = (range(&mut points().map(|p| p[0])), range(&mut points().map(|p| p[1])));
+            stats.roofs.push(RoofOut { name: f.id, pitch: f.pitch, thickness: f.thickness, x, y, z });
+        } else {
+            stats.roofs_unreadable += 1;
+            stats.roofs_skipped += 1;
+        }
+    }
+
+    if stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() == 0 {
         // §10: Archicad 17 to 24 share the container but not the records
         return Err(format!(
-            "Archicad: no walls, slabs, columns or beams found ({} walls, {} slabs, {} columns and {} beams skipped). \
-             This reader supports Archicad 25 to 29; projects from Archicad 17 to 24 are not supported yet.",
-            stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped
+            "Archicad: no walls, slabs, columns, beams or roofs found ({} walls, {} slabs, {} columns, {} beams and {} roofs \
+             skipped). This reader supports Archicad 25 to 29; projects from Archicad 17 to 24 are not supported yet.",
+            stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped, stats.roofs_skipped
         ));
     }
 
@@ -1285,9 +1418,11 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ),
         ("Archicad columns".into(), skipped_text(stats.columns.len(), stats.columns_skipped, stats.columns_profile, stats.columns_no_section)),
         ("Archicad beams".into(), skipped_text(stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.beams_no_section)),
+        ("Archicad roofs".into(), roof_text(&stats)),
         (
             "Archicad elements not read yet".into(),
-            "Roofs, openings, meshes, morphs, library objects, and columns and beams with a profile section".into(),
+            "Openings, meshes, morphs, library objects, curved roofs and shells, and columns and beams with a profile section"
+                .into(),
         ),
     ];
     if records.damaged > 0 {
@@ -1298,8 +1433,22 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs, columns, beams].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams, roofs].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
+}
+
+/// "2 read, 1 skipped (1 without a polygon)".
+fn roof_text(stats: &Stats) -> String {
+    let mut out = format!("{} read, {} skipped", stats.roofs.len(), stats.roofs_skipped);
+    let why: Vec<String> = [(stats.roofs_no_polygon, "without a polygon"), (stats.roofs_unreadable, "with fields that do not read")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+    if !why.is_empty() {
+        out += &format!(" ({})", why.join(", "));
+    }
+    out
 }
 
 /// "4 read, 2 skipped (1 with a profile section, 1 without a section)".
@@ -1328,12 +1477,17 @@ fn area(c: &[[f64; 2]]) -> f64 {
 /// side face per edge, flat shaded. False when nothing could be drawn.
 fn push_prism(layer: &mut Layer, prism: &Prism) -> bool {
     let (z0, z1) = (prism.z.0.min(prism.z.1), prism.z.0.max(prism.z.1));
-    if !z0.is_finite() || !z1.is_finite() || z1 - z0 <= 1e-6 {
-        return false;
-    }
+    push_solid(layer, &prism.contours, &|_| z0, &|_| z1)
+}
+
+/// Adds a body to the layer: the footprint (outer contour minus holes) with vertical sides, its
+/// underside and top at the heights `bottom` and `top` give for each corner (planes, for a
+/// sloped roof), flat shaded. False when nothing could be drawn or the top is not above the
+/// underside everywhere.
+fn push_solid(layer: &mut Layer, footprint: &[Vec<[f64; 2]>], bottom: &dyn Fn([f64; 2]) -> f64, top: &dyn Fn([f64; 2]) -> f64) -> bool {
     // clean contours: no repeated points, at least 3, outer counter-clockwise, holes clockwise
     let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
-    for (k, c) in prism.contours.iter().enumerate() {
+    for (k, c) in footprint.iter().enumerate() {
         let mut clean: Vec<[f64; 2]> = Vec::with_capacity(c.len());
         for p in c {
             if !p.iter().all(|v| v.is_finite()) {
@@ -1373,30 +1527,48 @@ fn push_prism(layer: &mut Layer, prism: &Prism) -> bool {
         return false;
     }
     let points: Vec<[f64; 2]> = contours.iter().flatten().copied().collect();
+    let (z0, z1): (Vec<f64>, Vec<f64>) = points.iter().map(|&p| (bottom(p), top(p))).unzip();
+    if z0.iter().zip(&z1).any(|(a, b)| !a.is_finite() || !b.is_finite() || b - a <= 1e-6) {
+        return false;
+    }
     let vertex = |layer: &mut Layer, p: [f64; 2], z: f64, n: [f32; 3]| {
         layer.positions.extend([p[0] as f32, p[1] as f32, z as f32]);
         layer.normals.extend(n);
         (layer.positions.len() / 3 - 1) as u32
     };
+    // the normal of a cap triangle, pointing up (`sign` 1) or down (-1)
+    let normal = |a: [f64; 3], b: [f64; 3], c: [f64; 3], sign: f64| {
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if length > 1e-15 { n.map(|v| (sign * v / length) as f32) } else { [0.0, 0.0, sign as f32] }
+    };
     for t in triangles.chunks_exact(3) {
-        let (a, b, c) = (points[t[0]], points[t[1]], points[t[2]]);
-        let ccw = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) > 0.0;
+        let (a, b, c) = (t[0], t[1], t[2]);
+        let (pa, pb, pc) = (points[a], points[b], points[c]);
+        let ccw = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0]) > 0.0;
         // top counter-clockwise from above, bottom clockwise
         let (a, b) = if ccw { (a, b) } else { (b, a) };
-        let top = [a, b, c].map(|p| vertex(layer, p, z1, [0.0, 0.0, 1.0]));
+        let at = |i: usize, z: &[f64]| [points[i][0], points[i][1], z[i]];
+        let n = normal(at(a, &z1), at(b, &z1), at(c, &z1), 1.0);
+        let top = [a, b, c].map(|i| vertex(layer, points[i], z1[i], n));
         layer.indices.extend(top);
-        let bottom = [a, c, b].map(|p| vertex(layer, p, z0, [0.0, 0.0, -1.0]));
+        let n = normal(at(a, &z0), at(b, &z0), at(c, &z0), -1.0);
+        let bottom = [a, c, b].map(|i| vertex(layer, points[i], z0[i], n));
         layer.indices.extend(bottom);
     }
+    let mut start = 0;
     for c in &contours {
         for i in 0..c.len() {
-            let (p, q) = (c[i], c[(i + 1) % c.len()]);
+            let (k, l) = (start + i, start + (i + 1) % c.len());
+            let (p, q) = (points[k], points[l]);
             let length = (q[0] - p[0]).hypot(q[1] - p[1]);
             // outwards: right of the edge (outer counter-clockwise, holes clockwise)
             let n = [((q[1] - p[1]) / length) as f32, (-(q[0] - p[0]) / length) as f32, 0.0];
-            let quad = [(p, z0), (q, z0), (q, z1), (p, z1)].map(|(p, z)| vertex(layer, p, z, n));
+            let quad = [(p, z0[k]), (q, z0[l]), (q, z1[l]), (p, z1[k])].map(|(p, z)| vertex(layer, p, z, n));
             layer.indices.extend([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
         }
+        start += c.len();
     }
     true
 }
@@ -1465,6 +1637,38 @@ mod tests {
         assert!(near(top, highest) && near(bottom, lowest), "walls from {bottom} to {top}");
     }
 
+    /// The bounds of the walls and slabs only (§11 gives their x and y ranges; roofs reach
+    /// beyond them).
+    fn walls_and_slabs_bounds(model: &Model) -> crate::model::Bounds {
+        let mut b = crate::model::Bounds::empty();
+        for layer in model.layers.iter().filter(|l| l.name == "Walls" || l.name == "Slabs") {
+            for p in layer.positions.chunks_exact(3) {
+                b.extend([p[0], p[1], p[2]]);
+            }
+        }
+        b
+    }
+
+    /// A roof plane of §11 (v0.4): name, pitch, thickness, x, y and z ranges.
+    type RoofRow = (&'static str, f64, f64, [f64; 2], [f64; 2], [f64; 2]);
+
+    /// The roof planes (§11 v0.4), sorted by name.
+    fn check_roofs(stats: &Stats, expected: &[RoofRow]) {
+        let near = |a: f64, b: f64, tolerance: f64| (a - b).abs() < tolerance;
+        let mut roofs = stats.roofs.clone();
+        roofs.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!((roofs.len(), stats.roofs_skipped), (expected.len(), 0), "{roofs:?}");
+        for (r, (name, pitch, thickness, x, y, z)) in roofs.iter().zip(expected) {
+            assert_eq!(&r.name, name);
+            assert!(near(r.pitch, *pitch, 2e-3) && near(r.thickness, *thickness, 1e-3), "{r:?}");
+            assert!(near(r.x.0, x[0], 1e-3) && near(r.x.1, x[1], 1e-3) && near(r.y.0, y[0], 1e-3) && near(r.y.1, y[1], 1e-3), "{r:?}");
+            assert!(near(r.z.0, z[0], 1e-3) && near(r.z.1, z[1], 1e-3), "{r:?}");
+        }
+    }
+
+    /// The single roof plane of `CH04_Part2_Walls.pln` and `CH05_Result.pln`.
+    const RT_002: RoofRow = ("RT - 002", 12.0, 0.3, [0.711, 11.311], [5.141, 12.741], [5.372, 7.932]);
+
     /// The expected values of the specification (§11) for `CH04_Part2_Walls.pln`.
     #[test]
     fn sample_ch04_walls_archicad_25() {
@@ -1479,15 +1683,17 @@ mod tests {
         for ((bottom, top), expected) in slabs.iter().zip([(-0.2, 0.1), (2.47, 2.85), (2.8, 3.1)]) {
             assert!(near(*bottom, expected.0) && near(*top, expected.1), "slab {slabs:?}");
         }
-        let b = model.bounds;
+        let b = walls_and_slabs_bounds(&model);
         assert!(near(b.min[0], 1.011) && near(b.max[0], 11.011) && near(b.min[1], 1.441) && near(b.max[1], 12.441), "{b:?}");
-        assert!(near(b.min[2], -0.2), "{b:?}");
+        assert!(near(b.min[2], -0.2) && near(model.bounds.min[2], -0.2), "{b:?}");
+        check_roofs(&stats, &[RT_002]);
         check_walls(&stats, &model, 16, 4, 9.0, -0.2);
         // §11 (v0.3): no columns or beams
         assert_eq!((stats.columns.len(), stats.columns_skipped, stats.beams.len(), stats.beams_skipped), (0, 0, 0, 0));
         // the walls are on their stories, for the explorer and the exploded view
         assert!(model.props.values().filter(|p| p.contains("\"category\":\"Wall\"")).all(|p| p.contains("\"level\":")));
-        assert_eq!(model.layers.iter().map(|l| l.elements.len()).sum::<usize>(), 23);
+        // 20 walls, 3 slabs and the roof
+        assert_eq!(model.layers.iter().map(|l| l.elements.len()).sum::<usize>(), 24);
     }
 
     /// The expected values of the specification (§11) for `DEMO.pln`.
@@ -1498,9 +1704,16 @@ mod tests {
         // 7 slabs drawn and 1 without polygon skipped: the y range up to 12.698 needs the seventh
         assert_eq!((stats.slabs, stats.slabs_skipped), (7, 1));
         check_stories(&stats, &model);
-        let b = model.bounds;
+        let b = walls_and_slabs_bounds(&model);
         assert!(near(b.min[0], 1.412) && near(b.max[0], 11.429) && near(b.min[1], 1.076) && near(b.max[1], 12.698), "{b:?}");
-        assert!(near(b.min[2], -0.31), "{b:?}");
+        assert!(near(b.min[2], -0.31) && near(model.bounds.min[2], -0.31), "{b:?}");
+        check_roofs(
+            &stats,
+            &[
+                ("Roo 2.01", 11.39, 0.271, [1.827, 11.025], [6.108, 12.306], [7.482, 9.611]),
+                ("SEO 1.01", 11.393, 0.3, [11.023, 11.219], [5.838, 12.582], [7.35, 7.695]),
+            ],
+        );
         check_walls(&stats, &model, 32, 24, 7.588, -0.272);
         // §11 (v0.3): two round columns, linked; the four beams have a profile section
         check_columns(&stats, &[("C 0.01", [11.102, 12.373]), ("C 0.02", [11.102, 6.023])], (-0.25, 2.78));
@@ -1556,6 +1769,9 @@ mod tests {
         let z: Vec<f32> = layer.positions.chunks_exact(3).map(|p| p[2]).collect();
         let (low, high) = z.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
         assert!((low - 2.45).abs() < 1e-3 && (high - 2.85).abs() < 1e-3, "{low} {high}");
+        check_roofs(&stats, &[RT_002]);
+        let roofs = model.layers.iter().find(|l| l.name == "Roofs").expect("roofs");
+        assert_eq!(roofs.solid_indices().len(), roofs.indices.len(), "a closed roof body");
     }
 
     #[test]
@@ -1773,7 +1989,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file()] {
             garbage_rounds(&file);
         }
     }
@@ -1988,6 +2204,152 @@ mod tests {
             z = (z.0.min(p[2]), z.1.max(p[2]));
         }
         (xy, z)
+    }
+
+    /// §8.6 (v0.4): of two candidates that both meet the conditions, the one whose axis is found
+    /// counts; without any axis, the first.
+    #[test]
+    fn beam_candidate_with_axis_first() {
+        let data = |axis: bool| {
+            let mut data = Vec::new();
+            if axis {
+                data.extend([1.0f64, 6.0, 0.5, 5.0, 6.0, 1.0].iter().flat_map(|v| v.to_le_bytes()));
+            }
+            for (at, id, values) in [(100, "X", [0.0f64, 0.5, 7.0, 7.0, 9.0, 7.0]), (200, "B5", [0.1, 0.5, 1.0, 6.0, 5.0, 6.0])] {
+                data.resize(at - 2, 0);
+                data.extend([1, 0]);
+                data.extend((id.len() as u32).to_le_bytes());
+                data.extend(id.encode_utf16().flat_map(u16::to_le_bytes));
+                data.push(0);
+                data.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+            }
+            data
+        };
+        let with = beam_fields(&data(true)).expect("beam");
+        assert_eq!((with.id.as_str(), with.top, with.offset), ("B5", (0.5, 1.0), 0.1));
+        let without = beam_fields(&data(false)).expect("beam");
+        assert_eq!((without.id.as_str(), without.top), ("X", (0.5, 0.5)));
+    }
+
+    /// Polygon data (§7) of these contours (outer first), each closed, without arcs or z cache.
+    fn polygon_bytes(contours: &[Vec<[f64; 2]>]) -> Vec<u8> {
+        let all = contours.iter().flatten();
+        let (lo, hi) = all.fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+        let coords: usize = contours.iter().map(|c| c.len() + 1).sum();
+        let mut data: Vec<u8> = [lo[0], lo[1], hi[0], hi[1]].iter().flat_map(|v| v.to_le_bytes()).collect();
+        data.extend([coords as u32, 0, contours.len() as u32].iter().flat_map(|v| v.to_le_bytes()));
+        let points = std::iter::once([0.0, 0.0]).chain(contours.iter().flat_map(|c| c.iter().copied().chain([c[0]])));
+        data.extend(points.flat_map(|p| [p[0], p[1]]).flat_map(f64::to_le_bytes));
+        let mut end = 0u32;
+        data.extend(0u32.to_le_bytes());
+        for c in contours {
+            end += c.len() as u32 + 1;
+            data.extend(end.to_le_bytes());
+        }
+        data
+    }
+
+    /// Roof data (§8.8): the ID string at 40 with t at q+1, then hp, α and the pivot line before
+    /// the polygon at `p`.
+    fn roof_data(id: &str, p: usize, [hp, pitch, thickness]: [f64; 3], line: [f64; 4], contours: &[Vec<[f64; 2]>]) -> Vec<u8> {
+        let mut data = vec![0u8; 38];
+        data.extend([1, 0]);
+        data.extend((id.len() as u32).to_le_bytes());
+        data.extend(id.encode_utf16().flat_map(u16::to_le_bytes));
+        data.push(0);
+        data.extend(thickness.to_le_bytes());
+        data.resize(p - 62, 0);
+        data.extend(hp.to_le_bytes());
+        data.push(0);
+        data.extend(pitch.to_le_bytes());
+        data.extend(line.iter().flat_map(|v| v.to_le_bytes()));
+        data.resize(p, 0);
+        data.extend(polygon_bytes(contours));
+        data
+    }
+
+    /// A rectangle from (x0, y0) to (x1, y1), counter-clockwise.
+    fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<[f64; 2]> {
+        vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    }
+
+    /// Roofs on the story "Hall" (4.5 m), 0x84 blocks in the outer layer:
+    /// - R1: 30°, hp 0.2, t 0.25, pivot line (0, 0)-(4, 0), the plane to its left (y 0 to 3):
+    ///   rising to the left of the line;
+    /// - R2: the same to its right (y −3 to 0): rising to the right;
+    /// - R3: flat, t 0.3, no pivot line;
+    /// - R4: 20°, a 4 × 4 plane with a 1 × 1 hole;
+    /// - R5: no polygon; R6: its polygon too near the start (p < 300); R7: thickness 0.
+    fn roofs_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+        ];
+        let line = [0.0, 0.0, 4.0, 0.0];
+        let roofs = [
+            roof_data("R1", 320, [0.2, 30.0, 0.25], line, &[rectangle(0.0, 0.0, 4.0, 3.0)]),
+            roof_data("R2", 320, [0.2, 30.0, 0.25], line, &[rectangle(0.0, -3.0, 4.0, 0.0)]),
+            roof_data("R3", 320, [0.2, 0.0, 0.3], [0.0; 4], &[rectangle(10.0, 0.0, 12.0, 2.0)]),
+            roof_data("R4", 320, [0.0, 20.0, 0.2], [20.0, 0.0, 24.0, 0.0], &[rectangle(20.0, 0.0, 24.0, 4.0), rectangle(21.0, 1.0, 22.0, 2.0)]),
+            roof_data("R5", 320, [0.0, 20.0, 0.2], line, &[]).into_iter().take(320).collect(),
+            roof_data("R6", 290, [0.0, 20.0, 0.2], line, &[rectangle(0.0, 0.0, 1.0, 1.0)]),
+            roof_data("R7", 320, [0.0, 20.0, 0.0], line, &[rectangle(0.0, 0.0, 1.0, 1.0)]),
+        ];
+        for (k, data) in roofs.iter().enumerate() {
+            blocks.push(block([0x70 + k as u8; 16], 0x84, &record(ROOF, data, &link(ON_STORY, STORY_ID)), 0));
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    #[test]
+    fn reads_roofs() {
+        let (loaded, stats) = convert(read_bytes(&roofs_file()).expect("container")).expect("roofs");
+        assert_eq!((stats.roofs.len(), stats.roofs_skipped, stats.roofs_no_polygon, stats.roofs_unreadable), (4, 3, 2, 1));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad roofs" && v == "4 read, 3 skipped (2 without a polygon, 1 with fields that do not read)"));
+        let roofs = &loaded.layers[0];
+        assert_eq!((roofs.name.as_str(), roofs.elements.len()), ("Roofs", 4));
+        // every body is closed and faces out
+        assert_eq!(roofs.solid_indices().len(), roofs.indices.len());
+        let (tan, up) = (30f64.to_radians().tan(), 0.25 / 30f64.to_radians().cos());
+        // the corners of an element: (x, y) -> (lowest, highest z)
+        let corners = |element: usize| {
+            let (_, first, count) = roofs.elements[element];
+            let mut out: Vec<([f32; 2], f32, f32)> = Vec::new();
+            for &i in &roofs.indices[first as usize..(first + count) as usize] {
+                let p = &roofs.positions[3 * i as usize..3 * i as usize + 3];
+                match out.iter_mut().find(|c| (c.0[0] - p[0]).abs() < 1e-5 && (c.0[1] - p[1]).abs() < 1e-5) {
+                    Some(c) => (c.1, c.2) = (c.1.min(p[2]), c.2.max(p[2])),
+                    None => out.push(([p[0], p[1]], p[2], p[2])),
+                }
+            }
+            out
+        };
+        let z_at = |element: usize, x: f32, y: f32| corners(element).into_iter().find(|c| c.0 == [x, y]).map(|c| (c.1 as f64, c.2 as f64)).unwrap();
+        let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-5 && (a.1 - b.1).abs() < 1e-5;
+        // R1: the underside on the pivot line at 4.5 + 0.2, rising to the left (+y)
+        assert!(near(z_at(0, 0.0, 0.0), (4.7, 4.7 + up)) && near(z_at(0, 4.0, 3.0), (4.7 + 3.0 * tan, 4.7 + 3.0 * tan + up)));
+        // R2: the plane right of the line rises to the right (−y)
+        assert!(near(z_at(1, 4.0, 0.0), (4.7, 4.7 + up)) && near(z_at(1, 0.0, -3.0), (4.7 + 3.0 * tan, 4.7 + 3.0 * tan + up)));
+        // the top of R1 faces up and away from its rise
+        let (_, first, _) = roofs.elements[0];
+        let top = roofs.indices[first as usize..].chunks_exact(3).map(|t| &roofs.normals[3 * t[0] as usize..3 * t[0] as usize + 3]).find(|n| n[2] > 0.5).unwrap();
+        let s = 30f32.to_radians().sin_cos();
+        assert!((top[0]).abs() < 1e-5 && (top[1] + s.0).abs() < 1e-5 && (top[2] - s.1).abs() < 1e-5, "{top:?}");
+        // R3: flat from 4.7 up 0.3
+        assert!(corners(2).iter().all(|c| (c.1 - 4.7).abs() < 1e-5 && (c.2 - 5.0).abs() < 1e-5));
+        // R4: the hole stays open: 8 triangles per face around it, 8 sides
+        let (_, _, count) = roofs.elements[3];
+        assert_eq!(count / 3, 2 * 8 + 8 * 2);
+        assert!(roofs.props[3].1.contains("\"Pitch\":\"20.00°\"") && roofs.props[3].1.contains("\"Thickness\":\"200 mm\""));
+        assert_eq!(stats.roofs[0].z, (4.7, 4.7 + 3.0 * tan + up));
     }
 
     #[test]

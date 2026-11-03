@@ -1649,11 +1649,19 @@ impl V8Converter<'_> {
         // line above it, along the dimension's y axis.
         let points: Vec<DVec3> = (0..count).map(|i| DVec3::new(e.f64(0x130 + 0x30 * i), e.f64(0x138 + 0x30 * i), 0.0)).collect();
         let height = e.f64(0x130 + 0x18);
-        // The columns of the 2 x 2 matrix at +0x110 are the dimension's x and y axes.
+        // The columns of the 2 x 2 matrix at +0x110 are the dimension's x and y axes: of length 1,
+        // but not always perpendicular (isometric dimensions, such as x = (0.866, 0.5), y = (0, 1)).
         let [m0, m1, m2, m3] = [0, 1, 2, 3].map(|k| e.f64(0x110 + 8 * k));
-        let (x, y) = (DVec3::new(m0, m2, 0.0).normalize_or_zero(), DVec3::new(m1, m3, 0.0).normalize_or_zero());
+        let (x, y) = (DVec3::new(m0, m2, 0.0), DVec3::new(m1, m3, 0.0));
         let base = points[0] + y * height;
-        let along: Vec<f64> = points.iter().map(|&p| (p - base).dot(x)).collect();
+        // Each point is base + d x + e y: d from the 2 x 2 system, which needs axes that are not
+        // parallel. The foot of the point lies at d along the dimension line.
+        let determinant = x.x * y.y - x.y * y.x;
+        if !(determinant.abs() > 1e-9 * x.length() * y.length()) { self.omit("Dimension"); return; }
+        let along: Vec<f64> = points.iter().map(|&p| {
+            let v = p - base;
+            (v.x * y.y - v.y * y.x) / determinant
+        }).collect();
         let feet: Vec<DVec3> = along.iter().map(|&d| base + x * d).collect();
         // The feet lie in the element's range (+0x38 low corner, +0x50 size, UOR), give or take
         // 1% of its largest size; the points themselves often do not.
@@ -1661,7 +1669,7 @@ impl V8Converter<'_> {
         let (low, size) = (range(0x38), range(0x50));
         let margin = 0.01 * size.max_element();
         let inside = |q: &DVec3| (0..2).all(|a| q[a] >= low[a] - margin && q[a] <= low[a] + size[a] + margin);
-        if x == DVec3::ZERO || y == DVec3::ZERO || !feet.iter().all(|q| q.is_finite() && inside(q)) {
+        if !feet.iter().all(|q| q.is_finite() && inside(q)) {
             self.omit("Dimension");
             return;
         }
@@ -1669,8 +1677,9 @@ impl V8Converter<'_> {
             if point != foot { self.push(e, id, Shape::Stroke(vec![point, foot])); }
         }
         self.push(e, id, Shape::Stroke(feet));
+        // The measured value is |d(i+1) - d(i)| times the length of the x axis, in master units.
         let master_per_uor = self.design.metres_per_uor / self.design.metres_per_master;
-        self.measures.extend(along.windows(2).map(|pair| (pair[1] - pair[0]).abs() * master_per_uor));
+        self.measures.extend(along.windows(2).map(|pair| (pair[1] - pair[0]).abs() * x.length() * master_per_uor));
     }
 
     /// A shared cell: the components of its definition (among the non-model elements), placed by
@@ -2610,6 +2619,26 @@ mod tests {
         assert_eq!(colors.iter().filter(|c| **c == [255, 255, 0, 255]).count(), 6, "two fill triangles");
         assert!(colors.iter().filter(|c| **c != [255, 255, 0, 255]).all(|c| *c == [0, 0, 255, 255]));
         assert!(frame.props[0].1.contains("\"Fill colour index\":4"), "{}", frame.props[0].1);
+    }
+
+    #[test]
+    fn v8_isometric_dimensions_solve_for_their_skewed_axes() {
+        // x = (cos 30, sin 30), y = (0, 1): vertical extension lines, a dimension line at 30 degrees.
+        let c = 3f64.sqrt() / 2.0;
+        let mut f = V8File::new(1000.0, 1.0, 1.0, [0.0; 3]);
+        // The dimension line runs 1 m below P0 = (0, 0) (h = -1), so its feet are B = (0, -1) m and
+        // B + 3 x = (2.598, 0.5) m; P1 lies 1.5 m above its foot. Projected with a dot product
+        // instead, the second foot would fall at (3.248, 0.875) m, outside the range.
+        let p1 = [3000.0 * c, 2000.0];
+        f.graphic(dimension(34, &[[0.0, 0.0], p1], -1000.0, [c, 0.0, 0.5, 1.0], [0, -1000], [(3000.0 * c) as i64, 1500], 0));
+        let loaded = load(f.bytes()).unwrap();
+        assert_eq!(info(&loaded, "DGN elements"), "Dimension: 1");
+        assert_eq!(info(&loaded, "DGN skipped elements"), "0");
+        let layer = &loaded.layers[0];
+        assert!(layer.props[0].1.contains("\"Measured (master units)\":\"3\""), "{}", layer.props[0].1);
+        // The world origin is P0; the lines span x 0 to 2.598 m and y -1 to 2 m.
+        let (lo, hi) = bounds(layer);
+        assert!(lo[0].abs() < 0.02 && (hi[0] - 3.0 * c as f32).abs() < 0.02 && (lo[1] + 1.0).abs() < 0.02 && (hi[1] - 2.0).abs() < 0.02, "{lo:?} {hi:?}");
     }
 }
 

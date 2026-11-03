@@ -62,7 +62,7 @@ To check a download yourself:
 sha256sum -c SHA256SUMS --ignore-missing
 gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, fingerprint 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
 gpg --verify SHA256SUMS.asc SHA256SUMS
-gh attestation verify open-3d-viewer_2026.45.1_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+gh attestation verify open-3d-viewer_2026.45.0_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
 ## OpenAEC Linux (SuperCloud)
@@ -180,7 +180,7 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## Testing and reliability
 
-- **174 unit tests** in `src/` (172 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 86 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 8 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **176 unit tests** in `src/` (174 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 88 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 8 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -230,7 +230,7 @@ open-3d-viewer FILE --save-as OUT.ifc
 open-3d-viewer --bench FILE [--frames 300]
 ```
 
-Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.1`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
+Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.0`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
 
 Open 3D Viewer Studio is part of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation) family of apps.
 

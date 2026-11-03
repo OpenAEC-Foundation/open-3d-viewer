@@ -252,8 +252,8 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     let stream = &data[..end];
     let mut p = STREAM_START;
     let mut runs = None;
-    // The first element record per key, with its data when it has any (§8.1).
-    let mut by_key: HashMap<Key, Option<usize>> = HashMap::new();
+    // Per key the first element record with data (§8.1); u32@24 = 0 is no key.
+    let mut by_key: HashMap<Key, usize> = HashMap::new();
     while p + 8 <= stream.len() {
         if is_padding(stream, p) {
             p += 8;
@@ -263,12 +263,11 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
             match stream[p + 4] {
                 0xC6 => drawing.body(&stream[p..p + step], p),
                 0xEF | 0x6F => {
-                    if let Some(key) = key_at(stream, p) {
-                        by_key.entry(key).or_insert_with(|| {
-                            let element = decode_element(&stream[p..p + step], p)?;
+                    if let Some(key) = key_at(stream, p).filter(|key| key.0 != 0 && !by_key.contains_key(key)) {
+                        if let Some(element) = decode_element(&stream[p..p + step], p) {
                             drawing.elements.push(element);
-                            Some(drawing.elements.len() - 1)
-                        });
+                            by_key.insert(key, drawing.elements.len() - 1);
+                        }
                     }
                 }
                 _ => {}
@@ -285,7 +284,7 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     }
     // Element records may come before or after their body.
     for body in &mut drawing.bodies {
-        body.element = by_key.get(&body.key).copied().flatten();
+        body.element = if body.key.0 == 0 { None } else { by_key.get(&body.key).copied() };
     }
     Ok(drawing)
 }
@@ -1240,12 +1239,21 @@ mod tests {
         push(&mut s, element((8, 1), true, "", [0.0; 5], Some((0x77, 0x01)), 36), false);
         // 8: same u32 as element 0 but another u16: not linked.
         push(&mut s, keyed(at(8.0), (1, 2)), true);
+        // 9: a first record without data does not count; a later one with data does (§8.1).
+        push(&mut s, element((9, 1), false, "No data", [0.9; 5], Some((0x01, 0x01)), 36), false);
+        push(&mut s, keyed(at(9.0), (9, 1)), true);
+        push(&mut s, element((9, 1), true, "Later", [0.6; 5], Some((0x01, 0x06)), 36), false);
+        // 10: u32@24 = 0 is no key: neither the element record nor the body takes part (§8.1).
+        push(&mut s, element((0, 5), true, "No key", [0.7; 5], Some((0x01, 0x01)), 36), false);
+        push(&mut s, keyed(at(10.0), (0, 5)), true);
 
         let drawing = parse(&file(3, "Elements", &s)).unwrap();
         assert_eq!(drawing.bodies.iter().map(|b| b.offset).collect::<Vec<_>>(), offsets);
         let element_of = |i: usize| drawing.bodies[i].element.map(|e| &drawing.elements[e]);
-        let linked: Vec<bool> = (0..9).map(|i| element_of(i).is_some()).collect();
-        assert_eq!(linked, [true, true, true, false, true, false, true, true, false]);
+        let linked: Vec<bool> = (0..11).map(|i| element_of(i).is_some()).collect();
+        assert_eq!(linked, [true, true, true, false, true, false, true, true, false, true, false]);
+        assert_eq!(element_of(9).unwrap().name, "Later");
+        assert!(drawing.elements.iter().all(|e| e.name != "No key"));
         let wall = element_of(0).unwrap();
         assert_eq!((wall.name.as_str(), wall.quantities, wall.type_code), ("WA-RFC", q, Some((0x01, 0x01))));
         assert_eq!(element_of(2).unwrap().name, "First");
@@ -1260,8 +1268,9 @@ mod tests {
             [
                 ("Walls", 1, false),
                 ("Slabs", 1, false),
+                ("Beams", 1, false),
                 ("Stairs", 1, false),
-                ("Other", 5, false),
+                ("Other", 6, false),
                 ("Auxiliary bodies (openings, rooms)", 1, true)
             ]
         );
@@ -1283,7 +1292,7 @@ mod tests {
         assert!(unknown.get("Name").is_none());
         let loose = props_of(&loaded, offsets[5]);
         assert!(loose.get("Name").is_none() && loose.get("Height (m)").is_none());
-        assert!(loaded.project.info.contains(&("Allplan bodies linked to an element".into(), "6".into())));
+        assert!(loaded.project.info.contains(&("Allplan bodies linked to an element".into(), "7".into())));
     }
 
     #[test]

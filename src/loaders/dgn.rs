@@ -5,9 +5,9 @@
 //! Structure)" and the clean-room notes of the DGN analysis (design file header, colour table and
 //! quaternion layout were measured on sample files). The V8 reader is written only from the
 //! clean-room specification of the DGN analysis (`SPEC_v0.1.md` §B) and Microsoft's public
-//! [MS-CFB] description of the compound file. V8 dimensions, multi-lines, tags, surfaces, solids,
-//! meshes, further models and other elements the specification does not describe yet are skipped
-//! and counted.
+//! [MS-CFB] description of the compound file. V8 dimensions other than 2D linear ones,
+//! multi-lines, tags, surfaces, solids, meshes, further models and other elements the
+//! specification does not describe yet are skipped and counted.
 //!
 //! The scene draws triangles only, so lines, arcs, curves and text boxes become thin ribbons: flat
 //! in 2D files, two crossed ribbons in 3D files, as wide as the line weight on a scale set by the
@@ -1334,6 +1334,8 @@ struct V8Design {
     /// Global origin in units of resolution.
     origin: DVec3,
     metres_per_uor: f64,
+    /// For measured distances of dimensions.
+    metres_per_master: f64,
     units: String,
     three_d: bool,
     /// Level names by level ID.
@@ -1347,8 +1349,8 @@ struct V8Design {
 
 impl V8Design {
     fn new(header: Option<&[u8]>, tables: &[V8Element], model: &[V8Element]) -> Self {
-        let (origin, metres_per_uor, units) = model_units(header)
-            .unwrap_or((DVec3::ZERO, 1.0, "none in the model header (1 UOR = 1 m assumed)".into()));
+        let (origin, metres_per_uor, metres_per_master, units) = model_units(header)
+            .unwrap_or((DVec3::ZERO, 1.0, 1.0, "none in the model header (1 UOR = 1 m assumed)".into()));
         // Levels: type 95 entries of kind 1, with the ID at +0x20 and the name in string linkage 1.
         let mut levels = BTreeMap::new();
         for e in tables.iter().filter(|e| e.kind() == 95 && e.level() == 1) {
@@ -1369,7 +1371,7 @@ impl V8Design {
         let mut folded = BTreeMap::new();
         for (name, &range) in &definitions { folded.entry(name.to_ascii_lowercase()).or_insert(range); }
         let three_d = model.iter().any(|e| e.graphic() && e.three_d());
-        V8Design { origin, metres_per_uor, units, three_d, levels, colors, definitions, folded }
+        V8Design { origin, metres_per_uor, metres_per_master, units, three_d, levels, colors, definitions, folded }
     }
 
     /// Design coordinates (UOR) to world metres.
@@ -1389,7 +1391,8 @@ impl V8Design {
 
 /// Global origin, metres per UOR and a description of the units from the model header (B.5):
 /// zlib data of 4096 bytes, a 4-byte prefix and an element of type 66.
-fn model_units(packed: Option<&[u8]>) -> Option<(DVec3, f64, String)> {
+/// Also the metres per master unit (1 when the header gives none).
+fn model_units(packed: Option<&[u8]>) -> Option<(DVec3, f64, f64, String)> {
     let mut unpacked = Vec::new();
     inflate(packed?, &mut unpacked, MAX_MODEL_HEADER).ok()?;
     let e = V8Element { bytes: unpacked.get(0x1004..)? };
@@ -1404,7 +1407,8 @@ fn model_units(packed: Option<&[u8]>) -> Option<(DVec3, f64, String)> {
         "1 master unit = {} m, 1 sub unit = {} m, 1 UOR = {metres_per_uor} m ({uor_per_storage} UOR per storage unit of {} m)",
         1.0 / per_metre(0x50), 1.0 / per_metre(0x60), 1.0 / per_metre(0xE8),
     );
-    Some((origin, metres_per_uor, units))
+    let metres_per_master = Some(1.0 / per_metre(0x50)).filter(|m| m.is_finite() && *m > 0.0).unwrap_or(1.0);
+    Some((origin, metres_per_uor, metres_per_master, units))
 }
 
 fn read_v8(data: &[u8]) -> Result<Loaded, String> {
@@ -1424,7 +1428,7 @@ fn read_v8(data: &[u8]) -> Result<Loaded, String> {
     let tables = v8_elements(&table_bytes, &mut scene)?;
     let design = V8Design::new(header.as_deref(), &tables, &graphics);
     let mut converter = V8Converter {
-        design: &design, tables: &tables, scene, placement: (DMat3::IDENTITY, DVec3::ZERO), instance_level: None, active: Vec::new(), visits: 0,
+        design: &design, tables: &tables, scene, placement: (DMat3::IDENTITY, DVec3::ZERO), instance_level: None, active: Vec::new(), visits: 0, measures: Vec::new(),
     };
     let mut i = 0;
     while i < graphics.len() {
@@ -1452,6 +1456,8 @@ struct V8Converter<'a> {
     /// The shared cell definitions being drawn, to stop a definition that holds itself.
     active: Vec<usize>,
     visits: usize,
+    /// Distances measured by the dimensions of the top-level element being drawn, in master units.
+    measures: Vec<f64>,
 }
 
 impl V8Converter<'_> {
@@ -1472,6 +1478,7 @@ impl V8Converter<'_> {
         let id = self.scene.new_id();
         let before = self.scene.prims.len();
         let mut texts = Vec::new();
+        self.measures.clear();
         self.draw(all, i, all.len(), id, 0, &mut texts);
         if self.scene.prims.len() == before { return next; }
         let level = e.level();
@@ -1483,6 +1490,10 @@ impl V8Converter<'_> {
         if e.u32(0x20) != 0 { props["Graphic group"] = e.u32(0x20).into(); }
         if matches!(e.kind(), 2 | 35) { if let Some(name) = e.name() { props["Cell"] = name.into(); } }
         if !texts.is_empty() { props["Text"] = texts.join("\n").into(); }
+        if !self.measures.is_empty() {
+            let values: Vec<String> = self.measures.iter().map(|v| ((v * 1e6).round() / 1e6).to_string()).collect();
+            props["Measured (master units)"] = values.join("; ").into();
+        }
         self.scene.record(id, e.kind(), level, props);
         next
     }
@@ -1538,6 +1549,7 @@ impl V8Converter<'_> {
                 let points = e.vertices();
                 if e.h_bit() { for p in points { self.push(&e, id, Shape::Stroke(vec![p])); } } else { self.push(&e, id, Shape::Stroke(points)); }
             }
+            33 => self.dimension(&e, id),
             35 => self.shared_cell(&e, id, depth, texts),
             kind => self.omit(&kind_label(kind)),
         }
@@ -1563,6 +1575,41 @@ impl V8Converter<'_> {
         };
         self.push(e, id, Shape::Stroke(text_box(e.point(origin_at), e.rotation(0x90), width, height)));
         if let Some(text) = text.filter(|t| !t.trim().is_empty()) { texts.push(text); }
+    }
+
+    /// A 2D linear dimension (B.10): an extension line from each of its points to the point's
+    /// foot on the dimension line, and the dimension line through the feet; the measured
+    /// distances go to the properties. 3D dimensions, short ones and other kinds of dimension
+    /// (angular, radial, ordinate: a foot more than 1% outside the element's range) are skipped.
+    fn dimension(&mut self, e: &V8Element, id: u64) {
+        let count = usize::from(e.bytes.get(0x87).copied().unwrap_or(0));
+        if e.three_d() || count < 2 || e.len() < 0x130 + 0x30 * count { self.omit("Dimension"); return; }
+        // Points of 0x30 bytes from +0x130; h of the first point is the height of the dimension
+        // line above it, along the dimension's y axis.
+        let points: Vec<DVec3> = (0..count).map(|i| DVec3::new(e.f64(0x130 + 0x30 * i), e.f64(0x138 + 0x30 * i), 0.0)).collect();
+        let height = e.f64(0x130 + 0x18);
+        // The columns of the 2 x 2 matrix at +0x110 are the dimension's x and y axes.
+        let [m0, m1, m2, m3] = [0, 1, 2, 3].map(|k| e.f64(0x110 + 8 * k));
+        let (x, y) = (DVec3::new(m0, m2, 0.0).normalize_or_zero(), DVec3::new(m1, m3, 0.0).normalize_or_zero());
+        let base = points[0] + y * height;
+        let along: Vec<f64> = points.iter().map(|&p| (p - base).dot(x)).collect();
+        let feet: Vec<DVec3> = along.iter().map(|&d| base + x * d).collect();
+        // The feet lie in the element's range (+0x38 low corner, +0x50 size, UOR), give or take
+        // 1% of its largest size; the points themselves often do not.
+        let range = |at: usize| DVec3::new(le64(e.bytes, at) as i64 as f64, le64(e.bytes, at + 8) as i64 as f64, le64(e.bytes, at + 16) as i64 as f64);
+        let (low, size) = (range(0x38), range(0x50));
+        let margin = 0.01 * size.max_element();
+        let inside = |q: &DVec3| (0..2).all(|a| q[a] >= low[a] - margin && q[a] <= low[a] + size[a] + margin);
+        if x == DVec3::ZERO || y == DVec3::ZERO || !feet.iter().all(|q| q.is_finite() && inside(q)) {
+            self.omit("Dimension");
+            return;
+        }
+        for (&point, &foot) in points.iter().zip(&feet) {
+            if point != foot { self.push(e, id, Shape::Stroke(vec![point, foot])); }
+        }
+        self.push(e, id, Shape::Stroke(feet));
+        let master_per_uor = self.design.metres_per_uor / self.design.metres_per_master;
+        self.measures.extend(along.windows(2).map(|pair| (pair[1] - pair[0]).abs() * master_per_uor));
     }
 
     /// A shared cell: the components of its definition (among the non-model elements), placed by
@@ -2377,6 +2424,52 @@ mod tests {
         assert_eq!(v8_span(&all, 1, all.len(), 1), 3, "the nested text node owns one text");
         assert_eq!(v8_span(&all, 0, all.len(), 1), 4, "a nested cell owns its two components");
         assert_eq!(v8_span(&all, 0, all.len(), 0), 4);
+    }
+
+    /// A 2D dimension (B.10) on `level`: `points` (x, y), the height `h` of the first point, the
+    /// 2 x 2 matrix `m` and the element range (`low`, `size`, UOR).
+    fn dimension(level: u32, points: &[[f64; 2]], h: f64, m: [f64; 4], low: [i64; 2], size: [i64; 2], properties: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 0x130 - 0x68 + 0x30 * points.len()];
+        data[0x87 - 0x68] = points.len() as u8;
+        data[0x110 - 0x68..0x130 - 0x68].copy_from_slice(&doubles(&m));
+        for (i, p) in points.iter().enumerate() {
+            let at = 0x130 - 0x68 + 0x30 * i;
+            data[at..at + 0x20].copy_from_slice(&doubles(&[p[0], p[1], 0.0, if i == 0 { h } else { 0.0 }]));
+        }
+        let mut e = v8(33, 0x1000, level, shown(properties, 0), &data, &[]);
+        for (k, value) in [low[0], low[1], 0, size[0], size[1], 0].iter().enumerate() {
+            e[0x38 + 8 * k..0x40 + 8 * k].copy_from_slice(&value.to_le_bytes());
+        }
+        e
+    }
+
+    #[test]
+    fn v8_linear_dimensions_draw_extension_and_dimension_lines() {
+        const IDENTITY: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
+        let mut f = V8File::new(1000.0, 1.0, 1.0, [0.0; 3]);
+        // From (0, 0) to (3, 0) m with the dimension line 1 m above.
+        f.graphic(dimension(31, &[[0.0, 0.0], [3000.0, 0.0]], 1000.0, IDENTITY, [0, 0], [3000, 1000], 0));
+        // A chain of three points along Y at x = 10 m, the dimension line 1 m to the left: the
+        // x axis is the first column (0, 1), the y axis the second (-1, 0). Read as rows, the line
+        // would lie 1 m to the right, outside the range.
+        f.graphic(dimension(32, &[[10_000.0, 0.0], [10_000.0, 2000.0], [10_000.0, 5000.0]], 1000.0, [0.0, -1.0, 1.0, 0.0], [9000, 0], [1000, 5000], 0));
+        // Skipped: feet outside the range (another kind of dimension), one point, a 3D dimension.
+        f.graphic(dimension(33, &[[0.0, 20_000.0], [3000.0, 20_000.0]], 1000.0, IDENTITY, [50_000, 50_000], [3000, 1000], 0));
+        f.graphic(dimension(33, &[[0.0, 20_000.0]], 1000.0, IDENTITY, [0, 20_000], [3000, 1000], 0));
+        f.graphic(dimension(33, &[[0.0, 20_000.0], [3000.0, 20_000.0]], 1000.0, IDENTITY, [0, 20_000], [3000, 1000], D3));
+        let loaded = load(f.bytes()).unwrap();
+        assert_eq!(info(&loaded, "DGN elements"), "Dimension: 2");
+        assert_eq!(info(&loaded, "DGN skipped elements"), "Dimension: 3");
+        assert_eq!(loaded.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Level 31", "Level 32"]);
+        let (plain, chain) = (&loaded.layers[0], &loaded.layers[1]);
+        assert_eq!(plain.elements.len(), 1, "a dimension is one element");
+        assert!(plain.props[0].1.contains("\"DGN element\":\"Dimension\"") && plain.props[0].1.contains("\"Measured (master units)\":\"3\""), "{}", plain.props[0].1);
+        // The world origin is the first point (0, 0); lines up to the dimension line at y = 1 m.
+        let (lo, hi) = bounds(plain);
+        assert!(lo[0].abs() < 0.02 && (hi[0] - 3.0).abs() < 0.02 && lo[1].abs() < 0.02 && (hi[1] - 1.0).abs() < 0.02, "{lo:?} {hi:?}");
+        assert!(chain.props[0].1.contains("\"Measured (master units)\":\"2; 3\""), "{}", chain.props[0].1);
+        let (lo, hi) = bounds(chain);
+        assert!((lo[0] - 9.0).abs() < 0.02 && (hi[0] - 10.0).abs() < 0.02 && lo[1].abs() < 0.02 && (hi[1] - 5.0).abs() < 0.02, "{lo:?} {hi:?}");
     }
 }
 

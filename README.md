@@ -111,7 +111,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 - **Orbit, pan and zoom.** Left drag orbits, middle drag pans, the wheel zooms to the cursor. The view cube turns the model to a side; **F** fits the model in view.
 - **Standard views.** Iso, top, front and right (`0`, `1`, `2`, `3`), perspective or orthographic (`P`, `O`), and the saved views of a Revit model.
 - **Render modes.** Solid, wireframe and solid with edges (`S`, `W`, `E`), the ground grid (`G`) and **Flip up** for files with the other up axis.
-- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Archicad walls, slabs, columns and beams, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
+- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Allplan element categories, Archicad walls, slabs, columns and beams, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
 - **Shortcuts.** Every command has one entry in one list, used by the ribbon, the title bar and the keyboard. In **Settings** you give any command your own key.
 
 ## Measure, section and explode
@@ -155,7 +155,7 @@ What does not come through:
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
-- **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in one colour; openings and rooms start hidden in a layer of their own. Macros (3D furniture), colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
+- **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category, each with a fixed colour; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (3D furniture), the drawing's own colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
 - **Archicad** shows walls, slabs and columns as extruded footprints on their stories, and beams along their axis, sloped ones too. Roofs, openings (doors, windows), library objects, columns and beams with a profile cross-section, and projects from before Archicad 25 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 

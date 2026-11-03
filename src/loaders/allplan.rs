@@ -23,11 +23,18 @@ pub struct AllplanLoader;
 impl Loader for AllplanLoader {
     fn name(&self) -> &'static str { "Allplan" }
     fn extensions(&self) -> &'static [&'static str] { &["ndw"] }
+    /// A project folder `*.prj` opens as a whole (§11), e.g. dropped on the window.
+    fn folder_extensions(&self) -> &'static [&'static str] { &["prj"] }
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)
     }
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
+        if let Some(dir) = source.path().filter(|path| path.is_dir()) {
+            let project = read_project(dir)?;
+            progress.set(Phase::Convert);
+            return build_project(&project);
+        }
         let data = source.read()?;
         progress.set(Phase::Convert);
         let drawing = parse(&data)?;
@@ -1012,20 +1019,7 @@ impl Folder {
 
 impl ProjectFiles for Folder {
     fn read(&mut self, path: &[&str]) -> Option<Vec<u8>> {
-        let mut at = self.root.clone();
-        for part in path {
-            let listing = self.listings.entry(at.clone()).or_insert_with(|| {
-                std::fs::read_dir(&at)
-                    .map(|entries| {
-                        entries
-                            .flatten()
-                            .map(|entry| (entry.file_name().to_string_lossy().to_lowercase(), entry.path()))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            });
-            at = listing.get(&part.to_lowercase())?.clone();
-        }
+        let at = self.find(path)?;
         let metadata = std::fs::metadata(&at).ok()?;
         if !metadata.is_file() || metadata.len() > MAX_PROJECT_FILE {
             return None;
@@ -1202,7 +1196,7 @@ fn color_table(data: &[u8]) -> HashMap<u16, [u8; 3]> {
 enum Paint {
     Surface { rgb: [u8; 3], textured: bool },
     Number([u8; 3]),
-    /// The category colour of the layer.
+    /// The category colour.
     Fallback,
 }
 
@@ -1216,6 +1210,43 @@ impl Paint {
     }
 }
 
+/// How many bodies took their colour from which source.
+#[derive(Debug, Default, Clone, Copy)]
+struct Tally {
+    textured: usize,
+    plain: usize,
+    number: usize,
+    fallback: usize,
+}
+
+impl Tally {
+    fn add(&mut self, paint: Paint) {
+        match paint {
+            Paint::Surface { textured: true, .. } => self.textured += 1,
+            Paint::Surface { .. } => self.plain += 1,
+            Paint::Number(_) => self.number += 1,
+            Paint::Fallback => self.fallback += 1,
+        }
+    }
+
+    fn merge(&mut self, other: Tally) {
+        self.textured += other.textured;
+        self.plain += other.plain;
+        self.number += other.number;
+        self.fallback += other.fallback;
+    }
+
+    fn text(&self) -> String {
+        format!(
+            "surface {} (textured {}), colour number {}, category colour {}",
+            self.textured + self.plain,
+            self.textured,
+            self.number,
+            self.fallback
+        )
+    }
+}
+
 /// The colours of the bodies of a drawing file from its project folder (§10).
 struct Painted {
     /// Per drawing body.
@@ -1224,18 +1255,35 @@ struct Painted {
     macros: Vec<Vec<Paint>>,
     /// Some colour came from the project files: the layers get vertex colours.
     active: bool,
+    /// The visible bodies of the drawing file, and the macro bodies.
+    visible: Tally,
+    macro_bodies: Tally,
     info: Vec<(String, String)>,
 }
 
-/// Looks up the colour of every body (§10): its surface, else its colour number, else the
-/// category colour. Every file is read once.
-fn paint(drawing: &Drawing, files: &mut dyn ProjectFiles) -> Painted {
-    let config = files.read(&["animation.cfg"]);
-    let table = config.as_deref().map(color_table).unwrap_or_default();
-    let mut surfaces: HashMap<String, Option<([u8; 3], bool)>> = HashMap::new();
-    let mut paint_body = |body: &Body| -> Paint {
+/// Colours from a project folder (§10): `animation.cfg` is read once, each surface once, for any
+/// number of drawing files.
+struct Painter<'a> {
+    files: &'a mut dyn ProjectFiles,
+    /// Version field and size of `animation.cfg`, when there is one.
+    config: Option<(u16, usize)>,
+    table: HashMap<u16, [u8; 3]>,
+    surfaces: HashMap<String, Option<([u8; 3], bool)>>,
+}
+
+impl<'a> Painter<'a> {
+    fn new(files: &'a mut dyn ProjectFiles) -> Self {
+        let config = files.read(&["animation.cfg"]);
+        let table = config.as_deref().map(color_table).unwrap_or_default();
+        let config = config.map(|data| (u16_at(&data, 2).unwrap_or(0), table.len()));
+        Self { files, config, table, surfaces: HashMap::new() }
+    }
+
+    /// The colour of a body: its surface, else its colour number, else the category colour.
+    fn body(&mut self, body: &Body) -> Paint {
         if let Some(name) = &body.surface {
-            let found = *surfaces.entry(name.to_lowercase()).or_insert_with(|| {
+            let files = &mut *self.files;
+            let found = *self.surfaces.entry(name.to_lowercase()).or_insert_with(|| {
                 let parts = surface_path(name)?;
                 let path: Vec<&str> = std::iter::once("design").chain(parts).collect();
                 surface_color(&files.read(&path)?)
@@ -1244,50 +1292,47 @@ fn paint(drawing: &Drawing, files: &mut dyn ProjectFiles) -> Painted {
                 return Paint::Surface { rgb, textured };
             }
         }
-        table.get(&body.color_number).map_or(Paint::Fallback, |&rgb| Paint::Number(rgb))
-    };
-    let bodies: Vec<Paint> = drawing.bodies.iter().map(&mut paint_body).collect();
-    let macros: Vec<Vec<Paint>> = drawing.macros.iter().map(|m| m.bodies.iter().map(&mut paint_body).collect()).collect();
-    let all = || bodies.iter().chain(macros.iter().flatten());
-    let active = all().any(|p| *p != Paint::Fallback);
-    let visible: Vec<Paint> = drawing.bodies.iter().zip(&bodies).filter(|(b, _)| !b.auxiliary).map(|(_, p)| *p).collect();
-    let tally = |paints: &mut dyn Iterator<Item = Paint>| {
-        let (mut textured, mut plain, mut number, mut fallback) = (0, 0, 0, 0);
-        for paint in paints {
-            match paint {
-                Paint::Surface { textured: true, .. } => textured += 1,
-                Paint::Surface { .. } => plain += 1,
-                Paint::Number(_) => number += 1,
-                Paint::Fallback => fallback += 1,
-            }
-        }
+        self.table.get(&body.color_number).map_or(Paint::Fallback, |&rgb| Paint::Number(rgb))
+    }
+
+    fn paint(&mut self, drawing: &Drawing) -> Painted {
+        let bodies: Vec<Paint> = drawing.bodies.iter().map(|b| self.body(b)).collect();
+        let macros: Vec<Vec<Paint>> = drawing.macros.iter().map(|m| m.bodies.iter().map(|b| self.body(b)).collect()).collect();
+        let active = bodies.iter().chain(macros.iter().flatten()).any(|p| *p != Paint::Fallback);
+        let mut visible = Tally::default();
+        drawing.bodies.iter().zip(&bodies).filter(|(b, _)| !b.auxiliary).for_each(|(_, p)| visible.add(*p));
+        let mut macro_bodies = Tally::default();
+        macros.iter().flatten().for_each(|p| macro_bodies.add(*p));
+        let info = vec![
+            ("Allplan colours (visible bodies)".into(), visible.text()),
+            ("Allplan colours (macro bodies)".into(), macro_bodies.text()),
+            ("Allplan project files".into(), self.files_line()),
+        ];
+        Painted { bodies, macros, active, visible, macro_bodies, info }
+    }
+
+    fn files_line(&self) -> String {
+        let found = self.surfaces.values().filter(|s| s.is_some()).count();
         format!(
-            "surface {} (textured {textured}), colour number {number}, category colour {fallback}",
-            textured + plain
+            "animation.cfg: {}; surfaces found: {found} of {}",
+            match self.config {
+                Some((version, colours)) => format!("version {version} ({colours} colours)"),
+                None => "not found".into(),
+            },
+            self.surfaces.len()
         )
-    };
-    let found = surfaces.values().filter(|s| s.is_some()).count();
-    let files_line = format!(
-        "animation.cfg: {}; surfaces found: {found} of {}",
-        match &config {
-            Some(data) => format!("version {} ({} colours)", u16_at(data, 2).unwrap_or(0), table.len()),
-            None => "not found".into(),
-        },
-        surfaces.len()
-    );
-    let info = vec![
-        ("Allplan colours (visible bodies)".into(), tally(&mut visible.iter().copied())),
-        ("Allplan colours (macro bodies)".into(), tally(&mut macros.iter().flatten().copied())),
-        ("Allplan project files".into(), files_line),
-    ];
-    Painted { bodies, macros, active, info }
+    }
+}
+
+/// Looks up the colour of every body of one drawing file (§10).
+fn paint(drawing: &Drawing, files: &mut dyn ProjectFiles) -> Painted {
+    Painter::new(files).paint(drawing)
 }
 
 /// Appends a colour for the last `count` vertices of a layer that has vertex colours.
-fn paint_vertices(layer: &mut Layer, count: usize, paint: Paint) {
-    let rgba = paint.rgba(layer.color);
+fn paint_vertices(layer: &mut Layer, count: usize, paint: Paint, fallback: [f32; 3]) {
     if let Some(colors) = layer.colors.as_mut() {
-        colors.extend(std::iter::repeat_n(rgba, count));
+        colors.extend(std::iter::repeat_n(paint.rgba(fallback), count));
     }
 }
 
@@ -1296,8 +1341,11 @@ fn rounded(value: f64) -> serde_json::Value {
     if value.is_finite() { serde_json::json!((value * 1000.0).round() / 1000.0) } else { serde_json::Value::Null }
 }
 
+/// Extra properties every element of a drawing file gets (in a project: file and storey).
+type Extra = serde_json::Map<String, serde_json::Value>;
+
 /// The properties of a body: the record (v0.1) and its element (§8.5).
-fn body_props(drawing: &Drawing, body: &Body) -> String {
+fn body_props(drawing: &Drawing, body: &Body, extra: &Extra) -> String {
     let mut props = serde_json::json!({
         "Allplan drawing file": drawing.name,
         "Record offset": format!("0x{:X}", body.offset),
@@ -1307,6 +1355,9 @@ fn body_props(drawing: &Drawing, body: &Body) -> String {
         "Kind": match body.kind { 4 => "explicit topology (4)".to_string(), k => format!("prism ({k})") },
         "Auxiliary": body.auxiliary,
     });
+    if !body.auxiliary {
+        props["Category"] = category(drawing, body).name().into();
+    }
     if body.open {
         props["Open surface"] = true.into();
     }
@@ -1330,6 +1381,9 @@ fn body_props(drawing: &Drawing, body: &Body) -> String {
         }
         map.insert("Element record".into(), format!("0x{:02X} at 0x{:X}", element.class, element.offset).into());
     }
+    if let Some(map) = props.as_object_mut() {
+        map.extend(extra.clone());
+    }
     props.to_string()
 }
 
@@ -1346,7 +1400,7 @@ fn append(layer: &mut Layer, positions: &[[f64; 3]], normals: &[[f32; 3]], indic
 }
 
 /// The properties of a macro placement (§9.4).
-fn placement_props(drawing: &Drawing, placement: &Placement, definition: &Macro) -> String {
+fn placement_props(drawing: &Drawing, placement: &Placement, definition: &Macro, extra: &Extra) -> String {
     let mut props = serde_json::json!({
         "Allplan drawing file": drawing.name,
         "Record offset": format!("0x{:X}", placement.offset),
@@ -1356,8 +1410,11 @@ fn placement_props(drawing: &Drawing, placement: &Placement, definition: &Macro)
         "Bodies": definition.bodies.len(),
     });
     let name = if placement.name.is_empty() { &definition.name } else { &placement.name };
-    if let (false, Some(map)) = (name.is_empty(), props.as_object_mut()) {
-        map.insert("Name".into(), name.clone().into());
+    if let Some(map) = props.as_object_mut() {
+        if !name.is_empty() {
+            map.insert("Name".into(), name.clone().into());
+        }
+        map.extend(extra.clone());
     }
     props.to_string()
 }
@@ -1384,7 +1441,74 @@ fn category(drawing: &Drawing, body: &Body) -> Category {
         .map_or(Category::Other, |(_, category)| category)
 }
 
-/// The layers: visible bodies per category, and the auxiliary bodies in one hidden layer.
+/// What a body of a drawing file is, for choosing its layer and fallback colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    /// A visible body of the drawing file.
+    Body(Category),
+    /// A visible body of a macro placement.
+    Macro,
+    Auxiliary,
+}
+
+impl Slot {
+    fn color(self) -> [f32; 3] {
+        match self {
+            Slot::Body(category) => category.color(),
+            Slot::Macro => MACRO_COLOR,
+            Slot::Auxiliary => AUXILIARY_COLOR,
+        }
+    }
+}
+
+/// Where the bodies of one drawing file go: the layers, which layer per slot, the element id per
+/// record offset, and extra properties.
+struct Target<'a> {
+    layers: &'a mut [Layer],
+    layer_of: &'a dyn Fn(Slot) -> usize,
+    id_of: &'a dyn Fn(usize) -> u64,
+    extra: &'a Extra,
+}
+
+/// Appends the bodies and macro placements of a drawing file to layers. A placement is one
+/// element: its visible bodies and its auxiliary ones, under the id of the placement record (§9.4).
+fn emit(drawing: &Drawing, painted: Option<&Painted>, target: Target) -> Result<(), String> {
+    let paint_of = |paints: Option<&Vec<Paint>>, i: usize| paints.and_then(|p| p.get(i)).copied().unwrap_or(Paint::Fallback);
+    for (i, body) in drawing.bodies.iter().enumerate() {
+        let slot = if body.auxiliary { Slot::Auxiliary } else { Slot::Body(category(drawing, body)) };
+        let Some(layer) = target.layers.get_mut((target.layer_of)(slot)) else { continue };
+        let id = (target.id_of)(body.offset);
+        let first = append(layer, &body.positions, &body.normals, &body.indices)?;
+        paint_vertices(layer, body.positions.len(), paint_of(painted.map(|p| &p.bodies), i), slot.color());
+        let count = u32::try_from(body.indices.len()).map_err(|_| "Allplan: too many triangles")?;
+        layer.elements.push((id, first, count));
+        layer.props.push((id, body_props(drawing, body, target.extra)));
+    }
+    for placement in &drawing.placements {
+        let Placed::Resolved(index) = placement.placed else { continue };
+        let definition = &drawing.macros[index];
+        let id = (target.id_of)(placement.offset);
+        let transform = Transform::new(&placement.matrix);
+        let mut props = Some(placement_props(drawing, placement, definition, target.extra));
+        for (auxiliary, slot) in [(false, Slot::Macro), (true, Slot::Auxiliary)] {
+            let Some(layer) = target.layers.get_mut((target.layer_of)(slot)) else { continue };
+            let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
+            for (i, body) in definition.bodies.iter().enumerate().filter(|(_, b)| b.auxiliary == auxiliary) {
+                transform.append(layer, body)?;
+                paint_vertices(layer, body.positions.len(), paint_of(painted.and_then(|p| p.macros.get(index)), i), slot.color());
+            }
+            let end = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
+            if end > first {
+                layer.elements.push((id, first, end - first));
+                layer.props.extend(props.take().map(|p| (id, p)));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The layers of one drawing file: visible bodies per category, macros, and the auxiliary bodies
+/// in one hidden layer.
 fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String> {
     let resolved = drawing.placements.iter().filter(|p| matches!(p.placed, Placed::Resolved(_))).count();
     if drawing.bodies.is_empty() && resolved == 0 {
@@ -1394,52 +1518,22 @@ fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String>
              elements and layouts are not read yet."
         ));
     }
-    let mut layers: Vec<(Option<Category>, Layer)> = Category::ALL
-        .iter()
-        .map(|&c| (Some(c), Layer { name: c.name().into(), color: c.color(), ..Layer::default() }))
-        .collect();
-    layers.push((
-        None,
-        Layer { name: "Auxiliary bodies (openings, rooms)".into(), color: AUXILIARY_COLOR, hidden: true, ..Layer::default() },
-    ));
+    let mut layers: Vec<Layer> =
+        Category::ALL.iter().map(|&c| Layer { name: c.name().into(), color: c.color(), ..Layer::default() }).collect();
+    layers.push(Layer { name: "Auxiliary bodies (openings, rooms)".into(), color: AUXILIARY_COLOR, hidden: true, ..Layer::default() });
     // Colours from the project folder become vertex colours; the category colour fills in (§10).
     let painted = painted.filter(|p| p.active);
     if painted.is_some() {
-        layers.iter_mut().for_each(|(_, layer)| layer.colors = Some(Vec::new()));
+        layers.iter_mut().for_each(|layer| layer.colors = Some(Vec::new()));
     }
-    let paint_of = |paints: Option<&Vec<Paint>>, i: usize| paints.and_then(|p| p.get(i)).copied().unwrap_or(Paint::Fallback);
-    for (i, body) in drawing.bodies.iter().enumerate() {
-        let wanted = if body.auxiliary { None } else { Some(category(drawing, body)) };
-        let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
-        let id = body.offset as u64;
-        let first = append(layer, &body.positions, &body.normals, &body.indices)?;
-        paint_vertices(layer, body.positions.len(), paint_of(painted.map(|p| &p.bodies), i));
-        let count = u32::try_from(body.indices.len()).map_err(|_| "Allplan: too many triangles")?;
-        layer.elements.push((id, first, count));
-        layer.props.push((id, body_props(drawing, body)));
-    }
-    // A placement is one element: its visible bodies in Macros, its auxiliary ones in the hidden
-    // layer, both under the id of the placement record (§9.4).
-    for placement in &drawing.placements {
-        let Placed::Resolved(index) = placement.placed else { continue };
-        let definition = &drawing.macros[index];
-        let id = placement.offset as u64;
-        let transform = Transform::new(&placement.matrix);
-        let mut props = Some(placement_props(drawing, placement, definition));
-        for (auxiliary, wanted) in [(false, Some(Category::Macros)), (true, None)] {
-            let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
-            let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
-            for (i, body) in definition.bodies.iter().enumerate().filter(|(_, b)| b.auxiliary == auxiliary) {
-                transform.append(layer, body)?;
-                paint_vertices(layer, body.positions.len(), paint_of(painted.and_then(|p| p.macros.get(index)), i));
-            }
-            let end = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
-            if end > first {
-                layer.elements.push((id, first, end - first));
-                layer.props.extend(props.take().map(|p| (id, p)));
-            }
-        }
-    }
+    let index_of = |c: Category| Category::ALL.iter().position(|&x| x == c).unwrap_or(0);
+    let layer_of = |slot: Slot| match slot {
+        Slot::Body(c) => index_of(c),
+        Slot::Macro => index_of(Category::Macros),
+        Slot::Auxiliary => Category::ALL.len(),
+    };
+    let target = Target { layers: &mut layers, layer_of: &layer_of, id_of: &|offset| offset as u64, extra: &Extra::new() };
+    emit(drawing, painted, target)?;
     let visible = drawing.bodies.iter().filter(|b| !b.auxiliary).count();
     let hidden = drawing.bodies.len() - visible;
     let linked = drawing.bodies.iter().filter(|b| b.element.is_some()).count();
@@ -1465,16 +1559,399 @@ fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String>
                 drawing.skipped_clip, drawing.skipped_no_faces, drawing.skipped_unreadable
             ),
         ),
-        (
-            "Allplan import scope".into(),
-            "3D bodies with element name, type and quantities, 3D macros, colours from the project folder (spec v0.4); no textures or 2D elements"
-                .into(),
-        ),
+        ("Allplan import scope".into(), IMPORT_SCOPE.into()),
     ];
     project.info.extend(painted.iter().flat_map(|p| p.info.iter().cloned()));
     // Empty layers are left out.
-    let layers = layers.into_iter().map(|(_, layer)| layer).filter(|layer| !layer.indices.is_empty()).collect();
+    let layers = layers.into_iter().filter(|layer| !layer.indices.is_empty()).collect();
     Ok(Loaded { layers, views: Vec::new(), project })
+}
+
+/// What the reader shows, for the project info.
+const IMPORT_SCOPE: &str = "3D bodies with element name, type and quantities, 3D macros, colours from the project folder, \
+     whole project folders (spec v0.5); no textures or 2D elements";
+
+/// A node of the building structure (§11.2).
+#[derive(Debug, Clone, PartialEq)]
+struct ProjectNode {
+    name: String,
+    /// Local name of the node element: `Storey`, `Site`, `Construction`, `UserDefinedStructureChildNode` …
+    kind: String,
+    files: Vec<u32>,
+    children: Vec<ProjectNode>,
+}
+
+/// Deepest node nesting read from a building structure.
+const MAX_NODE_DEPTH: usize = 64;
+
+/// The top-level nodes of `BIM/Allplan_BIM_BuildingStructure.xml` (§11.2), read by local name.
+fn read_structure(text: &str) -> Option<Vec<ProjectNode>> {
+    let document = roxmltree::Document::parse(text.trim_start_matches('\u{feff}')).ok()?;
+    Some(child_nodes(document.root_element(), 0))
+}
+
+/// The nodes under `parent`: `BuildingStructureNodes` → `BuildingStructureChildNode` or
+/// `ConstructionNodes` → `ConstructionChildNode`, each holding one node element.
+fn child_nodes(parent: roxmltree::Node, depth: usize) -> Vec<ProjectNode> {
+    const NOT_NODES: [&str; 7] =
+        ["Attributes", "InternalAttribute", "Integer", "String", "Files", "BuildingStructureNodes", "ConstructionNodes"];
+    if depth > MAX_NODE_DEPTH {
+        return Vec::new();
+    }
+    let named = |node: &roxmltree::Node, names: &[&str]| node.is_element() && names.contains(&node.tag_name().name());
+    let mut nodes = Vec::new();
+    for list in parent.children().filter(|n| named(n, &["BuildingStructureNodes", "ConstructionNodes"])) {
+        for item in list.children().filter(|n| named(n, &["BuildingStructureChildNode", "ConstructionChildNode"])) {
+            if let Some(node) = item.children().find(|n| n.is_element() && !NOT_NODES.contains(&n.tag_name().name())) {
+                let files = node
+                    .children()
+                    .filter(|n| named(n, &["Files"]))
+                    .flat_map(|list| list.children().filter(|n| named(n, &["File"])))
+                    .filter_map(|file| file.attribute("ID")?.trim().parse().ok())
+                    .collect();
+                nodes.push(ProjectNode {
+                    name: node.attribute("Name").unwrap_or("").trim().to_string(),
+                    kind: node.tag_name().name().to_string(),
+                    files,
+                    children: child_nodes(node, depth + 1),
+                });
+            }
+        }
+    }
+    nodes
+}
+
+/// A group of drawing files, one layer (§11.2): a storey, site or construction, or the files
+/// right under a top-level node.
+#[derive(Debug, Clone, PartialEq)]
+struct Group {
+    /// Index of its top-level node.
+    top: usize,
+    /// `<top> / <group>`, or `<top>` for files right under the top-level node.
+    label: String,
+    name: String,
+}
+
+/// The drawing files of a project folder in their groups (§11.2).
+#[derive(Debug, Default)]
+struct ProjectPlan {
+    tops: Vec<String>,
+    groups: Vec<Group>,
+    /// Drawing file number, group, and file name in the project folder.
+    files: Vec<(u32, usize, String)>,
+    /// `File` references in the structure (duplicates included).
+    references: usize,
+    /// Read from a building structure (else: all `tb*.ndw` of the folder).
+    structure: bool,
+}
+
+/// The groups and files of a building structure: each file in the group of its nearest storey,
+/// site or construction node; a file referenced twice is loaded once (§11.2).
+fn plan_structure(tops: &[ProjectNode]) -> ProjectPlan {
+    fn walk(node: &ProjectNode, top: usize, group: (String, String), depth: usize, plan: &mut ProjectPlan, seen: &mut std::collections::HashSet<u32>) {
+        let group = if depth > 0 && matches!(node.kind.as_str(), "Storey" | "Site" | "Construction") {
+            (format!("{} / {}", plan.tops[top], node.name), node.name.clone())
+        } else {
+            group
+        };
+        if !node.files.is_empty() {
+            let index = match plan.groups.iter().position(|g| g.top == top && g.label == group.0) {
+                Some(index) => index,
+                None => {
+                    plan.groups.push(Group { top, label: group.0.clone(), name: group.1.clone() });
+                    plan.groups.len() - 1
+                }
+            };
+            for &number in &node.files {
+                plan.references += 1;
+                if seen.insert(number) {
+                    plan.files.push((number, index, format!("tb{number:06}.ndw")));
+                }
+            }
+        }
+        for child in &node.children {
+            walk(child, top, group.clone(), depth + 1, plan, seen);
+        }
+    }
+    let mut plan = ProjectPlan { tops: tops.iter().map(|t| t.name.clone()).collect(), structure: true, ..ProjectPlan::default() };
+    let mut seen = std::collections::HashSet::new();
+    for (index, top) in tops.iter().enumerate() {
+        walk(top, index, (top.name.clone(), top.name.clone()), 0, &mut plan, &mut seen);
+    }
+    plan
+}
+
+/// Without a building structure: every `tb*.ndw` of the folder, by number, in one group named
+/// after the folder (§11.2).
+fn plan_folder(name: &str, entries: &[String]) -> ProjectPlan {
+    let mut files: Vec<(u32, usize, String)> = entries
+        .iter()
+        .filter_map(|entry| {
+            let digits = entry.strip_prefix("tb")?.strip_suffix(".ndw")?;
+            let number = (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| digits.parse().ok())??;
+            Some((number, 0, entry.clone()))
+        })
+        .collect();
+    files.sort();
+    files.dedup_by_key(|f| f.0);
+    let groups = if files.is_empty() { Vec::new() } else { vec![Group { top: 0, label: name.into(), name: name.into() }] };
+    ProjectPlan { tops: vec![name.into()], groups, files, references: 0, structure: false }
+}
+
+/// A drawing file of a project.
+struct ProjectDrawing {
+    number: u32,
+    group: usize,
+    drawing: Drawing,
+    painted: Painted,
+}
+
+/// A project folder read (§11).
+struct Project {
+    name: String,
+    plan: ProjectPlan,
+    /// Referenced drawing files that are not in the folder.
+    missing: Vec<u32>,
+    /// Drawing files that could not be read, with the reason.
+    unreadable: Vec<(u32, String)>,
+    drawings: Vec<ProjectDrawing>,
+    files_line: String,
+}
+
+impl Folder {
+    /// The path of `path` below the folder, found case-insensitively per component.
+    fn find(&mut self, path: &[&str]) -> Option<std::path::PathBuf> {
+        let mut at = self.root.clone();
+        for part in path {
+            at = self.listing(&at).get(&part.to_lowercase())?.clone();
+        }
+        Some(at)
+    }
+
+    /// The entries of a directory by lower-case name, listed once.
+    fn listing(&mut self, dir: &std::path::Path) -> &HashMap<String, std::path::PathBuf> {
+        self.listings.entry(dir.to_path_buf()).or_insert_with(|| {
+            std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries.flatten().map(|entry| (entry.file_name().to_string_lossy().to_lowercase(), entry.path())).collect()
+                })
+                .unwrap_or_default()
+        })
+    }
+}
+
+/// Reads drawing files, in parallel where threads are available.
+fn read_drawings(paths: &[std::path::PathBuf]) -> Vec<Result<Drawing, String>> {
+    let one = |path: &std::path::PathBuf| std::fs::read(path).map_err(|e| e.to_string()).and_then(|data| parse(&data));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8).min(paths.len());
+        if threads > 1 {
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let results: Vec<std::sync::Mutex<Option<Result<Drawing, String>>>> = paths.iter().map(|_| std::sync::Mutex::new(None)).collect();
+            std::thread::scope(|scope| {
+                for _ in 0..threads {
+                    scope.spawn(|| loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(path) = paths.get(i) else { break };
+                        let result = one(path);
+                        if let Ok(mut slot) = results[i].lock() {
+                            *slot = Some(result);
+                        }
+                    });
+                }
+            });
+            return results
+                .into_iter()
+                .map(|slot| slot.into_inner().ok().flatten().unwrap_or_else(|| Err("not read".into())))
+                .collect();
+        }
+    }
+    paths.iter().map(one).collect()
+}
+
+/// Reads a project folder (§11): its building structure (or all `tb*.ndw`), every drawing file
+/// once, and the colours from the same folder, read once.
+fn read_project(dir: &std::path::Path) -> Result<Project, String> {
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
+    let mut folder = Folder::new(dir);
+    let structure = folder
+        .read(&["BIM", "Allplan_BIM_BuildingStructure.xml"])
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|text| read_structure(&text));
+    let plan = match structure {
+        Some(tops) => plan_structure(&tops),
+        None => {
+            let root = folder.root.clone();
+            let entries: Vec<String> = folder.listing(&root).keys().cloned().collect();
+            plan_folder(&name, &entries)
+        }
+    };
+    let mut found = Vec::new();
+    let mut missing = Vec::new();
+    for (number, group, file) in &plan.files {
+        match folder.find(&[file]) {
+            Some(path) => found.push((*number, *group, path)),
+            None => missing.push(*number),
+        }
+    }
+    if found.is_empty() {
+        return Err(format!("Allplan: the project folder \"{name}\" has no drawing files (tb*.ndw)"));
+    }
+    let paths: Vec<std::path::PathBuf> = found.iter().map(|(_, _, path)| path.clone()).collect();
+    let read = read_drawings(&paths);
+    let mut painter = Painter::new(&mut folder);
+    let mut drawings = Vec::new();
+    let mut unreadable = Vec::new();
+    for ((number, group, _), result) in found.into_iter().zip(read) {
+        match result {
+            Ok(drawing) => {
+                let painted = painter.paint(&drawing);
+                drawings.push(ProjectDrawing { number, group, drawing, painted });
+            }
+            Err(error) => unreadable.push((number, error)),
+        }
+    }
+    let files_line = painter.files_line();
+    Ok(Project { name, plan, missing, unreadable, drawings, files_line })
+}
+
+/// What a drawing file holds, counted for a project.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Counts {
+    files: usize,
+    visible: usize,
+    auxiliary: usize,
+    placements: usize,
+}
+
+impl Counts {
+    fn of(drawing: &Drawing) -> Self {
+        let visible = drawing.bodies.iter().filter(|b| !b.auxiliary).count();
+        let placements = drawing.placements.iter().filter(|p| matches!(p.placed, Placed::Resolved(_))).count();
+        Self { files: 1, visible, auxiliary: drawing.bodies.len() - visible, placements }
+    }
+
+    fn add(&mut self, other: Counts) {
+        self.files += other.files;
+        self.visible += other.visible;
+        self.auxiliary += other.auxiliary;
+        self.placements += other.placements;
+    }
+}
+
+impl Project {
+    /// Counts per group.
+    fn group_counts(&self) -> Vec<Counts> {
+        let mut counts = vec![Counts::default(); self.plan.groups.len()];
+        for d in &self.drawings {
+            counts[d.group].add(Counts::of(&d.drawing));
+        }
+        counts
+    }
+
+    /// Counts per top-level node.
+    fn top_counts(&self) -> Vec<Counts> {
+        let mut counts = vec![Counts::default(); self.plan.tops.len()];
+        for d in &self.drawings {
+            counts[self.plan.groups[d.group].top].add(Counts::of(&d.drawing));
+        }
+        counts
+    }
+
+    /// The first top-level node (in document order) with visible bodies or placements: the only
+    /// one that starts visible (§11.3).
+    fn shown_top(&self) -> usize {
+        self.top_counts().iter().position(|c| c.visible + c.placements > 0).unwrap_or(0)
+    }
+}
+
+/// The layers of a project (§11.3): one per group with the visible bodies and macros of its
+/// drawing files, one hidden auxiliary layer per top-level node; only the first top-level node
+/// with visible bodies starts visible.
+fn build_project(project: &Project) -> Result<Loaded, String> {
+    let groups = &project.plan.groups;
+    let tops = &project.plan.tops;
+    let shown = project.shown_top();
+    let mut layers: Vec<Layer> = groups
+        .iter()
+        .map(|g| Layer { name: g.label.clone(), color: DEFAULT_COLOR, colors: Some(Vec::new()), hidden: g.top != shown, ..Layer::default() })
+        .chain(tops.iter().map(|t| Layer {
+            name: format!("{t} / Auxiliary bodies"),
+            color: AUXILIARY_COLOR,
+            colors: Some(Vec::new()),
+            hidden: true,
+            ..Layer::default()
+        }))
+        .collect();
+    for d in &project.drawings {
+        let group = &groups[d.group];
+        let (body_layer, auxiliary_layer) = (d.group, groups.len() + group.top);
+        let layer_of = |slot: Slot| if slot == Slot::Auxiliary { auxiliary_layer } else { body_layer };
+        // Ids unique over the project: file number and record offset (§11.3).
+        let number = u64::from(d.number);
+        let id_of = |offset: usize| number << 32 | (offset as u64 & 0xFFFF_FFFF);
+        let mut extra = Extra::new();
+        let file = if d.drawing.name.is_empty() { format!("{:06}", d.number) } else { format!("{:06} {}", d.number, d.drawing.name) };
+        extra.insert("Drawing file".into(), file.into());
+        extra.insert("Storey".into(), group.name.clone().into());
+        let target = Target { layers: &mut layers, layer_of: &layer_of, id_of: &id_of, extra: &extra };
+        emit(&d.drawing, Some(&d.painted), target)?;
+    }
+    if layers.iter().all(|l| l.indices.is_empty()) {
+        return Err(format!("Allplan: the project \"{}\" has no 3D bodies in its drawing files", project.name));
+    }
+    let total = project.top_counts().into_iter().fold(Counts::default(), |mut a, c| {
+        a.add(c);
+        a
+    });
+    let (mut visible, mut macro_bodies) = (Tally::default(), Tally::default());
+    for d in &project.drawings {
+        visible.merge(d.painted.visible);
+        macro_bodies.merge(d.painted.macro_bodies);
+    }
+    let structure = if project.plan.structure {
+        format!(
+            "{} top-level nodes, {} references to drawing files, {} missing, {} unreadable",
+            tops.len(),
+            project.plan.references,
+            project.missing.len(),
+            project.unreadable.len()
+        )
+    } else {
+        format!("no building structure: all {} tb*.ndw files of the folder", project.plan.files.len())
+    };
+    let mut info = vec![
+        ("Allplan project".into(), project.name.clone()),
+        ("Allplan building structure".into(), structure),
+        ("Allplan shown node".into(), format!("{} (the other top-level nodes start hidden)", tops.get(shown).cloned().unwrap_or_default())),
+        ("Allplan drawing files".into(), total.files.to_string()),
+        ("Allplan 3D bodies".into(), total.visible.to_string()),
+        ("Allplan auxiliary bodies (hidden)".into(), total.auxiliary.to_string()),
+        ("Allplan macro placements shown".into(), total.placements.to_string()),
+        ("Allplan colours (visible bodies)".into(), visible.text()),
+        ("Allplan colours (macro bodies)".into(), macro_bodies.text()),
+        ("Allplan project files".into(), project.files_line.clone()),
+        ("Allplan import scope".into(), IMPORT_SCOPE.into()),
+    ];
+    if !project.missing.is_empty() {
+        let list: Vec<String> = project.missing.iter().take(20).map(|n| format!("tb{n:06}.ndw")).collect();
+        info.push(("Allplan missing drawing files".into(), list.join(", ")));
+    }
+    if !project.unreadable.is_empty() {
+        let list: Vec<String> = project.unreadable.iter().take(20).map(|(n, e)| format!("tb{n:06}.ndw: {e}")).collect();
+        info.push(("Allplan unreadable drawing files".into(), list.join("; ")));
+    }
+    for (group, counts) in groups.iter().zip(project.group_counts()) {
+        info.push((
+            format!("Allplan group {}", group.label),
+            format!("{} drawing files, {} bodies, {} auxiliary, {} macro placements", counts.files, counts.visible, counts.auxiliary, counts.placements),
+        ));
+    }
+    let mut data = ProjectData::default();
+    data.info = info;
+    let layers = layers.into_iter().filter(|layer| !layer.indices.is_empty()).collect();
+    Ok(Loaded { layers, views: Vec::new(), project: data })
 }
 
 #[cfg(test)]
@@ -2694,6 +3171,150 @@ mod tests {
         }
     }
 
+    /// A building structure (§11.2): elements in the tempuri namespace under a prefix, the root
+    /// without, a BOM in front.
+    fn structure_xml(nodes: &str) -> String {
+        format!(
+            "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<NemetschekBuildingStructure xmlns:x=\"http://tempuri.org/XMLSchema.xsd\"><x:BuildingStructureNodes>{nodes}</x:BuildingStructureNodes></NemetschekBuildingStructure>"
+        )
+    }
+
+    /// A node in a `BuildingStructureChildNode` (or, `in_construction`, a `ConstructionChildNode`),
+    /// with attributes to skip, its files and its child nodes.
+    fn xml_node(kind: &str, name: &str, files: &[u32], children: &str, in_construction: bool) -> String {
+        let item = if in_construction { "ConstructionChildNode" } else { "BuildingStructureChildNode" };
+        let list = if kind == "Construction" { "ConstructionNodes" } else { "BuildingStructureNodes" };
+        let files: String = files.iter().map(|id| format!("<x:File ID=\"{id}\"/>")).collect();
+        format!(
+            "<x:{item}><x:{kind} Name=\"{name}\"><x:Attributes><x:InternalAttribute><x:Integer>7</x:Integer><x:String>x</x:String></x:InternalAttribute></x:Attributes><x:Files>{files}</x:Files><x:{list}>{children}</x:{list}></x:{kind}></x:{item}>"
+        )
+    }
+
+    /// A drawing file with one visible box at `x` (mm) and, `auxiliary`, an opening.
+    fn small_drawing(name: &str, x: f64, auxiliary: bool) -> Vec<u8> {
+        let mut s = prism(0, 0x0301, [x, 0.0, 0.0], [x + 1000.0, 200.0, 3000.0]);
+        if auxiliary {
+            s.extend(prism(1, 0x0301, [x + 100.0, 0.0, 100.0], [x + 900.0, 200.0, 900.0]));
+        }
+        file(3, name, &s)
+    }
+
+    /// A scratch folder under `target/`, removed on drop.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("allplan-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn write(&self, path: &str, data: impl AsRef<[u8]>) {
+            let path = self.0.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, data).unwrap();
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn reads_the_building_structure_by_local_name() {
+        let house = xml_node("Storey", "Ground floor", &[1], "", true) + &xml_node("Storey", "Roof", &[2, 1], "", true);
+        let xml = structure_xml(
+            &(xml_node("UserDefinedStructureChildNode", "Variant A", &[], &(xml_node("Site", "Site", &[5], "", false) + &xml_node("Construction", "House", &[6], &house, false)), false)
+                + &xml_node("UserDefinedStructureChildNode", " Variant B ", &[4], "", false)),
+        );
+        let tops = read_structure(&xml).unwrap();
+        assert_eq!(tops.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Variant A", "Variant B"]);
+        let plan = plan_structure(&tops);
+        let labels: Vec<&str> = plan.groups.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(labels, ["Variant A / Site", "Variant A / House", "Variant A / Ground floor", "Variant A / Roof", "Variant B"]);
+        let files: Vec<(u32, usize)> = plan.files.iter().map(|f| (f.0, f.1)).collect();
+        assert_eq!(files, [(5, 0), (6, 1), (1, 2), (2, 3), (4, 4)]);
+        assert_eq!(plan.files[0].2, "tb000005.ndw");
+        assert_eq!(plan.references, 6);
+        assert!(read_structure("<not xml").is_none());
+    }
+
+    #[test]
+    fn opens_a_project_folder() {
+        let scratch = Scratch::new("project");
+        let root = scratch.0.join("Test.prj");
+        let ground = xml_node("Storey", "Ground floor", &[1], "", true)
+            + &xml_node("Storey", "Roof", &[2, 1], "", true)
+            + &xml_node("Storey", "Cellar", &[3], "", true);
+        let xml = structure_xml(
+            &(xml_node("UserDefinedStructureChildNode", "Variant A", &[], &xml_node("Construction", "House", &[], &ground, false), false)
+                + &xml_node("UserDefinedStructureChildNode", "Variant B ", &[4], "", false)),
+        );
+        scratch.write("Test.prj/bim/ALLPLAN_BIM_BuildingStructure.xml", xml);
+        scratch.write("Test.prj/tb000001.ndw", small_drawing("Ground", 0.0, true));
+        scratch.write("Test.prj/TB000002.NDW", small_drawing("Roof", 2000.0, false));
+        scratch.write("Test.prj/tb000004.ndw", small_drawing("Variant", 0.0, false));
+        scratch.write("Test.prj/tb000009.ndw", small_drawing("Not in the structure", 9000.0, false));
+        scratch.write("Test.prj/animation.cfg", cfg(2, 2, &[(1, [255, 255, 255])]));
+
+        let project = read_project(&root).unwrap();
+        assert_eq!(project.plan.tops, ["Variant A", "Variant B"]);
+        assert_eq!((project.plan.references, project.missing.clone()), (5, vec![3]));
+        assert_eq!(project.drawings.iter().map(|d| d.number).collect::<Vec<_>>(), [1, 2, 4]);
+        assert_eq!(project.shown_top(), 0);
+        assert_eq!(project.top_counts()[0], Counts { files: 2, visible: 2, auxiliary: 1, placements: 0 });
+
+        let model = crate::loaders::load_with(&Source::File(root.clone()), &Progress::default()).unwrap();
+        assert_eq!(model.format, "Allplan");
+        let layers: Vec<(&str, bool)> = model.layers.iter().map(|l| (l.name.as_str(), l.hidden)).collect();
+        assert_eq!(
+            layers,
+            [("Variant A / Ground floor", false), ("Variant A / Roof", false), ("Variant B", true), ("Variant A / Auxiliary bodies", true)]
+        );
+        // Every layer has vertex colours: animation.cfg (colour number 0 is not in it) or the category.
+        assert!(model.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
+        // Ids are unique over the files: the boxes of files 1 and 4 sit at the same offset.
+        let ids: Vec<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        let unique: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len());
+        let id = model.layers[0].elements[0].0;
+        assert_eq!(id, 1 << 32 | STREAM_START as u64);
+        let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+        assert_eq!((props["Storey"].as_str(), props["Drawing file"].as_str()), (Some("Ground floor"), Some("000001 Ground")));
+        assert_eq!(props["Category"], "Other");
+        let info = |key: &str| model.project.info.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default();
+        assert_eq!(info("Allplan building structure"), "2 top-level nodes, 5 references to drawing files, 1 missing, 0 unreadable");
+        assert!(info("Allplan shown node").starts_with("Variant A"));
+        assert_eq!(info("Allplan group Variant A / Ground floor"), "1 drawing files, 1 bodies, 1 auxiliary, 0 macro placements");
+    }
+
+    #[test]
+    fn a_project_folder_without_structure_opens_all_drawing_files() {
+        let scratch = Scratch::new("plain");
+        let root = scratch.0.join("Plain.prj");
+        scratch.write("Plain.prj/TB000003.NDW", small_drawing("Three", 3000.0, false));
+        scratch.write("Plain.prj/tb000001.ndw", small_drawing("One", 0.0, false));
+        scratch.write("Plain.prj/notes.txt", "no drawing");
+        scratch.write("Plain.prj/BIM/Allplan_BIM_BuildingStructure.xml", "<broken");
+        let project = read_project(&root).unwrap();
+        assert!(!project.plan.structure);
+        assert_eq!(project.plan.tops, ["Plain.prj"]);
+        assert_eq!(project.drawings.iter().map(|d| d.number).collect::<Vec<_>>(), [1, 3]);
+        let loaded = build_project(&project).unwrap();
+        assert_eq!(loaded.layers.iter().map(|l| (l.name.as_str(), l.elements.len())).collect::<Vec<_>>(), [("Plain.prj", 2)]);
+
+        std::fs::create_dir_all(scratch.0.join("Empty.prj")).unwrap();
+        let error = read_project(&scratch.0.join("Empty.prj")).err().unwrap();
+        assert!(error.contains("no drawing files"), "{error}");
+        // Only loaders that open folders take folders.
+        std::fs::create_dir_all(scratch.0.join("Model.obj")).unwrap();
+        let error = crate::loaders::load_with(&Source::File(scratch.0.join("Model.obj")), &Progress::default()).err().unwrap();
+        assert!(error.contains("folders open only"), "{error}");
+    }
+
     /// Checks a real drawing file against the tables of spec §7.2 to §7.6, when `ALLPLAN_SAMPLE`
     /// holds its path. The samples are not in the repository.
     #[test]
@@ -2894,6 +3515,69 @@ mod tests {
             for c in picked {
                 assert!(c.iter().zip(rgb).all(|(a, b)| a.abs_diff(*b) <= 1), "{c:?} instead of {rgb:?}");
             }
+        }
+    }
+
+    /// Checks a whole project folder against spec §7.7, when `ALLPLAN_PROJECT` holds the path of
+    /// `QuickStart.prj`. The samples are not in the repository.
+    #[test]
+    fn optional_project_from_env() {
+        let Ok(path) = std::env::var("ALLPLAN_PROJECT") else { return };
+        let dir = std::path::Path::new(&path);
+        let started = web_time::Instant::now();
+        let project = read_project(dir).expect("Allplan project");
+        let loaded = build_project(&project).expect("Allplan project layers");
+        let elapsed = started.elapsed();
+        let tops = project.top_counts();
+        let shown = project.shown_top();
+        eprintln!(
+            "{path}: {} top-level nodes, {} references, {} missing, {} unreadable, {} files read in {elapsed:?}; shown {:?}",
+            project.plan.tops.len(),
+            project.plan.references,
+            project.missing.len(),
+            project.unreadable.len(),
+            project.drawings.len(),
+            project.plan.tops.get(shown)
+        );
+        for (top, counts) in project.plan.tops.iter().zip(&tops) {
+            eprintln!("  {top:?}: {counts:?}");
+        }
+        for (group, counts) in project.plan.groups.iter().zip(project.group_counts()) {
+            eprintln!("  {:?}: {counts:?}", group.label);
+        }
+        if !dir.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("QuickStart.prj")) {
+            return;
+        }
+        let names = &project.plan.tops;
+        assert_eq!(names.len(), 11);
+        assert_eq!(names[0], "START");
+        for i in 1..=10 {
+            assert_eq!(names[i], format!("Unit {i:02}"));
+        }
+        assert_eq!((project.plan.references, project.missing.len(), project.unreadable.len()), (316, 0, 0));
+        assert_eq!(names[shown], "Unit 01");
+        assert_eq!(tops[shown], Counts { files: 31, visible: 431, auxiliary: 172, placements: 376 });
+        let groups = project.group_counts();
+        for (label, want) in [
+            ("Unit 01 / Site", 102),
+            ("Unit 01 / Detached house", 1),
+            ("Unit 01 / Foundations", 1),
+            ("Unit 01 / 1st basement", 95),
+            ("Unit 01 / Ground floor", 106),
+            ("Unit 01 / 1st upper floor", 96),
+            ("Unit 01 / 2nd upper floor", 30),
+        ] {
+            let index = project.plan.groups.iter().position(|g| g.label == label).unwrap_or_else(|| panic!("no group {label:?}"));
+            assert_eq!(groups[index].visible, want, "{label}");
+        }
+        let total = tops.iter().fold(Counts::default(), |mut a, c| {
+            a.add(*c);
+            a
+        });
+        assert_eq!((total.visible, total.auxiliary, total.placements), (4276, 1771, 3801));
+        // Only the layers of "Unit 01" start visible.
+        for layer in &loaded.layers {
+            assert_eq!(layer.hidden, !layer.name.starts_with("Unit 01 /") || layer.name.ends_with("Auxiliary bodies"), "{}", layer.name);
         }
     }
 }

@@ -166,6 +166,11 @@ pub trait Loader: Send + Sync {
     fn source_y_up(&self) -> bool {
         false
     }
+    /// Lower-case extensions of folders this loader opens as a whole (e.g. an Allplan `.prj`
+    /// project folder dropped on the window); not part of the file dialog filter.
+    fn folder_extensions(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// What a loader read: the layers and the views saved in the file.
@@ -211,10 +216,15 @@ pub fn load(path: &Path) -> Result<Model, String> {
 /// As [`load`], for any source, reporting the steps to `progress`.
 pub fn load_with(source: &Source, progress: &Progress) -> Result<Model, String> {
     let ext = source.extension();
+    // A folder goes to the loader that opens folders with its extension.
+    let folder = source.path().is_some_and(Path::is_dir);
     let loader = registry()
         .into_iter()
-        .find(|l| l.extensions().contains(&ext.as_str()))
-        .ok_or_else(|| format!("Unsupported file type: .{ext}"))?;
+        .find(|l| if folder { l.folder_extensions() } else { l.extensions() }.contains(&ext.as_str()))
+        .ok_or_else(|| match folder {
+            true => format!("{}: folders open only as a project folder of a supported format", source.name()),
+            false => format!("Unsupported file type: .{ext}"),
+        })?;
     let start = Instant::now();
     let loaded = loader.load_with(source, progress)?;
     progress.set(Phase::Scene);

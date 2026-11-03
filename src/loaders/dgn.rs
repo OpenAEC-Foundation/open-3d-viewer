@@ -908,6 +908,8 @@ fn bspline_surface(design: &Design, all: &[Element], i: usize) -> Option<Vec<[DV
 // ---------------------------------------------------------------------------------------------
 // V8: the compound file ([MS-CFB]).
 
+/// Colour, weight (and, as 0x7FFFFFFF, line style) "by level" in a display header (B.13).
+const BY_LEVEL: u32 = 0xFFFF_FFFF;
 /// Sector numbers above this are markers: free, end of chain, FAT or DIFAT sector.
 const MAX_SECTOR: u32 = 0xFFFF_FFFA;
 const END_OF_CHAIN: u32 = 0xFFFF_FFFE;
@@ -1152,7 +1154,6 @@ impl<'a> V8Element<'a> {
     fn h_bit(&self) -> bool { self.properties() & 0x8000 != 0 }
     fn class(&self) -> u32 { self.properties() & 0xF }
     fn style(&self) -> u32 { self.u32(0x2C) }
-    fn weight(&self) -> u8 { self.u32(0x30).min(31) as u8 }
     fn color(&self) -> u32 { self.u32(0x34) }
     /// The empty range of control elements (B.12): low x = low y = -2^31, size x = size y = 0.
     fn empty_range(&self) -> bool {
@@ -1206,6 +1207,10 @@ impl<'a> V8Element<'a> {
             let count = le32(l, 8) as usize;
             (le32(l, 4), linkage_text(l.get(12..l.len().min(12usize.saturating_add(count))).unwrap_or_default()))
         }).collect()
+    }
+    /// The fill colour of a filled shape or cell: the u32 at +8 of its fill linkage 0x0041 (B.7).
+    fn fill_color(&self) -> Option<u32> {
+        self.linkages().into_iter().find(|(id, linkage)| *id == 0x0041 && linkage.len() >= 12).map(|(_, linkage)| le32(linkage, 8))
     }
     /// The name of a cell, shared cell or level: string linkage 1; without it, no name.
     fn name(&self) -> Option<String> { self.strings().into_iter().find(|(key, _)| *key == 1).map(|(_, name)| name).filter(|name| !name.is_empty()) }
@@ -1345,6 +1350,8 @@ struct V8Design {
     three_d: bool,
     /// Level names by level ID.
     levels: BTreeMap<u32, String>,
+    /// Line style, weight and colour of each level, for elements drawn "by level" (B.13).
+    symbology: BTreeMap<u32, (i32, u32, u32)>,
     colors: Option<Vec<[u8; 3]>>,
     /// Shared cell definitions by name: the definition and its components in the non-model elements.
     definitions: BTreeMap<String, (usize, usize)>,
@@ -1356,12 +1363,14 @@ impl V8Design {
     fn new(header: Option<&[u8]>, tables: &[V8Element], model: &[V8Element]) -> Self {
         let (origin, metres_per_uor, metres_per_master, units) = model_units(header)
             .unwrap_or((DVec3::ZERO, 1.0, 1.0, "none in the model header (1 UOR = 1 m assumed)".into()));
-        // Levels: type 95 entries of kind 1, with the ID at +0x20 and the name in string linkage 1.
-        let mut levels = BTreeMap::new();
+        // Levels: type 95 entries of kind 1, with the ID at +0x20, the name in string linkage 1 and
+        // the line style, weight and colour at +0x40, +0x44 and +0x48 (B.6, B.13).
+        let (mut levels, mut symbology) = (BTreeMap::new(), BTreeMap::new());
         for e in tables.iter().filter(|e| e.kind() == 95 && e.level() == 1) {
             if let Some((_, name)) = e.strings().into_iter().find(|(key, name)| *key == 1 && !name.is_empty()) {
                 levels.entry(e.u32(0x20)).or_insert(name);
             }
+            if e.len() >= 0x4C { symbology.entry(e.u32(0x20)).or_insert((e.u32(0x40) as i32, e.u32(0x44), e.u32(0x48))); }
         }
         let colors = tables.iter().filter(|e| e.kind() == 5 && e.level() == 1).find_map(|e| color_table(e.bytes, 0x22));
         let mut definitions = BTreeMap::new();
@@ -1376,7 +1385,7 @@ impl V8Design {
         let mut folded = BTreeMap::new();
         for (name, &range) in &definitions { folded.entry(name.to_ascii_lowercase()).or_insert(range); }
         let three_d = model.iter().any(|e| e.graphic() && e.three_d());
-        V8Design { origin, metres_per_uor, metres_per_master, units, three_d, levels, colors, definitions, folded }
+        V8Design { origin, metres_per_uor, metres_per_master, units, three_d, levels, symbology, colors, definitions, folded }
     }
 
     /// Design coordinates (UOR) to world metres.
@@ -1385,6 +1394,20 @@ impl V8Design {
     fn rgb(&self, color: u32) -> [u8; 3] {
         // Extended colours (256 and up) are not described yet: white.
         u8::try_from(color).map_or(default_color(0), |index| table_color(self.colors.as_deref(), index))
+    }
+
+    /// Colour index `color` of an element on `level`: 0xFFFFFFFF is the level's colour (B.13).
+    fn color(&self, color: u32, level: u32) -> u32 {
+        if color == BY_LEVEL { self.symbology.get(&level).map_or(0, |s| s.2) } else { color }
+    }
+
+    /// Line style, weight and colour of an element on `level`, "by level" values (B.13) taken
+    /// from the level (0 for a level that is not in the table).
+    fn symbology(&self, e: &V8Element, level: u32) -> (i32, u32, u32) {
+        let by_level = self.symbology.get(&level).copied().unwrap_or((0, 0, 0));
+        let style = if e.style() == 0x7FFF_FFFF { by_level.0 } else { e.style() as i32 };
+        let weight = if e.u32(0x30) == BY_LEVEL { by_level.1 } else { e.u32(0x30) };
+        (style, weight, self.color(e.color(), level))
     }
 
     fn level_name(&self, level: u32) -> String { self.levels.get(&level).cloned().unwrap_or_else(|| format!("Level {level}")) }
@@ -1433,7 +1456,7 @@ fn read_v8(data: &[u8]) -> Result<Loaded, String> {
     let tables = v8_elements(&table_bytes, &mut scene)?;
     let design = V8Design::new(header.as_deref(), &tables, &graphics);
     let mut converter = V8Converter {
-        design: &design, tables: &tables, scene, placement: (DMat3::IDENTITY, DVec3::ZERO), instance_level: None, active: Vec::new(), visits: 0, measures: Vec::new(),
+        design: &design, tables: &tables, scene, placement: (DMat3::IDENTITY, DVec3::ZERO), instance_level: None, active: Vec::new(), visits: 0, measures: Vec::new(), cell_fill: None,
     };
     let mut i = 0;
     while i < graphics.len() {
@@ -1463,6 +1486,8 @@ struct V8Converter<'a> {
     visits: usize,
     /// Distances measured by the dimensions of the top-level element being drawn, in master units.
     measures: Vec<f64>,
+    /// The fill colour of the cell being drawn, for its closed components without their own.
+    cell_fill: Option<u32>,
 }
 
 impl V8Converter<'_> {
@@ -1487,11 +1512,16 @@ impl V8Converter<'_> {
         self.draw(all, i, all.len(), id, 0, &mut texts);
         if self.scene.prims.len() == before { return next; }
         let level = e.level();
+        let (style, weight, color) = self.design.symbology(&e, level);
         let mut props = serde_json::json!({
             "DGN element": kind_name(e.kind()), "Level": self.design.level_name(level), "Level ID": level,
-            "Colour index": e.color(), "Line weight": e.weight(), "Line style": e.style(), "Class": e.class(),
+            "Colour index": color, "Line weight": weight, "Line style": style, "Class": e.class(),
             "Element ID": le64(e.bytes, 0x10),
         });
+        let by_level: Vec<&str> = [(e.style() == 0x7FFF_FFFF, "line style"), (e.u32(0x30) == BY_LEVEL, "line weight"), (e.color() == BY_LEVEL, "colour")]
+            .into_iter().filter_map(|(by_level, what)| by_level.then_some(what)).collect();
+        if !by_level.is_empty() { props["By level"] = by_level.join(", ").into(); }
+        if let Some(fill) = e.fill_color() { props["Fill colour index"] = self.design.color(fill, level).into(); }
         if e.u32(0x20) != 0 { props["Graphic group"] = e.u32(0x20).into(); }
         if matches!(e.kind(), 2 | 35) { if let Some(name) = e.name() { props["Cell"] = name.into(); } }
         if !texts.is_empty() { props["Text"] = texts.join("\n").into(); }
@@ -1503,10 +1533,29 @@ impl V8Converter<'_> {
         next
     }
 
-    fn push(&mut self, e: &V8Element, id: u64, shape: Shape) {
+    fn push(&mut self, e: &V8Element, id: u64, shape: Shape) { self.push_filled(e, id, shape, None); }
+
+    /// Adds a shape in the element's colour, or in colour index `fill`. Negative (custom) line
+    /// styles are drawn as solid lines like all others.
+    fn push_filled(&mut self, e: &V8Element, id: u64, shape: Shape, fill: Option<u32>) {
         let (design, (matrix, offset)) = (self.design, self.placement);
         let level = self.level(e);
-        self.scene.push(id, level, design.rgb(e.color()), e.weight(), shape, |p| design.world(matrix * p + offset));
+        let (_, weight, color) = design.symbology(e, level);
+        let color = fill.map_or(color, |fill| design.color(fill, level));
+        self.scene.push(id, level, design.rgb(color), weight.min(31) as u8, shape, |p| design.world(matrix * p + offset));
+    }
+
+    /// A closed outline. With a fill linkage (its own or its cell's): faces in the fill colour and
+    /// the outline in the element's colour; otherwise faces of closed 3D elements, outlines else.
+    fn closed(&mut self, e: &V8Element, id: u64, mut points: Vec<DVec3>, filled: bool) {
+        let Some(fill) = e.fill_color().or(self.cell_fill) else {
+            self.push(e, id, closed_shape(points, filled));
+            return;
+        };
+        if points.len() > 1 && points.first() != points.last() { points.push(points[0]); }
+        let faces = triangulate(&points);
+        if !faces.is_empty() { self.push_filled(e, id, Shape::Faces(faces), Some(fill)); }
+        self.push(e, id, Shape::Stroke(points));
     }
 
     /// Draws element `i` (and its components, which end at most at `end`) as part of pickable
@@ -1528,11 +1577,15 @@ impl V8Converter<'_> {
         match e.kind() {
             2 | 7 | 12 => {
                 // Cells keep their components in world coordinates; text nodes hold text elements.
+                // The fill of a filled cell fills its closed components.
+                let saved = self.cell_fill;
+                if e.kind() == 2 { self.cell_fill = e.fill_color().or(saved); }
                 let mut j = i + 1;
                 while j < stop {
                     self.draw(all, j, stop, id, depth + 1, texts);
                     j = v8_span(all, j, stop, depth + 1);
                 }
+                self.cell_fill = saved;
             }
             14 => {
                 let mut outline = Vec::new();
@@ -1545,10 +1598,10 @@ impl V8Converter<'_> {
                     }
                     j = next;
                 }
-                self.push(&e, id, closed_shape(outline, filled));
+                self.closed(&e, id, outline, filled);
             }
             3 | 4 | 6 | 11 | 15 | 16 | 27 => match v8_outline(all, i, stop) {
-                Some((points, true)) if e.kind() != 3 => self.push(&e, id, closed_shape(points, filled)),
+                Some((points, true)) if e.kind() != 3 => self.closed(&e, id, points, filled),
                 Some((points, _)) => self.push(&e, id, Shape::Stroke(points)),
                 None => self.malformed(&e),
             },
@@ -2501,6 +2554,62 @@ mod tests {
         assert_eq!(info(&loaded, "DGN world origin (metres)"), "152000, 50000, 0");
         let (lo, hi) = bounds(&loaded.layers[0]);
         assert!(lo[0] > -0.01 && (hi[0] - 10.0).abs() < 0.01 && hi[1] - lo[1] < 0.01, "{lo:?} {hi:?}");
+    }
+
+    /// A level entry with its line style, weight and colour at +0x40 (B.13); the override
+    /// symbology at +0x34 holds other values, which must not be used.
+    fn level_with_symbology(id: u32, name: &str, style: i32, weight: u32, color: u32) -> Vec<u8> {
+        let mut data = id.to_le_bytes().to_vec();
+        data.extend((-1i32).to_le_bytes());
+        data.extend([0; 0x0C]);
+        for value in [1u32, 31, 3, style as u32, weight, color, color] { data.extend(value.to_le_bytes()); }
+        v8(95, 0x0400, 1, None, &data, &[(1, name)])
+    }
+
+    /// Adds a fill linkage (B.7): header `07 10`, ID 0x0041, 8 at +4, the fill colour at +8, 0.
+    fn with_fill(mut element: Vec<u8>, color: u32) -> Vec<u8> {
+        element.extend([0x07, 0x10, 0x41, 0x00]);
+        for value in [8u32, color, 0] { element.extend(value.to_le_bytes()); }
+        let words = (element.len() / 2) as u32;
+        element[4..8].copy_from_slice(&words.to_le_bytes());
+        element
+    }
+
+    #[test]
+    fn v8_fill_colours_and_by_level_symbology() {
+        let mut f = V8File::new(1000.0, 1.0, 1.0, [0.0; 3]);
+        // Level 11: a custom line style (drawn solid), weight 2, colour 5 (magenta in our palette).
+        f.table(level_with_symbology(11, "Grid", -71, 2, 5));
+        // Grid lines by level (colour and weight 0xFFFFFFFF, style 0x7FFFFFFF) on level 11 and on
+        // level 13, which has no entry; a line of weight 0 and colour 5 on level 12 for comparison.
+        for (level, y) in [(11, 10_000.0), (12, 12_000.0), (13, 14_000.0)] {
+            let display = if level == 12 { [0, 5, 0] } else { [0, u32::MAX, u32::MAX] };
+            let mut line = v8(3, 0x1000, level, Some(display), &doubles(&[0.0, y, 10_000.0, y]), &[]);
+            if level != 12 { line[0x2C..0x30].copy_from_slice(&0x7FFF_FFFFu32.to_le_bytes()); }
+            f.graphic(line);
+        }
+        // A note frame on level 20: a 2D shape with outline colour 1 (blue), filled with colour 4 (yellow).
+        let square: Vec<f64> = [[0.0, 0.0], [1000.0, 0.0], [1000.0, 1000.0], [0.0, 1000.0], [0.0, 0.0]].concat();
+        f.graphic(with_fill(v8(6, 0x1000, 20, shown(0, 1), &counted(5, &square), &[]), 4));
+        let loaded = load(f.bytes()).unwrap();
+        assert_eq!(loaded.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Grid", "Level 12", "Level 13", "Level 20"]);
+        let (grid, reference, missing, frame) = (&loaded.layers[0], &loaded.layers[1], &loaded.layers[2], &loaded.layers[3]);
+        assert_eq!(grid.colors.as_ref().unwrap()[0], [255, 0, 255, 255], "the colour of level 11");
+        let props = &grid.props[0].1;
+        assert!(props.contains("\"Colour index\":5") && props.contains("\"Line weight\":2") && props.contains("\"Line style\":-71"), "{props}");
+        assert!(props.contains("\"By level\":\"line style, line weight, colour\""), "{props}");
+        // Weight 2 is 1.7 times as wide as weight 0 (not 31, which would be 11.85 times).
+        let width = |layer: &Layer| { let (lo, hi) = bounds(layer); hi[1] - lo[1] };
+        let ratio = width(grid) / width(reference);
+        assert!((ratio - 1.7).abs() < 0.05, "{ratio}");
+        // A level without an entry: colour 0 (white, drawn as dark ink) and weight 0.
+        assert_eq!(missing.colors.as_ref().unwrap()[0], [45, 45, 48, 255]);
+        assert!((width(missing) / width(reference) - 1.0).abs() < 0.01);
+        // The frame: two yellow triangles and the blue outline.
+        let colors = frame.colors.as_ref().unwrap();
+        assert_eq!(colors.iter().filter(|c| **c == [255, 255, 0, 255]).count(), 6, "two fill triangles");
+        assert!(colors.iter().filter(|c| **c != [255, 255, 0, 255]).all(|c| *c == [0, 0, 255, 255]));
+        assert!(frame.props[0].1.contains("\"Fill colour index\":4"), "{}", frame.props[0].1);
     }
 }
 

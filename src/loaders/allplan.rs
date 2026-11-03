@@ -1,18 +1,21 @@
 //! Allplan drawing files (`.ndw`, German "Teilbild"): the 3D bodies of one drawing file.
 //!
-//! Written from the clean-room specification "Allplan-tekenbestand (.ndw) v0.1" only. A drawing
+//! Written from the clean-room specification "Allplan-tekenbestand (.ndw) v0.2" only. A drawing
 //! file is a 12-byte header and pages of 32760 bytes; the element stream runs from the third page
 //! to the end of the last page and holds padding, attribute blocks and element records (§2, §3).
 //! Records of class 0xC6 are 3D bodies (§5): a prism (a bottom and a top ring) or an explicit
 //! boundary (edges and faces with holes). Coordinates are world coordinates in millimetres, Z up;
 //! the viewer shows them in metres without moving them, so drawing files of one project line up.
-//! Auxiliary bodies (openings, rooms) go in a layer that starts hidden.
+//! Each body links by key to its element record (class 0xEF or 0x6F, §8) for its name, element
+//! type and quantities; visible bodies go in a layer per category (walls, slabs, ...), auxiliary
+//! bodies (openings, rooms) in one layer that starts hidden.
 //!
 //! Not read yet: macros (3D furniture), colours and materials, 2D elements, project folders
 //! and layouts (`.npl`).
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
+use std::collections::HashMap;
 
 pub struct AllplanLoader;
 
@@ -60,10 +63,15 @@ struct Drawing {
     name: String,
     pages: usize,
     bodies: Vec<Body>,
+    /// The element records with data that bodies link to (§8).
+    elements: Vec<Element>,
     skipped_clip: usize,
     skipped_no_faces: usize,
     skipped_unreadable: usize,
 }
+
+/// The key that ties the records of one element together: (u32@24, u16@12) of the header (§8).
+type Key = (u32, u16);
 
 /// A 3D body as triangles: world coordinates in millimetres.
 #[derive(Debug)]
@@ -74,9 +82,128 @@ struct Body {
     form: u16,
     kind: u8,
     auxiliary: bool,
+    key: Key,
+    /// Index into [`Drawing::elements`] when the body is linked (§8.1).
+    element: Option<usize>,
     positions: Vec<[f64; 3]>,
     normals: Vec<[f32; 3]>,
     indices: Vec<u32>,
+}
+
+/// The data of an element record, class 0xEF or 0x6F (§8.2).
+#[derive(Debug, Clone)]
+struct Element {
+    offset: usize,
+    class: u8,
+    /// Trailing spaces and NUL removed, and a trailing `\` (catalogue code); may be empty.
+    name: String,
+    /// Height, thickness, length (m), area (m²), volume (m³) (§8.4).
+    quantities: [f64; 5],
+    /// Group and subtype (§8.3), when the record holds a valid type mark.
+    type_code: Option<(u8, u8)>,
+}
+
+/// The categories visible bodies are split into (§8.5), in layer order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Category {
+    Walls,
+    Slabs,
+    Columns,
+    Beams,
+    Foundations,
+    Stairs,
+    Other,
+}
+
+impl Category {
+    const ALL: [Category; 7] = [
+        Category::Walls,
+        Category::Slabs,
+        Category::Columns,
+        Category::Beams,
+        Category::Foundations,
+        Category::Stairs,
+        Category::Other,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Category::Walls => "Walls",
+            Category::Slabs => "Slabs",
+            Category::Columns => "Columns",
+            Category::Beams => "Beams",
+            Category::Foundations => "Foundations",
+            Category::Stairs => "Stairs",
+            Category::Other => "Other",
+        }
+    }
+
+    /// Fixed colours (the file's colour tables are not in the drawing file, §8.5).
+    fn color(self) -> [f32; 3] {
+        match self {
+            Category::Walls => [0.82, 0.79, 0.74],
+            Category::Slabs => [0.66, 0.69, 0.73],
+            Category::Columns => [0.60, 0.65, 0.75],
+            Category::Beams => [0.72, 0.62, 0.52],
+            Category::Foundations => [0.52, 0.52, 0.50],
+            Category::Stairs => [0.80, 0.70, 0.55],
+            Category::Other => DEFAULT_COLOR,
+        }
+    }
+}
+
+/// The label and category of an element type (§8.3); `None` for codes not in the table.
+fn element_type(group: u8, subtype: u8) -> Option<(&'static str, Category)> {
+    use Category::*;
+    Some(match (group, subtype) {
+        (0x01, 0x01) => ("Wall", Walls),
+        (0x01, 0x03) => ("Column", Columns),
+        (0x01, 0x04) => ("Slab", Slabs),
+        (0x01, 0x06) => ("Beam", Beams),
+        (0x01, 0x07) => ("Foundation", Foundations),
+        (0x01, 0x0A) => ("Chimney", Other),
+        (0x01, 0x0E) => ("Pier", Walls),
+        (0x01, 0x3E) => ("Finish", Other),
+        (0x01, 0x47) => ("Stair part", Stairs),
+        (0x09, 0x01) => ("Profile wall", Other),
+        (0x09, 0x3D) => ("Room", Other),
+        (0x09, 0x5F) => ("Terrain element", Other),
+        (0x59, 0x16) => ("Door opening", Other),
+        (0x59, 0x17) => ("Window opening", Other),
+        (0x59, 0x18) => ("Niche", Other),
+        (0x59, 0x19) => ("Wall opening", Other),
+        (0x59, 0x1B) => ("Beam recess", Other),
+        (0x59, 0x23) => ("Slab opening", Other),
+        (0x59, 0x24) => ("Slab recess", Other),
+        (0x59, 0x2A) => ("Door element", Other),
+        (0x59, 0x2B) => ("Window element", Other),
+        (0x59, 0x2D) => ("Recess element", Other),
+        _ => return None,
+    })
+}
+
+/// The key of the record at `p`.
+fn key_at(s: &[u8], p: usize) -> Option<Key> {
+    Some((u32_at(s, p + 24)?, u16_at(s, p + 12)?))
+}
+
+/// Reads the data of an element record (§8.2); `None` without the `||||` mark or when the name
+/// and quantities do not fit the record.
+fn decode_element(r: &[u8], offset: usize) -> Option<Element> {
+    let q = HEADER + 16 * usize::from(u16_at(r, 14)?);
+    if q + 144 > r.len() || r[q + 8..q + 12] != *b"||||" {
+        return None;
+    }
+    let units: Vec<u16> = (0..36).map_while(|i| u16_at(r, q + 32 + 2 * i)).take_while(|&u| u != 0).collect();
+    let name = String::from_utf16_lossy(&units);
+    let name = name.trim_end_matches([' ', '\0']);
+    let name = name.strip_suffix('\\').unwrap_or(name).to_string();
+    let mut quantities = [0.0; 5];
+    for (i, value) in quantities.iter_mut().enumerate() {
+        *value = f64_at(r, q + 104 + 8 * i)?;
+    }
+    let type_code = (q + 284 <= r.len() && matches!(r[q + 280], 0x81 | 0x41)).then(|| (r[q + 282], r[q + 283]));
+    Some(Element { offset, class: r[4], name, quantities, type_code })
 }
 
 fn u16_at(d: &[u8], o: usize) -> Option<u16> {
@@ -125,14 +252,25 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     let stream = &data[..end];
     let mut p = STREAM_START;
     let mut runs = None;
+    // Per key the first element record with data (§8.1); u32@24 = 0 is no key.
+    let mut by_key: HashMap<Key, usize> = HashMap::new();
     while p + 8 <= stream.len() {
         if is_padding(stream, p) {
             p += 8;
         } else if is_attribute(stream, p) {
             p += 8 + (2 * usize::from(stream[p + 2])).div_ceil(8) * 8;
         } else if let Some(step) = record_step(stream, p) {
-            if stream[p + 4] == 0xC6 {
-                drawing.body(&stream[p..p + step], p);
+            match stream[p + 4] {
+                0xC6 => drawing.body(&stream[p..p + step], p),
+                0xEF | 0x6F => {
+                    if let Some(key) = key_at(stream, p).filter(|key| key.0 != 0 && !by_key.contains_key(key)) {
+                        if let Some(element) = decode_element(&stream[p..p + step], p) {
+                            drawing.elements.push(element);
+                            by_key.insert(key, drawing.elements.len() - 1);
+                        }
+                    }
+                }
+                _ => {}
             }
             p += step;
         } else {
@@ -143,6 +281,10 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
                 None => break,
             }
         }
+    }
+    // Element records may come before or after their body.
+    for body in &mut drawing.bodies {
+        body.element = if body.key.0 == 0 { None } else { by_key.get(&body.key).copied() };
     }
     Ok(drawing)
 }
@@ -234,14 +376,18 @@ impl PaddingRuns {
 }
 
 /// A strictly valid header that is followed by the stream end, an attribute block or another
-/// strictly valid header, after at most one page of padding.
+/// strictly valid header (§3 item 4). Padding that runs to the stream end is always fine; padding
+/// followed by data may be one page long at most.
 fn strict_resync(s: &[u8], q: usize, runs: &PaddingRuns) -> bool {
     let Some(step) = strict_header(s, q) else { return false };
     let next = runs.end(s, q + step);
+    if next + 8 > s.len() {
+        return true;
+    }
     if next - (q + step) > PAGE {
         return false;
     }
-    next + 8 > s.len() || is_attribute(s, next) || strict_header(s, next).is_some()
+    is_attribute(s, next) || strict_header(s, next).is_some()
 }
 
 /// The outcome of decoding one 0xC6 record.
@@ -358,6 +504,8 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
         form,
         kind,
         auxiliary: r[1] & 1 == 1,
+        key: key_at(r, 0)?,
+        element: None,
         positions: Vec::new(),
         normals: Vec::new(),
         indices: Vec::new(),
@@ -533,17 +681,70 @@ fn triangulate(loops: &[Vec<[f64; 3]>], flip: bool, body: &mut Body) {
     }
 }
 
-/// The layers: the bodies, and the auxiliary bodies in a hidden layer.
+/// Rounds a quantity for display (§8.4).
+fn rounded(value: f64) -> serde_json::Value {
+    if value.is_finite() { serde_json::json!((value * 1000.0).round() / 1000.0) } else { serde_json::Value::Null }
+}
+
+/// The properties of a body: the record (v0.1) and its element (§8.5).
+fn body_props(drawing: &Drawing, body: &Body) -> String {
+    let mut props = serde_json::json!({
+        "Allplan drawing file": drawing.name,
+        "Record offset": format!("0x{:X}", body.offset),
+        "Record class": format!("0x{:02X}", body.record_type & 0xFF),
+        "Record type": format!("0x{:04X}", body.record_type),
+        "Form": format!("0x{:04X}", body.form),
+        "Kind": match body.kind { 4 => "explicit topology (4)".to_string(), k => format!("prism ({k})") },
+        "Auxiliary": body.auxiliary,
+    });
+    if let (Some(element), Some(map)) = (body.element.map(|i| &drawing.elements[i]), props.as_object_mut()) {
+        if !element.name.is_empty() {
+            map.insert("Name".into(), element.name.clone().into());
+        }
+        if let Some((group, subtype)) = element.type_code {
+            let label = element_type(group, subtype)
+                .map(|(label, _)| label.to_string())
+                .unwrap_or_else(|| format!("Element {group:02X} {subtype:02X}"));
+            map.insert("Element type".into(), label.into());
+            map.insert("Type code".into(), format!("{group:02X} {subtype:02X}").into());
+        }
+        let labels = ["Height (m)", "Thickness (m)", "Length (m)", "Area (m²)", "Volume (m³)"];
+        for (label, &value) in labels.iter().zip(&element.quantities) {
+            map.insert((*label).into(), rounded(value));
+        }
+        map.insert("Element record".into(), format!("0x{:02X} at 0x{:X}", element.class, element.offset).into());
+    }
+    props.to_string()
+}
+
+/// The layer of a visible body: the category of its element type, `Other` without one (§8.5).
+fn category(drawing: &Drawing, body: &Body) -> Category {
+    body.element
+        .and_then(|i| drawing.elements[i].type_code)
+        .and_then(|(group, subtype)| element_type(group, subtype))
+        .map_or(Category::Other, |(_, category)| category)
+}
+
+/// The layers: visible bodies per category, and the auxiliary bodies in one hidden layer.
 fn build(drawing: &Drawing) -> Result<Loaded, String> {
-    let mut solid = Layer { name: "3D bodies".into(), color: DEFAULT_COLOR, ..Layer::default() };
-    let mut auxiliary = Layer {
-        name: "Auxiliary bodies (openings, rooms)".into(),
-        color: AUXILIARY_COLOR,
-        hidden: true,
-        ..Layer::default()
-    };
+    if drawing.bodies.is_empty() {
+        let name = if drawing.name.is_empty() { String::new() } else { format!(" \"{}\"", drawing.name) };
+        return Err(format!(
+            "Allplan: the drawing file{name} has no 3D bodies. This reader shows 3D bodies only; 2D elements, \
+             macros (3D furniture) and layouts are not read yet."
+        ));
+    }
+    let mut layers: Vec<(Option<Category>, Layer)> = Category::ALL
+        .iter()
+        .map(|&c| (Some(c), Layer { name: c.name().into(), color: c.color(), ..Layer::default() }))
+        .collect();
+    layers.push((
+        None,
+        Layer { name: "Auxiliary bodies (openings, rooms)".into(), color: AUXILIARY_COLOR, hidden: true, ..Layer::default() },
+    ));
     for body in &drawing.bodies {
-        let layer = if body.auxiliary { &mut auxiliary } else { &mut solid };
+        let wanted = if body.auxiliary { None } else { Some(category(drawing, body)) };
+        let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
         let base = u32::try_from(layer.vertex_count()).map_err(|_| "Allplan: too many vertices")?;
         let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
         layer.positions.extend(body.positions.iter().flat_map(|p| p.map(|c| (c * MM) as f32)));
@@ -554,35 +755,18 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         let count = u32::try_from(body.indices.len()).map_err(|_| "Allplan: too many triangles")?;
         let id = body.offset as u64;
         layer.elements.push((id, first, count));
-        layer.props.push((
-            id,
-            serde_json::json!({
-                "Allplan drawing file": drawing.name,
-                "Record offset": format!("0x{:X}", body.offset),
-                "Record class": format!("0x{:02X}", body.record_type & 0xFF),
-                "Record type": format!("0x{:04X}", body.record_type),
-                "Form": format!("0x{:04X}", body.form),
-                "Kind": match body.kind { 4 => "explicit topology (4)".to_string(), k => format!("prism ({k})") },
-                "Auxiliary": body.auxiliary,
-            })
-            .to_string(),
-        ));
+        layer.props.push((id, body_props(drawing, body)));
     }
     let visible = drawing.bodies.iter().filter(|b| !b.auxiliary).count();
     let hidden = drawing.bodies.len() - visible;
-    if drawing.bodies.is_empty() {
-        let name = if drawing.name.is_empty() { String::new() } else { format!(" \"{}\"", drawing.name) };
-        return Err(format!(
-            "Allplan: the drawing file{name} has no 3D bodies. This reader shows 3D bodies only; 2D elements, \
-             macros (3D furniture) and layouts are not read yet."
-        ));
-    }
+    let linked = drawing.bodies.iter().filter(|b| b.element.is_some()).count();
     let mut project = ProjectData::default();
     project.info = vec![
         ("Allplan drawing file".into(), drawing.name.clone()),
         ("Allplan pages".into(), drawing.pages.to_string()),
         ("Allplan 3D bodies".into(), visible.to_string()),
         ("Allplan auxiliary bodies (hidden)".into(), hidden.to_string()),
+        ("Allplan bodies linked to an element".into(), linked.to_string()),
         (
             "Allplan skipped bodies".into(),
             format!(
@@ -592,10 +776,13 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         ),
         (
             "Allplan import scope".into(),
-            "3D bodies (spec v0.1); no macros, colours, materials or 2D elements".into(),
+            "3D bodies with element name, type and quantities (spec v0.2); no macros, colours, materials or 2D elements"
+                .into(),
         ),
     ];
-    Ok(Loaded { layers: vec![solid, auxiliary], views: Vec::new(), project })
+    // Empty layers are left out.
+    let layers = layers.into_iter().map(|(_, layer)| layer).filter(|layer| !layer.indices.is_empty()).collect();
+    Ok(Loaded { layers, views: Vec::new(), project })
 }
 
 #[cfg(test)]
@@ -972,8 +1159,156 @@ mod tests {
         assert_eq!(drawing.bodies[0].offset, body_at);
     }
 
-    /// Checks a real drawing file against the table of spec §7.2, when `ALLPLAN_SAMPLE` holds its
-    /// path. The samples are not in the repository.
+    /// Sets the key (u32@24, u16@12) of a record (§8).
+    fn keyed(mut record: Vec<u8>, key: Key) -> Vec<u8> {
+        record[24..28].copy_from_slice(&key.0.to_le_bytes());
+        record[12..14].copy_from_slice(&key.1.to_le_bytes());
+        record
+    }
+
+    /// An element record (§7.3): a rectangular outline (n16 = 4) and `n8` blocks of 8 bytes
+    /// (36 for the full record of 392 bytes), so q = 104.
+    fn element(key: Key, marker: bool, name: &str, quantities: [f64; 5], type_code: Option<(u8, u8)>, n8: u32) -> Vec<u8> {
+        let mut r = header(0xEF, 0, 4, n8);
+        for (x, y) in [(0.0f64, 0.0f64), (1000.0, 0.0), (1000.0, 200.0), (0.0, 200.0)] {
+            r.extend(x.to_le_bytes());
+            r.extend(y.to_le_bytes());
+        }
+        r.resize(HEADER + 64 + 8 * n8 as usize, 0);
+        let q = HEADER + 64;
+        if marker {
+            r[q + 8..q + 12].copy_from_slice(b"||||");
+        }
+        let mut units: Vec<u16> = name.encode_utf16().collect();
+        units.resize(36, 0x20);
+        for (i, u) in units.iter().enumerate() {
+            r[q + 32 + 2 * i..q + 34 + 2 * i].copy_from_slice(&u.to_le_bytes());
+        }
+        for (i, v) in quantities.iter().enumerate() {
+            r[q + 104 + 8 * i..q + 112 + 8 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        if let Some((group, subtype)) = type_code.filter(|_| q + 284 <= r.len()) {
+            r[q + 280] = 0x81;
+            r[q + 282] = group;
+            r[q + 283] = subtype;
+        }
+        keyed(r, key)
+    }
+
+    fn props_of(loaded: &Loaded, offset: usize) -> serde_json::Value {
+        let text = loaded.layers.iter().flat_map(|l| &l.props).find(|(id, _)| *id == offset as u64).map(|(_, p)| p).unwrap();
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn links_bodies_to_element_records() {
+        let q = [2.75, 0.24, 9.0, 2.16, 5.94];
+        let at = |i: f64| prism(0, 0x0301, [1000.0 * i, 0.0, 0.0], [1000.0 * i + 500.0, 200.0, 3000.0]);
+        let mut s = Vec::new();
+        let mut offsets = Vec::new();
+        let mut push = |s: &mut Vec<u8>, record: Vec<u8>, is_body: bool| {
+            if is_body {
+                offsets.push(STREAM_START + s.len());
+            }
+            s.extend(record);
+        };
+        // 0: element before its body; the name is a catalogue code.
+        push(&mut s, element((1, 1), true, "WA-RFC\\", q, Some((0x01, 0x01)), 36), false);
+        push(&mut s, keyed(at(0.0), (1, 1)), true);
+        // 1: body in a container, element after it.
+        push(&mut s, header(0x64, 0, 0, 54), false);
+        push(&mut s, keyed(at(1.0), (2, 1)), true);
+        push(&mut s, element((2, 1), true, "Floor", [0.3; 5], Some((0x01, 0x04)), 36), false);
+        // 2: two element records with one key: the first wins.
+        push(&mut s, keyed(at(2.0), (3, 1)), true);
+        push(&mut s, element((3, 1), true, "First", [0.1; 5], Some((0x01, 0x47)), 36), false);
+        push(&mut s, element((3, 1), true, "Second", [0.2; 5], Some((0x01, 0x01)), 36), false);
+        // 3: element without '||||': not linked.
+        push(&mut s, keyed(at(3.0), (4, 1)), true);
+        push(&mut s, element((4, 1), false, "No data", [0.4; 5], Some((0x01, 0x01)), 36), false);
+        // 4: element too short for the type (q + 284 past the end): name and quantities only.
+        push(&mut s, keyed(at(4.0), (5, 1)), true);
+        push(&mut s, element((5, 1), true, "Short", [0.5; 5], Some((0x01, 0x01)), 18), false);
+        // 5: no element with this key.
+        push(&mut s, keyed(at(5.0), (6, 1)), true);
+        // 6: auxiliary window opening.
+        push(&mut s, keyed(prism(1, 0x0301, [6000.0, 0.0, 900.0], [6500.0, 200.0, 2100.0]), (7, 1)), true);
+        push(&mut s, element((7, 1), true, "Window", [1.2; 5], Some((0x59, 0x17)), 36), false);
+        // 7: a type code not in the table.
+        push(&mut s, keyed(at(7.0), (8, 1)), true);
+        push(&mut s, element((8, 1), true, "", [0.0; 5], Some((0x77, 0x01)), 36), false);
+        // 8: same u32 as element 0 but another u16: not linked.
+        push(&mut s, keyed(at(8.0), (1, 2)), true);
+        // 9: a first record without data does not count; a later one with data does (§8.1).
+        push(&mut s, element((9, 1), false, "No data", [0.9; 5], Some((0x01, 0x01)), 36), false);
+        push(&mut s, keyed(at(9.0), (9, 1)), true);
+        push(&mut s, element((9, 1), true, "Later", [0.6; 5], Some((0x01, 0x06)), 36), false);
+        // 10: u32@24 = 0 is no key: neither the element record nor the body takes part (§8.1).
+        push(&mut s, element((0, 5), true, "No key", [0.7; 5], Some((0x01, 0x01)), 36), false);
+        push(&mut s, keyed(at(10.0), (0, 5)), true);
+
+        let drawing = parse(&file(3, "Elements", &s)).unwrap();
+        assert_eq!(drawing.bodies.iter().map(|b| b.offset).collect::<Vec<_>>(), offsets);
+        let element_of = |i: usize| drawing.bodies[i].element.map(|e| &drawing.elements[e]);
+        let linked: Vec<bool> = (0..11).map(|i| element_of(i).is_some()).collect();
+        assert_eq!(linked, [true, true, true, false, true, false, true, true, false, true, false]);
+        assert_eq!(element_of(9).unwrap().name, "Later");
+        assert!(drawing.elements.iter().all(|e| e.name != "No key"));
+        let wall = element_of(0).unwrap();
+        assert_eq!((wall.name.as_str(), wall.quantities, wall.type_code), ("WA-RFC", q, Some((0x01, 0x01))));
+        assert_eq!(element_of(2).unwrap().name, "First");
+        let short = element_of(4).unwrap();
+        assert_eq!((short.name.as_str(), short.quantities, short.type_code), ("Short", [0.5; 5], None));
+
+        let loaded = build(&drawing).unwrap();
+        let layers: Vec<(&str, usize, bool)> =
+            loaded.layers.iter().map(|l| (l.name.as_str(), l.elements.len(), l.hidden)).collect();
+        assert_eq!(
+            layers,
+            [
+                ("Walls", 1, false),
+                ("Slabs", 1, false),
+                ("Beams", 1, false),
+                ("Stairs", 1, false),
+                ("Other", 6, false),
+                ("Auxiliary bodies (openings, rooms)", 1, true)
+            ]
+        );
+        let colors: std::collections::HashSet<String> = loaded.layers.iter().map(|l| format!("{:?}", l.color)).collect();
+        assert_eq!(colors.len(), loaded.layers.len());
+
+        let wall = props_of(&loaded, offsets[0]);
+        assert_eq!(wall["Name"], "WA-RFC");
+        assert_eq!(wall["Element type"], "Wall");
+        assert_eq!(wall["Type code"], "01 01");
+        assert_eq!(wall["Height (m)"], 2.75);
+        assert_eq!(wall["Volume (m³)"], 5.94);
+        let short = props_of(&loaded, offsets[4]);
+        assert_eq!(short["Name"], "Short");
+        assert!(short.get("Element type").is_none() && short.get("Type code").is_none());
+        assert_eq!(props_of(&loaded, offsets[6])["Element type"], "Window opening");
+        let unknown = props_of(&loaded, offsets[7]);
+        assert_eq!(unknown["Element type"], "Element 77 01");
+        assert!(unknown.get("Name").is_none());
+        let loose = props_of(&loaded, offsets[5]);
+        assert!(loose.get("Name").is_none() && loose.get("Height (m)").is_none());
+        assert!(loaded.project.info.contains(&("Allplan bodies linked to an element".into(), "7".into())));
+    }
+
+    #[test]
+    fn resync_keeps_a_body_followed_by_padding_to_the_end() {
+        // Garbage forces a resync onto the body; after it run more than three pages of padding.
+        let mut s = vec![0xFFu8; 8];
+        s.extend(prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]));
+        let mut data = file(5, "Last body", &s);
+        assert_eq!(parse(&data).unwrap().bodies.len(), 1);
+        // The same padding followed by data is longer than a page: the candidate is not valid.
+        data[12 + 5 * PAGE - 64..12 + 5 * PAGE].fill(0xFF);
+        assert_eq!(parse(&data).unwrap().bodies.len(), 0);
+    }
+
+    /// Checks a real drawing file against the tables of spec §7.2 and §7.3, when `ALLPLAN_SAMPLE`
+    /// holds its path. The samples are not in the repository.
     #[test]
     fn optional_sample_from_env() {
         let Ok(path) = std::env::var("ALLPLAN_SAMPLE") else { return };
@@ -984,12 +1319,24 @@ mod tests {
         let auxiliary = drawing.bodies.len() - visible;
         let explicit = drawing.bodies.iter().filter(|b| b.kind == 4).count();
         let prisms = drawing.bodies.len() - explicit;
-        let solid_bounds = build(&drawing).ok().map(|loaded| bounds(&loaded.layers[0].positions));
+        let linked = drawing.bodies.iter().filter(|b| b.element.is_some()).count();
+        let mut codes = std::collections::BTreeMap::new();
+        for body in &drawing.bodies {
+            if let Some((group, subtype)) = body.element.and_then(|e| drawing.elements[e].type_code) {
+                *codes.entry(format!("{group:02X} {subtype:02X}")).or_insert(0usize) += 1;
+            }
+        }
+        let solid_bounds = build(&drawing).ok().map(|loaded| {
+            let positions: Vec<f32> =
+                loaded.layers.iter().filter(|l| !l.hidden).flat_map(|l| l.positions.iter().copied()).collect();
+            bounds(&positions)
+        });
         eprintln!(
             "{file_name}: \"{}\", {} pages, {visible} bodies, {auxiliary} auxiliary, kind 1/0 {prisms}, kind 4 {explicit}, \
-             skipped clip {} / no faces {} / unreadable {}, bounds {solid_bounds:?}",
+             linked {linked}, type codes {codes:?}, skipped clip {} / no faces {} / unreadable {}, bounds {solid_bounds:?}",
             drawing.name, drawing.pages, drawing.skipped_clip, drawing.skipped_no_faces, drawing.skipped_unreadable
         );
+        // §7.2
         type Range = [(f32, f32); 3];
         let table: [(&str, usize, &str, usize, usize, usize, usize, Option<Range>); 4] = [
             ("tb000141", 26, "1st basement floor plan", 91, 38, 96, 33, Some([(3880.0, 15855.0), (-20150.0, -5380.0), (-3169.5, 1074.7)])),
@@ -997,20 +1344,45 @@ mod tests {
             ("tb000110", 2, "QUICKSTART 01.1", 0, 0, 0, 0, None),
             ("tb000732", 3, "Floor slab", 1, 0, 1, 0, Some([(3950.0, 15908.5), (-20200.0, -5450.0), (-3400.0, -3100.0)])),
         ];
-        let Some(&(_, pages, name, want_visible, want_auxiliary, want_prisms, want_explicit, range)) =
+        if let Some(&(_, pages, name, want_visible, want_auxiliary, want_prisms, want_explicit, range)) =
             table.iter().find(|row| file_name.starts_with(row.0))
-        else {
-            return;
-        };
-        assert_eq!(drawing.pages, pages);
-        assert_eq!(drawing.name, name);
-        assert_eq!((visible, auxiliary), (want_visible, want_auxiliary));
-        assert_eq!((prisms, explicit), (want_prisms, want_explicit));
-        if let Some(range) = range {
-            let (lo, hi) = solid_bounds.expect("bodies");
-            for k in 0..3 {
-                let (min, max) = (range[k].0 / 1000.0, range[k].1 / 1000.0);
-                assert!((lo[k] - min).abs() < 6e-4 && (hi[k] - max).abs() < 6e-4, "axis {k}: {lo:?} {hi:?}");
+        {
+            assert_eq!(drawing.pages, pages);
+            assert_eq!(drawing.name, name);
+            assert_eq!((visible, auxiliary), (want_visible, want_auxiliary));
+            assert_eq!((prisms, explicit), (want_prisms, want_explicit));
+            if let Some(range) = range {
+                let (lo, hi) = solid_bounds.expect("bodies");
+                for k in 0..3 {
+                    let (min, max) = (range[k].0 / 1000.0, range[k].1 / 1000.0);
+                    assert!((lo[k] - min).abs() < 6e-4 && (hi[k] - max).abs() < 6e-4, "axis {k}: {lo:?} {hi:?}");
+                }
+            }
+        }
+        // §7.3: shown bodies (auxiliary included), linked bodies and bodies per type code.
+        type Codes = &'static [(&'static str, usize)];
+        let table: [(&str, Option<&str>, usize, usize, Codes); 4] = [
+            ("tb000141", None, 129, 129, &[("01 01", 36), ("01 03", 1), ("01 07", 1), ("01 0E", 3), ("01 3E", 1), ("01 47", 48), ("09 3D", 13), ("09 5F", 1), ("59 16", 7), ("59 17", 12), ("59 2B", 6)]),
+            ("tb000151", None, 143, 140, &[("01 01", 35), ("01 03", 1), ("01 0E", 2), ("01 3E", 1), ("01 47", 50), ("09 01", 3), ("09 3D", 10), ("09 5F", 1), ("59 16", 11), ("59 17", 13), ("59 18", 1), ("59 1B", 1), ("59 2A", 2), ("59 2B", 9)]),
+            ("tb000732", None, 1, 1, &[("01 07", 1)]),
+            ("tb000624", Some("Chimney"), 1, 1, &[("01 0A", 1)]),
+        ];
+        if let Some(&(_, name, shown, want_linked, want_codes)) = table.iter().find(|row| file_name.starts_with(row.0)) {
+            if let Some(name) = name {
+                assert_eq!(drawing.name, name);
+            }
+            assert_eq!((drawing.bodies.len(), linked), (shown, want_linked));
+            let want: std::collections::BTreeMap<String, usize> = want_codes.iter().map(|&(c, n)| (c.to_string(), n)).collect();
+            assert_eq!(codes, want);
+        }
+        if file_name.starts_with("tb000141") {
+            for (name, want) in [("WA-RFC", [2.75, 0.24, 9.0, 2.16, 5.94]), ("Insulation not analyzed", [2.95, 0.08, 4.0, 0.32, 0.944])] {
+                let found = drawing.bodies.iter().filter_map(|b| b.element.map(|e| &drawing.elements[e])).any(|e| {
+                    e.name == name
+                        && e.type_code == Some((0x01, 0x01))
+                        && e.quantities.iter().zip(want).all(|(a, b)| (a - b).abs() <= 1e-6)
+                });
+                assert!(found, "no wall {name:?} with quantities {want:?}");
             }
         }
     }

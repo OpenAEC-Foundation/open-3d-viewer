@@ -62,7 +62,7 @@ Zelf een download controleren:
 sha256sum -c SHA256SUMS --ignore-missing
 gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, vingerafdruk 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
 gpg --verify SHA256SUMS.asc SHA256SUMS
-gh attestation verify open-3d-viewer_2026.45.1_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+gh attestation verify open-3d-viewer_2026.45.0_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
 ## OpenAEC Linux (SuperCloud)
@@ -113,7 +113,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Draaien, verschuiven en zoomen.** Slepen met links draait, slepen met de middelste knop verschuift, het wiel zoomt naar de cursor. De kijkkubus draait het model naar een zijde; **F** past het model in beeld.
 - **Standaardaanzichten.** Iso, boven, voor en rechts (`0`, `1`, `2`, `3`), perspectief of orthografisch (`P`, `O`), en de opgeslagen aanzichten van een Revit-model.
 - **Weergaven.** Volledig, draadmodel en volledig met randen (`S`, `W`, `E`), het grondraster (`G`) en **Z-as omdraaien** voor bestanden met de andere as omhoog.
-- **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, Archicad-wanden, -vloeren, -kolommen en -liggers, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes en sparingsvolumes beginnen verborgen in eigen lagen; de sparingen blijven uit hun wanden en vloeren gesneden.
+- **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, Allplan-elementcategorieën, Archicad-wanden, -vloeren, -kolommen en -liggers, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes en sparingsvolumes beginnen verborgen in eigen lagen; de sparingen blijven uit hun wanden en vloeren gesneden.
 - **Sneltoetsen.** Elke opdracht staat één keer in één lijst, die het lint, de titelbalk en het toetsenbord gebruiken. In **Instellingen** geef je elke opdracht je eigen toets.
 
 ## Meten, doorsnijden en uit elkaar halen
@@ -157,7 +157,7 @@ Wat niet meekomt:
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
-- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in één kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Macro's (3D-meubilair), kleuren en materialen, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
+- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in een laag per categorie, elk met een vaste kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Een klik op een lichaam toont de naam, het elementtype en de hoeveelheden (hoogte, dikte, lengte, oppervlakte, inhoud) van het Allplan-element. Macro's (3D-meubilair), de eigen kleuren en materialen van de tekening, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **Archicad** toont wanden, vloeren en kolommen als geëxtrudeerde plattegronden op hun verdieping, en liggers langs hun as, ook schuine. Daken, openingen (deuren, ramen), bibliotheekobjecten, kolommen en liggers met een profieldoorsnede, en projecten van vóór Archicad 25 worden nog niet gelezen. Wandhoogtes volgen de verdieping waaraan de bovenkant van een wand gekoppeld is, of de eigen hoogte van de wand. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 
@@ -182,7 +182,7 @@ Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere b
 
 ## Testen en betrouwbaarheid
 
-- **174 unittests** in `src/` (172 draaien; 2 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 86 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 8 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **176 unittests** in `src/` (174 draaien; 2 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 88 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 8 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -232,7 +232,7 @@ open-3d-viewer BESTAND --save-as UIT.ifc
 open-3d-viewer --bench BESTAND [--frames 300]
 ```
 
-Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.1`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.
+Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.0`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.
 
 Open 3D Viewer Studio hoort bij de familie van apps van de [OpenAEC Foundation](https://github.com/OpenAEC-Foundation).
 

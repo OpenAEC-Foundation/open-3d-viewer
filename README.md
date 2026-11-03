@@ -62,7 +62,7 @@ To check a download yourself:
 sha256sum -c SHA256SUMS --ignore-missing
 gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, fingerprint 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
 gpg --verify SHA256SUMS.asc SHA256SUMS
-gh attestation verify open-3d-viewer_2026.45.1_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+gh attestation verify open-3d-viewer_2026.45.0_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
 ## OpenAEC Linux (SuperCloud)
@@ -111,7 +111,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 - **Orbit, pan and zoom.** Left drag orbits, middle drag pans, the wheel zooms to the cursor. The view cube turns the model to a side; **F** fits the model in view.
 - **Standard views.** Iso, top, front and right (`0`, `1`, `2`, `3`), perspective or orthographic (`P`, `O`), and the saved views of a Revit model.
 - **Render modes.** Solid, wireframe and solid with edges (`S`, `W`, `E`), the ground grid (`G`) and **Flip up** for files with the other up axis.
-- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Archicad walls, slabs, columns and beams, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
+- **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Allplan element categories, Archicad walls, slabs, columns and beams, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
 - **Shortcuts.** Every command has one entry in one list, used by the ribbon, the title bar and the keyboard. In **Settings** you give any command your own key.
 
 ## Measure, section and explode
@@ -155,7 +155,7 @@ What does not come through:
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
-- **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in one colour; openings and rooms start hidden in a layer of their own. Macros (3D furniture), colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
+- **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category, each with a fixed colour; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (3D furniture), the drawing's own colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
 - **Archicad** shows walls, slabs and columns as extruded footprints on their stories, and beams along their axis, sloped ones too. Roofs, openings (doors, windows), library objects, columns and beams with a profile cross-section, and projects from before Archicad 25 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 
@@ -180,7 +180,7 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## Testing and reliability
 
-- **174 unit tests** in `src/` (172 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 86 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 8 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **176 unit tests** in `src/` (174 run; 2 are left out by default, one needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 88 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 8 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -230,7 +230,7 @@ open-3d-viewer FILE --save-as OUT.ifc
 open-3d-viewer --bench FILE [--frames 300]
 ```
 
-Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.1`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
+Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.0`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
 
 Open 3D Viewer Studio is part of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation) family of apps.
 

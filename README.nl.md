@@ -138,7 +138,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **Revit** (`.rvt`, `.rfa`) | Desktop | Nee |
 | **SketchUp** (`.skp`, versie 3 en later) | Ja | Nee |
 | **Tekla Structures** (`.db1`, bèta) | Ja | Nee |
-| **Allplan** (`.ndw`-tekenbestanden, bèta) | Ja, 3D-lichamen | Nee |
+| **Allplan** (`.ndw`-tekenbestanden, bèta) | Ja, 3D-lichamen en macro's | Nee |
 | **Archicad** (`.pln`, `.pla`, Archicad 25 t/m 29, bèta) | Ja, wanden met sparingen, vloeren, kolommen, liggers en daken | Nee |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Ja, polygoongeometrie | Nee |
 | **MicroStation DGN** (`.dgn`, V7 en V8) | Ja | Nee |
@@ -157,7 +157,7 @@ Wat niet meekomt:
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
-- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in een laag per categorie, elk met een vaste kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Een klik op een lichaam toont de naam, het elementtype en de hoeveelheden (hoogte, dikte, lengte, oppervlakte, inhoud) van het Allplan-element. Macro's (3D-meubilair), de eigen kleuren en materialen van de tekening, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
+- **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in een laag per categorie, elk met een vaste kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Een klik op een lichaam toont de naam, het elementtype en de hoeveelheden (hoogte, dikte, lengte, oppervlakte, inhoud) van het Allplan-element. Macro's (meubels, ramen, deuren, leuningen) komen in een laag `Macros`, één element per plaatsing. De eigen kleuren en materialen van de tekening, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **Archicad** toont wanden, vloeren en kolommen als geëxtrudeerde plattegronden op hun verdieping, liggers langs hun as, ook schuine, en elk dakvlak tussen zijn schuine onder- en bovenkant, met verticale randen. Ramen en deuren worden als sparingen uit hun wanden gesneden; de sparingen beginnen verborgen in een eigen laag. Hun kozijnen, glas en bladen, bibliotheekobjecten, gebogen daken en schalen, kolommen en liggers met een profieldoorsnede, en projecten van vóór Archicad 25 worden nog niet gelezen. Wandhoogtes volgen de verdieping waaraan de bovenkant van een wand gekoppeld is, of de eigen hoogte van de wand. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 

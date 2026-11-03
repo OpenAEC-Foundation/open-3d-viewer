@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
+**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`p
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
-- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, DWG/DXF, MicroStation DGN (V7 en V8), CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
+- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, Archicad (wanden en vloeren), DWG/DXF, MicroStation DGN (V7 en V8), CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
 - **Meerdere modellen tegelijk.** **Openen** vervangt het model, **Toevoegen** zet er een ander bestand naast, en elk model heeft een eigen zichtbaarheidsknop.
 - **Slaat op als IFC.** Elk model dat de viewer opent, kan als IFC 4 worden opgeslagen, met verdiepingen, klassen, eigenschappen en materialen.
 - **Dezelfde app in de browser en op de desktop.** Eén codebasis; de browserversie hoef je niet te installeren.
@@ -113,7 +113,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Draaien, verschuiven en zoomen.** Slepen met links draait, slepen met de middelste knop verschuift, het wiel zoomt naar de cursor. De kijkkubus draait het model naar een zijde; **F** past het model in beeld.
 - **Standaardaanzichten.** Iso, boven, voor en rechts (`0`, `1`, `2`, `3`), perspectief of orthografisch (`P`, `O`), en de opgeslagen aanzichten van een Revit-model.
 - **Weergaven.** Volledig, draadmodel en volledig met randen (`S`, `W`, `E`), het grondraster (`G`) en **Z-as omdraaien** voor bestanden met de andere as omhoog.
-- **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes en sparingsvolumes beginnen verborgen in eigen lagen; de sparingen blijven uit hun wanden en vloeren gesneden.
+- **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, Archicad-wanden en -vloeren, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes en sparingsvolumes beginnen verborgen in eigen lagen; de sparingen blijven uit hun wanden en vloeren gesneden.
 - **Sneltoetsen.** Elke opdracht staat één keer in één lijst, die het lint, de titelbalk en het toetsenbord gebruiken. In **Instellingen** geef je elke opdracht je eigen toets.
 
 ## Meten, doorsnijden en uit elkaar halen
@@ -139,6 +139,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **SketchUp** (`.skp`, versie 3 en later) | Ja | Nee |
 | **Tekla Structures** (`.db1`, bèta) | Ja | Nee |
 | **Allplan** (`.ndw`-tekenbestanden, bèta) | Ja, 3D-lichamen | Nee |
+| **Archicad** (`.pln`, `.pla`, Archicad 25 t/m 29, bèta) | Ja, wanden en vloeren | Nee |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Ja, polygoongeometrie | Nee |
 | **MicroStation DGN** (`.dgn`, V7 en V8) | Ja | Nee |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Ja | Nee |
@@ -150,13 +151,14 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 
 Wat niet meekomt:
 
-- **IFC-export** schrijft elk element als driehoeken (`IfcTriangulatedFaceSet`), niet als parametrische geometrie. Klassen komen uit de Revit-categorie of de Tekla-onderdeelnaam, anders `IfcBuildingElementProxy`; elementen uit een geopend IFC-bestand houden hun klasse nog niet. Gecontroleerd met IfcOpenShell 0.8 op Revit-, SketchUp-, OBJ-, STL- en glTF-modellen.
+- **IFC-export** schrijft elk element als driehoeken (`IfcTriangulatedFaceSet`), niet als parametrische geometrie. Klassen komen uit de Revit-categorie, de Tekla-onderdeelnaam of het Archicad-element (wand, vloer), anders `IfcBuildingElementProxy`; elementen uit een geopend IFC-bestand houden hun klasse nog niet. Gecontroleerd met IfcOpenShell 0.8 op Revit-, SketchUp-, OBJ-, STL- en glTF-modellen.
 - **DWG en DXF** tonen de polygoongeometrie van de modelruimte. ACIS-volumes, annotaties, curves en externe verwijzingen vallen weg en worden geteld.
 - **MicroStation DGN** opent ontwerpbestanden van versie 7 en V8 (MicroStation V8, V8i en CONNECT). Lijnen, bogen en curves worden dunne linten zo breed als hun lijndikte, tekst wordt het kader van de tekst met de tekens in de elementeigenschappen; vlakken, kegels, geëxtrudeerde volumes en B-splinevlakken van 3D-bestanden worden vlakken. Levels worden lagen, in V8-bestanden met hun naam; cellen en gedeelde cellen zijn elk één element; lineaire 2D-maten van V8-bestanden worden lijnen, met de gemeten waarden in de elementeigenschappen. Andere maten, multilines, tags, lijnstijlen en referentiebestanden, en in V8-bestanden oppervlakken, volumes, kegels, B-splinevlakken, meshes en andere modellen dan het eerste, vallen weg en worden geteld. De V7-lezer is geschreven uit de openbare ISFF-beschrijving van Intergraph en een clean-room-analyse, de V8-lezer alleen uit de clean-room-specificatie.
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
 - **Allplan** opent één tekenbestand (`.ndw`) tegelijk en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in één kleur; openingen en ruimtes beginnen verborgen in een eigen laag. Macro's (3D-meubilair), kleuren en materialen, 2D-elementen, hele projectmappen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
+- **Archicad** toont wanden en vloeren als geëxtrudeerde plattegronden op hun verdieping. Kolommen, liggers, daken, openingen (deuren, ramen), bibliotheekobjecten en projecten van vóór Archicad 25 worden nog niet gelezen, en een wandhoogte die het bestand niet opslaat wordt geschat uit de verdiepingspeilen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **In de browser** openen IFC en Revit niet, moeten `.gltf`-bestanden hun buffers ingebed hebben, en worden OBJ-materialen niet gelezen.
 
 Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::registry()`; nieuwe schrijvers implementeren `export::Writer` en gaan in `export::registry()`.
@@ -180,7 +182,7 @@ Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere b
 
 ## Testen en betrouwbaarheid
 
-- **157 unittests** in `src/` (155 draaien; 2 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 70 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 7 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **170 unittests** in `src/` (168 draaien; 2 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 82 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 8 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -240,4 +242,4 @@ De eigen broncode van de viewer is LGPL-3.0-or-later. Zie [LICENSE](LICENSE). He
 
 ## Merken
 
-SketchUp is een merk van Trimble Inc., Revit en DWG van Autodesk, Inc., Tekla Structures van Trimble Solutions Corporation, Allplan van ALLPLAN GmbH (Nemetschek Group), en MicroStation van Bentley Systems, Inc. Open 3D Viewer Studio is een onafhankelijk project en is niet aan hen verbonden, door hen goedgekeurd of gesponsord.
+SketchUp is een merk van Trimble Inc., Revit en DWG van Autodesk, Inc., Tekla Structures van Trimble Solutions Corporation, Allplan van ALLPLAN GmbH (Nemetschek Group), MicroStation van Bentley Systems, Inc., en Archicad van Graphisoft SE. Open 3D Viewer Studio is een onafhankelijk project en is niet aan hen verbonden, door hen goedgekeurd of gesponsord.

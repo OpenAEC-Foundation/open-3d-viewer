@@ -3,10 +3,11 @@
 //! planes, library objects as boxes, meshes as terrain bodies and zones, grouped per story. Written
 //! from a clean-room specification of the file structure (SPEC v0.8, section numbers in the
 //! comments): a container of 16-byte items with QuickLZ groups, object records with associations,
-//! stories, the element polygon, the wall fields, columns and beams with their cross-sections, roof
-//! planes, windows and doors as openings, the place, size and height of library objects, meshes
-//! with their triangulation cache, and zones. Window and door frames, the shapes of library objects
-//! (code), curved roofs, zones cut by roofs and profile cross-sections are not read yet.
+//! stories, the element polygon, the wall fields, columns and beams with their cross-sections
+//! (rectangular, round or an own profile), roof planes, windows and doors as openings, the place,
+//! size and height of library objects, meshes with their triangulation cache, and zones. Window and
+//! door frames, the shapes of library objects (code), curved roofs and zones cut by roofs are not
+//! read yet.
 //!
 //! Archicad is Z up in metres, as the viewer: coordinates are taken as they are.
 
@@ -116,6 +117,9 @@ const MESH_CACHE_LINK: Guid = guid("f876b988fd101e41891a5ecca8c7b2a7");
 /// §5, §8.12 (v0.8): zones, and the association from a zone to the link object of its top.
 const ZONE: Guid = guid("2e33d03ae2ef1a4992a65b14bfdd7229");
 const ZONE_TOP_LINK: Guid = guid("563b426cda1e0540be1f6f8942311a7f");
+/// §5, §8.13 (v0.8): the profile object of a profile cross-section, and the association to it.
+const PROFILE: Guid = guid("d72bcdf4b1d4bf4ab13c59001907bbbd");
+const PROFILE_LINK: Guid = guid("443b07ca55067d4097151a019e628139");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -188,8 +192,8 @@ enum Section {
     Rect(f64, f64),
     /// Diameters b and d.
     Round(f64, f64),
-    /// An own 2D profile: not read yet.
-    Profile,
+    /// An own 2D profile (§8.13): the profile object it refers to.
+    Profile(Option<Guid>),
     /// Data that does not read as a section.
     Unreadable,
 }
@@ -249,6 +253,8 @@ struct Records {
     zones_too_large: usize,
     /// Triangulation caches of meshes, read as they come (`None`: one that does not read).
     mesh_caches: HashMap<Guid, Option<MeshCache>>,
+    /// Profile objects (§8.13), read as they come (`None`: a header that does not read).
+    profiles: HashMap<Guid, Option<ProfileShape>>,
     /// §8.10, by identity, only what the objects need (a parameter block runs to ~80 kB, and a
     /// large project has thousands): of an outline cache its bounds (when they read) and its
     /// (x, y) bytes; of a library reference its parameter block and name; of a parameter block
@@ -472,7 +478,7 @@ impl Records {
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
         let classes = [
-            MESH, MESH_CACHE, ZONE,
+            MESH, MESH_CACHE, ZONE, PROFILE,
             WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, OBJECT, OUTLINE, LIBRARY, PARAMETERS, COLUMN_SEGMENT,
             BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE,
         ];
@@ -543,7 +549,14 @@ impl Records {
                 self.sections.insert(object, section(class, data));
             }
             SECTION_PROFILE => {
-                self.sections.insert(object, Section::Profile);
+                // §8.13: the profile object, the first target
+                let profile = links.iter().find(|l| (l.0 == 0x11 || l.0 == 0x12) && l.1 == PROFILE_LINK).map(|l| l.2);
+                self.sections.insert(object, Section::Profile(profile));
+            }
+            PROFILE => {
+                if data.len() <= MAX_ELEMENT_DATA {
+                    self.profiles.insert(object, profile_shape(data));
+                }
             }
             STORY => {
                 // §6: 10 bytes, u32 n, n UTF-16LE units of name, i16 index
@@ -940,8 +953,10 @@ struct BeamFields {
     /// The axis: x1, y1, x2, y2.
     line: [f64; 4],
     /// The top of the beam at the start and the end, to its own story (both zr when the axis
-    /// with its heights is not found: horizontal).
+    /// with its heights is not found: horizontal). For a profile beam, the axis (§8.13).
     top: (f64, f64),
+    /// The end of its ID string (§8.13 reads the mirror flag after it).
+    q: usize,
 }
 
 /// §8.6 (v0.4): an ID string followed by u8 k ≤ 16 and six f64 (s, zr, x1, y1, x2, y2) that are
@@ -965,7 +980,7 @@ fn beam_fields(data: &[u8]) -> Option<BeamFields> {
             Some(last) => find_axis(data, 0..=last, start, end, &mut budget)?,
             None => None,
         };
-        let beam = |top: (f64, f64)| BeamFields { id: id.clone(), offset: f[0], line: [f[2], f[3], f[4], f[5]], top };
+        let beam = |top: (f64, f64)| BeamFields { id: id.clone(), offset: f[0], line: [f[2], f[3], f[4], f[5]], top, q };
         match axis {
             Some(o) => {
                 let top = (f64_at(data, o + 16)?, f64_at(data, o + 40)?);
@@ -1213,6 +1228,11 @@ struct Stats {
     /// read (§8.7); part of the skipped ones.
     columns_profile: usize,
     columns_no_section: usize,
+    /// Columns and beams drawn from their profile (§8.13), those drawn as its box, and beams
+    /// whose mirror flag is neither 0 nor 1 (taken as 0).
+    profiles: Vec<ProfileOut>,
+    profile_blocks: usize,
+    profile_odd_flags: usize,
     beams_profile: usize,
     beams_no_section: usize,
     roofs: Vec<RoofOut>,
@@ -1266,6 +1286,35 @@ struct ColumnOut {
     section: Section,
     z: (f64, f64),
     linked: bool,
+}
+
+/// A column or beam drawn from its profile (§8.13), for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct ProfileOut {
+    name: String,
+    beam: bool,
+    /// The mirror flag as in the file (beams).
+    flag: Option<u8>,
+    fills: usize,
+    points: usize,
+    bbox: [f64; 4],
+    /// The area of the fills (outer edges minus holes).
+    area: f64,
+    block: bool,
+    x: (f64, f64),
+    y: (f64, f64),
+    z: (f64, f64),
+}
+
+/// The ranges of a set of points.
+fn ranges(points: impl Iterator<Item = [f64; 3]>) -> [(f64, f64); 3] {
+    points.fold([(f64::INFINITY, f64::NEG_INFINITY); 3], |r, p| [0, 1, 2].map(|k| (r[k].0.min(p[k]), r[k].1.max(p[k]))))
+}
+
+/// The area of the fills of a profile: outer edges minus holes.
+fn fills_area(fills: &[Fill]) -> f64 {
+    fills.iter().flat_map(|f| f.iter().enumerate().map(|(k, c)| if k == 0 { area(c).abs() } else { -area(c).abs() })).sum()
 }
 
 /// A beam as drawn, for the tests.
@@ -1771,10 +1820,259 @@ fn section_of(records: &Records, segment: Option<Guid>) -> Result<Section, NoSec
         .and_then(|s| records.sections.get(&s).copied())
         .ok_or(NoSection::Missing)?;
     match section {
-        Section::Profile => Err(NoSection::Profile),
+        // §8.13: a profile whose header reads; else skipped as before
+        Section::Profile(Some(p)) if records.profiles.get(&p).is_some_and(Option::is_some) => Ok(section),
+        Section::Profile(_) => Err(NoSection::Profile),
         Section::Unreadable => Err(NoSection::Missing),
         s => Ok(s),
     }
+}
+
+/// A fill of a profile: its contours, the outer edge first.
+type Fill = Vec<Vec<[f64; 2]>>;
+
+/// §8.13 (v0.8): the shape of a profile: the bounding box of its header and its fills.
+#[derive(Debug, Clone)]
+struct ProfileShape {
+    /// xmin, ymin, xmax, ymax (local, m).
+    bbox: [f64; 4],
+    /// The K fills, each its contours (outer first, closing point dropped, arcs as segments);
+    /// `None` when they do not read (fewer than K, or one not closed): drawn as the box.
+    fills: Option<Vec<Fill>>,
+    /// The points of the fills as in the file (the sum of n − 1).
+    points: usize,
+}
+
+impl ProfileShape {
+    /// The fills to draw: those of the profile, or the box.
+    fn fills(&self) -> Vec<Fill> {
+        let [x0, y0, x1, y1] = self.bbox;
+        self.fills.clone().unwrap_or_else(|| vec![vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]])
+    }
+}
+
+/// §8.13: the header ("$mm" at 366, else the first from 40): the bounding box 3 bytes after it
+/// and K 64 bytes after it, then the first K fills from 68 bytes after it.
+fn profile_shape(data: &[u8]) -> Option<ProfileShape> {
+    let base = if data.get(366..369) == Some(b"$mm") { 366 } else { (40..data.len().saturating_sub(2)).find(|&i| &data[i..i + 3] == b"$mm")? };
+    let bbox = [3, 11, 19, 27].map(|k| f64_at(data, base + k).unwrap_or(f64::NAN));
+    let k = u32_at(data, base + 64)? as usize;
+    if !bbox.iter().all(|v| v.is_finite()) || bbox[0] > bbox[2] || bbox[1] > bbox[3] || !(1..=1000).contains(&k) {
+        return None;
+    }
+    let (mut fills, mut points, mut closed) = (Vec::with_capacity(k), 0, true);
+    let mut budget = SEARCH_BUDGET;
+    let mut at = base + 68;
+    while fills.len() < k && at < data.len() {
+        match profile_fill(data, at, &mut budget) {
+            Some((contours, end, n)) => {
+                closed &= contours.is_some();
+                fills.push(contours.unwrap_or_default());
+                points += n - 1;
+                at = end;
+            }
+            None => at += 1,
+        }
+    }
+    let fills = (fills.len() == k && closed).then_some(fills);
+    Some(ProfileShape { bbox, fills, points })
+}
+
+/// §8.13: a fill at `p`: `u16 1`, n points (point 0 unused), `u16 1`, the arcs, `u16 1`, m
+/// contour ends; coordinates finite and under 1e4, arcs between points 1 and n − 1 with an angle
+/// between 0 and 2π. Its contours (`None` when one is not closed), its end and n.
+fn profile_fill(data: &[u8], p: usize, budget: &mut usize) -> Option<(Option<Fill>, usize, usize)> {
+    let list = |at: usize| (u16_at(data, at)? == 1).then(|| u32_at(data, at + 2).map(|n| n as usize)).flatten();
+    let n = list(p).filter(|n| (3..=20_000).contains(n))?;
+    let points_at = p + 6;
+    let arcs_head = points_at + 16 * n;
+    let arcs = list(arcs_head).filter(|&a| a < n)?;
+    let ends_head = arcs_head + 6 + 16 * arcs;
+    let m = list(ends_head).filter(|m| (2..=n).contains(m))?;
+    let end = ends_head + 6 + 4 * m;
+    if end > data.len() {
+        return None;
+    }
+    *budget = budget.checked_sub(n + arcs + m)?;
+    let ends: Vec<usize> = (0..m).map(|k| u32_at(data, ends_head + 6 + 4 * k).unwrap() as usize).collect();
+    if ends[0] != 0 || ends[m - 1] != n - 1 || ends.windows(2).any(|w| w[0] > w[1]) {
+        return None;
+    }
+    let points: Vec<[f64; 2]> = (0..n).map(|k| [0, 8].map(|c| f64_at(data, points_at + 16 * k + c).unwrap())).collect();
+    if points.iter().flatten().any(|v| !v.is_finite() || v.abs() >= 1e4) {
+        return None;
+    }
+    let mut bows: HashMap<(usize, usize), f64> = HashMap::new();
+    for a in 0..arcs {
+        let at = arcs_head + 6 + 16 * a;
+        let (from, to, angle) = (u32_at(data, at)? as usize, u32_at(data, at + 4)? as usize, f64_at(data, at + 8)?);
+        let fits = |i: usize| (1..n).contains(&i);
+        if !(fits(from) && fits(to) && angle.is_finite() && angle != 0.0 && angle.abs() < std::f64::consts::TAU) {
+            return None;
+        }
+        bows.insert((from, to), angle);
+    }
+    let mut contours = Vec::with_capacity(m - 1);
+    for k in 0..m - 1 {
+        let numbers: Vec<usize> = (ends[k] + 1..=ends[k + 1]).collect();
+        if numbers.len() < 2 || points[numbers[0]] != points[*numbers.last().unwrap()] {
+            return Some((None, end, n));
+        }
+        let mut contour = Vec::with_capacity(numbers.len());
+        for w in numbers.windows(2) {
+            contour.push(points[w[0]]);
+            let angle = bows.get(&(w[0], w[1])).copied().or_else(|| bows.get(&(w[1], w[0])).map(|a| -a));
+            if let Some(angle) = angle {
+                contour.extend(arc_points(points[w[0]], points[w[1]], angle));
+            }
+        }
+        contours.push(contour);
+    }
+    Some((Some(contours), end, n))
+}
+
+/// §8.13: the points between `a` and `b` of a circular arc with central angle `angle` (positive:
+/// counter-clockwise, the middle left of the chord), at least one segment per π/16.
+fn arc_points(a: [f64; 2], b: [f64; 2], angle: f64) -> Vec<[f64; 2]> {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let chord = dx.hypot(dy);
+    if chord < 1e-12 {
+        return Vec::new();
+    }
+    let along = chord / 2.0 / (angle / 2.0).tan();
+    let middle = [(a[0] + b[0]) / 2.0 - dy / chord * along, (a[1] + b[1]) / 2.0 + dx / chord * along];
+    let radius = (a[0] - middle[0]).hypot(a[1] - middle[1]);
+    let start = (a[1] - middle[1]).atan2(a[0] - middle[0]);
+    let segments = (angle.abs() / (std::f64::consts::PI / 16.0)).ceil().max(1.0) as usize;
+    (1..segments)
+        .map(|i| {
+            let t = start + angle * i as f64 / segments as f64;
+            [middle[0] + radius * t.cos(), middle[1] + radius * t.sin()]
+        })
+        .collect()
+}
+
+/// §8.13: a profile beam's point (px, py) at t along its axis: from P1 + s·N along P2 − P1, px
+/// to the right of the axis (to the left when mirrored), py up from the axis heights z1, z2.
+struct ProfileBeam {
+    start: [f64; 3],
+    along: [f64; 3],
+    across: [f64; 2],
+}
+
+impl ProfileBeam {
+    fn new(f: &BeamFields, e: f64, mirrored: bool) -> Option<Self> {
+        let [x1, y1, x2, y2] = f.line;
+        let length = (x2 - x1).hypot(y2 - y1);
+        if length.is_nan() || length < 1e-9 {
+            return None;
+        }
+        let n = [-(y2 - y1) / length, (x2 - x1) / length];
+        let across = if mirrored { n } else { [-n[0], -n[1]] };
+        let start = [x1 + f.offset * n[0], y1 + f.offset * n[1], e + f.top.0];
+        Some(Self { start, along: [x2 - x1, y2 - y1, f.top.1 - f.top.0], across })
+    }
+
+    fn at(&self, p: [f64; 2], t: f64) -> [f64; 3] {
+        [self.start[0] + t * self.along[0] + self.across[0] * p[0], self.start[1] + t * self.along[1] + self.across[1] * p[0], self.start[2] + t * self.along[2] + p[1]]
+    }
+}
+
+/// Clean contours of a footprint or profile: no repeated points, at least 3 and an area, outer
+/// counter-clockwise, holes clockwise. `None` when the outer contour does not hold.
+fn clean_contours(footprint: &[Vec<[f64; 2]>]) -> Option<Vec<Vec<[f64; 2]>>> {
+    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
+    for (k, c) in footprint.iter().enumerate() {
+        let mut clean: Vec<[f64; 2]> = Vec::with_capacity(c.len());
+        for p in c {
+            if !p.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            if clean.last().is_none_or(|q| (q[0] - p[0]).abs() > 1e-9 || (q[1] - p[1]).abs() > 1e-9) {
+                clean.push(*p);
+            }
+        }
+        while clean.len() > 1 && (clean[0][0] - clean[clean.len() - 1][0]).abs() <= 1e-9 && (clean[0][1] - clean[clean.len() - 1][1]).abs() <= 1e-9 {
+            clean.pop();
+        }
+        let a = area(&clean);
+        if clean.len() < 3 || a.abs() < 1e-12 {
+            if k == 0 {
+                return None;
+            }
+            continue;
+        }
+        if (a > 0.0) != (k == 0) {
+            clean.reverse();
+        }
+        contours.push(clean);
+    }
+    Some(contours)
+}
+
+/// A flat-shaded face of three or more corners in this order (a fan), facing where `out` points.
+fn push_face(layer: &mut Layer, corners: &mut [[f64; 3]], out: [f64; 3]) {
+    let (u, v) = ([0, 1, 2].map(|k| corners[1][k] - corners[0][k]), [0, 1, 2].map(|k| corners[2][k] - corners[0][k]));
+    let mut n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    if length.is_nan() || length <= 1e-15 {
+        return;
+    }
+    if n[0] * out[0] + n[1] * out[1] + n[2] * out[2] < 0.0 {
+        corners.reverse();
+        n = n.map(|v| -v);
+    }
+    let base = (layer.positions.len() / 3) as u32;
+    for c in corners.iter() {
+        layer.positions.extend(c.map(|v| v as f32));
+        layer.normals.extend(n.map(|v| (v / length) as f32));
+    }
+    for i in 1..corners.len() as u32 - 1 {
+        layer.indices.extend([base, base + i, base + i + 1]);
+    }
+}
+
+/// §8.13: a profile beam: each fill (with its holes) as a prism along the axis, with end faces
+/// square to the axis in plan and the section vertical. False when nothing could be drawn.
+fn push_profile_beam(layer: &mut Layer, beam: &ProfileBeam, fills: &[Fill]) -> bool {
+    let first = layer.indices.len();
+    let axis = beam.along;
+    for fill in fills {
+        let Some(contours) = clean_contours(fill) else { continue };
+        let origin = contours[0][0];
+        let mut flat = Vec::new();
+        let mut holes = Vec::new();
+        for (k, c) in contours.iter().enumerate() {
+            if k > 0 {
+                holes.push(flat.len() / 2);
+            }
+            flat.extend(c.iter().flat_map(|p| [p[0] - origin[0], p[1] - origin[1]]));
+        }
+        let Ok(triangles) = earcutr::earcut(&flat, &holes, 2) else { continue };
+        let points: Vec<[f64; 2]> = contours.iter().flatten().copied().collect();
+        let back = axis.map(|v| -v);
+        for t in triangles.chunks_exact(3) {
+            push_face(layer, &mut [0, 1, 2].map(|k| beam.at(points[t[k]], 0.0)), back);
+            push_face(layer, &mut [0, 1, 2].map(|k| beam.at(points[t[k]], 1.0)), axis);
+        }
+        for c in &contours {
+            for i in 0..c.len() {
+                let (p, q) = (c[i], c[(i + 1) % c.len()]);
+                // outwards in the profile: right of the edge (outer counter-clockwise, holes clockwise)
+                let (ox, oy) = (q[1] - p[1], -(q[0] - p[0]));
+                let out = [beam.across[0] * ox, beam.across[1] * ox, oy];
+                push_face(layer, &mut [beam.at(p, 0.0), beam.at(q, 0.0), beam.at(q, 1.0), beam.at(p, 1.0)], out);
+            }
+        }
+    }
+    layer.indices.len() > first
+}
+
+/// A profile for the properties: "profile, 512 × 317 mm" (its bounding box), and how it is drawn.
+fn profile_text(shape: &ProfileShape) -> String {
+    let [x0, y0, x1, y1] = shape.bbox;
+    let block = if shape.fills.is_none() { ", drawn as its bounding box" } else { "" };
+    format!("profile, {:.0} × {:.0} mm{block}", (x1 - x0) * 1000.0, (y1 - y0) * 1000.0)
 }
 
 /// A section for the properties: "200 × 350 mm", "⌀ 200 mm" or "⌀ 200 × 300 mm".
@@ -1988,6 +2286,30 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
         let bottom = e + f.bottom_offset;
         let top = linked.map_or(bottom + f.height, |(_, level)| level + f.top_offset);
+        // §8.13: a profile column, each fill a prism, placed as the section of §8.5
+        if let Section::Profile(Some(guid)) = section {
+            let shape = records.profiles[&guid].as_ref().unwrap();
+            let fills = shape.fills();
+            let (s, c) = f.rotation.sin_cos();
+            let place = |p: &[f64; 2]| [f.center[0] + c * p[0] - s * p[1], f.center[1] + s * p[0] + c * p[1]];
+            let prisms: Vec<Prism> = fills.iter().map(|fill| Prism { contours: fill.iter().map(|k| k.iter().map(place).collect()).collect(), z: (bottom, top) }).collect();
+            let mut props = serde_json::Map::new();
+            props.insert("Name".into(), (if f.id.is_empty() { "Column" } else { &f.id }).into());
+            props.insert("category".into(), "Column".into());
+            props.insert("Section".into(), profile_text(shape).into());
+            let drawn = top > bottom && add(&mut columns, record, (bottom, top), &|layer| prisms.iter().fold(false, |any, p| push_prism(layer, p) | any), props);
+            if drawn {
+                let [x, y, _] = ranges(prisms.iter().flat_map(|p| p.contours.iter().flatten().map(|q| [q[0], q[1], 0.0])));
+                let (fills, area) = (fills.len(), fills_area(&fills));
+                stats.profile_blocks += usize::from(shape.fills.is_none());
+                let (points, bbox, block) = (shape.points, shape.bbox, shape.fills.is_none());
+                stats.profiles.push(ProfileOut { name: f.id.clone(), beam: false, flag: None, fills, points, bbox, area, block, x, y, z: (bottom, top) });
+                stats.columns.push(ColumnOut { name: f.id, center: f.center, anchor: f.anchor, section, z: (bottom, top), linked: linked.is_some() });
+            } else {
+                stats.columns_skipped += 1;
+            }
+            continue;
+        }
         let footprint = column_footprint(&f, section);
         let drawn = top > bottom
             && footprint.is_some_and(|contour| {
@@ -2026,6 +2348,38 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
             }
         };
         let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        // §8.13: a profile beam, its profile's origin on the axis
+        if let Section::Profile(Some(guid)) = section {
+            let shape = records.profiles[&guid].as_ref().unwrap();
+            let flag = record.data.get(f.q + 95).copied();
+            if !matches!(flag, Some(0 | 1)) {
+                stats.profile_odd_flags += 1;
+            }
+            let fills = shape.fills();
+            let Some(beam) = ProfileBeam::new(&f, e, flag == Some(1)) else {
+                stats.beams_skipped += 1;
+                continue;
+            };
+            let [x, y, z] = ranges(fills.iter().flatten().flatten().flat_map(|p| [beam.at(*p, 0.0), beam.at(*p, 1.0)]));
+            let mut props = serde_json::Map::new();
+            props.insert("Name".into(), (if f.id.is_empty() { "Beam" } else { &f.id }).into());
+            props.insert("category".into(), "Beam".into());
+            props.insert("Section".into(), profile_text(shape).into());
+            if flag == Some(1) {
+                props.insert("Profile".into(), "mirrored".into());
+            }
+            if add(&mut beams, record, z, &|layer| push_profile_beam(layer, &beam, &fills), props) {
+                stats.profile_blocks += usize::from(shape.fills.is_none());
+                let (fill_count, area, points, bbox, block) = (fills.len(), fills_area(&fills), shape.points, shape.bbox, shape.fills.is_none());
+                stats.profiles.push(ProfileOut { name: f.id.clone(), beam: true, flag, fills: fill_count, points, bbox, area, block, x, y, z });
+                let [x1, y1, x2, y2] = f.line;
+                let top = (e + f.top.0 + shape.bbox[3], e + f.top.1 + shape.bbox[3]);
+                stats.beams.push(BeamOut { name: f.id, start: [x1, y1], end: [x2, y2], section, top });
+            } else {
+                stats.beams_skipped += 1;
+            }
+            continue;
+        }
         let drawn = beam_ends(&f, e, section).is_some_and(|ends| {
             let z = ends.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[2]), hi.max(p[2])));
             let mut props = serde_json::Map::new();
@@ -2302,6 +2656,16 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ),
         ("Archicad columns".into(), skipped_text(stats.columns.len(), stats.columns_skipped, stats.columns_profile, stats.columns_no_section)),
         ("Archicad beams".into(), skipped_text(stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.beams_no_section)),
+        (
+            "Archicad profile sections".into(),
+            format!(
+                "{} beams and {} columns drawn from their profile, {} of them as its bounding box{}",
+                stats.profiles.iter().filter(|p| p.beam).count(),
+                stats.profiles.iter().filter(|p| !p.beam).count(),
+                stats.profile_blocks,
+                if stats.profile_odd_flags > 0 { format!("; {} mirror flags neither 0 nor 1", stats.profile_odd_flags) } else { String::new() }
+            ),
+        ),
         ("Archicad roofs".into(), roof_text(&stats)),
         ("Archicad openings".into(), opening_text(&stats)),
         ("Archicad library objects".into(), object_text(&stats)),
@@ -2446,33 +2810,7 @@ fn push_prism(layer: &mut Layer, prism: &Prism) -> bool {
 /// sloped roof), flat shaded. False when nothing could be drawn or the top is not above the
 /// underside everywhere.
 fn push_solid(layer: &mut Layer, footprint: &[Vec<[f64; 2]>], bottom: &dyn Fn([f64; 2]) -> f64, top: &dyn Fn([f64; 2]) -> f64) -> bool {
-    // clean contours: no repeated points, at least 3, outer counter-clockwise, holes clockwise
-    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
-    for (k, c) in footprint.iter().enumerate() {
-        let mut clean: Vec<[f64; 2]> = Vec::with_capacity(c.len());
-        for p in c {
-            if !p.iter().all(|v| v.is_finite()) {
-                return false;
-            }
-            if clean.last().is_none_or(|q| (q[0] - p[0]).abs() > 1e-9 || (q[1] - p[1]).abs() > 1e-9) {
-                clean.push(*p);
-            }
-        }
-        while clean.len() > 1 && (clean[0][0] - clean[clean.len() - 1][0]).abs() <= 1e-9 && (clean[0][1] - clean[clean.len() - 1][1]).abs() <= 1e-9 {
-            clean.pop();
-        }
-        let a = area(&clean);
-        if clean.len() < 3 || a.abs() < 1e-12 {
-            if k == 0 {
-                return false;
-            }
-            continue;
-        }
-        if (a > 0.0) != (k == 0) {
-            clean.reverse();
-        }
-        contours.push(clean);
-    }
+    let Some(contours) = clean_contours(footprint) else { return false };
     // caps, triangulated near the first point for precision
     let origin = contours[0][0];
     let mut flat = Vec::new();
@@ -2772,7 +3110,25 @@ mod tests {
         check_walls(&stats, &model, 32, 24, 7.588, -0.272);
         // §11 (v0.3): two round columns, linked; the four beams have a profile section
         check_columns(&stats, &[("C 0.01", [11.102, 12.373]), ("C 0.02", [11.102, 6.023])], (-0.25, 2.78));
-        assert_eq!((stats.beams.len(), stats.beams_skipped, stats.beams_profile), (0, 4, 4));
+        // §11 (v0.8): the four profile beams (gutters) are drawn now
+        assert_eq!((stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.profile_blocks), (4, 0, 0, 0));
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let pair = |a: (f64, f64), b: (f64, f64)| near(a.0, b.0) && near(a.1, b.1);
+        type ProfileRow = (&'static str, u8, usize, usize, [f64; 4], (f64, f64), (f64, f64), (f64, f64), f64);
+        let rows: [ProfileRow; 4] = [
+            ("RF 2.01", 0, 14, 70, [-0.1, 0.0, 0.412, 0.317], (1.829, 11.027), (5.696, 6.208), (5.386, 7.556), 0.05806),
+            ("RF 2.02", 1, 14, 70, [-0.1, 0.0, 0.412, 0.317], (1.829, 11.027), (12.208, 12.72), (5.389, 7.56), 0.05806),
+            ("RF 2.03", 0, 13, 65, [-0.098, 0.0, 0.412, 0.3844], (10.929, 11.439), (6.108, 12.308), (7.199, 7.583), 0.06733),
+            ("RF 2.04", 0, 14, 70, [-0.412, 0.0, 0.0997, 0.3923], (1.417, 1.929), (6.108, 12.308), (5.339, 5.731), 0.06508),
+        ];
+        for (name, flag, fills, points, bbox, x, y, z, area) in rows {
+            let p = stats.profiles.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("{name}: {:?}", stats.profiles));
+            assert!(p.beam && !p.block && p.flag == Some(flag) && p.fills == fills && p.points == points, "{p:?}");
+            assert!((0..4).all(|k| near(p.bbox[k], bbox[k])) && pair(p.x, x) && pair(p.y, y) && pair(p.z, z), "{p:?}");
+            assert!((p.area - area).abs() < 1e-5, "{p:?}");
+        }
+        let beams = model.layers.iter().find(|l| l.name == "Beams").expect("beams");
+        assert_eq!(beams.solid_indices().len(), beams.indices.len());
         assert_eq!(model.layers.iter().find(|l| l.name == "Columns").map(|l| l.elements.len()), Some(2));
         assert!(model.props.values().any(|p| p.contains("\"Name\":\"") && p.contains("\"category\":\"Wall\"")));
     }
@@ -3071,7 +3427,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file(), profiles_file()] {
             garbage_rounds(&file);
         }
     }
@@ -3749,6 +4105,147 @@ mod tests {
         file.resize(32, 0);
         file.extend(blocks.concat());
         file
+    }
+
+    /// A fill of a profile (§8.13): `u16 1`, the points (point 0 at (0, 0), each contour closed),
+    /// `u16 1`, the arcs, `u16 1`, the contour ends.
+    fn fill_bytes(contours: &[Vec<[f64; 2]>], arcs: &[(u32, u32, f64)]) -> Vec<u8> {
+        let mut points = vec![[0.0, 0.0]];
+        let mut ends = vec![0u32];
+        for c in contours {
+            points.extend(c.iter().copied().chain([c[0]]));
+            ends.push(points.len() as u32 - 1);
+        }
+        let list = |n: usize| [&1u16.to_le_bytes()[..], &(n as u32).to_le_bytes()].concat();
+        let mut out = list(points.len());
+        out.extend(points.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        out.extend(list(arcs.len()));
+        for (from, to, angle) in arcs {
+            out.extend(from.to_le_bytes());
+            out.extend(to.to_le_bytes());
+            out.extend(angle.to_le_bytes());
+        }
+        out.extend(list(ends.len()));
+        out.extend(ends.iter().flat_map(|v| v.to_le_bytes()));
+        out
+    }
+
+    /// A profile object (§8.13): version 2, "$mm" and the bounding box at 366, K at 430, the fills
+    /// from 434, then the same fills once more.
+    fn profile_data(bbox: [f64; 4], k: u32, fills: &[Vec<u8>]) -> Vec<u8> {
+        let mut data = 2u16.to_le_bytes().to_vec();
+        data.resize(366, 0);
+        data.extend(b"$mm");
+        data.extend(bbox.iter().flat_map(|v| v.to_le_bytes()));
+        data.resize(430, 0);
+        data.extend(k.to_le_bytes());
+        for _ in 0..2 {
+            for fill in fills {
+                data.extend(fill);
+                data.extend([0u8; 3]);
+            }
+        }
+        data
+    }
+
+    /// Profile beams and a profile column on the story "Hall" (4.5 m), each with its own segment,
+    /// profile section and profile object:
+    /// - BA: 0.2 × 0.1 with its top edge an arc of +π (bulging up to 0.2), along +x at y 0, the
+    ///   axis at zr 0.5, mirror flag 0;
+    /// - BM: 0.3 × 0.1 along +x at y 5, mirror flag 1;
+    /// - BS: 0.3 × 0.1 along +x at y 10, its axis from 0 to 1 above the story (sloped);
+    /// - BB: a header with K 2 and its fills cut off: drawn as the box −0.05..0.05 × 0..0.2, at y 15;
+    /// - BX: a profile object whose header does not read: skipped;
+    /// - KP: a column with an L-shaped profile around (20, 20), C 0, H 2.
+    fn profiles_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+        ];
+        let square = |w: f64| vec![rectangle(0.0, 0.0, w, 0.1)];
+        let arc = fill_bytes(&square(0.2), &[(3, 4, std::f64::consts::PI)]);
+        let flat = fill_bytes(&square(0.3), &[]);
+        let ell = fill_bytes(&[vec![[0.0, 0.0], [0.3, 0.0], [0.3, 0.1], [0.1, 0.1], [0.1, 0.3], [0.0, 0.3]]], &[]);
+        let mut bad = profile_data([0.0, 0.0, 0.3, 0.1], 1, std::slice::from_ref(&flat));
+        bad[366..369].copy_from_slice(b"xxx");
+        let profiles = [
+            profile_data([0.0, 0.0, 0.2, 0.2], 1, std::slice::from_ref(&arc)),
+            profile_data([0.0, 0.0, 0.3, 0.1], 1, std::slice::from_ref(&flat)),
+            profile_data([0.0, 0.0, 0.3, 0.1], 1, std::slice::from_ref(&flat)),
+            profile_data([-0.05, 0.0, 0.05, 0.2], 2, &[fill_bytes(&[rectangle(-0.05, 0.0, 0.05, 0.2)], &[])])[..434 + 100].to_vec(),
+            bad,
+            profile_data([0.0, 0.0, 0.3, 0.3], 1, std::slice::from_ref(&ell)),
+        ];
+        let id = |kind: u8, k: usize| [kind, k as u8, kind, k as u8, kind, k as u8, kind, k as u8, kind, k as u8, kind, k as u8, kind, k as u8, kind, k as u8];
+        for (k, profile) in profiles.iter().enumerate() {
+            blocks.push(block(id(0xE0, k), 0x84, &record(PROFILE, profile, &[0, 0, 0]), 0));
+            blocks.push(block(id(0xE1, k), 0x84, &record(SECTION_PROFILE, &[0; 32], &links_of(&[(0x11, PROFILE_LINK, id(0xE0, k))])), 0));
+            let class = if k == 5 { COLUMN_SEGMENT } else { BEAM_SEGMENT };
+            blocks.push(block(id(0xE2, k), 0x84, &record(class, &[0; 8], &links_of(&[(0x12, SECTION_LINK, id(0xE1, k))])), 0));
+        }
+        // name, y, axis heights, mirror flag
+        type Synthetic = (&'static str, f64, Option<(f64, f64)>, u8);
+        let beams: [Synthetic; 5] =
+            [("BA", 0.0, None, 0), ("BM", 5.0, None, 1), ("BS", 10.0, Some((0.0, 1.0)), 0), ("BB", 15.0, None, 0), ("BX", 20.0, None, 0)];
+        for (k, (name, y, heights, flag)) in beams.into_iter().enumerate() {
+            let mut data = beam_data(name, 0.0, 0.5, [1.0, y, 5.0, y], heights);
+            let q = 104 + 2 * name.len();
+            data.resize(q + 96, 0);
+            data[q + 95] = flag;
+            let items = [(0x12, ON_STORY, STORY_ID), (0x12, BEAM_SEGMENT_LINK, id(0xE2, k))];
+            blocks.push(block(id(0xE3, k), 0x84, &record(BEAM, &data, &links_of(&items)), 0));
+        }
+        let column = column_data("KP", [20.0, 20.0], [20.0, 20.0], 0.0, [0.0, 2.0, 0.0]);
+        let items = [(0x12, ON_STORY, STORY_ID), (0x12, COLUMN_SEGMENT_LINK, id(0xE2, 5))];
+        blocks.push(block(id(0xE4, 5), 0x84, &record(COLUMN, &column, &links_of(&items)), 0));
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    #[test]
+    fn draws_profile_beams_and_columns() {
+        let (loaded, stats) = convert(read_bytes(&profiles_file()).expect("container")).expect("elements");
+        assert_eq!((stats.beams.len(), stats.beams_skipped, stats.beams_profile, stats.profile_blocks), (4, 1, 1, 1));
+        assert_eq!((stats.columns.len(), stats.profiles.len()), (1, 5));
+        let by = |name: &str| stats.profiles.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("{name}: {:?}", stats.profiles));
+        let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
+        // BA: the arc bulges the top to 0.2 above the axis (4.5 + 0.5); px to the right of +x: −y
+        let ba = by("BA");
+        assert!(near(ba.x, (1.0, 5.0)) && near(ba.y, (-0.2, 0.0)) && near(ba.z, (5.0, 5.2)), "{ba:?}");
+        let half_disc = std::f64::consts::PI * 0.01 / 2.0;
+        assert!((ba.area - (0.02 + half_disc)).abs() < 2e-4 && ba.area < 0.02 + half_disc, "{ba:?}");
+        // BM: mirrored, px to the left: +y
+        assert!(near(by("BM").y, (5.0, 5.3)), "{:?}", by("BM"));
+        // BS: sloped from 4.5 to 5.5, the section staying vertical
+        let bs = by("BS");
+        assert!(near(bs.z, (4.5, 5.6)), "{bs:?}");
+        let beams = loaded.layers.iter().find(|l| l.name == "Beams").expect("beams");
+        let (_, first, count) = beams.elements[2];
+        let at_end: Vec<f32> = beams.indices[first as usize..(first + count) as usize]
+            .iter()
+            .map(|&i| &beams.positions[3 * i as usize..3 * i as usize + 3])
+            .filter(|p| (p[0] - 5.0).abs() < 1e-5)
+            .map(|p| p[2])
+            .collect();
+        assert!(at_end.iter().all(|z| (z - 5.5).abs() < 1e-5 || (z - 5.6).abs() < 1e-5) && !at_end.is_empty());
+        // BB: fewer fills than K: the box of the header
+        let bb = by("BB");
+        assert!(bb.block && near(bb.y, (14.95, 15.05)) && near(bb.z, (5.0, 5.2)), "{bb:?}");
+        // KP: the L around (20, 20), from the story up 2 m
+        let kp = by("KP");
+        assert!(!kp.beam && near(kp.x, (20.0, 20.3)) && near(kp.y, (20.0, 20.3)) && near(kp.z, (4.5, 6.5)) && (kp.area - 0.05).abs() < 1e-9, "{kp:?}");
+        // closed bodies facing out
+        let columns = loaded.layers.iter().find(|l| l.name == "Columns").expect("columns");
+        assert_eq!(beams.solid_indices().len(), beams.indices.len());
+        assert_eq!(columns.solid_indices().len(), columns.indices.len());
+        assert!(beams.props[1].1.contains("\"Profile\":\"mirrored\"") && beams.props[3].1.contains("drawn as its bounding box"));
     }
 
     #[test]

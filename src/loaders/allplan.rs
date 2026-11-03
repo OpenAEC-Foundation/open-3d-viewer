@@ -988,6 +988,11 @@ trait ProjectFiles {
     fn read(&mut self, path: &[&str]) -> Option<Vec<u8>>;
 }
 
+/// Largest preview side of a `.surf` that is averaged (§10.2; the samples have 120).
+const MAX_PREVIEW: usize = 4096;
+/// Most pixels read per side of the middle square of a preview (§10.2).
+const PREVIEW_SAMPLES: usize = 256;
+
 /// Largest project file read (a `.surf` or `animation.cfg` is a few kB).
 const MAX_PROJECT_FILE: u64 = 16 << 20;
 
@@ -1107,7 +1112,8 @@ impl<'a> Tiff<'a> {
     }
 
     /// The mean colour of the middle square of an uncompressed 8-bit palette image: columns
-    /// 3w/8 .. 5w/8 − 1 and rows 3h/8 .. 5h/8 − 1 (§10.2).
+    /// 3w/8 .. 5w/8 − 1 and rows 3h/8 .. 5h/8 − 1 (§10.2). Bounded: no preview above
+    /// [`MAX_PREVIEW`] pixels a side, and at most [`PREVIEW_SAMPLES`]² pixels read, at a fixed step.
     fn preview_middle(&self) -> Option<[u8; 3]> {
         let w = usize::try_from(self.number(256, 0)?).ok()?;
         let h = usize::try_from(self.number(257, 0)?).ok()?;
@@ -1115,7 +1121,7 @@ impl<'a> Tiff<'a> {
             && self.number(262, 2)? == 3
             && self.number(277, 1)? == 1
             && self.numbers(258).is_some_and(|bits| !bits.is_empty() && bits.iter().all(|&b| b == 8));
-        if !supported || w == 0 || h == 0 || w > 1 << 16 || h > 1 << 16 {
+        if !supported || w == 0 || h == 0 || w > MAX_PREVIEW || h > MAX_PREVIEW {
             return None;
         }
         let map = self.numbers(320).filter(|m| m.len() >= 768)?;
@@ -1126,15 +1132,18 @@ impl<'a> Tiff<'a> {
         if x1 <= x0 || y1 <= y0 {
             return None;
         }
+        let step = |from: usize, to: usize| (to - from).div_ceil(PREVIEW_SAMPLES);
+        let (dx, dy) = (step(x0, x1), step(y0, y1));
         let mut sum = [0u64; 3];
-        for y in y0..y1 {
+        let mut n = 0u64;
+        for y in (y0..y1).step_by(dy) {
             let strip = y / rows;
             let start = usize::try_from(*offsets.get(strip)?).ok()?;
             let end = match &counts {
                 Some(c) => start.checked_add(usize::try_from(*c.get(strip)?).ok()?)?,
                 None => self.data.len(),
             };
-            for x in x0..x1 {
+            for x in (x0..x1).step_by(dx) {
                 let at = start.checked_add((y % rows).checked_mul(w)?.checked_add(x)?)?;
                 if at >= end {
                     return None;
@@ -1143,9 +1152,9 @@ impl<'a> Tiff<'a> {
                 for (k, total) in sum.iter_mut().enumerate() {
                     *total += u64::from(map[256 * k + index] >> 8);
                 }
+                n += 1;
             }
         }
-        let n = ((x1 - x0) * (y1 - y0)) as u64;
         Some(sum.map(|total| ((total + n / 2) / n) as u8))
     }
 }
@@ -2368,51 +2377,32 @@ mod tests {
         compression: u16,
     }
 
-    /// A `.surf`: a little-endian TIFF with tag 65001 (RGB), optionally tag 65019 (texture) and a
-    /// palette preview (§10.2).
-    fn surf(rgb: [u8; 3], texture: Option<&str>, preview: Option<&Preview>) -> Vec<u8> {
+    /// A TIFF entry: tag, type, count and value bytes.
+    type Entry = (u16, u16, u32, Vec<u8>);
+
+    /// A little-endian TIFF: `pixels` at offset 8, then the values that do not fit in their entry,
+    /// then the IFD.
+    fn tiff_file(pixels: &[u8], entries: &[Entry]) -> Vec<u8> {
         let mut data = b"II*\0\0\0\0\0".to_vec();
-        let blob = |data: &mut Vec<u8>, bytes: &[u8]| {
-            let at = data.len() as u32;
-            data.extend_from_slice(bytes);
-            if data.len() % 2 == 1 {
-                data.push(0);
-            }
-            at
-        };
-        // (tag, type, count, value bytes)
-        let mut entries: Vec<(u16, u16, u32, Vec<u8>)> = vec![(65001, 1, 3, rgb.to_vec())];
-        if let Some(texture) = texture {
-            let bytes: Vec<u8> = texture.encode_utf16().flat_map(u16::to_le_bytes).collect();
-            entries.push((65019, 1, bytes.len() as u32, bytes));
-        }
-        if let Some(p) = preview {
-            let short = |v: u16| v.to_le_bytes().to_vec();
-            let map: Vec<u8> = (0..3).flat_map(|k| p.palette.iter().map(move |c| u16::from(c[k]) << 8)).flat_map(u16::to_le_bytes).collect();
-            entries.extend([
-                (256, 3, 1, short(p.w)),
-                (257, 3, 1, short(p.h)),
-                (258, 3, 1, short(8)),
-                (259, 3, 1, short(p.compression)),
-                (262, 3, 1, short(3)),
-                (277, 3, 1, short(1)),
-                (278, 3, 1, short(p.h)),
-                (279, 4, 1, (p.pixels.len() as u32).to_le_bytes().to_vec()),
-                (320, 3, 768, map),
-            ]);
-            let at = blob(&mut data, &p.pixels);
-            entries.push((273, 4, 1, at.to_le_bytes().to_vec()));
-        }
+        data.extend_from_slice(pixels);
         let mut fields = Vec::new();
-        for (tag, kind, count, bytes) in &entries {
+        for (tag, kind, count, bytes) in entries {
             let value = if bytes.len() <= 4 {
                 let mut v = bytes.clone();
                 v.resize(4, 0);
                 v
             } else {
-                blob(&mut data, bytes).to_le_bytes().to_vec()
+                if data.len() % 2 == 1 {
+                    data.push(0);
+                }
+                let at = data.len() as u32;
+                data.extend_from_slice(bytes);
+                at.to_le_bytes().to_vec()
             };
             fields.push((*tag, *kind, *count, value));
+        }
+        if data.len() % 2 == 1 {
+            data.push(0);
         }
         let ifd = data.len() as u32;
         data[4..8].copy_from_slice(&ifd.to_le_bytes());
@@ -2425,6 +2415,36 @@ mod tests {
         }
         data.extend([0; 4]);
         data
+    }
+
+    fn palette_entry(palette: &[[u8; 3]]) -> Entry {
+        let map: Vec<u8> = (0..3).flat_map(|k| palette.iter().map(move |c| u16::from(c[k]) << 8)).flat_map(u16::to_le_bytes).collect();
+        (320, 3, 768, map)
+    }
+
+    /// A `.surf`: a little-endian TIFF with tag 65001 (RGB), optionally tag 65019 (texture) and a
+    /// palette preview (§10.2).
+    fn surf(rgb: [u8; 3], texture: Option<&str>, preview: Option<&Preview>) -> Vec<u8> {
+        let mut entries: Vec<Entry> = vec![(65001, 1, 3, rgb.to_vec())];
+        if let Some(texture) = texture {
+            let bytes: Vec<u8> = texture.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            entries.push((65019, 1, bytes.len() as u32, bytes));
+        }
+        let Some(p) = preview else { return tiff_file(&[], &entries) };
+        let short = |v: u16| v.to_le_bytes().to_vec();
+        entries.extend([
+            (256, 3, 1, short(p.w)),
+            (257, 3, 1, short(p.h)),
+            (258, 3, 1, short(8)),
+            (259, 3, 1, short(p.compression)),
+            (262, 3, 1, short(3)),
+            (273, 4, 1, 8u32.to_le_bytes().to_vec()),
+            (277, 3, 1, short(1)),
+            (278, 3, 1, short(p.h)),
+            (279, 4, 1, (p.pixels.len() as u32).to_le_bytes().to_vec()),
+            palette_entry(&p.palette),
+        ]);
+        tiff_file(&p.pixels, &entries)
     }
 
     /// An `animation.cfg`: version field, then per entry the name length, `*N`, a gap of 2 or 4
@@ -2496,6 +2516,44 @@ mod tests {
         let packed = surf([200, 200, 200], Some("x.jpg"), Some(&middle_preview(5)));
         assert_eq!(surface_color(&packed), Some(([200, 200, 200], true)));
         assert_eq!(surface_color(b"MM\0*"), None);
+    }
+
+    /// A crafted textured `.surf`: a `side` × `side` preview, one row per strip, every strip at
+    /// the same 4096 bytes of palette index 1 (§10.2 review).
+    fn shared_strips(side: u32) -> Vec<u8> {
+        let long = |v: u32| v.to_le_bytes().to_vec();
+        let short = |v: u16| v.to_le_bytes().to_vec();
+        let strips: Vec<u8> = (0..side).flat_map(|_| 8u32.to_le_bytes()).collect();
+        let counts: Vec<u8> = (0..side).flat_map(|_| 4096u32.to_le_bytes()).collect();
+        let mut palette = vec![[255, 255, 255]; 256];
+        palette[1] = [12, 34, 56];
+        let texture: Vec<u8> = "x.jpg".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let entries: Vec<Entry> = vec![
+            (65001, 1, 3, vec![200, 200, 200]),
+            (65019, 1, texture.len() as u32, texture),
+            (256, 4, 1, long(side)),
+            (257, 4, 1, long(side)),
+            (258, 3, 1, short(8)),
+            (259, 3, 1, short(1)),
+            (262, 3, 1, short(3)),
+            (273, 4, side, strips),
+            (277, 3, 1, short(1)),
+            (278, 3, 1, short(1)),
+            (279, 4, side, counts),
+            palette_entry(&palette),
+        ];
+        tiff_file(&[1u8; 4096], &entries)
+    }
+
+    #[test]
+    fn a_huge_preview_is_bounded() {
+        let started = web_time::Instant::now();
+        // Above 4096 a side: the tint of 65001, without reading the preview.
+        assert_eq!(surface_color(&shared_strips(65536)), Some(([200, 200, 200], true)));
+        // 4096 a side, every read succeeding: at most 256 × 256 pixels are read.
+        assert_eq!(surface_color(&shared_strips(4096)), Some(([12, 34, 56], true)));
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(2), "took {elapsed:?}");
     }
 
     #[test]

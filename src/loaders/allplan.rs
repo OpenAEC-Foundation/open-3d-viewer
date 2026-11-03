@@ -37,6 +37,8 @@ const PAGE: usize = 0x7FF8;
 const NAME_OFFSET: usize = 12 + PAGE + 4;
 /// Length of the name in UTF-16 units.
 const NAME_UNITS: usize = 70;
+/// Start of the element stream: the third page (§2).
+const STREAM_START: usize = 12 + 2 * PAGE;
 /// Element record header (§3).
 const HEADER: usize = 40;
 /// Millimetres to the viewer's metres.
@@ -121,7 +123,8 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     // The element stream ends at T (or at the end of a truncated file).
     let end = (12 + pages * PAGE).min(data.len());
     let stream = &data[..end];
-    let mut p = 12 + 2 * PAGE;
+    let mut p = STREAM_START;
+    let mut runs = None;
     while p + 8 <= stream.len() {
         if is_padding(stream, p) {
             p += 8;
@@ -134,7 +137,8 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
             p += step;
         } else {
             // Resynchronise on the next strictly valid header, or stop.
-            match (p + 8..).step_by(8).take_while(|q| q + HEADER <= stream.len()).find(|&q| strict_resync(stream, q)) {
+            let runs = runs.get_or_insert_with(|| PaddingRuns::new(stream));
+            match (p + 8..).step_by(8).take_while(|q| q + HEADER <= stream.len()).find(|&q| strict_resync(stream, q, runs)) {
                 Some(q) => p = q,
                 None => break,
             }
@@ -192,13 +196,50 @@ fn strict_header(s: &[u8], q: usize) -> Option<usize> {
     if ok { step_of(s, q) } else { None }
 }
 
-/// A strictly valid header that is followed (after padding) by the stream end, an attribute
-/// block or another strictly valid header.
-fn strict_resync(s: &[u8], q: usize) -> bool {
+/// Where each run of padding in the stream ends, for the resync lookahead: without it, many
+/// candidate headers pointing into one long run would each walk the whole run.
+struct PaddingRuns {
+    /// Per 8-byte slot from [`STREAM_START`]: the slot where a padding walk from it stops.
+    stop: Vec<u32>,
+}
+
+impl PaddingRuns {
+    fn new(s: &[u8]) -> Self {
+        let slots = if s.len() >= STREAM_START + 8 { (s.len() - STREAM_START - 8) / 8 + 1 } else { 0 };
+        let mut stop = vec![0u32; slots];
+        let mut next = slots as u32;
+        for i in (0..slots).rev() {
+            if !is_padding(s, STREAM_START + 8 * i) {
+                next = i as u32;
+            }
+            stop[i] = next;
+        }
+        Self { stop }
+    }
+
+    /// The first position from `p` (on the 8-byte grid of the stream) that is not padding.
+    fn end(&self, s: &[u8], p: usize) -> usize {
+        match p.checked_sub(STREAM_START).filter(|d| d % 8 == 0).and_then(|d| self.stop.get(d / 8)) {
+            Some(&slot) => STREAM_START + 8 * slot as usize,
+            // Off the grid (records keep it, so this does not happen): walk.
+            None => {
+                let mut next = p;
+                while next + 8 <= s.len() && next - p <= PAGE && is_padding(s, next) {
+                    next += 8;
+                }
+                next
+            }
+        }
+    }
+}
+
+/// A strictly valid header that is followed by the stream end, an attribute block or another
+/// strictly valid header, after at most one page of padding.
+fn strict_resync(s: &[u8], q: usize, runs: &PaddingRuns) -> bool {
     let Some(step) = strict_header(s, q) else { return false };
-    let mut next = q + step;
-    while next + 8 <= s.len() && is_padding(s, next) {
-        next += 8;
+    let next = runs.end(s, q + step);
+    if next - (q + step) > PAGE {
+        return false;
     }
     next + 8 > s.len() || is_attribute(s, next) || strict_header(s, next).is_some()
 }
@@ -900,6 +941,35 @@ mod tests {
         let mut long = data[..12 + 2 * PAGE + 200].to_vec();
         long[8..10].copy_from_slice(&0xFFFEu16.to_le_bytes());
         let _ = parse(&long);
+    }
+
+    #[test]
+    fn resync_past_many_headers_into_one_long_padding_run_is_fast() {
+        // About 10 MB: garbage that forces a resync, then 100 000 strictly valid headers whose
+        // records all end at the start of one long run of padding followed by garbage, so no
+        // candidate is valid; near the end a real body that the resync must still find.
+        let pages = 320u16;
+        let mut data = file(pages, "Crafted", &[]);
+        let end = 12 + usize::from(pages) * PAGE;
+        let headers = 100_000;
+        let region = STREAM_START + 8 + HEADER * headers;
+        data[STREAM_START..STREAM_START + 8].fill(0xFF);
+        for i in 0..headers {
+            let q = STREAM_START + 8 + HEADER * i;
+            let n8 = ((region - q - HEADER) / 8) as u32;
+            data[q..q + HEADER].copy_from_slice(&header(0x82, 0, 0, n8));
+        }
+        let boxed = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        let body_at = end - 4096;
+        data[body_at - 64..body_at].fill(0xFF);
+        data[body_at..body_at + boxed.len()].copy_from_slice(&boxed);
+        let started = web_time::Instant::now();
+        let drawing = parse(&data).unwrap();
+        let elapsed = started.elapsed();
+        eprintln!("crafted 10 MB file parsed in {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_secs(2), "took {elapsed:?}");
+        assert_eq!(drawing.bodies.len(), 1);
+        assert_eq!(drawing.bodies[0].offset, body_at);
     }
 
     /// Checks a real drawing file against the table of spec §7.2, when `ALLPLAN_SAMPLE` holds its

@@ -2768,6 +2768,7 @@ dependencies = [
  "iced_tiny_skia",
  "ifc-lite-processing",
  "js-sys",
+ "log",
  "openaec-ui",
  "ply-reader",
  "png 0.18.1",
@@ -2786,6 +2787,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "windows",
  "winresource",
 ]
 

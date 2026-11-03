@@ -31,7 +31,9 @@ impl Loader for AllplanLoader {
         let data = source.read()?;
         progress.set(Phase::Convert);
         let drawing = parse(&data)?;
-        build(&drawing)
+        // Colours come from the project folder: the folder of the drawing file (§10).
+        let painted = source.path().and_then(|path| path.parent()).map(|dir| paint(&drawing, &mut Folder::new(dir)));
+        build(&drawing, painted.as_ref())
     }
 }
 
@@ -102,6 +104,10 @@ struct Body {
     key: Key,
     /// Index into [`Drawing::elements`] when the body is linked (§8.1).
     element: Option<usize>,
+    /// Colour number u16@20 of the header, looked up in `animation.cfg` (§10.3).
+    color_number: u16,
+    /// The `.surf` name in the tail of the record, relative to `design/` (§10.1).
+    surface: Option<String>,
     positions: Vec<[f64; 3]>,
     normals: Vec<[f32; 3]>,
     indices: Vec<u32>,
@@ -731,6 +737,10 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
         (0, true) => explicit_faces(r, topology_at, count, e, f, l, 1)?,
         _ => prism_faces(v, count)?,
     };
+    // The tail follows the bounding box, or the topology of an explicit body (§10.1).
+    let explicit = kind == 4 || (kind == 0 && open);
+    let tail_at = if explicit { topology_at.saturating_add(8usize.saturating_mul(e.saturating_add(f).saturating_add(l))) } else { topology_at };
+    let surface = r.get(tail_at..).and_then(surface_name);
     if faces.is_empty() {
         return Some(Decoded::NoFaces);
     }
@@ -768,6 +778,8 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
         auxiliary: r[1] & 1 == 1,
         key: key_at(r, 0)?,
         element: None,
+        color_number: u16_at(r, 20)?,
+        surface,
         positions: Vec::new(),
         normals: Vec::new(),
         indices: Vec::new(),
@@ -943,6 +955,342 @@ fn triangulate(loops: &[Vec<[f64; 3]>], flip: bool, body: &mut Body) {
     }
 }
 
+/// The first `.surf` name in the tail of a body (§10.1): at an even offset, a run of at least
+/// three UTF-16 name characters ending in NUL whose text ends in `.surf`.
+fn surface_name(tail: &[u8]) -> Option<String> {
+    // Name characters: printable ASCII and Latin letters. A stricter class than "≥ 0x20", so that
+    // the high half of a double right before the name does not become part of it.
+    let name_char = |u: u16| (0x20..=0x7E).contains(&u) || (0xA0..=0x24F).contains(&u);
+    let units: Vec<u16> = tail.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let mut i = 0;
+    while i < units.len() {
+        if !name_char(units[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < units.len() && name_char(units[i]) {
+            i += 1;
+        }
+        if units.get(i) == Some(&0) && i - start >= 3 {
+            let text = String::from_utf16_lossy(&units[start..i]);
+            if text.to_lowercase().ends_with(".surf") {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+/// Files of the project folder (§10), found case-insensitively per path component.
+trait ProjectFiles {
+    /// The bytes of the file at `path` (components below the project folder), if it is there.
+    fn read(&mut self, path: &[&str]) -> Option<Vec<u8>>;
+}
+
+/// Largest preview side of a `.surf` that is averaged (§10.2; the samples have 120).
+const MAX_PREVIEW: usize = 4096;
+/// Most pixels read per side of the middle square of a preview (§10.2).
+const PREVIEW_SAMPLES: usize = 256;
+
+/// Largest project file read (a `.surf` or `animation.cfg` is a few kB).
+const MAX_PROJECT_FILE: u64 = 16 << 20;
+
+/// The project folder on disk: the folder of the drawing file. Each directory is listed once.
+struct Folder {
+    root: std::path::PathBuf,
+    listings: HashMap<std::path::PathBuf, HashMap<String, std::path::PathBuf>>,
+}
+
+impl Folder {
+    fn new(root: &std::path::Path) -> Self {
+        // A drawing file named without a folder lies in the current one.
+        let root = if root.as_os_str().is_empty() { std::path::Path::new(".") } else { root };
+        Self { root: root.to_path_buf(), listings: HashMap::new() }
+    }
+}
+
+impl ProjectFiles for Folder {
+    fn read(&mut self, path: &[&str]) -> Option<Vec<u8>> {
+        let mut at = self.root.clone();
+        for part in path {
+            let listing = self.listings.entry(at.clone()).or_insert_with(|| {
+                std::fs::read_dir(&at)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .map(|entry| (entry.file_name().to_string_lossy().to_lowercase(), entry.path()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            at = listing.get(&part.to_lowercase())?.clone();
+        }
+        let metadata = std::fs::metadata(&at).ok()?;
+        if !metadata.is_file() || metadata.len() > MAX_PROJECT_FILE {
+            return None;
+        }
+        std::fs::read(&at).ok()
+    }
+}
+
+/// The path components of a `.surf` name below `design/`; `None` for names that would leave it.
+fn surface_path(name: &str) -> Option<Vec<&str>> {
+    let parts: Vec<&str> = name.split(['\\', '/']).collect();
+    let bad = |part: &&str| part.is_empty() || *part == "." || *part == ".." || part.contains(':');
+    (!parts.iter().any(bad)).then_some(parts)
+}
+
+/// The colour of a `.surf` file (§10.2) and whether it has a texture.
+fn surface_color(data: &[u8]) -> Option<([u8; 3], bool)> {
+    let tiff = Tiff::new(data)?;
+    let rgb = tiff.bytes(65001).filter(|b| b.len() >= 3).map(|b| [b[0], b[1], b[2]])?;
+    let texture = tiff.bytes(65019).is_some_and(|b| {
+        let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16_lossy(&units).trim_matches(['\0', ' ']).chars().next().is_some()
+    });
+    if !texture {
+        return Some((rgb, false));
+    }
+    // With a texture, 65001 is only a tint: the middle of the palette preview approximates the
+    // colour; other preview kinds keep 65001.
+    Some((tiff.preview_middle().unwrap_or(rgb), true))
+}
+
+/// The first IFD of a little-endian TIFF, enough for the tags of a `.surf` (§10.2).
+struct Tiff<'a> {
+    data: &'a [u8],
+    /// Tag → (type, count, offset of the value field).
+    entries: HashMap<u16, (u16, u32, usize)>,
+}
+
+impl<'a> Tiff<'a> {
+    fn new(data: &'a [u8]) -> Option<Self> {
+        if data.get(0..4) != Some(b"II*\0") {
+            return None;
+        }
+        let ifd = usize::try_from(u32_at(data, 4)?).ok()?;
+        let count = usize::from(u16_at(data, ifd)?);
+        let mut entries = HashMap::new();
+        for i in 0..count {
+            let at = ifd.checked_add(2 + 12 * i)?;
+            let (tag, kind, n) = (u16_at(data, at)?, u16_at(data, at + 2)?, u32_at(data, at + 4)?);
+            entries.entry(tag).or_insert((kind, n, at + 8));
+        }
+        Some(Self { data, entries })
+    }
+
+    /// The raw value bytes of a tag (inline when they fit in four bytes).
+    fn bytes(&self, tag: u16) -> Option<&'a [u8]> {
+        let &(kind, n, field) = self.entries.get(&tag)?;
+        let size = match kind {
+            1 | 2 | 6 | 7 => 1,
+            3 | 8 => 2,
+            4 | 9 => 4,
+            _ => return None,
+        };
+        let len = usize::try_from(n).ok()?.checked_mul(size)?;
+        let at = if len <= 4 { field } else { usize::try_from(u32_at(self.data, field)?).ok()? };
+        self.data.get(at..at.checked_add(len)?)
+    }
+
+    /// The numbers of a SHORT or LONG tag.
+    fn numbers(&self, tag: u16) -> Option<Vec<u32>> {
+        let bytes = self.bytes(tag)?;
+        match self.entries.get(&tag)?.0 {
+            3 => Some(bytes.chunks_exact(2).map(|c| u32::from(u16::from_le_bytes([c[0], c[1]]))).collect()),
+            4 => Some(bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
+            _ => None,
+        }
+    }
+
+    fn number(&self, tag: u16, default: u32) -> Option<u32> {
+        match self.entries.contains_key(&tag) {
+            true => self.numbers(tag)?.first().copied(),
+            false => Some(default),
+        }
+    }
+
+    /// The mean colour of the middle square of an uncompressed 8-bit palette image: columns
+    /// 3w/8 .. 5w/8 − 1 and rows 3h/8 .. 5h/8 − 1 (§10.2). Bounded: no preview above
+    /// [`MAX_PREVIEW`] pixels a side, and at most [`PREVIEW_SAMPLES`]² pixels read, at a fixed step.
+    fn preview_middle(&self) -> Option<[u8; 3]> {
+        let w = usize::try_from(self.number(256, 0)?).ok()?;
+        let h = usize::try_from(self.number(257, 0)?).ok()?;
+        let supported = self.number(259, 1)? == 1
+            && self.number(262, 2)? == 3
+            && self.number(277, 1)? == 1
+            && self.numbers(258).is_some_and(|bits| !bits.is_empty() && bits.iter().all(|&b| b == 8));
+        if !supported || w == 0 || h == 0 || w > MAX_PREVIEW || h > MAX_PREVIEW {
+            return None;
+        }
+        let map = self.numbers(320).filter(|m| m.len() >= 768)?;
+        let offsets = self.numbers(273)?;
+        let counts = self.numbers(279);
+        let rows = usize::try_from(self.number(278, u32::MAX)?).ok()?.clamp(1, h);
+        let (x0, x1, y0, y1) = (3 * w / 8, 5 * w / 8, 3 * h / 8, 5 * h / 8);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let step = |from: usize, to: usize| (to - from).div_ceil(PREVIEW_SAMPLES);
+        let (dx, dy) = (step(x0, x1), step(y0, y1));
+        let mut sum = [0u64; 3];
+        let mut n = 0u64;
+        for y in (y0..y1).step_by(dy) {
+            let strip = y / rows;
+            let start = usize::try_from(*offsets.get(strip)?).ok()?;
+            let end = match &counts {
+                Some(c) => start.checked_add(usize::try_from(*c.get(strip)?).ok()?)?,
+                None => self.data.len(),
+            };
+            for x in (x0..x1).step_by(dx) {
+                let at = start.checked_add((y % rows).checked_mul(w)?.checked_add(x)?)?;
+                if at >= end {
+                    return None;
+                }
+                let index = usize::from(*self.data.get(at)?);
+                for (k, total) in sum.iter_mut().enumerate() {
+                    *total += u64::from(map[256 * k + index] >> 8);
+                }
+                n += 1;
+            }
+        }
+        Some(sum.map(|total| ((total + n / 2) / n) as u8))
+    }
+}
+
+/// The colour table of `animation.cfg` (§10.3): colour number → RGB. The u32 with the number
+/// follows each name after 2 or 4 bytes, by file layout, not by the version field: the gap that
+/// matches for most names in the file comes first (an entry like `*0` can match at both).
+fn color_table(data: &[u8]) -> HashMap<u16, [u8; 3]> {
+    let digit = |at: usize| data.get(at..at + 2).is_some_and(|u| u[0].is_ascii_digit() && u[1] == 0);
+    let mut names = Vec::new();
+    for name in 2..data.len().saturating_sub(3) {
+        if data[name] != b'*' || data[name + 1] != 0 || !digit(name + 2) {
+            continue;
+        }
+        let Some(len) = u16_at(data, name - 2).map(usize::from) else { continue };
+        if len < 4 || len % 2 != 0 || len > 14 {
+            continue;
+        }
+        let end = name + len;
+        if !(name + 2..end).step_by(2).all(digit) {
+            continue;
+        }
+        let number = (name + 2..end).step_by(2).fold(0u32, |n, at| n * 10 + u32::from(data[at] - b'0'));
+        names.push((end, number));
+    }
+    let matches = |gap: usize| names.iter().filter(|&&(end, n)| u32_at(data, end + gap) == Some(n)).count();
+    let gaps: [usize; 2] = if matches(4) > matches(2) { [4, 2] } else { [2, 4] };
+    let mut table = HashMap::new();
+    for (end, number) in names {
+        let Ok(key) = u16::try_from(number) else { continue };
+        for gap in gaps {
+            if u32_at(data, end + gap) == Some(number) {
+                if let Some(rgb) = data.get(end + gap + 4..end + gap + 7) {
+                    table.entry(key).or_insert([rgb[0], rgb[1], rgb[2]]);
+                }
+                break;
+            }
+        }
+    }
+    table
+}
+
+/// Where the colour of a body comes from (§10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Paint {
+    Surface { rgb: [u8; 3], textured: bool },
+    Number([u8; 3]),
+    /// The category colour of the layer.
+    Fallback,
+}
+
+impl Paint {
+    fn rgba(self, fallback: [f32; 3]) -> [u8; 4] {
+        let [r, g, b] = match self {
+            Paint::Surface { rgb, .. } | Paint::Number(rgb) => rgb,
+            Paint::Fallback => fallback.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8),
+        };
+        [r, g, b, 255]
+    }
+}
+
+/// The colours of the bodies of a drawing file from its project folder (§10).
+struct Painted {
+    /// Per drawing body.
+    bodies: Vec<Paint>,
+    /// Per macro, per body.
+    macros: Vec<Vec<Paint>>,
+    /// Some colour came from the project files: the layers get vertex colours.
+    active: bool,
+    info: Vec<(String, String)>,
+}
+
+/// Looks up the colour of every body (§10): its surface, else its colour number, else the
+/// category colour. Every file is read once.
+fn paint(drawing: &Drawing, files: &mut dyn ProjectFiles) -> Painted {
+    let config = files.read(&["animation.cfg"]);
+    let table = config.as_deref().map(color_table).unwrap_or_default();
+    let mut surfaces: HashMap<String, Option<([u8; 3], bool)>> = HashMap::new();
+    let mut paint_body = |body: &Body| -> Paint {
+        if let Some(name) = &body.surface {
+            let found = *surfaces.entry(name.to_lowercase()).or_insert_with(|| {
+                let parts = surface_path(name)?;
+                let path: Vec<&str> = std::iter::once("design").chain(parts).collect();
+                surface_color(&files.read(&path)?)
+            });
+            if let Some((rgb, textured)) = found {
+                return Paint::Surface { rgb, textured };
+            }
+        }
+        table.get(&body.color_number).map_or(Paint::Fallback, |&rgb| Paint::Number(rgb))
+    };
+    let bodies: Vec<Paint> = drawing.bodies.iter().map(&mut paint_body).collect();
+    let macros: Vec<Vec<Paint>> = drawing.macros.iter().map(|m| m.bodies.iter().map(&mut paint_body).collect()).collect();
+    let all = || bodies.iter().chain(macros.iter().flatten());
+    let active = all().any(|p| *p != Paint::Fallback);
+    let visible: Vec<Paint> = drawing.bodies.iter().zip(&bodies).filter(|(b, _)| !b.auxiliary).map(|(_, p)| *p).collect();
+    let tally = |paints: &mut dyn Iterator<Item = Paint>| {
+        let (mut textured, mut plain, mut number, mut fallback) = (0, 0, 0, 0);
+        for paint in paints {
+            match paint {
+                Paint::Surface { textured: true, .. } => textured += 1,
+                Paint::Surface { .. } => plain += 1,
+                Paint::Number(_) => number += 1,
+                Paint::Fallback => fallback += 1,
+            }
+        }
+        format!(
+            "surface {} (textured {textured}), colour number {number}, category colour {fallback}",
+            textured + plain
+        )
+    };
+    let found = surfaces.values().filter(|s| s.is_some()).count();
+    let files_line = format!(
+        "animation.cfg: {}; surfaces found: {found} of {}",
+        match &config {
+            Some(data) => format!("version {} ({} colours)", u16_at(data, 2).unwrap_or(0), table.len()),
+            None => "not found".into(),
+        },
+        surfaces.len()
+    );
+    let info = vec![
+        ("Allplan colours (visible bodies)".into(), tally(&mut visible.iter().copied())),
+        ("Allplan colours (macro bodies)".into(), tally(&mut macros.iter().flatten().copied())),
+        ("Allplan project files".into(), files_line),
+    ];
+    Painted { bodies, macros, active, info }
+}
+
+/// Appends a colour for the last `count` vertices of a layer that has vertex colours.
+fn paint_vertices(layer: &mut Layer, count: usize, paint: Paint) {
+    let rgba = paint.rgba(layer.color);
+    if let Some(colors) = layer.colors.as_mut() {
+        colors.extend(std::iter::repeat_n(rgba, count));
+    }
+}
+
 /// Rounds a quantity for display (§8.4).
 fn rounded(value: f64) -> serde_json::Value {
     if value.is_finite() { serde_json::json!((value * 1000.0).round() / 1000.0) } else { serde_json::Value::Null }
@@ -961,6 +1309,9 @@ fn body_props(drawing: &Drawing, body: &Body) -> String {
     });
     if body.open {
         props["Open surface"] = true.into();
+    }
+    if let Some(surface) = &body.surface {
+        props["Surface"] = surface.clone().into();
     }
     if let (Some(element), Some(map)) = (body.element.map(|i| &drawing.elements[i]), props.as_object_mut()) {
         if !element.name.is_empty() {
@@ -1034,7 +1385,7 @@ fn category(drawing: &Drawing, body: &Body) -> Category {
 }
 
 /// The layers: visible bodies per category, and the auxiliary bodies in one hidden layer.
-fn build(drawing: &Drawing) -> Result<Loaded, String> {
+fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String> {
     let resolved = drawing.placements.iter().filter(|p| matches!(p.placed, Placed::Resolved(_))).count();
     if drawing.bodies.is_empty() && resolved == 0 {
         let name = if drawing.name.is_empty() { String::new() } else { format!(" \"{}\"", drawing.name) };
@@ -1051,11 +1402,18 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         None,
         Layer { name: "Auxiliary bodies (openings, rooms)".into(), color: AUXILIARY_COLOR, hidden: true, ..Layer::default() },
     ));
-    for body in &drawing.bodies {
+    // Colours from the project folder become vertex colours; the category colour fills in (§10).
+    let painted = painted.filter(|p| p.active);
+    if painted.is_some() {
+        layers.iter_mut().for_each(|(_, layer)| layer.colors = Some(Vec::new()));
+    }
+    let paint_of = |paints: Option<&Vec<Paint>>, i: usize| paints.and_then(|p| p.get(i)).copied().unwrap_or(Paint::Fallback);
+    for (i, body) in drawing.bodies.iter().enumerate() {
         let wanted = if body.auxiliary { None } else { Some(category(drawing, body)) };
         let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
         let id = body.offset as u64;
         let first = append(layer, &body.positions, &body.normals, &body.indices)?;
+        paint_vertices(layer, body.positions.len(), paint_of(painted.map(|p| &p.bodies), i));
         let count = u32::try_from(body.indices.len()).map_err(|_| "Allplan: too many triangles")?;
         layer.elements.push((id, first, count));
         layer.props.push((id, body_props(drawing, body)));
@@ -1071,8 +1429,9 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         for (auxiliary, wanted) in [(false, Some(Category::Macros)), (true, None)] {
             let Some((_, layer)) = layers.iter_mut().find(|(c, _)| *c == wanted) else { continue };
             let first = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
-            for body in definition.bodies.iter().filter(|b| b.auxiliary == auxiliary) {
+            for (i, body) in definition.bodies.iter().enumerate().filter(|(_, b)| b.auxiliary == auxiliary) {
                 transform.append(layer, body)?;
+                paint_vertices(layer, body.positions.len(), paint_of(painted.and_then(|p| p.macros.get(index)), i));
             }
             let end = u32::try_from(layer.indices.len()).map_err(|_| "Allplan: too many triangles")?;
             if end > first {
@@ -1093,6 +1452,13 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         ("Allplan bodies linked to an element".into(), linked.to_string()),
         ("Allplan macro placements".into(), placement_summary(drawing)),
         (
+            "Allplan colours".into(),
+            match painted {
+                Some(_) => "from the project folder (surfaces and animation.cfg)".into(),
+                None => "category colours (no project files found next to the drawing file)".into(),
+            },
+        ),
+        (
             "Allplan skipped bodies".into(),
             format!(
                 "clip volumes: {}, without faces: {}, unreadable: {}",
@@ -1101,10 +1467,11 @@ fn build(drawing: &Drawing) -> Result<Loaded, String> {
         ),
         (
             "Allplan import scope".into(),
-            "3D bodies with element name, type and quantities, and 3D macros (spec v0.3); no colours, materials or 2D elements"
+            "3D bodies with element name, type and quantities, 3D macros, colours from the project folder (spec v0.4); no textures or 2D elements"
                 .into(),
         ),
     ];
+    project.info.extend(painted.iter().flat_map(|p| p.info.iter().cloned()));
     // Empty layers are left out.
     let layers = layers.into_iter().map(|(_, layer)| layer).filter(|layer| !layer.indices.is_empty()).collect();
     Ok(Loaded { layers, views: Vec::new(), project })
@@ -1475,7 +1842,7 @@ mod tests {
         assert_eq!(data.len(), 12 + 2 * PAGE + 64);
         let drawing = parse(&data).unwrap();
         assert_eq!((drawing.name.as_str(), drawing.pages, drawing.bodies.len()), ("QUICKSTART", 2, 0));
-        let error = build(&drawing).err().unwrap();
+        let error = build(&drawing, None).err().unwrap();
         assert!(error.contains("no 3D bodies"), "{error}");
     }
 
@@ -1516,7 +1883,7 @@ mod tests {
                 let at = 12 + 2 * PAGE + (next() as usize) % (stream_end - 12 - 2 * PAGE);
                 fuzz[at] = next() as u8;
             }
-            let _ = parse(&fuzz).map(|d| build(&d));
+            let _ = parse(&fuzz).map(|d| build(&d, None));
         }
         // A header whose page count points far beyond the end of the file.
         let mut long = data[..12 + 2 * PAGE + 200].to_vec();
@@ -1654,7 +2021,7 @@ mod tests {
         let short = element_of(4).unwrap();
         assert_eq!((short.name.as_str(), short.quantities, short.type_code), ("Short", [0.5; 5], None));
 
-        let loaded = build(&drawing).unwrap();
+        let loaded = build(&drawing, None).unwrap();
         let layers: Vec<(&str, usize, bool)> =
             loaded.layers.iter().map(|l| (l.name.as_str(), l.elements.len(), l.hidden)).collect();
         assert_eq!(
@@ -1875,7 +2242,7 @@ mod tests {
         assert_eq!(extent(&TURN), ([-200.0, 5000.0, 0.0], [0.0, 6000.0, 3000.0]));
         assert_eq!(extent(&MIRROR), ([19000.0, 0.0, 0.0], [20000.0, 200.0, 3000.0]));
 
-        let loaded = build(&drawing).unwrap();
+        let loaded = build(&drawing, None).unwrap();
         let layers: Vec<(&str, usize, usize, bool)> =
             loaded.layers.iter().map(|l| (l.name.as_str(), l.elements.len(), l.triangle_count(), l.hidden)).collect();
         assert_eq!(
@@ -1915,7 +2282,7 @@ mod tests {
         let started = web_time::Instant::now();
         let drawing = parse(&data).unwrap();
         let parsed = started.elapsed();
-        let loaded = build(&drawing).unwrap();
+        let loaded = build(&drawing, None).unwrap();
         let elapsed = started.elapsed();
         eprintln!("1320 macro bodies placed 25 times in {elapsed:?} (read {parsed:?})");
         assert!(drawing.bodies.is_empty());
@@ -1960,7 +2327,7 @@ mod tests {
         let data = file(3, "Macros", &s);
         let end = STREAM_START + s.len();
         for cut in (STREAM_START..end + 8).step_by(5) {
-            let _ = parse(&data[..cut]).map(|d| build(&d));
+            let _ = parse(&data[..cut]).map(|d| build(&d, None));
         }
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let mut next = || {
@@ -1975,11 +2342,359 @@ mod tests {
                 let at = STREAM_START + (next() as usize) % (end - STREAM_START);
                 fuzz[at] = next() as u8;
             }
-            let _ = parse(&fuzz).map(|d| build(&d));
+            let _ = parse(&fuzz).map(|d| build(&d, None));
         }
     }
 
-    /// Checks a real drawing file against the tables of spec §7.2 to §7.5, when `ALLPLAN_SAMPLE`
+    /// Appends a tail to a body record (padded to 8 bytes, length updated) and sets its colour
+    /// number (u16@20).
+    fn with_tail(mut record: Vec<u8>, tail: &[u8], color_number: u16) -> Vec<u8> {
+        let mut tail = tail.to_vec();
+        tail.resize(tail.len().div_ceil(8) * 8, 0);
+        let n8 = (u32::from(record[17]) << 16 | u32::from(u16::from_le_bytes([record[18], record[19]]))) + (tail.len() / 8) as u32;
+        record[17] = (n8 >> 16) as u8;
+        record[18..20].copy_from_slice(&(n8 as u16).to_le_bytes());
+        record[20..22].copy_from_slice(&color_number.to_le_bytes());
+        record.extend(tail);
+        record
+    }
+
+    /// A body tail with a surface name at +16, after 8 zero bytes and the double 1.0 (§10.1).
+    fn surface_tail(name: &str) -> Vec<u8> {
+        let mut tail = vec![0u8; 8];
+        tail.extend(1.0f64.to_le_bytes());
+        tail.extend(name.encode_utf16().flat_map(u16::to_le_bytes));
+        tail.extend([0, 0]);
+        tail
+    }
+
+    /// An 8-bit palette preview: width, height, pixels (palette indices) and 256 RGB entries.
+    struct Preview {
+        w: u16,
+        h: u16,
+        pixels: Vec<u8>,
+        palette: Vec<[u8; 3]>,
+        compression: u16,
+    }
+
+    /// A TIFF entry: tag, type, count and value bytes.
+    type Entry = (u16, u16, u32, Vec<u8>);
+
+    /// A little-endian TIFF: `pixels` at offset 8, then the values that do not fit in their entry,
+    /// then the IFD.
+    fn tiff_file(pixels: &[u8], entries: &[Entry]) -> Vec<u8> {
+        let mut data = b"II*\0\0\0\0\0".to_vec();
+        data.extend_from_slice(pixels);
+        let mut fields = Vec::new();
+        for (tag, kind, count, bytes) in entries {
+            let value = if bytes.len() <= 4 {
+                let mut v = bytes.clone();
+                v.resize(4, 0);
+                v
+            } else {
+                if data.len() % 2 == 1 {
+                    data.push(0);
+                }
+                let at = data.len() as u32;
+                data.extend_from_slice(bytes);
+                at.to_le_bytes().to_vec()
+            };
+            fields.push((*tag, *kind, *count, value));
+        }
+        if data.len() % 2 == 1 {
+            data.push(0);
+        }
+        let ifd = data.len() as u32;
+        data[4..8].copy_from_slice(&ifd.to_le_bytes());
+        data.extend((fields.len() as u16).to_le_bytes());
+        for (tag, kind, count, value) in fields {
+            data.extend(tag.to_le_bytes());
+            data.extend(kind.to_le_bytes());
+            data.extend(count.to_le_bytes());
+            data.extend(value);
+        }
+        data.extend([0; 4]);
+        data
+    }
+
+    fn palette_entry(palette: &[[u8; 3]]) -> Entry {
+        let map: Vec<u8> = (0..3).flat_map(|k| palette.iter().map(move |c| u16::from(c[k]) << 8)).flat_map(u16::to_le_bytes).collect();
+        (320, 3, 768, map)
+    }
+
+    /// A `.surf`: a little-endian TIFF with tag 65001 (RGB), optionally tag 65019 (texture) and a
+    /// palette preview (§10.2).
+    fn surf(rgb: [u8; 3], texture: Option<&str>, preview: Option<&Preview>) -> Vec<u8> {
+        let mut entries: Vec<Entry> = vec![(65001, 1, 3, rgb.to_vec())];
+        if let Some(texture) = texture {
+            let bytes: Vec<u8> = texture.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            entries.push((65019, 1, bytes.len() as u32, bytes));
+        }
+        let Some(p) = preview else { return tiff_file(&[], &entries) };
+        let short = |v: u16| v.to_le_bytes().to_vec();
+        entries.extend([
+            (256, 3, 1, short(p.w)),
+            (257, 3, 1, short(p.h)),
+            (258, 3, 1, short(8)),
+            (259, 3, 1, short(p.compression)),
+            (262, 3, 1, short(3)),
+            (273, 4, 1, 8u32.to_le_bytes().to_vec()),
+            (277, 3, 1, short(1)),
+            (278, 3, 1, short(p.h)),
+            (279, 4, 1, (p.pixels.len() as u32).to_le_bytes().to_vec()),
+            palette_entry(&p.palette),
+        ]);
+        tiff_file(&p.pixels, &entries)
+    }
+
+    /// An `animation.cfg`: version field, then per entry the name length, `*N`, a gap of 2 or 4
+    /// bytes, the u32 N and R, G, B (§10.3).
+    fn cfg(version: u16, gap: usize, entries: &[(u32, [u8; 3])]) -> Vec<u8> {
+        let mut data = vec![0x01, 0x00];
+        data.extend(version.to_le_bytes());
+        data.extend([0x11; 6]);
+        for (n, rgb) in entries {
+            let name: Vec<u8> = format!("*{n}").encode_utf16().flat_map(u16::to_le_bytes).collect();
+            data.extend((name.len() as u16).to_le_bytes());
+            data.extend(&name);
+            data.extend(vec![0u8; gap]);
+            data.extend(n.to_le_bytes());
+            data.extend(rgb);
+            data.extend([0x40, 0x00, 0x00]);
+        }
+        data
+    }
+
+    /// Project files in memory, found case-insensitively.
+    struct Memory(HashMap<String, Vec<u8>>);
+
+    impl Memory {
+        fn new(files: &[(&str, Vec<u8>)]) -> Self {
+            Self(files.iter().map(|(k, v)| (k.to_lowercase(), v.clone())).collect())
+        }
+    }
+
+    impl ProjectFiles for Memory {
+        fn read(&mut self, path: &[&str]) -> Option<Vec<u8>> {
+            self.0.get(&path.join("/").to_lowercase()).cloned()
+        }
+    }
+
+    fn middle_preview(compression: u16) -> Preview {
+        // White around, the middle square (columns and rows 3..=4 of 8) red, green, blue and grey.
+        let mut pixels = vec![0u8; 64];
+        for (i, at) in [3 * 8 + 3, 3 * 8 + 4, 4 * 8 + 3, 4 * 8 + 4].into_iter().enumerate() {
+            pixels[at] = i as u8 + 1;
+        }
+        let mut palette = vec![[255, 255, 255]; 256];
+        palette[1] = [100, 0, 0];
+        palette[2] = [0, 100, 0];
+        palette[3] = [0, 0, 100];
+        palette[4] = [100, 100, 100];
+        Preview { w: 8, h: 8, pixels, palette, compression }
+    }
+
+    #[test]
+    fn reads_colour_tables_of_both_layouts() {
+        let entries = [(0, [0, 0, 0]), (1, [255, 255, 255]), (21, [73, 73, 73]), (255, [1, 2, 3])];
+        let want: HashMap<u16, [u8; 3]> = entries.iter().map(|&(n, c)| (n as u16, c)).collect();
+        assert_eq!(color_table(&cfg(2, 2, &entries)), want);
+        assert_eq!(color_table(&cfg(3, 4, &entries)), want);
+        // The layout decides, not the version field (a 2025 project: 0x0103 with the +4 layout).
+        assert_eq!(color_table(&cfg(0x0103, 4, &entries)), want);
+        assert!(color_table(b"").is_empty() && color_table(b"*\0").is_empty());
+    }
+
+    #[test]
+    fn reads_surface_colours() {
+        assert_eq!(surface_color(&surf([10, 20, 30], None, None)), Some(([10, 20, 30], false)));
+        assert_eq!(surface_color(&surf([10, 20, 30], Some(""), None)), Some(([10, 20, 30], false)));
+        // With a texture: the mean of the middle square of the preview.
+        let textured = surf([200, 200, 200], Some("FFC\\PARKETT\\FFC-Parkett.jpg"), Some(&middle_preview(1)));
+        assert_eq!(surface_color(&textured), Some(([50, 50, 50], true)));
+        // A preview kind not supported (compressed): the tint of 65001.
+        let packed = surf([200, 200, 200], Some("x.jpg"), Some(&middle_preview(5)));
+        assert_eq!(surface_color(&packed), Some(([200, 200, 200], true)));
+        assert_eq!(surface_color(b"MM\0*"), None);
+    }
+
+    /// A crafted textured `.surf`: a `side` × `side` preview, one row per strip, every strip at
+    /// the same 4096 bytes of palette index 1 (§10.2 review).
+    fn shared_strips(side: u32) -> Vec<u8> {
+        let long = |v: u32| v.to_le_bytes().to_vec();
+        let short = |v: u16| v.to_le_bytes().to_vec();
+        let strips: Vec<u8> = (0..side).flat_map(|_| 8u32.to_le_bytes()).collect();
+        let counts: Vec<u8> = (0..side).flat_map(|_| 4096u32.to_le_bytes()).collect();
+        let mut palette = vec![[255, 255, 255]; 256];
+        palette[1] = [12, 34, 56];
+        let texture: Vec<u8> = "x.jpg".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let entries: Vec<Entry> = vec![
+            (65001, 1, 3, vec![200, 200, 200]),
+            (65019, 1, texture.len() as u32, texture),
+            (256, 4, 1, long(side)),
+            (257, 4, 1, long(side)),
+            (258, 3, 1, short(8)),
+            (259, 3, 1, short(1)),
+            (262, 3, 1, short(3)),
+            (273, 4, side, strips),
+            (277, 3, 1, short(1)),
+            (278, 3, 1, short(1)),
+            (279, 4, side, counts),
+            palette_entry(&palette),
+        ];
+        tiff_file(&[1u8; 4096], &entries)
+    }
+
+    #[test]
+    fn a_huge_preview_is_bounded() {
+        let started = web_time::Instant::now();
+        // Above 4096 a side: the tint of 65001, without reading the preview.
+        assert_eq!(surface_color(&shared_strips(65536)), Some(([200, 200, 200], true)));
+        // 4096 a side, every read succeeding: at most 256 × 256 pixels are read.
+        assert_eq!(surface_color(&shared_strips(4096)), Some(([12, 34, 56], true)));
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(2), "took {elapsed:?}");
+    }
+
+    #[test]
+    fn finds_the_surface_name_in_a_body_tail() {
+        assert_eq!(surface_name(&surface_tail("FFC\\ANSTRICH\\FFC-Anstrich-weiss.surf")).as_deref(), Some("FFC\\ANSTRICH\\FFC-Anstrich-weiss.surf"));
+        assert_eq!(surface_name(&surface_tail("Glas.SURF")).as_deref(), Some("Glas.SURF"));
+        assert_eq!(surface_name(&surface_tail("Material name")), None);
+        // Text that is not followed by NUL does not count.
+        let mut open = surface_tail("a.surf");
+        open.truncate(open.len() - 2);
+        open.extend("xy".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(surface_name(&open), None);
+        assert_eq!(surface_path("..\\design.surf"), None);
+        assert_eq!(surface_path("C:\\x.surf"), None);
+        assert_eq!(surface_path("FFC\\Rot.surf"), Some(vec!["FFC", "Rot.surf"]));
+    }
+
+    /// Bodies with every colour source, and a macro body with its own colour number.
+    fn colour_stream() -> Vec<u8> {
+        let at = |i: f64| prism(0, 0x0301, [1000.0 * i, 0.0, 0.0], [1000.0 * i + 500.0, 200.0, 3000.0]);
+        let mut s = Vec::new();
+        s.extend(with_tail(at(0.0), &surface_tail("FFC\\AKZENTWAND\\FFC-Rot.surf"), 1));
+        s.extend(with_tail(at(1.0), &surface_tail("parkett.surf"), 1));
+        s.extend(with_tail(at(2.0), &[0; 16], 21));
+        s.extend(with_tail(at(3.0), &surface_tail("Missing.surf"), 99));
+        s.extend(with_tail(at(4.0), &surface_tail("Missing.surf"), 1));
+        let shelf = with_tail(prism(0, 0x0301, [0.0; 3], [500.0, 500.0, 500.0]), &[0; 8], 21);
+        s.extend(definition(3, "Shelf", &[representation(true, &shelf)]));
+        s.extend(placement(3, "Shelf", MOVE));
+        s
+    }
+
+    fn colour_files() -> Memory {
+        Memory::new(&[
+            ("animation.cfg", cfg(2, 2, &[(1, [255, 255, 255]), (21, [73, 73, 73])])),
+            ("design/FFC/AkzentWand/FFC-Rot.surf", surf([255, 0, 0], None, None)),
+            ("design/Parkett.surf", surf([200, 200, 200], Some("FFC\\PARKETT\\FFC-Parkett.jpg"), Some(&middle_preview(1)))),
+        ])
+    }
+
+    #[test]
+    fn paints_bodies_from_the_project_folder() {
+        let drawing = parse(&file(3, "Colours", &colour_stream())).unwrap();
+        let painted = paint(&drawing, &mut colour_files());
+        assert!(painted.active);
+        assert_eq!(
+            painted.bodies,
+            [
+                Paint::Surface { rgb: [255, 0, 0], textured: false },
+                Paint::Surface { rgb: [50, 50, 50], textured: true },
+                Paint::Number([73, 73, 73]),
+                Paint::Fallback,
+                Paint::Number([255, 255, 255]),
+            ]
+        );
+        assert_eq!(painted.macros, [vec![Paint::Number([73, 73, 73])]]);
+        let loaded = build(&drawing, Some(&painted)).unwrap();
+        for layer in &loaded.layers {
+            assert_eq!(layer.colors.as_ref().map(Vec::len), Some(layer.vertex_count()), "{}", layer.name);
+        }
+        let other = loaded.layers.iter().find(|l| l.name == "Other").unwrap();
+        let fallback = Paint::Fallback.rgba(Category::Other.color());
+        let colours: Vec<[u8; 4]> = other.elements.iter().map(|&(_, first, _)| other.colors.as_ref().unwrap()[other.indices[first as usize] as usize]).collect();
+        assert_eq!(colours, [[255, 0, 0, 255], [50, 50, 50, 255], [73, 73, 73, 255], fallback, [255, 255, 255, 255]]);
+        let macros = loaded.layers.iter().find(|l| l.name == "Macros").unwrap();
+        assert!(macros.colors.as_ref().unwrap().iter().all(|c| *c == [73, 73, 73, 255]));
+        assert_eq!(props_of(&loaded, drawing.bodies[0].offset)["Surface"], "FFC\\AKZENTWAND\\FFC-Rot.surf");
+        assert_eq!(props_of(&loaded, drawing.bodies[3].offset)["Surface"], "Missing.surf");
+        let info = |key: &str| loaded.project.info.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        assert_eq!(info("Allplan colours (visible bodies)").as_deref(), Some("surface 2 (textured 1), colour number 2, category colour 1"));
+        assert_eq!(info("Allplan project files").as_deref(), Some("animation.cfg: version 2 (2 colours); surfaces found: 2 of 3"));
+    }
+
+    #[test]
+    fn bytes_without_a_project_folder_keep_category_colours() {
+        let source = Source::Bytes { name: "tb000141.ndw".into(), data: Arc::new(file(3, "Colours", &colour_stream())) };
+        let model = crate::loaders::load_with(&source, &Progress::default()).unwrap();
+        assert!(model.layers.iter().all(|l| l.colors.is_none()));
+        assert!(model.project.info.iter().any(|(k, v)| k == "Allplan colours" && v.starts_with("category colours")));
+        // An empty project folder keeps them too.
+        let drawing = parse(&file(3, "Colours", &colour_stream())).unwrap();
+        let painted = paint(&drawing, &mut Memory::new(&[]));
+        assert!(!painted.active);
+        assert!(build(&drawing, Some(&painted)).unwrap().layers.iter().all(|l| l.colors.is_none()));
+    }
+
+    #[test]
+    fn finds_project_files_case_insensitively_on_disk() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("allplan-colours-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("design").join("FFC").join("RASEN")).unwrap();
+        std::fs::write(root.join("design").join("FFC").join("RASEN").join("FFC-Rasen-5.surf"), surf([59, 73, 41], None, None)).unwrap();
+        std::fs::write(root.join("ANIMATION.CFG"), cfg(3, 4, &[(1, [255, 255, 255])])).unwrap();
+        let mut s = with_tail(prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]), &surface_tail("ffc\\rasen\\ffc-rasen-5.surf"), 1);
+        s.extend(with_tail(prism(0, 0x0301, [2000.0, 0.0, 0.0], [3000.0, 200.0, 3000.0]), &[0; 8], 1));
+        let path = root.join("tb000114.ndw");
+        std::fs::write(&path, file(3, "Terrain", &s)).unwrap();
+        let model = crate::loaders::load_with(&Source::File(path), &Progress::default());
+        let _ = std::fs::remove_dir_all(&root);
+        let model = model.unwrap();
+        let layer = model.layers.iter().find(|l| l.name == "Other").unwrap();
+        let colors = layer.colors.as_ref().unwrap();
+        assert_eq!(colors.first(), Some(&[59, 73, 41, 255]));
+        assert_eq!(colors.last(), Some(&[255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn broken_surfaces_and_tables_do_not_panic() {
+        let inputs = [
+            surf([200, 200, 200], Some("FFC\\PARKETT\\FFC-Parkett.jpg"), Some(&middle_preview(1))),
+            cfg(3, 4, &[(1, [255, 255, 255]), (21, [73, 73, 73]), (300, [1, 2, 3])]),
+        ];
+        let mut seed = 0xD1B5_4A32_D192_ED03u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for input in &inputs {
+            for cut in 0..input.len() {
+                let _ = surface_color(&input[..cut]);
+                let _ = color_table(&input[..cut]);
+            }
+            for round in 0..500 {
+                let mut fuzz = input.clone();
+                for _ in 0..(1 + round % 20) {
+                    let at = (next() as usize) % fuzz.len();
+                    fuzz[at] = next() as u8;
+                }
+                let _ = surface_color(&fuzz);
+                let _ = color_table(&fuzz);
+            }
+        }
+        for _ in 0..200 {
+            let tail: Vec<u8> = (0..64).map(|_| next() as u8).collect();
+            let _ = surface_name(&tail);
+        }
+    }
+
+    /// Checks a real drawing file against the tables of spec §7.2 to §7.6, when `ALLPLAN_SAMPLE`
     /// holds its path. The samples are not in the repository.
     #[test]
     fn optional_sample_from_env() {
@@ -1999,7 +2714,7 @@ mod tests {
             }
         }
         // §7.2/§7.4 boxes: the drawing's own visible bodies, without macro bodies (v0.3).
-        let solid_bounds = build(&drawing).ok().map(|loaded| {
+        let solid_bounds = build(&drawing, None).ok().map(|loaded| {
             let positions: Vec<f32> = loaded
                 .layers
                 .iter()
@@ -2117,6 +2832,67 @@ mod tests {
             }
             for &(name, want) in want_names {
                 assert_eq!(names.get(name).copied().unwrap_or(0), want, "placements named {name:?}");
+            }
+        }
+        // §7.6: colours of the drawing's own visible bodies, from the project folder of the sample.
+        let folder = std::path::Path::new(&path).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let painted = paint(&drawing, &mut Folder::new(&folder));
+        let visible: Vec<(&Body, Paint)> =
+            drawing.bodies.iter().zip(painted.bodies.iter().copied()).filter(|(b, _)| !b.auxiliary).collect();
+        let (mut textured, mut plain, mut number, mut fallback) = (0, 0, 0, 0);
+        for (_, paint) in &visible {
+            match paint {
+                Paint::Surface { textured: true, .. } => textured += 1,
+                Paint::Surface { .. } => plain += 1,
+                Paint::Number(_) => number += 1,
+                Paint::Fallback => fallback += 1,
+            }
+        }
+        eprintln!("{file_name}: colours of {} visible bodies: surface {textured} textured / {plain}, number {number}, fallback {fallback}", visible.len());
+        let table: [(&str, usize, usize, usize, usize, usize); 3] =
+            [("tb000141", 91, 20, 2, 69, 0), ("tb000151", 93, 18, 26, 49, 0), ("tb000114", 102, 55, 0, 47, 0)];
+        if let Some(&(_, want_visible, want_textured, want_plain, want_number, want_fallback)) =
+            table.iter().find(|row| file_name.starts_with(row.0))
+        {
+            assert_eq!(
+                (visible.len(), textured, plain, number, fallback),
+                (want_visible, want_textured, want_plain, want_number, want_fallback)
+            );
+        }
+        // (colour number or surface name, bodies, RGB)
+        enum By {
+            Number(u16),
+            Surface(&'static str),
+        }
+        let colours: &[(By, usize, [u8; 3])] = if file_name.starts_with("tb000141") {
+            &[
+                (By::Number(1), 51, [255, 255, 255]),
+                (By::Surface("QS-Material-01.surf"), 16, [94, 61, 38]),
+                (By::Number(21), 9, [73, 73, 73]),
+                (By::Surface("FFC\\AKZENTWAND\\FFC-Rot.surf"), 1, [255, 0, 0]),
+                (By::Surface("Glas.surf"), 1, [239, 241, 245]),
+            ]
+        } else if file_name.starts_with("tb000114") {
+            &[(By::Surface("ffc\\rasen\\ffc-rasen-5.surf"), 7, [59, 73, 41])]
+        } else {
+            &[]
+        };
+        for (by, want, rgb) in colours {
+            let picked: Vec<[u8; 3]> = visible
+                .iter()
+                .filter_map(|(body, paint)| match (by, paint) {
+                    (By::Number(n), Paint::Number(c)) if body.color_number == *n => Some(*c),
+                    (By::Surface(name), Paint::Surface { rgb, .. })
+                        if body.surface.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(name)) =>
+                    {
+                        Some(*rgb)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(picked.len(), *want, "bodies for {rgb:?}");
+            for c in picked {
+                assert!(c.iter().zip(rgb).all(|(a, b)| a.abs_diff(*b) <= 1), "{c:?} instead of {rgb:?}");
             }
         }
     }

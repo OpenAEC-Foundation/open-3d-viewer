@@ -1,6 +1,6 @@
 //! Allplan drawing files (`.ndw`, German "Teilbild"): the 3D bodies of one drawing file.
 //!
-//! Written from the clean-room specification "Allplan-tekenbestand (.ndw) v0.2" only. A drawing
+//! Written from the clean-room specification "Allplan-tekenbestand (.ndw) v0.2.1" only. A drawing
 //! file is a 12-byte header and pages of 32760 bytes; the element stream runs from the third page
 //! to the end of the last page and holds padding, attribute blocks and element records (§2, §3).
 //! Records of class 0xC6 are 3D bodies (§5): a prism (a bottom and a top ring) or an explicit
@@ -319,7 +319,7 @@ fn step_of(s: &[u8], p: usize) -> Option<usize> {
 
 /// An element record as the reader accepts it in sequence (§3 item 3 and 4).
 fn record_step(s: &[u8], p: usize) -> Option<usize> {
-    if p + HEADER > s.len() || s[p + 7] & 0xF0 != 0x50 {
+    if p + HEADER > s.len() || s[p] & 7 != 0 || s[p + 7] & 0xF0 != 0x50 {
         return None;
     }
     step_of(s, p)
@@ -445,9 +445,14 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
     if f == 0 || v == 0 {
         return Some(Decoded::NoFaces);
     }
+    // Kind 0 is a prism of form 0x0301 only (§5.4, v0.2.1); other forms are not known yet.
+    if kind == 0 && (form != 0x0301 || v > 0) {
+        return None;
+    }
     let count = usize::try_from(v.unsigned_abs()).ok()?;
     let stored = if kind == 4 { count.checked_add(1)? } else { count };
-    let vertices_at = h + 32;
+    // Kind 0 has no 8 constant bytes before the vertices (§5.1, v0.2.1).
+    let vertices_at = h + if kind == 0 { 24 } else { 32 };
     let bbox_at = vertices_at.checked_add(stored.checked_mul(24)?)?;
     let topology_at = bbox_at.checked_add(48)?;
     if topology_at > r.len() {
@@ -457,10 +462,11 @@ fn decode_body_inner(r: &[u8], offset: usize) -> Option<Decoded> {
     for i in 0..stored {
         let o = vertices_at + 24 * i;
         let (x, y, z) = (f64_at(r, o)?, f64_at(r, o + 8)?, f64_at(r, o + 16)?);
+        // Column-major (§5.2, v0.2.1).
         let world = [
-            m[0] * x + m[1] * y + m[2] * z + m[9],
-            m[3] * x + m[4] * y + m[5] * z + m[10],
-            m[6] * x + m[7] * y + m[8] * z + m[11],
+            m[0] * x + m[3] * y + m[6] * z + m[9],
+            m[1] * x + m[4] * y + m[7] * z + m[10],
+            m[2] * x + m[5] * y + m[8] * z + m[11],
         ];
         points.push(world);
     }
@@ -849,7 +855,9 @@ mod tests {
         let l = if s.kind == 4 { (s.topology.len() as u32 - 8 * s.e - 8 * s.f) / 8 } else { 4 * s.f.saturating_sub(2) + 2 * s.vertices.len() as u32 / 2 };
         b.extend(l.to_le_bytes());
         b.extend(0u32.to_le_bytes());
-        b.extend([0x00, 0x00, 0x00, 0x20, 0x00, 0x20, 0x20, 0x38]);
+        if s.kind != 0 {
+            b.extend([0x00, 0x00, 0x00, 0x20, 0x00, 0x20, 0x20, 0x38]);
+        }
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
         for (i, p) in s.vertices.iter().enumerate() {
@@ -1060,6 +1068,69 @@ mod tests {
         assert_eq!(drawing.bodies.len(), 3);
         assert_eq!(drawing.bodies.iter().map(|b| b.indices.len() / 3).collect::<Vec<_>>(), [12, 12, 12]);
         drawing.bodies.iter().for_each(assert_outward);
+    }
+
+    /// A box prism of `kind` (0 or 1) from local (0, 0, 0) to (1000, 200, 3000), placed by the
+    /// 12-value matrix `m`.
+    fn placed_box(kind: u8, form: u16, m: [f64; 12]) -> Vec<u8> {
+        let ring = [[0.0, 0.0], [1000.0, 0.0], [1000.0, 200.0], [0.0, 200.0]];
+        let vertices: Vec<[f64; 3]> =
+            ring.iter().map(|p| [p[0], p[1], 0.0]).chain(ring.iter().map(|p| [p[0], p[1], 3000.0])).collect();
+        let mut r = body(&Spec { flags1: 0, kind, form, v: -8, e: 12, f: 6, translate: [0.0; 3], vertices: &vertices, topology: &[] });
+        for (i, v) in m.iter().enumerate() {
+            r[64 + 8 * i..72 + 8 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        r
+    }
+
+    #[test]
+    fn reads_kind_0_prisms_and_column_major_matrices() {
+        const IDENTITY: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        // Kind 0: no 8 constant bytes, so n8 = 48 instead of 49 (§7.4).
+        let kind0 = placed_box(0, 0x0301, IDENTITY);
+        assert_eq!(kind0.len(), 40 + 8 * 48);
+        // 90° about z: x' = −y + tx, y' = x + ty (§7.4).
+        let turned = placed_box(1, 0x0301, [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 5000.0, 0.0, 100.0]);
+        // Kind 0 with another form is not known yet: skipped.
+        let unknown = placed_box(0, 0x0201, IDENTITY);
+        let mut s = kind0.clone();
+        s.extend(&turned);
+        s.extend(&unknown);
+        let drawing = parse(&file(3, "Kind 0", &s)).unwrap();
+        assert_eq!(drawing.bodies.len(), 2);
+        assert_eq!(drawing.skipped_unreadable, 1);
+        let extent = |body: &Body| {
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for p in &body.positions {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+            (lo, hi)
+        };
+        let (first, second) = (&drawing.bodies[0], &drawing.bodies[1]);
+        assert_eq!((first.kind, first.indices.len() / 3), (0, 12));
+        assert_eq!(extent(first), ([0.0, 0.0, 0.0], [1000.0, 200.0, 3000.0]));
+        assert_eq!(extent(second), ([4800.0, 0.0, 100.0], [5000.0, 1000.0, 3100.0]));
+        assert_outward(first);
+        assert_outward(second);
+    }
+
+    #[test]
+    fn a_header_with_low_bits_in_byte_0_is_invalid() {
+        // A body whose byte 0 has low bits set is no record: the reader resyncs past it.
+        let a = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        let mut bad = prism(0, 0x0301, [2000.0, 0.0, 0.0], [3000.0, 200.0, 3000.0]);
+        bad[0] = 0x7B;
+        let c = prism(0, 0x0301, [4000.0, 0.0, 0.0], [5000.0, 200.0, 3000.0]);
+        let mut s = a.clone();
+        s.extend(&bad);
+        s.extend(&c);
+        let drawing = parse(&file(3, "Low bits", &s)).unwrap();
+        let offsets: Vec<usize> = drawing.bodies.iter().map(|b| b.offset).collect();
+        assert_eq!(offsets, [STREAM_START, STREAM_START + a.len() + bad.len()]);
     }
 
     #[test]
@@ -1307,7 +1378,7 @@ mod tests {
         assert_eq!(parse(&data).unwrap().bodies.len(), 0);
     }
 
-    /// Checks a real drawing file against the tables of spec §7.2 and §7.3, when `ALLPLAN_SAMPLE`
+    /// Checks a real drawing file against the tables of spec §7.2, §7.3 and §7.4, when `ALLPLAN_SAMPLE`
     /// holds its path. The samples are not in the repository.
     #[test]
     fn optional_sample_from_env() {
@@ -1336,13 +1407,18 @@ mod tests {
              linked {linked}, type codes {codes:?}, skipped clip {} / no faces {} / unreadable {}, bounds {solid_bounds:?}",
             drawing.name, drawing.pages, drawing.skipped_clip, drawing.skipped_no_faces, drawing.skipped_unreadable
         );
-        // §7.2
+        // §7.2 and §7.4
         type Range = [(f32, f32); 3];
-        let table: [(&str, usize, &str, usize, usize, usize, usize, Option<Range>); 4] = [
+        let table: [(&str, usize, &str, usize, usize, usize, usize, Option<Range>); 8] = [
             ("tb000141", 26, "1st basement floor plan", 91, 38, 96, 33, Some([(3880.0, 15855.0), (-20150.0, -5380.0), (-3169.5, 1074.7)])),
             ("tb000151", 64, "GF floor plan", 93, 50, 106, 37, Some([(4000.0, 15855.0), (-20150.0, -5500.0), (-650.0, 4024.7)])),
             ("tb000110", 2, "QUICKSTART 01.1", 0, 0, 0, 0, None),
             ("tb000732", 3, "Floor slab", 1, 0, 1, 0, Some([(3950.0, 15908.5), (-20200.0, -5450.0), (-3400.0, -3100.0)])),
+            // §7.4 (v0.2.1)
+            ("tb000452", 110, "GF additions (3D furniture)", 1, 0, 1, 0, Some([(8000.0, 15209.9), (-20150.0, -15345.0), (-650.0, 2600.0)])),
+            ("tb000114", 25, "Outdoor facilities, terrain", 102, 4, 103, 3, Some([(0.0, 47374.6), (-38491.7, 0.0), (-3650.0, 1000.0)])),
+            ("tb003080", 4, "1st basement - sections", 0, 12, 12, 0, None),
+            ("tb001501", 12, "Section A calculation result", 0, 0, 0, 0, None),
         ];
         if let Some(&(_, pages, name, want_visible, want_auxiliary, want_prisms, want_explicit, range)) =
             table.iter().find(|row| file_name.starts_with(row.0))

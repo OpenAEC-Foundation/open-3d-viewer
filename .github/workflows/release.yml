@@ -35,8 +35,6 @@ env:
   CARGO_TERM_COLOR: always
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
   DRY_RUN: ${{ github.event.inputs.dry_run == 'true' }}
-  # the Blueprint release whose B2 icons are copied into assets/b2
-  BLUEPRINT: v2026.44.1
 
 jobs:
   check:
@@ -77,8 +75,7 @@ jobs:
       - name: Repository checks
         run: |
           python3 scripts/build_readme_images.py --check
-          git clone --quiet --depth 1 --branch "$BLUEPRINT" https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint.git "$RUNNER_TEMP/blueprint"
-          python3 scripts/b2_icons.py "$RUNNER_TEMP/blueprint" --check
+          python3 scripts/b2_icons.py --check
       - name: Rust tests and the web build
         run: |
           cargo test --release --locked

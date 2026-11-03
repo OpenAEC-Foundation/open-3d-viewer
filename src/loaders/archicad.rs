@@ -1,11 +1,12 @@
 //! Archicad projects (.pln) and archives (.pla) of Archicad 24 to 29: walls (with their windows
 //! and doors cut out), slabs and columns as extruded footprints, beams along their axis, roof
-//! planes and library objects as boxes, grouped per story. Written from a clean-room specification
-//! of the file structure (SPEC v0.7, section numbers in the comments): a container of 16-byte items
-//! with QuickLZ groups, object records with associations, stories, the element polygon, the wall
-//! fields, columns and beams with their cross-sections, roof planes, windows and doors as openings,
-//! and the place, size and height of library objects. Window and door frames, the shapes of library
-//! objects (code), curved roofs and profile cross-sections are not read yet.
+//! planes, library objects as boxes, meshes as terrain bodies and zones, grouped per story. Written
+//! from a clean-room specification of the file structure (SPEC v0.8, section numbers in the
+//! comments): a container of 16-byte items with QuickLZ groups, object records with associations,
+//! stories, the element polygon, the wall fields, columns and beams with their cross-sections, roof
+//! planes, windows and doors as openings, the place, size and height of library objects, meshes
+//! with their triangulation cache, and zones. Window and door frames, the shapes of library objects
+//! (code), curved roofs, zones cut by roofs and profile cross-sections are not read yet.
 //!
 //! Archicad is Z up in metres, as the viewer: coordinates are taken as they are.
 
@@ -108,6 +109,13 @@ const LIBRARY_PARAMETERS: Guid = guid("a4f0eb76efc23f48a1a828d3adde99a0");
 const OUTLINE: Guid = guid("d3858d46688b6d48903456beaad7ad95");
 const LIBRARY: Guid = guid("3da3fc2b38bde349bf6d52ac8b850b9f");
 const PARAMETERS: Guid = guid("7d22db11e4dbaf4588b66fddea993f71");
+/// §5, §8.11 (v0.8): meshes (terrain), their triangulation cache and the association to it.
+const MESH: Guid = guid("46ee2f8f3f6aac41a32b69e44dc6276d");
+const MESH_CACHE: Guid = guid("b898e0c2e9a8bb4696c57200ead406f5");
+const MESH_CACHE_LINK: Guid = guid("f876b988fd101e41891a5ecca8c7b2a7");
+/// §5, §8.12 (v0.8): zones, and the association from a zone to the link object of its top.
+const ZONE: Guid = guid("2e33d03ae2ef1a4992a65b14bfdd7229");
+const ZONE_TOP_LINK: Guid = guid("563b426cda1e0540be1f6f8942311a7f");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
@@ -168,6 +176,8 @@ struct Record {
     segment: Option<Guid>,
     /// Walls: their windows and doors (§8.9).
     openings: Vec<Guid>,
+    /// Meshes: their triangulation cache (§8.11).
+    cache: Option<Guid>,
     data: Vec<u8>,
 }
 
@@ -232,6 +242,13 @@ struct Records {
     /// Placed library objects (§8.10): those with a story association; the others are 2D symbols.
     objects: Vec<ObjectRecord>,
     objects_too_large: usize,
+    /// Meshes (§8.11) and zones (§8.12).
+    meshes: Vec<Record>,
+    zones: Vec<Record>,
+    meshes_too_large: usize,
+    zones_too_large: usize,
+    /// Triangulation caches of meshes, read as they come (`None`: one that does not read).
+    mesh_caches: HashMap<Guid, Option<MeshCache>>,
     /// §8.10, by identity, only what the objects need (a parameter block runs to ~80 kB, and a
     /// large project has thousands): of an outline cache its bounds (when they read) and its
     /// (x, y) bytes; of a library reference its parameter block and name; of a parameter block
@@ -455,6 +472,7 @@ impl Records {
     fn block(&mut self, b: &[u8]) {
         let Some(object) = guid_at(b, 11) else { return };
         let classes = [
+            MESH, MESH_CACHE, ZONE,
             WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, OBJECT, OUTLINE, LIBRARY, PARAMETERS, COLUMN_SEGMENT,
             BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE,
         ];
@@ -481,20 +499,24 @@ impl Records {
                 let (outline, library) = (first(OBJECT_OUTLINE), first(OBJECT_LIBRARY));
                 self.objects.push(ObjectRecord { guid: object, story, outline, library, data: data.to_vec() });
             }
-            WALL | SLAB | COLUMN | BEAM | ROOF => {
+            WALL | SLAB | COLUMN | BEAM | ROOF | MESH | ZONE => {
                 let first = |assoc: Guid, op: &[u8]| links.iter().find(|l| op.contains(&l.0) && l.1 == assoc).map(|l| l.2);
                 let story = first(ON_STORY, &[0x12]);
                 let (top_link, segment) = match class {
                     WALL => (first(TOP_LINK, &[0x11, 0x12]), None),
                     COLUMN => (first(COLUMN_TOP_LINK, &[0x11, 0x12]), first(COLUMN_SEGMENT_LINK, &[0x11, 0x12])),
                     BEAM => (None, first(BEAM_SEGMENT_LINK, &[0x11, 0x12])),
+                    ZONE => (first(ZONE_TOP_LINK, &[0x11, 0x12]), None),
                     _ => (None, None),
                 };
+                let cache = if class == MESH { first(MESH_CACHE_LINK, &[0x11, 0x12]) } else { None };
                 let (list, too_large) = match class {
                     WALL => (&mut self.walls, &mut self.walls_too_large),
                     SLAB => (&mut self.slabs, &mut self.slabs_too_large),
                     COLUMN => (&mut self.columns, &mut self.columns_too_large),
                     BEAM => (&mut self.beams, &mut self.beams_too_large),
+                    MESH => (&mut self.meshes, &mut self.meshes_too_large),
+                    ZONE => (&mut self.zones, &mut self.zones_too_large),
                     _ => (&mut self.roofs, &mut self.roofs_too_large),
                 };
                 if data.len() > MAX_ELEMENT_DATA {
@@ -503,7 +525,10 @@ impl Records {
                 }
                 // §8.9: the windows and doors of a wall, any op, every target
                 let openings = if class == WALL { links.iter().filter(|l| l.1 == WALL_WINDOWS || l.1 == WALL_DOORS).map(|l| l.2).collect() } else { Vec::new() };
-                list.push(Record { guid: object, story, top_link, segment, openings, data: data.to_vec() });
+                list.push(Record { guid: object, story, top_link, segment, openings, cache, data: data.to_vec() });
+            }
+            MESH_CACHE => {
+                self.mesh_caches.insert(object, mesh_cache(data));
             }
             WINDOW | DOOR => {
                 if data.len() <= MAX_ELEMENT_DATA {
@@ -702,9 +727,12 @@ fn links(a: &[u8]) -> Vec<(u8, Guid, Guid)> {
 /// §7: the polygon of an element: contour 0 the outer edge, the rest holes (closing point
 /// dropped), and the absolute bottom and top it caches, if any.
 struct Polygon {
-    /// Where it starts in the data (§8.8 reads fields before it).
+    /// Where it starts and ends in the data (§8.8, §8.11 read fields before and after it).
     at: usize,
+    end: usize,
     contours: Vec<Vec<[f64; 2]>>,
+    /// The number of each point in the polygon (1-based, as in the file), per contour.
+    indices: Vec<Vec<usize>>,
     coords: usize,
     z: Option<(f64, f64)>,
 }
@@ -755,16 +783,20 @@ fn find_polygon(data: &[u8]) -> Option<Polygon> {
         }
         // contour k: points ends[k]+1 ..= ends[k+1]; the last repeats the first. Arcs (none in the
         // samples) are drawn straight.
+        let mut indices = Vec::with_capacity(subs);
         let contours = (0..subs)
             .map(|k| {
-                let mut c = points[ends[k] + 1..=ends[k + 1]].to_vec();
+                let mut numbers: Vec<usize> = (ends[k] + 1..=ends[k + 1]).collect();
+                let mut c: Vec<[f64; 2]> = numbers.iter().map(|&j| points[j]).collect();
                 if c.len() > 1 && c.first() == c.last() {
                     c.pop();
+                    numbers.pop();
                 }
+                indices.push(numbers);
                 c
             })
             .collect();
-        return Some(Polygon { at: i, contours, coords: n, z: z_cache(data, i, end) });
+        return Some(Polygon { at: i, end, contours, indices, coords: n, z: z_cache(data, i, end) });
     }
     None
 }
@@ -1205,6 +1237,23 @@ struct Stats {
     objects_ambiguous: usize,
     objects_flat: usize,
     objects_unreadable: usize,
+    meshes: Vec<MeshOut>,
+    /// Meshes skipped (§8.11): all, without a polygon, with fields or a layout that do not read;
+    /// drawn from their outline (no cache), drawn as a top only; cache triangles left out.
+    meshes_skipped: usize,
+    meshes_no_polygon: usize,
+    meshes_unreadable: usize,
+    meshes_without_cache: usize,
+    meshes_top_only: usize,
+    mesh_bad_triangles: usize,
+    zones: Vec<ZoneOut>,
+    /// Zones skipped (§8.12): all, without a polygon, without a number, with fields that do not
+    /// read, without a height.
+    zones_skipped: usize,
+    zones_no_polygon: usize,
+    zones_no_number: usize,
+    zones_unreadable: usize,
+    zones_no_height: usize,
 }
 
 /// A column as drawn, for the tests.
@@ -1229,6 +1278,40 @@ struct BeamOut {
     section: Section,
     /// The top at the start and the end.
     top: (f64, f64),
+}
+
+/// A mesh as drawn, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct MeshOut {
+    name: String,
+    /// From the triangulation cache (else from the outline).
+    cached: bool,
+    /// Vertices used, triangles of the top and outer edges.
+    vertices: usize,
+    triangles: usize,
+    outer_edges: usize,
+    reference: f64,
+    thickness: f64,
+    x: (f64, f64),
+    y: (f64, f64),
+    /// The lowest and highest point of the top, and the bottom.
+    top: (f64, f64),
+    bottom: f64,
+}
+
+/// A zone as drawn, for the tests.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct ZoneOut {
+    number: String,
+    name: String,
+    linked: bool,
+    holes: usize,
+    z: (f64, f64),
+    x: (f64, f64),
+    y: (f64, f64),
+    area: f64,
 }
 
 /// A library object as drawn, for the tests: A, B, H, whether H is known, and its ranges.
@@ -1356,6 +1439,207 @@ fn cut_openings(wall: Prism, origin: [f64; 2], dir: [f64; 2], openings: &[[f64; 
         pieces = next;
     }
     pieces.into_iter().map(|(_, piece)| piece).collect()
+}
+
+/// §8.11 (v0.8): the ID string that ends at q: the smallest n (0 to 255) with `01 00` and a u32
+/// n before n UTF-16LE units, any characters. The text and the offset of its length field.
+fn id_ending_at(data: &[u8], q: usize) -> Option<(String, usize)> {
+    (0..=255usize).find_map(|n| {
+        let i = q.checked_sub(4 + 2 * n)?;
+        if i < 2 || data.get(i - 2..i)? != [1, 0] || u32_at(data, i)? != n as u32 {
+            return None;
+        }
+        let units: Vec<u16> = data.get(i + 4..q)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        Some((String::from_utf16_lossy(&units), i))
+    })
+}
+
+/// §8.11: a mesh's triangulation cache: its vertices (x, y, z above the reference plane) and the
+/// triangles that read, counter-clockwise from above, and how many did not.
+#[derive(Debug, Clone)]
+struct MeshCache {
+    vertices: Vec<[f64; 3]>,
+    triangles: Vec<[usize; 3]>,
+    bad_triangles: usize,
+}
+
+/// §8.11: 5 bytes, nV vertices (3 f64), nT triangles (status, e0, e1, e2), nE edges (kind, -, -,
+/// -, va, vb, -), ending exactly at the end of the data. A triangle (status 0) runs along its
+/// edges: edge |e| − 1 from va to vb (e > 0) or back (e < 0), not of kind 1, each ending where
+/// the next starts; its corners are where they start.
+fn mesh_cache(data: &[u8]) -> Option<MeshCache> {
+    let count = |at: usize| u32_at(data, at).map(|n| n as usize).filter(|&n| n <= 1_000_000);
+    let vertices_at = 9;
+    let nv = count(5)?;
+    let nt_at = vertices_at + nv * 24;
+    let nt = count(nt_at)?;
+    let ne_at = nt_at + 4 + nt * 16;
+    let ne = count(ne_at)?;
+    if ne_at + 4 + ne * 28 != data.len() {
+        return None;
+    }
+    let vertices: Vec<[f64; 3]> = (0..nv).map(|k| [0, 8, 16].map(|c| f64_at(data, vertices_at + 24 * k + c).unwrap())).collect();
+    if vertices.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let i32_of = |at: usize| i32_at(data, at).unwrap();
+    // the directed edge e: from, to
+    let edge = |e: i32| -> Option<(usize, usize)> {
+        let k = (e.unsigned_abs() as usize).checked_sub(1).filter(|&k| k < ne)?;
+        let at = ne_at + 4 + 28 * k;
+        let (kind, a, b) = (i32_of(at), i32_of(at + 12), i32_of(at + 16));
+        let ok = |v: i32| usize::try_from(v).ok().filter(|&v| v < nv);
+        let (a, b) = (ok(a)?, ok(b)?);
+        (kind != 1).then_some(if e > 0 { (a, b) } else { (b, a) })
+    };
+    let (mut triangles, mut bad_triangles) = (Vec::new(), 0);
+    for t in 0..nt {
+        let at = nt_at + 4 + 16 * t;
+        if u32_at(data, at) != Some(0) {
+            continue; // a free cell
+        }
+        let edges: Option<Vec<(usize, usize)>> = (1..4).map(|j| edge(i32_of(at + 4 * j))).collect();
+        match edges {
+            Some(d) if d[0].1 == d[1].0 && d[1].1 == d[2].0 && d[2].1 == d[0].0 => triangles.push([d[0].0, d[1].0, d[2].0]),
+            _ => bad_triangles += 1,
+        }
+    }
+    Some(MeshCache { vertices, triangles, bad_triangles })
+}
+
+/// §8.11, without a cache: after the polygon, the vertex number of each polygon point and, at the
+/// end, the heights of the vertices (above the reference plane). The height of each polygon point
+/// (1-based; 0 when it has none). `None` when the layout does not hold.
+fn mesh_outline_heights(data: &[u8], end: usize, coords: usize) -> Option<Vec<f64>> {
+    struct Reader<'a> {
+        data: &'a [u8],
+        at: usize,
+    }
+    impl Reader<'_> {
+        /// The offset of the next `n` bytes, when they are there.
+        fn take(&mut self, n: usize) -> Option<usize> {
+            let start = self.at;
+            self.at = self.at.checked_add(n).filter(|&e| e <= self.data.len())?;
+            Some(start)
+        }
+        /// A count of at most 100 000.
+        fn count(&mut self) -> Option<usize> {
+            let at = self.take(4)?;
+            u32_at(self.data, at).map(|n| n as usize).filter(|&n| n <= 100_000)
+        }
+        /// `u16 1` and a count.
+        fn list(&mut self) -> Option<usize> {
+            let one = self.take(2)?;
+            if u16_at(self.data, one)? != 1 {
+                return None;
+            }
+            self.count()
+        }
+    }
+    let mut r = Reader { data, at: end };
+    let m = r.list()?;
+    if m != coords + 1 {
+        return None;
+    }
+    let ids_at = r.take(4 * m)?;
+    let ids: Vec<u32> = (0..m).map(|k| u32_at(data, ids_at + 4 * k).unwrap()).collect();
+    for _ in 0..2 {
+        let n = r.list()?;
+        r.take(4 * n)?;
+    }
+    if r.list()? != 1 {
+        return None;
+    }
+    let zeros = r.take(16)?;
+    if data[zeros..zeros + 16].iter().any(|&b| b != 0) {
+        return None;
+    }
+    r.take(16)?;
+    for _ in 0..r.count()? {
+        let one = r.take(30)?;
+        if u16_at(data, one)? != 1 {
+            return None;
+        }
+    }
+    let n = r.list()?;
+    r.take(4 * n)?;
+    r.take(10)?;
+    let mut z: HashMap<u32, f64> = HashMap::new();
+    for _ in 0..r.count()? {
+        let item = r.take(12)?;
+        z.insert(u32_at(data, item)?, f64_at(data, item + 4).filter(|v| v.is_finite())?);
+    }
+    Some(ids.iter().map(|id| z.get(id).copied().unwrap_or(0.0)).collect())
+}
+
+/// A surface of terrain: points (x, y, absolute height of the top) and its triangles.
+struct Surface {
+    points: Vec<[f64; 3]>,
+    triangles: Vec<[usize; 3]>,
+}
+
+/// §8.11: a mesh as a closed body: its triangles at their heights (facing up), the same at the
+/// flat `bottom` (facing down) and a side face along every outer edge (an edge of one triangle
+/// only). Only the top when `top_only`. The number of outer edges, or `None` when nothing could be
+/// drawn.
+fn push_terrain(layer: &mut Layer, surface: &Surface, bottom: f64, top_only: bool) -> Option<usize> {
+    let p = &surface.points;
+    // counter-clockwise from above; flat ones left out
+    let triangles: Vec<[usize; 3]> = surface
+        .triangles
+        .iter()
+        .filter(|t| t.iter().all(|&i| i < p.len()))
+        .filter_map(|&[a, b, c]| {
+            let cross = (p[b][0] - p[a][0]) * (p[c][1] - p[a][1]) - (p[b][1] - p[a][1]) * (p[c][0] - p[a][0]);
+            (cross.abs() > 1e-12).then_some(if cross > 0.0 { [a, b, c] } else { [a, c, b] })
+        })
+        .collect();
+    if triangles.is_empty() {
+        return None;
+    }
+    let face = |layer: &mut Layer, corners: &[[f64; 3]]| {
+        let (u, v) = ([0, 1, 2].map(|k| corners[1][k] - corners[0][k]), [0, 1, 2].map(|k| corners[2][k] - corners[0][k]));
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if length.is_nan() || length <= 1e-15 {
+            return;
+        }
+        let base = (layer.positions.len() / 3) as u32;
+        for c in corners {
+            layer.positions.extend(c.map(|v| v as f32));
+            layer.normals.extend(n.map(|v| (v / length) as f32));
+        }
+        for i in 1..corners.len() as u32 - 1 {
+            layer.indices.extend([base, base + i, base + i + 1]);
+        }
+    };
+    let low = |i: usize| [p[i][0], p[i][1], bottom];
+    for &[a, b, c] in &triangles {
+        face(layer, &[p[a], p[b], p[c]]);
+        if !top_only {
+            face(layer, &[low(a), low(c), low(b)]);
+        }
+    }
+    let mut uses: HashMap<(usize, usize), usize> = HashMap::new();
+    for t in &triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut outer = 0;
+    for t in &triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            if uses[&(a.min(b), a.max(b))] == 1 {
+                outer += 1;
+                if !top_only {
+                    face(layer, &[low(a), low(b), p[b], p[a]]);
+                }
+            }
+        }
+    }
+    Some(outer)
 }
 
 /// §8.10: the fields of a placed library object.
@@ -1538,6 +1822,10 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     // §8.9: the opening volumes start hidden, as those of IFC files
     let mut openings = Layer { name: "Openings".into(), color: [0.55, 0.75, 0.9], hidden: true, ..Layer::default() };
     let mut objects = Layer { name: "Objects".into(), color: [0.72, 0.64, 0.52], ..Layer::default() };
+    let mut terrain = Layer { name: "Terrain".into(), color: [0.56, 0.64, 0.46], ..Layer::default() };
+    // §8.12: zones overlap walls, slabs and roofs: half transparent, and hidden at first as the
+    // spaces of IFC files
+    let mut zones = Layer { name: "Zones".into(), color: [0.58, 0.74, 0.9], hidden: true, ..Layer::default() };
     let mut next_id = 0u64;
     let mut add = |layer: &mut Layer,
                    record: &Record,
@@ -1642,7 +1930,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
                 props.insert("Size".into(), format!("{:.0} × {:.0} mm", o.width * 1000.0, o.height * 1000.0).into());
                 props.insert("Sill".into(), format!("{:.0} mm", o.sill * 1000.0).into());
                 props.insert("Wall".into(), wall_name.clone().into());
-                let element = Record { guid, story: record.story, top_link: None, segment: None, openings: Vec::new(), data: Vec::new() };
+                let element = Record { guid, story: record.story, top_link: None, segment: None, openings: Vec::new(), cache: None, data: Vec::new() };
                 if add(&mut openings, &element, (low, high), &|layer| push_prism(layer, &prism), props) {
                     let (width, height, middle, sill) = (o.width, o.height, o.middle, o.sill);
                     stats.openings.push(OpeningOut { name: o.id, door, wall: wall_name.clone(), wall_length: length, middle, width, height, sill });
@@ -1829,7 +2117,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         if height.is_none() {
             props.insert("Height".into(), "unknown (drawn 1000 mm high)".into());
         }
-        let record = Record { guid: object.guid, story: Some(object.story), top_link: None, segment: None, openings: Vec::new(), data: Vec::new() };
+        let record = Record { guid: object.guid, story: Some(object.story), top_link: None, segment: None, openings: Vec::new(), cache: None, data: Vec::new() };
         let prism = Prism { contours: vec![footprint], z };
         if add(&mut objects, &record, z, &|layer| push_prism(layer, &prism), props) {
             let range = |k: usize| prism.contours[0].iter().map(|p| p[k]).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
@@ -1840,14 +2128,165 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     }
     stats.objects_skipped = stats.objects_ambiguous + stats.objects_flat + stats.objects_unreadable;
 
-    let elements = stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len();
+    // §8.11: meshes, their top from the triangulation cache (or the outline), a flat bottom
+    stats.meshes_unreadable = records.meshes_too_large;
+    for record in &records.meshes {
+        let data = &record.data;
+        let Some(polygon) = find_polygon(data).filter(|p| p.at >= 115) else {
+            stats.meshes_no_polygon += 1;
+            continue;
+        };
+        let p = polygon.at;
+        let (reference, thickness) = (f64_at(data, p - 115).unwrap(), f64_at(data, p - 60).unwrap());
+        if ![reference, thickness].iter().all(|v| v.is_finite() && v.abs() < 10_000.0) {
+            stats.meshes_unreadable += 1;
+            continue;
+        }
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let cache = record.cache.and_then(|c| records.mesh_caches.get(&c)).and_then(Option::as_ref);
+        let surface = match cache {
+            Some(cache) => {
+                stats.mesh_bad_triangles += cache.bad_triangles;
+                Surface { points: cache.vertices.iter().map(|v| [v[0], v[1], e + reference + v[2]]).collect(), triangles: cache.triangles.clone() }
+            }
+            None => {
+                let Some(heights) = mesh_outline_heights(data, polygon.end, polygon.coords) else {
+                    stats.meshes_unreadable += 1;
+                    continue;
+                };
+                // the outline (with holes) triangulated by ear clipping, each point at its height;
+                // the points inside the outline are left out
+                let points: Vec<[f64; 3]> = polygon.contours.iter().zip(&polygon.indices).flat_map(|(c, numbers)| {
+                    c.iter().zip(numbers).map(|(q, &k)| [q[0], q[1], e + reference + heights[k]])
+                }).collect();
+                let mut flat = Vec::new();
+                let mut holes = Vec::new();
+                for (k, c) in polygon.contours.iter().enumerate() {
+                    if k > 0 {
+                        holes.push(flat.len() / 2);
+                    }
+                    flat.extend(c.iter().flat_map(|q| [q[0] - points[0][0], q[1] - points[0][1]]));
+                }
+                let triangles = earcutr::earcut(&flat, &holes, 2).unwrap_or_default();
+                stats.meshes_without_cache += 1;
+                Surface { points, triangles: triangles.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect() }
+            }
+        };
+        let used: Vec<usize> = {
+            let mut used: Vec<usize> = surface.triangles.iter().flatten().copied().filter(|&i| i < surface.points.len()).collect();
+            used.sort_unstable();
+            used.dedup();
+            used
+        };
+        let range = |v: &mut dyn Iterator<Item = f64>| v.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+        let top = range(&mut used.iter().map(|&i| surface.points[i][2]));
+        let bottom = e + reference - thickness;
+        // a bottom at or above the lowest point of the top: the top only
+        let top_only = bottom >= top.0;
+        let name = id_ending_at(data, p - 115).map(|(name, _)| name).filter(|n| !n.is_empty()).unwrap_or_else(|| "Mesh".to_string());
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), name.clone().into());
+        props.insert("category".into(), "Mesh".into());
+        props.insert("Surface".into(), (if cache.is_some() { "from the triangulation cache" } else { "from the outline (no cache)" }).into());
+        if top_only {
+            props.insert("Body".into(), "top surface only (the bottom is not below it)".into());
+        }
+        let outer = std::cell::Cell::new(None);
+        let z = (if top_only { top.0 } else { bottom }, top.1);
+        let drawn = add(&mut terrain, record, z, &|layer| {
+            outer.set(push_terrain(layer, &surface, bottom, top_only));
+            outer.get().is_some()
+        }, props);
+        if drawn {
+            stats.meshes_top_only += usize::from(top_only);
+            let (x, y) = (range(&mut used.iter().map(|&i| surface.points[i][0])), range(&mut used.iter().map(|&i| surface.points[i][1])));
+            let (vertices, triangles, outer_edges) = (used.len(), surface.triangles.len(), outer.get().unwrap_or(0));
+            stats.meshes.push(MeshOut { name, cached: cache.is_some(), vertices, triangles, outer_edges, reference, thickness, x, y, top, bottom });
+        } else {
+            stats.meshes_unreadable += 1;
+        }
+    }
+    stats.meshes_skipped = stats.meshes_no_polygon + stats.meshes_unreadable;
+
+    // §8.12: zones, prisms of their polygon from their bottom to their (linked) top
+    stats.zones_unreadable = records.zones_too_large;
+    for record in &records.zones {
+        let data = &record.data;
+        let Some(polygon) = find_polygon(data).filter(|p| p.at >= 100) else {
+            stats.zones_no_polygon += 1;
+            continue;
+        };
+        let q = polygon.at - 63;
+        let Some((number, i)) = id_ending_at(data, q) else {
+            stats.zones_no_number += 1;
+            continue;
+        };
+        let name = id_ending_at(data, i.saturating_sub(2)).map(|(name, _)| name.trim_end().to_string()).unwrap_or_default();
+        let [bottom_offset, height, floor] = [0, 8, 16].map(|k| f64_at(data, q + k).unwrap_or(f64::NAN));
+        if ![bottom_offset, height, floor].iter().all(|v| v.is_finite() && v.abs() < 1000.0) {
+            stats.zones_unreadable += 1;
+            continue;
+        }
+        let e = record.story.and_then(|s| level_of.get(&s)).copied().unwrap_or(0.0);
+        let bottom = e + bottom_offset;
+        // the top linked to a story: its level plus T; else the floor layer and the height
+        let linked = record
+            .top_link
+            .and_then(|link| records.top_links.get(&link))
+            .and_then(|targets| targets.iter().find_map(|t| Some((t, *level_of.get(t)?))));
+        let top_offset = data.len().checked_sub(33).and_then(|at| f64_at(data, at)).filter(|t| t.is_finite() && t.abs() < 1000.0);
+        let top = match (linked, top_offset) {
+            (Some((_, level)), Some(t)) => level + t,
+            _ if height <= 0.0 => {
+                stats.zones_no_height += 1;
+                continue;
+            }
+            _ => bottom + floor + height,
+        };
+        if top.is_nan() || top <= bottom {
+            stats.zones_no_height += 1;
+            continue;
+        }
+        let area = polygon.contours.iter().enumerate().map(|(k, c)| if k == 0 { area(c).abs() } else { -area(c).abs() }).sum::<f64>();
+        let mut props = serde_json::Map::new();
+        props.insert("Name".into(), (if name.is_empty() { number.clone() } else { format!("{number} {name}") }).into());
+        props.insert("category".into(), "Zone".into());
+        props.insert("Number".into(), number.clone().into());
+        props.insert("Zone name".into(), name.clone().into());
+        props.insert("Area".into(), format!("{area:.2} m² (computed)").into());
+        let link = match linked.filter(|_| top_offset.is_some()) {
+            Some((story, _)) => format!("linked to {}", names.get(story).map_or("the story above the top story", String::as_str)),
+            None => "not linked".to_string(),
+        };
+        props.insert("Top".into(), link.into());
+        let prism = Prism { contours: polygon.contours.clone(), z: (bottom, top) };
+        if add(&mut zones, record, (bottom, top), &|layer| push_prism(layer, &prism), props) {
+            let range = |k: usize| polygon.contours[0].iter().map(|p| p[k]).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+            let linked = linked.is_some() && top_offset.is_some();
+            stats.zones.push(ZoneOut { number, name, linked, holes: polygon.contours.len() - 1, z: (bottom, top), x: range(0), y: range(1), area });
+        } else {
+            stats.zones_unreadable += 1;
+        }
+    }
+    stats.zones_skipped = stats.zones_no_polygon + stats.zones_no_number + stats.zones_unreadable + stats.zones_no_height;
+    zones.colors = Some(vec![[148, 189, 230, 90]; zones.vertex_count()]);
+
+    let elements =
+        stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len() + stats.meshes.len() + stats.zones.len();
     if elements == 0 {
         // §10: Archicad 17 to 23 share the container but not the records
         return Err(format!(
-            "Archicad: no walls, slabs, columns, beams, roofs or library objects found ({} walls, {} slabs, {} columns, {} beams, \
-             {} roofs and {} objects skipped). This reader supports Archicad 24 to 29; projects from Archicad 17 to 23 are not \
-             supported yet.",
-            stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped, stats.roofs_skipped, stats.objects_skipped
+            "Archicad: no walls, slabs, columns, beams, roofs, library objects, meshes or zones found ({} walls, {} slabs, {} \
+             columns, {} beams, {} roofs, {} objects, {} meshes and {} zones skipped). This reader supports Archicad 24 to 29; \
+             projects from Archicad 17 to 23 are not supported yet.",
+            stats.walls_skipped,
+            stats.slabs_skipped,
+            stats.columns_skipped,
+            stats.beams_skipped,
+            stats.roofs_skipped,
+            stats.objects_skipped,
+            stats.meshes_skipped,
+            stats.zones_skipped
         ));
     }
 
@@ -1866,10 +2305,17 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ("Archicad roofs".into(), roof_text(&stats)),
         ("Archicad openings".into(), opening_text(&stats)),
         ("Archicad library objects".into(), object_text(&stats)),
+        ("Archicad meshes".into(), mesh_text(&stats)),
+        ("Archicad zones".into(), reasons(stats.zones.len(), stats.zones_skipped, &[
+            (stats.zones_no_polygon, "without a polygon"),
+            (stats.zones_no_number, "without a number"),
+            (stats.zones_unreadable, "whose fields do not read"),
+            (stats.zones_no_height, "without a height"),
+        ])),
         (
             "Archicad elements not read yet".into(),
-            "Window and door frames, glass and leaves, the shapes of library objects (drawn as boxes), meshes, morphs, curved roofs \
-             and shells, and columns and beams with a profile section"
+            "Window and door frames, glass and leaves, the shapes of library objects (drawn as boxes), morphs, curved roofs and \
+             shells, zones cut by roofs, and columns and beams with a profile section"
                 .into(),
         ),
     ];
@@ -1881,11 +2327,39 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };
-    let layers = [walls, slabs, columns, beams, roofs, openings, objects].into_iter().filter(|l| !l.indices.is_empty()).collect();
+    let layers = [walls, slabs, columns, beams, roofs, openings, objects, terrain, zones].into_iter().filter(|l| !l.indices.is_empty()).collect();
     Ok((Loaded { layers, views: Vec::new(), project }, stats))
 }
 
 /// "8 drawn as boxes (1 with an unknown height), 1 skipped (1 two-dimensional)".
+/// "4 read, 1 skipped (1 without a number)".
+fn reasons(read: usize, skipped: usize, why: &[(usize, &str)]) -> String {
+    let mut out = format!("{read} read, {skipped} skipped");
+    let why: Vec<String> = why.iter().filter(|(n, _)| *n > 0).map(|(n, what)| format!("{n} {what}")).collect();
+    if !why.is_empty() {
+        out += &format!(" ({})", why.join(", "));
+    }
+    out
+}
+
+/// "1 read, 0 skipped; 1 from its outline, without cache".
+fn mesh_text(stats: &Stats) -> String {
+    let mut out = reasons(stats.meshes.len(), stats.meshes_skipped, &[
+        (stats.meshes_no_polygon, "without a polygon"),
+        (stats.meshes_unreadable, "whose fields do not read"),
+    ]);
+    for (n, what) in [
+        (stats.meshes_without_cache, "from its outline, without cache"),
+        (stats.meshes_top_only, "as a top surface only"),
+        (stats.mesh_bad_triangles, "cache triangles left out"),
+    ] {
+        if n > 0 {
+            out += &format!("; {n} {what}");
+        }
+    }
+    out
+}
+
 fn object_text(stats: &Stats) -> String {
     let unknown = stats.objects.iter().filter(|o| !o.height_known).count();
     let mut out = format!("{} drawn as boxes ({unknown} with an unknown height), {} skipped", stats.objects.len(), stats.objects_skipped);
@@ -2158,6 +2632,25 @@ mod tests {
 
     /// §11 (v0.6): the library objects drawn as boxes, those whose ZZYZX is known, none skipped;
     /// one pickable element each in the visible layer Objects.
+    /// A zone of §11 (v0.8): number, name, z, x and y range, area.
+    type ZoneRow = (&'static str, &'static str, (f64, f64), (f64, f64), (f64, f64), f64);
+
+    /// §11 (v0.8): exactly these zones, all linked, without holes; hidden, closed bodies.
+    fn check_zones(stats: &Stats, model: &Model, expected: &[ZoneRow]) {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        let pair = |a: (f64, f64), b: (f64, f64)| near(a.0, b.0) && near(a.1, b.1);
+        assert_eq!((stats.zones.len(), stats.zones_skipped), (expected.len(), 0), "{:?}", stats.zones);
+        for &(number, name, z, x, y, area) in expected {
+            let zone = stats.zones.iter().find(|zone| zone.number == number).unwrap_or_else(|| panic!("{number}: {:?}", stats.zones));
+            assert!(zone.name == name && zone.linked && zone.holes == 0, "{zone:?}");
+            assert!(pair(zone.z, z) && pair(zone.x, x) && pair(zone.y, y) && near(zone.area, area), "{zone:?}");
+        }
+        let layer = model.layers.iter().find(|l| l.name == "Zones").expect("zones");
+        assert!(layer.hidden && layer.elements.len() == expected.len());
+        assert_eq!(layer.solid_indices().len(), layer.indices.len());
+        assert!(layer.colors.as_ref().is_some_and(|c| c.len() == layer.vertex_count() && c.iter().all(|c| c[3] < 255)), "half transparent");
+    }
+
     fn check_objects(stats: &Stats, model: &Model, objects: usize, known: usize) {
         let with_height = stats.objects.iter().filter(|o| o.height_known).count();
         assert_eq!((stats.objects.len(), with_height, stats.objects_skipped), (objects, known, 0), "{:?}", stats.objects);
@@ -2209,8 +2702,9 @@ mod tests {
         check_walls(&stats, &model, 16, 4, 9.0, -0.2);
         // §11 (v0.5): no windows or doors
         assert_eq!((stats.openings.len(), stats.openings_skipped), (0, 0));
-        // §11 (v0.6): no library objects
+        // §11 (v0.6): no library objects; (v0.8) no meshes or zones
         assert_eq!((stats.objects.len(), stats.objects_skipped), (0, 0));
+        assert_eq!((stats.meshes.len(), stats.meshes_skipped, stats.zones.len(), stats.zones_skipped), (0, 0, 0, 0));
         // §11 (v0.3): no columns or beams
         assert_eq!((stats.columns.len(), stats.columns_skipped, stats.beams.len(), stats.beams_skipped), (0, 0, 0, 0));
         // the walls are on their stories, for the explorer and the exploded view
@@ -2229,7 +2723,8 @@ mod tests {
         check_stories(&stats, &model);
         let b = walls_and_slabs_bounds(&model);
         assert!(near(b.min[0], 1.412) && near(b.max[0], 11.429) && near(b.min[1], 1.076) && near(b.max[1], 12.698), "{b:?}");
-        assert!(near(b.min[2], -0.31) && near(model.bounds.min[2], -0.31), "{b:?}");
+        // the lowest slab at -0.31; the model reaches down to the bottom of the terrain (§8.11)
+        assert!(near(b.min[2], -0.31) && near(model.bounds.min[2], -1.65), "{b:?}");
         check_roofs(
             &stats,
             &[
@@ -2240,6 +2735,26 @@ mod tests {
         check_openings(&stats, &model, 6, 7, &[("Di 1.03", "Wai 1.11", 6.6, 5.65, 0.83, 2.115, 0.0), ("We 1.01", "Wae 1.04", 5.303, 2.98, 2.4, 0.95, 1.2)]);
         // §11 (v0.6): 8 library objects, 7 with ZZYZX; the examples of the table
         check_objects(&stats, &model, 8, 7);
+        // §11 (v0.8): the mesh and the 8 zones
+        assert_eq!((stats.meshes.len(), stats.meshes_skipped), (1, 0));
+        let m = &stats.meshes[0];
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        assert_eq!((m.name.as_str(), m.cached, m.vertices, m.triangles, m.outer_edges), ("Ter 0.00", true, 22, 32, 10), "{m:?}");
+        assert!(near(m.reference, -0.15) && near(m.thickness, 1.5) && near(m.bottom, -1.65), "{m:?}");
+        assert!(near(m.x.0, -1.0) && near(m.x.1, 14.667) && near(m.y.0, -1.0) && near(m.y.1, 15.238), "{m:?}");
+        assert!(near(m.top.0, -1.021) && near(m.top.1, -0.15), "{m:?}");
+        let terrain = model.layers.iter().find(|l| l.name == "Terrain").expect("terrain");
+        assert!(!terrain.hidden && terrain.triangle_count() == 84 && terrain.solid_indices().len() == terrain.indices.len());
+        check_zones(&stats, &model, &[
+            ("0.01", "Living Room", (0.0, 2.8), (1.829, 7.025), (6.098, 12.296), 32.205),
+            ("0.02", "Kitchen", (0.0, 2.8), (1.829, 5.527), (2.100, 6.098), 14.410),
+            ("0.03", "WC", (0.0, 2.8), (5.652, 7.025), (4.948, 5.973), 1.407),
+            ("0.04", "Storage", (0.0, 2.8), (5.652, 7.025), (2.100, 4.823), 3.739),
+            ("1.01", "Bathroom", (3.0, 8.633), (1.829, 5.027), (9.598, 12.296), 8.528),
+            ("1.02", "Bedroom", (3.0, 9.105), (1.829, 6.002), (6.098, 9.473), 14.084),
+            ("1.03", "Master Bedroom", (3.0, 8.633), (7.150, 11.027), (6.098, 12.296), 24.030),
+            ("1.04", "Stair/Hall", (3.0, 8.633), (5.152, 7.025), (6.098, 12.296), 8.196),
+        ]);
         // the names as Archicad shows them (§8.10 v0.7): without ".gsm"; the one without ZZYZX
         assert!(stats.objects.iter().all(|o| !o.name.is_empty() && !o.name.ends_with(".gsm")), "{:?}", stats.objects);
         assert!(stats.objects.iter().any(|o| !o.height_known && o.name.starts_with("Shower Cabin")));
@@ -2323,6 +2838,18 @@ mod tests {
         );
         // §11 (v0.6): 26 library objects, 17 with ZZYZX
         check_objects(&stats, &model, 26, 17);
+        // §11 (v0.8): no meshes; 8 zones
+        assert_eq!(stats.meshes.len(), 0);
+        check_zones(&stats, &model, &[
+            ("01", "Living Room", (0.0, 2.8), (1.413, 6.609), (5.666, 12.039), 33.114),
+            ("02", "Toilet", (0.0, 2.8), (5.361, 6.609), (4.541, 5.541), 1.248),
+            ("03", "Storage", (0.0, 2.8), (5.361, 6.609), (1.843, 4.416), 3.211),
+            ("04", "Kitchen", (0.0, 2.8), (1.413, 5.236), (1.843, 5.666), 14.340),
+            ("05", "Bedroom", (3.0, 5.8), (1.413, 5.711), (5.843, 9.141), 14.175),
+            ("06", "Master Bedroom", (3.0, 5.8), (6.836, 10.609), (5.843, 12.039), 23.378),
+            ("07", "Hallway", (3.0, 5.8), (4.686, 6.711), (5.843, 12.039), 8.724),
+            ("08", "Bathroom", (3.0, 5.8), (1.413, 4.586), (9.241, 12.039), 8.796),
+        ]);
         let roofs = model.layers.iter().find(|l| l.name == "Roofs").expect("roofs");
         assert_eq!(roofs.solid_indices().len(), roofs.indices.len(), "a closed roof body");
     }
@@ -2544,7 +3071,7 @@ mod tests {
     /// valid file: an answer (model or error) every time, quickly, without a panic.
     #[test]
     fn truncated_or_garbage_input_does_not_panic() {
-        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file()] {
+        for file in [synthetic_file(), columns_and_beams_file(), roofs_file(), openings_file(), objects_file(), meshes_and_zones_file()] {
             garbage_rounds(&file);
         }
     }
@@ -3089,6 +3616,186 @@ mod tests {
         file.resize(32, 0);
         file.extend(blocks.concat());
         file
+    }
+
+    /// An ID string as in §8.2: `01 00`, u32 n and n UTF-16LE units.
+    fn id_string(text: &str) -> Vec<u8> {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let mut out = vec![1, 0];
+        out.extend((units.len() as u32).to_le_bytes());
+        out.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+        out
+    }
+
+    /// Mesh data (§8.11): its name ending at P − 115 where ref starts, t at P − 60, the outline
+    /// polygon at P, then `after` (the layout without cache).
+    fn mesh_data(name: &str, [reference, thickness]: [f64; 2], outline: &[Vec<[f64; 2]>], after: &[u8]) -> Vec<u8> {
+        let mut data = vec![0u8; 20];
+        data.extend(id_string(name));
+        let q = data.len();
+        data.extend(reference.to_le_bytes());
+        data.resize(q + 55, 0);
+        data.extend(thickness.to_le_bytes());
+        data.resize(q + 115, 0);
+        data.extend(polygon_bytes(outline));
+        data.extend(after);
+        data
+    }
+
+    /// The layout after the polygon of a mesh without cache (§8.11): the vertex numbers of the
+    /// polygon points (point 0 first), and the heights of those vertices.
+    fn mesh_fallback(ids: &[u32], heights: &[(u32, f64)]) -> Vec<u8> {
+        let list = |n: usize| [&1u16.to_le_bytes()[..], &(n as u32).to_le_bytes()].concat();
+        let mut out = list(ids.len());
+        out.extend(ids.iter().flat_map(|v| v.to_le_bytes()));
+        for _ in 0..2 {
+            out.extend(list(ids.len()));
+            out.extend(vec![0u8; 4 * ids.len()]);
+        }
+        out.extend(list(1));
+        out.extend([0u8; 16]);
+        out.extend([0u8; 16]);
+        // one point inside the outline, left out
+        out.extend(1u32.to_le_bytes());
+        out.extend(1u16.to_le_bytes());
+        out.extend([5.0f64, 5.0, 9.0].iter().flat_map(|v| v.to_le_bytes()));
+        out.extend(99u32.to_le_bytes());
+        out.extend(list(0));
+        out.extend([0u8; 10]);
+        out.extend((heights.len() as u32).to_le_bytes());
+        for (id, z) in heights {
+            out.extend(id.to_le_bytes());
+            out.extend(z.to_le_bytes());
+        }
+        out
+    }
+
+    /// A triangulation cache (§8.11): the vertices, triangles (status, e0, e1, e2) and edges
+    /// (kind, va, vb).
+    fn mesh_cache_data(vertices: &[[f64; 3]], triangles: &[[i32; 4]], edges: &[[i32; 3]]) -> Vec<u8> {
+        let mut out = vec![1, 0, 3, 0, 0];
+        out.extend((vertices.len() as u32).to_le_bytes());
+        out.extend(vertices.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        out.extend((triangles.len() as u32).to_le_bytes());
+        out.extend(triangles.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        out.extend((edges.len() as u32).to_le_bytes());
+        for [kind, a, b] in edges {
+            out.extend([*kind, 0, 0, *a, *b, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        out
+    }
+
+    /// Zone data (§8.12): its name ending where its number's ID string starts, the number ending
+    /// at P0 − 63 where Cb, H and S start, the polygon at P0, and T 33 bytes before the end.
+    fn zone_data(number: &str, name: &str, [bottom, height, floor, top]: [f64; 4], outline: &[Vec<[f64; 2]>]) -> Vec<u8> {
+        let mut data = vec![0u8; 20];
+        data.extend(id_string(name));
+        data.extend(id_string(number));
+        let q = data.len();
+        data.extend([bottom, height, floor].iter().flat_map(|v| v.to_le_bytes()));
+        data.resize(q + 63, 0);
+        data.extend(polygon_bytes(outline));
+        data.extend([0u8; 8]);
+        data.extend(top.to_le_bytes());
+        data.extend([0u8; 25]);
+        data
+    }
+
+    /// Meshes and zones on the story "Hall" (4.5 m), with the story above the top story at 7.5 m:
+    /// - M1 "Hill": the square 0..10, ref 0.2, t 1: a cache of the 4 corners (z 0, 0, 1, 1) and a
+    ///   middle (z 2), 4 triangles around the middle, a free one and one with a bad edge;
+    /// - M2 "Flat": the square 20..30 without cache, its corners at 0, 0.5, 1 and 0.5;
+    /// - Z1 "01 Hall room  ": 6 × 4 with a 1 × 1 hole, its top linked (7.5 − 0.3);
+    /// - Z2 "02 Store": not linked, Cb 0.1, S 0.1, H 2 (its T of 99 out of date);
+    /// - Z3 "03 Void": not linked, H 0: skipped.
+    fn meshes_and_zones_file() -> Vec<u8> {
+        let mut story = vec![0u8; 10];
+        story.extend(4u32.to_le_bytes());
+        story.extend("Hall".encode_utf16().flat_map(u16::to_le_bytes));
+        story.extend(2i16.to_le_bytes());
+        let other = guid("ffeeddccbbaa99887766554433221100");
+        let square = |x: f64| vec![rectangle(x, 0.0, x + 10.0, 10.0)];
+        let mut blocks = vec![
+            block(STORY_ID, 0x84, &record(STORY, &story, &[0, 0, 0]), 0),
+            block([0x21; 16], 0x84, &record(STORY_LEVEL, &4.5f64.to_le_bytes(), &link(other, STORY_ID)), 0),
+            block([0x22; 16], 0x84, &record(STORY_LEVEL, &7.5f64.to_le_bytes(), &link(other, TOP_STORY)), 0),
+            block(LINKED_TO_TOP, 0x84, &record(LINK, &[0; 16], &links_of(&[(0x12, LINK_STORY, TOP_STORY)])), 0),
+        ];
+        // M1: edges 1-4 along the outline, 5-8 from the middle (4) to each corner
+        let vertices = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 1.0], [0.0, 10.0, 1.0], [5.0, 5.0, 2.0]];
+        let mut edges: Vec<[i32; 3]> = (0..4).map(|k| [12, k, (k + 1) % 4]).collect();
+        edges.extend((0..4).map(|k| [0, 4, k]));
+        let mut triangles: Vec<[i32; 4]> = (0..4).map(|k| [0, k + 1, -(5 + (k + 1) % 4), 5 + k]).collect();
+        triangles.push([1, 1, 2, 3]);
+        triangles.push([0, 0, 2, 3]);
+        blocks.push(block([0x31; 16], 0x84, &record(MESH_CACHE, &mesh_cache_data(&vertices, &triangles, &edges), &[0, 0, 0]), 0));
+        let hill = mesh_data("Hill", [0.2, 1.0], &square(0.0), &[1, 2, 3, 4, 5]);
+        blocks.push(block([0x32; 16], 0x84, &record(MESH, &hill, &links_of(&[(0x12, ON_STORY, STORY_ID), (0x11, MESH_CACHE_LINK, [0x31; 16])])), 0));
+        let fallback = mesh_fallback(&[0, 11, 12, 13, 14, 11], &[(11, 0.0), (12, 0.5), (13, 1.0), (14, 0.5)]);
+        let flat = mesh_data("Flat", [0.2, 1.0], &square(20.0), &fallback);
+        blocks.push(block([0x33; 16], 0x84, &record(MESH, &flat, &links_of(&[(0x12, ON_STORY, STORY_ID)])), 0));
+        let hall = vec![rectangle(0.0, 20.0, 6.0, 24.0), rectangle(2.0, 21.0, 3.0, 22.0)];
+        let zones: [(&str, &str, [f64; 4], bool); 3] =
+            [("01", "Hall room  ", [0.0, 2.5, 0.1, -0.3], true), ("02", "Store", [0.1, 2.0, 0.1, 99.0], false), ("03", "Void", [0.0, 0.0, 0.0, 0.0], false)];
+        for (k, (number, name, values, linked)) in zones.into_iter().enumerate() {
+            let mut items = vec![(0x12, ON_STORY, STORY_ID)];
+            if linked {
+                items.push((0x11, ZONE_TOP_LINK, LINKED_TO_TOP));
+            }
+            let outline = if k == 0 { hall.clone() } else { vec![rectangle(10.0 * k as f64, 20.0, 10.0 * k as f64 + 2.0, 22.0)] };
+            blocks.push(block([0x40 + k as u8; 16], 0x84, &record(ZONE, &zone_data(number, name, values, &outline), &links_of(&items)), 0));
+        }
+        let mut file = b"ROF FDB ".to_vec();
+        file.resize(32, 0);
+        file.extend(blocks.concat());
+        file
+    }
+
+    #[test]
+    fn reads_meshes_and_zones() {
+        let (loaded, stats) = convert(read_bytes(&meshes_and_zones_file()).expect("container")).expect("elements");
+        assert_eq!((stats.meshes.len(), stats.meshes_skipped, stats.meshes_without_cache, stats.mesh_bad_triangles), (2, 0, 1, 1));
+        assert!(loaded.project.info.iter().any(|(k, v)| k == "Archicad meshes"
+            && v == "2 read, 0 skipped; 1 from its outline, without cache; 1 cache triangles left out"));
+        let terrain = loaded.layers.iter().find(|l| l.name == "Terrain").expect("terrain");
+        assert!(!terrain.hidden);
+        // every body closed and facing out
+        assert_eq!(terrain.solid_indices().len(), terrain.indices.len());
+        // M1: 4 triangles up, 4 down, 4 outer edges; its top at 4.5 + 0.2 + z, its bottom 1 below 4.7
+        let hill = &stats.meshes[0];
+        assert_eq!((hill.cached, hill.vertices, hill.triangles, hill.outer_edges), (true, 5, 4, 4));
+        assert!((hill.top.0 - 4.7).abs() < 1e-9 && (hill.top.1 - 6.7).abs() < 1e-9 && (hill.bottom - 3.7).abs() < 1e-9, "{hill:?}");
+        let (_, _, count) = terrain.elements[0];
+        assert_eq!(count / 3, 4 + 4 + 4 * 2);
+        // the volume: the 10 × 10 base 1 m deep, plus the pyramid of the cache over it
+        let volume = |element: usize| {
+            let (_, first, count) = terrain.elements[element];
+            let p = |i: u32| glam::DVec3::from_array(std::array::from_fn(|k| terrain.positions[3 * i as usize + k] as f64));
+            terrain.indices[first as usize..(first + count) as usize].chunks_exact(3).map(|t| p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0).sum::<f64>()
+        };
+        // the top over the base: the mean of z over each triangle, times its area (25 each)
+        let top = 25.0 * ((0.0 + 0.0 + 2.0) + (0.0 + 1.0 + 2.0) + (1.0 + 1.0 + 2.0) + (1.0 + 0.0 + 2.0)) / 3.0;
+        assert!((volume(0) - (100.0 + top)).abs() < 1e-3, "{}", volume(0));
+        // M2: from its outline, each corner at its own height: two triangles up, two down, 4 sides
+        let flat = &stats.meshes[1];
+        assert_eq!((flat.cached, flat.vertices, flat.triangles, flat.outer_edges), (false, 4, 2, 4));
+        assert!((flat.top.0 - 4.7).abs() < 1e-9 && (flat.top.1 - 5.7).abs() < 1e-9, "{flat:?}");
+        assert!(terrain.props[1].1.contains("\"Surface\":\"from the outline (no cache)\"") && terrain.props[1].1.contains("\"Name\":\"Flat\""));
+
+        // zones: Z1 with its hole and linked top, Z2 not linked, Z3 without a height
+        assert_eq!((stats.zones.len(), stats.zones_skipped, stats.zones_no_height), (2, 1, 1));
+        let zones = loaded.layers.iter().find(|l| l.name == "Zones").expect("zones");
+        assert!(zones.hidden && zones.solid_indices().len() == zones.indices.len());
+        let (hall, store) = (&stats.zones[0], &stats.zones[1]);
+        assert_eq!((hall.number.as_str(), hall.name.as_str(), hall.holes, hall.linked), ("01", "Hall room", 1, true));
+        assert!((hall.z.0 - 4.5).abs() < 1e-9 && (hall.z.1 - 7.2).abs() < 1e-9 && (hall.area - 23.0).abs() < 1e-9, "{hall:?}");
+        assert!(!store.linked && (store.z.0 - 4.6).abs() < 1e-9 && (store.z.1 - 6.7).abs() < 1e-9, "{store:?}");
+        for want in ["\"Name\":\"01 Hall room\"", "\"Number\":\"01\"", "\"Area\":\"23.00 m² (computed)\"", "linked to the story above"] {
+            assert!(zones.props[0].1.contains(want), "{want} in {}", zones.props[0].1);
+        }
+        // the hole stays open: 8 triangles per face around it, 8 sides
+        let (_, _, count) = zones.elements[0];
+        assert_eq!(count / 3, 2 * 8 + 8 * 2);
     }
 
     #[test]

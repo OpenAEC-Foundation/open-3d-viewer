@@ -318,8 +318,10 @@ fn decode_macro(d: &[u8], offset: usize) -> Macro {
     Macro { number, name, bodies, triangles }
 }
 
-/// Walks records in `s` from `start` by §3 items 1–3 (padding, attribute blocks, records),
-/// calling `record` with the offset and step of each record; stops at an invalid header.
+/// Walks the records inside a macro definition (`s`, from `start`) by §3 items 1–3 (padding,
+/// attribute blocks, records), calling `record` with the offset and step of each record; stops
+/// at an invalid header. Inside a macro byte 0 is not checked: nested records mostly have its
+/// low bits set (§9.1).
 fn walk(s: &[u8], start: usize, mut record: impl FnMut(usize, usize)) {
     let mut p = start;
     while p + 8 <= s.len() {
@@ -327,7 +329,7 @@ fn walk(s: &[u8], start: usize, mut record: impl FnMut(usize, usize)) {
             p += 8;
         } else if is_attribute(s, p) {
             p += 8 + (2 * usize::from(s[p + 2])).div_ceil(8) * 8;
-        } else if let Some(step) = record_step(s, p) {
+        } else if let Some(step) = (p + HEADER <= s.len() && s[p + 7] & 0xF0 == 0x50).then(|| step_of(s, p)).flatten() {
             record(p, step);
             p += step;
         } else {
@@ -1922,6 +1924,34 @@ mod tests {
         let macros = loaded.layers.iter().find(|l| l.name == "Macros").unwrap();
         assert_eq!((macros.elements.len(), macros.triangle_count()), (25, 25 * 1320 * 12));
         assert!(elapsed < std::time::Duration::from_secs(5), "took {elapsed:?}");
+    }
+
+    #[test]
+    fn macro_records_with_low_bits_in_byte_0_are_read() {
+        // Inside a macro, byte 0 of a header is not checked (§9.1): nested records mostly have
+        // 0x7A or 0x7E there, and some representations too.
+        let mut boxed = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        boxed[0] = 0x7A;
+        let mut container = header(0x64, 0, 0, (boxed.len() / 8) as u32);
+        container[0] = 0x7E;
+        let mut triangle = open_triangle(0, [[0.0, 0.0, 0.0], [500.0, 0.0, 0.0], [0.0, 500.0, 0.0]]);
+        triangle[0] = 0x7E;
+        let mut nested = container;
+        nested.extend(&boxed);
+        nested.extend(&triangle);
+        let mut three_d = representation(true, &nested);
+        three_d[0] = 0x7E;
+        let mut s = definition(5, "Cupboard", &[three_d]);
+        s.extend(placement(5, "Hall cupboard", MOVE));
+        let drawing = parse(&file(3, "Low bits in macros", &s)).unwrap();
+        assert_eq!(drawing.placements[0].placed, Placed::Resolved(0));
+        let bodies: Vec<(u8, usize)> = drawing.macros[0].bodies.iter().map(|b| (b.kind, b.indices.len() / 3)).collect();
+        assert_eq!(bodies, [(1, 12), (0, 1)]);
+        // In the drawing's own stream the rule stays: such a body is no record there.
+        assert!(drawing.bodies.is_empty());
+        let mut alone = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+        alone[0] = 0x7A;
+        assert!(parse(&file(3, "Low bits", &alone)).unwrap().bodies.is_empty());
     }
 
     #[test]

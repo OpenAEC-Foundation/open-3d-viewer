@@ -1154,6 +1154,11 @@ impl<'a> V8Element<'a> {
     fn style(&self) -> u32 { self.u32(0x2C) }
     fn weight(&self) -> u8 { self.u32(0x30).min(31) as u8 }
     fn color(&self) -> u32 { self.u32(0x34) }
+    /// The empty range of control elements (B.12): low x = low y = -2^31, size x = size y = 0.
+    fn empty_range(&self) -> bool {
+        let low = |at: usize| le64(self.bytes, at) as i64 == -(1i64 << 31);
+        low(0x38) && low(0x40) && le64(self.bytes, 0x50) == 0 && le64(self.bytes, 0x58) == 0
+    }
     fn point_size(&self) -> usize { if self.three_d() { 24 } else { 16 } }
     /// A point of two or three doubles at byte `at`.
     fn point(&self, at: usize) -> DVec3 {
@@ -1510,6 +1515,9 @@ impl V8Converter<'_> {
         let e = all[i];
         if depth > MAX_DEPTH { self.omit("Too deeply nested element"); return; }
         if !e.graphic() || self.scene.full() { return; }
+        // Invisible control elements of the model (B.12), such as "Pattern Control Element"
+        // texts at the origin, have the empty range; drawn, they would stretch the drawing.
+        if self.active.is_empty() && e.empty_range() { self.omit("Control element"); return; }
         self.visits += 1;
         if self.visits > MAX_VISITS {
             if self.visits == MAX_VISITS + 1 { self.omit("Element limit exceeded (rest skipped)"); }
@@ -2470,6 +2478,29 @@ mod tests {
         assert!(chain.props[0].1.contains("\"Measured (master units)\":\"2; 3\""), "{}", chain.props[0].1);
         let (lo, hi) = bounds(chain);
         assert!((lo[0] - 9.0).abs() < 0.02 && (hi[0] - 10.0).abs() < 0.02 && lo[1].abs() < 0.02 && (hi[1] - 5.0).abs() < 0.02, "{lo:?} {hi:?}");
+    }
+
+    #[test]
+    fn v8_control_elements_with_the_empty_range_are_not_drawn() {
+        let mut f = V8File::new(1000.0, 1.0, 1.0, [0.0; 3]);
+        // A "Pattern Control Element" text (B.12): level 0, properties 0x4281, at the origin, of
+        // size 0, with the empty range (low -2^31, size 0).
+        let mut control = v8(17, 0x1000, 0, shown(0x4281, 0), &text_data([0.0, 0.0], [0.0, 0.0], b"Pattern Control Element"), &[]);
+        for (k, value) in [-(1i64 << 31), -(1i64 << 31), 0, 0, 0, 0].iter().enumerate() {
+            control[0x38 + 8 * k..0x40 + 8 * k].copy_from_slice(&value.to_le_bytes());
+        }
+        f.graphic(control);
+        // The drawing itself, some 152 km from the origin: a line of 10 m.
+        f.graphic(v8(3, 0x1000, 5, shown(0, 0), &doubles(&[152_000_000.0, 50_000_000.0, 152_010_000.0, 50_000_000.0]), &[]));
+        let loaded = load(f.bytes()).unwrap();
+        assert_eq!(info(&loaded, "DGN elements"), "Line: 1");
+        assert_eq!(info(&loaded, "DGN skipped elements"), "Control element: 1");
+        assert_eq!(loaded.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Level 5"]);
+        // The bounds are those of the line alone: its first point is the world origin, and its
+        // ribbon is as thin as a 10 m drawing asks.
+        assert_eq!(info(&loaded, "DGN world origin (metres)"), "152000, 50000, 0");
+        let (lo, hi) = bounds(&loaded.layers[0]);
+        assert!(lo[0] > -0.01 && (hi[0] - 10.0).abs() < 0.01 && hi[1] - lo[1] < 0.01, "{lo:?} {hi:?}");
     }
 }
 

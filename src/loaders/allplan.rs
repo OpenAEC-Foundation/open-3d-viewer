@@ -1896,7 +1896,7 @@ mod tests {
 
     #[test]
     fn a_large_macro_is_read_once_and_placed_quickly() {
-        // tb000152 places 3277 macro bodies with 25 placements; ten times that: one macro of 1320
+        // tb000152 places 3268 macro bodies with 25 placements; ten times that: one macro of 1320
         // boxes, placed 25 times (33 000 bodies).
         let mut nested = Vec::new();
         for i in 0..1320 {
@@ -1998,9 +1998,14 @@ mod tests {
                 *codes.entry(format!("{group:02X} {subtype:02X}")).or_insert(0usize) += 1;
             }
         }
+        // §7.2/§7.4 boxes: the drawing's own visible bodies, without macro bodies (v0.3).
         let solid_bounds = build(&drawing).ok().map(|loaded| {
-            let positions: Vec<f32> =
-                loaded.layers.iter().filter(|l| !l.hidden).flat_map(|l| l.positions.iter().copied()).collect();
+            let positions: Vec<f32> = loaded
+                .layers
+                .iter()
+                .filter(|l| !l.hidden && l.name != Category::Macros.name())
+                .flat_map(|l| l.positions.iter().copied())
+                .collect();
             bounds(&positions)
         });
         eprintln!(
@@ -2096,7 +2101,7 @@ mod tests {
         );
         type Box3 = [(f64, f64); 3];
         let table: [(&str, usize, usize, usize, usize, usize, Box3, &[(&str, usize)]); 3] = [
-            ("tb000152", 25, 25, 0, 0, 3277, [(5176.5, 15513.5), (-15170.0, -5820.0), (-5.0, 2450.0)], &[("Hall cupboard", 4), ("Kitchen chair", 3)]),
+            ("tb000152", 25, 25, 0, 0, 3268, [(5176.5, 15513.5), (-15170.0, -5820.0), (-5.0, 2450.0)], &[("Hall cupboard", 4), ("Kitchen chair", 3)]),
             ("tb000162", 105, 104, 1, 0, 104, [(10290.0, 15830.0), (-21720.0, -20080.0), (2600.0, 3760.0)], &[]),
             ("tb000141", 13, 13, 0, 0, 463, [(4445.0, 15735.6), (-20070.0, -5580.0), (-3100.0, -350.0)], &[("ID-WD", 4)]),
         ];

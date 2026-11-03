@@ -9,6 +9,41 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub struct IfcLoader;
 
+/// Geometry that marks out a volume instead of something built. IfcLite meshes these too
+/// (openings in a fixed translucent red), but they start hidden on layers of their own.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Helper {
+    /// Rooms and zones.
+    Space,
+    /// Opening and voiding volumes; IfcLite already cuts them from their hosts (IfcRelVoidsElement).
+    Opening,
+    /// IfcVirtualElement: a boundary without a physical counterpart.
+    Virtual,
+}
+
+impl Helper {
+    fn of(ifc_type: &str) -> Option<Self> {
+        let is = |types: &[&str]| types.iter().any(|t| t.eq_ignore_ascii_case(ifc_type));
+        if is(&["IfcSpace", "IfcSpatialZone", "IfcExternalSpatialElement"]) {
+            Some(Self::Space)
+        } else if is(&["IfcOpeningElement", "IfcOpeningStandardCase", "IfcVoidingFeature"]) {
+            Some(Self::Opening)
+        } else if is(&["IfcVirtualElement"]) {
+            Some(Self::Virtual)
+        } else {
+            None
+        }
+    }
+
+    fn layer_prefix(self) -> &'static str {
+        match self {
+            Self::Space => "Spaces",
+            Self::Opening => "Openings",
+            Self::Virtual => "Virtual elements",
+        }
+    }
+}
+
 impl Loader for IfcLoader {
     fn name(&self) -> &'static str {
         "IFC"
@@ -42,24 +77,31 @@ impl Loader for IfcLoader {
         let world = result.frame.world_mapper();
         let direction = result.frame.direction_mapper();
         let anchor = result.frame.to_world([0.0; 3]);
-        let mut layers = BTreeMap::<(bool, String), Layer>::new();
+        let mut layers = BTreeMap::<(Option<Helper>, String), Layer>::new();
         let mut spatial_volume_ids = BTreeSet::new();
+        let mut opening_ids = BTreeSet::new();
         for mesh in result.meshes {
             if mesh.indices.is_empty() || mesh.positions.is_empty() {
                 continue;
             }
-            let is_space = mesh.ifc_type.eq_ignore_ascii_case("IfcSpace")
-                || mesh.ifc_type.eq_ignore_ascii_case("IfcSpatialZone");
+            let helper = Helper::of(&mesh.ifc_type);
             let base_name = mesh.presentation_layer.as_ref().filter(|s| !s.is_empty()).unwrap_or(&mesh.ifc_type);
-            let name = if is_space { format!("Spaces: {base_name}") } else { base_name.clone() };
-            if is_space { spatial_volume_ids.insert(mesh.express_id); }
-            // A presentation layer may mix physical elements and room volumes. Keep
-            // those in separate toggleable layers, retaining all source geometry.
-            let layer = layers.entry((is_space, name.clone())).or_insert_with(|| Layer {
+            let name = match helper {
+                Some(helper) => format!("{}: {base_name}", helper.layer_prefix()),
+                None => base_name.clone(),
+            };
+            match helper {
+                Some(Helper::Space) => { spatial_volume_ids.insert(mesh.express_id); }
+                Some(Helper::Opening | Helper::Virtual) => { opening_ids.insert(mesh.express_id); }
+                None => {}
+            }
+            // A presentation layer may mix physical elements with room or opening volumes.
+            // Keep those in separate toggleable layers, retaining all source geometry.
+            let layer = layers.entry((helper, name.clone())).or_insert_with(|| Layer {
                 name,
                 color: [mesh.color[0], mesh.color[1], mesh.color[2]],
                 colors: Some(Vec::new()),
-                hidden: is_space,
+                hidden: helper.is_some(),
                 ..Layer::default()
             });
             let base = u32::try_from(layer.vertex_count()).map_err(|_| "IFC: layer exceeds the mesh index limit")?;
@@ -99,7 +141,7 @@ impl Loader for IfcLoader {
         }
         let has_other_geometry = layers.values().any(|layer| !layer.hidden);
         if !has_other_geometry {
-            // A space-only IFC is still a useful model; do not open a blank scene.
+            // A file of only spaces or openings is still a useful model; do not open a blank scene.
             for layer in layers.values_mut() { layer.hidden = false; }
         }
         let project = ProjectData {
@@ -111,6 +153,8 @@ impl Loader for IfcLoader {
                 ("IFC space visibility".into(), if has_other_geometry {
                     "Spaces and spatial zones start hidden; enable their layers to inspect them."
                 } else { "Only spatial volumes found; their layers start visible." }.into()),
+                ("IFC opening/virtual elements".into(), opening_ids.len().to_string()),
+                ("IFC hidden opening/virtual elements".into(), if has_other_geometry { opening_ids.len() } else { 0 }.to_string()),
             ],
             ..ProjectData::default()
         };
@@ -181,6 +225,34 @@ mod tests {
         assert!(room.props.iter().any(|(id, props)| *id == 17 && props.contains("IfcSpace")));
         assert_eq!(wall.positions, room.positions);
         assert!(loaded.project.info.iter().any(|(key, value)| key == "IFC hidden space/zone elements" && value == "1"));
+    }
+
+    /// Volume enclosed by a closed triangle list (divergence theorem).
+    fn enclosed_volume(layer: &Layer) -> f64 {
+        let p = |i: u32| std::array::from_fn::<f64, 3, _>(|k| layer.positions[3 * i as usize + k] as f64);
+        layer.indices.chunks_exact(3).map(|t| {
+            let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+            a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0])
+        }).sum::<f64>() / 6.0
+    }
+
+    #[test]
+    fn hides_opening_volumes_while_their_voids_stay_cut_from_the_host() {
+        // Issue #29: openings drew as IfcLite's translucent red overlay on top of their walls.
+        let data = include_bytes!("../../test-models/ifc-wall-opening.ifc");
+        let source = Source::Bytes { name: "wall-opening.ifc".into(), data: Arc::new(data.to_vec()) };
+        let loaded = IfcLoader.load_with(&source, &Progress::default()).expect("IFC wall with opening");
+        assert_eq!(loaded.layers.len(), 2);
+        let wall = loaded.layers.iter().find(|layer| !layer.hidden).expect("visible physical wall");
+        let opening = loaded.layers.iter().find(|layer| layer.hidden).expect("hidden opening volume");
+        assert_eq!(wall.name, "Shared");
+        assert_eq!(opening.name, "Openings: Shared");
+        assert!(wall.props.iter().any(|(id, props)| *id == 16 && props.contains("IfcWall")));
+        assert!(opening.props.iter().any(|(id, props)| *id == 24 && props.contains("IfcOpeningElement")));
+        // 4 x 0.2 x 3 m wall minus the 1 x 0.2 x 2 m hole; the 1 x 0.4 x 2 m opening itself stays whole.
+        assert!((enclosed_volume(wall) - 2.0).abs() < 1e-3, "wall volume {}", enclosed_volume(wall));
+        assert!((enclosed_volume(opening) - 0.8).abs() < 1e-3, "opening volume {}", enclosed_volume(opening));
+        assert!(loaded.project.info.iter().any(|(key, value)| key == "IFC hidden opening/virtual elements" && value == "1"));
     }
 
     #[test]

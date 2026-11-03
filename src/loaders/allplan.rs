@@ -38,9 +38,11 @@ impl Loader for AllplanLoader {
         let data = source.read()?;
         progress.set(Phase::Convert);
         let drawing = parse(&data)?;
-        // Colours come from the project folder: the folder of the drawing file (§10).
+        // Colours come from the project folder: the folder of the drawing file (§10); 2D lines lie
+        // on the storey the structure there gives the file, else at 0 (§12.2).
         let painted = source.path().and_then(|path| path.parent()).map(|dir| paint(&drawing, &mut Folder::new(dir)));
-        build(&drawing, painted.as_ref())
+        let z = source.path().and_then(file_height).unwrap_or(0.0);
+        build_at(&drawing, painted.as_ref(), z)
     }
 }
 
@@ -89,6 +91,11 @@ struct Drawing {
     /// The macro definitions that placements use (§9.1).
     macros: Vec<Macro>,
     placements: Vec<Placement>,
+    /// The 2D lines and polylines drawn (§12.1).
+    lines: Vec<Line2d>,
+    /// 2D records left out: part of a 3D element, or unreadable.
+    lines_with_3d: usize,
+    lines_unreadable: usize,
     skipped_clip: usize,
     skipped_no_faces: usize,
     skipped_unreadable: usize,
@@ -96,6 +103,34 @@ struct Drawing {
 
 /// The key that ties the records of one element together: (u32@24, u16@12) of the header (§8).
 type Key = (u32, u16);
+
+/// A 2D line (class 0x82) or polyline (0x84) of the drawing file (§12.1): world points in mm.
+#[derive(Debug, Clone)]
+struct Line2d {
+    class: u8,
+    key: Key,
+    points: Vec<[f64; 2]>,
+}
+
+/// Largest coordinate of a 2D point taken (mm, §12.1).
+const MAX_COORDINATE: f64 = 1e7;
+
+/// Reads a 2D line or polyline record (§12.1); `None` when its points do not fit or are not
+/// finite or too far out.
+fn decode_line(r: &[u8]) -> Option<Line2d> {
+    let class = *r.get(4)?;
+    let n = usize::from(u16_at(r, 14)?);
+    if n < 2 || (class == 0x82 && n != 2) || HEADER + 16 * n > r.len() {
+        return None;
+    }
+    let points = (0..n)
+        .map(|i| Some([f64_at(r, HEADER + 16 * i)?, f64_at(r, HEADER + 16 * i + 8)?]))
+        .collect::<Option<Vec<_>>>()?;
+    if points.iter().flatten().any(|v| !v.is_finite() || v.abs() > MAX_COORDINATE) {
+        return None;
+    }
+    Some(Line2d { class, key: key_at(r, 0)?, points })
+}
 
 /// A 3D body as triangles: world coordinates in millimetres.
 #[derive(Debug)]
@@ -484,6 +519,9 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     // Per key the first element record with data (§8.1); u32@24 = 0 is no key.
     let mut by_key: HashMap<Key, usize> = HashMap::new();
     let mut definitions: HashMap<u32, (usize, usize)> = HashMap::new();
+    // Keys of all 3D body records, shown or not: 2D records of such an element are not drawn (§12.1).
+    let mut body_keys = std::collections::HashSet::new();
+    let mut lines = Vec::new();
     while p + 8 <= stream.len() {
         if is_padding(stream, p) {
             p += 8;
@@ -491,7 +529,14 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
             p += 8 + (2 * usize::from(stream[p + 2])).div_ceil(8) * 8;
         } else if let Some(step) = record_step(stream, p) {
             match stream[p + 4] {
-                0xC6 => drawing.body(&stream[p..p + step], p),
+                0xC6 => {
+                    body_keys.extend(key_at(stream, p));
+                    drawing.body(&stream[p..p + step], p);
+                }
+                0x82 | 0x84 => match decode_line(&stream[p..p + step]) {
+                    Some(line) => lines.push(line),
+                    None => drawing.lines_unreadable += 1,
+                },
                 0xEF | 0x6F => {
                     if let Some(key) = key_at(stream, p).filter(|key| key.0 != 0 && !by_key.contains_key(key)) {
                         if let Some(element) = decode_element(&stream[p..p + step], p) {
@@ -522,6 +567,13 @@ fn parse(data: &[u8]) -> Result<Drawing, String> {
     // Element records may come before or after their body.
     for body in &mut drawing.bodies {
         body.element = if body.key.0 == 0 { None } else { by_key.get(&body.key).copied() };
+    }
+    for line in lines {
+        if line.key.0 != 0 && body_keys.contains(&line.key) {
+            drawing.lines_with_3d += 1;
+        } else {
+            drawing.lines.push(line);
+        }
     }
     // Placements may come before or after their definition; each definition is read once.
     let mut read: HashMap<u32, Option<usize>> = HashMap::new();
@@ -1507,19 +1559,93 @@ fn emit(drawing: &Drawing, painted: Option<&Painted>, target: Target) -> Result<
     Ok(())
 }
 
-/// The layers of one drawing file: visible bodies per category, macros, and the auxiliary bodies
-/// in one hidden layer.
+/// [`build_at`] at height 0 (tests).
+#[cfg(test)]
 fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String> {
+    build_at(drawing, painted, 0.0)
+}
+
+/// Colour of the 2D lines: dark, like ink (§12.3).
+const LINE_COLOR: [f32; 3] = [0.20, 0.20, 0.22];
+/// How far above their storey the 2D lines are drawn (mm, §12.2).
+const LINE_LIFT: f64 = 10.0;
+
+/// Half the width of the 2D line ribbons: a share of the extent of the lines (between the 2nd
+/// and 98th percentile, so a few far-off lines do not widen them all), at least 5 mm.
+fn line_half_width<'a>(lines: impl Iterator<Item = &'a Line2d>) -> f64 {
+    let points: Vec<[f64; 2]> = lines.flat_map(|l| l.points.iter().copied()).collect();
+    if points.is_empty() {
+        return 5.0;
+    }
+    let step = (points.len() / 100_000).max(1);
+    let mut extent = [0.0f64; 2];
+    for (axis, e) in extent.iter_mut().enumerate() {
+        let mut values: Vec<f64> = points.iter().step_by(step).map(|p| p[axis]).collect();
+        values.sort_by(f64::total_cmp);
+        let at = |f: f64| values[((values.len() - 1) as f64 * f).round() as usize];
+        *e = at(0.98) - at(0.02);
+    }
+    (extent[0].hypot(extent[1]) / 3000.0).max(5.0)
+}
+
+/// Appends 2D lines to a layer as flat ribbons facing up at height `z` (mm), with square ends;
+/// a polyline as its segments, not closed (§12.1). Returns the number of segments drawn.
+fn emit_lines(layer: &mut Layer, lines: &[Line2d], z: f64, half: f64) -> Result<usize, String> {
+    let mut segments = 0;
+    for line in lines {
+        for pair in line.points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let length = dx.hypot(dy);
+            if !(length > 1e-9) {
+                continue;
+            }
+            let (ux, uy) = (dx / length * half, dy / length * half);
+            let (start, end) = ([a[0] - ux, a[1] - uy], [b[0] + ux, b[1] + uy]);
+            // Counter-clockwise seen from above: start right, end right, end left, start left.
+            let quad = [
+                [start[0] + uy, start[1] - ux, z],
+                [end[0] + uy, end[1] - ux, z],
+                [end[0] - uy, end[1] + ux, z],
+                [start[0] - uy, start[1] + ux, z],
+            ];
+            append(layer, &quad, &[[0.0, 0.0, 1.0]; 4], &[0, 1, 2, 0, 2, 3])?;
+            paint_vertices(layer, 4, Paint::Fallback, LINE_COLOR);
+            segments += 1;
+        }
+    }
+    Ok(segments)
+}
+
+/// What became of the 2D records of drawing files.
+fn lines_summary<'a>(drawings: impl Iterator<Item = &'a Drawing>, segments: usize) -> String {
+    let (mut lines, mut polylines, mut with_3d, mut unreadable) = (0, 0, 0, 0);
+    for d in drawings {
+        lines += d.lines.iter().filter(|l| l.class == 0x82).count();
+        polylines += d.lines.iter().filter(|l| l.class == 0x84).count();
+        with_3d += d.lines_with_3d;
+        unreadable += d.lines_unreadable;
+    }
+    format!(
+        "{lines} lines and {polylines} polylines ({segments} segments drawn); {with_3d} part of a 3D element and \
+         {unreadable} unreadable, not drawn"
+    )
+}
+
+/// The layers of one drawing file: visible bodies per category, macros, 2D lines at height `z`
+/// (mm), and the auxiliary bodies in one hidden layer.
+fn build_at(drawing: &Drawing, painted: Option<&Painted>, z: f64) -> Result<Loaded, String> {
     let resolved = drawing.placements.iter().filter(|p| matches!(p.placed, Placed::Resolved(_))).count();
-    if drawing.bodies.is_empty() && resolved == 0 {
+    if drawing.bodies.is_empty() && resolved == 0 && drawing.lines.is_empty() {
         let name = if drawing.name.is_empty() { String::new() } else { format!(" \"{}\"", drawing.name) };
         return Err(format!(
-            "Allplan: the drawing file{name} has no 3D bodies. This reader shows 3D bodies and macros only; 2D \
-             elements and layouts are not read yet."
+            "Allplan: the drawing file{name} has no 3D bodies and no 2D lines. This reader shows 3D bodies, macros \
+             and 2D lines; texts, hatchings, arcs and layouts are not read yet."
         ));
     }
     let mut layers: Vec<Layer> =
         Category::ALL.iter().map(|&c| Layer { name: c.name().into(), color: c.color(), ..Layer::default() }).collect();
+    layers.push(Layer { name: "2D lines".into(), color: LINE_COLOR, ..Layer::default() });
     layers.push(Layer { name: "Auxiliary bodies (openings, rooms)".into(), color: AUXILIARY_COLOR, hidden: true, ..Layer::default() });
     // Colours from the project folder become vertex colours; the category colour fills in (§10).
     let painted = painted.filter(|p| p.active);
@@ -1530,10 +1656,12 @@ fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String>
     let layer_of = |slot: Slot| match slot {
         Slot::Body(c) => index_of(c),
         Slot::Macro => index_of(Category::Macros),
-        Slot::Auxiliary => Category::ALL.len(),
+        Slot::Auxiliary => Category::ALL.len() + 1,
     };
     let target = Target { layers: &mut layers, layer_of: &layer_of, id_of: &|offset| offset as u64, extra: &Extra::new() };
     emit(drawing, painted, target)?;
+    let half = line_half_width(drawing.lines.iter());
+    let segments = emit_lines(&mut layers[Category::ALL.len()], &drawing.lines, z + LINE_LIFT, half)?;
     let visible = drawing.bodies.iter().filter(|b| !b.auxiliary).count();
     let hidden = drawing.bodies.len() - visible;
     let linked = drawing.bodies.iter().filter(|b| b.element.is_some()).count();
@@ -1545,6 +1673,7 @@ fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String>
         ("Allplan auxiliary bodies (hidden)".into(), hidden.to_string()),
         ("Allplan bodies linked to an element".into(), linked.to_string()),
         ("Allplan macro placements".into(), placement_summary(drawing)),
+        ("Allplan 2D lines".into(), format!("{} at z {z} mm", lines_summary(std::iter::once(drawing), segments))),
         (
             "Allplan colours".into(),
             match painted {
@@ -1569,7 +1698,7 @@ fn build(drawing: &Drawing, painted: Option<&Painted>) -> Result<Loaded, String>
 
 /// What the reader shows, for the project info.
 const IMPORT_SCOPE: &str = "3D bodies with element name, type and quantities, 3D macros, colours from the project folder, \
-     whole project folders (spec v0.5); no textures or 2D elements";
+     whole project folders, 2D lines and polylines (spec v0.6); no textures, texts, hatchings or arcs";
 
 /// A node of the building structure (§11.2).
 #[derive(Debug, Clone, PartialEq)]
@@ -1579,6 +1708,60 @@ struct ProjectNode {
     kind: String,
     files: Vec<u32>,
     children: Vec<ProjectNode>,
+    /// Of a storey: the level model (ObjectGuid) and the number of its bottom plane (§12.2).
+    bottom: Option<(String, i64)>,
+}
+
+/// Attribute keys of a storey (§12.2): the level model, and the number of its bottom plane.
+const LEVEL_MODEL_KEY: &str = "325ADB67-B049-4781-A41A-877EADA7D218";
+const BOTTOM_PLANE_KEY: &str = "39C9F321-882F-11D3-BD97-00E0294907AD";
+
+/// The level model and bottom plane number in the `Attributes` of a node (§12.2): an
+/// `InternalAttribute` holds its key (in an attribute or a text) and a `String` or `Integer` with
+/// a `Value`.
+fn storey_plane(node: roxmltree::Node) -> Option<(String, i64)> {
+    let named = |n: &roxmltree::Node, name: &str| n.is_element() && n.tag_name().name() == name;
+    let (mut model, mut bottom) = (None, None);
+    for attribute in node.children().filter(|n| named(n, "Attributes")).flat_map(|a| a.children().filter(|n| named(n, "InternalAttribute"))) {
+        let has = |key: &str| {
+            attribute.descendants().any(|n| n.attributes().any(|a| a.value().trim().eq_ignore_ascii_case(key)) || n.text().is_some_and(|t| t.trim().eq_ignore_ascii_case(key)))
+        };
+        let value = |kind: &str| {
+            let n = attribute.descendants().find(|n| named(n, kind))?;
+            n.attribute("Value").or(n.text()).map(|v| v.trim().to_string())
+        };
+        if has(LEVEL_MODEL_KEY) {
+            model = value("String").or(model);
+        }
+        if has(BOTTOM_PLANE_KEY) {
+            bottom = value("Integer").and_then(|v| v.parse().ok()).or(bottom);
+        }
+    }
+    Some((model?, bottom?))
+}
+
+/// The plane heights of the level models of a project (§12.2): model ObjectGuid (lower case) →
+/// plane number → height (mm).
+type Levels = HashMap<String, HashMap<i64, f64>>;
+
+/// Adds the planes of one `Allplan_BIM_LevMo_*.xml`: `BottomPlane` and `TopPlane` elements with an
+/// `ObjectGuid` (its first part, hexadecimal, is the plane number) and a `HeightLevel`.
+fn read_levels(text: &str, levels: &mut Levels) {
+    let Ok(document) = roxmltree::Document::parse(text.trim_start_matches('\u{feff}')) else { return };
+    let root = document.root_element();
+    let Some(model) = root.attribute("ObjectGuid").filter(|_| root.tag_name().name() == "Levelmodel") else { return };
+    let planes = levels.entry(model.trim().to_lowercase()).or_default();
+    for plane in root.descendants().filter(|n| n.is_element() && matches!(n.tag_name().name(), "BottomPlane" | "TopPlane")) {
+        let number = plane.attribute("ObjectGuid").and_then(|id| i64::from_str_radix(id.trim().split('-').next()?, 16).ok());
+        let height = plane
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "HeightLevel")
+            .and_then(|n| n.text()?.trim().parse::<f64>().ok())
+            .filter(|h| h.is_finite());
+        if let (Some(number), Some(height)) = (number, height) {
+            planes.entry(number).or_insert(height);
+        }
+    }
 }
 
 /// Deepest node nesting read from a building structure.
@@ -1614,6 +1797,7 @@ fn child_nodes(parent: roxmltree::Node, depth: usize) -> Vec<ProjectNode> {
                     kind: node.tag_name().name().to_string(),
                     files,
                     children: child_nodes(node, depth + 1),
+                    bottom: storey_plane(node),
                 });
             }
         }
@@ -1630,6 +1814,8 @@ struct Group {
     /// `<top> / <group>`, or `<top>` for files right under the top-level node.
     label: String,
     name: String,
+    /// Height of the 2D lines: the bottom plane of a storey, else 0 (mm, §12.2).
+    z: f64,
 }
 
 /// The drawing files of a project folder in their groups (§11.2).
@@ -1647,38 +1833,52 @@ struct ProjectPlan {
 
 /// The groups and files of a building structure: each file in the group of its nearest storey,
 /// site or construction node; a file referenced twice is loaded once (§11.2).
-fn plan_structure(tops: &[ProjectNode]) -> ProjectPlan {
-    fn walk(node: &ProjectNode, top: usize, group: (String, String), depth: usize, plan: &mut ProjectPlan, seen: &mut std::collections::HashSet<u32>) {
+fn plan_structure(tops: &[ProjectNode], levels: &Levels) -> ProjectPlan {
+    struct Walk<'a> {
+        plan: ProjectPlan,
+        seen: std::collections::HashSet<u32>,
+        levels: &'a Levels,
+    }
+    fn walk(node: &ProjectNode, top: usize, group: (String, String, f64), depth: usize, w: &mut Walk) {
+        // A storey's lines lie on its bottom plane; other groups at 0 (§12.2).
+        let z = || {
+            let (model, plane) = node.bottom.as_ref()?;
+            w.levels.get(&model.to_lowercase())?.get(plane).copied()
+        };
         let group = if depth > 0 && matches!(node.kind.as_str(), "Storey" | "Site" | "Construction") {
-            (format!("{} / {}", plan.tops[top], node.name), node.name.clone())
+            let z = if node.kind == "Storey" { z().unwrap_or(0.0) } else { 0.0 };
+            (format!("{} / {}", w.plan.tops[top], node.name), node.name.clone(), z)
+        } else if depth == 0 && node.kind == "Storey" {
+            (group.0, group.1, z().unwrap_or(0.0))
         } else {
             group
         };
+        let plan = &mut w.plan;
         if !node.files.is_empty() {
             let index = match plan.groups.iter().position(|g| g.top == top && g.label == group.0) {
                 Some(index) => index,
                 None => {
-                    plan.groups.push(Group { top, label: group.0.clone(), name: group.1.clone() });
+                    plan.groups.push(Group { top, label: group.0.clone(), name: group.1.clone(), z: group.2 });
                     plan.groups.len() - 1
                 }
             };
             for &number in &node.files {
                 plan.references += 1;
-                if seen.insert(number) {
+                if w.seen.insert(number) {
                     plan.files.push((number, index, format!("tb{number:06}.ndw")));
                 }
             }
         }
         for child in &node.children {
-            walk(child, top, group.clone(), depth + 1, plan, seen);
+            walk(child, top, group.clone(), depth + 1, w);
         }
     }
-    let mut plan = ProjectPlan { tops: tops.iter().map(|t| t.name.clone()).collect(), structure: true, ..ProjectPlan::default() };
-    let mut seen = std::collections::HashSet::new();
+    let plan = ProjectPlan { tops: tops.iter().map(|t| t.name.clone()).collect(), structure: true, ..ProjectPlan::default() };
+    let mut w = Walk { plan, seen: std::collections::HashSet::new(), levels };
     for (index, top) in tops.iter().enumerate() {
-        walk(top, index, (top.name.clone(), top.name.clone()), 0, &mut plan, &mut seen);
+        walk(top, index, (top.name.clone(), top.name.clone(), 0.0), 0, &mut w);
     }
-    plan
+    w.plan
 }
 
 /// Without a building structure: every `tb*.ndw` of the folder, by number, in one group named
@@ -1694,7 +1894,7 @@ fn plan_folder(name: &str, entries: &[String]) -> ProjectPlan {
         .collect();
     files.sort();
     files.dedup_by_key(|f| f.0);
-    let groups = if files.is_empty() { Vec::new() } else { vec![Group { top: 0, label: name.into(), name: name.into() }] };
+    let groups = if files.is_empty() { Vec::new() } else { vec![Group { top: 0, label: name.into(), name: name.into(), z: 0.0 }] };
     ProjectPlan { tops: vec![name.into()], groups, files, references: 0, structure: false }
 }
 
@@ -1770,17 +1970,43 @@ fn read_drawings(paths: &[std::path::PathBuf]) -> Vec<Result<Drawing, String>> {
     paths.iter().map(one).collect()
 }
 
+/// The plan of the building structure of a project folder, with the storey heights from its
+/// level models (§11.2, §12.2); `None` without a (readable) structure.
+fn structure_plan(folder: &mut Folder) -> Option<ProjectPlan> {
+    let text = String::from_utf8(folder.read(&["BIM", "Allplan_BIM_BuildingStructure.xml"])?).ok()?;
+    let tops = read_structure(&text)?;
+    let mut levels = Levels::new();
+    if let Some(bim) = folder.find(&["BIM"]) {
+        let mut models: Vec<String> =
+            folder.listing(&bim).keys().filter(|n| n.starts_with("allplan_bim_levmo_") && n.ends_with(".xml")).cloned().collect();
+        models.sort();
+        for model in models {
+            if let Some(text) = folder.read(&["BIM", &model]).and_then(|b| String::from_utf8(b).ok()) {
+                read_levels(&text, &mut levels);
+            }
+        }
+    }
+    Some(plan_structure(&tops, &levels))
+}
+
+/// The storey height of a drawing file `tbNNNNNN.ndw` opened on its own from its project folder
+/// (§12.2): the height its group has in the building structure.
+fn file_height(path: &std::path::Path) -> Option<f64> {
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    let digits = name.strip_prefix("tb")?.strip_suffix(".ndw")?;
+    let number: u32 = digits.bytes().all(|b| b.is_ascii_digit()).then(|| digits.parse().ok())??;
+    let plan = structure_plan(&mut Folder::new(path.parent()?))?;
+    let &(_, group, _) = plan.files.iter().find(|f| f.0 == number)?;
+    Some(plan.groups[group].z)
+}
+
 /// Reads a project folder (§11): its building structure (or all `tb*.ndw`), every drawing file
 /// once, and the colours from the same folder, read once.
 fn read_project(dir: &std::path::Path) -> Result<Project, String> {
     let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
     let mut folder = Folder::new(dir);
-    let structure = folder
-        .read(&["BIM", "Allplan_BIM_BuildingStructure.xml"])
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| read_structure(&text));
-    let plan = match structure {
-        Some(tops) => plan_structure(&tops),
+    let plan = match structure_plan(&mut folder) {
+        Some(plan) => plan,
         None => {
             let root = folder.root.clone();
             let entries: Vec<String> = folder.listing(&root).keys().cloned().collect();
@@ -1823,13 +2049,15 @@ struct Counts {
     visible: usize,
     auxiliary: usize,
     placements: usize,
+    /// 2D lines and polylines drawn.
+    lines: usize,
 }
 
 impl Counts {
     fn of(drawing: &Drawing) -> Self {
         let visible = drawing.bodies.iter().filter(|b| !b.auxiliary).count();
         let placements = drawing.placements.iter().filter(|p| matches!(p.placed, Placed::Resolved(_))).count();
-        Self { files: 1, visible, auxiliary: drawing.bodies.len() - visible, placements }
+        Self { files: 1, visible, auxiliary: drawing.bodies.len() - visible, placements, lines: drawing.lines.len() }
     }
 
     fn add(&mut self, other: Counts) {
@@ -1837,6 +2065,7 @@ impl Counts {
         self.visible += other.visible;
         self.auxiliary += other.auxiliary;
         self.placements += other.placements;
+        self.lines += other.lines;
     }
 }
 
@@ -1873,9 +2102,17 @@ fn build_project(project: &Project) -> Result<Loaded, String> {
     let groups = &project.plan.groups;
     let tops = &project.plan.tops;
     let shown = project.shown_top();
+    // Layers: the groups, then their 2D lines, then the auxiliary bodies per top-level node.
     let mut layers: Vec<Layer> = groups
         .iter()
         .map(|g| Layer { name: g.label.clone(), color: DEFAULT_COLOR, colors: Some(Vec::new()), hidden: g.top != shown, ..Layer::default() })
+        .chain(groups.iter().map(|g| Layer {
+            name: format!("{} / 2D lines", g.label),
+            color: LINE_COLOR,
+            colors: Some(Vec::new()),
+            hidden: g.top != shown,
+            ..Layer::default()
+        }))
         .chain(tops.iter().map(|t| Layer {
             name: format!("{t} / Auxiliary bodies"),
             color: AUXILIARY_COLOR,
@@ -1884,9 +2121,11 @@ fn build_project(project: &Project) -> Result<Loaded, String> {
             ..Layer::default()
         }))
         .collect();
+    let half = line_half_width(project.drawings.iter().flat_map(|d| &d.drawing.lines));
+    let mut segments = 0;
     for d in &project.drawings {
         let group = &groups[d.group];
-        let (body_layer, auxiliary_layer) = (d.group, groups.len() + group.top);
+        let (body_layer, auxiliary_layer) = (d.group, 2 * groups.len() + group.top);
         let layer_of = |slot: Slot| if slot == Slot::Auxiliary { auxiliary_layer } else { body_layer };
         // Ids unique over the project: file number and record offset (§11.3).
         let number = u64::from(d.number);
@@ -1897,9 +2136,10 @@ fn build_project(project: &Project) -> Result<Loaded, String> {
         extra.insert("Storey".into(), group.name.clone().into());
         let target = Target { layers: &mut layers, layer_of: &layer_of, id_of: &id_of, extra: &extra };
         emit(&d.drawing, Some(&d.painted), target)?;
+        segments += emit_lines(&mut layers[groups.len() + d.group], &d.drawing.lines, group.z + LINE_LIFT, half)?;
     }
     if layers.iter().all(|l| l.indices.is_empty()) {
-        return Err(format!("Allplan: the project \"{}\" has no 3D bodies in its drawing files", project.name));
+        return Err(format!("Allplan: the project \"{}\" has no 3D bodies or 2D lines in its drawing files", project.name));
     }
     let total = project.top_counts().into_iter().fold(Counts::default(), |mut a, c| {
         a.add(c);
@@ -1929,6 +2169,7 @@ fn build_project(project: &Project) -> Result<Loaded, String> {
         ("Allplan 3D bodies".into(), total.visible.to_string()),
         ("Allplan auxiliary bodies (hidden)".into(), total.auxiliary.to_string()),
         ("Allplan macro placements shown".into(), total.placements.to_string()),
+        ("Allplan 2D lines".into(), lines_summary(project.drawings.iter().map(|d| &d.drawing), segments)),
         ("Allplan colours (visible bodies)".into(), visible.text()),
         ("Allplan colours (macro bodies)".into(), macro_bodies.text()),
         ("Allplan project files".into(), project.files_line.clone()),
@@ -1945,7 +2186,10 @@ fn build_project(project: &Project) -> Result<Loaded, String> {
     for (group, counts) in groups.iter().zip(project.group_counts()) {
         info.push((
             format!("Allplan group {}", group.label),
-            format!("{} drawing files, {} bodies, {} auxiliary, {} macro placements", counts.files, counts.visible, counts.auxiliary, counts.placements),
+            format!(
+                "{} drawing files, {} bodies, {} auxiliary, {} macro placements, {} 2D lines at z {} mm",
+                counts.files, counts.visible, counts.auxiliary, counts.placements, counts.lines, group.z
+            ),
         ));
     }
     let mut data = ProjectData::default();
@@ -3232,7 +3476,7 @@ mod tests {
         );
         let tops = read_structure(&xml).unwrap();
         assert_eq!(tops.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Variant A", "Variant B"]);
-        let plan = plan_structure(&tops);
+        let plan = plan_structure(&tops, &Levels::new());
         let labels: Vec<&str> = plan.groups.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, ["Variant A / Site", "Variant A / House", "Variant A / Ground floor", "Variant A / Roof", "Variant B"]);
         let files: Vec<(u32, usize)> = plan.files.iter().map(|f| (f.0, f.1)).collect();
@@ -3265,7 +3509,7 @@ mod tests {
         assert_eq!((project.plan.references, project.missing.clone()), (5, vec![3]));
         assert_eq!(project.drawings.iter().map(|d| d.number).collect::<Vec<_>>(), [1, 2, 4]);
         assert_eq!(project.shown_top(), 0);
-        assert_eq!(project.top_counts()[0], Counts { files: 2, visible: 2, auxiliary: 1, placements: 0 });
+        assert_eq!(project.top_counts()[0], Counts { files: 2, visible: 2, auxiliary: 1, placements: 0, lines: 0 });
 
         let model = crate::loaders::load_with(&Source::File(root.clone()), &Progress::default()).unwrap();
         assert_eq!(model.format, "Allplan");
@@ -3288,7 +3532,7 @@ mod tests {
         let info = |key: &str| model.project.info.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default();
         assert_eq!(info("Allplan building structure"), "2 top-level nodes, 5 references to drawing files, 1 missing, 0 unreadable");
         assert!(info("Allplan shown node").starts_with("Variant A"));
-        assert_eq!(info("Allplan group Variant A / Ground floor"), "1 drawing files, 1 bodies, 1 auxiliary, 0 macro placements");
+        assert_eq!(info("Allplan group Variant A / Ground floor"), "1 drawing files, 1 bodies, 1 auxiliary, 0 macro placements, 0 2D lines at z 0 mm");
     }
 
     #[test]
@@ -3315,7 +3559,135 @@ mod tests {
         assert!(error.contains("folders open only"), "{error}");
     }
 
-    /// Checks a real drawing file against the tables of spec §7.2 to §7.6, when `ALLPLAN_SAMPLE`
+    /// A 2D line (0x82) or polyline (0x84) record with key `key` through `points` (mm).
+    fn line_record(points: &[[f64; 2]], key: Key) -> Vec<u8> {
+        let class = if points.len() == 2 { 0x82 } else { 0x84 };
+        let mut r = header(class, 0, points.len() as u16, 0);
+        for p in points {
+            r.extend(p[0].to_le_bytes());
+            r.extend(p[1].to_le_bytes());
+        }
+        keyed(r, key)
+    }
+
+    /// The z values of a layer, in metres.
+    fn heights(layer: &Layer) -> Vec<f32> {
+        let mut z: Vec<f32> = layer.positions.chunks_exact(3).map(|p| p[2]).collect();
+        z.sort_by(f32::total_cmp);
+        z.dedup();
+        z
+    }
+
+    #[test]
+    fn draws_2d_lines_that_are_not_part_of_a_3d_element() {
+        let mut s = keyed(prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]), (5, 1));
+        s.extend(line_record(&[[0.0, 0.0], [1000.0, 0.0]], (0, 0)));
+        s.extend(line_record(&[[0.0, 1000.0], [1000.0, 1000.0], [1000.0, 2000.0]], (0, 0)));
+        // The plan outline of the body: not drawn.
+        s.extend(line_record(&[[0.0, 200.0], [1000.0, 200.0]], (5, 1)));
+        // A key without a 3D body: drawn.
+        s.extend(line_record(&[[0.0, 3000.0], [0.0, 4000.0]], (6, 1)));
+        // Not finite, too far out, a line with three points: unreadable.
+        s.extend(line_record(&[[f64::NAN, 0.0], [1.0, 0.0]], (0, 0)));
+        s.extend(line_record(&[[2e7, 0.0], [1.0, 0.0]], (0, 0)));
+        let mut three = line_record(&[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], (0, 0));
+        three[4] = 0x82;
+        s.extend(three);
+        // Stale data at the end of the stream (byte 0 & 7 != 0): no record.
+        let mut stale = line_record(&[[0.0, 5000.0], [1000.0, 5000.0]], (0, 0));
+        stale[0] = 0x7B;
+        s.extend(stale);
+        let drawing = parse(&file(3, "Plan", &s)).unwrap();
+        let classes: Vec<(u8, usize)> = drawing.lines.iter().map(|l| (l.class, l.points.len())).collect();
+        assert_eq!(classes, [(0x82, 2), (0x84, 3), (0x82, 2)]);
+        assert_eq!((drawing.lines_with_3d, drawing.lines_unreadable), (1, 3));
+
+        let loaded = build(&drawing, None).unwrap();
+        let lines = loaded.layers.iter().find(|l| l.name == "2D lines").unwrap();
+        assert!(!lines.hidden && lines.elements.is_empty());
+        assert_eq!(lines.triangle_count(), 2 * 4);
+        assert_eq!(heights(lines), [0.01]);
+        assert!(lines.normals.chunks_exact(3).all(|n| n == [0.0, 0.0, 1.0]));
+        let info = loaded.project.info.iter().find(|(k, _)| k == "Allplan 2D lines").map(|(_, v)| v.as_str());
+        assert_eq!(info, Some("2 lines and 1 polylines (4 segments drawn); 1 part of a 3D element and 3 unreadable, not drawn at z 0 mm"));
+
+        // A drawing file with 2D lines only opens too.
+        let only = parse(&file(3, "Plot", &line_record(&[[0.0, 0.0], [5000.0, 0.0]], (0, 0)))).unwrap();
+        assert_eq!(build(&only, None).unwrap().layers.len(), 1);
+    }
+
+    /// A storey whose attributes point at a level model and its bottom plane (§12.2).
+    fn storey_xml(name: &str, files: &[u32], model: &str, bottom: i64) -> String {
+        let files: String = files.iter().map(|id| format!("<x:File ID=\"{id}\"/>")).collect();
+        format!(
+            "<x:BuildingStructureChildNode><x:Storey Name=\"{name}\"><x:Attributes>\
+             <x:InternalAttribute Key=\"325adb67-b049-4781-a41a-877eada7d218\"><x:String Value=\"{model}\"/></x:InternalAttribute>\
+             <x:InternalAttribute><x:Key>{BOTTOM_PLANE_KEY}</x:Key><x:Integer Value=\"{bottom}\"/></x:InternalAttribute>\
+             <x:InternalAttribute Key=\"806EA91C-6428-4af2-8917-E63B343D3372\"><x:Integer Value=\"99\"/></x:InternalAttribute>\
+             </x:Attributes><x:Files>{files}</x:Files></x:Storey></x:BuildingStructureChildNode>"
+        )
+    }
+
+    const LEVEL_MODEL: &str = "{8A3B7E1C-0000-4000-8000-00000000ABCD}";
+
+    fn level_model_xml() -> String {
+        let plane = |kind: &str, number: u32, height: f64| {
+            format!("<{kind} ObjectGuid=\"{number:08X}-0000-0000-0000-000000000000\"><HeightLevel>{height}</HeightLevel></{kind}>")
+        };
+        format!(
+            "<?xml version=\"1.0\"?><Levelmodel ObjectGuid=\"{}\"><Building>{}{}</Building><PlanePairs><Planepair Name=\"Ground floor\">{}{}</Planepair></PlanePairs></Levelmodel>",
+            LEVEL_MODEL.to_lowercase(),
+            plane("BottomPlane", 5, -150.0),
+            plane("TopPlane", 6, 2650.0),
+            plane("BottomPlane", 10, 2800.0),
+            plane("TopPlane", 11, 5600.0)
+        )
+    }
+
+    #[test]
+    fn draws_2d_lines_on_their_storey() {
+        let scratch = Scratch::new("lines");
+        let root = scratch.0.join("Lines.prj");
+        let xml = structure_xml(&xml_node(
+            "UserDefinedStructureChildNode",
+            "House",
+            &[],
+            &(xml_node("Site", "Site", &[3], "", false) + &storey_xml("Ground floor", &[1], LEVEL_MODEL, 5) + &storey_xml("Upper floor", &[2], LEVEL_MODEL, 10)),
+            false,
+        ));
+        scratch.write("Lines.prj/BIM/Allplan_BIM_BuildingStructure.xml", xml);
+        scratch.write("Lines.prj/BIM/Allplan_BIM_LevMo_House.xml", level_model_xml());
+        let plan = |key: Key| {
+            let mut s = prism(0, 0x0301, [0.0; 3], [1000.0, 200.0, 3000.0]);
+            s.extend(line_record(&[[0.0, 0.0], [4000.0, 0.0]], key));
+            s
+        };
+        scratch.write("Lines.prj/tb000001.ndw", file(3, "Ground floor plan", &plan((0, 0))));
+        scratch.write("Lines.prj/tb000002.ndw", file(3, "Upper floor plan", &plan((7, 1))));
+        scratch.write("Lines.prj/tb000003.ndw", file(3, "Site plan", &line_record(&[[0.0, 0.0], [9000.0, 9000.0]], (0, 0))));
+
+        let project = read_project(&root).unwrap();
+        let z: Vec<(&str, f64)> = project.plan.groups.iter().map(|g| (g.label.as_str(), g.z)).collect();
+        assert_eq!(z, [("House / Site", 0.0), ("House / Ground floor", -150.0), ("House / Upper floor", 2800.0)]);
+        let loaded = build_project(&project).unwrap();
+        let layer = |name: &str| loaded.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("no layer {name}"));
+        assert_eq!(heights(layer("House / Site / 2D lines")), [0.01]);
+        assert_eq!(heights(layer("House / Ground floor / 2D lines")), [-0.14]);
+        assert_eq!(heights(layer("House / Upper floor / 2D lines")), [2.81]);
+        assert!(layer("House / Ground floor / 2D lines").colors.as_ref().unwrap().iter().all(|c| *c == Paint::Fallback.rgba(LINE_COLOR)));
+
+        // A drawing file of the project opened on its own lies on the same storey; as bytes at 0.
+        assert_eq!(file_height(&root.join("tb000002.ndw")), Some(2800.0));
+        let alone = crate::loaders::load_with(&Source::File(root.join("tb000002.ndw")), &Progress::default()).unwrap();
+        let lines = alone.layers.iter().find(|l| l.name == "2D lines").unwrap();
+        assert_eq!(heights(lines), [2.81]);
+        let data = std::fs::read(root.join("tb000002.ndw")).unwrap();
+        let bytes = crate::loaders::load_with(&Source::Bytes { name: "tb000002.ndw".into(), data: Arc::new(data) }, &Progress::default()).unwrap();
+        assert_eq!(heights(bytes.layers.iter().find(|l| l.name == "2D lines").unwrap()), [0.01]);
+        assert_eq!(file_height(&scratch.0.join("tb000002.ndw")), None);
+    }
+
+    /// Checks a real drawing file against the tables of spec §7.2 to §7.8, when `ALLPLAN_SAMPLE`
     /// holds its path. The samples are not in the repository.
     #[test]
     fn optional_sample_from_env() {
@@ -3455,6 +3827,43 @@ mod tests {
                 assert_eq!(names.get(name).copied().unwrap_or(0), want, "placements named {name:?}");
             }
         }
+        // §7.8: the 2D lines and polylines drawn, their segments and xy box; on its own in its project
+        // folder tb000141 lies on its storey.
+        let lines = drawing.lines.iter().filter(|l| l.class == 0x82).count();
+        let polylines = drawing.lines.len() - lines;
+        let segments: usize = drawing.lines.iter().map(|l| l.points.len() - 1).sum();
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        for p in drawing.lines.iter().flat_map(|l| &l.points) {
+            for k in 0..2 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let height = file_height(std::path::Path::new(&path));
+        eprintln!("{file_name}: {lines} lines, {polylines} polylines, {segments} segments, xy {lo:?}..{hi:?}, storey height {height:?}");
+        type Box2 = [(f64, f64); 2];
+        let table: [(&str, usize, usize, usize, Option<Box2>); 6] = [
+            ("tb000141", 239, 2, 243, Some([(4000.0, 15815.5), (-20150.0, -5500.0)])),
+            ("tb000151", 315, 28, 454, Some([(4000.0, 15849.9), (-20150.0, -5500.0)])),
+            ("tb000113", 607, 0, 607, Some([(0.0, 20965.8), (-38491.7, 0.0)])),
+            ("tb000121", 8, 0, 8, Some([(4080.0, 15769.7), (-20070.0, -5580.0)])),
+            ("tb000110", 0, 0, 0, None),
+            ("tb000152", 0, 0, 0, None),
+        ];
+        if let Some(&(_, want_lines, want_polylines, want_segments, range)) = table.iter().find(|row| file_name.starts_with(row.0)) {
+            assert_eq!((lines, polylines, segments), (want_lines, want_polylines, want_segments));
+            if let Some(range) = range {
+                for k in 0..2 {
+                    assert!((lo[k] - range[k].0).abs() <= 0.5 && (hi[k] - range[k].1).abs() <= 0.5, "axis {k}: {lo:?} {hi:?}");
+                }
+            }
+        }
+        if file_name.starts_with("tb000141") {
+            if let Some(height) = height {
+                assert_eq!(height, -3100.0);
+            }
+        }
         // §7.6: colours of the drawing's own visible bodies, from the project folder of the sample.
         let folder = std::path::Path::new(&path).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let painted = paint(&drawing, &mut Folder::new(&folder));
@@ -3556,7 +3965,7 @@ mod tests {
         }
         assert_eq!((project.plan.references, project.missing.len(), project.unreadable.len()), (316, 0, 0));
         assert_eq!(names[shown], "Unit 01");
-        assert_eq!(tops[shown], Counts { files: 31, visible: 431, auxiliary: 172, placements: 376 });
+        assert_eq!(tops[shown], Counts { files: 31, visible: 431, auxiliary: 172, placements: 376, lines: 2256 });
         let groups = project.group_counts();
         for (label, want) in [
             ("Unit 01 / Site", 102),
@@ -3575,6 +3984,20 @@ mod tests {
             a
         });
         assert_eq!((total.visible, total.auxiliary, total.placements), (4276, 1771, 3801));
+        // §7.8: 2D elements drawn and storey height per group of "Unit 01".
+        for (label, want_lines, want_z) in [
+            ("Unit 01 / Site", 981, 0.0),
+            ("Unit 01 / Detached house", 8, 0.0),
+            ("Unit 01 / 1st basement", 243, -3100.0),
+            ("Unit 01 / Ground floor", 427, -150.0),
+            ("Unit 01 / 1st upper floor", 425, 2800.0),
+            ("Unit 01 / 2nd upper floor", 172, 5750.0),
+        ] {
+            let index = project.plan.groups.iter().position(|g| g.label == label).unwrap_or_else(|| panic!("no group {label:?}"));
+            assert_eq!((groups[index].lines, project.plan.groups[index].z), (want_lines, want_z), "{label}");
+        }
+        let foundations = project.plan.groups.iter().position(|g| g.label == "Unit 01 / Foundations").unwrap();
+        assert_eq!(groups[foundations].lines, 0);
         // Only the layers of "Unit 01" start visible.
         for layer in &loaded.layers {
             assert_eq!(layer.hidden, !layer.name.starts_with("Unit 01 /") || layer.name.ends_with("Auxiliary bodies"), "{}", layer.name);

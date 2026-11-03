@@ -10,6 +10,7 @@ use crate::export;
 use crate::icons;
 use crate::loaders;
 use crate::measure::format::{AreaUnit, Category, LengthUnit, VolumeUnit, MAX_DECIMALS};
+use crate::measure::hover::{Hover, Pointer, Screen};
 use crate::measure::{MeasureState, Tool};
 use crate::model::Model;
 use crate::theme::{srgb3, srgb4, Palette, ThemeKind};
@@ -19,7 +20,7 @@ use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use iced::widget::text::Wrapping;
 use iced::{Background, Border, Color, Padding, Shadow};
 use openaec_ui::Language;
@@ -139,7 +140,18 @@ pub struct App {
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
+    /// Where the cursor rests in the viewport (x, y, width, height), waiting to be looked up for
+    /// the measure tool; when the last lookup ended and how long it took.
+    hover_request: Option<(f32, f32, f32, f32)>,
+    hover_last: Option<(Instant, std::time::Duration)>,
+    /// What the hover was found in besides the view: the section box and plane and the shown
+    /// layers. When they change, it is looked up again.
+    hover_scene: Option<HoverScene>,
+    /// Boxes around blocks of triangles of the model, for the ray of a click or hover.
+    pick_index: Option<PickIndex>,
 }
+
+type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>);
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -212,6 +224,8 @@ pub enum Message {
     Measure(Tool),
     /// Enter: close the polygon being measured.
     MeasureFinish,
+    /// The edges of layers, built in the background for snapping.
+    MeasureEdges(crate::measure::Edges),
     MeasureDelete(usize),
     MeasureClear,
     MeasureLength(LengthUnit),
@@ -307,6 +321,10 @@ impl Default for App {
             explode_offsets: Arc::default(),
             explode_bounds: None,
             measure: MeasureState::default(),
+            hover_request: None,
+            hover_last: None,
+            hover_scene: None,
+            pick_index: None,
         }
     }
 }
@@ -323,6 +341,35 @@ pub fn load_task(source: loaders::Source, progress: Arc<loaders::Progress>) -> T
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
         Message::Loaded,
+    )
+}
+
+/// Builds the edges of `layers` for snapping on a worker thread.
+#[cfg(not(target_arch = "wasm32"))]
+fn edges_task(model: Arc<Model>, layers: Vec<usize>) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            let id = model.id;
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::measure::Edges::build(&model, &layers));
+            });
+            rx.await.unwrap_or(crate::measure::Edges(id, Vec::new()))
+        },
+        Message::MeasureEdges,
+    )
+}
+
+/// Builds the edges of `layers` in the browser (no threads there): after the next frame, so the
+/// tool shows as chosen first.
+#[cfg(target_arch = "wasm32")]
+fn edges_task(model: Arc<Model>, layers: Vec<usize>) -> Task<Message> {
+    Task::perform(
+        async move {
+            crate::web::next_frame().await;
+            crate::measure::Edges::build(&model, &layers)
+        },
+        Message::MeasureEdges,
     )
 }
 
@@ -678,6 +725,52 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.refresh_hover();
+        match self.build_edges() {
+            Some(edges) => Task::batch([task, edges]),
+            None => task,
+        }
+    }
+
+    /// A measure tool is on: builds the edges of the shown layers that have none yet, in the
+    /// background, so the cursor does not wait for them.
+    fn build_edges(&mut self) -> Option<Task<Message>> {
+        if self.measure.tool.is_none() || self.measure.building_edges {
+            return None;
+        }
+        let model = self.model.clone()?;
+        let layers = self.measure.edges_to_build((0..model.layers.len()).filter(|&l| self.visible.get(l) == Some(&true)));
+        if layers.is_empty() {
+            return None;
+        }
+        self.measure.building_edges = true;
+        Some(edges_task(model, layers))
+    }
+
+    fn hover_scene(&self) -> HoverScene {
+        (self.active_section(), self.plane, self.visible.clone())
+    }
+
+    fn hover_scene_holds(&self) -> bool {
+        self.hover_scene.as_ref().is_some_and(|(section, plane, visible)| {
+            *section == self.active_section() && *plane == self.plane && *visible == self.visible
+        })
+    }
+
+    /// The section or the shown layers changed under the hover: look again where the cursor rests.
+    fn refresh_hover(&mut self) {
+        if self.measure.hover.is_none() || self.hover_scene_holds() {
+            return;
+        }
+        if let Some(h) = self.measure.hover.take() {
+            self.hover_request = Some((h.cursor.x, h.cursor.y, h.screen.size.0, h.screen.size.1));
+            self.hover_last = None;
+            self.update_hover();
+        }
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::OpenDialog => return pick_model_task(false),
             Message::AddDialog => return pick_model_task(true),
@@ -800,14 +893,18 @@ impl App {
             Message::Navigate(n) => match n {
                 Navigate::Orbit { dx, dy } => {
                     self.anim = None;
+                    self.measure.hover = None;
                     self.camera.orbit(dx, dy)
                 }
                 Navigate::Pan { dx, dy, height } => {
                     self.anim = None;
+                    self.measure.hover = None;
                     self.camera.pan(dx, dy, height)
                 }
                 Navigate::Zoom { steps, x, y, width, height } => {
                     self.anim = None;
+                    // the viewport looks again on the next frame
+                    self.measure.hover = None;
                     let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
                     self.camera.zoom_at(steps, ndc, width / height.max(1.0));
                 }
@@ -816,6 +913,14 @@ impl App {
                     self.viewport_size = (width, height);
                 }
                 Navigate::Pick { x, y, width, height } => self.pick(x, y, width, height),
+                Navigate::Hover { x, y, width, height } => {
+                    self.hover_request = Some((x, y, width, height));
+                    self.update_hover();
+                }
+                Navigate::HoverOff => {
+                    self.hover_request = None;
+                    self.measure.hover = None;
+                }
             },
             Message::ApplyView(i) => self.apply_view(i),
             Message::ToggleGrids => self.show_grids = !self.show_grids,
@@ -896,6 +1001,7 @@ impl App {
                         self.anim = None;
                     }
                 }
+                self.update_hover();
             }
             Message::TogglePlane => {
                 if self.plane.is_some() || self.plane_picking {
@@ -905,6 +1011,7 @@ impl App {
                     self.plane_picking = self.model.is_some();
                     self.measure.tool = None;
                     self.measure.picks.clear();
+                    self.measure.hover = None;
                 }
             }
             Message::FlipPlane => {
@@ -929,6 +1036,7 @@ impl App {
                 if self.explode_on {
                     self.measure.tool = None;
                     self.measure.picks.clear();
+                    self.measure.hover = None;
                 }
                 self.update_explode();
             }
@@ -957,6 +1065,17 @@ impl App {
                 }
             }
             Message::MeasureFinish => self.measure.finish(),
+            Message::MeasureEdges(edges) => {
+                if self.model.as_ref().is_some_and(|m| m.id == edges.0) {
+                    self.measure.add_edges(edges.1);
+                    // snap to them where the cursor rests
+                    if let Some(h) = self.measure.hover.take() {
+                        self.hover_request = Some((h.cursor.x, h.cursor.y, h.screen.size.0, h.screen.size.1));
+                        self.hover_last = None;
+                        self.update_hover();
+                    }
+                }
+            }
             Message::MeasureDelete(i) => {
                 if i < self.measure.results.len() {
                     self.measure.results.remove(i);
@@ -992,7 +1111,10 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) || self.anim.is_some() {
+        let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. })
+            || self.anim.is_some()
+            || self.hover_request.is_some()
+        {
             window::frames().map(|_| Message::Tick)
         } else {
             Subscription::none()
@@ -1035,27 +1157,28 @@ impl App {
     /// Selects what is under the cursor: the nearest visible triangle, then its element (or the
     /// whole layer when the format has no elements); empty space clears the selection. While
     /// placing the section plane, puts it on the face under the cursor instead; while measuring,
-    /// hands the click to the measure tool.
+    /// hands the click to the measure tool, with what is highlighted under the cursor.
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
-        let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
-        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
-        let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
-        let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
-        let mm = self.model_matrix();
-        let (section, plane) = (self.active_section(), self.plane);
-        let keep = |p: Vec3| {
-            let w = mm.transform_point3(p);
-            section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
-        };
-        // the exploded view moves the triangles: their offsets back in model space
-        let back = mm.inverse();
-        let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
-        let hit = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep);
+        if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
+            let screen = self.screen(width, height);
+            let holds = self.hover_scene_holds() && self.measure.hover.as_ref().is_some_and(|h| h.holds_for(&screen, Vec2::new(x, y)));
+            if !holds {
+                self.measure.hover = self.measure_hover(&model, x, y, width, height);
+            }
+            let Some(hover) = self.measure.hover.clone() else { return };
+            self.measure.click(&model, &hover, &self.model_matrix());
+            // the measured element is also selected (shows its properties)
+            if tool == Tool::Volume {
+                self.select(&model, Some((hover.layer, hover.triangle)));
+            }
+            return;
+        }
+        let (origin, dir, hit) = self.cast(&model, x, y, width, height);
         if self.plane_picking {
-            if let (Some((l, t)), Some(world)) = (hit, self.world_bounds()) {
-                let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
+            let mm = self.model_matrix();
+            if let (Some((l, t, s)), Some(world)) = (hit, self.world_bounds()) {
                 if let Some((point, normal)) = face_at(&model.layers[l], t, origin - s, dir) {
                     let (point, mut normal) = (mm.transform_point3(point + s), mm.transform_vector3(normal));
                     // the face as seen: its normal towards the viewer
@@ -1071,24 +1194,84 @@ impl App {
             }
             return;
         }
-        if let Some(tool) = self.measure.tool {
-            let Some((l, t)) = hit else { return };
-            // the point on the triangle as it is (the exploded view is off while measuring)
-            let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
-            let Some((point, _)) = face_at(&model.layers[l], t, origin - s, dir) else { return };
-            let pixel = crate::measure::pixel_size(&self.camera.view_proj(width / height), (width, height), mm.transform_point3(point));
-            self.measure.click(&model, l, t, point, &mm, pixel);
-            // the measured element is also selected (shows its properties)
-            if tool != Tool::Volume {
-                return;
-            }
-        }
+        self.select(&model, hit.map(|(l, t, _)| (l, t)));
+    }
+
+    /// Selects the element of triangle `t` of layer `l` (the whole layer without elements), or
+    /// nothing.
+    fn select(&mut self, model: &Model, hit: Option<(usize, usize)>) {
         self.selected = hit.map(|(l, t)| (l, model.layers[l].element_at(t)));
         self.selection = match self.selected {
             Some((_, Some(id))) => model.element_ranges(id),
             Some((l, None)) => vec![(l, 0, model.layers[l].indices.len() as u32)],
             None => Vec::new(),
         };
+    }
+
+    /// The camera's view of a viewport of width × height.
+    fn screen(&self, width: f32, height: f32) -> Screen {
+        Screen { view_proj: self.camera.view_proj(width / height), size: (width, height) }
+    }
+
+    /// Whether a world point is shown: not cut away by the section box or plane.
+    fn shown(&self) -> impl Fn(Vec3) -> bool {
+        let (section, plane) = (self.active_section(), self.plane);
+        move |w: Vec3| section.is_none_or(|s| s.contains(w)) && plane.is_none_or(|pl| !pl.cuts(w))
+    }
+
+    /// The ray through viewport point (x, y) (model space) and the nearest visible triangle it
+    /// hits: (layer, triangle, how far the exploded view moved it (model space)).
+    fn cast(&mut self, model: &Model, x: f32, y: f32, width: f32, height: f32) -> (Vec3, Vec3, Option<(usize, usize, Vec3)>) {
+        let mm = self.model_matrix();
+        let inv = (self.camera.view_proj(width / height) * mm).inverse();
+        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        let origin = inv.project_point3(Vec3::new(nx, ny, 0.0));
+        let dir = inv.project_point3(Vec3::new(nx, ny, 1.0)) - origin;
+        let shown = self.shown();
+        let keep = |p: Vec3| shown(mm.transform_point3(p));
+        // the blocks hold where the triangles are at rest, not pulled apart
+        if !self.explode_on && self.pick_index.as_ref().is_none_or(|ix| ix.model != model.id) {
+            self.pick_index = Some(PickIndex::new(model));
+        }
+        let index = self.pick_index.as_ref().filter(|_| !self.explode_on);
+        // the exploded view moves the triangles: their offsets back in model space
+        let back = mm.inverse();
+        let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
+        let hit = pick_triangle(model, &self.visible, origin, dir, &shift, &keep, index).map(|(l, t)| {
+            let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
+            (l, t, s)
+        });
+        (origin, dir, hit)
+    }
+
+    /// What a measure click at (x, y) would take.
+    fn measure_hover(&mut self, model: &Model, x: f32, y: f32, width: f32, height: f32) -> Option<Hover> {
+        let (origin, dir, hit) = self.cast(model, x, y, width, height);
+        let (l, t, s) = hit?;
+        // the point on the triangle as it is (the exploded view is off while measuring)
+        let (point, _) = face_at(&model.layers[l], t, origin - s, dir)?;
+        let shown = self.shown();
+        let pointer = Pointer { screen: self.screen(width, height), cursor: Vec2::new(x, y), shown: &shown };
+        self.hover_scene = Some(self.hover_scene());
+        self.measure.hover_at(model, l, t, point, &self.model_matrix(), &pointer)
+    }
+
+    /// Looks up what the cursor rests on for the measure tool. The next lookup waits twice as long
+    /// as the last one took, so a large model keeps responding (the frame ticks come back for it).
+    fn update_hover(&mut self) {
+        let Some((x, y, width, height)) = self.hover_request else { return };
+        let Some(model) = self.model.clone().filter(|_| self.measure.tool.is_some() && !self.plane_picking) else {
+            self.hover_request = None;
+            self.measure.hover = None;
+            return;
+        };
+        if self.hover_last.is_some_and(|(end, took)| end.elapsed() < 2 * took) {
+            return;
+        }
+        let start = Instant::now();
+        self.measure.hover = self.measure_hover(&model, x, y, width.max(1.0), height.max(1.0));
+        self.hover_last = Some((Instant::now(), start.elapsed()));
+        self.hover_request = None;
     }
 
     // ---- ribbon ---------------------------------------------------------------------------
@@ -1730,6 +1913,7 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.explode_offsets,
+            hover: self.measure.tool.is_some() && !self.plane_picking,
         })
             .width(Fill)
             .height(Fill);
@@ -1770,14 +1954,21 @@ impl App {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
             })
         };
+        // what a click would take, found in this view (not one the camera left)
+        let view_proj = self.camera.view_proj(self.aspect());
+        let hover = self.measure.hover.as_ref().filter(|h| {
+            self.measure.tool.is_some_and(|t| t != Tool::Volume) && h.screen.view_proj == view_proj && self.hover_scene_holds()
+        });
         // hidden while the model is taken apart: they belong to the model as it is
         let measures = (overlay.is_none()
             && !self.explode_on
-            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty()))
+            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some()))
         .then(|| {
             canvas(crate::measure::overlay::MeasureOverlay {
                 results: &self.measure.results,
                 picks: &self.measure.picks,
+                hover,
+                tool: self.measure.tool,
                 units: self.measure.units,
                 language: l,
                 view_proj: self.camera.view_proj(self.aspect()),
@@ -1960,10 +2151,64 @@ pub(crate) fn face_at(layer: &crate::model::Layer, t: usize, origin: Vec3, dir: 
     Some((origin + dir * (normal.dot(a - origin) / along), normal))
 }
 
+/// Triangles per block of a [`PickIndex`].
+const TRI_BLOCK: usize = 256;
+
+/// The bounding box (model space) of every [`TRI_BLOCK`] triangles of each layer, so a ray skips
+/// the blocks it misses. Triangles of one element or face follow each other, so the boxes are
+/// small. Only for the model at rest: the exploded view moves the triangles.
+pub struct PickIndex {
+    model: u64,
+    layers: Vec<Vec<(Vec3, Vec3)>>,
+}
+
+impl PickIndex {
+    pub fn new(model: &Model) -> Self {
+        let layers = model
+            .layers
+            .iter()
+            .map(|layer| {
+                let pos = &layer.positions;
+                let at = |i: u32| pos.get(3 * i as usize..3 * i as usize + 3).map(|p| Vec3::new(p[0], p[1], p[2]));
+                layer
+                    .indices
+                    .chunks(3 * TRI_BLOCK)
+                    .map(|block| crate::measure::geometry::bounds_of(block.iter().filter_map(|&i| at(i))))
+                    .collect()
+            })
+            .collect();
+        Self { model: model.id, layers }
+    }
+}
+
+/// Whether the ray `origin + t·dir` meets the box `lo`..`hi` for some 0 < t < `max`.
+fn ray_meets_box(origin: Vec3, dir: Vec3, (lo, hi): (Vec3, Vec3), max: f32) -> bool {
+    let (mut near, mut far) = (0.0f32, max);
+    for a in 0..3 {
+        // a little room for flat boxes and rounding
+        let pad = 1e-5 * (1.0 + hi[a].abs().max(lo[a].abs()));
+        let (lo, hi) = (lo[a] - pad, hi[a] + pad);
+        if dir[a].abs() < 1e-20 {
+            if origin[a] < lo || origin[a] > hi {
+                return false;
+            }
+            continue;
+        }
+        let (t0, t1) = ((lo - origin[a]) / dir[a], (hi - origin[a]) / dir[a]);
+        near = near.max(t0.min(t1));
+        far = far.min(t0.max(t1));
+        if near > far {
+            return false;
+        }
+    }
+    true
+}
+
 /// The nearest triangle hit by the ray `origin + t·dir` (t > 0) among the visible layers:
 /// (layer, triangle), skipping hits that `keep` rejects (the section box). A triangle is where
 /// `shift` (layer, vertex) moves its first vertex: the exploded view, whose units never share a
-/// vertex. Möller–Trumbore, two-sided.
+/// vertex. With `index` (the model at rest), blocks of triangles the ray misses are skipped.
+/// Möller–Trumbore, two-sided.
 pub fn pick_triangle(
     model: &Model,
     visible: &[bool],
@@ -1971,6 +2216,7 @@ pub fn pick_triangle(
     dir: Vec3,
     shift: &dyn Fn(usize, u32) -> Vec3,
     keep: &dyn Fn(Vec3) -> bool,
+    index: Option<&PickIndex>,
 ) -> Option<(usize, usize)> {
     let mut best: Option<(f32, usize, usize)> = None;
     for (l, layer) in model.layers.iter().enumerate() {
@@ -1982,32 +2228,41 @@ pub fn pick_triangle(
             let i = 3 * i as usize;
             Vec3::new(pos[i], pos[i + 1], pos[i + 2])
         };
-        for (t, tri) in layer.indices.chunks_exact(3).enumerate() {
-            if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) {
+        let blocks = index.filter(|ix| ix.model == model.id).and_then(|ix| ix.layers.get(l));
+        for (b, block) in layer.indices.chunks(3 * TRI_BLOCK).enumerate() {
+            // a block the ray misses, or meets only beyond the nearest hit so far: skipped
+            let far = best.map_or(f32::INFINITY, |(d, _, _)| d);
+            if blocks.and_then(|bx| bx.get(b)).is_some_and(|&bx| !ray_meets_box(origin, dir, bx, far)) {
                 continue;
             }
-            let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
-            let (e1, e2) = (b - a, c - a);
-            let h = dir.cross(e2);
-            let det = e1.dot(h);
-            if det.abs() < 1e-12 {
-                continue;
-            }
-            let f = 1.0 / det;
-            // the ray moved back instead of the triangle
-            let s = origin - shift(l, tri[0]) - a;
-            let u = f * s.dot(h);
-            if !(0.0..=1.0).contains(&u) {
-                continue;
-            }
-            let q = s.cross(e1);
-            let v = f * dir.dot(q);
-            if v < 0.0 || u + v > 1.0 {
-                continue;
-            }
-            let d = f * e2.dot(q);
-            if d > 0.0 && best.is_none_or(|(bd, _, _)| d < bd) && keep(origin + dir * d) {
-                best = Some((d, l, t));
+            for (i, tri) in block.chunks_exact(3).enumerate() {
+                let t = b * TRI_BLOCK + i;
+                if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) {
+                    continue;
+                }
+                let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
+                let (e1, e2) = (b - a, c - a);
+                let h = dir.cross(e2);
+                let det = e1.dot(h);
+                if det.abs() < 1e-12 {
+                    continue;
+                }
+                let f = 1.0 / det;
+                // the ray moved back instead of the triangle
+                let s = origin - shift(l, tri[0]) - a;
+                let u = f * s.dot(h);
+                if !(0.0..=1.0).contains(&u) {
+                    continue;
+                }
+                let q = s.cross(e1);
+                let v = f * dir.dot(q);
+                if v < 0.0 || u + v > 1.0 {
+                    continue;
+                }
+                let d = f * e2.dot(q);
+                if d > 0.0 && best.is_none_or(|(bd, _, _)| d < bd) && keep(origin + dir * d) {
+                    best = Some((d, l, t));
+                }
             }
         }
     }
@@ -2406,18 +2661,50 @@ mod tests {
         };
         let model = Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]);
         let still = |_: usize, _: u32| Vec3::ZERO;
-        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true);
+        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None);
         let (l, t) = hit.expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(20));
+        let index = PickIndex::new(&model);
+        assert_eq!(pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, Some(&index)), hit);
         assert_eq!(model.element_ranges(20), vec![(0, 6, 6)]);
         let props = model.element_props(20);
         assert!(props.contains(&("level".to_string(), "00 begane grond".to_string())), "{props:?}");
-        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true).is_none());
-        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true).is_none());
+        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None).is_none());
         // a section box below z = 0.5 cuts the upper square away: the lower one is hit
         let below = |p: Vec3| p.z < 0.5;
-        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below).expect("hit");
+        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below, None).expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(10));
+    }
+
+    #[test]
+    fn the_pick_index_skips_blocks_and_finds_the_same_triangle() {
+        use crate::model::Layer;
+        // 1000 unit squares in a row at x = 2i, facing +Z, and a ray down onto each of a few
+        let mut layer = Layer { name: "Row".into(), ..Layer::default() };
+        for i in 0..1000u32 {
+            let x = 2.0 * i as f32;
+            layer.positions.extend_from_slice(&[x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x + 1.0, 1.0, 0.0, x, 1.0, 0.0]);
+            layer.indices.extend_from_slice(&[4 * i, 4 * i + 1, 4 * i + 2, 4 * i, 4 * i + 2, 4 * i + 3]);
+        }
+        let model = Model::new(PathBuf::from("row.obj"), "OBJ", vec![layer]);
+        let index = PickIndex::new(&model);
+        assert_eq!(index.layers[0].len(), 2000_usize.div_ceil(TRI_BLOCK));
+        let still = |_: usize, _: u32| Vec3::ZERO;
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        for x in [0.3, 255.5, 256.7, 1400.2, 1998.9, 1999.5] {
+            let origin = Vec3::new(x, 0.6, 5.0);
+            let plain = pick_triangle(&model, &[true], origin, down, &still, &|_| true, None);
+            assert_eq!(pick_triangle(&model, &[true], origin, down, &still, &|_| true, Some(&index)), plain, "x = {x}");
+            assert_eq!(plain.is_some(), x.rem_euclid(2.0) < 1.0, "x = {x}");
+        }
+        // a slanted ray, across many blocks
+        let slanted = Vec3::new(-0.3, 0.0, -1.0);
+        let origin = Vec3::new(1001.0, 0.5, 2.0);
+        assert_eq!(
+            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, Some(&index)),
+            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, None),
+        );
     }
 
     /// Two unit squares facing +Z side by side: element 10 at x 0..1, element 20 at x 2..3.
@@ -2447,9 +2734,9 @@ mod tests {
         // no levels: elements mode; the middle is x 1.5, so the squares move by -2 and +2
         let down = Vec3::new(0.0, 0.0, -1.0);
         let shift = |l: usize, i: u32| app.explode_offset(l, i);
-        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true);
+        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true, None);
         assert_eq!(hit.map(|(l, t)| model.layers[l].element_at(t)), Some(Some(20)));
-        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true, None).is_none());
         let b = app.world_bounds().unwrap();
         assert_eq!((b.min[0], b.max[0]), (-2.0, 5.0));
         app.selection = model.element_ranges(20);
@@ -2508,6 +2795,63 @@ mod tests {
         assert!(app.selected.is_none(), "measuring does not select");
         let _ = app.update(Message::Escape);
         assert!(app.measure.tool.is_none());
+    }
+
+    #[test]
+    fn hovering_highlights_what_the_click_takes() {
+        use crate::measure::hover::SnapKind;
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Plate".into(),
+            positions: vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let vp = app.camera.view_proj(w / h);
+        let screen = |p: Vec3| {
+            let n = vp.project_point3(p);
+            ((n.x + 1.0) * 0.5 * w, (1.0 - n.y) * 0.5 * h)
+        };
+        let hover = |app: &mut App, x: f32, y: f32| {
+            let _ = app.update(Message::Navigate(Navigate::Hover { x, y, width: w, height: h }));
+            app.hover_last = None; // no pause between the looks of a test
+        };
+        // nothing to measure: nothing highlighted
+        let (x, y) = screen(Vec3::new(1.0, 0.5, 0.0));
+        hover(&mut app, x, y);
+        assert!(app.measure.hover.is_none());
+
+        let _ = app.update(Message::Measure(Tool::Distance));
+        hover(&mut app, x, y);
+        assert_eq!(app.measure.hover.as_ref().map(|h| h.kind), Some(SnapKind::Face));
+        // 3 px from the corner (0, 0): the corner
+        let (cx, cy) = screen(Vec3::ZERO);
+        hover(&mut app, cx + 3.0, cy - 2.0);
+        let highlighted = app.measure.hover.clone().expect("hover");
+        assert_eq!(highlighted.kind, SnapKind::Corner);
+        // the click lands a pixel or two off: it takes the highlighted corner
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: cx + 5.0, y: cy - 3.0, width: w, height: h }));
+        assert_eq!(app.measure.picks, vec![highlighted.snap]);
+        // orbiting drops the highlight; leaving the viewport too
+        hover(&mut app, x, y);
+        let _ = app.update(Message::Navigate(Navigate::Orbit { dx: 5.0, dy: 0.0 }));
+        assert!(app.measure.hover.is_none());
+        hover(&mut app, x, y);
+        let _ = app.update(Message::Navigate(Navigate::HoverOff));
+        assert!(app.measure.hover.is_none());
+        // the layer under the cursor is hidden (a shortcut, remote control): the highlight goes,
+        // and a click there measures nothing
+        hover(&mut app, x, y);
+        assert!(app.measure.hover.is_some());
+        let _ = app.update(Message::Layer(0, false));
+        assert!(app.measure.hover.is_none(), "looked again: nothing shown there");
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        assert_eq!(app.measure.picks.len(), 1, "only the corner from before");
     }
 
     #[test]

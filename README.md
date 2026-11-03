@@ -116,7 +116,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 
 ## Measure, section and explode
 
-- **Measure** distances, angles, polygons and areas by clicking in the model, or between two elements. Measurements stay in the view until you clear them.
+- **Measure** distances, angles, polygons and areas by clicking in the model, or between two elements. Before you click, the point, edge or face under the cursor is highlighted, and the cursor snaps to corners, edge middles and edges within a few pixels. Measurements stay in the view until you clear them.
 - **Section box and section plane** cut the model open, with the cut faces filled. The box can fit the selection.
 - **Exploded view** pulls the model apart per storey or per element, by a percentage per axis.
 
@@ -178,7 +178,7 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## Testing and reliability
 
-- **121 unit tests** in `src/` (120 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 42 for the loaders, 14 for the app, 11 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **139 unit tests** in `src/` (138 run, 1 needs a local sample), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 52 for the loaders, 16 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 7 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.

@@ -1168,6 +1168,13 @@ impl<'a> V8Element<'a> {
     /// The vertices of a line (two points at +0x68) or of a line string, shape, curve, pole or
     /// point string element (a count at +0x68, points from +0x70).
     fn vertices(&self) -> Vec<DVec3> {
+        if self.kind() == 4 && self.flags() & 0x0100 != 0 {
+            // A line string with flag 0x0100 (B.11): a count N at +0x68, a 16-byte marker at
+            // +0x70, then N - 1 points of two doubles from +0x80. Its stored range is not valid;
+            // like every element here, its extent comes from the points.
+            let count = (self.u32(0x68) as usize).saturating_sub(1).min(self.len().saturating_sub(0x80) / 16);
+            return (0..count).map(|k| DVec3::new(self.f64(0x80 + 16 * k), self.f64(0x88 + 16 * k), 0.0)).collect();
+        }
         let size = self.point_size();
         let (first, count) = if self.kind() == 3 { (0x68, 2) } else { (0x70, self.u32(0x68) as usize) };
         let available = self.len().saturating_sub(first) / size;
@@ -2302,6 +2309,33 @@ mod tests {
         assert!((lo[0] + 5.0).abs() < 0.01 && (hi[0] - lo[0] - 2.0).abs() < 0.01 && (lo[1] - 3.0).abs() < 0.01, "{lo:?} {hi:?}");
         assert_eq!(info(&loaded, "DGN elements"), "Shared cell: 2");
         assert_eq!(info(&loaded, "DGN skipped elements"), "Shared cell without definition: 2");
+    }
+
+    #[test]
+    fn v8_line_strings_with_flag_0100_hold_n_minus_1_points_after_a_marker() {
+        let mut f = V8File::new(1000.0, 1.0, 1.0, [0.0; 3]);
+        // N = 4: a 16-byte marker, then three points (B.11); the length is 0x70 + 16 N.
+        let mut data = 4u32.to_le_bytes().to_vec();
+        data.extend([0; 4]);
+        data.extend([0xF0, 0x06, 0x91, 0x7C, 0xFF, 0xFF, 0xFF, 0xFF].repeat(2));
+        data.extend(doubles(&[1000.0, 1000.0, 3000.0, 1000.0, 3000.0, 2000.0]));
+        let mut element = v8(4, 0x1100, 64, shown(0, 0), &data, &[]);
+        assert_eq!(element.len(), 0x70 + 16 * 4);
+        // An invalid stored range: low = the first point, the "size" 2^63 - low x.
+        for (k, value) in [1000i64, 1000, 0, i64::MAX - 999, 0, 0].iter().enumerate() {
+            element[0x38 + 8 * k..0x40 + 8 * k].copy_from_slice(&value.to_le_bytes());
+        }
+        f.graphic(element);
+        // An ordinary line string beside it.
+        f.graphic(v8(4, 0x1000, 65, shown(0, 0), &counted(2, &[0.0, 0.0, 0.0, 500.0]), &[]));
+        let loaded = load(f.bytes()).unwrap();
+        assert_eq!(info(&loaded, "DGN elements"), "Line string: 2");
+        assert_eq!(info(&loaded, "DGN skipped elements"), "0");
+        // The world origin is the first point, (1, 1) m; the points span 2 x 1 m.
+        let (lo, hi) = bounds(&loaded.layers[0]);
+        assert!(lo[0] > -0.01 && (hi[0] - 2.0).abs() < 0.01 && lo[1] > -0.01 && (hi[1] - 1.0).abs() < 0.01, "{lo:?} {hi:?}");
+        let (lo, hi) = bounds(&loaded.layers[1]);
+        assert!((lo[0] + 1.0).abs() < 0.01 && (hi[1] + 0.5).abs() < 0.01, "{lo:?} {hi:?}");
     }
 
     #[test]

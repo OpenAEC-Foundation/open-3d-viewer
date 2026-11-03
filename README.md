@@ -156,7 +156,7 @@ What does not come through:
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
 - **Allplan** opens one drawing file (`.ndw`) at a time and shows its 3D bodies (walls, slabs, columns, windows, stairs) in one colour; openings and rooms start hidden in a layer of their own. Macros (3D furniture), colours and materials, 2D elements, whole project folders and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
-- **Archicad** shows walls and slabs as extruded footprints on their stories. Columns, beams, roofs, openings (doors, windows), library objects and projects from before Archicad 25 are not read yet, and a wall height the file does not store is estimated from the story levels. The reader is written from a clean-room specification.
+- **Archicad** shows walls and slabs as extruded footprints on their stories. Columns, beams, roofs, openings (doors, windows), library objects and projects from before Archicad 25 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 
 New formats: implement `loaders::Loader` and add it to `loaders::registry()`; new writers implement `export::Writer` and go in `export::registry()`.

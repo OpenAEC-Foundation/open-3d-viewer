@@ -1,4 +1,4 @@
-//! Archicad projects (.pln) and archives (.pla) of Archicad 25 to 29: walls (with their windows
+//! Archicad projects (.pln) and archives (.pla) of Archicad 24 to 29: walls (with their windows
 //! and doors cut out), slabs and columns as extruded footprints, beams along their axis, roof
 //! planes and library objects as boxes, grouped per story. Written from a clean-room specification
 //! of the file structure (SPEC v0.7, section numbers in the comments): a container of 16-byte items
@@ -59,7 +59,7 @@ const fn guid(hex: &str) -> Guid {
     out
 }
 
-// §5: the classes the reader uses, the same in Archicad 25 to 29.
+// §5: the classes the reader uses, the same in Archicad 24 to 29.
 const WALL: Guid = guid("8245654faf33524eabfcc35d46765ec4");
 const SLAB: Guid = guid("75125c944879d44187449d22d72ca486");
 const STORY: Guid = guid("256b04bcd6271a46a6e56fa0e8594a95");
@@ -1842,10 +1842,10 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
 
     let elements = stats.walls + stats.slabs + stats.columns.len() + stats.beams.len() + stats.roofs.len() + stats.objects.len();
     if elements == 0 {
-        // §10: Archicad 17 to 24 share the container but not the records
+        // §10: Archicad 17 to 23 share the container but not the records
         return Err(format!(
             "Archicad: no walls, slabs, columns, beams, roofs or library objects found ({} walls, {} slabs, {} columns, {} beams, \
-             {} roofs and {} objects skipped). This reader supports Archicad 25 to 29; projects from Archicad 17 to 24 are not \
+             {} roofs and {} objects skipped). This reader supports Archicad 24 to 29; projects from Archicad 17 to 23 are not \
              supported yet.",
             stats.walls_skipped, stats.slabs_skipped, stats.columns_skipped, stats.beams_skipped, stats.roofs_skipped, stats.objects_skipped
         ));
@@ -2342,10 +2342,11 @@ mod tests {
         let load = |data: &[u8]| ArchicadLoader.load(&Source::Bytes { name: "x.pln".into(), data: Arc::new(data.to_vec()) }).unwrap_err();
         assert!(load(b"not an Archicad project at all, but long enough").contains("no ROF FDB signature"));
         assert!(load(b"MM\0\0 an Archicad 10 project of more than 32 bytes").contains("before Archicad 17"));
-        // the container with nothing in it: no elements, as an Archicad 17-24 file gives
+        // the container with nothing in it: no elements, as an Archicad 17-23 file gives
         let mut empty = b"ROF FDB ".to_vec();
         empty.resize(64, 0);
-        assert!(load(&empty).contains("Archicad 25 to 29"));
+        let message = load(&empty);
+        assert!(message.contains("supports Archicad 24 to 29") && message.contains("Archicad 17 to 23 are not supported"), "{message}");
         // an item that is not a block, free space or a group
         empty[48] = 1;
         assert!(load(&empty).contains("unknown item at offset 48"));

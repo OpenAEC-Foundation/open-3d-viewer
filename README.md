@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
+**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, Vertex BD, BTL, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -36,7 +36,7 @@ One Rust code base gives three things: the **desktop app** for Windows, macOS an
 | [`scripts/`](scripts/) | The README images, the B2 icon copy and the product video, all made by script |
 | [`test-models/`](test-models/) | The models the tests open |
 
-The readers for SketchUp, Tekla and PLY, and the Revit library, live in their own OpenAEC repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). This repository pins each to a fixed commit.
+The readers for SketchUp, Tekla, PLY and Vertex BD/BTL, and the Revit library, live in their own OpenAEC repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`vertex.dll`](https://github.com/OpenAEC-Foundation/vertex.dll), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). This repository pins each to a fixed commit.
 
 ![A SketchUp model of a house on its plot in the viewer, with the models and layers on the left and the file properties on the right, theme Light](docs/images/readme/hero.png)
 
@@ -91,7 +91,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), Vertex BD (`.vxz`), BTL timber machine files, DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -138,6 +138,8 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
 | **Allplan** (`.ndw` drawing files, `.prj` project folders, beta) | Yes, 3D bodies, macros and 2D lines; project folders on the desktop | No |
 | **Archicad** (`.pln`, `.pla`, Archicad 24 to 29, beta) | Yes, walls with openings, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs, railings | No |
+| **Vertex BD** (`.vxz` projects, `.vxm` models, beta) | Yes, framing and building bodies with their colours | No |
+| **BTL** (`.btl`, Hundegger BTL 10, as exported by Vertex BD) | Yes, timber parts with their end cuts and processings | No |
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
 | **MicroStation DGN** (`.dgn`, V7 and V8) | Yes | No |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
@@ -157,6 +159,7 @@ What does not come through:
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
 - **Allplan** opens a drawing file (`.ndw`) and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (furniture, windows, doors, railings) are placed in a `Macros` layer, one element per placement. Opened from its project folder, each body gets its colour from the project: its surface (`design/*.surf`, a textured surface by the average of its preview) or else its colour number in `animation.cfg`; in the browser, or for a drawing file on its own, the layers keep a fixed colour per category. On the desktop a whole project folder (`*.prj`, dropped on the window) opens as one model: the drawing files of its building structure, one layer per storey (the category becomes a property), and only the first building of the structure shown. 2D lines and polylines that are not part of a 3D element (site plans, axes, plan details) are drawn as thin dark lines just above their storey, in a `2D lines` layer. Textures, texts, hatchings, arcs and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
 - **Archicad** shows walls, slabs and columns as extruded footprints on their stories, beams along their axis, sloped ones too (columns and beams with an own profile as that profile, its arcs included), and each plane of a roof between its sloped underside and top, with vertical edges. Arcs in outlines are drawn as short straight segments; roofs of thickness 0 (helper bodies for solid element operations) are left out. Windows and doors are cut from their walls as openings, which start hidden in a layer of their own. Library objects (furniture, kitchens, sanitary, 3D text) are drawn as boxes of their size, 1 m high when the height is in the library part's own code. Meshes become closed terrain bodies (their triangulated top, a flat bottom and sides), and zones prisms that start hidden, half transparent, in a layer of their own. Morphs are drawn face by face from their stored body, without materials. Stairs are a block per tread from the stair's plan scheme, railings a half transparent band with a rail on top and posts at the segment ends; the real shapes of treads, stringers, posts and balusters (library code) are not read. Window and door frames, glass and leaves, the real shapes of library objects, curved roofs and shells, zones cut by roofs (drawn whole), and projects from before Archicad 24 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
+- **Vertex BD** opens a project archive (`.vxz`) and shows the bodies of its framing model (`FRAMING.vxm`) and building model (`MODEL.vxm`) in their colours, one layer per model. Windows and doors (library symbols), element names (stud, top plate) and materials are not read yet. **BTL** shows each part as its blank with the end cuts applied, in a layer per member type (stud, top plate, cladding board), with size, timber grade and every processing in the element properties; laps, saw cuts, drillings and dovetails are listed but not cut out. Both readers are written from reverse-engineered sample files ([`vertex.dll`](https://github.com/OpenAEC-Foundation/vertex.dll)).
 - **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
 
 New formats: implement `loaders::Loader` and add it to `loaders::registry()`; new writers implement `export::Writer` and go in `export::registry()`.

@@ -1,12 +1,23 @@
-//! Adapter from the independent vertex-reader (repository `vertex.dll`) to the app's scene model:
-//! Vertex BD projects (`.vxz` archives and their `.vxm` models) and Hundegger BTL machine files
-//! (`.btl`, timber members as exported by Vertex BD and other timber CAD).
+//! Vertex BD projects (`.vxz` archives, `.vxm` models) and Hundegger BTL machine files (`.btl`,
+//! timber members as exported by Vertex BD) through the OpenAEC shared library `vertex.dll`
+//! (`libvertex.so` on Linux, `libvertex.dylib` on macOS). The reader is not compiled in: the
+//! installers put the library next to the program and it is loaded at run time, so without it these
+//! files report that the reader is missing. The interface (`vertex_read`, one scene buffer) is
+//! described in the library's `docs/ABI.md`.
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{Layer, ProjectData};
-use vertex_reader::{btl, vxm};
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
-/// Millimetres to metres.
-const MM: f64 = 0.001;
+/// The interface version this adapter understands.
+const ABI_VERSION: u32 = 1;
+
+#[cfg(windows)]
+const LIBRARY: &str = "vertex.dll";
+#[cfg(target_os = "macos")]
+const LIBRARY: &str = "libvertex.dylib";
+#[cfg(all(unix, not(target_os = "macos")))]
+const LIBRARY: &str = "libvertex.so";
 
 pub struct VertexLoader;
 
@@ -17,76 +28,8 @@ impl Loader for VertexLoader {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)
     }
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
-        progress.set(Phase::Read);
-        let data = source.read()?;
-        let model = if source.extension() == "vxm" { vxm::read_vxm(&data)? } else { vxm::read_vxz(&data)? };
-        progress.set(Phase::Convert);
-        let mut project = ProjectData::default();
-        for note in &model.notes {
-            // "VOF022947/FRAMING.vxm: build: r199074": the file, then a key and its value.
-            let note = note.split_once(": ").filter(|(file, _)| file.ends_with(".vxm")).map_or(note.as_str(), |(_, rest)| rest);
-            if let Some((key, value)) = note.split_once(": ") {
-                if !project.info.iter().any(|(k, v)| k == key && v == value) {
-                    project.info.push((key.to_string(), value.to_string()));
-                }
-            }
-        }
-        Ok(Loaded { layers: vxm_layers(model.meshes), views: Vec::new(), project })
+        read(source, progress)
     }
-}
-
-/// One layer per Vertex model file (FRAMING, MODEL), each body a pickable element with its own
-/// colour; flat-shaded, as the bodies are planar faces.
-fn vxm_layers(meshes: Vec<vxm::VxmMesh>) -> Vec<Layer> {
-    let mut layers: Vec<Layer> = Vec::new();
-    for (i, mesh) in meshes.into_iter().enumerate() {
-        let name = mesh.kind.split('/').next().filter(|s| !s.is_empty()).unwrap_or("Model").to_string();
-        let k = match layers.iter().position(|l| l.name == name) {
-            Some(k) => k,
-            None => {
-                let color = timber_color(layers.len());
-                layers.push(Layer { name, color, colors: Some(Vec::new()), ..Default::default() });
-                layers.len() - 1
-            }
-        };
-        let layer = &mut layers[k];
-        let rgba = mesh.color.unwrap_or([layer.color[0], layer.color[1], layer.color[2], 1.0]).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let id = i as u64 + 1;
-        let first = layer.indices.len() as u32;
-        for tri in mesh.indices.chunks_exact(3) {
-            let Some(p) = tri.iter().map(|&j| mesh.positions.get(j as usize).copied()).collect::<Option<Vec<_>>>() else { continue };
-            let n = face_normal(p[0], p[1], p[2]);
-            let base = layer.vertex_count() as u32;
-            for q in &p {
-                layer.positions.extend(q.map(|c| (c as f64 * MM) as f32));
-                layer.normals.extend(n);
-            }
-            if let Some(colors) = layer.colors.as_mut() {
-                colors.extend([rgba; 3]);
-            }
-            layer.indices.extend([base, base + 1, base + 2]);
-        }
-        let count = layer.indices.len() as u32 - first;
-        if count == 0 {
-            continue;
-        }
-        layer.elements.push((id, first, count));
-        let mut props = serde_json::Map::new();
-        props.insert("Name".into(), mesh.name.into());
-        for (key, value) in mesh.properties {
-            props.insert(key, value.into());
-        }
-        layer.props.push((id, serde_json::Value::Object(props).to_string()));
-    }
-    layers.retain(|l| !l.indices.is_empty());
-    layers
-}
-
-fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
-    let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
-    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    if l > 0.0 { n.map(|x| x / l) } else { [0.0, 0.0, 1.0] }
 }
 
 pub struct BtlLoader;
@@ -98,114 +41,142 @@ impl Loader for BtlLoader {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)
     }
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
-        progress.set(Phase::Read);
-        let data = source.read()?;
-        if !btl::is_btl(&data) {
-            return Err(format!("{}: not a BTL file", source.name()));
-        }
-        let file = btl::parse(&data)?;
-        progress.set(Phase::Convert);
-        Ok(Loaded { layers: btl_layers(&file), views: Vec::new(), project: btl_project(&file) })
+        read(source, progress)
     }
 }
 
-/// The project info: version, exporter and the filled-in `[GENERAL]` keys.
-fn btl_project(file: &btl::BtlFile) -> ProjectData {
-    let mut project = ProjectData::default();
-    project.info.push(("BTL version".into(), file.version.clone()));
-    let comments: Vec<&str> = file.general.iter().filter(|(k, _)| k == "COMMENT").map(|(_, v)| v.as_str()).collect();
-    for (key, value) in &file.general {
-        if key != "COMMENT" && key != "SCALEUNIT" && !value.trim().is_empty() {
-            project.info.push((title_case(key), value.trim().to_string()));
-        }
-    }
-    if !comments.is_empty() {
-        project.info.push(("Comment".into(), comments.join("; ")));
-    }
-    project.info.push(("Parts".into(), file.parts.len().to_string()));
-    project
+fn read(source: &Source, progress: &Progress) -> Result<Loaded, String> {
+    progress.set(Phase::Read);
+    let library = library()?;
+    let data = source.read()?;
+    progress.set(Phase::Convert);
+    let scene = library.read(&source.name(), &data)?;
+    decode(&scene)
 }
 
-/// One layer per member type (`ANNOTATION`), each part a pickable element.
-fn btl_layers(file: &btl::BtlFile) -> Vec<Layer> {
-    let mut layers: Vec<Layer> = Vec::new();
-    for (i, part) in file.parts.iter().enumerate() {
-        let name = if part.annotation.trim().is_empty() { "Parts".to_string() } else { part.annotation.trim().to_string() };
-        let k = match layers.iter().position(|l| l.name == name) {
-            Some(k) => k,
-            None => {
-                let color = timber_color(layers.len());
-                layers.push(Layer { name, color, ..Default::default() });
-                layers.len() - 1
-            }
-        };
-        let layer = &mut layers[k];
-        let mesh = btl::part_mesh(part);
-        if mesh.indices.is_empty() {
+/// The functions of the loaded library.
+struct Library {
+    read: unsafe extern "C" fn(*const u8, usize, *const u8, usize, *mut *mut u8, *mut usize) -> i32,
+    free: unsafe extern "C" fn(*mut u8, usize),
+    // Keeps the library loaded as long as the functions above are used.
+    _lib: libloading::Library,
+}
+
+impl Library {
+    /// Calls `vertex_read` and copies the buffer it returns (a scene, or an error message).
+    fn read(&self, name: &str, data: &[u8]) -> Result<Vec<u8>, String> {
+        let (mut out, mut len) = (std::ptr::null_mut(), 0usize);
+        // SAFETY: the pointers and lengths describe live slices and out-parameters, and the
+        // buffer is copied before it is handed back to `vertex_free`, once.
+        let code = unsafe { (self.read)(name.as_ptr(), name.len(), data.as_ptr(), data.len(), &mut out, &mut len) };
+        if out.is_null() {
+            return Err(format!("{name}: the Vertex reader returned nothing (code {code})"));
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out, len) }.to_vec();
+        unsafe { (self.free)(out, len) };
+        match code {
+            0 => Ok(bytes),
+            _ => Err(String::from_utf8_lossy(&bytes).into_owned()),
+        }
+    }
+}
+
+/// The library, loaded once: from `O3V_VERTEX_LIB`, next to the program, in `../lib/open-3d-viewer`
+/// (the Linux packages) or `../Frameworks` (the macOS app), and in a build from source in
+/// `vendor/vertex`.
+fn library() -> Result<&'static Library, String> {
+    static LIBRARY_CELL: OnceLock<Result<Library, String>> = OnceLock::new();
+    LIBRARY_CELL.get_or_init(load_library).as_ref().map_err(Clone::clone)
+}
+
+fn candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = std::env::var_os("O3V_VERTEX_LIB") {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) {
+        paths.push(dir.join(LIBRARY));
+        paths.push(dir.join("../lib/open-3d-viewer").join(LIBRARY));
+        paths.push(dir.join("../Frameworks").join(LIBRARY));
+    }
+    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor/vertex").join(LIBRARY));
+    paths
+}
+
+fn load_library() -> Result<Library, String> {
+    let mut tried = Vec::new();
+    for path in candidates() {
+        if !path.is_file() {
             continue;
         }
-        let id = i as u64 + 1;
-        let base = layer.vertex_count() as u32;
-        let first = layer.indices.len() as u32;
-        layer.positions.extend(mesh.positions.iter().flat_map(|p| p.map(|c| (c as f64 * MM) as f32)));
-        layer.normals.extend(mesh.normals.iter().flatten());
-        layer.indices.extend(mesh.indices.iter().map(|&j| base + j));
-        layer.elements.push((id, first, mesh.indices.len() as u32));
-        layer.props.push((id, part_props(part)));
-    }
-    layers.retain(|l| !l.indices.is_empty());
-    layers
-}
-
-/// The properties of a part: identification, size and its processings.
-fn part_props(part: &btl::BtlPart) -> String {
-    let mut map = serde_json::Map::new();
-    let mut put = |key: &str, value: serde_json::Value| {
-        map.insert(key.to_string(), value);
-    };
-    if let Some(n) = part.number { put("Member number", n.into()); }
-    for (key, label) in [("DESIGNATION", "Designation"), ("ANNOTATION", "Type"), ("STOREY", "Storey"), ("GROUP", "Group"), ("PACKAGE", "Package"), ("ASSEMBLYNUMBER", "Assembly"), ("ORDERNUMBER", "Order"), ("MATERIAL", "Material"), ("TIMBERGRADE", "Timber grade"), ("QUALITYGRADE", "Quality grade"), ("COMMENT", "Comment")] {
-        if let Some(v) = part.field(key).filter(|v| !v.trim().is_empty()) {
-            put(label, v.trim().into());
+        // SAFETY: loading runs the library's initialisers; vertex.dll is our own Rust library
+        // without any.
+        let lib = match unsafe { libloading::Library::new(&path) } {
+            Ok(lib) => lib,
+            Err(e) => {
+                tried.push(format!("{}: {e}", path.display()));
+                continue;
+            }
+        };
+        // SAFETY: the symbols have the signatures of the library's include/vertex.h.
+        unsafe {
+            let version = lib.get::<unsafe extern "C" fn() -> u32>(b"vertex_abi_version\0").map_err(|e| format!("{}: {e}", path.display()))?;
+            let version = version();
+            if version != ABI_VERSION {
+                tried.push(format!("{}: interface version {version}, this viewer needs {ABI_VERSION}", path.display()));
+                continue;
+            }
+            let read = *lib.get(b"vertex_read\0").map_err(|e| format!("{}: {e}", path.display()))?;
+            let free = *lib.get(b"vertex_free\0").map_err(|e| format!("{}: {e}", path.display()))?;
+            return Ok(Library { read, free, _lib: lib });
         }
     }
-    put("Count", part.count.into());
-    put("Length (mm)", rounded(part.length));
-    put("Height (mm)", rounded(part.height));
-    put("Width (mm)", rounded(part.width));
-    put("Volume (m³)", serde_json::json!((part.length * part.height * part.width * 1e-9 * 1e6).round() / 1e6));
-    if let Some(uid) = part.uid { put("UID", uid.into()); }
-    for (n, process) in part.processes.iter().enumerate() {
-        let params: Vec<String> = process.params.iter().map(|(k, v)| format!("P{k:02}={v}")).collect();
-        put(&format!("Processing {:02}", n + 1), format!("{} ({}) {}", process.key.name(), process.key, params.join(" ")).into());
+    let detail = if tried.is_empty() { String::new() } else { format!(" ({})", tried.join("; ")) };
+    Err(format!("Vertex BD and BTL files need the Vertex reader ({LIBRARY}), which comes with the installers of Open 3D Viewer Studio{detail}"))
+}
+
+/// The scene buffer of the library (`VXS1`, see its docs/ABI.md) as the viewer's layers.
+fn decode(buf: &[u8]) -> Result<Loaded, String> {
+    let bad = || "Vertex reader: damaged scene".to_string();
+    if buf.get(..4) != Some(b"VXS1") {
+        return Err(bad());
     }
-    serde_json::Value::Object(map).to_string()
-}
+    let header_len = u32::from_le_bytes(buf.get(4..8).ok_or_else(bad)?.try_into().map_err(|_| bad())?) as usize;
+    let header: serde_json::Value = serde_json::from_slice(buf.get(8..8 + header_len).ok_or_else(bad)?).map_err(|_| bad())?;
+    let mut at = 8 + header_len;
+    let mut take = |n: usize| -> Result<&[u8], String> {
+        let bytes = buf.get(at..at.checked_add(n).ok_or_else(bad)?).ok_or_else(bad)?;
+        at += n;
+        Ok(bytes)
+    };
+    let floats = |b: &[u8]| b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect::<Vec<_>>();
 
-fn rounded(value: f64) -> serde_json::Value {
-    serde_json::json!((value * 100.0).round() / 100.0)
-}
-
-/// `PROJECTNUMBER` → "Projectnumber"; the BTL keys have no word breaks.
-fn title_case(key: &str) -> String {
-    let lower = key.to_lowercase();
-    let mut chars = lower.chars();
-    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
-}
-
-/// Wood tones, one per member type.
-fn timber_color(i: usize) -> [f32; 3] {
-    const TONES: [[f32; 3]; 8] = [
-        [0.85, 0.70, 0.48],
-        [0.76, 0.58, 0.38],
-        [0.90, 0.78, 0.58],
-        [0.66, 0.50, 0.34],
-        [0.80, 0.66, 0.52],
-        [0.72, 0.62, 0.45],
-        [0.93, 0.84, 0.66],
-        [0.60, 0.46, 0.32],
-    ];
-    TONES[i % TONES.len()]
+    let mut project = ProjectData::default();
+    for pair in header["info"].as_array().into_iter().flatten() {
+        if let (Some(k), Some(v)) = (pair[0].as_str(), pair[1].as_str()) {
+            project.info.push((k.to_string(), v.to_string()));
+        }
+    }
+    let mut layers = Vec::new();
+    for l in header["layers"].as_array().ok_or_else(bad)? {
+        let vertices = l["vertices"].as_u64().ok_or_else(bad)? as usize;
+        let indices = l["indices"].as_u64().ok_or_else(bad)? as usize;
+        let color = l["color"].as_array().map(|c| [0, 1, 2].map(|i| c.get(i).and_then(|v| v.as_f64()).unwrap_or(0.7) as f32)).unwrap_or(super::DEFAULT_COLOR);
+        let positions = floats(take(vertices * 12)?);
+        let normals = floats(take(vertices * 12)?);
+        let colors = match l["colors"].as_bool() {
+            Some(true) => Some(take(vertices * 4)?.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()),
+            _ => None,
+        };
+        let indices: Vec<u32> = take(indices * 4)?.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        if indices.iter().any(|&i| i as usize >= vertices) {
+            return Err(bad());
+        }
+        let elements = l["elements"].as_array().into_iter().flatten().filter_map(|e| Some((e[0].as_u64()?, e[1].as_u64()? as u32, e[2].as_u64()? as u32))).collect();
+        let props = l["props"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_u64()?, p[1].as_str()?.to_string()))).collect();
+        layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false });
+    }
+    Ok(Loaded { layers, views: Vec::new(), project })
 }
 
 #[cfg(test)]
@@ -213,33 +184,52 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    const SAMPLE: &str = "VERSION: \"BTL V10.5\"\r\nBUILD: \"10500\"\r\n[GENERAL]\r\nPROJECTNUMBER: \"VOR000001\"\r\nPROJECTNAME: \"Test\"\r\nEXPORTRELEASE: \"Vertex BD Pro 32.0.8 \"\r\nSCALEUNIT: 2\r\nCOMMENT: panel W1\r\n[PART]\r\nSINGLEMEMBERNUMBER: 1\r\nDESIGNATION: \"W1-1\"\r\nANNOTATION: \"STUD\"\r\nTIMBERGRADE: \"C24\"\r\nCOUNT: 1\r\nLENGTH: 00250000\r\nHEIGHT: 00007000\r\nWIDTH: 00004300\r\nUID: 1\r\nTRANSFORMATION: OX:00000000 OY:00000000 OZ:00000000 XX:00000000 XY:00000000 XZ:00000100 YX:00000100 YY:00000000 YZ:00000000 ZX:00000000 ZY:00000100 ZZ:00000000\r\nPROCESSKEY: 2-010-1\r\nPROCESSPARAMETERS:  P01:00000000 P02:00000000 P03:00000000 P06:00009000 P07:00009000\r\nPROCESSIDENT: 1\r\nPROCESSKEY: 1-010-1\r\nPROCESSPARAMETERS:  P01:00250000 P02:00000000 P03:00000000 P06:00009000 P07:00009000\r\nPROCESSIDENT: 2\r\n[PART]\r\nSINGLEMEMBERNUMBER: 2\r\nANNOTATION: \"TOP PLATE\"\r\nLENGTH: 00100000\r\nHEIGHT: 00007000\r\nWIDTH: 00004300\r\nTRANSFORMATION: OX:00000000 OY:00000000 OZ:00250000 XX:00000100 XY:00000000 XZ:00000000 YX:00000000 YY:00000100 YZ:00000000 ZX:00000000 ZY:00000000 ZZ:00000100\r\nPROCESSKEY: 4-040-1\r\nPROCESSPARAMETERS:  P01:00050000 P02:00003500 P11:00004300 P12:00001200\r\nPROCESSIDENT: 1\r\n";
-
-    #[test]
-    fn loads_vertex_sample_projects() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../vertex.dll/vertex");
-        let Ok(entries) = std::fs::read_dir(&dir) else { return };
-        let mut loaded = 0;
-        for path in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "vxz")) {
-            let model = super::super::load(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            assert_eq!(model.format, "Vertex BD");
-            assert!(model.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
-            loaded += 1;
-        }
-        assert!(loaded == 0 || loaded >= 10);
+    /// A scene buffer as the library writes it: one triangle with one element.
+    fn scene() -> Vec<u8> {
+        let header = r#"{"format":"BTL","info":[["BTL version","BTL V10.5"]],"layers":[{"name":"STUD","color":[0.8,0.6,0.4],"vertices":3,"indices":3,"colors":true,"elements":[[1,0,3]],"props":[[1,"{\"Type\":\"STUD\"}"]]}]}"#;
+        let mut buf = b"VXS1".to_vec();
+        buf.extend((header.len() as u32).to_le_bytes());
+        buf.extend(header.as_bytes());
+        for v in [0f32, 0., 0., 1., 0., 0., 0., 1., 0.] { buf.extend(v.to_le_bytes()); }
+        for v in [0f32, 0., 1., 0., 0., 1., 0., 0., 1.] { buf.extend(v.to_le_bytes()); }
+        buf.extend([200u8, 150, 100, 255].repeat(3));
+        for i in [0u32, 1, 2] { buf.extend(i.to_le_bytes()); }
+        buf
     }
 
     #[test]
-    fn loads_btl_parts_as_elements() {
-        let source = Source::Bytes { name: "wall.BTL".into(), data: Arc::new(SAMPLE.as_bytes().to_vec()) };
+    fn decodes_a_scene_buffer() {
+        let loaded = decode(&scene()).unwrap();
+        assert_eq!(loaded.layers.len(), 1);
+        let layer = &loaded.layers[0];
+        assert_eq!((layer.name.as_str(), layer.vertex_count(), layer.triangle_count()), ("STUD", 3, 1));
+        assert_eq!(layer.colors.as_ref().unwrap()[2], [200, 150, 100, 255]);
+        assert_eq!(layer.elements, [(1, 0, 3)]);
+        assert_eq!(loaded.project.info[0].1, "BTL V10.5");
+    }
+
+    #[test]
+    fn refuses_damaged_buffers() {
+        let full = scene();
+        assert!(decode(&full[..full.len() - 1]).is_err());
+        assert!(decode(b"VXS2").is_err());
+        let mut bad_index = full.clone();
+        let n = bad_index.len();
+        bad_index[n - 4..].copy_from_slice(&7u32.to_le_bytes());
+        assert!(decode(&bad_index).is_err());
+    }
+
+    /// With the library in vendor/vertex (or `O3V_VERTEX_LIB`): a real BTL file end to end.
+    #[test]
+    fn reads_btl_through_the_library_when_present() {
+        if library().is_err() {
+            return;
+        }
+        let btl = "VERSION: \"BTL V10.5\"\r\n[GENERAL]\r\nSCALEUNIT: 2\r\n[PART]\r\nANNOTATION: \"STUD\"\r\nLENGTH: 00250000\r\nHEIGHT: 00007000\r\nWIDTH: 00004300\r\nTRANSFORMATION: OX:00000000 OY:00000000 OZ:00000000 XX:00000000 XY:00000000 XZ:00000100 YX:00000100 YY:00000000 YZ:00000000 ZX:00000000 ZY:00000100 ZZ:00000000\r\n";
+        let source = Source::Bytes { name: "wall.btl".into(), data: Arc::new(btl.as_bytes().to_vec()) };
         let model = super::super::load_with(&source, &Progress::default()).expect("BTL");
         assert_eq!(model.format, "BTL");
-        assert_eq!(model.layers.len(), 2);
-        assert_eq!(model.triangle_count(), 24);
-        // A 2.5 m stud standing up, a 1 m top plate on it: metres, Z up.
-        assert!((model.bounds.max[2] - 2.543).abs() < 1e-4, "{:?}", model.bounds);
-        assert!(model.props.values().any(|p| p.contains("\"Timber grade\":\"C24\"")));
-        assert!(model.props.values().any(|p| p.contains("Drilling (4-040-1)")));
-        assert!(model.project.info.iter().any(|(k, v)| k == "Exportrelease" && v.contains("Vertex BD")));
+        assert_eq!(model.triangle_count(), 12);
+        assert!((model.bounds.max[2] - 2.5).abs() < 1e-4, "{:?}", model.bounds);
     }
 }

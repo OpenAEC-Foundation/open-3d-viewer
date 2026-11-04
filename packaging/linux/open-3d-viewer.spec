@@ -18,6 +18,7 @@ and saves them as IFC.
 %install
 install -Dm755 %{_sourcedir}/open-3d-viewer %{buildroot}/usr/bin/open-3d-viewer
 install -Dm755 %{_sourcedir}/open-3d-viewer-mcp %{buildroot}/usr/bin/open-3d-viewer-mcp
+install -Dm644 %{_sourcedir}/libvertex.so %{buildroot}/usr/lib/open-3d-viewer/libvertex.so
 install -Dm644 %{_sourcedir}/org.openaec.Open3DViewer.desktop %{buildroot}/usr/share/applications/org.openaec.Open3DViewer.desktop
 install -Dm644 %{_sourcedir}/icon.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png
 install -Dm644 %{_sourcedir}/LICENSE %{buildroot}/usr/share/licenses/open-3d-viewer/LICENSE
@@ -25,6 +26,7 @@ install -Dm644 %{_sourcedir}/LICENSE %{buildroot}/usr/share/licenses/open-3d-vie
 %files
 /usr/bin/open-3d-viewer
 /usr/bin/open-3d-viewer-mcp
+/usr/lib/open-3d-viewer/libvertex.so
 /usr/share/applications/org.openaec.Open3DViewer.desktop
 /usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png
 /usr/share/licenses/open-3d-viewer/LICENSE

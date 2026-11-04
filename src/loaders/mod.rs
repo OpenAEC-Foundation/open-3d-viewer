@@ -23,6 +23,7 @@ mod cad;
 mod allplan;
 mod dgn;
 mod archicad;
+#[cfg(not(target_arch = "wasm32"))]
 mod vertex;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
@@ -195,9 +196,13 @@ pub fn registry() -> Vec<&'static dyn Loader> {
     let builtin: Vec<&'static dyn Loader> = vec![
         &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
         &cityjson::CityJsonLoader, &landxml::LandXmlLoader,
-        &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader, &vertex::VertexLoader, &vertex::BtlLoader,
+        &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &vertex::VertexLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &vertex::BtlLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &ifc::IfcLoader,
     ];
@@ -298,7 +303,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("btl", "BTL"), ("vxz", "Vertex BD")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }

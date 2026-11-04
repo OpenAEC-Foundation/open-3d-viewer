@@ -56,8 +56,6 @@ acadrust = { git = "https://github.com/HakanSeven12/acadrust", rev = "299dc758f9
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
 tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
-# Vertex BD project archives and BTL timber machine files (repository vertex.dll)
-vertex-reader = { git = "https://github.com/OpenAEC-Foundation/vertex.dll", rev = "70fdffba015a5ca20987ecb09c0b9d71291f9e51" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
@@ -65,6 +63,8 @@ quicklz = "0.3.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
 ifc-lite-processing = "=25.0.1"
+# Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
+libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
 rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76" }
 rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76", default-features = false }

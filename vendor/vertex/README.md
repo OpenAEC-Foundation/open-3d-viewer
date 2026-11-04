@@ -1,7 +1,7 @@
 # vertex.dll
 
 The Vertex BD (`.vxz`, `.vxm`) and BTL (`.btl`) reader as a shared library, from the private
-OpenAEC repository `vertex.dll`, release `v0.1.0` (commit `62d2f61df0a5b03cf4cd92a37ea6c2930d0b6400`). The viewer loads it at run
+OpenAEC repository `vertex.dll`, release `v0.2.0` (commit `e998d669365560dad46b277fb00734f6d8dc8c0d`). The viewer loads it at run
 time; the installers put it next to the program. Update with `scripts/update-vertex.sh <tag>`.
 
 | File | Platform |

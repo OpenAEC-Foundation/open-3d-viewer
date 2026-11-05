@@ -7,5 +7,5 @@ Exec=open-3d-viewer %f
 Icon=org.openaec.Open3DViewer
 Terminal=false
 Categories=Graphics;3DGraphics;Viewer;Engineering;
-MimeType=model/gltf-binary;model/gltf+json;model/obj;model/stl;application/x-ply;model/3mf;model/vnd.collada+xml;image/x-3ds;application/geo+json;application/gml+xml;model/vnd.usdz+zip;
+MimeType=model/gltf-binary;model/gltf+json;model/obj;model/stl;application/x-ply;model/3mf;model/vnd.collada+xml;image/x-3ds;application/geo+json;application/gml+xml;model/vnd.usdz+zip;application/vnd.las;application/vnd.laszip;model/e57;
 StartupWMClass=open-3d-viewer

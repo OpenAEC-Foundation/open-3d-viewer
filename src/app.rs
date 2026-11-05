@@ -1595,7 +1595,7 @@ impl App {
                             .color(if visible { p.text } else { p.text_muted })
                             .wrapping(Wrapping::WordOrGlyph)
                             .width(Fill),
-                        text(format_count(layer.triangle_count())).size(10).color(p.text_muted),
+                        text(format_count(if layer.points { layer.point_count() } else { layer.triangle_count() })).size(10).color(p.text_muted),
                     ]
                     .spacing(6)
                     .align_y(Center),
@@ -1641,6 +1641,9 @@ impl App {
             .filter(|(_, v)| **v)
             .map(|(l, _)| l.triangle_count())
             .sum();
+        // point clouds count points: shown instead of triangles when the model has no triangles
+        let (triangles, points) = (model.triangle_count(), model.point_count());
+        let visible_points: usize = model.layers.iter().zip(&self.visible).filter(|(_, v)| **v).map(|(l, _)| l.point_count()).sum();
         let mut content = column![].spacing(5).padding(Padding { top: 0.0, right: 6.0, bottom: 8.0, left: 0.0 });
         let section = |title: &str| -> Element<'static, Message> {
             container(text(title.to_uppercase()).size(11).font(FONT_BOLD).color(p.group_label))
@@ -1808,8 +1811,9 @@ impl App {
             .push(section(l.text("Geometrie", "Geometry")))
             .push(prop(l.text("Lagen", "Layers"), model.layers.len().to_string()))
             .push(prop(l.text("Hoekpunten", "Vertices"), format_count(model.vertex_count())))
-            .push(prop(l.text("Driehoeken", "Triangles"), format_count(model.triangle_count())))
-            .push(prop(l.text("Zichtbaar", "Visible"), format_count(visible_tris)))
+            .push((triangles > 0 || points == 0).then(|| prop(l.text("Driehoeken", "Triangles"), format_count(triangles))))
+            .push((points > 0).then(|| prop(l.text("Punten", "Points"), format_count(points))))
+            .push(prop(l.text("Zichtbaar", "Visible"), format_count(if triangles == 0 { visible_points } else { visible_tris })))
             .push(rule::horizontal(1))
             .push(section(l.text("Grenzen (Z omhoog)", "Bounds (Z up)")))
             .push(prop("Min", format_vec(b.min)))
@@ -2105,8 +2109,14 @@ impl App {
         if let Some(m) = &self.model {
             right = right
                 .push(item("Layers", m.layers.len().to_string()))
-                .push(item("Vertices", format_count(m.vertex_count())))
-                .push(item("Triangles", format_count(m.triangle_count())));
+                .push(item("Vertices", format_count(m.vertex_count())));
+            let (triangles, points) = (m.triangle_count(), m.point_count());
+            if triangles > 0 || points == 0 {
+                right = right.push(item("Triangles", format_count(triangles)));
+            }
+            if points > 0 {
+                right = right.push(item("Points", format_count(points)));
+            }
         }
         right = right.push(item(
             "Mode",

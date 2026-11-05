@@ -64,6 +64,9 @@ quicklz = "0.3.1"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # USD stages (.usda, .usdc, .usdz) with composition, pure Rust (MIT)
 openusd = { version = "0.8", default-features = false }
+# Point clouds: LAS and LAZ (las MIT, laz Apache-2.0) and E57 (MIT), all pure Rust
+las = { version = "0.11", features = ["laz"] }
+e57 = "0.11"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

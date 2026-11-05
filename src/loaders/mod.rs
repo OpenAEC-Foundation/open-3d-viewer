@@ -30,6 +30,7 @@ mod off;
 mod max3ds;
 mod geojson;
 mod citygml;
+mod usd;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::borrow::Cow;
@@ -201,7 +202,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
     let builtin: Vec<&'static dyn Loader> = vec![
         &skp::SkpLoader, &tekla::TeklaLoader, &gltf::GltfLoader, &obj::ObjLoader, &stl::StlLoader, &ply::PlyLoader,
         &cityjson::CityJsonLoader, &landxml::LandXmlLoader, &threemf::ThreeMfLoader, &collada::ColladaLoader,
-        &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader,
+        &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -305,7 +306,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }

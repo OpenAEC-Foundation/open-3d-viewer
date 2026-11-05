@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, CityGML, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
+**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, CityGML, GeoJSON, LandXML, glTF, USD, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC (also zipped) and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, CityGML, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC (also zipped) and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, CityGML, GeoJSON, LandXML, glTF, USD, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -145,6 +145,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **GeoJSON** (`.geojson`, polygons and lines) | Yes | No |
 | **LandXML** (`.xml`, `.landxml`, TIN surfaces) | Yes | No |
 | **glTF** (`.gltf`, `.glb`) | Yes | No |
+| **USD** (`.usd`, `.usda`, `.usdc`, `.usdz`) | Yes | No |
 | **COLLADA** (`.dae`) | Yes | No |
 | **Wavefront OBJ** (`.obj`) | Yes | No |
 | **STL** (`.stl`, ASCII and binary) | Yes | No |
@@ -164,6 +165,7 @@ What does not come through:
 - **GeoJSON** shows polygons as flat faces (with their holes) and lines as 0.3 m wide ribbons, one element per feature with its properties; a polygon with a `height`, `building:height` or `building:levels` (3 m a level, with `min_height` for the underside) becomes a block. Longitude/latitude are projected to local metres around the first coordinate (equirectangular, fine for a district, not for a country); projected coordinates are taken as metres. Points are not drawn.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **COLLADA** shows the triangles and polygons of the visual scene, one layer per SketchUp tag or else per material, in the diffuse colour of the material; textures, lines, polygons with holes and animations are left out. **3MF** shows each build item as a layer, with its components, base materials and colour groups; textures, beam lattices and slices are not read.
+- **USD** shows the meshes of the composed stage (sublayers, references, payloads, variants and instances), each mesh a pickable element with its name and path, placed with its transform ops, one layer per bound material in its `UsdPreviewSurface` diffuse colour, with `displayColor` colours; up axis and units come from the stage. Textures, subdivision surfaces, implicit shapes (cube, sphere, ..), curves, points, skinning and animation (the default time is drawn) are left out. In the browser only the file itself is read, so references to other files are missing (a `.usdz` carries its own). The reader is the pure-Rust `openusd` crate.
 - **FBX** shows the meshes of the scene, each model a pickable element with its name and user properties, placed with its parents and its full transform, one layer per material in its diffuse colour; units and axes come from the file. Textures, NURBS and curves, cameras, lights, animations, skinning and blend shapes are left out. The reader is written from the public description of the format, without the FBX SDK. **3DS** shows each mesh object as an element, one layer per material in its diffuse colour, in file units; textures, smoothing groups, lights, cameras and the keyframer (animation, instances) are not read. **OFF** shows one flat shaded mesh with its vertex or face colours; binary OFF is not read.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
 - **Allplan** opens a drawing file (`.ndw`) and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (furniture, windows, doors, railings) are placed in a `Macros` layer, one element per placement. Opened from its project folder, each body gets its colour from the project: its surface (`design/*.surf`, a textured surface by the average of its preview) or else its colour number in `animation.cfg`; in the browser, or for a drawing file on its own, the layers keep a fixed colour per category. On the desktop a whole project folder (`*.prj`, dropped on the window) opens as one model: the drawing files of its building structure, one layer per storey (the category becomes a property), and only the first building of the structure shown. 2D lines and polylines that are not part of a 3D element (site plans, axes, plan details) are drawn as thin dark lines just above their storey, in a `2D lines` layer. Textures, texts, hatchings, arcs and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.

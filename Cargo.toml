@@ -6,7 +6,8 @@ description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.89"
+# openusd (USD import) needs Rust 1.96
+rust-version = "1.96"
 
 repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
 default-run = "open-3d-viewer"
@@ -61,6 +62,8 @@ ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# USD stages (.usda, .usdc, .usdz) with composition, pure Rust (MIT)
+openusd = { version = "0.8", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

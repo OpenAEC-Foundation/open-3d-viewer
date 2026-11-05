@@ -1,7 +1,7 @@
 use ifc_lite_core::{
     declared_schema_bounded, parse_entity, AttributeValue as A, EntityScanner, SchemaVersion,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 pub struct Node {
     pub id: u32,
@@ -188,6 +188,73 @@ impl Graph {
             result.extend(types);
         }
         Ok(result)
+    }
+}
+impl Graph {
+    /// Non-empty `Name` attribute.
+    pub fn name(&self, n: &Node) -> Option<String> {
+        self.attr(n, "Name")
+            .and_then(text)
+            .filter(|s| !s.is_empty())
+    }
+    /// The storey itself, or the nearest building storey reached upward through spatial
+    /// containment, decomposition, nesting, voids and fills. Breadth-first in document order;
+    /// bounded.
+    pub fn storey_of(&self, id: u32) -> Option<u32> {
+        if self
+            .nodes
+            .get(&id)
+            .is_some_and(|n| n.kind == "IFCBUILDINGSTOREY")
+        {
+            return Some(id);
+        }
+        let mut queue = VecDeque::from([id]);
+        let mut seen = HashSet::from([id]);
+        while let Some(current) = queue.pop_front() {
+            for (relation, parent) in self.parents.get(&current).into_iter().flatten() {
+                if relation == "IFCRELASSIGNSTOGROUP" || seen.len() > 256 || !seen.insert(*parent) {
+                    continue;
+                }
+                let Some(node) = self.nodes.get(parent) else {
+                    continue;
+                };
+                if node.kind == "IFCBUILDINGSTOREY" {
+                    return Some(*parent);
+                }
+                queue.push_back(*parent);
+            }
+        }
+        None
+    }
+    pub fn finding(
+        &self,
+        n: &Node,
+        facet: &str,
+        status: crate::ValidationStatus,
+        reason: String,
+    ) -> crate::Finding {
+        crate::Finding {
+            express_id: n.id,
+            global_id: self.attr(n, "GlobalId").and_then(text),
+            entity_type: n.kind.clone(),
+            facet: facet.into(),
+            status,
+            reason,
+            name: self.name(n),
+            storey: self.storey_of(n.id).and_then(|id| {
+                let storey = self.nodes.get(&id)?;
+                Some(self.name(storey).unwrap_or_else(|| format!("#{id}")))
+            }),
+        }
+    }
+}
+/// Numeric value of a real, integer or typed measure.
+pub fn number(a: &A) -> Option<f64> {
+    match a {
+        A::Float(v) if v.is_finite() => Some(*v),
+        A::Integer(v) => Some(*v as f64),
+        A::Typed { value, .. } => number(value),
+        _ => None,
     }
 }
 fn attr<'a>(schema: SchemaVersion, n: &'a Node, name: &str) -> Option<&'a A> {

@@ -170,7 +170,7 @@ pub fn value_matches(expected: &Option<Value>, a: &A) -> Result<bool, String> {
 }
 
 thread_local! { static PATTERNS: std::cell::RefCell<std::collections::HashMap<String,oxixml_regex::Regex>> = std::cell::RefCell::new(std::collections::HashMap::new()); }
-fn pattern_match(pattern: &str, s: &str) -> Result<bool, String> {
+pub(crate) fn pattern_match(pattern: &str, s: &str) -> Result<bool, String> {
     if pattern.len() > 4096 || s.len() > 1024 * 1024 {
         return Err("XSD pattern/input exceeds evaluation limit".into());
     }

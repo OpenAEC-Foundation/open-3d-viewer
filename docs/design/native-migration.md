@@ -8,12 +8,13 @@ The native validator and viewer share a Rust source tree. This ledger distinguis
 | Separate products | Compile-time product descriptor, distinct executable/settings/install IDs | Separate signed workflow implemented; credentialed execution and publication remain pending |
 | IFC semantic data | IFClite core 25.0.1, including entities without geometry | Full IFC2X3/IFC4 conformance is not claimed |
 | IDS validation | Native `bim-validator-core`, typed IDS input | 307 official paired cases: 292 exact matches, 14 not checkable, 1 invalid input; see core README for precise scope |
+| Built-in rule sets | Model checks after buildingSMART validation-service rules (PJS/SPS/OJT/PSE/GRP codes) and BIM basis ILS (NL) profile in `bim-validator-core` | No geometry or georeferencing rules; ILS coverage is the subset listed in the core README |
 | Background validation | Worker, cancellation and generation guard | Cancellation is cooperative |
 | Finding selection | Source-scoped GlobalId lookup in loaded geometry | Entities without geometry remain reportable without selectable meshes |
-| Reports | JSON and CSV, same core through GUI and CLI | No HTML/PDF report renderer yet |
+| Reports | JSON, CSV and self-contained HTML (English/Dutch), same core through GUI and CLI | No PDF renderer |
 | BCF 2.1 | Import, status edit, archive preservation, findings export | Full XSD validation of imports is not implemented |
 | BCF viewpoints | Camera and metadata read, original files preserved | Viewer does not yet restore camera, visibility, clipping or coloring; selection frames a component |
-| BCF creation | Topic and component references | No viewport snapshot capture yet |
+| BCF creation | Topic and component references; one topic per finding, per rule, or per rule and storey | No viewport snapshot capture yet |
 | HTTP API and hosted jobs | Existing service remains available separately | Not migrated to native Rust |
 | Browser validation | Existing web validator remains separate | New native validation interface is not a WASM target |
 | Performance | Existing native renderer reused | No comparative validation benchmark published |

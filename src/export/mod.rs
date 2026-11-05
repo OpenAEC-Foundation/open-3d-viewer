@@ -87,6 +87,10 @@ mod tests {
         for entry in std::fs::read_dir(repo_file("test-models")).unwrap() {
             let path = entry.unwrap().path();
             let Ok(model) = loaders::load(&path) else { continue };
+            // point clouds are left out of IFC: nothing to save
+            if model.triangle_count() == 0 {
+                continue;
+            }
             let out = dir.join(path.file_stem().unwrap()).with_extension("ifc");
             super::save(&model, &out).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();

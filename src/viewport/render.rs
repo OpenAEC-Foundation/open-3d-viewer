@@ -4,6 +4,11 @@
 //! viewport, resolved, and then blitted into iced's frame at the widget bounds. Model geometry
 //! is uploaded once per model (keyed by `Model::id`); each frame only writes the uniforms, and
 //! the offsets of the exploded view when they change.
+//!
+//! Point clouds are drawn as squares of [`POINT_SIZE`] pixels, whatever their distance: each
+//! point is an instance of a four-vertex triangle strip that the vertex shader spreads round the
+//! point on screen. Instanced quads rather than `PointList`, whose points are one pixel on every
+//! backend that matters (WebGL2 and WebGPU have no point size).
 
 use super::camera::Camera;
 use crate::explode::ExplodeIndex;
@@ -23,6 +28,8 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStenci
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
+/// The size of a point of a point cloud, in logical pixels.
+const POINT_SIZE: f32 = 2.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
@@ -65,6 +72,14 @@ struct Vertex {
     color: [u8; 4],
     /// Unit of the exploded view: index into the offsets (0 never moves).
     unit: u32,
+}
+
+/// A point of a point cloud: an instance of `vs_point`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct PointVertex {
+    position: [f32; 3],
+    color: [u8; 4],
 }
 
 #[repr(C)]
@@ -120,9 +135,12 @@ impl shader::Primitive for ScenePrimitive {
 }
 
 struct GpuLayer {
+    /// [`Vertex`]es of a mesh, [`PointVertex`]es of a point cloud.
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// The points of a point cloud layer (no indices); 0 for a mesh.
+    points: u32,
     /// Line lists, built on first use: all triangle edges (wireframe) and feature edges.
     wire: Option<(wgpu::Buffer, u32)>,
     features: Option<(wgpu::Buffer, u32)>,
@@ -150,6 +168,7 @@ pub struct ScenePipeline {
     face_count: wgpu::RenderPipeline,
     cap: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    points: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
     blit_uniforms: wgpu::Buffer,
@@ -379,6 +398,39 @@ impl ScenePipeline {
             wgpu::DepthBiasState::default(),
             true,
         );
+        // Point clouds: a square per point (instance), unlit.
+        let point_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
+        let points = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("o3v.points"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_point"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<PointVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &point_attributes,
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_point"),
+                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
 
         // Blit
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -453,6 +505,7 @@ impl ScenePipeline {
             face_count,
             cap,
             lines,
+            points,
             blit,
             blit_layout,
             blit_uniforms,
@@ -546,6 +599,10 @@ impl ScenePipeline {
         for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
+            if layer.points {
+                self.layers.push(upload_points(device, layer, base));
+                continue;
+            }
             let units = explode.and_then(|e| e.vertex_units.get(l));
             let vertices: Vec<Vertex> = (0..layer.vertex_count())
                 .map(|i| Vertex {
@@ -573,6 +630,7 @@ impl ScenePipeline {
                 vertices,
                 indices,
                 index_count: layer.indices.len() as u32,
+                points: 0,
                 wire: None,
                 features: None,
                 solid: None,
@@ -610,7 +668,7 @@ impl ScenePipeline {
     fn ensure_edges(&mut self, device: &wgpu::Device, visible: &[bool], all_triangle_edges: bool) {
         let Some(model) = self.model.clone() else { return };
         for (i, (gpu, layer)) in self.layers.iter_mut().zip(&model.layers).enumerate() {
-            if !visible.get(i).copied().unwrap_or(true) {
+            if !visible.get(i).copied().unwrap_or(true) || layer.points {
                 continue;
             }
             let slot = if all_triangle_edges { &mut gpu.wire } else { &mut gpu.features };
@@ -729,11 +787,13 @@ impl ScenePipeline {
         let srgb = if self.srgb { 1.0 } else { 0.0 };
         let clip = settings.section.map(|s| s.uniform()).unwrap_or([[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]]);
         let plane = settings.plane.unwrap_or([[0.0; 4]; 2]);
+        // half the point size in clip units (x, y), for `vs_point`
+        let point = POINT_SIZE * scale;
         let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3], plane: [[f32; 4]; 2]| Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
-            params: [srgb, line_scale, 0.0, 0.0],
+            params: [srgb, line_scale, point / w as f32, point / h as f32],
             clip,
             cap: [CAP_COLOR[0], CAP_COLOR[1], CAP_COLOR[2], CAP_HATCH * viewport.scale_factor() as f32],
             plane,
@@ -785,10 +845,21 @@ impl ScenePipeline {
                 pass.set_pipeline(&self.lit);
                 pass.set_bind_group(0, &self.model_group, &[]);
                 for (i, layer) in self.layers.iter().enumerate() {
-                    if visible(i) {
+                    if visible(i) && layer.index_count > 0 {
                         pass.set_vertex_buffer(0, layer.vertices.slice(..));
                         pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..layer.index_count, 0, 0..1);
+                    }
+                }
+            }
+            // point clouds in every mode: they have no faces or edges
+            if self.layers.iter().any(|l| l.points > 0) {
+                pass.set_pipeline(&self.points);
+                pass.set_bind_group(0, &self.model_group, &[]);
+                for (i, layer) in self.layers.iter().enumerate() {
+                    if visible(i) && layer.points > 0 {
+                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                        pass.draw(0..4, 0..layer.points);
                     }
                 }
             }
@@ -797,7 +868,7 @@ impl ScenePipeline {
                 pass.set_bind_group(0, &self.model_group, &[]);
                 for &(i, first, count) in &primitive.selection {
                     let Some(layer) = self.layers.get(i) else { continue };
-                    if visible(i) && first + count <= layer.index_count {
+                    if visible(i) && count > 0 && first + count <= layer.index_count {
                         pass.set_vertex_buffer(0, layer.vertices.slice(..));
                         pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(first..first + count, 0, 0..1);
@@ -832,7 +903,7 @@ impl ScenePipeline {
                 pass.set_pipeline(&self.glass);
                 pass.set_bind_group(0, &self.model_group, &[]);
                 for (i, layer) in self.layers.iter().enumerate() {
-                    if visible(i) && layer.transparent {
+                    if visible(i) && layer.transparent && layer.index_count > 0 {
                         pass.set_vertex_buffer(0, layer.vertices.slice(..));
                         pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..layer.index_count, 0, 0..1);
@@ -885,6 +956,35 @@ impl ScenePipeline {
         pass.set_bind_group(0, &targets.blit_group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// The points of a point cloud layer as an instance buffer, written straight into the mapped
+/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`.
+fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4]) -> GpuLayer {
+    let n = layer.vertex_count();
+    let size = std::mem::size_of::<PointVertex>();
+    let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("o3v.layer.points"),
+        size: (n.max(1) * size) as u64,
+        usage: wgpu::BufferUsages::VERTEX,
+        mapped_at_creation: true,
+    });
+    {
+        let mut view = vertices.slice(..).get_mapped_range_mut();
+        let out: &mut [PointVertex] = bytemuck::cast_slice_mut(&mut view[..n * size]);
+        for (i, (p, v)) in layer.positions.chunks_exact(3).zip(out.iter_mut()).enumerate() {
+            let color = layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base);
+            *v = PointVertex { position: [p[0], p[1], p[2]], color: [color[0], color[1], color[2], 255] };
+        }
+    }
+    vertices.unmap();
+    let indices = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("o3v.layer.indices"),
+        size: 4,
+        usage: wgpu::BufferUsages::INDEX,
+        mapped_at_creation: false,
+    });
+    GpuLayer { vertices, indices, index_count: 0, points: n as u32, wire: None, features: None, solid: None, transparent: false }
 }
 
 /// Units per row of the offsets texture; `OFFSETS_WIDTH` in scene.wgsl. With WebGL2's 2048 rows

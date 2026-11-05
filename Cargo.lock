@@ -752,7 +752,7 @@ dependencies = [
 [[package]]
 name = "dgn-export"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/microstation-dll?rev=c2a0fca4481ed80302a0f02788d505772b5108e3#c2a0fca4481ed80302a0f02788d505772b5108e3"
+source = "git+https://github.com/OpenAEC-Foundation/microstation-dll?rev=4740c4fb140917699e8cf52e893f922410693542#4740c4fb140917699e8cf52e893f922410693542"
 dependencies = [
  "dgn-model",
  "earcutr",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "dgn-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/microstation-dll?rev=c2a0fca4481ed80302a0f02788d505772b5108e3#c2a0fca4481ed80302a0f02788d505772b5108e3"
+source = "git+https://github.com/OpenAEC-Foundation/microstation-dll?rev=4740c4fb140917699e8cf52e893f922410693542#4740c4fb140917699e8cf52e893f922410693542"
 dependencies = [
  "serde",
 ]
@@ -772,7 +772,7 @@ dependencies = [
 [[package]]
 name = "dgn-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/microstation-dll?rev=c2a0fca4481ed80302a0f02788d505772b5108e3#c2a0fca4481ed80302a0f02788d505772b5108e3"
+source = "git+https://github.com/OpenAEC-Foundation/microstation-dll?rev=4740c4fb140917699e8cf52e893f922410693542#4740c4fb140917699e8cf52e893f922410693542"
 dependencies = [
  "dgn-model",
  "flate2",

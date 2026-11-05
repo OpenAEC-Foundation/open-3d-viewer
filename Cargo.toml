@@ -67,6 +67,13 @@ openusd = { version = "0.8", default-features = false }
 # Point clouds: LAS and LAZ (las MIT, laz Apache-2.0) and E57 (MIT), all pure Rust
 las = { version = "0.11", features = ["laz"] }
 e57 = "0.11"
+# Shapefiles with their .dbf attributes (shapefile and dbase, MIT, pure Rust); code pages through encoding_rs
+shapefile = { version = "0.9", features = ["encoding_rs"] }
+# STEP (AP203, AP214, AP242): Part 21 reader to a B-rep model and its face tessellator, pure Rust
+# (Apache-2.0); cadmpeg-ir is large and takes long to compile
+cadmpeg-codec-step = "0.6.8"
+cadmpeg-ir = "0.6.8"
+cadmpeg-tessellate = "0.6.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

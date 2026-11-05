@@ -1,7 +1,9 @@
 //! glTF 2.0 (.gltf / .glb). The default scene is flattened to world space and grouped into one
 //! layer per material; each node with a mesh is a pickable element with its name. glTF is Y up,
 //! metres; converted to Z up. Base colour = material factor times the average colour of its
-//! base-colour texture (no texture mapping yet).
+//! base-colour texture (no texture mapping yet). Triangle strips and fans are drawn as
+//! triangles; point primitives (scans, photogrammetry) as dots in a point layer per material, in
+//! their vertex colours. Lines are not drawn.
 
 use super::{Loader, DEFAULT_COLOR, Source};
 use crate::model::{flat_shaded, y_up_to_z_up, Layer};
@@ -32,8 +34,8 @@ impl Loader for GltfLoader {
         let (doc, buffers, images) = imported.map_err(|e| format!("glTF: {e}"))?;
         let texture_average: Vec<[f32; 4]> = images.iter().map(average_color).collect();
 
-        // material index (None = default material) -> layer under construction
-        let mut layers: BTreeMap<Option<usize>, Layer> = BTreeMap::new();
+        // (material index (None = default material), points) -> layer under construction
+        let mut layers: BTreeMap<(Option<usize>, bool), Layer> = BTreeMap::new();
 
         let scene = doc.default_scene().or_else(|| doc.scenes().next());
         let roots: Vec<gltf::Node> = match &scene {
@@ -52,7 +54,7 @@ impl Loader for GltfLoader {
                         props_in.get_or_insert(prim.material().index());
                     }
                 }
-                if let Some(layer) = props_in.and_then(|m| layers.get_mut(&m)) {
+                if let Some(layer) = props_in.and_then(|m| layers.get_mut(&(m, false))) {
                     let mut props = serde_json::Map::new();
                     let name = node.name().or(mesh.name()).map(str::to_owned).unwrap_or_else(|| format!("Node {}", node.index()));
                     props.insert("Name".into(), name.into());
@@ -81,11 +83,12 @@ fn add_primitive(
     world: Mat4,
     buffers: &[gltf::buffer::Data],
     texture_average: &[[f32; 4]],
-    layers: &mut BTreeMap<Option<usize>, Layer>,
+    layers: &mut BTreeMap<(Option<usize>, bool), Layer>,
     element: u64,
 ) -> bool {
-    if prim.mode() != gltf::mesh::Mode::Triangles {
-        return false; // points, lines and strips are not shown yet
+    use gltf::mesh::Mode;
+    if !matches!(prim.mode(), Mode::Triangles | Mode::TriangleStrip | Mode::TriangleFan | Mode::Points) {
+        return false; // lines are not shown
     }
     let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
     let Some(positions) = reader.read_positions() else { return false };
@@ -94,6 +97,19 @@ fn add_primitive(
         Some(i) => i.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
     };
+    let indices: Vec<u32> = match prim.mode() {
+        // every other triangle of a strip turns the other way
+        Mode::TriangleStrip => (2..indices.len())
+            .flat_map(|k| if k % 2 == 0 { [indices[k - 2], indices[k - 1], indices[k]] } else { [indices[k - 1], indices[k - 2], indices[k]] })
+            .collect(),
+        Mode::TriangleFan => (2..indices.len()).flat_map(|k| [indices[0], indices[k - 1], indices[k]]).collect(),
+        _ => indices,
+    };
+    if prim.mode() == Mode::Points {
+        let colors = reader.read_colors(0).map(|c| c.into_rgba_f32().collect());
+        add_points(prim, world, &positions, &indices, colors, texture_average, layers);
+        return false;
+    }
     let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|n| n.collect());
     let colors: Option<Vec<[f32; 4]>> = reader.read_colors(0).map(|c| c.into_rgba_f32().collect());
 
@@ -130,7 +146,7 @@ fn add_primitive(
         }
     };
 
-    let layer = layers.entry(material.index()).or_insert_with(|| Layer {
+    let layer = layers.entry((material.index(), false)).or_insert_with(|| Layer {
         name: material
             .name()
             .map(str::to_owned)
@@ -181,6 +197,52 @@ fn add_primitive(
         layer.elements.push((element, first, count));
     }
     count > 0
+}
+
+/// A point primitive: its points (by index) into the point layer of its material.
+fn add_points(
+    prim: &gltf::Primitive,
+    world: Mat4,
+    positions: &[[f32; 3]],
+    indices: &[u32],
+    colors: Option<Vec<[f32; 4]>>,
+    texture_average: &[[f32; 4]],
+    layers: &mut BTreeMap<(Option<usize>, bool), Layer>,
+) {
+    let material = prim.material();
+    let pbr = material.pbr_metallic_roughness();
+    let mut base = pbr.base_color_factor();
+    if let Some(tex) = pbr.base_color_texture() {
+        if let Some(avg) = texture_average.get(tex.texture().source().index()) {
+            for i in 0..4 {
+                base[i] *= avg[i];
+            }
+        }
+    }
+    let srgb = [linear_to_srgb(base[0]), linear_to_srgb(base[1]), linear_to_srgb(base[2])];
+    let layer = layers.entry((material.index(), true)).or_insert_with(|| Layer {
+        name: format!(
+            "{} (points)",
+            material.name().map(str::to_owned).unwrap_or_else(|| match material.index() {
+                Some(i) => format!("Material {i}"),
+                None => "Default".to_owned(),
+            })
+        ),
+        color: if material.index().is_some() { srgb } else { DEFAULT_COLOR },
+        colors: Some(Vec::new()),
+        points: true,
+        ..Layer::default()
+    });
+    let fill = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    for &i in indices {
+        let Some(p) = positions.get(i as usize) else { continue };
+        layer.positions.extend_from_slice(&world.transform_point3(Vec3::from_array(*p)).to_array());
+        let c = match colors.as_ref().and_then(|c| c.get(i as usize)) {
+            Some(c) => [0, 1, 2].map(|k| (linear_to_srgb(c[k] * base[k]) * 255.0).round() as u8),
+            None => fill,
+        };
+        layer.colors.as_mut().unwrap().push([c[0], c[1], c[2], 255]);
+    }
 }
 
 fn linear_to_srgb(v: f32) -> f32 {
@@ -263,6 +325,37 @@ mod tests {
         // the node is a pickable element; unnamed, so "Node <index>"
         assert_eq!(model.layers[0].elements, vec![(1, 0, 3)]);
         assert_eq!(model.element_props(1), vec![("Name".to_string(), "Node 0".to_string())]);
+    }
+
+    /// A glTF of four points (mode 0) with colours, and the same four as a triangle strip.
+    #[test]
+    fn loads_points_and_triangle_strips() {
+        let mut bytes = Vec::new();
+        for v in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        for c in [1.0f32, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] {
+            bytes.extend_from_slice(&c.to_le_bytes());
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0,1]}}],"scene":0,
+            "nodes":[{{"mesh":0}},{{"mesh":1,"translation":[0,0,5]}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"COLOR_0":1}},"mode":0}}]}},{{"primitives":[{{"attributes":{{"POSITION":0}},"mode":5}}]}}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},
+                         {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC4"}}],
+            "bufferViews":[{{"buffer":0,"byteLength":48}},{{"buffer":0,"byteOffset":48,"byteLength":64}}],
+            "buffers":[{{"byteLength":112,"uri":"data:application/octet-stream;base64,{}"}}]}}"#,
+            base64_encode(&bytes)
+        );
+        let source = crate::loaders::Source::Bytes { name: "scan.gltf".into(), data: std::sync::Arc::new(json.into_bytes()) };
+        let model = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("gltf");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Default", "Default (points)"]);
+        assert_eq!((model.triangle_count(), model.point_count()), (2, 4));
+        let points = &model.layers[1];
+        assert_eq!(points.colors.as_ref().unwrap()[1], [0, 255, 0, 255]);
+        // Y up: the point at y = 1 is at z = 1
+        assert_eq!(&points.positions[6..9], &[0.0, 0.0, 1.0]);
     }
 
     fn base64_encode(data: &[u8]) -> String {

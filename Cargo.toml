@@ -64,9 +64,9 @@ quicklz = "0.3.1"
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
 ifc-lite-processing = "=25.0.1"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "f9fcc76dcc841aab44b215455f981ebf798b7015" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "f9fcc76dcc841aab44b215455f981ebf798b7015", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "f9fcc76dcc841aab44b215455f981ebf798b7015" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
 log = "0.4"

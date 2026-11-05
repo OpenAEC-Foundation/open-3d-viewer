@@ -1,5 +1,5 @@
 //! The neutral scene model every loader produces: Z-up, metres (or file units), one
-//! triangle mesh per layer.
+//! triangle mesh or point cloud per layer.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,6 +28,9 @@ pub struct Layer {
     pub props: Vec<(u64, String)>,
     /// Hidden in the file (a hidden SketchUp tag): starts switched off.
     pub hidden: bool,
+    /// A point cloud (LAS, LAZ, E57): every vertex is a point, drawn as a dot of a few pixels;
+    /// no `indices`, `normals` or `elements`.
+    pub points: bool,
 }
 
 impl Layer {
@@ -37,6 +40,11 @@ impl Layer {
 
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
+    }
+
+    /// The points of a point cloud layer (0 for a mesh).
+    pub fn point_count(&self) -> usize {
+        if self.points { self.vertex_count() } else { 0 }
     }
 
     /// The triangles of the elements (or the whole layer) that enclose volume, for the cut fill.
@@ -379,9 +387,12 @@ impl Model {
     /// Builds a model from layers: drops empty layers and computes the bounds.
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
         let props: HashMap<u64, String> = layers.iter_mut().flat_map(|l| std::mem::take(&mut l.props)).collect();
-        layers.retain(|l| !l.indices.is_empty() && !l.positions.is_empty());
+        layers.retain(|l| (l.points || !l.indices.is_empty()) && !l.positions.is_empty());
         layers.iter_mut().for_each(unshare_element_vertices);
-        let layers: Vec<Layer> = layers.into_iter().flat_map(|l| split_layer(l, MAX_PART_VERTICES, MAX_PART_TRIANGLES)).collect();
+        let layers: Vec<Layer> = layers
+            .into_iter()
+            .flat_map(|l| if l.points { split_points(l, MAX_PART_POINTS) } else { split_layer(l, MAX_PART_VERTICES, MAX_PART_TRIANGLES) })
+            .collect();
         let mut bounds = Bounds::empty();
         for layer in &layers {
             for p in layer.positions.chunks_exact(3) {
@@ -418,6 +429,11 @@ impl Model {
         self.layers.iter().map(Layer::triangle_count).sum()
     }
 
+    /// The points of the point cloud layers.
+    pub fn point_count(&self) -> usize {
+        self.layers.iter().map(Layer::point_count).sum()
+    }
+
     /// Where an element is drawn: (layer, first index, index count) per range.
     pub fn element_ranges(&self, id: u64) -> Vec<(usize, u32, u32)> {
         let mut out = Vec::new();
@@ -444,6 +460,29 @@ impl Model {
 /// to 6 line indices per triangle, parts stay below that.
 pub const MAX_PART_VERTICES: usize = 8_000_000;
 pub const MAX_PART_TRIANGLES: usize = 10_000_000;
+/// Points per GPU buffer: 16 bytes each (position and colour).
+pub const MAX_PART_POINTS: usize = 12_000_000;
+
+/// Splits a point cloud layer into parts of at most `max` points, named as [`split_layer`] does.
+pub fn split_points(mut layer: Layer, max: usize) -> Vec<Layer> {
+    let n = layer.vertex_count();
+    if n <= max {
+        return vec![layer];
+    }
+    let count = n.div_ceil(max);
+    let mut parts = Vec::with_capacity(count);
+    // from the back, so the source shrinks as the parts grow
+    for k in (0..count).rev() {
+        let mut part = empty_like(&layer);
+        part.points = true;
+        part.name = format!("{} (part {}/{count})", layer.name, k + 1);
+        part.positions = layer.positions.split_off(3 * k * max);
+        part.colors = layer.colors.as_mut().map(|c| c.split_off((k * max).min(c.len())));
+        parts.push(part);
+    }
+    parts.reverse();
+    parts
+}
 
 /// Splits a layer that is too big for one GPU buffer into parts named "Name (part n)".
 pub fn split_layer(layer: Layer, max_vertices: usize, max_triangles: usize) -> Vec<Layer> {
@@ -648,6 +687,25 @@ mod tests {
         assert_eq!(parts[1].triangle_count(), 1);
         assert_eq!(parts[1].name, "L (part 2/2)");
         assert!(parts.iter().all(|p| p.indices.iter().all(|&i| (i as usize) < p.vertex_count())));
+    }
+
+    #[test]
+    fn point_layers_are_kept_and_split() {
+        let layer = Layer {
+            name: "Ground".into(),
+            positions: (0..15).map(|v| v as f32).collect(),
+            colors: Some((0..5).map(|i| [i, 0, 0, 255]).collect()),
+            points: true,
+            ..Layer::default()
+        };
+        let parts = split_points(layer.clone(), 2);
+        assert_eq!(parts.iter().map(Layer::point_count).collect::<Vec<_>>(), [2, 2, 1]);
+        assert_eq!(parts[1].positions, [6.0, 7.0, 8.0, 9.0, 10.0, 11.0]);
+        assert_eq!(parts[2].colors, Some(vec![[4, 0, 0, 255]]));
+        assert_eq!(parts[0].name, "Ground (part 1/3)");
+        let model = Model::new(PathBuf::from("cloud.las"), "LAS", vec![layer]);
+        assert_eq!((model.layers.len(), model.point_count(), model.triangle_count()), (1, 5, 0));
+        assert_eq!(model.bounds.max, [12.0, 13.0, 14.0]);
     }
 
     #[test]

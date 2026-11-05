@@ -1,6 +1,7 @@
 //! Desktop IFC import through the standalone IFClite processing library.
 //! Meshes are in metres, Z up. Preserve the model's world rotation while keeping
 //! georeferenced positions near the origin; record the removed anchor in project data.
+//! A zipped IFC (`.ifczip`, as buildingSMART defines it) opens the first `.ifc` in the archive.
 
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{Layer, ProjectData};
@@ -50,7 +51,7 @@ impl Loader for IfcLoader {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["ifc"]
+        &["ifc", "ifczip"]
     }
 
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
@@ -60,6 +61,7 @@ impl Loader for IfcLoader {
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
         let data = source.read()?;
+        let data = if data.starts_with(b"PK\x03\x04") { std::borrow::Cow::Owned(unzip_ifc(&data)?) } else { data };
         let mut header = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data);
         while header.first().is_some_and(u8::is_ascii_whitespace) {
             header = &header[1..];
@@ -162,6 +164,18 @@ impl Loader for IfcLoader {
     }
 }
 
+/// The first `.ifc` file in an `.ifczip` archive (the archive holds one, sometimes in a folder).
+fn unzip_ifc(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("IFC zip: {e}"))?;
+    let index = (0..archive.len())
+        .find(|&i| archive.name_for_index(i).and_then(Result::ok).is_some_and(|name| name.to_lowercase().ends_with(".ifc")))
+        .ok_or("IFC zip: the archive holds no .ifc file")?;
+    let mut file = archive.by_index(index).map_err(|e| format!("IFC zip: {e}"))?;
+    let mut out = Vec::with_capacity(file.size() as usize);
+    std::io::Read::read_to_end(&mut file, &mut out).map_err(|e| format!("IFC zip: {e}"))?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +215,29 @@ mod tests {
         for (got, expected) in model.bounds.size().into_iter().zip([0.002, 0.003, 0.004]) {
             assert!((got - expected).abs() < 0.00001, "size {:?}", model.bounds.size());
         }
+    }
+
+    #[test]
+    fn opens_the_ifc_inside_an_ifczip() {
+        let mut zipped = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut zipped);
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("readme.txt", options).unwrap();
+        std::io::Write::write_all(&mut writer, b"not the model").unwrap();
+        writer.start_file("model/box.ifc", options).unwrap();
+        std::io::Write::write_all(&mut writer, &exported_box()).unwrap();
+        writer.finish().unwrap();
+        let source = Source::Bytes { name: "box.IFCZIP".into(), data: Arc::new(zipped.into_inner()) };
+        let model = crate::loaders::load_with(&source, &Progress::default()).expect("ifcZIP import");
+        assert_eq!(model.format, "IFC");
+        assert_eq!(model.triangle_count(), 12);
+        assert!(crate::loaders::supported_extensions().contains(&"ifczip"));
+        let mut no_ifc = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut no_ifc);
+        writer.start_file("readme.txt", options).unwrap();
+        writer.finish().unwrap();
+        let source = Source::Bytes { name: "empty.ifczip".into(), data: Arc::new(no_ifc.into_inner()) };
+        assert!(IfcLoader.load(&source).unwrap_err().contains("no .ifc file"));
     }
 
     #[test]

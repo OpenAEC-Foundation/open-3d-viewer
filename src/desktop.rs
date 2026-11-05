@@ -245,10 +245,11 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     if let Some(file) = &args.file {
         let model = loaders::load(file)?;
         eprintln!(
-            "loaded {}: {} layers, {} triangles in {:.2} s",
+            "loaded {}: {} layers, {} triangles, {} points in {:.2} s",
             model.file_name(),
             model.layers.len(),
             model.triangle_count(),
+            model.point_count(),
             model.load_time.as_secs_f32()
         );
         app.initial_view = args.view;

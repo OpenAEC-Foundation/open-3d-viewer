@@ -600,6 +600,7 @@ mod tests {
             elements: Vec::new(),
             props: Vec::new(),
             hidden: false,
+            points: false,
         }
     }
 

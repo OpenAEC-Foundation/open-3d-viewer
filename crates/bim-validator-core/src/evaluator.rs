@@ -1,6 +1,6 @@
 use crate::graph::{text, Graph, Node};
 use crate::values::{matches, supported, value_matches};
-use crate::{Finding, SpecificationResult, ValidationReport, ValidationStatus as S};
+use crate::{combine, Finding, SpecificationResult, ValidationReport, ValidationStatus as S};
 use ifc_lite_core::AttributeValue as A;
 use openbim_ids::{Entity, Facet, Ids, Occurrence, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -34,6 +34,8 @@ pub fn validate(
             failed_count: 0,
             findings: vec![],
             reasons: vec![],
+            source: crate::RuleSource::Ids,
+            severity: crate::Severity::Error,
         };
         if !spec.ifc_versions.iter().any(|v| v.as_str() == g.label) {
             r.status = S::NotCheckable;
@@ -167,26 +169,11 @@ pub fn validate(
         ids_title: ids.info.title.clone(),
         status,
         specifications,
+        model: None,
     })
 }
-fn combine(a: S, b: S) -> S {
-    if a == S::NotCheckable || b == S::NotCheckable {
-        S::NotCheckable
-    } else if a == S::Failed || b == S::Failed {
-        S::Failed
-    } else {
-        S::Passed
-    }
-}
 fn finding(g: &Graph, n: &Node, facet: &str, status: S, reason: String) -> Finding {
-    Finding {
-        express_id: n.id,
-        global_id: g.attr(n, "GlobalId").and_then(text),
-        entity_type: n.kind.clone(),
-        facet: facet.into(),
-        status,
-        reason,
-    }
+    g.finding(n, facet, status, reason)
 }
 fn support(f: &Facet) -> Result<(), String> {
     if let Facet::PartOf(p) = f {

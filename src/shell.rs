@@ -731,7 +731,7 @@ impl Studio {
             w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, 0, Msg::RibbonTab),
             // Bestand takes the place of the ribbon and the documents until it closes
             if self.backstage { self.backstage_view(look) } else { column![self.ribbon(look), self.document_area(look)].into() },
-            w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]),
+            row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)],
         ]
         .height(Length::Fill);
         let mut layers = vec![focus::inert(container(screen).style(move |_| container::Style { background: Some(c.frame.into()), ..Default::default() }), self.dialog.is_some())];
@@ -739,6 +739,36 @@ impl Studio {
             layers.push(mouse_area(w::overlay(look, self.dialog_card(look, dialog))).into());
         }
         iced::widget::Stack::with_children(layers).into()
+    }
+
+    /// The lamp at the right of the status bar: grey when remote control is off, amber when the
+    /// MCP server can connect, green while it is connected.
+    fn mcp_lamp(&self, look: Look) -> Element<'_, Msg> {
+        use crate::remote::{link_status, LinkStatus};
+        let l = self.l();
+        let c = look.color;
+        let status = if self.app.remote.enabled { link_status() } else { LinkStatus::Off };
+        let (color, label, tip) = match status {
+            LinkStatus::Connected => (iced::Color::from_rgb8(0x2e, 0xa0, 0x43), l.text("MCP verbonden", "MCP connected"), l.text("Een AI-agent is verbonden via open-3d-viewer-mcp", "An AI agent is connected through open-3d-viewer-mcp")),
+            LinkStatus::Ready => (iced::Color::from_rgb8(0xd2, 0x99, 0x22), l.text("MCP beschikbaar", "MCP available"), l.text("Klaar voor een AI-agent via open-3d-viewer-mcp", "Ready for an AI agent through open-3d-viewer-mcp")),
+            LinkStatus::Off => (c.statusbar_text, l.text("MCP uit", "MCP off"), l.text("Afstandsbediening staat uit (--no-remote of O3V_REMOTE=0)", "Remote control is off (--no-remote or O3V_REMOTE=0)")),
+        };
+        let dot = container(Space::new().width(8).height(8)).style(move |_| container::Style {
+            background: Some(color.into()),
+            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+            ..Default::default()
+        });
+        let line = row![dot, iced::widget::text(label).size(11).font(fonts::MONO).color(c.statusbar_text)].spacing(6).align_y(iced::Alignment::Center);
+        let cell = column![
+            w::divider(look),
+            container(line)
+                .height(openaec_ui::design::tokens::shell::STATUSBAR - 1.0)
+                .padding([0, 10])
+                .align_y(iced::alignment::Vertical::Center)
+                .style(move |_| container::Style { background: Some(c.statusbar.into()), ..Default::default() }),
+        ]
+        .width(Length::Shrink);
+        w::with_tooltip(look, cell.into(), tip, None)
     }
 
     fn title_bar(&self, look: Look) -> Element<'_, Msg> {

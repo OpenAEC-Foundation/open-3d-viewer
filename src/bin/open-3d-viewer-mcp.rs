@@ -66,7 +66,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 fn tools() -> Vec<Value> {
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a 3D model file in the viewer (as File > Open) and wait until it is loaded. Formats: .ifc .rvt .rfa .skp .pln .pla .gltf .glb .obj .stl .ply. Returns the model summary.",
+        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), LandXML (.xml .landxml), glTF (.gltf .glb), .obj, .stl, .ply. Returns the model summary.",
             json!({ "path": { "type": "string", "description": "Absolute path of the file" } }), &["path"], false),
         tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
             json!({
@@ -94,6 +94,12 @@ fn tools() -> Vec<Value> {
                 "limit": { "type": "integer", "description": "Default 100" },
                 "show": { "type": "boolean", "description": "Open the schedule's table in the window" }
             }), &["schedule"], false),
+        tool("list_sheets", "Sheets in the file (Revit, beta): index, number, name and the names of the views placed on each.", json!({}), &[], true),
+        tool("get_sheet", "A sheet (Revit, beta): its paper and the views placed on it, as boxes in sheet millimetres (x right, y up) with title, detail number, scale and the view index for apply_view. With show, the sheet opens in its tab in the window.",
+            json!({
+                "sheet": { "type": ["integer", "string"], "description": "Index, sheet number or name" },
+                "show": { "type": "boolean", "description": "Open the sheet in the window" }
+            }), &["sheet"], false),
         tool("find_elements", "Find BIM elements by their properties (category, family, type, level, name, ... as the properties panel shows them). Matching is case-insensitive and on 'contains'. With group_by, returns counts per value instead (e.g. walls per level).",
             json!({
                 "text": { "type": "string", "description": "Any property value contains this (or the element id)" },

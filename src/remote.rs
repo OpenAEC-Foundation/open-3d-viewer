@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 type Answer = Result<Value, String>;
@@ -67,6 +68,35 @@ pub struct RemoteState {
 
 // ---- the socket -------------------------------------------------------------------------------
 
+/// The socket listens (set once it is bound).
+static LISTENING: AtomicBool = AtomicBool::new(false);
+/// Clients connected now (the MCP server keeps one connection while it runs).
+static CLIENTS: AtomicUsize = AtomicUsize::new(0);
+
+/// What the status bar's lamp shows of the remote control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkStatus {
+    /// Remote control is off or the socket could not be bound.
+    Off,
+    /// Listening, no client.
+    Ready,
+    /// An MCP server (or another client) is connected.
+    Connected,
+}
+
+pub fn link_status() -> LinkStatus {
+    if !LISTENING.load(Ordering::Relaxed) {
+        LinkStatus::Off
+    } else if CLIENTS.load(Ordering::Relaxed) > 0 {
+        LinkStatus::Connected
+    } else {
+        LinkStatus::Ready
+    }
+}
+
+/// An internal command that only makes the window redraw (the lamp changed).
+const LINK_CHANGED: &str = "_link";
+
 /// The subscription stream: starts the listener and yields its commands as messages.
 pub fn serve() -> impl Stream<Item = Message> {
     iced::stream::channel(16, async |mut output| {
@@ -88,6 +118,8 @@ fn listen(tx: iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> std:
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
     let announcement = Announcement { port: listener.local_addr()?.port(), token: new_token(), pid: std::process::id() };
     remote_link::announce(&announcement)?;
+    LISTENING.store(true, Ordering::Relaxed);
+    let _ = tx.unbounded_send(RemoteCall::new(LINK_CHANGED, Value::Null).0);
     let token = announcement.token;
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -101,6 +133,14 @@ fn listen(tx: iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> std:
 /// One client: a request per line, an answer per line.
 fn connection(stream: TcpStream, tx: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>, token: &str) {
     let Ok(read) = stream.try_clone() else { return };
+    CLIENTS.fetch_add(1, Ordering::Relaxed);
+    let _ = tx.unbounded_send(RemoteCall::new(LINK_CHANGED, Value::Null).0);
+    serve_client(read, stream, tx, token);
+    CLIENTS.fetch_sub(1, Ordering::Relaxed);
+    let _ = tx.unbounded_send(RemoteCall::new(LINK_CHANGED, Value::Null).0);
+}
+
+fn serve_client(read: TcpStream, stream: TcpStream, tx: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>, token: &str) {
     let mut write = stream;
     for line in BufReader::new(read).lines() {
         let Ok(line) = line else { break };
@@ -229,6 +269,11 @@ impl App {
                 call.answer(answer);
                 return task;
             }
+            "get_sheet" => {
+                let (answer, task) = self.remote_sheet(&call.args);
+                call.answer(answer);
+                return task;
+            }
             "screenshot" => {
                 self.finish_animation();
                 self.remote.pending_shots.push(call);
@@ -257,6 +302,8 @@ impl App {
 
     fn command(&mut self, cmd: &str, a: &Value) -> Answer {
         match cmd {
+            // the lamp changed: nobody waits for the answer, the window just redraws
+            LINK_CHANGED => Ok(Value::Null),
             "get_state" => Ok(self.state_json()),
             "list_layers" => self.list_layers(a),
             "set_layer_visibility" => self.set_layer_visibility(a),
@@ -264,6 +311,7 @@ impl App {
             "apply_view" => self.remote_apply_view(a),
             "get_project_info" => self.project_info(),
             "list_schedules" => self.schedules_json(),
+            "list_sheets" => self.sheets_json(),
             "find_elements" => self.find_elements(a),
             "get_element" => {
                 let id = a.get("id").and_then(id_of).ok_or("id is required")?;
@@ -493,6 +541,8 @@ impl App {
             "placing_section_plane": self.plane_picking,
             "selection": self.selection_json(),
             "active_view": self.active_view.and_then(|i| self.model.as_ref()?.views.get(i).map(|v| v.name.clone())),
+            "shown_sheet": self.active_sheet.and_then(|i| self.model.as_ref()?.project.sheets.get(i).map(|s| s.title.clone())),
+            "shown_schedule": self.active_schedule.and_then(|i| self.schedules.get(i).map(|s| s.name.clone())),
             "viewport": { "width": round(self.viewport_size.0), "height": round(self.viewport_size.1) },
             "measurements": self.measurements.iter().map(|m| m.label.clone()).collect::<Vec<_>>(),
         })

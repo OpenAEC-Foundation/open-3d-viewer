@@ -12,6 +12,7 @@ use iced::widget::text::Wrapping;
 use iced::widget::{button, canvas as canvas_widget, container, text, Column};
 use iced::{Color, Element, Fill, Padding, Point, Rectangle, Size, Task};
 use openaec_ui::Language;
+use serde_json::{json, Value};
 
 /// Margin around the sheet in the workspace (logical pixels).
 const MARGIN: f32 = 24.0;
@@ -87,6 +88,75 @@ impl App {
     pub(super) fn sheet_view_element(&self, p: Palette, l: Language, sheet: &Sheet) -> Element<'_, Message> {
         let drawing = SheetDrawing { sheet: sheet.clone(), palette: p, empty: l.text("Geen geplaatste views", "No placed views").to_string() };
         container(canvas_widget(drawing).width(Fill).height(Fill)).width(Fill).height(Fill).style(move |_| p.panel()).into()
+    }
+}
+
+// ---- remote control ----
+
+impl App {
+    /// Remote `list_sheets`: every sheet with its number, name and placed views.
+    pub(crate) fn sheets_json(&self) -> Result<Value, String> {
+        self.model.as_ref().ok_or("no model is open: call open_file first")?;
+        let list: Vec<Value> = self
+            .sheets()
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                json!({
+                    "index": i,
+                    "number": s.number,
+                    "name": s.name,
+                    "views": s.viewports.iter().map(|v| v.title.clone()).collect::<Vec<_>>(),
+                    "shown": self.active_sheet == Some(i),
+                })
+            })
+            .collect();
+        Ok(json!({ "count": list.len(), "sheets": list }))
+    }
+
+    /// Remote `get_sheet`: a sheet's paper and placed views (sheet millimetres, x right, y up;
+    /// `view` is the index for apply_view); with `show`, it opens in its document tab.
+    pub(crate) fn remote_sheet(&mut self, a: &Value) -> (Result<Value, String>, Task<Message>) {
+        let i = match self.find_sheet(a.get("sheet")) {
+            Ok(i) => i,
+            Err(e) => return (Err(e), Task::none()),
+        };
+        let s = &self.sheets()[i];
+        let mm = |r: &SheetRect| json!({ "min": r.min.map(|v| (v * 1000.0).round()), "max": r.max.map(|v| (v * 1000.0).round()) });
+        let answer = json!({
+            "index": i,
+            "number": s.number,
+            "name": s.name,
+            "paper_mm": s.paper.as_ref().map(mm),
+            "views": s.viewports.iter().map(|v| json!({
+                "title": v.title,
+                "view": v.view,
+                "detail_number": v.detail,
+                "scale": v.scale,
+                "box_mm": mm(&v.rect),
+                "box_estimated": v.estimated,
+            })).collect::<Vec<_>>(),
+            "note": "beta: the boxes of the placed views and the paper; the drawing itself (lines, text, title block) is not read yet",
+        });
+        let show = a.get("show").and_then(Value::as_bool).unwrap_or(false);
+        (Ok(answer), if show { self.open_sheet(i) } else { Task::none() })
+    }
+
+    /// A sheet by index, number or name (exact, else the first containing it, ignoring case).
+    fn find_sheet(&self, spec: Option<&Value>) -> Result<usize, String> {
+        self.model.as_ref().ok_or("no model is open: call open_file first")?;
+        let spec = spec.ok_or("sheet (index, number or name) is required")?;
+        let sheets = self.sheets();
+        if let Some(i) = spec.as_u64() {
+            return (i < sheets.len() as u64).then_some(i as usize).ok_or(format!("no sheet {i}"));
+        }
+        let want = spec.as_str().ok_or("sheet must be an index, a number or a name")?.to_lowercase();
+        let exact = |s: &Sheet| [&s.number, &s.name, &s.title].iter().any(|t| t.to_lowercase() == want);
+        sheets
+            .iter()
+            .position(exact)
+            .or_else(|| sheets.iter().position(|s| s.title.to_lowercase().contains(&want)))
+            .ok_or(format!("no sheet '{want}'"))
     }
 }
 

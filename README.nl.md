@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
+**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`p
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
-- **Opent wat je toegestuurd krijgt.** IFC (ook gezipt) en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, Archicad (wanden met hun ramen en deuren, vloeren, kolommen, liggers, daken, bibliotheekobjecten als blok, terreinmeshes, zones, morphs, trappen en leuningen), DWG/DXF, MicroStation DGN (V7 en V8), CityJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL en PLY op de desktop en in de browser.
+- **Opent wat je toegestuurd krijgt.** IFC (ook gezipt) en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, Archicad (wanden met hun ramen en deuren, vloeren, kolommen, liggers, daken, bibliotheekobjecten als blok, terreinmeshes, zones, morphs, trappen en leuningen), DWG/DXF, MicroStation DGN (V7 en V8), CityJSON, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL en PLY op de desktop en in de browser.
 - **Meerdere modellen tegelijk.** **Openen** vervangt het model, **Toevoegen** zet er een ander bestand naast, en elk model heeft een eigen zichtbaarheidsknop.
 - **Slaat op als IFC.** Elk model dat de viewer opent, kan als IFC 4 worden opgeslagen, met verdiepingen, klassen, eigenschappen en materialen.
 - **Dezelfde app in de browser en op de desktop.** Eén codebasis; de browserversie hoef je niet te installeren.
@@ -143,6 +143,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **DWG / DXF** (`.dwg`, `.dxf`) | Ja, polygoongeometrie | Nee |
 | **MicroStation DGN** (`.dgn`, V7 en V8) | Ja | Nee |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Ja | Nee |
+| **GeoJSON** (`.geojson`, polygonen en lijnen) | Ja | Nee |
 | **LandXML** (`.xml`, `.landxml`, TIN-oppervlakken) | Ja | Nee |
 | **glTF** (`.gltf`, `.glb`) | Ja | Nee |
 | **COLLADA** (`.dae`) | Ja | Nee |
@@ -160,6 +161,7 @@ Wat niet meekomt:
 - **DWG en DXF** tonen de polygoongeometrie van de modelruimte. ACIS-volumes, annotaties, curves en externe verwijzingen vallen weg en worden geteld.
 - **MicroStation DGN** opent ontwerpbestanden van versie 7 en V8 (MicroStation V8, V8i en CONNECT). Lijnen, bogen en curves worden dunne linten zo breed als hun lijndikte, tekst wordt het kader van de tekst met de tekens in de elementeigenschappen; vlakken, kegels, geëxtrudeerde volumes en B-splinevlakken van 3D-bestanden worden vlakken. Levels worden lagen, in V8-bestanden met hun naam; cellen en gedeelde cellen zijn elk één element; lineaire 2D-maten van V8-bestanden worden lijnen, met de gemeten waarden in de elementeigenschappen. Andere maten, multilines, tags, lijnstijlen en referentiebestanden, en in V8-bestanden oppervlakken, volumes, kegels, B-splinevlakken, meshes en andere modellen dan het eerste, vallen weg en worden geteld. De V7-lezer is geschreven uit de openbare ISFF-beschrijving van Intergraph en een clean-room-analyse, de V8-lezer alleen uit de clean-room-specificatie.
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
+- **GeoJSON** toont polygonen als vlakke vlakken (met hun gaten) en lijnen als linten van 0,3 m breed, één element per feature met zijn eigenschappen; een polygoon met een `height`, `building:height` of `building:levels` (3 m per bouwlaag, met `min_height` voor de onderkant) wordt een blok. Lengte- en breedtegraden worden geprojecteerd naar lokale meters rond de eerste coördinaat (equirectangulair, goed voor een wijk, niet voor een land); geprojecteerde coördinaten worden als meters gelezen. Punten worden niet getekend.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
 - **COLLADA** toont de driehoeken en polygonen van de visuele scène, één laag per SketchUp-tag of anders per materiaal, in de diffuse kleur van het materiaal; texturen, lijnen, polygonen met gaten en animaties vallen weg. **3MF** toont elk build-item als laag, met zijn componenten, basismaterialen en kleurgroepen; texturen, beam lattices en slices worden niet gelezen.
 - **FBX** toont de meshes van de scène, elk model een aanklikbaar element met zijn naam en gebruikerseigenschappen, geplaatst met zijn ouders en zijn volledige transformatie, één laag per materiaal in de diffuse kleur; eenheden en assen komen uit het bestand. Texturen, NURBS en curves, camera's, lampen, animaties, skinning en blend shapes vallen weg. De lezer is geschreven vanuit de openbare beschrijving van het formaat, zonder de FBX SDK. **3DS** toont elk meshobject als element, één laag per materiaal in de diffuse kleur, in de eenheden van het bestand; texturen, smoothing groups, lampen, camera's en de keyframer (animatie, instanties) worden niet gelezen. **OFF** toont één vlak gearceerde mesh met zijn hoek- of vlakkleuren; binaire OFF wordt niet gelezen.

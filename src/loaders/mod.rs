@@ -41,6 +41,8 @@ mod ascgrid;
 mod shapefile;
 mod vrml;
 mod amf;
+mod ifcx;
+mod step;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::borrow::Cow;
@@ -189,6 +191,16 @@ pub trait Loader: Send + Sync {
     fn folder_extensions(&self) -> &'static [&'static str] {
         &[]
     }
+    /// True when files of this format layer over each other into one model (IFCX): a file added
+    /// to an open model of this format composes with it, see [`Loader::load_stack`].
+    fn composes(&self) -> bool {
+        false
+    }
+    /// Reads several files as one model, the later ones layered over the earlier ones (only
+    /// when [`Loader::composes`]; by default the last file alone).
+    fn load_stack(&self, sources: &[Source], progress: &Progress) -> Result<Loaded, String> {
+        self.load_with(sources.last().ok_or("no file")?, progress)
+    }
 }
 
 /// What a loader read: the layers and the views saved in the file.
@@ -215,6 +227,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
+        &ifcx::IfcxLoader, &step::StepLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -238,21 +251,41 @@ pub fn load(path: &Path) -> Result<Model, String> {
 
 /// As [`load`], for any source, reporting the steps to `progress`.
 pub fn load_with(source: &Source, progress: &Progress) -> Result<Model, String> {
+    load_stack(std::slice::from_ref(source), progress)
+}
+
+/// The loader for a file (or a project folder).
+fn loader_for(source: &Source) -> Result<&'static dyn Loader, String> {
     let ext = source.extension();
     // A folder goes to the loader that opens folders with its extension.
     let folder = source.path().is_some_and(Path::is_dir);
-    let loader = registry()
+    registry()
         .into_iter()
         .find(|l| if folder { l.folder_extensions() } else { l.extensions() }.contains(&ext.as_str()))
         .ok_or_else(|| match folder {
             true => format!("{}: folders open only as a project folder of a supported format", source.name()),
             false => format!("Unsupported file type: .{ext}"),
-        })?;
+        })
+}
+
+/// True when `source` is of a format whose files layer over each other (IFCX).
+pub fn composes(source: &Source) -> bool {
+    loader_for(source).is_ok_and(|l| l.composes())
+}
+
+/// Loads files that layer over each other as one model, the later ones stronger (see
+/// [`Loader::load_stack`]); one file loads as [`load_with`]. The model is named after the first.
+pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, String> {
+    let source = sources.first().ok_or("no file to open")?;
+    let loader = loader_for(sources.last().unwrap_or(source))?;
     let start = Instant::now();
-    let loaded = loader.load_with(source, progress)?;
+    let loaded = match sources {
+        [one] => loader.load_with(one, progress)?,
+        _ => loader.load_stack(sources, progress)?,
+    };
     progress.set(Phase::Scene);
     let mut model = Model::new(source.model_path(), loader.name(), loaded.layers);
-    model.file_size = source.len();
+    model.file_size = sources.iter().map(Source::len).sum();
     model.views = loaded.views;
     model.project = loaded.project;
     model.load_time = start.elapsed();
@@ -320,7 +353,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }

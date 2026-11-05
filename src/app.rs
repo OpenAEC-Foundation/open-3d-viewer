@@ -73,6 +73,11 @@ pub struct App {
     pub model: Option<Arc<Model>>,
     pub models: Vec<ModelEntry>,
     adding_model: bool,
+    /// The files of the last model when they layer over each other (IFCX) and that model: a
+    /// file of the same kind added next composes with them into that model.
+    layer_stack: (Vec<loaders::Source>, Option<u64>),
+    /// The files of the load running now, and whether it replaces the last model (a restack).
+    loading_stack: (Vec<loaders::Source>, bool),
     pub visible: Vec<bool>,
     pub camera: Camera,
     pub mode: RenderMode,
@@ -291,6 +296,8 @@ impl Default for App {
             model: None,
             models: Vec::new(),
             adding_model: false,
+            layer_stack: (Vec::new(), None),
+            loading_stack: (Vec::new(), false),
             visible: Vec::new(),
             camera: Camera::default(),
             mode: RenderMode::Solid,
@@ -342,14 +349,14 @@ impl Default for App {
     }
 }
 
-/// Loads a file on a worker thread.
+/// Loads a file (or files that layer into one model) on a worker thread.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_task(source: loaders::Source, progress: Arc<loaders::Progress>) -> Task<Message> {
+pub fn load_task(sources: Vec<loaders::Source>, progress: Arc<loaders::Progress>) -> Task<Message> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(loaders::load_with(&source, &progress).map(Arc::new));
+                let _ = tx.send(loaders::load_stack(&sources, &progress).map(Arc::new));
             });
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
@@ -389,11 +396,11 @@ fn edges_task(model: Arc<Model>, layers: Vec<usize>) -> Task<Message> {
 /// Loads a file in the browser (no threads there): after the next frame, so the loading card
 /// shows first.
 #[cfg(target_arch = "wasm32")]
-pub fn load_task(source: loaders::Source, progress: Arc<loaders::Progress>) -> Task<Message> {
+pub fn load_task(sources: Vec<loaders::Source>, progress: Arc<loaders::Progress>) -> Task<Message> {
     Task::perform(
         async move {
             crate::web::next_frame().await;
-            loaders::load_with(&source, &progress).map(Arc::new)
+            loaders::load_stack(&sources, &progress).map(Arc::new)
         },
         Message::Loaded,
     )
@@ -733,10 +740,27 @@ impl App {
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
         }
+        // an IFCX file added to an IFCX model layers over it: the files load again as one model
+        let last = self.models.last().map(|entry| entry.model.id).or(self.model.as_ref().map(|m| m.id));
+        let composes = loaders::composes(&source);
+        let restack = add && composes && !self.layer_stack.0.is_empty() && last.is_some() && last == self.layer_stack.1;
+        let mut sources = if restack { self.layer_stack.0.clone() } else { Vec::new() };
+        sources.push(source.clone());
+        self.loading_stack = (sources.clone(), restack);
         self.adding_model = add;
         let progress = Arc::new(loaders::Progress::default());
         self.status = Status::Loading { file: source.name(), since: Instant::now(), progress: progress.clone() };
-        load_task(source, progress)
+        load_task(sources, progress)
+    }
+
+    /// Puts a model in the place of the last one (an IFCX stack with a file added).
+    fn replace_last_model(&mut self, model: Arc<Model>) {
+        if self.models.len() <= 1 {
+            self.set_model(model);
+        } else {
+            self.models.pop();
+            self.add_model(model);
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -795,13 +819,26 @@ impl App {
             Message::AddPicked(Some(source)) => return self.open(source, true),
             Message::Open(path) => return self.open(loaders::Source::File(path), false),
             Message::Loaded(Ok(model)) => {
-                if self.adding_model { self.add_model(model); } else { self.set_model(model); }
+                let (mut stack, restack) = std::mem::take(&mut self.loading_stack);
+                if !stack.last().is_some_and(loaders::composes) {
+                    stack.clear();
+                }
+                let id = model.id;
+                if restack {
+                    self.replace_last_model(model);
+                } else if self.adding_model {
+                    self.add_model(model);
+                } else {
+                    self.set_model(model);
+                }
+                self.layer_stack = (stack, Some(id));
                 self.adding_model = false;
                 self.remote_loaded();
                 return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
                 self.adding_model = false;
+                self.loading_stack = (Vec::new(), false);
                 self.status = Status::Error(e);
                 self.remote_loaded();
                 return self.shot_after_delay();
@@ -2604,6 +2641,42 @@ mod tests {
         assert!(matches!(messages[0], Message::Mode(RenderMode::Wireframe)), "{messages:?}");
         assert!(matches!(messages[1], Message::ToggleGrid), "{messages:?}");
         assert!(matches!(messages[2], Message::SaveDialog), "{messages:?}");
+    }
+
+    #[test]
+    fn an_ifcx_file_added_to_an_ifcx_model_layers_over_it() {
+        fn source(name: &str, text: &str) -> loaders::Source {
+            loaders::Source::Bytes { name: name.into(), data: Arc::new(text.as_bytes().to_vec()) }
+        }
+        // the load the task would run, done here
+        fn finish(app: &mut App) {
+            let model = loaders::load_stack(&app.loading_stack.0, &loaders::Progress::default()).map(Arc::new);
+            let _ = app.update(Message::Loaded(model));
+        }
+        let base = r#"{"header": {"ifcxVersion": "ifcx_alpha"}, "imports": [], "schemas": {}, "data": [
+            {"path": "w", "attributes": {"bsi::ifc::class": {"code": "IfcWall"},
+             "usd::usdgeom::mesh": {"points": [[0,0,0],[1,0,0],[0,0,1]], "faceVertexIndices": [0,1,2]}}}]}"#;
+        let overlay = r#"{"header": {"ifcxVersion": "ifcx_alpha"}, "imports": [], "schemas": {}, "data": [
+            {"path": "w", "attributes": {"bsi::ifc::prop::FireRating": "R60"}}]}"#;
+        let mut app = App::default();
+        let _ = app.update(Message::Picked(Some(source("base.ifcx", base))));
+        finish(&mut app);
+        let _ = app.update(Message::AddPicked(Some(source("rating.ifcx", overlay))));
+        assert_eq!(app.loading_stack.0.len(), 2);
+        finish(&mut app);
+        assert_eq!(app.models.len(), 1, "composed into the open model");
+        let model = app.model.clone().unwrap();
+        assert_eq!(model.triangle_count(), 1);
+        assert!(model.props.values().any(|p| p.contains("R60")));
+        // after another kind of file the next IFCX stands on its own
+        let _ = app.update(Message::AddPicked(Some(loaders::Source::Bytes {
+            name: "tri.obj".into(),
+            data: Arc::new(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec()),
+        })));
+        finish(&mut app);
+        assert_eq!(app.models.len(), 2, "{:?}", app.status);
+        let _ = app.update(Message::AddPicked(Some(source("rating.ifcx", overlay))));
+        assert_eq!(app.loading_stack.0.len(), 1);
     }
 
     #[test]

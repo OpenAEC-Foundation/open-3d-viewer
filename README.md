@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
+**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, CityGML, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC (also zipped) and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC (also zipped) and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, CityGML, GeoJSON, LandXML, glTF, COLLADA, 3MF, FBX, 3DS, OBJ, OFF, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -141,6 +141,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **DWG / DXF** (`.dwg`, `.dxf`) | Yes, polygon geometry | No |
 | **MicroStation DGN** (`.dgn`, V7 and V8) | Yes | No |
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
+| **CityGML** (`.gml`, `.citygml`, 1.0 to 3.0) | Yes | No |
 | **GeoJSON** (`.geojson`, polygons and lines) | Yes | No |
 | **LandXML** (`.xml`, `.landxml`, TIN surfaces) | Yes | No |
 | **glTF** (`.gltf`, `.glb`) | Yes | No |
@@ -159,6 +160,7 @@ What does not come through:
 - **DWG and DXF** show the polygon geometry of model space. ACIS solids, annotations, curves and external references are left out and counted.
 - **MicroStation DGN** opens version 7 design files and V8 design files (MicroStation V8, V8i and CONNECT). Lines, arcs and curves are drawn as thin ribbons as wide as their line weight, text as its box with the characters in the element properties; shapes, cones, extruded solids and B-spline surfaces of 3D files are faces. Levels are layers, with their names in V8 files; cells and shared cells are one element each; 2D linear dimensions of V8 files are drawn as lines, with the measured values in the element properties. Other dimensions, multi-lines, tags, line styles and reference files, and in V8 files surfaces, solids, cones, B-spline surfaces, meshes and models other than the first, are left out and counted. The V7 reader is written from Intergraph's public ISFF description and a clean-room analysis, the V8 reader from the clean-room specification only.
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
+- **CityGML** shows the polygons of each city object at its highest level of detail (LoD1 blocks or LoD2 surfaces), one layer per surface type (walls, roofs, ground, windows, doors, ..) or else per object type, one element per city object with its attributes and generic attributes; coordinates are moved to a local origin, not reprojected. Textures and colours (appearances), implicit geometry (placed library objects), geometry referenced from other objects and curves are not read.
 - **GeoJSON** shows polygons as flat faces (with their holes) and lines as 0.3 m wide ribbons, one element per feature with its properties; a polygon with a `height`, `building:height` or `building:levels` (3 m a level, with `min_height` for the underside) becomes a block. Longitude/latitude are projected to local metres around the first coordinate (equirectangular, fine for a district, not for a country); projected coordinates are taken as metres. Points are not drawn.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
 - **COLLADA** shows the triangles and polygons of the visual scene, one layer per SketchUp tag or else per material, in the diffuse colour of the material; textures, lines, polygons with holes and animations are left out. **3MF** shows each build item as a layer, with its components, base materials and colour groups; textures, beam lattices and slices are not read.

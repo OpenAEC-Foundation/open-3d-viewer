@@ -442,6 +442,7 @@ impl App {
             "layers": m.layers.len(),
             "vertices": m.vertex_count(),
             "triangles": m.triangle_count(),
+            "points": m.point_count(),
             "elements": elements,
             "views": m.views.len(),
             "levels": m.project.levels.len(),
@@ -565,6 +566,7 @@ impl App {
                     "name": l.name,
                     "visible": self.visible.get(i).copied().unwrap_or(true),
                     "triangles": l.triangle_count(),
+                    "points": l.point_count(),
                     "elements": l.elements.len(),
                     "color": format!("#{r:02x}{g:02x}{b:02x}"),
                 })

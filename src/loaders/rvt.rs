@@ -61,6 +61,7 @@ impl Loader for RvtLoader {
                     elements: b.elements,
                     props: b.props,
                     hidden: false,
+                    points: false,
                 }
             })
             .collect::<Vec<Layer>>();

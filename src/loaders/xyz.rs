@@ -9,7 +9,8 @@
 //! Points take their colour, else their intensity as grey, else a colour by height. A
 //! classification column gives a layer per class in the ASPRS colours, as for LAS. Thinned out
 //! evenly to [`MAX_POINTS`](super::pointcloud::MAX_POINTS); far coordinates move to a local
-//! origin. A `.txt` or `.csv` file opens only when its lines are columns of numbers.
+//! origin. A `.txt` or `.csv` file opens only when its lines are columns of numbers. An `.asc`
+//! that starts with `ncols` is an ESRI ASCII elevation grid, read by [`ascgrid`](super::ascgrid).
 
 use super::las::{class_color, class_name};
 use super::pointcloud::{color_by_height, grey, intensity_range, Cloud, MAX_POINTS};
@@ -60,6 +61,10 @@ fn load(source: &Source, progress: &Progress, pts: bool) -> Result<Loaded, Strin
     progress.set(Phase::Read);
     let data = source.read()?;
     progress.set(Phase::Convert);
+    if !pts && super::ascgrid::is_grid(&data) {
+        let (layers, info) = super::ascgrid::read(&data, &source.stem(), super::ascgrid::MAX_CELLS).map_err(|e| format!("{}: {e}", source.name()))?;
+        return Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } });
+    }
     let (layers, info) = read(&data, &source.stem(), pts, MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;
     Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }

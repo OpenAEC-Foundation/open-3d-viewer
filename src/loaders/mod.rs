@@ -37,6 +37,7 @@ mod e57;
 mod xyz;
 mod ptx;
 mod pcd;
+mod ascgrid;
 mod shapefile;
 mod vrml;
 mod amf;

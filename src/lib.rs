@@ -25,6 +25,7 @@ pub mod loaders;
 mod managed;
 mod measure;
 pub mod model;
+pub mod product;
 mod remote;
 pub mod remote_link;
 pub mod section;
@@ -47,3 +48,8 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
     let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
     writer.write_image_data(rgba).map_err(|e| e.to_string())
 }
+
+#[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+pub mod validation;
+#[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+pub mod validation_cli;

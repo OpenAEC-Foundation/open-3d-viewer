@@ -10,6 +10,10 @@
 //!   open-3d-viewer-mcp                  (started by the MCP client)
 //!   open-3d-viewer-mcp --print-config   (the JSON to add it to an MCP client)
 
+#[path = "../product.rs"]
+#[allow(dead_code)]
+mod product;
+
 #[path = "../remote_link.rs"]
 mod remote_link;
 
@@ -335,6 +339,10 @@ fn handle(viewer: &mut Viewer, msg: &Value) -> Option<Value> {
 }
 
 fn main() {
+    if cfg!(feature = "bim-validator") {
+        eprintln!("Build open-3d-viewer-mcp without the bim-validator feature.");
+        std::process::exit(2);
+    }
     if std::env::args().any(|a| a == "--print-config") {
         let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
         let config = json!({ "mcpServers": { "open-3d-viewer": { "command": exe, "args": [] } } });

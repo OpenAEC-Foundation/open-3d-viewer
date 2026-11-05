@@ -24,7 +24,7 @@ pub fn settings_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("OpenAEC").join("Open 3D Viewer Studio"))
+    Some(base.join("OpenAEC").join(crate::product::CURRENT.settings_namespace))
 }
 
 /// `remote.json` in the settings folder, next to the preferences.

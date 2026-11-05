@@ -74,7 +74,8 @@ pub fn configure(backend: Option<String>, present_mode: Option<String>, dir: Opt
     let var = |name| std::env::var(name).unwrap_or_else(|_| "-".into());
     log::info!(
         target: "o3v::gpu",
-        "Open 3D Viewer Studio {}: GPU {}; WGPU_BACKEND={} ({choice}), ICED_PRESENT_MODE={}, WGPU_POWER_PREF={} in {} ms",
+        "{} {}: GPU {}; WGPU_BACKEND={} ({choice}), ICED_PRESENT_MODE={}, WGPU_POWER_PREF={} in {} ms",
+        crate::product::CURRENT.name,
         env!("CARGO_PKG_VERSION"),
         gpu.map_or_else(|| "-".into(), |g| g.to_string()),
         var("WGPU_BACKEND"),

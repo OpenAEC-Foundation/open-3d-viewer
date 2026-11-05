@@ -1,0 +1,13 @@
+[package]
+name = "bim-bcf"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-3.0-or-later"
+description = "Bounded native BCF 2.1 archive round trips"
+
+[dependencies]
+roxmltree = "0.20"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v5"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }

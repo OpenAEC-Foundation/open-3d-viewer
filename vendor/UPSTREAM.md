@@ -11,3 +11,7 @@ Open Pointcloud Studio carries a snapshot the same way. Local changes, for the w
 in the browser (`src/shell.rs`). To update, copy the
 crate again from the Style Repo and run its `scripts/check_portable_ui.py` there first.
 Licenses: see `openaec-ui/LICENSE.md` and `openaec-ui/NOTICE.md`.
+
+The native validation panel extends `design::widgets::button` to accept owned or borrowed labels (`Cow<str>`). This retains the shared button style, focus behavior and accessible name while supporting generated finding labels. Preserve this compatibility change when refreshing the snapshot until it is available upstream.
+
+Local test-only adjustment in `src/frame.rs` selects the software fallback renderer when `gpu-renderer` is enabled, while retaining standalone CPU-only test support.

@@ -32,3 +32,6 @@ temp/
 
 # Claude Code
 .claude/
+
+# Python packaging-tool caches
+__pycache__/

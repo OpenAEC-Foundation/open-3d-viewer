@@ -59,6 +59,8 @@ tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
+# ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

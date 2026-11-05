@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
+**A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, COLLADA, 3MF, OBJ, STL and PLY, measures and sections them, and saves them as IFC, on the desktop and in the browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, OBJ, STL and PLY on the desktop and in the browser.
+- **Opens what you get sent.** IFC (also zipped) and Revit on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), CityJSON, LandXML, glTF, COLLADA, 3MF, OBJ, STL and PLY on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it, and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -132,7 +132,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 
 | Format | Open | Save |
 |--------|------|------|
-| **IFC 4** (`.ifc`) | Desktop | Yes |
+| **IFC 4** (`.ifc`, zipped `.ifczip`) | Desktop | Yes |
 | **Revit** (`.rvt`, `.rfa`) | Desktop | No |
 | **SketchUp** (`.skp`, version 3 and later) | Yes | No |
 | **Tekla Structures** (`.db1`, beta) | Yes | No |
@@ -143,9 +143,11 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Yes | No |
 | **LandXML** (`.xml`, `.landxml`, TIN surfaces) | Yes | No |
 | **glTF** (`.gltf`, `.glb`) | Yes | No |
+| **COLLADA** (`.dae`) | Yes | No |
 | **Wavefront OBJ** (`.obj`) | Yes | No |
 | **STL** (`.stl`, ASCII and binary) | Yes | No |
 | **PLY** (`.ply`) | Yes | No |
+| **3MF** (`.3mf`) | Yes | No |
 
 What does not come through:
 
@@ -154,6 +156,7 @@ What does not come through:
 - **MicroStation DGN** opens version 7 design files and V8 design files (MicroStation V8, V8i and CONNECT). Lines, arcs and curves are drawn as thin ribbons as wide as their line weight, text as its box with the characters in the element properties; shapes, cones, extruded solids and B-spline surfaces of 3D files are faces. Levels are layers, with their names in V8 files; cells and shared cells are one element each; 2D linear dimensions of V8 files are drawn as lines, with the measured values in the element properties. Other dimensions, multi-lines, tags, line styles and reference files, and in V8 files surfaces, solids, cones, B-spline surfaces, meshes and models other than the first, are left out and counted. The V7 reader is written from Intergraph's public ISFF description and a clean-room analysis, the V8 reader from the clean-room specification only.
 - **LandXML** shows TIN surfaces; survey points and alignments are not turned into surfaces. **CityJSON** shows the highest level of detail per object.
 - **Textures** of glTF, OBJ and SketchUp become their average colour; SketchUp soft edges are not smoothed.
+- **COLLADA** shows the triangles and polygons of the visual scene, one layer per SketchUp tag or else per material, in the diffuse colour of the material; textures, lines, polygons with holes and animations are left out. **3MF** shows each build item as a layer, with its components, base materials and colour groups; textures, beam lattices and slices are not read.
 - **Tekla** profiles are approximations; the reader is written from a clean-room specification.
 - **Allplan** opens a drawing file (`.ndw`) and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (furniture, windows, doors, railings) are placed in a `Macros` layer, one element per placement. Opened from its project folder, each body gets its colour from the project: its surface (`design/*.surf`, a textured surface by the average of its preview) or else its colour number in `animation.cfg`; in the browser, or for a drawing file on its own, the layers keep a fixed colour per category. On the desktop a whole project folder (`*.prj`, dropped on the window) opens as one model: the drawing files of its building structure, one layer per storey (the category becomes a property), and only the first building of the structure shown. 2D lines and polylines that are not part of a 3D element (site plans, axes, plan details) are drawn as thin dark lines just above their storey, in a `2D lines` layer. Textures, texts, hatchings, arcs and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
 - **Archicad** shows walls, slabs and columns as extruded footprints on their stories, beams along their axis, sloped ones too (columns and beams with an own profile as that profile, its arcs included), and each plane of a roof between its sloped underside and top, with vertical edges. Arcs in outlines are drawn as short straight segments; roofs of thickness 0 (helper bodies for solid element operations) are left out. Windows and doors are cut from their walls as openings, which start hidden in a layer of their own. Library objects (furniture, kitchens, sanitary, 3D text) are drawn as boxes of their size, 1 m high when the height is in the library part's own code. Meshes become closed terrain bodies (their triangulated top, a flat bottom and sides), and zones prisms that start hidden, half transparent, in a layer of their own. Morphs are drawn face by face from their stored body, without materials. Stairs are a block per tread from the stair's plan scheme, railings a half transparent band with a rail on top and posts at the segment ends; the real shapes of treads, stringers, posts and balusters (library code) are not read. Window and door frames, glass and leaves, the real shapes of library objects, curved roofs and shells, zones cut by roofs (drawn whole), and projects from before Archicad 24 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.

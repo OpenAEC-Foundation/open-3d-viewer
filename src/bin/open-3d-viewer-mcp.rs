@@ -66,7 +66,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 fn tools() -> Vec<Value> {
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), LandXML (.xml .landxml), glTF (.gltf .glb), .obj, .stl, .ply. Returns the model summary.",
+        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), LandXML (.xml .landxml), glTF (.gltf .glb), COLLADA (.dae), 3MF (.3mf), .obj, .stl, .ply. Returns the model summary.",
             json!({ "path": { "type": "string", "description": "Absolute path of the file" } }), &["path"], false),
         tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
             json!({

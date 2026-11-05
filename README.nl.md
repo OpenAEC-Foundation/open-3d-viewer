@@ -4,7 +4,7 @@
 
 # Open 3D Viewer Studio
 
-**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
+**Een gratis 3D-viewer voor bouwmodellen: hij opent IFC, Revit, SketchUp, Tekla, Allplan, Archicad, DWG/DXF, MicroStation DGN, CityJSON, LandXML, glTF, COLLADA, 3MF, OBJ, STL en PLY, meet en doorsnijdt ze, en slaat ze op als IFC, op de desktop en in de browser.**
 
 [![Release](https://img.shields.io/github/v/release/OpenAEC-Foundation/open-3d-viewer?include_prereleases&label=release&color=D97706)](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest)
 [![Build](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml/badge.svg)](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/build.yml)
@@ -91,7 +91,7 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`p
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
-- **Opent wat je toegestuurd krijgt.** IFC en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, Archicad (wanden met hun ramen en deuren, vloeren, kolommen, liggers, daken, bibliotheekobjecten als blok, terreinmeshes, zones, morphs, trappen en leuningen), DWG/DXF, MicroStation DGN (V7 en V8), CityJSON, LandXML, glTF, OBJ, STL en PLY op de desktop en in de browser.
+- **Opent wat je toegestuurd krijgt.** IFC (ook gezipt) en Revit op de desktop; SketchUp (versie 3 en later), Tekla Structures, Allplan, Archicad (wanden met hun ramen en deuren, vloeren, kolommen, liggers, daken, bibliotheekobjecten als blok, terreinmeshes, zones, morphs, trappen en leuningen), DWG/DXF, MicroStation DGN (V7 en V8), CityJSON, LandXML, glTF, COLLADA, 3MF, OBJ, STL en PLY op de desktop en in de browser.
 - **Meerdere modellen tegelijk.** **Openen** vervangt het model, **Toevoegen** zet er een ander bestand naast, en elk model heeft een eigen zichtbaarheidsknop.
 - **Slaat op als IFC.** Elk model dat de viewer opent, kan als IFC 4 worden opgeslagen, met verdiepingen, klassen, eigenschappen en materialen.
 - **Dezelfde app in de browser en op de desktop.** Eén codebasis; de browserversie hoef je niet te installeren.
@@ -134,7 +134,7 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 
 | Formaat | Openen | Opslaan |
 |---------|--------|---------|
-| **IFC 4** (`.ifc`) | Desktop | Ja |
+| **IFC 4** (`.ifc`, gezipt `.ifczip`) | Desktop | Ja |
 | **Revit** (`.rvt`, `.rfa`) | Desktop | Nee |
 | **SketchUp** (`.skp`, versie 3 en later) | Ja | Nee |
 | **Tekla Structures** (`.db1`, bèta) | Ja | Nee |
@@ -145,9 +145,11 @@ De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build
 | **CityJSON** (`.json`, `.cityjson`, `.jsonl`) | Ja | Nee |
 | **LandXML** (`.xml`, `.landxml`, TIN-oppervlakken) | Ja | Nee |
 | **glTF** (`.gltf`, `.glb`) | Ja | Nee |
+| **COLLADA** (`.dae`) | Ja | Nee |
 | **Wavefront OBJ** (`.obj`) | Ja | Nee |
 | **STL** (`.stl`, ASCII en binair) | Ja | Nee |
 | **PLY** (`.ply`) | Ja | Nee |
+| **3MF** (`.3mf`) | Ja | Nee |
 
 Wat niet meekomt:
 
@@ -156,6 +158,7 @@ Wat niet meekomt:
 - **MicroStation DGN** opent ontwerpbestanden van versie 7 en V8 (MicroStation V8, V8i en CONNECT). Lijnen, bogen en curves worden dunne linten zo breed als hun lijndikte, tekst wordt het kader van de tekst met de tekens in de elementeigenschappen; vlakken, kegels, geëxtrudeerde volumes en B-splinevlakken van 3D-bestanden worden vlakken. Levels worden lagen, in V8-bestanden met hun naam; cellen en gedeelde cellen zijn elk één element; lineaire 2D-maten van V8-bestanden worden lijnen, met de gemeten waarden in de elementeigenschappen. Andere maten, multilines, tags, lijnstijlen en referentiebestanden, en in V8-bestanden oppervlakken, volumes, kegels, B-splinevlakken, meshes en andere modellen dan het eerste, vallen weg en worden geteld. De V7-lezer is geschreven uit de openbare ISFF-beschrijving van Intergraph en een clean-room-analyse, de V8-lezer alleen uit de clean-room-specificatie.
 - **LandXML** toont TIN-oppervlakken; meetpunten en alignementen worden geen oppervlak. **CityJSON** toont per object het hoogste detailniveau.
 - **Texturen** van glTF, OBJ en SketchUp worden hun gemiddelde kleur; zachte randen in SketchUp worden niet gladgemaakt.
+- **COLLADA** toont de driehoeken en polygonen van de visuele scène, één laag per SketchUp-tag of anders per materiaal, in de diffuse kleur van het materiaal; texturen, lijnen, polygonen met gaten en animaties vallen weg. **3MF** toont elk build-item als laag, met zijn componenten, basismaterialen en kleurgroepen; texturen, beam lattices en slices worden niet gelezen.
 - **Tekla**-profielen zijn benaderingen; de lezer is geschreven vanuit een cleanroom-specificatie.
 - **Allplan** opent een tekenbestand (`.ndw`) en toont de 3D-lichamen (wanden, vloeren, kolommen, ramen, trappen) in een laag per categorie; openingen en ruimtes beginnen verborgen in een eigen laag. Een klik op een lichaam toont de naam, het elementtype en de hoeveelheden (hoogte, dikte, lengte, oppervlakte, inhoud) van het Allplan-element. Macro's (meubels, ramen, deuren, leuningen) komen in een laag `Macros`, één element per plaatsing. Geopend vanuit de projectmap krijgt elk lichaam zijn kleur uit het project: zijn oppervlak (`design/*.surf`, een oppervlak met textuur via het gemiddelde van het voorbeeld) of anders zijn kleurnummer in `animation.cfg`; in de browser, of voor een los tekenbestand, houden de lagen een vaste kleur per categorie. Op de desktop opent een hele projectmap (`*.prj`, op het venster gesleept) als één model: de tekenbestanden uit de bouwwerkstructuur, één laag per verdieping (de categorie wordt een eigenschap), en alleen het eerste gebouw uit de structuur zichtbaar. 2D-lijnen en -polylijnen die niet bij een 3D-element horen (situatie, assen, details in de plattegrond) komen als dunne donkere lijnen net boven hun verdieping, in een laag `2D lines`. Texturen, teksten, arceringen, bogen en lay-outs (`.npl`) worden nog niet gelezen. De lezer is geschreven vanuit een cleanroom-specificatie.
 - **Archicad** toont wanden, vloeren en kolommen als geëxtrudeerde plattegronden op hun verdieping, liggers langs hun as, ook schuine (kolommen en liggers met een eigen profiel als dat profiel, met zijn bogen), en elk dakvlak tussen zijn schuine onder- en bovenkant, met verticale randen. Bogen in omtrekken worden als korte rechte stukken getekend; daken met dikte 0 (hulplichamen voor bewerkingen met volume-elementen) worden weggelaten. Ramen en deuren worden als sparingen uit hun wanden gesneden; de sparingen beginnen verborgen in een eigen laag. Bibliotheekobjecten (meubels, keukens, sanitair, 3D-tekst) worden getekend als blok van hun maat, 1 m hoog als de hoogte in de eigen code van het bibliotheekdeel staat. Meshes worden gesloten terreinlichamen (hun getrianguleerde bovenvlak, een vlakke onderkant en zijkanten), en zones prisma's die verborgen en half doorzichtig in een eigen laag beginnen. Morphs worden vlak voor vlak uit hun opgeslagen lichaam getekend, zonder materialen. Trappen worden een blok per trede uit het trapschema in de plattegrond, leuningen een half doorzichtige band met een regel erop en palen aan de segmenteinden; de echte vorm van treden, trapbomen, palen en balusters (bibliotheekcode) wordt niet gelezen. Kozijnen, glas en bladen van ramen en deuren, de echte vorm van bibliotheekobjecten, gebogen daken en schalen, zones die door daken worden afgesneden (heel getekend), en projecten van vóór Archicad 24 worden nog niet gelezen. Wandhoogtes volgen de verdieping waaraan de bovenkant van een wand gekoppeld is, of de eigen hoogte van de wand. De lezer is geschreven vanuit een cleanroom-specificatie.

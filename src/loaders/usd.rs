@@ -3,9 +3,9 @@
 //! payloads, variants, instancing). Each `Mesh` prim is a pickable element with its name and
 //! path, placed with its xform ops (`xformOpOrder`: translate, rotate in any axis order, orient,
 //! scale, transform, inverted pivots, `!resetXformStack!`) and those of its parents; one layer
-//! per bound material (`material:binding` to a `UsdPreviewSurface` diffuse colour), coloured by
-//! `primvars:displayColor` when the mesh has one (constant, per face, per vertex or per face
-//! vertex). Polygons are fan triangulated (holes left out), `leftHanded` meshes turned around,
+//! per bound material (`material:binding` to a `UsdPreviewSurface` diffuse colour); a mesh
+//! without a material is coloured by its `primvars:displayColor` (constant, per face, per vertex
+//! or per face vertex). Polygons are fan triangulated (holes left out), `leftHanded` meshes turned around,
 //! flat shaded. `upAxis` and `metersPerUnit` (USD default: Y up, centimetres) convert to metres,
 //! Z up. Textures, subdivision, implicit shapes (Cube, Sphere, ..), curves, points, skinning and
 //! animation (the default time is drawn) are not read. In the browser only the file itself is
@@ -292,9 +292,13 @@ impl Scene<'_> {
         let left_handed = attribute(prim, "orientation").and_then(|v| text(&v)).as_deref() == Some("leftHanded");
         let world = self.world(prim, 0);
         let flip = left_handed != (world.determinant() < 0.0);
-        let colors = attribute(prim, "primvars:displayColor").map(|v| vec3s(&v)).unwrap_or_default();
-        let interpolation = prim.attribute("primvars:displayColor").get_metadata::<sdf::Value>("interpolation").ok().flatten().and_then(|v| text(&v));
         let material = self.material(prim);
+        // a bound material wins over displayColor, as in a USD renderer
+        let colors = match material {
+            Some(_) => Vec::new(),
+            None => attribute(prim, "primvars:displayColor").map(|v| vec3s(&v)).unwrap_or_default(),
+        };
+        let interpolation = prim.attribute("primvars:displayColor").get_metadata::<sdf::Value>("interpolation").ok().flatten().and_then(|v| text(&v));
         let (layer_name, base) = material.unwrap_or_else(|| ("Default".into(), DEFAULT_COLOR));
         let base_rgba = {
             let c = colors.first().map(|c| c.to_array().map(|v| v as f32)).unwrap_or(base).map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);

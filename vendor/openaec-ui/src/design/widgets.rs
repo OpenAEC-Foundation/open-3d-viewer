@@ -254,12 +254,13 @@ pub fn button_style(look: Look, kind: ButtonKind, status: iced_button::Status) -
 /// A text button, with an optional 16 px icon on the left. `None` disables it.
 pub fn button<'a, M: Clone + 'a>(
     look: Look,
-    label: &'a str,
+    label: impl Into<std::borrow::Cow<'a, str>>,
     kind: ButtonKind,
     density: Density,
     icon: Option<&'static str>,
     on_press: Option<M>,
 ) -> Element<'a, M> {
+    let label = label.into();
     let c = look.color;
     let fg = if on_press.is_none() {
         c.text_disabled
@@ -275,14 +276,14 @@ pub fn button<'a, M: Clone + 'a>(
     if let Some(source) = icon {
         content = content.push(glyph(source, 16.0, fg, if on_press.is_none() { fg } else { accent }));
     }
-    content = content.push(text(label).size(font::SIZE_BODY).font(fonts::STRONG));
+    content = content.push(text(label.clone()).size(font::SIZE_BODY).font(fonts::STRONG));
     let enabled = on_press.is_some();
     let control = iced_button(container(content).height(Length::Fill).align_y(Vertical::Center))
         .height(density.height())
         .padding(Padding::from([0.0, density.pad_x()]))
         .on_press_maybe(on_press)
         .style(move |_, status| button_style(look, kind, status));
-    a11y::node(focusable(look, control, enabled, radius::MEDIUM), Node::new(Role::Button, label).disabled(!enabled))
+    a11y::node(focusable(look, control, enabled, radius::MEDIUM), Node::new(Role::Button, label.as_ref()).disabled(!enabled))
 }
 
 /// A square icon button: 28 px, or 20 px in a panel header. The icon is 16 px.

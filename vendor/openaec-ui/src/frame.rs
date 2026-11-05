@@ -240,6 +240,18 @@ mod tests {
     use iced::advanced::{layout, widget::Tree};
     use iced::Size;
 
+    fn layout_renderer() -> iced::Renderer {
+        let renderer = iced_tiny_skia::Renderer::new(crate::fonts::BODY, iced::Pixels(12.0));
+        #[cfg(feature = "gpu-renderer")]
+        {
+            iced::Renderer::Secondary(renderer)
+        }
+        #[cfg(not(feature = "gpu-renderer"))]
+        {
+            renderer
+        }
+    }
+
     fn band(height: u16) -> Element<'static, ()> {
         container(Space::new().width(Fill).height(u32::from(height))).width(Fill).into()
     }
@@ -257,7 +269,7 @@ mod tests {
             },
             profile,
         );
-        let renderer = iced_tiny_skia::Renderer::new(crate::fonts::BODY, iced::Pixels(12.0));
+        let renderer = layout_renderer();
         let mut tree = Tree::new(&element);
         let node = element.as_widget_mut().layout(
             &mut tree,
@@ -278,7 +290,7 @@ mod tests {
     fn optional_workspace_panes_keep_asymmetric_source_widths() {
         let profile = WorkspaceFrameProfile::OPEN_FRAME;
         let mut element = workspace_panes(profile, Some(band(1)), band(1), Some(band(1)));
-        let renderer = iced_tiny_skia::Renderer::new(crate::fonts::BODY, iced::Pixels(12.0));
+        let renderer = layout_renderer();
         let mut tree = Tree::new(&element);
         let node = element.as_widget_mut().layout(
             &mut tree,
@@ -296,7 +308,7 @@ mod tests {
     fn composer_sidebar_frame_preserves_source_geometry() {
         let profile = SidebarFrameProfile::WORKSPACE_COMPOSER;
         let mut element = sidebar_frame(profile, band(1), band(1), band(1), band(1));
-        let renderer = iced_tiny_skia::Renderer::new(crate::fonts::BODY, iced::Pixels(12.0));
+        let renderer = layout_renderer();
         let mut tree = Tree::new(&element);
         let node = element.as_widget_mut().layout(
             &mut tree,

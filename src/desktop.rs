@@ -117,7 +117,7 @@ fn parse_args() -> Result<Args, String> {
                 })
             }
             "-h" | "--help" => {
-                println!("{}", include_str!("desktop.rs").lines().take_while(|l| l.starts_with("//!")).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("desktop.rs").lines().take_while(|l| l.starts_with("//!")).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n").replace("Open 3D Viewer Studio", crate::product::CURRENT.name).replace("open-3d-viewer", crate::product::CURRENT.id));
                 std::process::exit(0);
             }
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -191,7 +191,7 @@ fn run_app(args: Args) -> iced::Result {
     app.initial_view = args.view;
     app.pending_open = args.file.clone();
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
-    app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
+    app.remote.enabled = !args.no_remote && std::env::var(crate::product::CURRENT.remote_env).as_deref() != Ok("0");
     let mut studio = shell::Studio::new(app);
     if let Some(dir) = dir {
         studio = studio.with_settings_in(dir);

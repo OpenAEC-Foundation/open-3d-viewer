@@ -13,6 +13,7 @@ default-run = "open-3d-viewer"
 
 # The desktop app includes Revit support; the web target uses byte-oriented readers.
 [workspace]
+members = ["crates/bim-validator-core", "crates/bim-bcf"]
 
 [lib]
 name = "open_3d_viewer"
@@ -26,7 +27,20 @@ path = "src/main.rs"
 name = "open-3d-viewer-mcp"
 path = "src/bin/open-3d-viewer-mcp.rs"
 
+[[bin]]
+name = "open-bim-validator"
+path = "src/bin/open-bim-validator.rs"
+required-features = ["bim-validator"]
+
+[features]
+default = []
+bim-validator = ["dep:bim-validator-core", "dep:bim-bcf", "dep:uuid", "dep:time"]
+
 [dependencies]
+uuid = { version = "1", features = ["v5"], optional = true }
+time = { version = "0.3", features = ["formatting"], optional = true }
+bim-validator-core = { path = "crates/bim-validator-core", optional = true }
+bim-bcf = { path = "crates/bim-bcf", optional = true }
 # GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
 iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "advanced", "svg", "canvas"] }
 # Shared OpenAEC window shell, tokens, widgets and icons (LGPL-3.0-only; fonts OFL, icons CC BY-SA,
@@ -87,7 +101,7 @@ console_error_panic_hook = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # Which GPU the window gets, before wgpu starts (`gpu`); the version wgpu-hal uses (MIT OR Apache-2.0)
-windows = { version = "0.58", features = ["Win32_Graphics_Dxgi"] }
+windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_System_Console"] }
 
 [target.'cfg(windows)'.build-dependencies]
 # The app icon and version info in the .exe (MIT)

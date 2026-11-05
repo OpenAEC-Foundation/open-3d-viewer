@@ -47,6 +47,9 @@ jobs:
         run: |
           cargo test --release --locked
           cargo test --release --locked -p openaec-ui --lib
+          cargo test --release --locked --workspace --features bim-validator
+      - name: Product packaging contracts
+        run: python3 -m unittest discover -s scripts -p 'test_*products.py' -v
       - name: Web build (wasm32)
         run: cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
 

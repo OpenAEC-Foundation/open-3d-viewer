@@ -1,0 +1,44 @@
+name: Native product review artifacts
+
+# Manual, unsigned review builds. This workflow never publishes a release or updates a catalogue.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  products:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read-only access to native format libraries
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
+          log-public-key: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: swatinem/rust-cache@v2
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev libgtk-3-dev
+      - name: Packaging contracts
+        run: python -m unittest discover -s scripts -p test_build_products.py -v
+      - name: Viewer tests
+        run: cargo test --release --locked --lib
+      - name: Validator tests
+        run: cargo test --release --locked --workspace --features bim-validator
+      - name: Build both products from this revision
+        run: python scripts/build-products.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-products-${{ runner.os }}-${{ runner.arch }}-review-unsigned
+          path: dist/products/*
+          if-no-files-found: error

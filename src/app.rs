@@ -69,6 +69,8 @@ pub enum Status {
 }
 
 pub struct App {
+    #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+    pub validation: crate::validation::State,
     pub theme: ThemeKind,
     pub model: Option<Arc<Model>>,
     pub models: Vec<ModelEntry>,
@@ -159,6 +161,8 @@ type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>);
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+    Bim(crate::validation::Event),
     OpenDialog,
     AddDialog,
     Open(PathBuf),
@@ -287,6 +291,8 @@ const ANIM_SECONDS: f32 = 0.45;
 impl Default for App {
     fn default() -> Self {
         Self {
+            #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+            validation: crate::validation::State::default(),
             theme: ThemeKind::Light,
             model: None,
             models: Vec::new(),
@@ -485,8 +491,8 @@ pub fn save_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
 impl App {
     pub fn title(&self) -> String {
         match &self.model {
-            Some(m) => format!("{} - Open 3D Viewer Studio", m.file_name()),
-            None => "Open 3D Viewer Studio".to_string(),
+            Some(m) => format!("{} - {}", m.file_name(), crate::product::CURRENT.name),
+            None => crate::product::CURRENT.name.to_string(),
         }
     }
 
@@ -647,6 +653,11 @@ impl App {
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
     pub fn set_model(&mut self, model: Arc<Model>) {
+        #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+        {
+            let source = model.path.extension().filter(|ext| ext.to_str().is_some_and(|s| s.eq_ignore_ascii_case("ifc"))).map(|_| model.path.clone());
+            if self.validation.ifc != source { self.validation.set_model(source); }
+        }
         self.models = vec![ModelEntry::new(model.clone(), 0)];
         self.set_scene(model);
     }
@@ -671,7 +682,7 @@ impl App {
         }
     }
 
-    fn set_layer_visible(&mut self, layer: usize, shown: bool) {
+    pub(crate) fn set_layer_visible(&mut self, layer: usize, shown: bool) {
         for entry in &mut self.models {
             if entry.layers.contains(&layer) {
                 if shown && !entry.visible {
@@ -733,6 +744,8 @@ impl App {
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
         }
+        #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+        if !add { self.validation.set_model(source.path().filter(|_| source.extension() == "ifc").map(std::path::Path::to_path_buf)); }
         self.adding_model = add;
         let progress = Arc::new(loaders::Progress::default());
         self.status = Status::Loading { file: source.name(), since: Instant::now(), progress: progress.clone() };
@@ -787,6 +800,8 @@ impl App {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+            Message::Bim(event) => return crate::validation::update(self, event),
             Message::OpenDialog => return pick_model_task(false),
             Message::AddDialog => return pick_model_task(true),
             Message::Picked(None) => {}
@@ -1312,7 +1327,7 @@ impl App {
             tab("Home", RibbonTab::Home),
             tab("View", RibbonTab::View),
             Space::new().width(Fill),
-            text("Open 3D Viewer Studio").size(12).font(FONT_BOLD).color(p.accent),
+            text(crate::product::CURRENT.name).size(12).font(FONT_BOLD).color(p.accent),
             text(" · iced").size(12).color(p.text_muted),
         ]
         .spacing(4)
@@ -2057,7 +2072,7 @@ impl App {
         exts.sort();
         container(
             column![
-                text("Open 3D Viewer Studio").size(24).font(FONT_BOLD).color(p.text),
+                text(crate::product::CURRENT.name).size(24).font(FONT_BOLD).color(p.text),
                 text("Rust + iced edition").size(13).color(p.accent),
                 Space::new().height(8),
                 text("Open a model or drop a file on the window.").size(13).color(p.text_secondary),

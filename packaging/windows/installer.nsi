@@ -14,7 +14,10 @@ Unicode true
 !endif
 
 Name "Open 3D Viewer Studio ${NUMBER}"
-OutFile "open-3d-viewer_${NUMBER}_x64-setup.exe"
+!ifndef OUTPUT
+  !define OUTPUT "open-3d-viewer_${NUMBER}_x64-setup.exe"
+!endif
+OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Open 3D Viewer Studio"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma

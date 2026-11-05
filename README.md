@@ -21,6 +21,20 @@
 
 ## What this repository is
 
+### Native BIM validator (in development)
+
+This codebase also builds **Open BIM Validator**, a separate native Rust application sharing the renderer and OpenAEC interface. Its validation engine reads the full IFC graph through IFClite, parses IDS with `openbim-ids`, and runs locally without a Python runtime. The two desktop products have separate settings and installation identities.
+
+```sh
+cargo run --bin open-3d-viewer
+cargo run --features bim-validator --bin open-bim-validator
+cargo run --features bim-validator --bin open-bim-validator -- --validate model.ifc --ids rules.ids --report results.json --bcf issues.bcfzip
+```
+
+Build each product separately: Cargo features apply to the complete build. The validator supports JSON/CSV reports and BCF 2.1 import, status edits and export. Unsupported validation semantics produce an explicit **not checkable** result. CLI exit codes are `0` passed, `1` failed, `2` not checkable and `3` input/output error; existing output files are never overwritten by the CLI.
+
+This native migration is not yet a replacement release for the existing validator. See the [migration capability ledger](docs/design/native-migration.md) for limitations and [product packaging](packaging/PRODUCTS.md) for separate build artifacts. The review workflow produces unsigned artifacts; the existing viewer release links below refer to published viewer releases.
+
 This repository is the complete source of **Open 3D Viewer Studio**, the 3D viewer of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation). Architects, engineers and builders send each other models in many formats; with this viewer you open any of them without the program that made it. You walk around the model, pick an element and read its properties, measure, cut it open, pull it apart per storey or per element, and save it as IFC.
 
 One Rust code base gives three things: the **desktop app** for Windows, macOS and Linux, the **browser version** at [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com), and the **MCP server** through which AI agents drive the desktop app. The repository also holds what turns that code into signed installers and a live website.

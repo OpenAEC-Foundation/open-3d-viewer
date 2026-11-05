@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Open BIM Validator
+GenericName=BIM model validator
+Comment=Inspect BIM models and validate IFC against IDS
+Exec=open-bim-validator %f
+Icon=org.openaec.OpenBIMValidator
+Terminal=false
+Categories=Graphics;3DGraphics;Viewer;Engineering;
+MimeType=application/x-step;
+StartupWMClass=open-bim-validator

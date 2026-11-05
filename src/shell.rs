@@ -27,10 +27,10 @@ use web_time::{Duration, Instant};
 
 /// Version: OpenAEC calendar versioning (year.ISO week.patch).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-const NAME: &str = "Open 3D Viewer Studio";
+const NAME: &str = crate::product::CURRENT.name;
 /// The id of this app in the installer's catalogue, for the update notice (desktop only).
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-const APP_ID: &str = "open-3d-viewer";
+const APP_ID: &str = crate::product::CURRENT.id;
 const PANEL_MIN: f32 = 190.0;
 const PANEL_MAX: f32 = 520.0;
 const RECENT: usize = 8;
@@ -933,7 +933,12 @@ impl Studio {
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight)), hide, Some(self.command("view.right").shortcut_label().unwrap_or("")))];
             body = body
                 .push(ch::splitter(look, dragging(Side::Right), Msg::SplitterPress(Side::Right)))
-                .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, Self::pane(app.properties_body(p, l))));
+                .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, {
+                    #[cfg(all(feature = "bim-validator", not(target_arch = "wasm32")))]
+                    { column![container(crate::validation::panel(app, look, l).map(Msg::App)).height(Length::FillPortion(3)), Self::pane(app.properties_body(p, l))].height(Length::Fill).into() }
+                    #[cfg(not(all(feature = "bim-validator", not(target_arch = "wasm32"))))]
+                    { Self::pane(app.properties_body(p, l)) }
+                }));
         }
         body.into()
     }

@@ -19,6 +19,20 @@
 
 </div>
 
+## Native BIM-validator (in ontwikkeling)
+
+Deze codebasis bouwt ook **Open BIM Validator**: een afzonderlijke native Rust-app met dezelfde renderer en OpenAEC-interface. IFClite levert de volledige IFC-data; `openbim-ids` leest IDS-specificaties. De controles draaien lokaal zonder Python-runtime. Beide producten hebben eigen instellingen en installatie-identiteiten.
+
+```sh
+cargo run --bin open-3d-viewer
+cargo run --features bim-validator --bin open-bim-validator
+cargo run --features bim-validator --bin open-bim-validator -- --validate model.ifc --ids regels.ids --report resultaten.json --bcf issues.bcfzip
+```
+
+Bouw de producten afzonderlijk. De validator biedt JSON/CSV-rapporten en BCF 2.1-import, statuswijzigingen en export. Niet-ondersteunde controles worden expliciet **niet controleerbaar**. De CLI gebruikt exitcodes `0` geslaagd, `1` afgekeurd, `2` niet controleerbaar en `3` invoer-/uitvoerfout; bestaande uitvoerbestanden worden niet overschreven.
+
+Deze migratie is nog geen vervangende release voor de bestaande validator. Zie het [migratieoverzicht](docs/design/native-migration.md) voor beperkingen en de [productbuilds](packaging/PRODUCTS.md) voor afzonderlijke artifacts. De reviewworkflow levert ongetekende artifacts; onderstaande downloadlinks verwijzen naar gepubliceerde viewerreleases.
+
 ## Wat deze repository is
 
 Deze repository is de volledige broncode van **Open 3D Viewer Studio**, de 3D-viewer van de [OpenAEC Foundation](https://github.com/OpenAEC-Foundation). Architecten, constructeurs en bouwers sturen elkaar modellen in allerlei formaten; met deze viewer open je ze allemaal zonder het programma waarmee ze gemaakt zijn. Je loopt om het model heen, klikt een element aan en leest zijn eigenschappen, meet, snijdt het open, trekt het uit elkaar per verdieping of per element, en slaat het op als IFC.

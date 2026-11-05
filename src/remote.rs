@@ -114,7 +114,7 @@ pub fn serve() -> impl Stream<Item = Message> {
 }
 
 fn listen(tx: iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> std::io::Result<()> {
-    let port = std::env::var("O3V_REMOTE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let port = std::env::var(crate::product::CURRENT.remote_port_env).ok().and_then(|p| p.parse().ok()).unwrap_or(0);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
     let announcement = Announcement { port: listener.local_addr()?.port(), token: new_token(), pid: std::process::id() };
     remote_link::announce(&announcement)?;

@@ -61,7 +61,7 @@ On a touch screen **one finger orbits**, **two fingers pinch to zoom** and **mov
 
 What works and what does not on Android:
 
-- Every format of the browser version opens through **Open** (Android's file picker) or a `?file=` link. IFC and Revit do not, as in any browser.
+- Every format of the browser version opens through **Open** (Android's file picker) or a `?file=` link. Revit, Vertex BD and BTL do not, as in any browser; opening one says so in the status bar and opens a dialog whose **Download** button opens the desktop app's download page.
 - The 3D view needs WebGPU or WebGL2; a current Chrome has one of them on most phones of the last years.
 - A large model loads slowly and the app waits while it does; a phone has less memory than a computer, so a very large model can stop the tab.
 - Typing into the explorer's search field does not bring up the on-screen keyboard (iced has no on-screen keyboard support in the browser yet).
@@ -70,7 +70,7 @@ What works and what does not on Android:
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
-- **Opens what you get sent.** IFC (also zipped), Revit, Vertex BD (`.vxz`) and BTL timber machine files on the desktop; SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), STEP (AP203, AP214, AP242), IFC5 (IFCX, alpha), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino (version 4 to 8), COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL and PLY, and LAS, LAZ, E57, PTS, PTX, PCD and ASCII XYZ point clouds, on the desktop and in the browser.
+- **Opens what you get sent.** Revit, Vertex BD (`.vxz`) and BTL timber machine files on the desktop; IFC (also zipped), SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), STEP (AP203, AP214, AP242), IFC5 (IFCX, alpha), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino (version 4 to 8), COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL and PLY, and LAS, LAZ, E57, PTS, PTX, PCD and ASCII XYZ point clouds, on the desktop and in the browser.
 - **Several models at once.** **Open** replaces the model, **Add** puts another file next to it (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
@@ -164,7 +164,7 @@ The readers for SketchUp, Tekla and PLY, and the Revit library, live in their ow
 
 | Format | Open | Save |
 |--------|------|------|
-| **IFC 4** (`.ifc`, zipped `.ifczip`) | Desktop | Yes |
+| **IFC 4** (`.ifc`, zipped `.ifczip`) | Yes; large files are slower in the browser | Yes |
 | **Revit** (`.rvt`, `.rfa`) | Desktop | No |
 | **IFC5 / IFCX** (`.ifcx`, alpha) | Yes | No |
 | **SketchUp** (`.skp`, version 3 and later) | Yes | No |
@@ -223,7 +223,7 @@ What does not come through:
 - **Allplan** opens a drawing file (`.ndw`) and shows its 3D bodies (walls, slabs, columns, windows, stairs) in a layer per category; openings and rooms start hidden in a layer of their own. A click on a body shows the name, element type and quantities (height, thickness, length, area, volume) of its Allplan element. Macros (furniture, windows, doors, railings) are placed in a `Macros` layer, one element per placement. Opened from its project folder, each body gets its colour from the project: its surface (`design/*.surf`, a textured surface by the average of its preview) or else its colour number in `animation.cfg`; in the browser, or for a drawing file on its own, the layers keep a fixed colour per category. On the desktop a whole project folder (`*.prj`, dropped on the window) opens as one model: the drawing files of its building structure, one layer per storey (the category becomes a property), and only the first building of the structure shown. 2D lines and polylines that are not part of a 3D element (site plans, axes, plan details) are drawn as thin dark lines just above their storey, in a `2D lines` layer. Textures, texts, hatchings, arcs and layouts (`.npl`) are not read yet. The reader is written from a clean-room specification.
 - **Archicad** shows walls, slabs and columns as extruded footprints on their stories, beams along their axis, sloped ones too (columns and beams with an own profile as that profile, its arcs included), and each plane of a roof between its sloped underside and top, with vertical edges. Arcs in outlines are drawn as short straight segments; roofs of thickness 0 (helper bodies for solid element operations) are left out. Windows and doors are cut from their walls as openings, which start hidden in a layer of their own. Library objects (furniture, kitchens, sanitary, 3D text) are drawn as boxes of their size, 1 m high when the height is in the library part's own code. Meshes become closed terrain bodies (their triangulated top, a flat bottom and sides), and zones prisms that start hidden, half transparent, in a layer of their own. Morphs are drawn face by face from their stored body, without materials. Stairs are a block per tread from the stair's plan scheme, railings a half transparent band with a rail on top and posts at the segment ends; the real shapes of treads, stringers, posts and balusters (library code) are not read. Window and door frames, glass and leaves, the real shapes of library objects, curved roofs and shells, zones cut by roofs (drawn whole), and projects from before Archicad 24 are not read yet. Wall heights follow the story a wall's top is linked to, or the wall's own height. The reader is written from a clean-room specification.
 - **Vertex BD** opens a project archive (`.vxz`) and shows the bodies of its framing model (`FRAMING.vxm`) and building model (`MODEL.vxm`) in their material colours, one layer per model, with the placed library symbols (posts, lintels, roof slabs, windows and doors). Click a body for its element id and material (such as PIECE.VUREN or WIN.GLASS). Element type names (stud, top plate) are not in the model files and are not shown. **BTL** shows each part with its processings cut out (end cuts, saw cuts, laps and grooves, drillings, dovetail tenons and mortises). The explorer groups the layers per panel: a panel shows or hides at once, and within it each member type (stud, top plate, cladding board) and each kind of processing has its own layer, so you can switch off the cladding or show only the drillings. A processing is drawn in its own colour as the material it removes; click it to see its parameters and what they mean. Click a part for its size, timber grade and processings. Both readers are in `vertex.dll` (`libvertex.so`, `libvertex.dylib`), an OpenAEC library written from reverse-engineered sample files: the installers put it next to the program, which loads it at run time (`vendor/vertex/`, updated with `scripts/update-vertex.sh`).
-- **In the browser**, IFC and Revit do not open, `.gltf` files need their buffers embedded, and OBJ materials are not read.
+- **In the browser**, Revit, Vertex BD and BTL do not open (the start screen names only what the browser opens, and such a file points to the desktop app), `.gltf` files need their buffers embedded, and OBJ materials are not read. IFC opens, but on the page's own thread: the page waits while it converts, about 3 to 5 times as long as one desktop thread (a 14 MB file takes about 5 s), and a file of more than about 100 to 200 MB can run out of the browser's memory.
 
 New formats: implement `loaders::Loader` and add it to `loaders::registry()`; new writers implement `export::Writer` and go in `export::registry()`.
 
@@ -249,7 +249,7 @@ Count sources: `cargo test --release` and `cargo test --release -p openaec-ui --
 
 ## Current limitations
 
-- **IFC and Revit open on the desktop only.** The browser version does not include those readers.
+- **Revit, Vertex BD and BTL open on the desktop only.** The browser version does not include those readers. IFC opens in both, but large IFC files are slow in the browser and very large ones do not fit in its memory.
 - **IGES files do not open.** STEP files do; IGES is not read yet.
 - **Elements cannot be hidden one by one.** Visibility works per layer and per model.
 - **No undo yet.** Measurements and the section are cleared by hand.
@@ -262,7 +262,7 @@ Found something? [Open an issue](https://github.com/OpenAEC-Foundation/open-3d-v
 
 ## Under the hood
 
-The viewer is written in Rust. The interface is [iced](https://iced.rs) 0.14 and the 3D view is an own wgpu pipeline with 4x MSAA inside iced's `shader` widget, so the same code runs natively and as WebAssembly on WebGPU, without a web view or JavaScript framework. The window follows the OpenAEC standard application: the shell, design tokens, fonts and B2 icons come from [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 (`vendor/openaec-ui`, `assets/b2`). IFC is read with [IFClite](https://github.com/LTplus-AG/ifc-lite) and DWG/DXF with [acadrust](https://github.com/hakanaktt/acadrust). On a computer with integrated AMD graphics, a Revit sample of 18.8 MB loads in about 2.5 s and draws at about 110 frames per second at 1920x1080 (`open-3d-viewer --bench`).
+The viewer is written in Rust. The interface is [iced](https://iced.rs) 0.14 and the 3D view is an own wgpu pipeline with 4x MSAA inside iced's `shader` widget, so the same code runs natively and as WebAssembly on WebGPU, without a web view or JavaScript framework. The window follows the OpenAEC standard application: the shell, design tokens, fonts and B2 icons come from [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 (`vendor/openaec-ui`, `assets/b2`). IFC is read with [IFClite](https://github.com/LTplus-AG/ifc-lite), on the desktop and in the browser, and DWG/DXF with [acadrust](https://github.com/hakanaktt/acadrust). On a computer with integrated AMD graphics, a Revit sample of 18.8 MB loads in about 2.5 s and draws at about 110 frames per second at 1920x1080 (`open-3d-viewer --bench`).
 
 ## Contributing
 

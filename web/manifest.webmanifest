@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Open 3D Viewer Studio",
   "short_name": "3D Viewer",
-  "description": "View SketchUp, Tekla, glTF, OBJ, STL and PLY models and save them as IFC. Free and open source, by the OpenAEC Foundation.",
+  "description": "View IFC, SketchUp, Tekla, glTF, OBJ, STL and PLY models and save them as IFC. Free and open source, by the OpenAEC Foundation.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

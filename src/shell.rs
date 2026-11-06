@@ -200,6 +200,8 @@ impl Prefs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialog {
     Settings,
+    /// A file of this format (such as Revit) opens only in the desktop app: where to get it.
+    DesktopOnly(&'static str),
 }
 
 /// What a screenshot shows: the workspace, the Bestand page or a page of the settings.
@@ -277,6 +279,8 @@ pub enum Msg {
     Maximize,
     CloseWindow,
     Update,
+    /// Opens the desktop app's download page (from [`Dialog::DesktopOnly`]).
+    DownloadDesktop,
 }
 
 pub struct Studio {
@@ -549,7 +553,17 @@ impl Studio {
                 if let Some(path) = opened {
                     self.remember(path);
                 }
-                return self.app.update(message).map(Msg::App);
+                // a format only the desktop app opens: say where to get it, with a working link,
+                // which the status bar has no room for on a phone
+                let desktop_only = match &message {
+                    Message::Loaded(Err(e)) => crate::loaders::desktop_only_error(e),
+                    _ => None,
+                };
+                let task = self.app.update(message).map(Msg::App);
+                if let Some(format) = desktop_only {
+                    return Task::batch([task, self.update(Msg::Dialog(Some(Dialog::DesktopOnly(format))))]);
+                }
+                return task;
             }
             // one ribbon tab: choosing it closes Bestand; in the compact layout it also folds the
             // ribbon away and back
@@ -712,6 +726,12 @@ impl Studio {
                     }
                 }
             }
+            Msg::DownloadDesktop => {
+                if let Err(e) = open_url(crate::loaders::DESKTOP_DOWNLOAD) {
+                    self.app.status = Status::Error(e);
+                }
+                return self.update(Msg::Dialog(None));
+            }
         }
         Task::none()
     }
@@ -760,7 +780,12 @@ impl Studio {
             Status::Loading { file, since, .. } => format!("{} {file}… {:.0} s", l.text("Laden", "Loading"), since.elapsed().as_secs_f32()),
             Status::Saving { file, since } => format!("{} {file}… {:.0} s", l.text("Opslaan", "Saving"), since.elapsed().as_secs_f32()),
             Status::Loaded(s) => s.clone(),
-            Status::Error(e) => format!("{}: {e}", l.text("Fout", "Error")),
+            Status::Error(e) => match crate::loaders::desktop_only_error(e) {
+                // a format only the desktop app opens: the short message in the chosen language
+                // (the download link is in the dialog that opens with it)
+                Some(format) => format!("{}: {}", l.text("Fout", "Error"), crate::loaders::desktop_only_message(format, l == Language::Dutch)),
+                None => format!("{}: {e}", l.text("Fout", "Error")),
+            },
         }
     }
 
@@ -965,10 +990,7 @@ impl Studio {
                 look,
                 large("project.folder"),
                 l.text("Geen model geopend", "No model open"),
-                l.text(
-                    "Open een bestand of sleep het hierheen: IFC, Revit, SketchUp, glTF, OBJ, STL of PLY.",
-                    "Open a file or drop it here: IFC, Revit, SketchUp, glTF, OBJ, STL or PLY.",
-                ),
+                formats_hint(l),
                 Some(open),
             ))
             .width(Length::Fill)
@@ -1081,8 +1103,80 @@ impl Studio {
                     true,
                 )
             }
+            Dialog::DesktopOnly(format) => w::dialog(
+                look,
+                l.text("Desktop-app nodig", "Desktop app needed"),
+                close_icon,
+                Some(Msg::Dialog(None)),
+                w::body(look, desktop_only_text(l, format)).into(),
+                None,
+                vec![
+                    w::button(look, l.text("Sluiten", "Close"), K::Quiet, D::Regular, None, Some(Msg::Dialog(None))),
+                    w::button(look, l.text("Downloaden", "Download"), K::Primary, D::Regular, None, Some(Msg::DownloadDesktop)),
+                ],
+                false,
+            ),
         }
     }
+}
+
+/// What the desktop-only dialog says about a `format` file.
+fn desktop_only_text(l: Language, format: &str) -> String {
+    match l {
+        Language::Dutch => format!(
+            "{format}-bestanden openen alleen in de desktop-app; de browserversie kan ze niet lezen. De desktop-app is gratis, voor Windows, macOS en Linux: Downloaden opent de releasepagina op GitHub."
+        ),
+        Language::English => format!(
+            "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub."
+        ),
+    }
+}
+
+/// Opens `url` in the browser: a new tab on the web, the default browser on the desktop.
+fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::open_url(url);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let program = match std::env::consts::OS {
+            "windows" => "explorer",
+            "macos" => "open",
+            _ => "xdg-open",
+        };
+        std::process::Command::new(program).arg(url).spawn().map(|_| ()).map_err(|e| format!("Open {url}: {e}"))
+    }
+}
+
+/// The start screen's hint: the featured formats this build opens, from the loader registry
+/// (as the file dialog), and how many more it opens. Built once per language: the registry is
+/// fixed before the app starts.
+fn formats_hint(l: Language) -> &'static str {
+    static HINTS: std::sync::OnceLock<[String; 2]> = std::sync::OnceLock::new();
+    let hints = HINTS.get_or_init(|| {
+        let (featured, others) = crate::loaders::featured_formats();
+        [Language::Dutch, Language::English].map(|l| hint_text(l, &featured, others))
+    });
+    &hints[usize::from(l == Language::English)]
+}
+
+/// The start screen's hint in language `l`: the `featured` format names, then how many `others`.
+fn hint_text(l: Language, featured: &[&str], others: usize) -> String {
+    let or = l.text("of", "or");
+    let mut items: Vec<String> = featured.iter().map(|s| s.to_string()).collect();
+    match others {
+        0 => {}
+        1 => items.push(l.text("een ander formaat", "one other format").into()),
+        n => items.push(match l {
+            Language::Dutch => format!("een van {n} andere formaten"),
+            Language::English => format!("one of {n} other formats"),
+        }),
+    }
+    let list = match items.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} {or} {last}", rest.join(", ")),
+    };
+    format!("{}: {list}.", l.text("Open een bestand of sleep het hierheen", "Open a file or drop it here"))
 }
 
 /// `text` cut to what fits on one line of the status bar `width` wide (logical pixels).
@@ -1133,6 +1227,58 @@ mod tests {
     use openaec_ui::design::a11y::Collect;
     use openaec_ui::iced::advanced::layout::{self, Layout};
     use openaec_ui::iced::advanced::widget::Tree;
+
+    #[test]
+    fn start_screen_names_only_formats_this_build_opens() {
+        let featured = ["IFC", "SketchUp", "glTF", "OBJ", "STL", "PLY"];
+        assert_eq!(
+            hint_text(Language::English, &featured, 29),
+            "Open a file or drop it here: IFC, SketchUp, glTF, OBJ, STL, PLY or one of 29 other formats."
+        );
+        assert_eq!(
+            hint_text(Language::Dutch, &featured, 29),
+            "Open een bestand of sleep het hierheen: IFC, SketchUp, glTF, OBJ, STL, PLY of een van 29 andere formaten."
+        );
+        assert_eq!(hint_text(Language::English, &["IFC", "PLY"], 0), "Open a file or drop it here: IFC or PLY.");
+        // from the registry: this build's featured formats, the desktop-only ones on the desktop alone
+        let (names, others) = crate::loaders::featured_formats();
+        let hint = formats_hint(Language::English);
+        assert!(names.iter().all(|name| hint.contains(name)), "{hint}");
+        assert!(hint.contains("IFC") && hint.contains(&format!("{others} other formats")), "{hint}");
+        assert_eq!(hint.contains("Revit"), cfg!(not(target_arch = "wasm32")), "{hint}");
+    }
+
+    #[test]
+    fn status_bar_shows_the_desktop_app_message_in_the_chosen_language() {
+        let mut studio = Studio::new(App::default());
+        studio.app.status = Status::Error(crate::loaders::desktop_only_message("Revit", false));
+        studio.prefs.language = Language::Dutch;
+        assert_eq!(studio.status_text(), "Fout: Revit vereist de desktop-app");
+        studio.prefs.language = Language::English;
+        assert_eq!(studio.status_text(), "Error: Revit needs the desktop app");
+        // short enough for one status-bar line on a phone (390 px), where one_line cuts the rest
+        assert_eq!(one_line(&studio.status_text(), 390.0), studio.status_text());
+        studio.app.status = Status::Error("Unsupported file type: .abc".into());
+        assert_eq!(studio.status_text(), "Error: Unsupported file type: .abc");
+    }
+
+    #[test]
+    fn desktop_only_file_opens_a_dialog_with_the_download_link() {
+        let mut studio = Studio::new(App::default());
+        let _ = studio.update(Msg::App(Message::Loaded(Err(crate::loaders::desktop_only_message("Vertex BD", false)))));
+        assert_eq!(studio.dialog, Some(Dialog::DesktopOnly("Vertex BD")));
+        assert!(matches!(&studio.app.status, Status::Error(e) if e == "Vertex BD needs the desktop app"));
+        // the dialog names the format and the button, in both languages, and is reachable by assistive tech
+        assert!(desktop_only_text(Language::English, "Vertex BD").starts_with("Vertex BD files open only in the desktop app"));
+        assert!(desktop_only_text(Language::Dutch, "Vertex BD").contains("Downloaden opent de releasepagina"));
+        studio.prefs.language = Language::English;
+        let names = accessibility(&studio).summary();
+        assert!(names.iter().any(|n| n.ends_with(": Desktop app needed")) && names.iter().any(|n| n.ends_with(": Download")), "{names:?}");
+        let _ = studio.update(Msg::Dialog(None));
+        // any other load error leaves the dialog closed
+        let _ = studio.update(Msg::App(Message::Loaded(Err("Unsupported file type: .abc".into()))));
+        assert_eq!(studio.dialog, None);
+    }
 
     fn accessibility(studio: &Studio) -> Collect {
         let mut element = studio.view();
@@ -1202,7 +1348,7 @@ mod tests {
     fn every_control_has_a_name_in_every_view() {
         let mut studio = Studio::new(App::default());
         studio.update = Some(Available { app: APP_ID.into(), current: VERSION.into(), latest: "2099.1.0".into(), page_url: None, installer: None });
-        for (backstage, dialog, page) in [(false, None, SettingsPage::General), (true, None, SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::Shortcuts)] {
+        for (backstage, dialog, page) in [(false, None, SettingsPage::General), (true, None, SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::Shortcuts), (false, Some(Dialog::DesktopOnly("Revit")), SettingsPage::General)] {
             studio.backstage = backstage;
             studio.dialog = dialog;
             studio.settings_page = page;

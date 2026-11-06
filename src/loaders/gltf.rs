@@ -18,6 +18,10 @@ impl Loader for GltfLoader {
         "glTF"
     }
 
+    fn featured(&self) -> Option<u8> {
+        Some(3)
+    }
+
     fn extensions(&self) -> &'static [&'static str] {
         &["gltf", "glb"]
     }

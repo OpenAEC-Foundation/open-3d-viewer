@@ -52,6 +52,12 @@ pub async fn next_frame() {
     let _ = JsFuture::from(promise).await;
 }
 
+/// Opens `url` in a new browser tab (in the installed Android app: in Chrome).
+pub fn open_url(url: &str) -> Result<(), String> {
+    let window = web_sys::window().ok_or("no window")?;
+    window.open_with_url_and_target(url, "_blank").map(|_| ()).map_err(|e| format!("Open {url}: {e:?}"))
+}
+
 /// Hands `bytes` to the browser as a download named `name`.
 pub fn download(name: &str, bytes: &[u8], mime: &str) -> Result<(), String> {
     let js = |e: JsValue| format!("Download {name}: {e:?}");

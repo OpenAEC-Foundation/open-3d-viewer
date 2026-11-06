@@ -44,7 +44,9 @@ rfd = "0.17"
 web-time = "1"
 # PNG for the window icon and window screenshots (MIT OR Apache-2.0)
 png = "0.18"
-# The gzip-compressed B2 icon masters in assets/b2 (MIT OR Apache-2.0)
+# The gzip-compressed B2 icon masters in assets/b2, and the zlib-compressed arrays of FBX and Rhino
+# .3dm meshes (MIT OR Apache-2.0). Rhino .3dm needs no other dependency: src/loaders/rhino.rs is
+# written from McNeel's openNURBS source (published for reading 3dm files); no openNURBS code is built.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # Mesh formats
 gltf = { version = "1.4", default-features = false, features = ["import", "names", "utils"] }

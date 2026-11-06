@@ -37,7 +37,8 @@ Every release is on the [releases page](https://github.com/OpenAEC-Foundation/op
 |----------|-------|
 | **Windows** | `.exe` installer (x64, no administrator rights needed) or `.zip` |
 | **macOS** | `.dmg` (universal: Apple silicon and Intel) |
-| **Linux** | `.deb`, `.rpm`, `.AppImage` or `.tar.gz` |
+| **Linux** | `.deb`, `.rpm`, `.AppImage` or `.tar.gz`, for x86_64 and arm64 |
+| **Docker** | `ghcr.io/openaec-foundation/open-3d-viewer`, see [Docker](#docker) |
 
 When the OpenAEC Installer has a newer version, the title bar of the viewer says so, and **Update** hands over to the installer. Every file is signed: Windows with Authenticode, macOS with a Developer ID and notarized by Apple, Linux with the OpenAEC OpenPGP key (`.asc` next to each package and to `SHA256SUMS`), and all of them with a GitHub build attestation. The release notes say per platform whether it is signed; a release that misses a signature is marked as a pre-release.
 
@@ -101,26 +102,57 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## OpenAEC Linux (SuperCloud)
 
-The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC SuperCloud in which each user's tools run on the server as regular Linux programs, streamed to the browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). The SuperCloud builds that one image from the AppImage of a release, so this repository publishes no Docker image of its own.
+The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC SuperCloud in which each user's tools run on the server as regular Linux programs, streamed to the browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). The SuperCloud builds that one image from the AppImage of a release; for a container of the viewer alone, see [Docker](#docker). The viewer follows the SuperCloud contract for a desktop app in a streamed desktop (route B of [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md)): files from Docs open by a path in the work folder, and the SuperCloud's assistant drives the viewer through its MCP server.
 
-- **Without FUSE:** `./open-3d-viewer_<version>_amd64.AppImage --appimage-extract`, then `squashfs-root/AppRun [FILE]`.
+- **x86_64 and arm64:** the AppImage, `.deb`, `.rpm` and `.tar.gz` come for both (the SuperCloud's servers are ARM); the Vertex BD and BTL reader (`libvertex.so`) exists for x86_64 only.
+- **Without FUSE:** `./open-3d-viewer_<version>_amd64.AppImage --appimage-extract` (or `_arm64.AppImage`), then `squashfs-root/AppRun [FILE]`. A relative `FILE` is looked up in the work folder when it is not in the current folder.
 - **Without a GPU:** the 3D view draws with Mesa's software renderers, lavapipe (Vulkan, `mesa-vulkan-drivers`) or llvmpipe (OpenGL, `libegl-mesa0`). Without either, the window opens but the 3D view stays empty.
 - **Under Wayland**, with a small compositor such as labwc, and without a system tray, notification service, keyring or D-Bus session.
 - **Stopping:** the viewer only reads models and writes exports, so there is no unsaved work; on `SIGTERM` it stops.
 
 | Variable | What it does |
 |----------|--------------|
-| `OPENAEC_BEHEERD=1` | Managed mode: no update notice (the SuperCloud refreshes the image). The viewer never downloads updates itself. |
-| `OPENAEC_MAP` | The work folder (`/openaec` in the SuperCloud): the open and save dialogs start there. |
+| `OPENAEC_BEHEERD=1` | Managed mode: no update notice (the SuperCloud refreshes the image), and the viewer runs in the work folder. The viewer never downloads updates itself. |
+| `OPENAEC_MAP` | The work folder (`/openaec` in the SuperCloud): the open and save dialogs start there, and the MCP tools take paths relative to it. In managed mode they reach no file outside it. |
+| `OPENAEC_TAAL` | The user's language: `nl` or `en` (other languages get English). `--language` wins. |
+| `OPENAEC_THEMA` | The theme: `light`, `dark`, `blueprint`, `high-contrast-dark` or `high-contrast-light`. `--theme` wins. |
+| `OPENAEC_OPEN` | A file to open at the start when the command line names none. |
+| `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` | The MCP server over HTTP for the SuperCloud's assistant, see [MCP](#mcp). |
 | `XDG_CONFIG_HOME` | Settings (preferences, own shortcuts, the MCP link) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, by default under `~/.config`. |
-| `O3V_REMOTE=0` | No control port for the MCP server. `O3V_REMOTE_PORT` fixes its port (otherwise a free one). |
+| `O3V_REMOTE=0` | No control port for the MCP server (and no MCP over HTTP). `O3V_REMOTE_PORT` fixes its port (otherwise a free one). |
 | `WGPU_BACKEND` | `vulkan` or `gl` to choose the graphics backend; by default the first that works. |
 
 A file to open goes on the command line, as do `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` and `--language en|nl`.
 
-**Network:** the viewer makes no outgoing connections and has no telemetry. It listens only on `127.0.0.1`, for its own MCP server (see [MCP](#mcp)). The file dialogs go through the XDG desktop portal, or `zenity` when there is none.
+**Network:** the viewer makes no outgoing connections and has no telemetry. It listens on `127.0.0.1` for its own MCP server (see [MCP](#mcp)) and, only with `OPENAEC_MCP_POORT` and `OPENAEC_MCP_GEHEIM`, on that port for the SuperCloud's assistant. The file dialogs go through the XDG desktop portal, or `zenity` when there is none.
 
-Every pull request and every release starts the Linux build this way on GitHub Actions ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): the release extracts the AppImage, starts it under labwc without a screen or GPU, checks that the window and a model in the 3D view draw, keeps the screenshots, and puts the memory in use with no file open in the release notes.
+Every pull request and every release starts the Linux build this way on GitHub Actions, on x86_64 and arm64 ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): the release extracts the AppImage, starts it under labwc without a screen or GPU, checks that the window and a model in the 3D view draw, drives it over MCP as the SuperCloud's assistant does (open a file by its path in the work folder, save the IFC next to it), keeps the screenshots, and puts the memory in use with no file open in the release notes.
+
+## Docker
+
+With every release comes a Docker image in which the Linux app runs on its own, full screen, streamed to the browser on port 3000 ([#27](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/27)). It is built from the release's `.deb` with the OpenAEC Blueprint's template ([`packaging/docker`](packaging/docker)), for `linux/amd64`.
+
+```bash
+docker run -p 3000:3000 -v <folder>:/openaec ghcr.io/openaec-foundation/open-3d-viewer:latest
+```
+
+Open http://localhost:3000. `/openaec` holds your files (the dialogs start there); `/config` keeps the viewer's settings, so mount a volume there to keep them. The image is tagged with the release version (for example `:2026.45.10`) and `latest`, and signed with cosign (keyless, GitHub OIDC) with a build attestation and an SBOM:
+
+```bash
+cosign verify ghcr.io/openaec-foundation/open-3d-viewer:latest --certificate-identity-regexp 'https://github.com/OpenAEC-Foundation/open-3d-viewer/' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+| Variable | Default | What |
+|----------|---------|------|
+| `OPENAEC_LANG` | (empty) | Language: `nl` or `en`. |
+| `OPENAEC_THEME` | (empty) | Theme: `light`, `dark`, `blueprint`, `high-contrast-dark` or `high-contrast-light`. |
+| `OPENAEC_OPEN` | (empty) | A file under `/openaec` to open at the start. |
+| `OPENAEC_MCP_GEHEIM` | (empty) | A secret of 16 characters or more: switches on the MCP server for the SuperCloud's assistant, inside the container on `http://<container>:3001/mcp`. Every request sends `Authorization: Bearer <secret>`; requests with an `Origin` header (a browser) are refused. Do not publish this port; it is for the internal network. |
+| `OPENAEC_MCP_POORT` | `3001` | Its port. |
+| `OPENAEC_SCREEN` | `1920x1080` | Size of the virtual screen. |
+| `OPENAEC_RESTART` | `1` | `0`: the container does not start the viewer again when it closes. |
+
+The viewer runs as user `openaec` (uid 1000), without `--privileged`, FUSE or GPU: the 3D view draws with Mesa's software renderers. `GET /gezond` on port 3000 answers `OK` while the viewer and the stream run, and the image's `HEALTHCHECK` uses it. The container is in managed mode (no update notice; a new image brings the update) and makes no outgoing connections. The stream on port 3000 has no password: do not put it on the internet directly. Every release builds the image, checks that the container becomes healthy, runs the viewer as a regular user and can be photographed, tests the MCP server in it, and puts the memory at rest in the release notes, before it is published.
 
 ## What is in this repository
 
@@ -204,15 +236,16 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## MCP
 
-`open-3d-viewer-mcp` is an [MCP](https://modelcontextprotocol.io) server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the desktop viewer as a person does: open files, take screenshots, set the camera and the standard and saved views, show, hide and isolate layers, find elements by property, select, read properties, set a section box or plane, pull the model apart, change the render mode, read Revit schedules and measure.
+`open-3d-viewer-mcp` is an [MCP](https://modelcontextprotocol.io) server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the desktop viewer as a person does: open files, take screenshots, set the camera and the standard and saved views, show, hide and isolate layers, find elements by property, select, read properties, set a section box or plane, pull the model apart, change the render mode, read Revit schedules, measure, and save the model as IFC.
 
 - **You see what it does.** Commands go through the same path as your clicks, in the window on your screen. Measurements stay in the view.
 - **It stays on your computer.** The window listens on `127.0.0.1` only, with a random token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` or `O3V_REMOTE=0` switches it off.
-- **Install:** keep `open-3d-viewer-mcp` next to the viewer (the installers do) and register it, for example `claude mcp add open-3d-viewer -- "C:\path\to\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` prints the JSON for other clients.
+- **Install:** keep `open-3d-viewer-mcp` next to the viewer (the installers do) and register it, for example `claude mcp add open-3d-viewer -- "C:\path\to\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` prints the JSON for other clients, and `--list-tools` the tool definitions.
+- **In the OpenAEC SuperCloud** the assistant uses the same tools, named with the prefix `viewer3d_` so they do not clash with other tools' (contract: [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md), route B). `viewer3d_open` opens a file by its path in the work folder (where the SuperCloud puts the file from Docs), `viewer3d_opslaan` saves the model next to it as IFC (the SuperCloud keeps it as a new version in Docs; an existing file is only replaced with `overwrite: true`), and `viewer3d_stand` says what is open; the others are `viewer3d_` plus the names above. With `OPENAEC_MCP_POORT` and `OPENAEC_MCP_GEHEIM` (16 characters or more) the viewer serves them itself over HTTP at `http://<OPENAEC_MCP_ADRES>:<port>/mcp` (address `0.0.0.0` in managed mode, else `127.0.0.1`): every request sends `Authorization: Bearer <secret>` (compared in constant time), requests with an `Origin` header are refused, and the secret is removed from the viewer's environment at the start. `open-3d-viewer-mcp --prefixed` (or `OPENAEC_BEHEERD=1`) gives the same names over stdio. Calls under the names without the prefix keep working everywhere.
 
 ## Testing and reliability
 
-- **290 unit tests** in `src/` (285 run; 5 are left out by default: two need local samples, three write sample or image files), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 195 for the loaders, 20 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 10 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **300 unit tests** in `src/` (295 run; 5 are left out by default: two need local samples, three write sample or image files), plus 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 195 for the loaders, 20 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 10 for IFC export, 7 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), and more for the 3D view, view cube, remote control, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.

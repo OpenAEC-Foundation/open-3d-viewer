@@ -21,8 +21,9 @@
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -81,43 +82,50 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 
 /// The tools, under their names without a prefix (the viewer's command names).
 pub fn tools() -> Vec<Value> {
-    let mut save = tool("save_file", "Save the open model as IFC (the format the viewer writes), as File > Save as does, and wait until it is written. Without a path it goes next to the open file, with the same name and .ifc. A file that exists is only replaced with overwrite: true. Returns the path written.",
+    let mut save = tool("save_file", "Save the open model as IFC (the format the viewer writes), as File > Save as does, and wait until it is written. Without a path it goes next to the open file, with the same name and .ifc; an open .ifc is not replaced but saved beside it as <name>-viewer.ifc, as the viewer's IFC is a re-export (triangles and the properties it shows). A file that exists is only replaced with overwrite: true. Returns the path written.",
         json!({
-            "path": { "type": "string", "description": "Where to save: absolute, or relative to the work folder (OPENAEC_MAP) when there is one. Default: next to the open file, as .ifc" },
+            "path": { "type": "string", "description": "Where to save: absolute, or relative to the work folder (OPENAEC_MAP) when there is one. Default: next to the open file, as .ifc (<name>-viewer.ifc when the open file is an IFC)" },
             "overwrite": { "type": "boolean", "description": "Replace the file when it exists (default false)" }
         }), &[], false);
     save["annotations"]["destructiveHint"] = json!(true);
+    // writes a file with save_to, and replaces one with overwrite
+    let mut screenshot = tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
+        json!({
+            "area": { "type": "string", "enum": ["viewport", "window"] },
+            "max_size": { "type": "integer", "description": "Longest side in pixels (default 1600)" },
+            "save_to": { "type": "string", "description": "Also write the PNG to this .png path (absolute, or relative to the work folder)" },
+            "overwrite": { "type": "boolean", "description": "Replace the save_to file when it exists (default false)" }
+        }), &[], false);
+    screenshot["annotations"]["destructiveHint"] = json!(true);
+    let paging = |mut properties: Value, default: u32, max: u32| {
+        properties["offset"] = json!({ "type": "integer", "description": "Skip this many (default 0)" });
+        properties["limit"] = json!({ "type": "integer", "description": format!("At most this many (default {default}, at most {max})") });
+        properties
+    };
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), COLLADA (.dae), 3MF (.3mf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz) and E57 (.e57). Returns the model summary.",
+        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
             json!({ "path": { "type": "string", "description": "Path of the file: absolute, or relative to the work folder (OPENAEC_MAP) when there is one" } }), &["path"], false),
         save,
-        tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
-            json!({
-                "area": { "type": "string", "enum": ["viewport", "window"] },
-                "max_size": { "type": "integer", "description": "Longest side in pixels (default 1600)" },
-                "save_to": { "type": "string", "description": "Also write the PNG to this path" }
-            }), &[], true),
-        tool("list_layers", "The model's layers (Revit categories, SketchUp tags, glTF materials, OBJ groups) with index, visibility, triangle and element counts and colour.",
-            json!({ "filter": { "type": "string", "description": "Only layers whose name contains this" } }), &[], true),
+        screenshot,
+        tool("list_layers", "The model's layers (Revit categories, SketchUp tags, glTF materials, OBJ groups) with index, visibility, triangle and element counts and colour, a page at a time (total and truncated tell whether there are more).",
+            paging(json!({ "filter": { "type": "string", "description": "Only layers whose name contains this" } }), 100, 200), &[], true),
         tool("set_layer_visibility", "Show or hide layers, or isolate them (show only these).",
             json!({
                 "layers": { "description": "Layer indices and/or names (exact, else contains), or \"all\"", "oneOf": [{ "type": "string" }, { "type": "integer" }, { "type": "array", "items": { "type": ["integer", "string"] } }] },
                 "visible": { "type": "boolean" },
                 "isolate": { "type": "boolean", "description": "Show only these layers" }
             }), &["layers"], false),
-        tool("list_views", "Views saved in the file (Revit: 3D views, floor plans, sections, elevations) with index, kind and level.", json!({}), &[], true),
+        tool("list_views", "Views saved in the file (Revit: 3D views, floor plans, sections, elevations) with index, kind and level, a page at a time.", paging(json!({}), 100, 200), &[], true),
         tool("apply_view", "Show a saved view: its camera and what it shows (section box, plan range).",
             json!({ "view": { "type": ["integer", "string"], "description": "Index or name of the view" } }), &["view"], false),
-        tool("get_project_info", "Project data from the file: project information, levels with elevations, phases, grid lines and rooms.", json!({}), &[], true),
+        tool("get_project_info", "Project data from the file: project information, levels with elevations, phases, grid lines (up to 200 each) and rooms with their parameters, a page of rooms at a time (offset and limit page the rooms; room_count is the total).", paging(json!({}), 20, 50), &[], true),
         tool("list_schedules", "Schedules in the file (Revit): index, name, column headings and row count. They are computed a few seconds after the model is in ('computing': true until then).", json!({}), &[], true),
         tool("get_schedule", "The rows of a schedule (Revit) as Revit shows them, computed from the elements, with the element ids of each row (usable with select). With show, the table opens under the 3D view.",
-            json!({
+            paging(json!({
                 "schedule": { "type": ["integer", "string"], "description": "Index or name of the schedule" },
-                "offset": { "type": "integer" },
-                "limit": { "type": "integer", "description": "Default 100" },
                 "show": { "type": "boolean", "description": "Open the schedule's table in the window" }
-            }), &["schedule"], false),
+            }), 100, 200), &["schedule"], false),
         tool("list_sheets", "Sheets in the file (Revit, beta): index, number, name and the names of the views placed on each.", json!({}), &[], true),
         tool("get_sheet", "A sheet (Revit, beta): its paper and the views placed on it, as boxes in sheet millimetres (x right, y up) with title, detail number, scale and the view index for apply_view. With show, the sheet opens in its tab in the window.",
             json!({
@@ -125,14 +133,12 @@ pub fn tools() -> Vec<Value> {
                 "show": { "type": "boolean", "description": "Open the sheet in the window" }
             }), &["sheet"], false),
         tool("find_elements", "Find BIM elements by their properties (category, family, type, level, name, ... as the properties panel shows them). Matching is case-insensitive and on 'contains'. With group_by, returns counts per value instead (e.g. walls per level).",
-            json!({
+            paging(json!({
                 "text": { "type": "string", "description": "Any property value contains this (or the element id)" },
                 "where": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Property conditions, e.g. {\"category\": \"Doors\", \"level\": \"Level 1\"}" },
                 "layer": { "type": "string", "description": "Only elements on layers whose name contains this" },
-                "group_by": { "type": "string", "description": "Property to count by, e.g. \"level\" or \"type\"" },
-                "limit": { "type": "integer", "description": "Default 50" },
-                "offset": { "type": "integer" }
-            }), &[], true),
+                "group_by": { "type": "string", "description": "Property to count by, e.g. \"level\" or \"type\"" }
+            }), 50, 100), &[], true),
         tool("get_element", "All properties of an element plus its measurements: bounding box (min, max, size, centre), surface area, and volume when its mesh is closed.",
             json!({ "id": { "type": ["integer", "string"] } }), &["id"], true),
         tool("select", "Select (highlight) elements by id as a click would, and show their properties in the properties panel; or clear the selection.",
@@ -254,7 +260,8 @@ fn call_tool(call: &mut Call, name: &str, args: &Value) -> Value {
     match call(&command, args, timeout_of(&command)) {
         Ok(mut result) => {
             let image = result.as_object_mut().and_then(|o| o.remove("png_base64"));
-            let text = serde_json::to_string_pretty(&result).unwrap_or_default();
+            // compact: answers stay small for the assistant
+            let text = serde_json::to_string(&result).unwrap_or_default();
             let mut content = vec![];
             if let Some(Value::String(data)) = image {
                 content.push(json!({ "type": "image", "data": data, "mimeType": "image/png" }));
@@ -365,15 +372,72 @@ impl HttpConfig {
         eprintln!("MCP server listening on http://{}:{}/mcp", self.addr, self.port);
         let secret: Arc<str> = self.secret.into();
         let handler = Arc::new(handler);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
+        let active = Arc::new(AtomicUsize::new(0));
+        std::thread::Builder::new().name("mcp-http".into()).spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(stream) => stream,
+                    // out of file descriptors and the like: wait for some to come free, not spin
+                    Err(_) => {
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                };
+                // a thread per connection, but not more than MAX_CONNECTIONS of them, taken
+                // before the secret is checked: no flood of (slow) clients uses up the threads
+                if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+                    let _ = respond(&mut stream, 503, Some("text/plain; charset=utf-8"), b"too many connections");
+                    continue;
+                }
+                let slot = Slot(active.clone());
                 let (secret, handler) = (secret.clone(), handler.clone());
-                std::thread::spawn(move || {
+                let spawned = std::thread::Builder::new().spawn(move || {
+                    let _slot = slot;
                     let _ = http_connection(stream, &secret, &*handler);
                 });
+                // no thread to be had: the connection closes (and its slot comes free)
+                if spawned.is_err() {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
             }
-        });
+        })?;
         Ok(())
+    }
+}
+
+/// Connections served at the same time; the next ones are refused at once.
+const MAX_CONNECTIONS: usize = 32;
+/// The time a client has for its whole request, head and body.
+const REQUEST_TIME: Duration = Duration::from_secs(30);
+/// What is read of a refused request's rest before closing, at most (and for a second at most).
+const DRAIN: u64 = 64 << 10;
+
+/// A connection's place among the [`MAX_CONNECTIONS`]; given back when the connection ends.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A stream whose reads stop at a deadline, not only after a pause: a client that sends a byte
+/// now and then cannot hold its connection open.
+struct Deadline {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the request took too long"));
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
     }
 }
 
@@ -458,6 +522,7 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: Option<&str>, body
         405 => "Method Not Allowed",
         411 => "Length Required",
         413 => "Payload Too Large",
+        503 => "Service Unavailable",
         _ => "Error",
     };
     let mut head = format!("HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n", body.len());
@@ -477,19 +542,20 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: Option<&str>, body
 
 /// One request per connection: admit it, read the body, answer, close.
 fn http_connection(stream: TcpStream, secret: &str, handler: &dyn Fn(&str) -> Option<String>) -> std::io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut write = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    // a client that does not take its answer does not hold the connection either
+    write.set_write_timeout(Some(REQUEST_TIME))?;
+    let mut reader = BufReader::new(Deadline { stream, until: Instant::now() + REQUEST_TIME });
     let answered = answer_request(&mut reader, &mut write, secret, handler);
     // Close without a reset: a socket closed with unread data in it (a refused request's body)
-    // sends RST, and the client may lose the answer.
+    // sends RST, and the client may lose the answer. Only a little, briefly.
     let _ = write.shutdown(std::net::Shutdown::Write);
-    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(1)));
-    let _ = std::io::copy(&mut reader.by_ref().take(MAX_BODY as u64), &mut std::io::sink());
+    reader.get_mut().until = Instant::now() + Duration::from_secs(1);
+    let _ = std::io::copy(&mut reader.by_ref().take(DRAIN), &mut std::io::sink());
     answered
 }
 
-fn answer_request(reader: &mut BufReader<TcpStream>, write: &mut TcpStream, secret: &str, handler: &dyn Fn(&str) -> Option<String>) -> std::io::Result<()> {
+fn answer_request(reader: &mut impl BufRead, write: &mut TcpStream, secret: &str, handler: &dyn Fn(&str) -> Option<String>) -> std::io::Result<()> {
     let Some(req) = read_request(reader)? else { return Ok(()) };
     if let Err((status, text)) = admit(&req, secret) {
         return respond(write, status, Some("text/plain; charset=utf-8"), text.as_bytes());
@@ -630,6 +696,27 @@ mod tests {
         assert_eq!(admit(&req("POST", "/mcp", &[("Authorization", "Basic 0123456789abcdef")]), secret).unwrap_err().0, 401);
         assert_eq!(admit(&req("POST", "/", &[auth]), secret).unwrap_err().0, 404);
         assert_eq!(admit(&req("GET", "/mcp", &[auth]), secret).unwrap_err().0, 405);
+    }
+
+    #[test]
+    fn a_trickling_client_is_cut_off_at_the_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // a byte every 50 ms, which no per-read time-out would ever stop
+        let client = std::thread::spawn(move || {
+            let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+            while s.write_all(b"P").is_ok() && s.flush().is_ok() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let start = Instant::now();
+        let mut reader = BufReader::new(Deadline { stream, until: start + Duration::from_millis(400) });
+        let err = read_request(&mut reader).unwrap_err();
+        assert!(matches!(err.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock), "{err}");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        drop(reader);
+        client.join().unwrap();
     }
 
     #[test]

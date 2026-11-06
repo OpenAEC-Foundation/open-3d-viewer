@@ -14,6 +14,7 @@
 use openaec_ui::design::ThemeId;
 use openaec_ui::Language;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 /// `OPENAEC_BEHEERD=1`: the SuperCloud manages the version (it refreshes the image), so the app
 /// shows no update notice.
@@ -22,9 +23,52 @@ pub fn managed() -> bool {
 }
 
 /// `OPENAEC_MAP`: the user's work folder (`/openaec` in the SuperCloud), where the open and save
-/// dialogs start. Ignored when it is not a folder.
+/// dialogs start, as an absolute path fixed at the start (see [`fix_work_folder`]). Ignored when it
+/// is not a folder.
 pub fn work_folder() -> Option<PathBuf> {
-    std::env::var_os("OPENAEC_MAP").map(PathBuf::from).filter(|p| p.is_dir())
+    confinement().work.clone()
+}
+
+/// The work folder and whether the AI connection is held to it, fixed once at the start: a
+/// relative `OPENAEC_MAP` stays right after [`enter_work_folder`], and a folder that is missing
+/// does not lift the confinement.
+struct Confinement {
+    /// `OPENAEC_MAP` made absolute, when it is a folder.
+    work: Option<PathBuf>,
+    /// The same with links resolved, to compare resolved paths with.
+    real: Option<PathBuf>,
+    /// Paths of the AI connection only in the work folder, and none without one.
+    strict: bool,
+}
+
+static CONFINEMENT: OnceLock<Confinement> = OnceLock::new();
+
+impl Confinement {
+    fn from_env(strict: bool) -> Self {
+        let work = std::env::var_os("OPENAEC_MAP")
+            .filter(|v| !v.is_empty())
+            .and_then(|v| std::path::absolute(PathBuf::from(v)).ok())
+            .map(|p| normalize(&p))
+            .filter(|p| p.is_dir());
+        let real = work.as_ref().and_then(|w| w.canonicalize().ok());
+        Self { work: work.filter(|_| real.is_some()), real, strict }
+    }
+}
+
+fn confinement() -> &'static Confinement {
+    CONFINEMENT.get_or_init(|| Confinement::from_env(managed()))
+}
+
+/// Fixes the work folder and the confinement of the AI connection; call it before [`start_file`]
+/// and [`enter_work_folder`]. Paths are held to the work folder in managed mode and whenever the
+/// MCP endpoint over HTTP is on (`http`), since that is reached from outside the process; without
+/// a usable work folder the AI connection then reaches no file at all.
+pub fn fix_work_folder(http: bool) {
+    let confinement = Confinement::from_env(managed() || http);
+    if confinement.strict && confinement.work.is_none() {
+        eprintln!("OPENAEC_MAP is not a folder: the MCP tools reach no files");
+    }
+    let _ = CONFINEMENT.set(confinement);
 }
 
 /// Where a dialog starts: the model's own folder, unless there is a work folder and the model
@@ -84,25 +128,38 @@ pub fn enter_work_folder() {
 }
 
 /// A path given by the AI connection (the MCP tools): relative to the work folder when there is
-/// one, and in managed mode only inside it, since the SuperCloud reaches the viewer from outside.
+/// one, and in managed mode (or with the HTTP endpoint) only inside it, since the SuperCloud
+/// reaches the viewer from outside. Fails closed: no work folder, no path.
 pub fn confine(path: &Path) -> Result<PathBuf, String> {
-    let work = work_folder();
-    let strict = managed() && work.is_some();
-    let resolved = confine_in(path, work.as_deref(), strict)?;
-    if strict {
-        // a link inside the work folder must not lead out of it
-        let work = work.and_then(|w| w.canonicalize().ok());
-        let real = resolved.canonicalize().ok().or_else(|| {
-            let parent = resolved.parent()?.canonicalize().ok()?;
-            Some(parent.join(resolved.file_name()?))
-        });
-        if let (Some(work), Some(real)) = (work, real) {
-            if !real.starts_with(&work) {
+    confinement().confine(path)
+}
+
+impl Confinement {
+    fn confine(&self, path: &Path) -> Result<PathBuf, String> {
+        let resolved = confine_in(path, self.work.as_deref(), self.strict)?;
+        if self.strict {
+            // a link inside the work folder must not lead out of it, nor lead nowhere (writing
+            // through it would create its target, wherever that is)
+            let real = match resolved.symlink_metadata() {
+                Ok(_) => resolved.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?,
+                Err(_) => match (resolved.parent().and_then(|p| p.canonicalize().ok()), resolved.file_name()) {
+                    (Some(parent), Some(name)) => parent.join(name),
+                    _ => return Err(format!("the folder of {} does not exist", path.display())),
+                },
+            };
+            let work = self.real.as_deref().ok_or("there is no work folder")?;
+            if !real.starts_with(work) {
                 return Err(format!("{} lies outside the work folder {}", path.display(), work.display()));
             }
         }
+        Ok(resolved)
     }
-    Ok(resolved)
+}
+
+/// Whether the AI connection is held to the work folder (see [`fix_work_folder`]). The loaders
+/// then hold a model's references to other files (glTF buffers, OBJ materials) to it as well.
+pub fn confined() -> bool {
+    confinement().strict
 }
 
 /// [`confine`] without the file system: resolves `path` against `work` and, when `strict`,
@@ -117,6 +174,7 @@ pub fn confine_in(path: &Path, work: Option<&Path>, strict: bool) -> Result<Path
         Some(work) if strict && !resolved.starts_with(normalize(work)) => {
             Err(format!("{} lies outside the work folder {}; give a path in it", path.display(), work.display()))
         }
+        None if strict => Err(format!("{}: there is no work folder (OPENAEC_MAP), so no file is reachable", path.display())),
         _ => Ok(resolved),
     }
 }
@@ -166,9 +224,39 @@ mod tests {
         assert!(confine_in(Path::new("/etc/passwd"), Some(work), true).is_err());
         assert!(confine_in(Path::new("../etc/passwd"), Some(work), true).is_err());
         assert!(confine_in(Path::new("/openaec-other/a.ifc"), Some(work), true).is_err());
-        // not managed, or no work folder: as given
+        // not managed: as given
         assert_eq!(confine_in(Path::new("/tmp/a.ifc"), Some(work), false), Ok(p("/tmp/a.ifc")));
-        assert_eq!(confine_in(Path::new("a.ifc"), None, true), Ok(p("a.ifc")));
+        assert_eq!(confine_in(Path::new("a.ifc"), None, false), Ok(p("a.ifc")));
+        // managed without a work folder: nothing, rather than everything
+        assert!(confine_in(Path::new("a.ifc"), None, true).is_err());
+        assert!(confine_in(Path::new("/home/user/.profile"), None, true).is_err());
+    }
+
+    #[test]
+    fn links_and_missing_work_folders_do_not_open_the_way_out() {
+        let base = std::env::temp_dir().join(format!("o3v-confine-{}", std::process::id()));
+        let work = base.join("openaec");
+        std::fs::create_dir_all(work.join("project")).unwrap();
+        std::fs::write(work.join("a.ifc"), b"x").unwrap();
+        let c = Confinement { work: Some(work.clone()), real: work.canonicalize().ok(), strict: true };
+        assert_eq!(c.confine(Path::new("a.ifc")), Ok(work.join("a.ifc")));
+        assert_eq!(c.confine(Path::new("project/new.ifc")), Ok(work.join("project/new.ifc")));
+        assert!(c.confine(Path::new("missing/new.ifc")).is_err());
+        assert!(c.confine(&base.join("outside.ifc")).is_err());
+        // a work folder that was not there at the start: no paths at all
+        let none = Confinement { work: None, real: None, strict: true };
+        assert!(none.confine(&work.join("a.ifc")).is_err());
+        #[cfg(unix)]
+        {
+            std::fs::write(base.join("secret"), b"x").unwrap();
+            std::os::unix::fs::symlink(base.join("secret"), work.join("out.ifc")).unwrap();
+            std::os::unix::fs::symlink(base.join("nowhere"), work.join("dangling.png")).unwrap();
+            std::os::unix::fs::symlink(work.join("a.ifc"), work.join("in.ifc")).unwrap();
+            assert!(c.confine(Path::new("out.ifc")).is_err(), "a link out of the work folder");
+            assert!(c.confine(Path::new("dangling.png")).is_err(), "a link to nothing");
+            assert!(c.confine(Path::new("in.ifc")).is_ok(), "a link inside it");
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

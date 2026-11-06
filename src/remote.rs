@@ -103,9 +103,14 @@ const LINK_CHANGED: &str = "_link";
 pub fn serve() -> impl Stream<Item = Message> {
     iced::stream::channel(16, async |mut output| {
         let (tx, mut rx) = iced::futures::channel::mpsc::unbounded::<RemoteCall>();
+        // the HTTP endpoint does not need the control port: it keeps its commands coming when
+        // that cannot be bound or announced (no settings folder, port taken)
+        let http = start_mcp_http(&tx);
         if let Err(e) = listen(tx) {
             eprintln!("remote control: {e}");
-            return;
+            if !http {
+                return;
+            }
         }
         while let Some(call) = rx.next().await {
             if output.send(Message::Remote(call)).await.is_err() {
@@ -127,9 +132,10 @@ pub fn serve_mcp_http(config: crate::mcp::HttpConfig) {
     *MCP_HTTP.lock().unwrap_or_else(|e| e.into_inner()) = Some(config);
 }
 
+/// Starts the MCP endpoint over HTTP, if one is set; whether it serves.
 #[cfg(not(target_arch = "wasm32"))]
-fn start_mcp_http(tx: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) {
-    let Some(config) = MCP_HTTP.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+fn start_mcp_http(tx: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> bool {
+    let Some(config) = MCP_HTTP.lock().unwrap_or_else(|e| e.into_inner()).take() else { return false };
     let tx = Mutex::new(tx.clone());
     let served = config.serve(move |body| {
         let tx = tx.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -142,14 +148,18 @@ fn start_mcp_http(tx: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>
             })
         })
     });
-    if let Err(e) = served {
+    if let Err(e) = &served {
         eprintln!("MCP over HTTP: {e}");
     }
+    served.is_ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_mcp_http(_: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> bool {
+    false
 }
 
 fn listen(tx: iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> std::io::Result<()> {
-    #[cfg(not(target_arch = "wasm32"))]
-    start_mcp_http(&tx);
     let port = std::env::var("O3V_REMOTE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
     let announcement = Announcement { port: listener.local_addr()?.port(), token: new_token(), pid: std::process::id() };
@@ -228,12 +238,46 @@ fn flag(a: &Value, key: &str) -> Option<bool> {
     a.get(key)?.as_bool()
 }
 
+/// The most entries a listing gives in one answer.
+const MAX_LIST: usize = 200;
+
+/// `offset` and `limit` of a listing: `limit` defaults to `default` and is at most `max`, so an
+/// answer stays small for the assistant (the SuperCloud contract asks for at most about 30,000
+/// characters); the rest comes with a next `offset`.
+pub(crate) fn page(a: &Value, default: usize, max: usize) -> (usize, usize) {
+    let offset = a.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let limit = a.get("limit").and_then(Value::as_u64).map_or(default, |l| l as usize).min(max);
+    (offset, limit)
+}
+
+/// One page of `items` as `{total, offset, returned, truncated, <key>: [...]}`.
+fn paged(key: &str, items: Vec<Value>, (offset, limit): (usize, usize)) -> Value {
+    let total = items.len();
+    let shown: Vec<Value> = items.into_iter().skip(offset).take(limit).collect();
+    let mut out = json!({ "total": total, "offset": offset, "returned": shown.len(), "truncated": offset.saturating_add(shown.len()) < total });
+    out[key] = Value::Array(shown);
+    out
+}
+
 /// A path from a remote client: in the work folder of the SuperCloud (`managed::confine`).
 fn confine(path: &str) -> Result<PathBuf, String> {
     #[cfg(not(target_arch = "wasm32"))]
     return crate::managed::confine(std::path::Path::new(path));
     #[cfg(target_arch = "wasm32")]
     Ok(PathBuf::from(path))
+}
+
+/// Where a screenshot's `save_to` writes: a `.png` in the work folder, and an existing file only
+/// with `overwrite`, as `save_file` (so a screenshot never replaces a model).
+fn shot_target(path: &Value, a: &Value) -> Result<PathBuf, String> {
+    let path = confine(path.as_str().ok_or("save_to must be a path")?)?;
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+        return Err(format!("save_to {}: a screenshot is saved as .png", path.display()));
+    }
+    if path.symlink_metadata().is_ok() && !flag(a, "overwrite").unwrap_or(false) {
+        return Err(format!("{} exists; pass overwrite: true to replace it, or another path", path.display()));
+    }
+    Ok(path)
 }
 
 fn vec3(v: &Value) -> Option<Vec3> {
@@ -320,6 +364,11 @@ impl App {
                 return task;
             }
             "screenshot" => {
+                // a wrong save_to is refused before the capture
+                if let Some(Err(e)) = call.args.get("save_to").map(|p| shot_target(p, &call.args)) {
+                    call.answer(Err(e));
+                    return Task::none();
+                }
                 self.finish_animation();
                 self.remote.pending_shots.push(call);
                 if self.remote.pending_shots.len() > 1 {
@@ -352,9 +401,9 @@ impl App {
             "get_state" => Ok(self.state_json()),
             "list_layers" => self.list_layers(a),
             "set_layer_visibility" => self.set_layer_visibility(a),
-            "list_views" => self.list_views(),
+            "list_views" => self.list_views(a),
             "apply_view" => self.remote_apply_view(a),
-            "get_project_info" => self.project_info(),
+            "get_project_info" => self.project_info(a),
             "list_schedules" => self.schedules_json(),
             "list_sheets" => self.sheets_json(),
             "find_elements" => self.find_elements(a),
@@ -424,7 +473,9 @@ impl App {
     }
 
     /// Where `save_file` writes: `path` (in the work folder), else next to the open file as IFC.
-    /// Only formats the viewer writes, and an existing file only with `overwrite`.
+    /// Only formats the viewer writes, and an existing file only with `overwrite`. The default is
+    /// never the open file itself: the viewer's IFC is a re-export (triangles, the properties it
+    /// shows), so an open `a.ifc` is saved as `a-viewer.ifc` beside it.
     pub(crate) fn save_target(&self, a: &Value) -> Result<PathBuf, String> {
         let model = self.require_model()?;
         if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -434,7 +485,14 @@ impl App {
         let mut path = match a.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) {
             Some(p) => confine(p)?,
             None if model.path.as_os_str().is_empty() => return Err("the model has no file; give a path".into()),
-            None => confine(&model.path.with_extension(default_ext).to_string_lossy())?,
+            None => {
+                let mut path = model.path.with_extension(default_ext);
+                if model.path.extension().is_some_and(|e| e.eq_ignore_ascii_case(default_ext)) {
+                    let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    path.set_file_name(format!("{stem}-viewer.{default_ext}"));
+                }
+                confine(&path.to_string_lossy())?
+            }
         };
         if path.extension().is_none() {
             path.set_extension(default_ext);
@@ -453,7 +511,7 @@ impl App {
     fn remote_save(&mut self, call: RemoteCall) -> Task<Message> {
         match self.save_target(&call.args) {
             Ok(path) => {
-                let task = self.update(Message::SavePicked(Some(path)));
+                let task = self.start_save(path, flag(&call.args, "overwrite").unwrap_or(false));
                 self.remote.pending_save.push(call);
                 task
             }
@@ -464,7 +522,8 @@ impl App {
         }
     }
 
-    /// Answers the `save_file` calls once the file is written.
+    /// Answers the `save_file` calls once the file is written (one save runs at a time, see
+    /// [`App::start_save`], so this result is theirs).
     pub fn remote_saved(&mut self, result: &Result<(PathBuf, f32), String>) {
         let answer = result.clone().map(|(path, secs)| {
             let bytes = std::fs::metadata(&path).map(|m| m.len()).ok();
@@ -525,9 +584,10 @@ impl App {
             self.remote.shot_image = Some((w, h));
             out["note"] = json!("Screen coordinates for pick, select, section_plane and measure are pixels of this image.");
         }
-        if let Some(path) = a.get("save_to").and_then(Value::as_str) {
-            let path = confine(path)?;
-            std::fs::write(&path, &png).map_err(|e| format!("save_to {}: {e}", path.display()))?;
+        if let Some(path) = a.get("save_to") {
+            let path = shot_target(path, a)?;
+            crate::export::write_file(&path, flag(a, "overwrite").unwrap_or(false), |out| out.write_all(&png))
+                .map_err(|e| format!("save_to {}: {e}", path.display()))?;
             out["saved_to"] = json!(path.display().to_string());
         }
         out["png_base64"] = json!(base64(&png));
@@ -677,7 +737,7 @@ impl App {
                 })
             })
             .collect();
-        Ok(json!({ "count": layers.len(), "layers": layers }))
+        Ok(paged("layers", layers, page(a, 100, MAX_LIST)))
     }
 
     /// Layer indices for a list of indices and/or names (exact name first, else name contains).
@@ -734,7 +794,7 @@ impl App {
         Ok(json!({ "changed": layers.len(), "visible_layers": shown.len(), "hidden_layers": model.layers.len() - shown.len() }))
     }
 
-    fn list_views(&self) -> Answer {
+    fn list_views(&self, a: &Value) -> Answer {
         let model = self.require_model()?;
         let views: Vec<Value> = model
             .views
@@ -742,7 +802,7 @@ impl App {
             .enumerate()
             .map(|(i, v)| json!({ "index": i, "name": v.name, "kind": kind_name(v.kind), "level": v.level, "active": self.active_view == Some(i) }))
             .collect();
-        Ok(json!({ "count": views.len(), "views": views }))
+        Ok(paged("views", views, page(a, 100, MAX_LIST)))
     }
 
     fn remote_apply_view(&mut self, a: &Value) -> Answer {
@@ -768,20 +828,29 @@ impl App {
         Ok(json!({ "view": model.views[i].name, "camera": self.camera_json(), "section_box": self.section_json() }))
     }
 
-    fn project_info(&self) -> Answer {
+    fn project_info(&self, a: &Value) -> Answer {
         let model = self.require_model()?;
         let p = &model.project;
+        // levels and grids up to MAX_LIST; rooms (with all their parameters) a page at a time
+        let (offset, limit) = page(a, 20, 50);
+        let rooms: Vec<Value> = p.rooms.iter().skip(offset).take(limit).map(|r| json!({
+            "number": r.number,
+            "name": r.name,
+            "level": r.level,
+            "parameters": Value::Object(r.extra.iter().map(|(k, v)| (k.clone(), json!(v))).collect()),
+        })).collect();
+        let truncated = p.levels.len() > MAX_LIST || p.grids.len() > MAX_LIST || offset.saturating_add(rooms.len()) < p.rooms.len();
         Ok(json!({
             "info": Value::Object(p.info.iter().map(|(k, v)| (k.clone(), json!(v))).collect()),
-            "levels": p.levels.iter().map(|(n, z)| json!({ "name": n, "elevation": round(*z) })).collect::<Vec<_>>(),
+            "levels": p.levels.iter().take(MAX_LIST).map(|(n, z)| json!({ "name": n, "elevation": round(*z) })).collect::<Vec<_>>(),
+            "level_count": p.levels.len(),
             "phases": p.phases,
-            "grids": p.grids.iter().map(|g| json!({ "name": g.name, "a": g.a, "b": g.b })).collect::<Vec<_>>(),
-            "rooms": p.rooms.iter().map(|r| json!({
-                "number": r.number,
-                "name": r.name,
-                "level": r.level,
-                "parameters": Value::Object(r.extra.iter().map(|(k, v)| (k.clone(), json!(v))).collect()),
-            })).collect::<Vec<_>>(),
+            "grids": p.grids.iter().take(MAX_LIST).map(|g| json!({ "name": g.name, "a": g.a, "b": g.b })).collect::<Vec<_>>(),
+            "grid_count": p.grids.len(),
+            "rooms": rooms,
+            "room_count": p.rooms.len(),
+            "rooms_offset": offset,
+            "truncated": truncated,
         }))
     }
 
@@ -797,8 +866,7 @@ impl App {
             .map(|o| o.iter().map(|(k, v)| (k.to_lowercase(), v.as_str().map_or_else(|| v.to_string(), str::to_string).to_lowercase())).collect())
             .unwrap_or_default();
         let group_by = a.get("group_by").and_then(Value::as_str);
-        let limit = a.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
-        let offset = a.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let (offset, limit) = page(a, 50, 100);
 
         let mut matches: Vec<(u64, Vec<usize>, Vec<(String, String)>)> = Vec::new();
         for (id, layers) in element_layers(&model) {
@@ -838,7 +906,7 @@ impl App {
                 json!({ "id": id, "layer": model.layers[layers[0]].name, "properties": summary })
             })
             .collect();
-        Ok(json!({ "total": total, "offset": offset, "returned": shown.len(), "elements": shown }))
+        Ok(json!({ "total": total, "offset": offset, "returned": shown.len(), "truncated": offset.saturating_add(shown.len()) < total, "elements": shown }))
     }
 
     /// The triangles of an element in world space.
@@ -1530,9 +1598,58 @@ mod tests {
         std::fs::write(dir.join("old.ifc"), b"x").unwrap();
         assert!(app.save_target(&json!({ "path": at("old.ifc") })).unwrap_err().contains("overwrite"));
         assert_eq!(app.save_target(&json!({ "path": at("old.ifc"), "overwrite": true })), Ok(dir.join("old.ifc")));
+        // an open IFC is not the default target: the viewer's IFC goes beside it
+        let mut ifc = App::default();
+        ifc.set_model(Arc::new(Model::new(dir.join("a.IFC"), "IFC", vec![])));
+        assert_eq!(ifc.save_target(&json!({})), Ok(dir.join("a-viewer.ifc")));
+        assert_eq!(ifc.save_target(&json!({ "path": at("a.IFC"), "overwrite": true })), Ok(dir.join("a.IFC")));
         let _ = std::fs::remove_dir_all(&dir);
         // nothing open, nothing to save
         assert!(App::default().save_target(&json!({})).is_err());
+    }
+
+    #[test]
+    fn screenshots_are_saved_as_new_pngs() {
+        let dir = std::env::temp_dir().join(format!("o3v-shot-target-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = |name: &str| json!(dir.join(name).to_string_lossy());
+        let none = json!({});
+        assert_eq!(shot_target(&at("view.png"), &none), Ok(dir.join("view.png")));
+        assert_eq!(shot_target(&at("view.PNG"), &none), Ok(dir.join("view.PNG")));
+        // never a model, nor a file that is there without overwrite
+        assert!(shot_target(&at("model.ifc"), &none).unwrap_err().contains(".png"));
+        assert!(shot_target(&at("model"), &none).is_err());
+        std::fs::write(dir.join("old.png"), b"x").unwrap();
+        assert!(shot_target(&at("old.png"), &none).unwrap_err().contains("overwrite"));
+        assert!(shot_target(&at("old.png"), &json!({ "overwrite": true })).is_ok());
+        assert!(shot_target(&json!(1), &none).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The open_file tool names every format the viewer opens, so an agent does not turn one down.
+    #[test]
+    fn open_file_lists_every_format() {
+        let tools = crate::mcp::tools();
+        let open = tools.iter().find(|t| t["name"] == "open_file").unwrap();
+        let text = open["description"].as_str().unwrap();
+        for ext in crate::loaders::supported_extensions() {
+            assert!(text.contains(&format!(".{ext} ")) || text.contains(&format!(".{ext})")) || text.contains(&format!(".{ext},")), ".{ext} is not in open_file");
+        }
+    }
+
+    #[test]
+    fn listings_are_paged_and_capped() {
+        let mut app = app();
+        let layers = run(&mut app, "list_layers", json!({ "limit": 100000 })).unwrap();
+        assert_eq!((layers["total"].clone(), layers["truncated"].clone()), (json!(1), json!(false)));
+        let none = run(&mut app, "list_layers", json!({ "offset": 1 })).unwrap();
+        assert_eq!(none["returned"], json!(0));
+        assert_eq!(page(&json!({ "limit": 100000 }), 50, 100), (0, 100));
+        assert_eq!(page(&json!({}), 50, 100), (0, 50));
+        let found = run(&mut app, "find_elements", json!({ "limit": 1 })).unwrap();
+        assert_eq!((found["returned"].clone(), found["truncated"].clone()), (json!(1), json!(true)));
+        let info = run(&mut app, "get_project_info", json!({})).unwrap();
+        assert_eq!(info["room_count"], json!(0));
     }
 
     #[test]

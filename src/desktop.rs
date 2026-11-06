@@ -197,7 +197,7 @@ fn run_app(args: Args) -> iced::Result {
         studio = studio.with_settings_in(dir);
     }
     studio.set_look(args.theme, args.language);
-    shell::run(studio, window_icon())
+    shell::run(studio, window_icon(), true)
 }
 
 /// The earlier stand-alone window (own ribbon and panels); kept for `--window-screenshot`.

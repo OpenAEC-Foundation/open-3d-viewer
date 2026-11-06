@@ -38,7 +38,9 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           cp packaging/android/app/build/outputs/apk/debug/app-debug.apk "open-3d-viewer-android-$version.apk"
+      # only builds from main are handed out: a pull request (from a fork too) builds, keeps nothing
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: open-3d-viewer-android
           path: open-3d-viewer-android-*.apk

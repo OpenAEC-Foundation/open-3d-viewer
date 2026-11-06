@@ -295,7 +295,7 @@ pub struct Studio {
     last_title_press: Option<Instant>,
     /// The splitter being dragged, with the cursor and panel width where it started.
     drag: Option<(Side, Option<f32>, f32)>,
-    /// The window's width (logical pixels).
+    /// The window's width in layout units: iced reports it already divided by the interface size.
     width: f32,
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
@@ -326,7 +326,7 @@ impl Studio {
 
     /// A phone or a narrow window: see [`COMPACT_WIDTH`].
     fn compact(&self) -> bool {
-        self.width / self.prefs.scale() as f32 <= COMPACT_WIDTH
+        self.width <= COMPACT_WIDTH
     }
 
     /// Whether the side panel shows: from the preferences, or in the compact layout the one panel
@@ -599,7 +599,11 @@ impl Studio {
                 self.save_prefs();
             }
             Msg::Scale(scale) => {
+                // the window keeps its size, and iced reports no resize: the width in layout units
+                // grows as the interface shrinks
+                let old = self.prefs.scale();
                 self.prefs.scale = scale;
+                self.width *= (old / self.prefs.scale()) as f32;
                 self.save_prefs();
             }
             // the compact layout shows one panel at a time and leaves the preferences as they are
@@ -773,7 +777,7 @@ impl Studio {
         let folded = compact && self.ribbon_folded;
         let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
         // a phone has no room for the version, and the web app has no remote control
-        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width / self.prefs.scale() as f32)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
             w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { 0 }, Msg::RibbonTab),
@@ -993,7 +997,7 @@ impl Studio {
         let middle = middle.push(workspace);
         if self.compact() {
             // one panel at a time, the full width, in place of the 3D view
-            let width = self.width / self.prefs.scale() as f32;
+            let width = self.width;
             return match self.compact_panel {
                 Some(Side::Left) => {
                     let hide = l.text("Verkenner verbergen", "Hide explorer");
@@ -1093,7 +1097,8 @@ fn one_line(text: &str, width: f32) -> String {
 
 /// Starts the viewer in its window: the shell around `studio`, with the shared fonts and no
 /// system title bar (the shell draws its own).
-pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
+/// `antialiasing`: smooth the overlay's shapes (the view cube, measurements, gizmos) with MSAA.
+pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool) -> iced::Result {
     fonts::install_fallback();
     // the installer reports updates; the app only shows them, and not in managed mode
     #[cfg(not(target_arch = "wasm32"))]
@@ -1106,9 +1111,7 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
         .scale_factor(|s: &Studio| s.prefs.scale() as f32)
         .font(crate::INTER_REGULAR)
         .font(crate::INTER_SEMIBOLD)
-        // not in the browser: on WebGL2 (most phones) iced's multisampled overlay pass keeps
-        // stale pixels, so a view cube stays behind where it was after the layout moves
-        .antialiasing(cfg!(not(target_arch = "wasm32")))
+        .antialiasing(antialiasing)
         .default_font(fonts::BODY);
     fonts::FILES
         .iter()
@@ -1231,6 +1234,25 @@ mod tests {
         assert_eq!(studio.prefs.left_width, PANEL_MAX);
         let _ = studio.update(Msg::SplitterRelease);
         assert!(studio.drag.is_none());
+    }
+
+    #[test]
+    fn the_compact_layout_follows_the_width_in_layout_units() {
+        let mut studio = Studio::new(App::default());
+        // a 1500 px window at interface size 1.5: iced reports 1000 layout units
+        let _ = studio.update(Msg::Scale(1.5));
+        let _ = studio.update(Msg::Resized(1000.0));
+        assert!(!studio.compact());
+        // twice the interface size on the same window: 750 units, still room for the panels
+        let _ = studio.update(Msg::Scale(2.0));
+        assert_eq!(studio.width, 750.0);
+        assert!(!studio.compact());
+        // a 412 px phone at size 1: compact; at 0.75 the same phone is 549 units wide
+        let _ = studio.update(Msg::Scale(1.0));
+        let _ = studio.update(Msg::Resized(412.0));
+        assert!(studio.compact());
+        let _ = studio.update(Msg::Scale(0.75));
+        assert!((studio.width - 412.0 / 0.75).abs() < 0.01 && studio.compact());
     }
 
     #[test]

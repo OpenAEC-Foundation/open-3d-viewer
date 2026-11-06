@@ -676,6 +676,9 @@ pub struct CubeState {
     hover: Option<Point>,
     /// Press point and last point of a drag that started on the cube.
     press: Option<(Point, Point)>,
+    /// The finger that pressed, or `None` for the mouse: only it drags and releases the press, and
+    /// the other fingers go on to the viewport below.
+    finger: Option<touch::Finger>,
     dragged: bool,
 }
 
@@ -693,18 +696,35 @@ where
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         let publish = |e: CubeEvent| Some(canvas::Action::publish(Message::from(e)).and_capture());
+        let local = |p: Point| Point::new(p.x - bounds.x, p.y - bounds.y);
+        // a finger works as the mouse: a tap on a face snaps to it, a drag on the cube orbits; the
+        // finger's own position counts, as the cursor follows whichever finger moved last
+        let (pointer, at) = match *event {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. })
+            | iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+            | iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => (None, cursor.position()),
+            iced::Event::Touch(
+                touch::Event::FingerMoved { id, position }
+                | touch::Event::FingerPressed { id, position }
+                | touch::Event::FingerLifted { id, position }
+                | touch::Event::FingerLost { id, position },
+            ) => (Some(id), Some(position)),
+            _ => return None,
+        };
+        let pressing = state.press.is_some() && state.finger == pointer;
         match event {
-            // a finger works as the mouse: a tap on a face snaps to it, a drag on the cube orbits
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) | iced::Event::Touch(touch::Event::FingerMoved { .. }) => {
-                if let Some((start, last)) = state.press {
-                    let now = cursor.position()?;
-                    let now = Point::new(now.x - bounds.x, now.y - bounds.y);
+                if let Some((start, last)) = state.press.filter(|_| pressing) {
+                    let now = local(at?);
                     if state.dragged || start.distance(now) > 3.0 {
                         state.dragged = true;
                         state.press = Some((start, now));
                         return publish(CubeEvent::Orbit { dx: now.x - last.x, dy: now.y - last.y });
                     }
                     return Some(canvas::Action::capture());
+                }
+                if pointer.is_some() {
+                    return None;
                 }
                 let over = cursor.position_in(bounds).filter(|p| over_cube(*p, bounds));
                 if over != state.hover {
@@ -713,16 +733,20 @@ where
                 }
                 None
             }
-            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) | iced::Event::Touch(touch::Event::FingerPressed { .. }) => {
-                let p = cursor.position_in(bounds).filter(|p| over_cube(*p, bounds))?;
-                state.press = Some((p, p));
+            iced::Event::Mouse(mouse::Event::ButtonPressed(_)) | iced::Event::Touch(touch::Event::FingerPressed { .. }) => {
+                let at = at.filter(|p| bounds.contains(*p)).map(local).filter(|p| over_cube(*p, bounds))?;
+                // a new press takes over from an earlier one, whose release may never come
+                state.press = Some((at, at));
+                state.finger = pointer;
                 state.dragged = false;
                 Some(canvas::Action::capture())
             }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-            | iced::Event::Touch(touch::Event::FingerLifted { .. } | touch::Event::FingerLost { .. }) => {
+            _ if !pressing => None,
+            _ => {
                 let (start, _) = state.press.take()?;
-                if std::mem::take(&mut state.dragged) {
+                state.finger = None;
+                let lost = matches!(event, iced::Event::Touch(touch::Event::FingerLost { .. }));
+                if std::mem::take(&mut state.dragged) || lost {
                     return Some(canvas::Action::capture());
                 }
                 match hit(start, bounds, self.yaw, self.pitch) {
@@ -730,7 +754,6 @@ where
                     None => Some(canvas::Action::capture()),
                 }
             }
-            _ => None,
         }
     }
 
@@ -1045,5 +1068,45 @@ mod tests {
             assert_eq!(label.split(' ').count(), 2);
         }
         assert_eq!(edge_label([1, 1, 1]), "CUSTOM");
+    }
+
+    #[test]
+    fn only_the_finger_that_pressed_the_cube_drags_and_releases_it() {
+        use canvas::Program;
+        let bounds = test_bounds();
+        let (yaw, pitch) = CameraPreset::Front.orientation();
+        let cube = CubeOverlay { yaw, pitch, ortho: false };
+        let mut state = CubeState::default();
+        let on_cube = center(bounds);
+        let elsewhere = Point::new(100.0, 600.0);
+        let finger = |id: u64, event: fn(touch::Finger, Point) -> touch::Event, at: Point| iced::Event::Touch(event(touch::Finger(id), at));
+        fn pressed(id: touch::Finger, position: Point) -> touch::Event {
+            touch::Event::FingerPressed { id, position }
+        }
+        fn moved(id: touch::Finger, position: Point) -> touch::Event {
+            touch::Event::FingerMoved { id, position }
+        }
+        fn lifted(id: touch::Finger, position: Point) -> touch::Event {
+            touch::Event::FingerLifted { id, position }
+        }
+        // the cursor follows whichever finger reported last
+        let send = |state: &mut CubeState, event: iced::Event, cursor: Point| {
+            Program::<CubeEvent>::update(&cube, state, &event, bounds, mouse::Cursor::Available(cursor)).map(|a| a.into_inner())
+        };
+        assert!(send(&mut state, finger(1, pressed, on_cube), on_cube).is_some());
+        // a second finger on the model goes on to the viewport: its moves and its lift too
+        assert!(send(&mut state, finger(2, pressed, elsewhere), elsewhere).is_none());
+        assert!(send(&mut state, finger(2, moved, Point::new(elsewhere.x + 40.0, elsewhere.y)), elsewhere).is_none());
+        assert!(send(&mut state, finger(2, lifted, elsewhere), elsewhere).is_none());
+        // the first finger drags by its own position, not the cursor's
+        let (message, ..) = send(&mut state, finger(1, moved, Point::new(on_cube.x + 5.0, on_cube.y)), elsewhere).unwrap();
+        assert_eq!(message, Some(CubeEvent::Orbit { dx: 5.0, dy: 0.0 }));
+        let (_, _, status) = send(&mut state, finger(1, lifted, on_cube), elsewhere).unwrap();
+        assert_eq!(status, iced::event::Status::Captured);
+        assert!(state.press.is_none() && state.finger.is_none());
+        // a tap snaps to the face under it
+        send(&mut state, finger(3, pressed, on_cube), on_cube);
+        let (message, ..) = send(&mut state, finger(3, lifted, on_cube), on_cube).unwrap();
+        assert_eq!(message, Some(CubeEvent::Snap(CubeTarget::Face(CameraPreset::Front))));
     }
 }

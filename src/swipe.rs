@@ -4,7 +4,8 @@
 //! iced's scrollable scrolls by touch only where no button takes the finger first, and these are
 //! nearly all buttons. This wrapper watches the fingers before its content does: a finger that
 //! moves more than a few pixels along the axis scrolls the scrollable `id` with it, and the button
-//! under it lets go (it gets the finger as lost, so it does not fire). A tap stays a tap.
+//! under it lets go (it gets the finger as lost, so it does not fire). A tap stays a tap, and a
+//! finger the content already follows by itself (between the buttons, or on a slider) is left to it.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
@@ -99,6 +100,15 @@ impl<M> Widget<M, Theme, Renderer> for Swipe<'_, M> {
                         shell.capture_event();
                         return;
                     }
+                    // short of the slop the content sees the move: content that follows the finger
+                    // itself (the scrollable, where the finger landed between buttons, or a slider)
+                    // keeps it, or the swipe would scroll again by what the scrollable already did
+                    let captured = shell.is_event_captured();
+                    self.content.as_widget_mut().update(&mut tree.children[0], event, layout, cursor, renderer, clipboard, shell, viewport);
+                    if !captured && shell.is_event_captured() {
+                        tree.state.downcast_mut::<State>().finger = None;
+                    }
+                    return;
                 }
             }
             Event::Touch(touch::Event::FingerLifted { id, .. } | touch::Event::FingerLost { id, .. }) => {

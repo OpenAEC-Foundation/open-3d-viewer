@@ -90,6 +90,8 @@ pub struct App {
     pub layer_filter: String,
     pub status: Status,
     pub viewport_size: (f32, f32),
+    /// The last press was a finger's, not the mouse's: the hint shows the touch gestures.
+    pub fingers: bool,
     /// View preset to apply when the next model arrives (command line).
     pub initial_view: Option<ViewPreset>,
     /// `--window-screenshot`: capture the real window once the model is shown, then exit.
@@ -258,6 +260,8 @@ pub enum Message {
     MeasureDecimals(Category, u8),
     /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
     Escape,
+    /// A finger (`true`) or a mouse button (`false`) went down.
+    Pressed(bool),
     /// A frame while loading (animates the loading card).
     Tick,
     TakeShot,
@@ -316,6 +320,7 @@ impl Default for App {
             layer_filter: String::new(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
+            fingers: false,
             initial_view: None,
             window_shot: None,
             pending_open: None,
@@ -1074,6 +1079,7 @@ impl App {
                     s.turn_by(degrees.to_radians() - s.turn);
                 }
             }
+            Message::Pressed(fingers) => self.fingers = fingers,
             Message::Tick => {
                 if let Some((from, to, start)) = self.anim {
                     let t = (start.elapsed().as_secs_f32() / ANIM_SECONDS).min(1.0);
@@ -1203,6 +1209,8 @@ impl App {
         };
         let events = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Open(path)),
+            iced::Event::Touch(iced::touch::Event::FingerPressed { .. }) => Some(Message::Pressed(true)),
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Message::Pressed(false)),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
                 if status == event::Status::Ignored =>
             {
@@ -2064,8 +2072,8 @@ impl App {
             (None, _) => Some(center(self.welcome(p)).into()),
             _ => None,
         };
-        // a phone (a narrow view) is used with fingers
-        let hint = if self.viewport_size.0 < 600.0 {
+        // the gestures for whatever pressed last: fingers on a phone or tablet, else the mouse
+        let hint = if self.fingers {
             l.text(
                 "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken en slepen: pannen",
                 "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press and drag: pan",

@@ -17,9 +17,24 @@ use wasm_bindgen_futures::JsFuture;
 /// Starts the app in the page.
 pub fn main() {
     console_error_panic_hook::set_once();
-    if let Err(e) = shell::run(shell::Studio::new(App::default()), None) {
-        web_sys::console::error_1(&format!("Open 3D Viewer: {e}").into());
-    }
+    wasm_bindgen_futures::spawn_local(async {
+        // the overlay is smoothed with WebGPU only: on WebGL2 (most phones) iced's multisampled
+        // overlay pass keeps stale pixels, so a view cube stays behind after the layout moves
+        let antialiasing = webgpu().await.unwrap_or(false);
+        if let Err(e) = shell::run(shell::Studio::new(App::default()), None, antialiasing) {
+            web_sys::console::error_1(&format!("Open 3D Viewer: {e}").into());
+        }
+    });
+}
+
+/// Whether the browser offers a WebGPU adapter, which wgpu then draws with; without one it falls
+/// back to WebGL2.
+async fn webgpu() -> Option<bool> {
+    let navigator = js_sys::Reflect::get(&js_sys::global(), &"navigator".into()).ok()?;
+    let gpu = js_sys::Reflect::get(&navigator, &"gpu".into()).ok().filter(|gpu| gpu.is_object())?;
+    let request: js_sys::Function = js_sys::Reflect::get(&gpu, &"requestAdapter".into()).ok()?.dyn_into().ok()?;
+    let adapter = request.call0(&gpu).ok()?.dyn_into::<js_sys::Promise>().ok()?;
+    Some(JsFuture::from(adapter).await.ok()?.is_object())
 }
 
 /// Waits until the browser has drawn the next frame, so a status change shows before a long,

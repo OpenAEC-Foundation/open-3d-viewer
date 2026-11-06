@@ -82,8 +82,9 @@
           }
         });
       }
-      // The app shell is kept for offline starts (web/sw.js).
-      if ("serviceWorker" in navigator) {
+      // The app shell is kept for offline starts (web/sw.js). Not under `trunk serve`: a service
+      // worker would hold on to that address for every project served there afterwards.
+      if ("serviceWorker" in navigator && !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
         addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
       }
       // On a phone or tablet, offer to install the app once, unless it was declined before. The

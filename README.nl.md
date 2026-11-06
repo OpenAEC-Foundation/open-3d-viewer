@@ -262,7 +262,7 @@ open-3d-viewer [BESTAND] [--theme light|dark|blueprint|high-contrast-dark|high-c
 open-3d-viewer [BESTAND] --screenshot UIT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAAM] [--explode X,Y,Z]
 open-3d-viewer BESTAND --save-as UIT.ifc
-open-3d-viewer --bench BESTAND [--frames 300]
+open-3d-viewer --bench BESTAND [--frames 300] [--throughput]
 ```
 
 Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.11`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.

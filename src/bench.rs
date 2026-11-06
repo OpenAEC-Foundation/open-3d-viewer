@@ -2,6 +2,11 @@
 //! (1920x1080, 4x MSAA, orbiting camera), reporting load time and frame times; the last pass
 //! cuts the model with a section box (lower 60 %, filled cuts). With `O3V_BENCH_PNG=path` the
 //! first section frame is also written as a PNG. `WGPU_BACKEND` chooses the backend.
+//!
+//! These frame times are latencies: the bench waits for the GPU after every frame. With
+//! `--throughput` it instead keeps two frames in flight, as a swap chain does, and checks the
+//! 120 fps criterion per camera scenario (orbit, pan, zoom): at least 120 submitted frames per
+//! second and a p95 frame time of at most 8.33 ms, counting the frames over 16.67 ms.
 
 use crate::loaders;
 use crate::theme::{srgb3, srgb4, ThemeKind};
@@ -10,11 +15,83 @@ use crate::viewport::render::{RenderMode, RenderSettings, ScenePipeline, ScenePr
 use iced::futures::executor::block_on;
 use iced::wgpu;
 use iced::widget::shader::{Primitive, Viewport};
+use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use web_time::Instant;
 
-pub fn run(file: &Path, frames: u32) -> Result<(), String> {
+/// The 120 fps criterion: submitted frames per second, p95 frame time, and the time after which
+/// a frame counts as late.
+const MIN_FPS: f64 = 120.0;
+const MAX_P95_MS: f64 = 8.33;
+const LATE_MS: f64 = 16.67;
+/// Frames in flight in the throughput mode, as with a double-buffered swap chain.
+const IN_FLIGHT: usize = 2;
+
+/// Frame times of one scenario.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameStats {
+    pub frames: u32,
+    pub fps: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+    pub over_budget: u32,
+}
+
+impl FrameStats {
+    /// Meets the 120 fps criterion.
+    pub fn passes(&self) -> bool {
+        self.fps >= MIN_FPS && self.p95_ms <= MAX_P95_MS
+    }
+}
+
+/// Stats of `durations_ms` (one per frame) over `wall_s` seconds: p95 by nearest rank.
+pub fn frame_stats(durations_ms: &[f64], wall_s: f64) -> FrameStats {
+    let mut sorted = durations_ms.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let n = sorted.len();
+    let p95_ms = if n == 0 { 0.0 } else { sorted[((0.95 * n as f64).ceil() as usize).clamp(1, n) - 1] };
+    FrameStats {
+        frames: n as u32,
+        fps: if wall_s > 0.0 { n as f64 / wall_s } else { 0.0 },
+        p95_ms,
+        max_ms: sorted.last().copied().unwrap_or(0.0),
+        over_budget: sorted.iter().filter(|&&d| d > LATE_MS).count() as u32,
+    }
+}
+
+/// How the camera moves from frame to frame in the throughput mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scenario {
+    Orbit,
+    Pan,
+    Zoom,
+}
+
+impl Scenario {
+    pub const ALL: [Scenario; 3] = [Scenario::Orbit, Scenario::Pan, Scenario::Zoom];
+
+    fn name(self) -> &'static str {
+        match self {
+            Scenario::Orbit => "orbit",
+            Scenario::Pan => "pan",
+            Scenario::Zoom => "zoom",
+        }
+    }
+
+    /// Moves the camera for `frame`; pan and zoom turn back every 100 frames, so the model
+    /// stays in view.
+    fn step(self, camera: &mut Camera, frame: u32, height: f32) {
+        let back = if (frame / 100) % 2 == 0 { 1.0 } else { -1.0 };
+        match self {
+            Scenario::Orbit => camera.orbit(4.0, 0.0),
+            Scenario::Pan => camera.pan(3.0 * back, 0.0, height),
+            Scenario::Zoom => camera.zoom(0.02 * back),
+        }
+    }
+}
+
+pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
     let model = Arc::new(loaders::load(file)?);
     println!(
         "{}: {} layers, {} vertices, {} triangles, {} points, loaded in {:.2} s",
@@ -60,6 +137,76 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
     camera.set_preset(ViewPreset::Iso);
     camera.fit(&model.bounds, w as f32 / h as f32);
     let p = ThemeKind::Light.palette();
+
+    if throughput {
+        let settings = RenderSettings {
+            mode: RenderMode::Solid,
+            grid: true,
+            background: srgb3(p.viewport),
+            grid_minor: srgb4(p.grid_minor),
+            grid_major: srgb4(p.grid_major),
+            model_matrix: glam::Mat4::IDENTITY,
+            section: None,
+            plane: None,
+            caps: false,
+            grids: true,
+            bounds: None,
+        };
+        let submit = |camera: Camera, pipeline: &mut ScenePipeline| {
+            let primitive = ScenePrimitive {
+                model: Some(model.clone()),
+                visible: vec![true; model.layers.len()],
+                selection: Vec::new(),
+                camera,
+                settings,
+                explode: None,
+                offsets: Arc::default(),
+            };
+            primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            primitive.render(pipeline, &mut encoder, &view, &clip);
+            queue.submit([encoder.finish()])
+        };
+        // the GPU upload, not counted
+        submit(camera, &mut pipeline);
+        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        let mut all = true;
+        for scenario in Scenario::ALL {
+            let done: Arc<Mutex<Vec<Instant>>> = Arc::default();
+            let mut pending = VecDeque::with_capacity(IN_FLIGHT + 1);
+            let mut c = camera;
+            let start = Instant::now();
+            for i in 0..frames {
+                if pending.len() >= IN_FLIGHT {
+                    let oldest = pending.pop_front();
+                    device.poll(wgpu::PollType::Wait { submission_index: oldest, timeout: None }).ok();
+                }
+                scenario.step(&mut c, i, h as f32);
+                pending.push_back(submit(c, &mut pipeline));
+                let done = done.clone();
+                queue.on_submitted_work_done(move || done.lock().unwrap().push(Instant::now()));
+            }
+            device.poll(wgpu::PollType::wait_indefinitely()).ok();
+            let ends = done.lock().unwrap().clone();
+            let durations: Vec<f64> =
+                std::iter::once(start).chain(ends.iter().copied()).collect::<Vec<_>>().windows(2).map(|w| (w[1] - w[0]).as_secs_f64() * 1000.0).collect();
+            let wall = ends.last().map_or(0.0, |t| (*t - start).as_secs_f64());
+            let s = frame_stats(&durations, wall);
+            all &= s.passes();
+            println!(
+                "{} @ {w}x{h} 4xMSAA: {} frames, {:.0} fps, p95 {:.2} ms, max {:.2} ms, {} over 16.67 ms: {}",
+                scenario.name(),
+                s.frames,
+                s.fps,
+                s.p95_ms,
+                s.max_ms,
+                s.over_budget,
+                if s.passes() { "PASS" } else { "FAIL" }
+            );
+        }
+        println!("120 fps criterion: {}", if all { "PASS" } else { "FAIL" });
+        return Ok(());
+    }
 
     // lower 60 % of the model, a little turned
     let mut section = crate::section::SectionBox::around(&model.bounds);
@@ -174,4 +321,27 @@ fn write_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textu
     crate::write_png(path, w, h, &rgba)?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_stats_counts_frames_over_budget() {
+        let s = frame_stats(&[5.0, 5.0, 20.0, 8.0], 0.038);
+        assert_eq!(s.frames, 4);
+        assert_eq!(s.over_budget, 1);
+        assert_eq!(s.max_ms, 20.0);
+        assert_eq!(s.p95_ms, 20.0);
+        assert!((s.fps - 105.26).abs() < 0.01);
+    }
+
+    #[test]
+    fn passes_needs_fps_and_p95() {
+        let s = |fps, p95_ms| FrameStats { frames: 300, fps, p95_ms, max_ms: p95_ms, over_budget: 0 };
+        assert!(s(130.0, 8.0).passes());
+        assert!(!s(130.0, 9.0).passes());
+        assert!(!s(110.0, 7.0).passes());
+    }
 }

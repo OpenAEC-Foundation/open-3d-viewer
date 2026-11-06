@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- the web app's theme colour (web/manifest.webmanifest) and its loading screen -->
+    <color name="statusBar">#F5960A</color>
+    <color name="navigationBar">#1C1C1E</color>
+    <color name="splash">#1C1C1E</color>
+    <color name="iconBackground">#FBB016</color>
+</resources>

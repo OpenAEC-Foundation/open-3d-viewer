@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The version of the app (Cargo.toml, year.ISO week.patch) names the APK version as well.
+def cargo = file('../../../Cargo.toml').text
+def (year, week, patch) = (cargo =~ /(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"/)[0][1..3].collect { it as int }
+
+// The site the app opens; another host for a fork or a test site: -PsiteHost=example.org
+def siteHost = project.findProperty('siteHost') ?: 'open-3d-viewer.open-aec.com'
+def siteUrl = "https://${siteHost}/"
+
+android {
+    namespace 'org.openaec.open3dviewer'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'org.openaec.open3dviewer'
+        minSdk 24
+        targetSdk 36
+        versionCode year * 100000 + week * 1000 + patch
+        versionName "${year}.${week}.${patch}"
+
+        resValue 'string', 'hostName', siteHost
+        resValue 'string', 'launchUrl', siteUrl
+        resValue 'string', 'webManifestUrl', "${siteUrl}manifest.webmanifest"
+        // Digital Asset Links: the site names this app (its package and signing key) in
+        // /.well-known/assetlinks.json; then Chrome shows the app without its address bar
+        // (the quotes escaped for an Android string resource)
+        resValue 'string', 'assetStatements', """[{ \\"relation\\": [\\"delegate_permission/common.handle_all_urls\\"], \\"target\\": { \\"namespace\\": \\"web\\", \\"site\\": \\"https://${siteHost}\\" } }]"""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Trusted Web Activity launcher, splash and fallbacks (Apache-2.0)
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.4'
+}

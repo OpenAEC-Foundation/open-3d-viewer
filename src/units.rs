@@ -18,7 +18,11 @@ pub enum UnitKey {
 /// A set of unit keys. It hashes with [`KeyHasher`]: hiding or isolating 10^5 elements fills it
 /// and every redraw of the flags looks them all up, which the default hasher makes too slow for
 /// one frame.
-pub type UnitKeySet = HashSet<UnitKey, BuildHasherDefault<KeyHasher>>;
+/// A set and a map hashed with [`KeyHasher`], for keys and ids that come by the 10^5.
+pub type FastHashSet<T> = HashSet<T, BuildHasherDefault<KeyHasher>>;
+pub type FastHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<KeyHasher>>;
+
+pub type UnitKeySet = FastHashSet<UnitKey>;
 
 /// A fast hash for small integer keys (the multiply-rotate mix of rustc's FxHasher). The keys
 /// come from the model itself, not from outside, so it needs no protection against crafted

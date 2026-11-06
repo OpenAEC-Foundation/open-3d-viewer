@@ -29,14 +29,17 @@ pub fn units_in_box(index: &ExplodeIndex, offsets: &[[f32; 4]], view_proj: Mat4,
             }
             let shift = offsets.get(u).map_or(Vec3::ZERO, |o| Vec3::new(o[0], o[1], o[2]));
             let (min, max) = (Vec3::from(b.min) + shift, Vec3::from(b.max) + shift);
-            let corners: Vec<Option<Vec2>> = (0..8)
-                .map(|i| to_screen(Vec3::new(if i & 1 == 0 { min.x } else { max.x }, if i & 2 == 0 { min.y } else { max.y }, if i & 4 == 0 { min.z } else { max.z })))
-                .collect();
-            let seen: Vec<Vec2> = corners.iter().flatten().copied().collect();
-            if seen.is_empty() || (!crossing && seen.len() < corners.len()) {
+            // the corners on screen, without allocating: 10^5 units are boxed at once
+            let (mut smin, mut smax, mut seen) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY), 0);
+            for i in 0..8 {
+                let corner = Vec3::new(if i & 1 == 0 { min.x } else { max.x }, if i & 2 == 0 { min.y } else { max.y }, if i & 4 == 0 { min.z } else { max.z });
+                if let Some(p) = to_screen(corner) {
+                    (smin, smax, seen) = (smin.min(p), smax.max(p), seen + 1);
+                }
+            }
+            if seen == 0 || (!crossing && seen < 8) {
                 return false;
             }
-            let (smin, smax) = seen.iter().fold((Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)), |(a, b), &p| (a.min(p), b.max(p)));
             if crossing {
                 smax.x >= lo.x && smin.x <= hi.x && smax.y >= lo.y && smin.y <= hi.y
             } else {

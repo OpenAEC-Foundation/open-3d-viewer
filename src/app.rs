@@ -1440,12 +1440,20 @@ impl App {
     /// selection: elements, and layers without elements; nothing hidden or switched off.
     fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32) {
         let (Some(model), Some(index)) = (self.model.clone(), self.explode_index.clone()) else { return };
-        let shown_elements: HashSet<u64> =
-            model.layers.iter().enumerate().filter(|(l, _)| self.visible.get(*l).copied().unwrap_or(true)).flat_map(|(_, layer)| layer.elements.iter().map(|e| e.0)).collect();
+        // the elements on layers that are switched on; with every layer on, all of them
+        let all_on = self.visible.iter().all(|&v| v);
+        let shown_elements: crate::units::FastHashSet<u64> = if all_on {
+            Default::default()
+        } else {
+            model.layers.iter().enumerate().filter(|(l, _)| self.visible.get(*l).copied().unwrap_or(true)).flat_map(|(_, layer)| layer.elements.iter().map(|e| e.0)).collect()
+        };
         let view_proj = self.camera.view_proj(width.max(1.0) / height.max(1.0)) * self.model_matrix();
         // what the section box or plane cuts away wholly is not boxed either
         let (section, plane, mm) = (self.active_section(), self.plane, self.model_matrix());
         let cut_away = |u: usize| {
+            if section.is_none() && plane.is_none() {
+                return false;
+            }
             let (b, o) = (index.unit_bounds(u), self.units.get(u).map_or(Vec3::ZERO, |s| Vec3::new(s[0], s[1], s[2])));
             let corners = [0, 1, 2, 3, 4, 5, 6, 7].map(|i| {
                 let pick = |a: usize| if i >> a & 1 == 0 { b.min[a] } else { b.max[a] };
@@ -1462,7 +1470,7 @@ impl App {
         let hidden = |u: usize| {
             let off = self.units.get(u).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0) || cut_away(u);
             off || match index.owner(u) {
-                Some(UnitOwner::Element(id)) => !shown_elements.contains(&id),
+                Some(UnitOwner::Element(id)) => !all_on && !shown_elements.contains(&id),
                 Some(UnitOwner::LayerRest(l)) => !self.visible.get(l).copied().unwrap_or(true) || !model.layers[l].elements.is_empty(),
                 None => true,
             }

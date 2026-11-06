@@ -260,7 +260,27 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 if s.passes() { "PASS" } else { "FAIL" }
             );
         }
-        // hiding every element must be done within one frame
+        // selecting, isolating and hiding every element must each be done within one frame
+        let mut timed = |what: String, ms: f64| {
+            let pass = ms <= MAX_P95_MS;
+            all &= pass;
+            println!("{what}: {ms:.2} ms in update: {}", if pass { "PASS" } else { "FAIL" });
+        };
+        if index.len() > 1 {
+            let mut app = crate::app::App::default();
+            app.set_model(model.clone());
+            app.fit();
+            let (vw, vh) = app.viewport_size;
+            // a crossing box over the whole viewport: everything it touches
+            let boxed = crate::viewport::Navigate::Box { x0: vw, y0: vh, x1: 0.0, y1: 0.0, width: vw, height: vh, done: true };
+            let t = Instant::now();
+            let _ = app.update(crate::app::Message::Navigate(boxed));
+            timed(format!("box select {} elements", app.sel.len()), t.elapsed().as_secs_f64() * 1000.0);
+            app.click(model.layers[0].elements.first().map(|e| Pickable::Element(e.0)), false);
+            let t = Instant::now();
+            let _ = app.update(crate::app::Message::IsolateSelection);
+            timed(format!("isolate 1 of {} elements", app.hidden.len() + 1), t.elapsed().as_secs_f64() * 1000.0);
+        }
         if index.len() > 1 {
             let mut app = crate::app::App::default();
             app.set_model(model.clone());
@@ -269,10 +289,9 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             let t = Instant::now();
             let _ = app.update(crate::app::Message::HideSelection);
             let ms = t.elapsed().as_secs_f64() * 1000.0;
-            let pass = ms <= MAX_P95_MS;
-            all &= pass;
-            println!("hide {} elements: {ms:.2} ms in update: {}", app.hidden.len(), if pass { "PASS" } else { "FAIL" });
+            timed(format!("hide {} elements", app.hidden.len()), ms);
         }
+        drop(timed);
         println!("120 fps criterion: {}", if all { "PASS" } else { "FAIL" });
         return Ok(());
     }

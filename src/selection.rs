@@ -1,7 +1,7 @@
 //! What is selected: elements, or whole layers of formats without elements, in pick order.
 
 use crate::model::Model;
-use std::collections::HashSet;
+use crate::units::FastHashSet;
 
 /// What a click selects: an element, or a whole layer when the format has no elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,7 +16,7 @@ pub enum Pickable {
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
     items: Vec<Pickable>,
-    set: HashSet<Pickable>,
+    set: FastHashSet<Pickable>,
 }
 
 impl Selection {
@@ -37,6 +37,9 @@ impl Selection {
 
     /// Adds the items that are not selected yet, in their order.
     pub fn extend(&mut self, items: impl IntoIterator<Item = Pickable>) {
+        let items = items.into_iter();
+        self.set.reserve(items.size_hint().0);
+        self.items.reserve(items.size_hint().0);
         for item in items {
             if self.set.insert(item) {
                 self.items.push(item);

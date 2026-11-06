@@ -10,6 +10,7 @@
 //! The same units carry the hidden and selected flags of `crate::units`.
 
 use crate::model::{Bounds, Model};
+use crate::units::FastHashMap;
 use crate::viewport::render::transform_bounds;
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -46,7 +47,7 @@ pub struct ExplodeIndex {
     /// Per unit (0: none): the element it is, or the layer whose triangles outside elements it is.
     owners: Vec<Option<UnitOwner>>,
     /// The unit of every element, and per layer the unit of its triangles outside elements.
-    element_units: HashMap<u64, u32>,
+    element_units: FastHashMap<u64, u32>,
     rest_units: Vec<Option<u32>>,
     /// Per unit (0 unused): bounds at rest (model space).
     bounds: Vec<Bounds>,
@@ -65,7 +66,7 @@ impl ExplodeIndex {
     pub fn new(model: &Model) -> Self {
         // per unit: the element it is (None: the rest of a layer)
         let mut elements: Vec<Option<u64>> = vec![None];
-        let mut element_units: HashMap<u64, u32> = HashMap::new();
+        let mut element_units: FastHashMap<u64, u32> = FastHashMap::default();
         let mut bounds = vec![Bounds::empty()];
         let mut vertex_units = Vec::with_capacity(model.layers.len());
         let mut owners: Vec<Option<UnitOwner>> = vec![None];

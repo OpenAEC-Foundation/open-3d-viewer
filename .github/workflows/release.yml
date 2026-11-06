@@ -7,6 +7,11 @@
 # as a pre-release. The private format readers (rvt-dll and the standalone readers) are fetched
 # with the read-only deploy keys in FORMAT_CRATES_SSH_KEYS, as in build.yml.
 #
+# Linux is built for x86_64 and arm64 (the SuperCloud's servers are ARM), each tested without a
+# GPU. The Docker image ghcr.io/openaec-foundation/open-3d-viewer (#27) is built from the x86_64
+# .deb with packaging/docker, tested, and published with the release: signed with cosign
+# (keyless), with a build attestation and an SBOM.
+#
 # A dry run (Run workflow on a branch, dry_run on, no tag) builds and signs everything with the
 # version in Cargo.toml and publishes nothing; the signatures are in the job summaries.
 name: Release
@@ -82,11 +87,26 @@ jobs:
           cargo check --release --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
 
   linux:
-    name: Linux
+    name: Linux ${{ matrix.arch }}
     needs: check
-    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+            deb: amd64
+            machine: x86_64
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            deb: arm64
+            machine: aarch64
+    runs-on: ${{ matrix.runner }}
     env:
       NUMBER: ${{ needs.check.outputs.number }}
+      # x64 or arm64 (.tar.gz), amd64 or arm64 (.deb, AppImage), x86_64 or aarch64 (.rpm, appimagetool)
+      ARCH: ${{ matrix.arch }}
+      DEB_ARCH: ${{ matrix.deb }}
+      MACHINE: ${{ matrix.machine }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,17 +131,22 @@ jobs:
           desktop=packaging/linux/org.openaec.Open3DViewer.desktop
           icon=assets/icons/icon.png
           stage=$(mktemp -d)
+          [[ "$(uname -m)" == "$MACHINE" ]] || { echo "::error::built on $(uname -m), expected $MACHINE"; exit 1; }
+          file "$viewer"
           # .tar.gz
-          dir="$stage/open-3d-viewer_${NUMBER}_linux-x64"
+          dir="$stage/open-3d-viewer_${NUMBER}_linux-${ARCH}"
           mkdir -p "$dir"
-          vertex=vendor/vertex/libvertex.so
-          cp "$viewer" "$mcp" "$vertex" LICENSE README.md "$dir/"
-          tar -C "$stage" -czf "$out/open-3d-viewer_${NUMBER}_linux-x64.tar.gz" "open-3d-viewer_${NUMBER}_linux-x64"
+          # The Vertex BD / BTL reader (vendor/vertex) exists for Linux x86_64 only; without it the
+          # viewer runs and only those formats say the library is missing.
+          vertex=()
+          [[ "$ARCH" == x64 ]] && vertex=(vendor/vertex/libvertex.so)
+          cp "$viewer" "$mcp" "${vertex[@]}" LICENSE README.md "$dir/"
+          tar -C "$stage" -czf "$out/open-3d-viewer_${NUMBER}_linux-${ARCH}.tar.gz" "open-3d-viewer_${NUMBER}_linux-${ARCH}"
           # .deb
           deb="$stage/deb"
           install -Dm755 "$viewer" "$deb/usr/bin/open-3d-viewer"
           install -Dm755 "$mcp" "$deb/usr/bin/open-3d-viewer-mcp"
-          install -Dm644 "$vertex" "$deb/usr/lib/open-3d-viewer/libvertex.so"
+          [[ ${#vertex[@]} -eq 0 ]] || install -Dm644 "${vertex[0]}" "$deb/usr/lib/open-3d-viewer/libvertex.so"
           install -Dm644 "$desktop" "$deb/usr/share/applications/org.openaec.Open3DViewer.desktop"
           install -Dm644 "$icon" "$deb/usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png"
           install -Dm644 LICENSE "$deb/usr/share/doc/open-3d-viewer/copyright"
@@ -131,7 +156,7 @@ jobs:
           Version: ${NUMBER}
           Section: graphics
           Priority: optional
-          Architecture: amd64
+          Architecture: ${DEB_ARCH}
           Maintainer: OpenAEC Foundation <info@open-aec.com>
           Homepage: https://github.com/OpenAEC-Foundation/open-3d-viewer
           Description: 3D model viewer for AEC files
@@ -140,28 +165,28 @@ jobs:
            and saves them as IFC.
           EOF
           sed -i 's/^          //' "$deb/DEBIAN/control"
-          dpkg-deb --root-owner-group --build "$deb" "$out/open-3d-viewer_${NUMBER}_amd64.deb"
+          dpkg-deb --root-owner-group --build "$deb" "$out/open-3d-viewer_${NUMBER}_${DEB_ARCH}.deb"
           # .rpm
           rpmtop=$(mktemp -d)
           mkdir -p "$rpmtop"/{SOURCES,SPECS,RPMS,BUILD,BUILDROOT}
-          cp "$viewer" "$mcp" "$vertex" "$desktop" "$icon" LICENSE "$rpmtop/SOURCES/"
-          rpmbuild -bb --define "_topdir $rpmtop" --define "number $NUMBER" packaging/linux/open-3d-viewer.spec
-          cp "$rpmtop"/RPMS/x86_64/*.rpm "$out/open-3d-viewer_${NUMBER}_x86_64.rpm"
+          cp "$viewer" "$mcp" "${vertex[@]}" "$desktop" "$icon" LICENSE "$rpmtop/SOURCES/"
+          rpmbuild -bb --define "_topdir $rpmtop" --define "number $NUMBER" --define "vertex ${#vertex[@]}" packaging/linux/open-3d-viewer.spec
+          cp "$rpmtop"/RPMS/"$MACHINE"/*.rpm "$out/open-3d-viewer_${NUMBER}_${MACHINE}.rpm"
           # AppImage
           app="$stage/AppDir"
           install -Dm755 "$viewer" "$app/usr/bin/open-3d-viewer"
           install -Dm755 "$mcp" "$app/usr/bin/open-3d-viewer-mcp"
-          install -Dm644 "$vertex" "$app/usr/lib/open-3d-viewer/libvertex.so"
+          [[ ${#vertex[@]} -eq 0 ]] || install -Dm644 "${vertex[0]}" "$app/usr/lib/open-3d-viewer/libvertex.so"
           cp "$desktop" "$app/"
           cp "$icon" "$app/org.openaec.Open3DViewer.png"
           ln -s usr/bin/open-3d-viewer "$app/AppRun"
-          curl -fsSL -o "$stage/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          curl -fsSL -o "$stage/appimagetool" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${MACHINE}.AppImage"
           chmod +x "$stage/appimagetool"
-          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$stage/appimagetool" --no-appstream "$app" "$out/open-3d-viewer_${NUMBER}_amd64.AppImage"
+          ARCH="$MACHINE" APPIMAGE_EXTRACT_AND_RUN=1 "$stage/appimagetool" --no-appstream "$app" "$out/open-3d-viewer_${NUMBER}_${DEB_ARCH}.AppImage"
           ls -la "$out"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
@@ -169,33 +194,94 @@ jobs:
   # (OpenAEC-Blueprint#61): extracted (no FUSE), without a GPU, under labwc without a screen, with
   # a screenshot. The memory in use with no file open goes in the release notes.
   linux-headless:
-    name: Linux without a GPU
+    name: Linux ${{ matrix.arch }} without a GPU
     needs: linux
-    runs-on: ubuntu-24.04
-    outputs:
-      memory: ${{ steps.run.outputs.memory }}
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
-          name: linux
+          name: linux-${{ matrix.arch }}
           path: dist
       - name: labwc, grim and Mesa's software renderers
         run: sudo apt-get update && sudo apt-get install -y labwc grim mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri vulkan-tools
+      # the memory at rest goes to `publish` in this job's artifact (a matrix job has one output)
       - name: Start the extracted AppImage and take screenshots
-        id: run
         run: |
           packaging/linux/headless-test.sh dist/*.AppImage test-models/test-cube.obj headless
-          echo "memory=$(cat headless/memory-mb.txt)" >> "$GITHUB_OUTPUT"
-          echo "### Linux without a GPU: started, drawn, $(cat headless/memory-mb.txt) MB at rest" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Linux ${{ matrix.arch }} without a GPU: started, drawn, $(cat headless/memory-mb.txt) MB at rest" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: linux-headless
+          name: linux-headless-${{ matrix.arch }}
           path: headless/
           if-no-files-found: ignore
+
+  # The Linux app as a container for the SuperCloud (#27): built from this release's .deb with
+  # packaging/docker (the OpenAEC Blueprint's template), tested here, published by `publish`.
+  docker:
+    name: Docker image
+    needs: [check, linux]
+    runs-on: ubuntu-24.04
+    outputs:
+      memory: ${{ steps.test.outputs.memory }}
+    env:
+      NUMBER: ${{ needs.check.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: linux
+      - name: Build the image from the release's .deb
+        run: |
+          set -euo pipefail
+          ctx=$(mktemp -d)
+          cp packaging/docker/Dockerfile packaging/docker/index.html packaging/docker/openaec-start packaging/docker/openaec-gezond "$ctx/"
+          mkdir -p "$ctx/setup.d" && cp packaging/docker/setup.d/*.sh "$ctx/setup.d/"
+          cp "linux/open-3d-viewer_${NUMBER}_amd64.deb" "$ctx/"
+          docker build "$ctx" -t "open-3d-viewer:${NUMBER}" \
+            --build-arg APP_DEB="open-3d-viewer_${NUMBER}_amd64.deb" \
+            --build-arg APP_COMMAND=/usr/bin/open-3d-viewer \
+            --build-arg APP_NAME=open-3d-viewer \
+            --build-arg APP_TITLE="Open 3D Viewer Studio" \
+            --build-arg APP_VERSION="$NUMBER" \
+            --build-arg APP_SOURCE="https://github.com/$GITHUB_REPOSITORY" \
+            --build-arg APP_LICENSE=LGPL-3.0-or-later \
+            --build-arg APP_DESCRIPTION="3D model viewer for AEC files, streamed to the browser" \
+            --build-arg EXTRA_PACKAGES="$(cat packaging/docker/extra-packages)"
+          docker image ls "open-3d-viewer:${NUMBER}"
+      - name: Test the container
+        id: test
+        run: |
+          bash packaging/docker/test-container.sh "open-3d-viewer:${NUMBER}" /usr/bin/open-3d-viewer docker-test
+          echo "memory=$(cat docker-test/memory.txt)" >> "$GITHUB_OUTPUT"
+          echo "### Docker: healthy, streamed, $(cat docker-test/memory.txt) at rest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Test the MCP server in the container
+        run: bash packaging/docker/test-mcp.sh "open-3d-viewer:${NUMBER}" test-models/test-cube.obj docker-test/mcp
+      - name: Save the image
+        run: docker save "open-3d-viewer:${NUMBER}" | gzip > docker-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: docker-image.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-test
+          path: docker-test/
 
   windows:
     name: Windows
@@ -461,24 +547,50 @@ jobs:
   publish:
     name: Publish
     if: ${{ github.event.inputs.dry_run != 'true' }}
-    needs: [check, linux, linux-headless, windows, macos]
+    needs: [check, linux, linux-headless, docker, windows, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
       attestations: write
+      packages: write
     env:
       NUMBER: ${{ needs.check.outputs.number }}
       WINDOWS_SIGNED: ${{ needs.windows.outputs.signed }}
       MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
-      MEMORY_MB: ${{ needs.linux-headless.outputs.memory }}
+      DOCKER_MEMORY: ${{ needs.docker.outputs.memory }}
+      IMAGE: ghcr.io/openaec-foundation/open-3d-viewer
     steps:
       - uses: actions/download-artifact@v4
         with:
-          # the packages, not the screenshots of linux-headless
-          pattern: "{linux,windows,macos}"
+          # the packages, not the screenshots of linux-headless or the image
+          pattern: "{linux-x64,linux-arm64,windows,macos}"
           path: assets
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-headless-*
+          path: headless
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: docker
+      - name: Memory at rest
+        run: |
+          echo "MEMORY_X64=$(cat headless/linux-headless-x64/memory-mb.txt)" >> "$GITHUB_ENV"
+          echo "MEMORY_ARM64=$(cat headless/linux-headless-arm64/memory-mb.txt)" >> "$GITHUB_ENV"
+      # The SBOM of the image goes with the release files (and in SHA256SUMS); the image itself is
+      # pushed after everything else is signed, so a failed signature publishes no image.
+      - name: Load the Docker image
+        run: docker load < docker/docker-image.tar.gz
+      - name: SBOM of the image
+        uses: anchore/sbom-action@v0
+        with:
+          image: open-3d-viewer:${{ env.NUMBER }}
+          format: spdx-json
+          output-file: assets/open-3d-viewer_${{ env.NUMBER }}_docker-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
       - name: Checksums
         run: |
           cd assets
@@ -499,11 +611,21 @@ jobs:
           printf '%s\n' "$OPENAEC_GPG_PRIVATE_KEY" | gpg --batch --import
           fpr=$(tr -d ' ' <<< "$OPENAEC_GPG_FINGERPRINT")
           gpg --batch --list-secret-keys --with-colons | grep -q "$fpr" || { echo "::error::the imported key is not $fpr"; exit 1; }
-          for f in assets/SHA256SUMS assets/*.deb assets/*.rpm assets/*.AppImage assets/*_linux-x64.tar.gz; do
+          for f in assets/SHA256SUMS assets/*.deb assets/*.rpm assets/*.AppImage assets/*_linux-*.tar.gz; do
             gpg --batch --yes --pinentry-mode loopback --passphrase "$OPENAEC_GPG_PASSPHRASE" --local-user "$fpr" --armor --detach-sign --output "$f.asc" "$f"
             gpg --batch --verify "$f.asc" "$f"
           done
           echo "signed=true" >> "$GITHUB_OUTPUT"
+      - name: Release or pre-release
+        env:
+          GPG_SIGNED: ${{ steps.gpg.outputs.signed }}
+        run: |
+          if [[ "$WINDOWS_SIGNED" == true && "$MACOS_SIGNED" == true && "$GPG_SIGNED" == true ]]; then
+            echo "PRERELEASE=false" >> "$GITHUB_ENV"
+          else
+            echo "PRERELEASE=true" >> "$GITHUB_ENV"
+            echo "::warning::Windows, macOS or Linux is not signed; publishing as a pre-release"
+          fi
       - name: Build attestation
         uses: actions/attest-build-provenance@v2
         with:
@@ -515,6 +637,41 @@ jobs:
             assets/*.zip
             assets/*.exe
             assets/*.dmg
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # The image tested in the `docker` job, under this version; `latest` only moves with a full
+      # release.
+      - name: Push the Docker image
+        run: |
+          set -euo pipefail
+          docker tag "open-3d-viewer:${NUMBER}" "$IMAGE:${NUMBER}"
+          docker push "$IMAGE:${NUMBER}"
+          if [[ "$PRERELEASE" == false ]]; then
+            docker tag "open-3d-viewer:${NUMBER}" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${NUMBER}" | cut -d@ -f2)
+          echo "DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "### Docker: $IMAGE:${NUMBER}@$digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the image (cosign, keyless)
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      - name: Build attestation of the image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ env.DIGEST }}
+          push-to-registry: true
+      - name: SBOM attestation of the image
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ env.DIGEST }}
+          sbom-path: assets/open-3d-viewer_${{ env.NUMBER }}_docker-sbom.spdx.json
+          push-to-registry: true
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -530,13 +687,24 @@ jobs:
           | --- | --- |
           | Windows 10/11 x64 | \`open-3d-viewer_${NUMBER}_x64-setup.exe\` (installeert zonder beheerdersrechten) of \`_windows-x64.zip\` |
           | macOS 11+ (Apple silicon en Intel) | \`open-3d-viewer_${NUMBER}_macos-universal.dmg\` |
-          | Ubuntu, Linux Mint | \`open-3d-viewer_${NUMBER}_amd64.deb\` |
-          | Fedora | \`open-3d-viewer_${NUMBER}_x86_64.rpm\` |
-          | Elke Linux | \`open-3d-viewer_${NUMBER}_amd64.AppImage\` of \`_linux-x64.tar.gz\` |
+          | Ubuntu, Linux Mint | \`open-3d-viewer_${NUMBER}_amd64.deb\` (ARM: \`_arm64.deb\`) |
+          | Fedora | \`open-3d-viewer_${NUMBER}_x86_64.rpm\` (ARM: \`_aarch64.rpm\`) |
+          | Elke Linux | \`open-3d-viewer_${NUMBER}_amd64.AppImage\` of \`_linux-x64.tar.gz\` (ARM: \`_arm64.AppImage\` of \`_linux-arm64.tar.gz\`) |
+          | Docker | \`${IMAGE}:${NUMBER}\`, zie hieronder |
 
           IFC- en Revit-bestanden openen in de desktopapp; in de browser niet.
 
-          De AppImage draait ook uitgepakt (\`--appimage-extract\`, dan \`AppRun\`) en zonder GPU, zoals in OpenAEC Linux; dat is voor deze release getest onder labwc met software-rendering. Geheugengebruik in rust, zonder geopend bestand: ${MEMORY_MB} MB.
+          De AppImage draait ook uitgepakt (\`--appimage-extract\`, dan \`AppRun\`) en zonder GPU, zoals in OpenAEC Linux; dat is voor deze release getest onder labwc met software-rendering, op x86_64 en arm64. Geheugengebruik in rust, zonder geopend bestand: ${MEMORY_X64} MB (x86_64), ${MEMORY_ARM64} MB (arm64).
+
+          ## Docker
+
+          De Linux-app als container, gestreamd naar de browser (#27): \`${IMAGE}:${NUMBER}\` (digest \`${DIGEST}\`), voor \`linux/amd64\`.
+
+          \`\`\`bash
+          docker run -p 3000:3000 -v "\$PWD":/openaec ${IMAGE}:${NUMBER}
+          \`\`\`
+
+          Open daarna http://localhost:3000. Geheugengebruik van de container in rust, zonder geopend bestand: **${DOCKER_MEMORY}**. Met \`OPENAEC_MCP_GEHEIM\` draait de MCP-server in de container op poort 3001 (alleen intern netwerk). Controleren: \`cosign verify ${IMAGE}@${DIGEST} --certificate-identity-regexp 'https://github.com/OpenAEC-Foundation/open-3d-viewer/' --certificate-oidc-issuer https://token.actions.githubusercontent.com\`; de SBOM staat bij de bestanden.
 
           ## Ondertekening
 
@@ -546,6 +714,7 @@ jobs:
           | macOS: app en schijfkopie (Developer ID, genotariseerd) | $(yes "$MACOS_SIGNED") |
           | Linux: \`SHA256SUMS\`, \`.deb\`, \`.rpm\`, AppImage en \`.tar.gz\` (OpenPGP, \`.asc\`) | $(yes "$GPG_SIGNED") |
           | Alle pakketten: build-attestatie via GitHub | ja |
+          | Docker-image: cosign (keyless), build-attestatie en SBOM | ja |
 
           Controleren: \`sha256sum -c SHA256SUMS\`, \`gpg --verify SHA256SUMS.asc SHA256SUMS\` (OpenAEC-sleutel \`${OPENAEC_GPG_FINGERPRINT}\`, publiek in [\`docs/openaec-releases.asc\`](https://github.com/OpenAEC-Foundation/open-3d-viewer/blob/main/docs/openaec-releases.asc)) en \`gh attestation verify BESTAND --repo OpenAEC-Foundation/open-3d-viewer\`.
 
@@ -553,8 +722,7 @@ jobs:
           EOF
           sed -i 's/^          //' notes.md
           pre=()
-          if [[ "$WINDOWS_SIGNED" != true || "$MACOS_SIGNED" != true || "$GPG_SIGNED" != true ]]; then
+          if [[ "$PRERELEASE" == true ]]; then
             pre=(--prerelease)
-            echo "::warning::Windows, macOS or Linux is not signed; publishing as a pre-release"
           fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Open 3D Viewer Studio ${NUMBER}" --notes-file notes.md "${pre[@]}" assets/*

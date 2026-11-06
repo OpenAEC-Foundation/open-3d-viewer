@@ -1,0 +1,45 @@
+name: Android
+
+# The Android app (packaging/android): a Trusted Web Activity around the web app at
+# open-3d-viewer.open-aec.com, built as a debug APK to install by hand. It is signed with the
+# runner's throw-away debug key, so each build is a fresh app to Android; no store, no own key.
+# The web app itself installs from the browser as well (a PWA, see web/).
+on:
+  push:
+    branches: [main]
+    paths: ['packaging/android/**', 'web/**', 'Cargo.toml', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['packaging/android/**', 'web/**', 'Cargo.toml', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK platform and build tools
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Build the APK
+        run: gradle --no-daemon -p packaging/android assembleDebug
+      - name: Name the APK
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          cp packaging/android/app/build/outputs/apk/debug/app-debug.apk "open-3d-viewer-android-$version.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-3d-viewer-android
+          path: open-3d-viewer-android-*.apk
+          if-no-files-found: error

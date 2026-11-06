@@ -319,10 +319,13 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             let t = Instant::now();
             let _ = app.update(crate::app::Message::Navigate(boxed));
             timed(format!("box select {} elements", app.sel.len()), t.elapsed().as_secs_f64() * 1000.0);
-            app.click(model.layers[0].elements.first().map(|e| Pickable::Element(e.0)), false);
-            let t = Instant::now();
-            let _ = app.update(crate::app::Message::IsolateSelection);
-            timed(format!("isolate 1 of {} elements", app.hidden.len() + 1), t.elapsed().as_secs_f64() * 1000.0);
+            // a model of only structural objects has units but no layer to isolate an element of
+            if let Some(first) = model.layers.iter().find_map(|l| l.elements.first()) {
+                app.click(Some(Pickable::Element(first.0)), false);
+                let t = Instant::now();
+                let _ = app.update(crate::app::Message::IsolateSelection);
+                timed(format!("isolate 1 of {} elements", app.hidden.len() + 1), t.elapsed().as_secs_f64() * 1000.0);
+            }
         }
         if index.len() > 1 {
             let mut app = crate::app::App::default();

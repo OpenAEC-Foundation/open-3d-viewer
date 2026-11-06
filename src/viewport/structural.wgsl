@@ -28,9 +28,16 @@ const GLYPH_NODE: u32 = 0u;
 // How much larger a marked (selected or hovered) glyph is drawn, to cover the plain one.
 const MARK_GROW: f32 = 1.3;
 
-// The world offset of a unit of the exploded view.
-fn unit_offset(unit: u32) -> vec3<f32> {
-    return textureLoad(offsets, vec2<i32>(i32(unit % OFFSETS_WIDTH), i32(unit / OFFSETS_WIDTH)), 0).xyz;
+// The state of a unit (`crate::units`): the world offset of the exploded view in xyz, the flags
+// (hidden, selected) in w.
+fn struct_unit(unit: u32) -> vec4<f32> {
+    return textureLoad(offsets, vec2<i32>(i32(unit % OFFSETS_WIDTH), i32(unit / OFFSETS_WIDTH)), 0);
+}
+
+// The colour mark of an instance: its pass's, or the selection's where the unit is selected
+// through the units texture (box select), drawn at the plain size.
+fn flag_mark(mark: u32, flags: u32) -> u32 {
+    return select(mark, 1u, mark == 0u && (flags & UNIT_SELECTED) != 0u);
 }
 
 fn mark_color(mark: u32, color: vec4<f32>) -> vec4<f32> {
@@ -76,14 +83,16 @@ fn style_scale(style: u32) -> f32 {
 fn seg_vertex(s: SegIn, vi: u32, mark: u32) -> VertexOut {
     var out: VertexOut;
     let k = style_scale(s.style);
-    let shift = unit_offset(s.unit);
+    let state = struct_unit(s.unit);
+    let flags = unit_flags(state);
+    let shift = state.xyz;
     var wa = (u.model * vec4<f32>(s.a + s.a_off * k, 1.0)).xyz + shift;
     var wb = (u.model * vec4<f32>(s.b + s.b_off * k, 1.0)).xyz + shift;
     var ca = u.view_proj * vec4<f32>(wa, 1.0);
     var cb = u.view_proj * vec4<f32>(wb, 1.0);
     out.normal = vec3<f32>(0.0);
-    out.color = mark_color(mark, select(su.colors[0], s.color, s.color.a > 0.0));
-    if (ca.w < NEAR_W && cb.w < NEAR_W) {
+    out.color = mark_color(flag_mark(mark, flags), select(su.colors[0], s.color, s.color.a > 0.0));
+    if ((ca.w < NEAR_W && cb.w < NEAR_W) || (flags & UNIT_HIDDEN) != 0u) {
         out.clip = NOWHERE;
         out.world = wa;
         return out;
@@ -192,13 +201,15 @@ fn rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 // few pixels, are dropped; the section box and plane cut whole glyphs, by their centre.
 fn glyph_vertex(v: GlyphVertex, g: GlyphIn, mark: u32) -> VertexOut {
     var out: VertexOut;
-    let centre = (u.model * vec4<f32>(g.pos, 1.0)).xyz + unit_offset(g.unit);
+    let state = struct_unit(g.unit);
+    let flags = unit_flags(state);
+    let centre = (u.model * vec4<f32>(g.pos, 1.0)).xyz + state.xyz;
     out.world = centre;
     out.normal = vec3<f32>(0.0);
     let kind = g.kind_lod & 255u;
-    out.color = mark_color(mark, select(su.colors[1], g.color, g.color.a > 0.0));
+    out.color = mark_color(flag_mark(mark, flags), select(su.colors[1], g.color, g.color.a > 0.0));
     let cc = u.view_proj * vec4<f32>(centre, 1.0);
-    if (cc.w < NEAR_W || clipped(centre)) {
+    if (cc.w < NEAR_W || clipped(centre) || (flags & UNIT_HIDDEN) != 0u) {
         out.clip = NOWHERE;
         return out;
     }

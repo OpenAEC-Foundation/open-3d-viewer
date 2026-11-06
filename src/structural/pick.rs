@@ -137,7 +137,8 @@ pub struct Scene<'a> {
     pub display: &'a StructuralDisplay,
     /// The unit of the exploded view of every display item (empty: none).
     pub units: &'a [u32],
-    /// The offset (world) of every unit.
+    /// The state of every unit (`crate::units`): its offset (world) and its flags; a hidden unit is
+    /// neither drawn nor picked.
     pub offsets: &'a [[f32; 4]],
     pub view: View,
     pub lod: Lod,
@@ -147,7 +148,9 @@ pub struct Scene<'a> {
 
 impl Scene<'_> {
     fn item_shown(&self, item: u32) -> bool {
-        self.shown_items.is_none_or(|s| s.get(item as usize).copied().unwrap_or(true))
+        let unit = self.units.get(item as usize).copied().unwrap_or(0) as usize;
+        let flags = self.offsets.get(unit).map_or(0, |o| (o[3] + 0.5) as u32);
+        flags & crate::units::UNIT_HIDDEN as u32 == 0 && self.shown_items.is_none_or(|s| s.get(item as usize).copied().unwrap_or(true))
     }
 
     fn offset(&self, item: u32) -> Vec3 {

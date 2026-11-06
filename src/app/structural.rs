@@ -6,8 +6,10 @@
 //! units (`App::sel`); structural instances keep a selection of their own beside the mesh
 //! selection (`App::sel`), drawn from instance ranges ([`Marks`]) that the renderer gathers into
 //! instances of their own. A plain click replaces both; Ctrl-click adds or removes a node or
-//! member ([`App::click_structural`]). Box select, hide, isolate and undo of structural objects
-//! through the units-texture flags of #91 are not wired up yet; the seam is
+//! member ([`App::click_structural`]). Nodes and members are units of the exploded view, so box
+//! select, hide, isolate and undo reach them through the units texture: a hidden unit is neither
+//! drawn nor picked, and a unit selected that way is drawn in the selection colour. That selection
+//! (in `App::sel`) and the structural one are not yet one list; the seam is
 //! [`App::set_structural_selection`], which takes any number of ids.
 //!
 //! Hiding a model of a combined set (the models list), or hiding every layer, hides its structural
@@ -35,7 +37,8 @@ use web_time::{Duration, Instant};
 pub(crate) const HOVER_REST: Duration = Duration::from_millis(120);
 
 /// What a hover grid is built from: the structural instances as drawn (the display, the units and
-/// offsets of the exploded view, the models shown), the camera, the viewport and the up axis. It
+/// their state: offsets of the exploded view and hidden flags, the models shown), the camera, the
+/// viewport and the up axis. It
 /// holds the vectors themselves and compares them by pointer, so none can be freed and its address
 /// reused for another while the key lives.
 #[derive(Clone)]
@@ -194,7 +197,7 @@ impl App {
             model: model.id,
             display,
             explode: self.explode_index.clone(),
-            offsets: self.explode_offsets.clone(),
+            offsets: self.units.clone(),
             shown: self.structural.shown_items.clone(),
             camera: self.camera,
             size: (width, height),
@@ -550,17 +553,42 @@ mod tests {
         rest(&mut app);
         hover(&mut app, x, y);
         assert!(app.structural.hovered.is_some());
-        // new offsets: the grid is stale
+        // another units state (offsets of the exploded view, flags): the grid is stale
         let (w, h) = app.viewport_size;
         let key = app.structural_key(w, h).unwrap();
         assert!(app.structural.grid_for(&key).is_some());
-        app.explode_offsets = Arc::new((*app.explode_offsets).clone());
+        app.units = Arc::new((*app.units).clone());
         let key = app.structural_key(w, h).unwrap();
         assert!(app.structural.grid_for(&key).is_none());
         hover(&mut app, x, y);
         assert!(app.structural.hovered.is_some());
         let _ = app.update(Message::Measure(crate::measure::Tool::Distance));
         assert_eq!(app.structural.hovered, None, "measuring");
+    }
+
+    /// Hiding a node through the selection (as box select and Hide do) leaves it undrawn and
+    /// unpicked; showing all brings it back.
+    #[test]
+    fn hidden_units_are_not_picked() {
+        let mut app = portal();
+        let display = app.model.as_ref().unwrap().structural_display.clone().unwrap();
+        let (w, h) = app.viewport_size;
+        let g = 0;
+        let node = display.items[display.glyph_item[g] as usize].element;
+        let (x, y) = screen(&app, display.glyphs[g].pos);
+        assert_eq!(app.pick_structural(x, y, w, h, None).map(|h| h.element), Some(node));
+        app.sel.extend([crate::selection::Pickable::Element(node)]);
+        app.selection_changed();
+        let unit = app.explode_index.as_ref().unwrap().structural_unit(node).unwrap() as usize;
+        assert_eq!(app.units[unit][3] as u8 & crate::units::UNIT_SELECTED, crate::units::UNIT_SELECTED, "drawn selected");
+        let _ = app.update(Message::HideSelection);
+        assert_eq!(app.units[unit][3] as u8 & crate::units::UNIT_HIDDEN, crate::units::UNIT_HIDDEN);
+        assert_ne!(app.pick_structural(x, y, w, h, None).map(|h| h.element), Some(node), "hidden");
+        rest(&mut app);
+        hover(&mut app, x, y);
+        assert_ne!(app.structural.hovered, Some(node));
+        let _ = app.update(Message::ShowAllElements);
+        assert_eq!(app.pick_structural(x, y, w, h, None).map(|h| h.element), Some(node));
     }
 
     fn node(id: u64, p: Vec3) -> bim_structural::Node {

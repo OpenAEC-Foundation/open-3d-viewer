@@ -33,6 +33,7 @@ pub mod remote_link;
 pub mod section;
 pub mod shell;
 pub mod structural;
+mod swipe;
 mod theme;
 mod view_cube;
 mod viewport;

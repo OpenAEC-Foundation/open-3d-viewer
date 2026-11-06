@@ -34,6 +34,9 @@ const APP_ID: &str = "open-3d-viewer";
 const PANEL_MIN: f32 = 190.0;
 const PANEL_MAX: f32 = 520.0;
 const RECENT: usize = 8;
+/// At or below this width (a phone, or a narrow browser window) the layout is compact: the ribbon
+/// scrolls sideways and folds away, and a side panel takes the place of the 3D view.
+const COMPACT_WIDTH: f32 = 720.0;
 
 /// The viewport palette for a theme: the 3D background and grid of the nearest viewport theme.
 pub(crate) fn viewport_kind(theme: ThemeId) -> ThemeKind {
@@ -268,6 +271,8 @@ pub enum Msg {
     Key(KeyPress),
     Navigate(Navigation),
     TitlePress,
+    /// The window's width (logical pixels), for the compact layout.
+    Resized(f32),
     Minimize,
     Maximize,
     CloseWindow,
@@ -290,6 +295,11 @@ pub struct Studio {
     last_title_press: Option<Instant>,
     /// The splitter being dragged, with the cursor and panel width where it started.
     drag: Option<(Side, Option<f32>, f32)>,
+    /// The window's width in layout units: iced reports it already divided by the interface size.
+    width: f32,
+    /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
+    compact_panel: Option<Side>,
+    ribbon_folded: bool,
 }
 
 impl Studio {
@@ -308,6 +318,24 @@ impl Studio {
             maximized: false,
             last_title_press: None,
             drag: None,
+            width: 1280.0,
+            compact_panel: None,
+            ribbon_folded: false,
+        }
+    }
+
+    /// A phone or a narrow window: see [`COMPACT_WIDTH`].
+    fn compact(&self) -> bool {
+        self.width <= COMPACT_WIDTH
+    }
+
+    /// Whether the side panel shows: from the preferences, or in the compact layout the one panel
+    /// that takes the place of the 3D view.
+    fn panel_shown(&self, side: Side) -> bool {
+        match (self.compact(), side) {
+            (true, side) => self.compact_panel == Some(side),
+            (false, Side::Left) => self.prefs.left,
+            (false, Side::Right) => self.prefs.right,
         }
     }
 
@@ -438,11 +466,11 @@ impl Studio {
                 .icon(small("transform.flip-vertical"), large("transform.flip-vertical"))
                 .toggle(app.flip_up)
                 .enabled(loaded),
-            Command::new("view.left", l.text("Verkenner", "Explorer"), Msg::ToggleLeft).icon(small("panel.left"), large("panel.left")).shortcut(Shortcut::ctrl('1')).toggle(self.prefs.left),
+            Command::new("view.left", l.text("Verkenner", "Explorer"), Msg::ToggleLeft).icon(small("panel.left"), large("panel.left")).shortcut(Shortcut::ctrl('1')).toggle(self.panel_shown(Side::Left)),
             Command::new("view.right", l.text("Eigenschappen", "Properties"), Msg::ToggleRight)
                 .icon(small("panel.right"), large("panel.right"))
                 .shortcut(Shortcut::ctrl('2'))
-                .toggle(self.prefs.right),
+                .toggle(self.panel_shown(Side::Right)),
             Command::new("camera.fit", l.text("Passend", "Fit"), go(Message::Fit)).icon(small("view.fit"), large("view.fit")).shortcut(key('f')).enabled(loaded),
             Command::new("camera.iso", l.text("Iso", "Iso"), go(Message::Preset(ViewPreset::Iso))).icon(small("view.isometric"), large("view.isometric")).shortcut(key('0')),
             Command::new("camera.top", l.text("Boven", "Top"), go(Message::Preset(ViewPreset::Top))).icon(small("view.top"), large("view.top")).shortcut(key('1')),
@@ -523,8 +551,12 @@ impl Studio {
                 }
                 return self.app.update(message).map(Msg::App);
             }
-            // one ribbon tab: choosing it closes Bestand
-            Msg::RibbonTab(_) => self.backstage = false,
+            // one ribbon tab: choosing it closes Bestand; in the compact layout it also folds the
+            // ribbon away and back
+            Msg::RibbonTab(_) => {
+                self.ribbon_folded = self.compact() && !self.backstage && !self.ribbon_folded;
+                self.backstage = false;
+            }
             Msg::Backstage(open) => self.backstage = open,
             Msg::OpenRecent(path) => return self.update(Msg::App(Message::Open(path))),
             Msg::Dialog(dialog) => {
@@ -567,8 +599,17 @@ impl Studio {
                 self.save_prefs();
             }
             Msg::Scale(scale) => {
+                // the window keeps its size, and iced reports no resize: the width in layout units
+                // grows as the interface shrinks
+                let old = self.prefs.scale();
                 self.prefs.scale = scale;
+                self.width *= (old / self.prefs.scale()) as f32;
                 self.save_prefs();
+            }
+            // the compact layout shows one panel at a time and leaves the preferences as they are
+            Msg::ToggleLeft | Msg::ToggleRight if self.compact() => {
+                let side = if matches!(message, Msg::ToggleLeft) { Side::Left } else { Side::Right };
+                self.compact_panel = (self.compact_panel != Some(side)).then_some(side);
             }
             Msg::ToggleLeft => {
                 self.prefs.left = !self.prefs.left;
@@ -578,6 +619,7 @@ impl Studio {
                 self.prefs.right = !self.prefs.right;
                 self.save_prefs();
             }
+            Msg::Resized(width) => self.width = width,
             Msg::SplitterPress(side) => {
                 let width = match side {
                     Side::Left => self.prefs.left_width,
@@ -689,8 +731,13 @@ impl Studio {
         } else {
             Subscription::none()
         };
+        let resized = iced::event::listen_with(|event, _, _| match event {
+            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Resized(size.width)),
+            _ => None,
+        });
         Subscription::batch([
             self.app.subscription().map(Msg::App),
+            resized,
             open.map(Msg::App),
             drag,
             openaec_ui::keyboard::presses().map(Msg::Key),
@@ -726,12 +773,17 @@ impl Studio {
         if !self.app.selection.is_empty() {
             left.push(format!("{} {}", self.app.selection.len(), l.text("geselecteerd", "selected")));
         }
+        let compact = self.compact();
+        let folded = compact && self.ribbon_folded;
+        let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
+        // a phone has no room for the version, and the web app has no remote control
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
-            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, 0, Msg::RibbonTab),
+            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { 0 }, Msg::RibbonTab),
             // Bestand takes the place of the ribbon and the documents until it closes
-            if self.backstage { self.backstage_view(look) } else { column![self.ribbon(look), self.document_area(look)].into() },
-            row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)],
+            if self.backstage { self.backstage_view(look) } else { column![ribbon, self.document_area(look)].into() },
+            status,
         ]
         .height(Length::Fill);
         let mut layers = vec![focus::inert(container(screen).style(move |_| container::Style { background: Some(c.frame.into()), ..Default::default() }), self.dialog.is_some())];
@@ -777,6 +829,11 @@ impl Studio {
         if let Some(available) = &self.update {
             extra.push(container(upd::notice(look, available, Msg::Update)).padding([0, 8]).into());
         }
+        if self.compact() {
+            // the panels have no room beside the 3D view: these buttons swap them in and out
+            extra.push(cm::icon_button(look, &self.command("view.left"), 28.0));
+            extra.push(cm::icon_button(look, &self.command("view.right"), 28.0));
+        }
         extra.push(cm::icon_button(look, &self.command("app.settings"), 28.0));
         let name = self.title();
         #[cfg(not(target_arch = "wasm32"))]
@@ -790,7 +847,8 @@ impl Studio {
         {
             let _ = (WindowActions::<Msg>::clone, WindowIcons::clone);
             let c = look.color;
-            let name = container(w::body(look, name)).width(Length::Fill).center_x(Length::Fill);
+            // a phone has no room for the file name next to the buttons (the status bar has it)
+            let name: Element<'_, Msg> = if self.compact() { Space::new().width(Length::Fill).into() } else { container(w::body(look, name)).width(Length::Fill).center_x(Length::Fill).into() };
             container(row(quick).spacing(2).push(name).extend(extra).spacing(2).padding([0, 4]).align_y(iced::Alignment::Center))
                 .height(32)
                 .width(Length::Fill)
@@ -820,6 +878,18 @@ impl Studio {
             w::ribbon_group(look, l.text("Meten", "Measure"), measure),
             w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
         ];
+        if self.compact() {
+            // narrower than the ribbon: it scrolls sideways (a finger drags it)
+            use iced::widget::scrollable::{Direction, Scrollbar};
+            let c = look.color;
+            let id = iced::widget::Id::new("ribbon");
+            let band = iced::widget::scrollable(row(groups).height(Length::Fill)).id(id.clone()).direction(Direction::Horizontal(Scrollbar::new().width(3).scroller_width(3))).width(Length::Fill);
+            return container(crate::swipe::swipe(id, true, band))
+                .height(openaec_ui::design::tokens::shell::RIBBON)
+                .width(Length::Fill)
+                .style(move |_| container::Style { background: Some(c.panel.into()), ..Default::default() })
+                .into();
+        }
         w::ribbon(look, groups)
     }
 
@@ -872,7 +942,14 @@ impl Studio {
             ],
         );
         let page = column![w::heading(look, l.text("Recente bestanden", "Recent files"), 16.0), recent, Space::new().height(16), about].spacing(8).padding(24).max_width(720);
-        container(row![container(nav).height(Length::Fill).style(move |_| w::panel_style(look)), iced::widget::scrollable(page).width(Length::Fill)])
+        let page = iced::widget::scrollable(page).width(Length::Fill);
+        // a phone: the commands above the recent files
+        let content: Element<'_, Msg> = if self.compact() {
+            column![container(nav.width(Length::Fill)).style(move |_| w::panel_style(look)), page].into()
+        } else {
+            row![container(nav).height(Length::Fill).style(move |_| w::panel_style(look)), page].into()
+        };
+        container(content)
             .height(Length::Fill)
             .style(move |_| container::Style { background: Some(c.panel.into()), ..Default::default() })
             .into()
@@ -918,6 +995,23 @@ impl Studio {
             middle = middle.push(w::document_tabs(look, &tabs, active, small("window.close"), Msg::SelectTab, Msg::CloseTab, Msg::SelectTab));
         }
         let middle = middle.push(workspace);
+        if self.compact() {
+            // one panel at a time, the full width, in place of the 3D view
+            let width = self.width;
+            return match self.compact_panel {
+                Some(Side::Left) => {
+                    let hide = l.text("Verkenner verbergen", "Hide explorer");
+                    let actions = vec![w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft))];
+                    w::panel(look, l.text("Verkenner", "Explorer"), width, actions, Self::pane(app.layers_body(p, l)))
+                }
+                Some(Side::Right) => {
+                    let hide = l.text("Eigenschappen verbergen", "Hide properties");
+                    let actions = vec![w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight))];
+                    w::panel(look, l.text("Eigenschappen", "Properties"), width, actions, Self::pane(app.properties_body(p, l)))
+                }
+                None => middle.into(),
+            };
+        }
         let dragging = |side| self.drag.is_some_and(|(s, ..)| s == side);
         let mut body = row![].height(Length::Fill);
         if self.prefs.left {
@@ -991,9 +1085,20 @@ impl Studio {
     }
 }
 
+/// `text` cut to what fits on one line of the status bar `width` wide (logical pixels).
+fn one_line(text: &str, width: f32) -> String {
+    // the status bar's 11 px text is about 6.5 px a character, between 10 px of padding each side
+    let fits = ((width - 20.0) / 6.5).max(8.0) as usize;
+    if text.chars().count() <= fits {
+        return text.to_string();
+    }
+    text.chars().take(fits - 1).chain(std::iter::once('…')).collect()
+}
+
 /// Starts the viewer in its window: the shell around `studio`, with the shared fonts and no
 /// system title bar (the shell draws its own).
-pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
+/// `antialiasing`: smooth the overlay's shapes (the view cube, measurements, gizmos) with MSAA.
+pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool) -> iced::Result {
     fonts::install_fallback();
     // the installer reports updates; the app only shows them, and not in managed mode
     #[cfg(not(target_arch = "wasm32"))]
@@ -1006,7 +1111,7 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
         .scale_factor(|s: &Studio| s.prefs.scale() as f32)
         .font(crate::INTER_REGULAR)
         .font(crate::INTER_SEMIBOLD)
-        .antialiasing(true)
+        .antialiasing(antialiasing)
         .default_font(fonts::BODY);
     fonts::FILES
         .iter()
@@ -1129,6 +1234,25 @@ mod tests {
         assert_eq!(studio.prefs.left_width, PANEL_MAX);
         let _ = studio.update(Msg::SplitterRelease);
         assert!(studio.drag.is_none());
+    }
+
+    #[test]
+    fn the_compact_layout_follows_the_width_in_layout_units() {
+        let mut studio = Studio::new(App::default());
+        // a 1500 px window at interface size 1.5: iced reports 1000 layout units
+        let _ = studio.update(Msg::Scale(1.5));
+        let _ = studio.update(Msg::Resized(1000.0));
+        assert!(!studio.compact());
+        // twice the interface size on the same window: 750 units, still room for the panels
+        let _ = studio.update(Msg::Scale(2.0));
+        assert_eq!(studio.width, 750.0);
+        assert!(!studio.compact());
+        // a 412 px phone at size 1: compact; at 0.75 the same phone is 549 units wide
+        let _ = studio.update(Msg::Scale(1.0));
+        let _ = studio.update(Msg::Resized(412.0));
+        assert!(studio.compact());
+        let _ = studio.update(Msg::Scale(0.75));
+        assert!((studio.width - 412.0 / 0.75).abs() < 0.01 && studio.compact());
     }
 
     #[test]

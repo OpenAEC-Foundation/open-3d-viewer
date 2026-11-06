@@ -1,0 +1,19 @@
+// The Android app: a Trusted Web Activity around the web app at open-3d-viewer.open-aec.com,
+// in the shape Bubblewrap generates (https://github.com/GoogleChromeLabs/bubblewrap).
+// Build: gradle -p packaging/android assembleDebug (Gradle 8.14, JDK 17, Android SDK 36).
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'open-3d-viewer-android'
+include ':app'

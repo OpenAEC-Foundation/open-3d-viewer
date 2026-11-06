@@ -50,6 +50,23 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 gh attestation verify open-3d-viewer_2026.45.11_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
+## Android
+
+De viewer draait op Android-telefoons en -tablets: het is de browserversie, geïnstalleerd als app.
+
+- **Installeren vanuit de browser (aanbevolen).** Open [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com) in Chrome en tik op **Install** in de balk die verschijnt, of kies **App installeren** (of **Toevoegen aan startscherm**) in het menu van Chrome. De app krijgt een eigen pictogram, opent schermvullend zonder adresbalk, en start zonder netwerk zodra hij een keer geopend is. Hij werkt zichzelf bij met de website.
+- **APK.** Elke run van [`android.yml`](.github/workflows/android.yml) op `main` ([de lijst van die runs](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/android.yml?query=branch%3Amain+event%3Apush)) bewaart een `open-3d-viewer-android-*.apk` onder *Artifacts* op de pagina van de run (je moet bij GitHub ingelogd zijn; de download is een `.zip` met de APK erin). Zet hem op de telefoon, open hem en sta installeren vanaf die bron toe. De APK is een [Trusted Web Activity](https://developer.chrome.com/docs/android/trusted-web-activity): dezelfde webapp, door Chrome geopend als eigen app. Het is een debug-build met een wegwerpsleutel, dus Android kan ervoor waarschuwen, voor een nieuwere moet je de oude eerst verwijderen, en Chrome toont bovenin een smalle adresbalk tot de site de releasesleutel van de app noemt in `/.well-known/assetlinks.json`. Hij staat niet in de Play Store.
+
+Op een touchscreen **draait één vinger**, **zoomen twee vingers door te knijpen** en **verschuiven ze samen**, **tikken selecteert** een element (of zet een meetpunt), en **lang drukken en dan slepen verschuift** (zoals de rechtermuisknop). Op telefoonbreedte is het venster compact: het lint schuift opzij onder je vinger en klapt weg als je op **Start** tikt, en de twee paneelknoppen rechtsboven wisselen de 3D-weergave voor de verkenner of de eigenschappen.
+
+Wat wel en niet werkt op Android:
+
+- Elk formaat van de browserversie opent via **Openen** (de bestandskiezer van Android) of een `?file=`-link. IFC en Revit niet, zoals in elke browser.
+- De 3D-weergave heeft WebGPU of WebGL2 nodig; een recente Chrome heeft een van beide op de meeste telefoons van de laatste jaren.
+- Een groot model laadt langzaam en de app wacht zolang; een telefoon heeft minder geheugen dan een computer, dus een heel groot model kan het tabblad laten stoppen.
+- Typen in het zoekveld van de verkenner haalt het schermtoetsenbord niet op (iced ondersteunt in de browser nog geen schermtoetsenbord).
+- Er is geen native Android-build: iced 0.14, de interfacebibliotheek, kan niet zelf op Android starten, dus de app is de webversie, geïnstalleerd vanuit Chrome of verpakt in de APK.
+
 ## Waarom gebruiken?
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
@@ -137,8 +154,9 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions, op 
 | [`src/loaders/`](src/loaders/) | Eén adapter per bestandsformaat; [`src/export/`](src/export/) schrijft IFC 4 |
 | [`src/bin/open-3d-viewer-mcp.rs`](src/bin/open-3d-viewer-mcp.rs) | De MCP-server voor AI-agents |
 | [`vendor/openaec-ui/`](vendor/openaec-ui/), [`assets/b2/`](assets/b2/) | De gedeelde OpenAEC-vensterschil en iconen, overgenomen uit [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 |
-| [`packaging/`](packaging/) | De Windows-installer, de macOS-appbundel en de Linux-pakketten |
-| [`.github/workflows/`](.github/workflows/) | `build.yml` test elke wijziging, `release.yml` bouwt en ondertekent een release, `live.yml` publiceert de browserversie |
+| [`packaging/`](packaging/) | De Windows-installer, de macOS-appbundel, de Linux-pakketten en de Android-app ([`packaging/android/`](packaging/android/)) |
+| [`web/`](web/) | Wat van de browserversie een installeerbare app maakt: het webappmanifest, de service worker en de iconen |
+| [`.github/workflows/`](.github/workflows/) | `build.yml` test elke wijziging, `release.yml` bouwt en ondertekent een release, `live.yml` publiceert de browserversie, `android.yml` bouwt de Android-APK |
 | [`scripts/`](scripts/) | De README-beelden, de kopie van de B2-iconen en de productvideo, allemaal met een script gemaakt |
 | [`test-models/`](test-models/) | De modellen die de tests openen |
 
@@ -239,6 +257,7 @@ Bron van de getallen: `cargo test --release` en `cargo test --release -p openaec
 - **IGES-bestanden openen niet.** STEP-bestanden wel; IGES wordt nog niet gelezen.
 - **Elementen zijn niet een voor een te verbergen.** Zichtbaarheid werkt per laag en per model.
 - **Nog geen ongedaan maken.** Metingen en de doorsnede wis je met de hand.
+- **Op Android** is de app de browserversie (geïnstalleerd vanuit Chrome, of de APK daaromheen), met dezelfde grenzen; zie [Android](#android).
 - **De browserversie blokkeert tijdens het laden** van een groot model (nog geen worker-threads) en onthoudt je instellingen niet tussen bezoeken.
 - **Vijf iconen zijn tijdelijk.** De OpenAEC-iconenset heeft nog geen iconen voor volledig, draadmodel, randen, perspectief en orthografisch; de viewer gebruikt de dichtstbijzijnde.
 - **Geen loopmodus of verborgen-lijnenweergave.**
@@ -281,7 +300,7 @@ Open 3D Viewer Studio hoort bij de familie van apps van de [OpenAEC Foundation](
 
 ## Licentie
 
-De eigen broncode van de viewer is LGPL-3.0-or-later. Zie [LICENSE](LICENSE). Het lettertype Inter valt onder de SIL Open Font License (`assets/fonts/Inter-LICENSE.txt`); `vendor/openaec-ui` en zijn lettertypen en iconen staan beschreven in [`NOTICE.md`](vendor/openaec-ui/NOTICE.md). IFClite en acadrust vallen onder MPL-2.0. De desktopapp linkt de Revit-bibliotheek `rvt-dll` van OpenAEC, die haar eigen propriëtaire licentie houdt, dus de desktopbuilds zijn niet helemaal open source; de browserversie bevat haar niet.
+De eigen broncode van de viewer is LGPL-3.0-or-later. Zie [LICENSE](LICENSE). Het lettertype Inter valt onder de SIL Open Font License (`assets/fonts/Inter-LICENSE.txt`); `vendor/openaec-ui` en zijn lettertypen en iconen staan beschreven in [`NOTICE.md`](vendor/openaec-ui/NOTICE.md). IFClite en acadrust vallen onder MPL-2.0. De Android-APK bevat ook Google's [Android Browser Helper](https://github.com/GoogleChrome/android-browser-helper) en de AndroidX-bibliotheken die die gebruikt, onder de [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). De desktopapp linkt de Revit-bibliotheek `rvt-dll` van OpenAEC, die haar eigen propriëtaire licentie houdt, dus de desktopbuilds zijn niet helemaal open source; de browserversie bevat haar niet.
 
 ## Merken
 

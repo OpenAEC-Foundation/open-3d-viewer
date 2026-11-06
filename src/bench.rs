@@ -17,11 +17,12 @@ use web_time::Instant;
 pub fn run(file: &Path, frames: u32) -> Result<(), String> {
     let model = Arc::new(loaders::load(file)?);
     println!(
-        "{}: {} layers, {} vertices, {} triangles, loaded in {:.2} s",
+        "{}: {} layers, {} vertices, {} triangles, {} points, loaded in {:.2} s",
         model.file_name(),
         model.layers.len(),
         model.vertex_count(),
         model.triangle_count(),
+        model.point_count(),
         model.load_time.as_secs_f32()
     );
 

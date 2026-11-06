@@ -174,7 +174,7 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
         }
         let elements = l["elements"].as_array().into_iter().flatten().filter_map(|e| Some((e[0].as_u64()?, e[1].as_u64()? as u32, e[2].as_u64()? as u32))).collect();
         let props = l["props"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_u64()?, p[1].as_str()?.to_string()))).collect();
-        layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false });
+        layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false, points: false });
     }
     Ok(Loaded { layers, views: Vec::new(), project })
 }

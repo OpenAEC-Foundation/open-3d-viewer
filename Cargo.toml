@@ -1,12 +1,13 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.45.9"
+version = "2026.45.10"
 description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.89"
+# openusd (USD import) needs Rust 1.96
+rust-version = "1.96"
 
 repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
 default-run = "open-3d-viewer"
@@ -52,13 +53,27 @@ stl_io = "0.11"
 # Polygon triangulation, LandXML surfaces and native CAD mesh import.
 earcutr = "0.5"
 roxmltree = "0.20"
-acadrust = { git = "https://github.com/HakanSeven12/acadrust", rev = "299dc758f958b08accc35a10d98b83e228fafc89", default-features = false }
+acadrust = { git = "https://github.com/hakanaktt/acadrust", rev = "299dc758f958b08accc35a10d98b83e228fafc89", default-features = false }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
 tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
+# ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# USD stages (.usda, .usdc, .usdz) with composition, pure Rust (MIT)
+openusd = { version = "0.8", default-features = false }
+# Point clouds: LAS and LAZ (las MIT, laz Apache-2.0) and E57 (MIT), all pure Rust
+las = { version = "0.11", features = ["laz"] }
+e57 = "0.11"
+# Shapefiles with their .dbf attributes (shapefile and dbase, MIT, pure Rust); code pages through encoding_rs
+shapefile = { version = "0.9", features = ["encoding_rs"] }
+# STEP (AP203, AP214, AP242): Part 21 reader to a B-rep model and its face tessellator, pure Rust
+# (Apache-2.0); cadmpeg-ir is large and takes long to compile
+cadmpeg-codec-step = "0.6.8"
+cadmpeg-ir = "0.6.8"
+cadmpeg-tessellate = "0.6.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
@@ -66,9 +81,9 @@ ifc-lite-processing = "=25.0.1"
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "21bc671cadff50882877c8b2e4f945dbb60a0f76" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
 log = "0.4"

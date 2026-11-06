@@ -2,6 +2,7 @@
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
 mod schedules;
+mod sheets;
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
@@ -73,6 +74,11 @@ pub struct App {
     pub model: Option<Arc<Model>>,
     pub models: Vec<ModelEntry>,
     adding_model: bool,
+    /// The files of the last model when they layer over each other (IFCX) and that model: a
+    /// file of the same kind added next composes with them into that model.
+    layer_stack: (Vec<loaders::Source>, Option<u64>),
+    /// The files of the load running now, and whether it replaces the last model (a restack).
+    loading_stack: (Vec<loaders::Source>, bool),
     pub visible: Vec<bool>,
     pub camera: Camera,
     pub mode: RenderMode,
@@ -111,10 +117,13 @@ pub struct App {
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
     pub show_grids: bool,
-    /// Explorer groups opened: views, rooms, layers, schedules.
-    pub explorer_open: [bool; 4],
+    /// Explorer groups opened: views, rooms, layers, schedules, sheets.
+    pub explorer_open: [bool; 5],
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
+    /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
+    pub open_sheets: Vec<usize>,
+    pub active_sheet: Option<usize>,
     /// Schedules open in a document tab, in tab order, and the one shown under the viewport.
     pub open_schedules: Vec<usize>,
     pub active_schedule: Option<usize>,
@@ -191,8 +200,15 @@ pub enum Message {
     /// Show a view saved in the file.
     ApplyView(usize),
     ToggleGrids,
-    /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules).
+    /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules, 4 sheets).
     ToggleExplorer(usize),
+    /// Open a sheet in its document tab.
+    OpenSheet(usize),
+    /// Show a sheet's tab (`None`: not a sheet).
+    ShowSheet(Option<usize>),
+    CloseSheet(usize),
+    /// A view on a sheet clicked: show it (index in `Model::views`).
+    SheetView(usize),
     /// Open a schedule in its document tab.
     OpenSchedule(usize),
     /// Show a schedule's tab (`None`: the 3D view alone).
@@ -287,6 +303,8 @@ impl Default for App {
             model: None,
             models: Vec::new(),
             adding_model: false,
+            layer_stack: (Vec::new(), None),
+            loading_stack: (Vec::new(), false),
             visible: Vec::new(),
             camera: Camera::default(),
             mode: RenderMode::Solid,
@@ -312,8 +330,10 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
-            explorer_open: [false, false, true, false],
+            explorer_open: [false, false, true, false, false],
             open_layer_groups: HashSet::new(),
+            open_sheets: Vec::new(),
+            active_sheet: None,
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
@@ -337,14 +357,14 @@ impl Default for App {
     }
 }
 
-/// Loads a file on a worker thread.
+/// Loads a file (or files that layer into one model) on a worker thread.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_task(source: loaders::Source, progress: Arc<loaders::Progress>) -> Task<Message> {
+pub fn load_task(sources: Vec<loaders::Source>, progress: Arc<loaders::Progress>) -> Task<Message> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(loaders::load_with(&source, &progress).map(Arc::new));
+                let _ = tx.send(loaders::load_stack(&sources, &progress).map(Arc::new));
             });
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
@@ -384,11 +404,11 @@ fn edges_task(model: Arc<Model>, layers: Vec<usize>) -> Task<Message> {
 /// Loads a file in the browser (no threads there): after the next frame, so the loading card
 /// shows first.
 #[cfg(target_arch = "wasm32")]
-pub fn load_task(source: loaders::Source, progress: Arc<loaders::Progress>) -> Task<Message> {
+pub fn load_task(sources: Vec<loaders::Source>, progress: Arc<loaders::Progress>) -> Task<Message> {
     Task::perform(
         async move {
             crate::web::next_frame().await;
-            loaders::load_with(&source, &progress).map(Arc::new)
+            loaders::load_stack(&sources, &progress).map(Arc::new)
         },
         Message::Loaded,
     )
@@ -697,6 +717,8 @@ impl App {
         self.active_schedule = None;
         self.schedules.clear();
         self.schedules_pending = false;
+        self.open_sheets.clear();
+        self.active_sheet = None;
         self.explorer_open[0] = false;
         self.selected = None;
         self.selection.clear();
@@ -726,10 +748,27 @@ impl App {
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
         }
+        // an IFCX file added to an IFCX model layers over it: the files load again as one model
+        let last = self.models.last().map(|entry| entry.model.id).or(self.model.as_ref().map(|m| m.id));
+        let composes = loaders::composes(&source);
+        let restack = add && composes && !self.layer_stack.0.is_empty() && last.is_some() && last == self.layer_stack.1;
+        let mut sources = if restack { self.layer_stack.0.clone() } else { Vec::new() };
+        sources.push(source.clone());
+        self.loading_stack = (sources.clone(), restack);
         self.adding_model = add;
         let progress = Arc::new(loaders::Progress::default());
         self.status = Status::Loading { file: source.name(), since: Instant::now(), progress: progress.clone() };
-        load_task(source, progress)
+        load_task(sources, progress)
+    }
+
+    /// Puts a model in the place of the last one (an IFCX stack with a file added).
+    fn replace_last_model(&mut self, model: Arc<Model>) {
+        if self.models.len() <= 1 {
+            self.set_model(model);
+        } else {
+            self.models.pop();
+            self.add_model(model);
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -788,13 +827,26 @@ impl App {
             Message::AddPicked(Some(source)) => return self.open(source, true),
             Message::Open(path) => return self.open(loaders::Source::File(path), false),
             Message::Loaded(Ok(model)) => {
-                if self.adding_model { self.add_model(model); } else { self.set_model(model); }
+                let (mut stack, restack) = std::mem::take(&mut self.loading_stack);
+                if !stack.last().is_some_and(loaders::composes) {
+                    stack.clear();
+                }
+                let id = model.id;
+                if restack {
+                    self.replace_last_model(model);
+                } else if self.adding_model {
+                    self.add_model(model);
+                } else {
+                    self.set_model(model);
+                }
+                self.layer_stack = (stack, Some(id));
                 self.adding_model = false;
                 self.remote_loaded();
                 return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
                 self.adding_model = false;
+                self.loading_stack = (Vec::new(), false);
                 self.status = Status::Error(e);
                 self.remote_loaded();
                 return self.shot_after_delay();
@@ -948,6 +1000,10 @@ impl App {
                     *open = !*open;
                 }
             }
+            Message::OpenSheet(i) => return self.open_sheet(i),
+            Message::ShowSheet(i) => return self.show_sheet(i),
+            Message::CloseSheet(i) => return self.close_sheet(i),
+            Message::SheetView(view) => return self.sheet_view(view),
             Message::OpenSchedule(i) => return self.open_schedule(i),
             Message::ShowSchedule(i) => return self.show_schedule(i),
             Message::CloseSchedule(i) => return self.close_schedule(i),
@@ -1523,6 +1579,7 @@ impl App {
         }
 
         body = self.schedules_group(p, l, &query, body);
+        body = self.sheets_group(p, l, &query, body);
 
         // rooms, by level (low to high, then rooms without a level)
         let rooms = &model.project.rooms;
@@ -1591,8 +1648,12 @@ impl App {
                     row![
                         eye_icon(visible, false),
                         swatch,
-                        text(label).size(12).color(if visible { p.text } else { p.text_muted }).wrapping(Wrapping::WordOrGlyph).width(Fill),
-                        text(format_count(layer.triangle_count())).size(10).color(p.text_muted),
+                        text(label)
+                            .size(12)
+                            .color(if visible { p.text } else { p.text_muted })
+                            .wrapping(Wrapping::WordOrGlyph)
+                            .width(Fill),
+                        text(format_count(if layer.points { layer.point_count() } else { layer.triangle_count() })).size(10).color(p.text_muted),
                     ]
                     .spacing(6)
                     .align_y(Center),
@@ -1684,6 +1745,9 @@ impl App {
             .filter(|(_, v)| **v)
             .map(|(l, _)| l.triangle_count())
             .sum();
+        // point clouds count points: shown instead of triangles when the model has no triangles
+        let (triangles, points) = (model.triangle_count(), model.point_count());
+        let visible_points: usize = model.layers.iter().zip(&self.visible).filter(|(_, v)| **v).map(|(l, _)| l.point_count()).sum();
         let mut content = column![].spacing(5).padding(Padding { top: 0.0, right: 6.0, bottom: 8.0, left: 0.0 });
         let section = |title: &str| -> Element<'static, Message> {
             container(text(title.to_uppercase()).size(11).font(FONT_BOLD).color(p.group_label))
@@ -1851,8 +1915,9 @@ impl App {
             .push(section(l.text("Geometrie", "Geometry")))
             .push(prop(l.text("Lagen", "Layers"), model.layers.len().to_string()))
             .push(prop(l.text("Hoekpunten", "Vertices"), format_count(model.vertex_count())))
-            .push(prop(l.text("Driehoeken", "Triangles"), format_count(model.triangle_count())))
-            .push(prop(l.text("Zichtbaar", "Visible"), format_count(visible_tris)))
+            .push((triangles > 0 || points == 0).then(|| prop(l.text("Driehoeken", "Triangles"), format_count(triangles))))
+            .push((points > 0).then(|| prop(l.text("Punten", "Points"), format_count(points))))
+            .push(prop(l.text("Zichtbaar", "Visible"), format_count(if triangles == 0 { visible_points } else { visible_tris })))
             .push(rule::horizontal(1))
             .push(section(l.text("Grenzen (Z omhoog)", "Bounds (Z up)")))
             .push(prop("Min", format_vec(b.min)))
@@ -2148,8 +2213,14 @@ impl App {
         if let Some(m) = &self.model {
             right = right
                 .push(item("Layers", m.layers.len().to_string()))
-                .push(item("Vertices", format_count(m.vertex_count())))
-                .push(item("Triangles", format_count(m.triangle_count())));
+                .push(item("Vertices", format_count(m.vertex_count())));
+            let (triangles, points) = (m.triangle_count(), m.point_count());
+            if triangles > 0 || points == 0 {
+                right = right.push(item("Triangles", format_count(triangles)));
+            }
+            if points > 0 {
+                right = right.push(item("Points", format_count(points)));
+            }
         }
         right = right.push(item(
             "Mode",
@@ -2656,6 +2727,42 @@ mod tests {
         assert!(matches!(messages[0], Message::Mode(RenderMode::Wireframe)), "{messages:?}");
         assert!(matches!(messages[1], Message::ToggleGrid), "{messages:?}");
         assert!(matches!(messages[2], Message::SaveDialog), "{messages:?}");
+    }
+
+    #[test]
+    fn an_ifcx_file_added_to_an_ifcx_model_layers_over_it() {
+        fn source(name: &str, text: &str) -> loaders::Source {
+            loaders::Source::Bytes { name: name.into(), data: Arc::new(text.as_bytes().to_vec()) }
+        }
+        // the load the task would run, done here
+        fn finish(app: &mut App) {
+            let model = loaders::load_stack(&app.loading_stack.0, &loaders::Progress::default()).map(Arc::new);
+            let _ = app.update(Message::Loaded(model));
+        }
+        let base = r#"{"header": {"ifcxVersion": "ifcx_alpha"}, "imports": [], "schemas": {}, "data": [
+            {"path": "w", "attributes": {"bsi::ifc::class": {"code": "IfcWall"},
+             "usd::usdgeom::mesh": {"points": [[0,0,0],[1,0,0],[0,0,1]], "faceVertexIndices": [0,1,2]}}}]}"#;
+        let overlay = r#"{"header": {"ifcxVersion": "ifcx_alpha"}, "imports": [], "schemas": {}, "data": [
+            {"path": "w", "attributes": {"bsi::ifc::prop::FireRating": "R60"}}]}"#;
+        let mut app = App::default();
+        let _ = app.update(Message::Picked(Some(source("base.ifcx", base))));
+        finish(&mut app);
+        let _ = app.update(Message::AddPicked(Some(source("rating.ifcx", overlay))));
+        assert_eq!(app.loading_stack.0.len(), 2);
+        finish(&mut app);
+        assert_eq!(app.models.len(), 1, "composed into the open model");
+        let model = app.model.clone().unwrap();
+        assert_eq!(model.triangle_count(), 1);
+        assert!(model.props.values().any(|p| p.contains("R60")));
+        // after another kind of file the next IFCX stands on its own
+        let _ = app.update(Message::AddPicked(Some(loaders::Source::Bytes {
+            name: "tri.obj".into(),
+            data: Arc::new(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec()),
+        })));
+        finish(&mut app);
+        assert_eq!(app.models.len(), 2, "{:?}", app.status);
+        let _ = app.update(Message::AddPicked(Some(source("rating.ifcx", overlay))));
+        assert_eq!(app.loading_stack.0.len(), 1);
     }
 
     #[test]

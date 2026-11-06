@@ -1,4 +1,4 @@
-// Scene shader: lit triangles, unlit lines, and the blit of the multisampled frame into iced's target.
+// Scene shader: lit triangles, unlit lines and points, and the blit of the multisampled frame into iced's target.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -159,6 +159,45 @@ fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4<f32>(encode(to_linear(in.color.rgb) * u.params.y), in.color.a);
+}
+
+// ---- point clouds ---------------------------------------------------------------------------------
+// Each point is an instance: a strip of four vertices spread round it on screen, a square of the
+// same size in pixels whatever its distance (u.params.zw: half the size in clip units). The corner
+// comes from bits of the vertex index, not from an array (a local array indexed at run time can go
+// through slow scratch memory on some GPUs). The section box and plane cut whole points, by their
+// centre, here rather than in the fragment shader: without `discard` the GPU tests depth before
+// shading, which matters with millions of overlapping points. Points do not move in the exploded
+// view.
+
+struct PointIn {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs_point(p: PointIn, @builtin(vertex_index) vi: u32) -> VertexOut {
+    // strip order: (-1, -1), (1, -1), (-1, 1), (1, 1)
+    let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - 1.0;
+    let world = u.model * vec4<f32>(p.position, 1.0);
+    var clip = u.view_proj * world;
+    clip = vec4<f32>(clip.xy + corner * u.params.zw * clip.w, clip.zw);
+    var out: VertexOut;
+    out.clip = clip;
+    if (clipped(world.xyz)) {
+        // all four corners on one spot outside the view: nothing drawn
+        out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    }
+    out.world = world.xyz;
+    out.normal = vec3<f32>(0.0);
+    out.color = p.color;
+    return out;
+}
+
+// Unlit: points carry the colour of the scan (or of their class); cut in `vs_point`.
+@fragment
+fn fs_point(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(encode(to_linear(in.color.rgb)), 1.0);
 }
 
 // ---- cut fill of the section box ----------------------------------------------------------------

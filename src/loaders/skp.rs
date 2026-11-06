@@ -6,6 +6,7 @@ pub struct SkpLoader;
 
 impl Loader for SkpLoader {
     fn name(&self) -> &'static str { "SketchUp" }
+    fn featured(&self) -> Option<u8> { Some(2) }
     fn extensions(&self) -> &'static [&'static str] { &["skp"] }
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)

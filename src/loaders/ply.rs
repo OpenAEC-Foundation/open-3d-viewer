@@ -13,6 +13,7 @@ pub struct PlyLoader;
 
 impl Loader for PlyLoader {
     fn name(&self) -> &'static str { "PLY" }
+    fn featured(&self) -> Option<u8> { Some(6) }
     fn extensions(&self) -> &'static [&'static str] { &["ply"] }
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)

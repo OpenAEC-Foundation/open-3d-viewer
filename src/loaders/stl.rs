@@ -12,6 +12,10 @@ impl Loader for StlLoader {
         "STL"
     }
 
+    fn featured(&self) -> Option<u8> {
+        Some(5)
+    }
+
     fn extensions(&self) -> &'static [&'static str] {
         &["stl"]
     }

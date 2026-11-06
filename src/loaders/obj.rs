@@ -16,6 +16,10 @@ impl Loader for ObjLoader {
         "OBJ"
     }
 
+    fn featured(&self) -> Option<u8> {
+        Some(4)
+    }
+
     fn extensions(&self) -> &'static [&'static str] {
         &["obj"]
     }

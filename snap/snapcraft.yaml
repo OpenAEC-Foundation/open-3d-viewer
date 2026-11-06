@@ -1,0 +1,35 @@
+name: open-3d-viewer
+base: core22
+version: 0.0.0
+title: Open 3D Viewer
+summary: Open 3D Viewer for Linux
+description: Open 3D Viewer. This Snap packages the published OpenAEC release with its approved app logo.
+grade: stable
+confinement: strict
+icon: assets/icons/icon.png
+architectures:
+- amd64
+apps:
+  open-3d-viewer:
+    command: usr/bin/open-3d-viewer
+    extensions:
+    - gnome
+    desktop: usr/share/applications/open-3d-viewer.desktop
+    plugs:
+    - home
+    - removable-media
+    - network
+    - browser-support
+parts:
+  open-3d-viewer:
+    plugin: nil
+    stage-packages:
+    - libxkbcommon0
+    - libvulkan1
+    override-build: 'set -eu
+
+      dpkg-deb -x "${CRAFT_PROJECT_DIR}/release.deb" "${CRAFT_PART_INSTALL}"
+
+      python3 "${CRAFT_PROJECT_DIR}/snap/prepare-desktop.py" "${CRAFT_PART_INSTALL}"
+
+      '

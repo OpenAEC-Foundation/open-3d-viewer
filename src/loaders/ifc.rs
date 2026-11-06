@@ -160,7 +160,7 @@ impl Loader for IfcLoader {
             ],
             ..ProjectData::default()
         };
-        Ok(Loaded { layers: layers.into_values().collect(), views: Vec::new(), project })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers: layers.into_values().collect(), views: Vec::new(), project })
     }
 }
 

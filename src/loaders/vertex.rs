@@ -176,7 +176,7 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
         let props = l["props"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_u64()?, p[1].as_str()?.to_string()))).collect();
         layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false, points: false });
     }
-    Ok(Loaded { layers, views: Vec::new(), project })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
 
 #[cfg(test)]

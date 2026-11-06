@@ -3437,7 +3437,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
         ..ProjectData::default()
     };
     let layers = [walls, slabs, columns, beams, roofs, openings, objects, terrain, zones, morphs, stairs, railings].into_iter().filter(|l| !l.indices.is_empty()).collect();
-    Ok((Loaded { layers, views: Vec::new(), project }, stats))
+    Ok((Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project }, stats))
 }
 
 /// "8 drawn as boxes (1 with an unknown height), 1 skipped (1 two-dimensional)".

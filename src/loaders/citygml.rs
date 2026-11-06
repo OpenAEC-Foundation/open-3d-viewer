@@ -335,7 +335,7 @@ fn read(text: &str) -> Result<Loaded, String> {
         info.push(("Coordinate reference system".into(), srs.to_string()));
     }
     info.push(("Coordinate interpretation".into(), "Source axes retained; local distances assume metres. No CRS reprojection.".into()));
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 #[cfg(test)]

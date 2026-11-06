@@ -24,13 +24,13 @@ impl Loader for PlyLoader {
         let header = header(&data)?;
         if !header.elements.iter().any(|e| e.name == "face" && e.count > 0) {
             let (layers, info) = points(&data, &header, &source.stem(), MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;
-            return Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } });
+            return Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } });
         }
         let mesh = ply_reader::read(&data)?;
         let layers = vec![Layer { name: source.stem(), color: mesh.color, positions: mesh.positions,
             normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, ..Layer::default() }];
         let project = ProjectData::default();
-        Ok(Loaded { layers, views: Vec::new(), project })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
     }
 }
 

@@ -419,7 +419,7 @@ fn convert(ir: &CadIr, header: &Header) -> Result<Loaded, String> {
     if scene.refused > 0 {
         info.push(("STEP faces not triangulated".into(), scene.refused.to_string()));
     }
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 #[cfg(test)]

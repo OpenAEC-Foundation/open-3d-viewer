@@ -78,7 +78,7 @@ fn convert(document: &CadDocument) -> Result<Loaded, String> {
         ("CAD world origin (metres)".into(), format!("{}, {}, {}", origin.x, origin.y, origin.z)),
         ("CAD omitted entities".into(), if omitted.is_empty() { "0".into() } else { omitted }),
     ];
-    Ok(Loaded { layers: builder.layers.into_values().collect(), views: Vec::new(), project })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers: builder.layers.into_values().collect(), views: Vec::new(), project })
 }
 
 impl Builder<'_> {

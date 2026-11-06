@@ -222,7 +222,7 @@ impl Scene {
             ("DGN elements".into(), counts),
             ("DGN skipped elements".into(), if omitted.is_empty() { "0".into() } else { omitted }),
         ];
-        Ok(Loaded { layers: layers.into_values().filter(|l| !l.indices.is_empty()).collect(), views: Vec::new(), project })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers: layers.into_values().filter(|l| !l.indices.is_empty()).collect(), views: Vec::new(), project })
     }
 }
 

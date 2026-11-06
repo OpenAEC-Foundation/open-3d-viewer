@@ -111,7 +111,7 @@ fn read(bytes: &[u8]) -> Result<Loaded, String> {
     }
     if let Some(crs) = scene.crs { info.push(("Coordinate reference system".into(), crs)); }
     info.push(("Coordinate interpretation".into(), "Source axes retained; local distances assume metres. No CRS reprojection.".into()));
-    Ok(Loaded { layers: scene.layers.into_values().collect(), views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers: scene.layers.into_values().collect(), views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 impl Scene {

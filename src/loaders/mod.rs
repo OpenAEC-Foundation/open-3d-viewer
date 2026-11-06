@@ -47,7 +47,8 @@ mod ifcx;
 mod step;
 mod rhino;
 
-use crate::model::{Layer, Model, ProjectData, SavedView};
+use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
+use crate::structural::StructuralPart;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -200,7 +201,7 @@ pub trait Loader: Send + Sync {
     /// what else the file holds.
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
-        self.load(source).map(|layers| Loaded { layers, views: Vec::new(), project: ProjectData::default() })
+        self.load(source).map(|layers| Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData::default() })
     }
     /// True when the format is Y up and `load` converted it to Z up.
     fn source_y_up(&self) -> bool {
@@ -223,11 +224,17 @@ pub trait Loader: Send + Sync {
     }
 }
 
-/// What a loader read: the layers and the views saved in the file.
+/// What a loader read: the layers, the views saved in the file and the structural analysis
+/// models.
 pub struct Loaded {
     pub layers: Vec<Layer>,
     pub views: Vec<SavedView>,
     pub project: ProjectData,
+    /// Structural analysis models, in f64 world metres of the file (no anchor subtracted).
+    pub structural: Vec<bim_structural::AnalysisModel>,
+    /// The anchor the loader subtracted from the layer positions (world metres, Z up), when the
+    /// format has one; it places the model when models are combined.
+    pub origin: Option<glam::DVec3>,
 }
 
 /// Loaders from other crates, see [`add`].
@@ -312,9 +319,14 @@ pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, Stri
     model.file_size = sources.iter().map(Source::len).sum();
     model.views = loaded.views;
     model.project = loaded.project;
+    model.origins = vec![Origin { anchor: loaded.origin, shift: glam::DVec3::ZERO }];
+    if !loaded.structural.is_empty() {
+        model.set_structural(loaded.structural.into_iter().map(|m| StructuralPart::new(0, Arc::new(m))).collect());
+    }
     model.load_time = start.elapsed();
     model.source_y_up = loader.source_y_up();
-    if model.layers.is_empty() {
+    // a file of only analysis objects (nodes and members, no triangles) opens too
+    if model.layers.is_empty() && !model.has_structural_geometry() {
         return Err(format!("{}: no geometry found", model.file_name()));
     }
     Ok(model)

@@ -6,6 +6,7 @@
 //! moves, so the app can highlight what a click would pick.
 //! The camera lives in the application state; the widget reports navigation as messages.
 
+pub mod box_select;
 pub mod camera;
 pub mod render;
 
@@ -31,6 +32,9 @@ pub enum Navigate {
     /// Left click at (x, y) in the viewport (logical pixels); `add`: with Ctrl, to add to the
     /// selection.
     Pick { x: f32, y: f32, width: f32, height: f32, add: bool },
+    /// Ctrl + left drag: the box from (x0, y0) to the cursor (x1, y1) in a viewport of width ×
+    /// height; `done` when the button is released.
+    Box { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, height: f32, done: bool },
     /// The cursor rests at (x, y) in the viewport (only while `hover` is on).
     Hover { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor left the viewport.
@@ -69,6 +73,8 @@ pub struct State {
 enum Drag {
     Orbit,
     Pan,
+    /// Ctrl + left: a selection box from the point the button went down.
+    Box,
 }
 
 impl<Message> shader::Program<Message> for Viewport3D<'_>
@@ -120,6 +126,7 @@ where
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let position = cursor.position_in(bounds)?;
                 let drag = match button {
+                    mouse::Button::Left if state.command => Drag::Box,
                     mouse::Button::Left if state.shift => Drag::Pan,
                     mouse::Button::Left => Drag::Orbit,
                     mouse::Button::Middle if state.shift => Drag::Orbit,
@@ -127,7 +134,7 @@ where
                     _ => return None,
                 };
                 state.drag = Some((drag, position));
-                state.press = (*button == mouse::Button::Left && drag == Drag::Orbit).then_some(position);
+                state.press = (*button == mouse::Button::Left && matches!(drag, Drag::Orbit | Drag::Box)).then_some(position);
                 // a click keeps the highlight it takes; a drag does not
                 state.hover = None;
                 Some(shader::Action::capture())
@@ -135,10 +142,14 @@ where
             Event::Mouse(mouse::Event::ButtonReleased(_)) => {
                 let drag = state.drag.take();
                 let press = state.press.take();
-                if let (Some((Drag::Orbit, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
+                if let (Some((Drag::Orbit | Drag::Box, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
                         return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command });
                     }
+                }
+                if let (Some((Drag::Box, from)), Some(at)) = (drag, cursor.position()) {
+                    let (x1, y1) = (at.x - bounds.x, at.y - bounds.y);
+                    return publish(Navigate::Box { x0: from.x, y0: from.y, x1, y1, width: bounds.width, height: bounds.height, done: true });
                 }
                 if drag.is_some() && self.hover {
                     // after orbiting or panning, what is under the cursor changed
@@ -172,11 +183,15 @@ where
                     }
                     state.press = None;
                 }
+                if drag == Drag::Box {
+                    // the box keeps where it started
+                    return publish(Navigate::Box { x0: last.x, y0: last.y, x1: position.x, y1: position.y, width: bounds.width, height: bounds.height, done: false });
+                }
                 let (dx, dy) = (position.x - last.x, position.y - last.y);
                 state.drag = Some((drag, position));
                 match drag {
                     Drag::Orbit => publish(Navigate::Orbit { dx, dy }),
-                    Drag::Pan => publish(Navigate::Pan { dx, dy, height: bounds.height }),
+                    Drag::Pan | Drag::Box => publish(Navigate::Pan { dx, dy, height: bounds.height }),
                 }
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -210,6 +225,7 @@ where
         match state.drag {
             Some((Drag::Orbit, _)) => mouse::Interaction::Grabbing,
             Some((Drag::Pan, _)) => mouse::Interaction::Move,
+            Some((Drag::Box, _)) => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) && self.hover => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),

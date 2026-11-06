@@ -162,6 +162,8 @@ pub struct App {
     pub hidden: Arc<HashSet<UnitKey>>,
     /// Undo and redo of what is shown: hidden elements and layer and model switches.
     pub history: History<ViewState>,
+    /// The selection box while it is dragged: from, to (viewport pixels).
+    pub box_select: Option<(Vec2, Vec2)>,
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
@@ -373,6 +375,7 @@ impl Default for App {
             units: Arc::default(),
             hidden: Arc::default(),
             history: History::new(),
+            box_select: None,
             explode_bounds: None,
             measure: MeasureState::default(),
             hover_request: None,
@@ -1018,6 +1021,13 @@ impl App {
                     self.viewport_size = (width, height);
                 }
                 Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
+                Navigate::Box { x0, y0, x1, y1, width, height, done } => {
+                    let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
+                    self.box_select = (!done).then_some(rect);
+                    if done {
+                        self.select_box(rect, width, height);
+                    }
+                }
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -1392,6 +1402,33 @@ impl App {
             }
         }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
+    }
+
+    /// Adds what the box `rect` (viewport pixels of a viewport of width × height) holds to the
+    /// selection: elements, and layers without elements; nothing hidden or switched off.
+    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32) {
+        let (Some(model), Some(index)) = (self.model.clone(), self.explode_index.clone()) else { return };
+        let shown_elements: HashSet<u64> =
+            model.layers.iter().enumerate().filter(|(l, _)| self.visible.get(*l).copied().unwrap_or(true)).flat_map(|(_, layer)| layer.elements.iter().map(|e| e.0)).collect();
+        let view_proj = self.camera.view_proj(width.max(1.0) / height.max(1.0)) * self.model_matrix();
+        let hidden = |u: usize| {
+            let off = self.units.get(u).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0);
+            off || match index.owner(u) {
+                Some(UnitOwner::Element(id)) => !shown_elements.contains(&id),
+                Some(UnitOwner::LayerRest(l)) => !self.visible.get(l).copied().unwrap_or(true) || !model.layers[l].elements.is_empty(),
+                None => true,
+            }
+        };
+        let units = crate::viewport::box_select::units_in_box(&index, &self.units, view_proj, (width, height), rect, &hidden);
+        let items: Vec<Pickable> = units
+            .into_iter()
+            .filter_map(|u| match index.owner(u)? {
+                UnitOwner::Element(id) => Some(Pickable::Element(id)),
+                UnitOwner::LayerRest(l) => Some(Pickable::Layer(l)),
+            })
+            .collect();
+        self.sel.extend(items);
+        self.selection_changed();
     }
 
     /// What is shown now, for undo.
@@ -2329,12 +2366,14 @@ impl App {
             .width(Fill)
             .height(Fill)
         });
+        let boxed = self.box_select.map(|(from, to)| canvas(crate::viewport::box_select::BoxOverlay { from, to }).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(section)
             .push(plane)
             .push(measures)
             .push(measurements)
+            .push(boxed)
             .push(picking)
             .push(cube)
             .push(overlay)
@@ -3258,6 +3297,22 @@ mod tests {
         let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
         assert_ne!(app.units[unit][0], 0.0, "still moved apart");
         assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn ctrl_drag_box_adds_what_it_holds() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
+        let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false }));
+        assert!(app.box_select.is_some(), "drawn while dragging");
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        assert!(app.box_select.is_none());
+        assert_eq!(app.sel.len(), 2);
     }
 
     #[test]

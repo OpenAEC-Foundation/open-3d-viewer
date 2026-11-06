@@ -179,9 +179,9 @@ pub fn tools() -> Vec<Value> {
                 "add": { "type": "boolean", "description": "Add to the selection instead of replacing it" },
                 "clear": { "type": "boolean" }
             }), &[], false),
-        tool("hide_elements", "Hide elements by id, or the selection when no ids are given, as Hide in the ribbon; the selection is cleared. Undo brings them back.",
+        tool("hide_elements", "Hide elements by id, or the selection when no ids are given, as Hide in the ribbon; the selection is cleared. Structural nodes, members and surfaces are hidden too. Undo brings them back.",
             json!({ "ids": { "type": "array", "items": { "type": ["integer", "string"] } } }), &[], false),
-        tool("isolate_elements", "Hide every element but the given ones (or the selection), as Isolate in the ribbon; they stay selected.",
+        tool("isolate_elements", "Hide every element but the given ones (or the selection), as Isolate in the ribbon; they stay selected. Structural nodes, members and surfaces count as elements.",
             json!({ "ids": { "type": "array", "items": { "type": ["integer", "string"] } } }), &[], false),
         tool("show_all_elements", "Show every element hidden with hide_elements or isolate_elements; layer and model switches stay as they are.",
             json!({}), &[], false),

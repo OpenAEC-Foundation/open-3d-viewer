@@ -114,12 +114,14 @@ jobs:
           # .tar.gz
           dir="$stage/open-3d-viewer_${NUMBER}_linux-x64"
           mkdir -p "$dir"
-          cp "$viewer" "$mcp" LICENSE README.md "$dir/"
+          vertex=vendor/vertex/libvertex.so
+          cp "$viewer" "$mcp" "$vertex" LICENSE README.md "$dir/"
           tar -C "$stage" -czf "$out/open-3d-viewer_${NUMBER}_linux-x64.tar.gz" "open-3d-viewer_${NUMBER}_linux-x64"
           # .deb
           deb="$stage/deb"
           install -Dm755 "$viewer" "$deb/usr/bin/open-3d-viewer"
           install -Dm755 "$mcp" "$deb/usr/bin/open-3d-viewer-mcp"
+          install -Dm644 "$vertex" "$deb/usr/lib/open-3d-viewer/libvertex.so"
           install -Dm644 "$desktop" "$deb/usr/share/applications/org.openaec.Open3DViewer.desktop"
           install -Dm644 "$icon" "$deb/usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png"
           install -Dm644 LICENSE "$deb/usr/share/doc/open-3d-viewer/copyright"
@@ -142,13 +144,14 @@ jobs:
           # .rpm
           rpmtop=$(mktemp -d)
           mkdir -p "$rpmtop"/{SOURCES,SPECS,RPMS,BUILD,BUILDROOT}
-          cp "$viewer" "$mcp" "$desktop" "$icon" LICENSE "$rpmtop/SOURCES/"
+          cp "$viewer" "$mcp" "$vertex" "$desktop" "$icon" LICENSE "$rpmtop/SOURCES/"
           rpmbuild -bb --define "_topdir $rpmtop" --define "number $NUMBER" packaging/linux/open-3d-viewer.spec
           cp "$rpmtop"/RPMS/x86_64/*.rpm "$out/open-3d-viewer_${NUMBER}_x86_64.rpm"
           # AppImage
           app="$stage/AppDir"
           install -Dm755 "$viewer" "$app/usr/bin/open-3d-viewer"
           install -Dm755 "$mcp" "$app/usr/bin/open-3d-viewer-mcp"
+          install -Dm644 "$vertex" "$app/usr/lib/open-3d-viewer/libvertex.so"
           cp "$desktop" "$app/"
           cp "$icon" "$app/org.openaec.Open3DViewer.png"
           ln -s usr/bin/open-3d-viewer "$app/AppRun"
@@ -220,7 +223,7 @@ jobs:
         run: |
           cargo build --release --locked
           mkdir -p sign
-          cp target/release/open-3d-viewer.exe target/release/open-3d-viewer-mcp.exe sign/
+          cp target/release/open-3d-viewer.exe target/release/open-3d-viewer-mcp.exe vendor/vertex/vertex.dll sign/
       - name: Sign the programs
         continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.0
@@ -232,7 +235,7 @@ jobs:
           trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
           files-folder: ${{ github.workspace }}\sign
-          files-folder-filter: exe
+          files-folder-filter: exe,dll
           files-folder-depth: 1
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
@@ -297,6 +300,7 @@ jobs:
           $files = [ordered]@{
             "open-3d-viewer.exe" = "sign\open-3d-viewer.exe"
             "open-3d-viewer-mcp.exe" = "sign\open-3d-viewer-mcp.exe"
+            "vertex.dll" = "sign\vertex.dll"
             (Split-Path $setup -Leaf) = $setup
             "installed open-3d-viewer.exe" = "$installed\open-3d-viewer.exe"
             "installed open-3d-viewer-mcp.exe" = "$installed\open-3d-viewer-mcp.exe"
@@ -318,7 +322,7 @@ jobs:
           Copy-Item "installer\open-3d-viewer_$($env:NUMBER)_x64-setup.exe" dist\
           $app = "$env:RUNNER_TEMP\open-3d-viewer_$($env:NUMBER)_windows-x64"
           New-Item -ItemType Directory -Force $app | Out-Null
-          Copy-Item sign\open-3d-viewer.exe, sign\open-3d-viewer-mcp.exe, LICENSE, README.md $app
+          Copy-Item sign\open-3d-viewer.exe, sign\open-3d-viewer-mcp.exe, sign\vertex.dll, LICENSE, README.md $app
           Compress-Archive -Path $app -DestinationPath "dist\open-3d-viewer_$($env:NUMBER)_windows-x64.zip"
       - uses: actions/upload-artifact@v4
         with:
@@ -364,7 +368,7 @@ jobs:
           set -euo pipefail
           app="build/Open 3D Viewer Studio.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          cp build/open-3d-viewer build/open-3d-viewer-mcp "$app/Contents/MacOS/"
+          cp build/open-3d-viewer build/open-3d-viewer-mcp vendor/vertex/libvertex.dylib "$app/Contents/MacOS/"
           sed "s/@NUMBER@/$NUMBER/g" packaging/macos/Info.plist.in > "$app/Contents/Info.plist"
           cp assets/icons/icon.icns "$app/Contents/Resources/AppIcon.icns"
       - name: Prepare Developer ID signing and notarization
@@ -429,6 +433,7 @@ jobs:
           if [[ -n "${SIGN_ID:-}" ]]; then
             # the MCP server first: the bundle's signature covers it
             codesign --force --options runtime --timestamp --sign "$SIGN_ID" --keychain "$SIGN_KC" "$app/Contents/MacOS/open-3d-viewer-mcp"
+            codesign --force --options runtime --timestamp --sign "$SIGN_ID" --keychain "$SIGN_KC" "$app/Contents/MacOS/libvertex.dylib"
             codesign --force --options runtime --timestamp --sign "$SIGN_ID" --keychain "$SIGN_KC" "$app"
             stage=$(mktemp -d); cp -R "$app" "$stage/"; ln -s /Applications "$stage/Applications"
             make_dmg "$stage" "$dmg"
@@ -519,7 +524,7 @@ jobs:
           set -euo pipefail
           yes() { [[ "$1" == true ]] && echo "ja" || echo "**nee**"; }
           cat > notes.md <<EOF
-          **Open 3D Viewer Studio** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
+          **Open 3D Viewer Studio** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Bekijk wat hij doet in de [productvideo](https://www.youtube.com/watch?v=cxHO8M8W2Ow) (73 s). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
 
           | Systeem | Bestand |
           | --- | --- |

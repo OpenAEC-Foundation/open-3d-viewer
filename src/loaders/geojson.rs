@@ -46,18 +46,27 @@ const LEVEL_HEIGHT: f64 = 3.0;
 const LINE_WIDTH: f64 = 0.3;
 
 /// How file coordinates become local metres.
-struct Frame {
-    geographic: bool,
+pub(super) struct Frame {
+    pub geographic: bool,
     /// The first coordinate: longitude/latitude, or x/y in metres.
-    origin: [f64; 2],
+    pub origin: [f64; 2],
     cos_lat: f64,
 }
 
 impl Frame {
+    pub fn new(geographic: bool, origin: [f64; 2]) -> Self {
+        Self { geographic, origin, cos_lat: origin[1].to_radians().cos() }
+    }
+
     fn local(&self, c: &Value) -> Option<[f64; 3]> {
         let c = c.as_array()?;
         let (x, y) = (c.first()?.as_f64()?, c.get(1)?.as_f64()?);
         let z = c.get(2).and_then(Value::as_f64).unwrap_or(0.0);
+        self.local_xyz(x, y, z)
+    }
+
+    /// A file coordinate in local metres.
+    pub fn local_xyz(&self, x: f64, y: f64, z: f64) -> Option<[f64; 3]> {
         let p = if self.geographic {
             [(x - self.origin[0]) * METRES_PER_DEGREE_LON * self.cos_lat, (y - self.origin[1]) * METRES_PER_DEGREE_LAT, z]
         } else {
@@ -87,6 +96,11 @@ fn extent(value: &Value, first: &mut Option<[f64; 2]>, range: &mut [f64; 4]) {
     }
 }
 
+/// Whether coordinates in this x/y range (min x, min y, max x, max y) are longitude/latitude.
+pub(super) fn in_degrees(range: [f64; 4]) -> bool {
+    range[0] >= -180.0 && range[2] <= 180.0 && range[1] >= -90.0 && range[3] <= 90.0
+}
+
 /// A number, or the number at the start of a text such as `"12.5 m"`.
 fn number(v: &Value) -> Option<f64> {
     v.as_f64().or_else(|| {
@@ -97,7 +111,7 @@ fn number(v: &Value) -> Option<f64> {
 }
 
 /// A `#rrggbb` or `#rgb` colour.
-fn hex_color(v: Option<&Value>) -> Option<[u8; 4]> {
+pub(super) fn hex_color(v: Option<&Value>) -> Option<[u8; 4]> {
     let s = v?.as_str()?.trim().strip_prefix('#')?;
     let digits: Vec<u8> = match s.len() {
         3 => s.chars().map(|c| c.to_digit(16).map(|d| d as u8 * 17)).collect::<Option<_>>()?,
@@ -113,7 +127,7 @@ fn rgba(c: [f32; 3]) -> [u8; 4] {
 }
 
 /// The underside and top above the ground of an extruded feature, when it has a height.
-fn heights(props: &serde_json::Map<String, Value>) -> Option<(f64, f64)> {
+pub(super) fn heights(props: &serde_json::Map<String, Value>) -> Option<(f64, f64)> {
     let get = |keys: &[&str]| keys.iter().find_map(|k| props.get(*k).and_then(number));
     let top = get(&["height", "building:height", "render_height", "Height", "HEIGHT"])
         .or_else(|| get(&["building:levels", "levels"]).map(|l| l * LEVEL_HEIGHT))?;
@@ -123,12 +137,13 @@ fn heights(props: &serde_json::Map<String, Value>) -> Option<(f64, f64)> {
     (top > bottom && top.is_finite()).then_some((bottom, top))
 }
 
+/// The layers of features (GeoJSON, Shapefile): Areas, Buildings, Lines and Points.
 #[derive(Default)]
-struct Scene {
+pub(super) struct Scene {
     layers: BTreeMap<&'static str, Layer>,
     next_id: u64,
-    points: usize,
-    skipped: usize,
+    pub points: usize,
+    pub skipped: usize,
 }
 
 impl Scene {
@@ -136,9 +151,68 @@ impl Scene {
         let color = match name {
             "Areas" => [0.80, 0.82, 0.76],
             "Lines" => [0.35, 0.35, 0.38],
+            "Points" => [0.85, 0.30, 0.25],
             _ => DEFAULT_COLOR,
         };
-        self.layers.entry(name).or_insert_with(|| Layer { name: name.into(), color, colors: Some(Vec::new()), ..Layer::default() })
+        let points = name == "Points";
+        self.layers.entry(name).or_insert_with(|| Layer { name: name.into(), color, colors: Some(Vec::new()), points, ..Layer::default() })
+    }
+
+    /// Adds a feature drawn by `draw`: a pickable element with properties `props`.
+    pub fn feature(&mut self, props: serde_json::Map<String, Value>, draw: impl FnOnce(&mut Self)) {
+        self.next_id += 1;
+        let element = self.next_id;
+        let before: Vec<(&'static str, u32)> = self.layers.iter().map(|(k, l)| (*k, l.indices.len() as u32)).collect();
+        draw(self);
+        let mut props = Some(props);
+        for (name, layer) in self.layers.iter_mut() {
+            let first = before.iter().find(|(k, _)| k == name).map_or(0, |b| b.1);
+            let count = layer.indices.len() as u32 - first;
+            if count == 0 {
+                continue;
+            }
+            layer.elements.push((element, first, count));
+            if let Some(p) = props.take() {
+                layer.props.push((element, Value::Object(p).to_string()));
+            }
+        }
+    }
+
+    /// A point (local metres), drawn as a dot.
+    pub fn point(&mut self, p: [f64; 3], color: Option<[u8; 4]>) {
+        let layer = self.layer("Points");
+        layer.positions.extend(p.map(|v| v as f32));
+        layer.colors.as_mut().unwrap().push(color.unwrap_or([217, 77, 64, 255]));
+    }
+
+    /// Triangles in local metres (as a MultiPatch strip or fan) in layer `layer`.
+    pub fn triangles(&mut self, layer: &'static str, triangles: &[[[f64; 3]; 3]], color: [u8; 4]) {
+        let layer = self.layer(layer);
+        for t in triangles {
+            let (u, v) = ([0, 1, 2].map(|k| t[1][k] - t[0][k]), [0, 1, 2].map(|k| t[2][k] - t[0][k]));
+            let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            let length = n.iter().map(|c| c * c).sum::<f64>().sqrt();
+            if length < 1e-12 {
+                continue;
+            }
+            for p in t {
+                Self::push(layer, *p, n.map(|c| c / length), color);
+            }
+        }
+    }
+
+    /// The layers, with one colour per layer where all their vertices share it.
+    pub fn into_layers(self) -> Vec<Layer> {
+        let mut layers: Vec<Layer> = self.layers.into_values().collect();
+        for layer in &mut layers {
+            // one colour for the whole layer: no vertex colours
+            if !layer.points && layer.colors.as_ref().is_some_and(|c| c.windows(2).all(|w| w[0] == w[1])) {
+                if let Some(c) = layer.colors.take().and_then(|c| c.first().copied()) {
+                    layer.color = [c[0], c[1], c[2]].map(|v| v as f32 / 255.0);
+                }
+            }
+        }
+        layers
     }
 
     fn push(layer: &mut Layer, p: [f64; 3], n: [f64; 3], color: [u8; 4]) {
@@ -166,13 +240,17 @@ impl Scene {
     }
 
     fn polygon(&mut self, frame: &Frame, rings: &Value, style: &Style) {
+        let rings = rings.as_array().into_iter().flatten().map(|r| r.as_array().into_iter().flatten().filter_map(|c| frame.local(c)).collect());
+        self.polygon_rings(rings.collect(), style);
+    }
+
+    /// A polygon of rings in local metres, the first the outer one: a flat face (with holes), or
+    /// a block when `style` has heights.
+    pub fn polygon_rings(&mut self, rings: Vec<Vec<[f64; 3]>>, style: &Style) {
         // rings without the closing point; outer counter-clockwise, holes clockwise
         let mut rings: Vec<Vec<[f64; 3]>> = rings
-            .as_array()
             .into_iter()
-            .flatten()
-            .filter_map(|r| {
-                let mut ring: Vec<[f64; 3]> = r.as_array()?.iter().filter_map(|c| frame.local(c)).collect();
+            .filter_map(|mut ring| {
                 ring.dedup();
                 if ring.len() > 1 && ring.first() == ring.last() {
                     ring.pop();
@@ -193,7 +271,23 @@ impl Scene {
                 ring.reverse();
             }
         }
-        let flat: Vec<f64> = rings.iter().flatten().flat_map(|p| [p[0], p[1]]).collect();
+        // triangulated in plan, or a face that is not flat (a wall, a roof) in the plane it
+        // leans to most (from its Newell normal)
+        let mut normal = [0.0f64; 3];
+        let outer = &rings[0];
+        for k in 0..outer.len() {
+            let (a, b) = (outer[k], outer[(k + 1) % outer.len()]);
+            normal[0] += (a[1] - b[1]) * (a[2] + b[2]);
+            normal[1] += (a[2] - b[2]) * (a[0] + b[0]);
+            normal[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        let [nx, ny, nz] = normal.map(f64::abs);
+        let (u, v) = match style.heights {
+            None if nx > nz && nx >= ny => (1, 2),
+            None if ny > nz && ny > nx => (0, 2),
+            _ => (0, 1),
+        };
+        let flat: Vec<f64> = rings.iter().flatten().flat_map(|p| [p[u], p[v]]).collect();
         let mut holes = Vec::new();
         let mut at = 0;
         for ring in &rings[..rings.len() - 1] {
@@ -260,7 +354,11 @@ impl Scene {
     }
 
     fn line(&mut self, frame: &Frame, line: &Value, style: &Style) {
-        let points: Vec<[f64; 3]> = line.as_array().into_iter().flatten().filter_map(|c| frame.local(c)).collect();
+        self.line_points(line.as_array().into_iter().flatten().filter_map(|c| frame.local(c)).collect(), style);
+    }
+
+    /// A line through points in local metres, drawn as a flat ribbon.
+    pub fn line_points(&mut self, points: Vec<[f64; 3]>, style: &Style) {
         let color = style.stroke.unwrap_or(rgba([0.35, 0.35, 0.38]));
         let layer = self.layer("Lines");
         for w in points.windows(2) {
@@ -280,10 +378,10 @@ impl Scene {
     }
 }
 
-struct Style {
-    heights: Option<(f64, f64)>,
-    fill: Option<[u8; 4]>,
-    stroke: Option<[u8; 4]>,
+pub(super) struct Style {
+    pub heights: Option<(f64, f64)>,
+    pub fill: Option<[u8; 4]>,
+    pub stroke: Option<[u8; 4]>,
 }
 
 fn read(data: &[u8]) -> Result<Loaded, String> {
@@ -309,49 +407,25 @@ fn read(data: &[u8]) -> Result<Loaded, String> {
     // the old `crs` member (GeoJSON 2008): a named CRS other than WGS 84 is projected
     let crs = doc["crs"]["properties"]["name"].as_str().map(str::to_string);
     let named_geographic = crs.as_deref().is_none_or(|c| c.contains("CRS84") || c.ends_with(":4326") || c.ends_with("::4326"));
-    let in_degrees = range[0] >= -180.0 && range[2] <= 180.0 && range[1] >= -90.0 && range[3] <= 90.0;
-    let geographic = named_geographic && in_degrees;
-    let frame = Frame { geographic, origin, cos_lat: origin[1].to_radians().cos() };
+    let geographic = named_geographic && in_degrees(range);
+    let frame = Frame::new(geographic, origin);
     let mut scene = Scene::default();
     for (props, id, geometry) in features {
         if geometry.is_null() {
             continue;
         }
         let style = Style { heights: heights(props), fill: hex_color(props.get("fill")), stroke: hex_color(props.get("stroke")) };
-        scene.next_id += 1;
-        let element = scene.next_id;
-        let before: Vec<(&'static str, u32)> = scene.layers.iter().map(|(k, l)| (*k, l.indices.len() as u32)).collect();
-        scene.geometry(&frame, geometry, &style, 0);
-        let mut written = false;
-        for (name, layer) in scene.layers.iter_mut() {
-            let first = before.iter().find(|(k, _)| k == name).map_or(0, |b| b.1);
-            let count = layer.indices.len() as u32 - first;
-            if count == 0 {
-                continue;
-            }
-            layer.elements.push((element, first, count));
-            if !written {
-                let mut p = props.clone();
-                if !id.is_null() {
-                    p.insert("Feature id".into(), id.clone());
-                }
-                if let Some((bottom, top)) = style.heights {
-                    p.insert("Extruded".into(), format!("{bottom} m to {top} m").into());
-                }
-                layer.props.push((element, Value::Object(p).to_string()));
-                written = true;
-            }
+        let mut p = props.clone();
+        if !id.is_null() {
+            p.insert("Feature id".into(), id.clone());
         }
-    }
-    let mut layers: Vec<Layer> = scene.layers.into_values().collect();
-    for layer in &mut layers {
-        // one colour for the whole layer: no vertex colours
-        if layer.colors.as_ref().is_some_and(|c| c.windows(2).all(|w| w[0] == w[1])) {
-            if let Some(c) = layer.colors.take().and_then(|c| c.first().copied()) {
-                layer.color = [c[0], c[1], c[2]].map(|v| v as f32 / 255.0);
-            }
+        if let Some((bottom, top)) = style.heights {
+            p.insert("Extruded".into(), format!("{bottom} m to {top} m").into());
         }
+        scene.feature(p, |scene| scene.geometry(&frame, geometry, &style, 0));
     }
+    let (points, skipped) = (scene.points, scene.skipped);
+    let layers = scene.into_layers();
     if layers.iter().all(|l| l.indices.is_empty()) {
         return Err("GeoJSON: no polygons or lines (points are not drawn)".into());
     }
@@ -366,11 +440,11 @@ fn read(data: &[u8]) -> Result<Loaded, String> {
     if let Some(crs) = crs {
         info.push(("Coordinate reference system".into(), crs));
     }
-    if scene.points > 0 {
-        info.push(("GeoJSON points (not drawn)".into(), scene.points.to_string()));
+    if points > 0 {
+        info.push(("GeoJSON points (not drawn)".into(), points.to_string()));
     }
-    if scene.skipped > 0 {
-        info.push(("GeoJSON skipped geometries".into(), scene.skipped.to_string()));
+    if skipped > 0 {
+        info.push(("GeoJSON skipped geometries".into(), skipped.to_string()));
     }
     Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }

@@ -1,7 +1,7 @@
-//! Shared by the point cloud readers (LAS/LAZ, E57): points into point layers, thinned out
-//! evenly to at most [`MAX_POINTS`], and moved to a local origin when the coordinates are far
-//! from zero (survey coordinates do not fit an f32 to the millimetre). The origin is kept in the
-//! project information, as the CityJSON and LandXML readers do.
+//! Shared by the point cloud readers (LAS/LAZ, E57, PLY, XYZ, PTS, PTX, PCD, OBJ): points into
+//! point layers, thinned out evenly to at most [`MAX_POINTS`], and moved to a local origin when
+//! the coordinates are far from zero (survey coordinates do not fit an f32 to the millimetre).
+//! The origin is kept in the project information, as the CityJSON and LandXML readers do.
 
 use crate::model::Layer;
 use std::collections::HashMap;
@@ -95,6 +95,94 @@ impl Cloud {
         }
         std::mem::take(&mut self.layers)
     }
+}
+
+/// Colours the points of `layers` by their height, blue low to red high, for clouds without colour
+/// or intensity (a flat grey cloud shows no shape, as points are not shaded).
+pub fn color_by_height(layers: &mut [Layer]) {
+    let z = || layers.iter().flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
+    let (low, high) = z().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), z| (lo.min(z), hi.max(z)));
+    let span = (high - low).max(1e-6);
+    // a muted blue, green, yellow, red ramp
+    const RAMP: [[f32; 3]; 4] = [[0.23, 0.42, 0.78], [0.35, 0.72, 0.45], [0.93, 0.80, 0.30], [0.86, 0.32, 0.22]];
+    for layer in layers.iter_mut() {
+        let colors = layer.positions.chunks_exact(3).map(|p| {
+            let t = ((p[2] - low) / span).clamp(0.0, 1.0) * (RAMP.len() - 1) as f32;
+            let k = (t as usize).min(RAMP.len() - 2);
+            let f = t - k as f32;
+            let c = [0, 1, 2].map(|i| ((RAMP[k][i] * (1.0 - f) + RAMP[k + 1][i] * f) * 255.0).round() as u8);
+            [c[0], c[1], c[2], 255]
+        });
+        layer.colors = Some(colors.collect());
+    }
+}
+
+/// A number type of a binary point record (PLY, PCD).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scalar {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    F32,
+    F64,
+}
+
+impl Scalar {
+    pub fn size(self) -> usize {
+        match self {
+            Self::I8 | Self::U8 => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 | Self::F32 => 4,
+            Self::I64 | Self::U64 | Self::F64 => 8,
+        }
+    }
+
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
+
+    /// The value at the start of `b` (at least [`Scalar::size`] bytes), little or big endian.
+    pub fn get(self, b: &[u8], big: bool) -> f64 {
+        let mut a = [0u8; 8];
+        let n = self.size();
+        a[..n].copy_from_slice(&b[..n]);
+        if big {
+            a[..n].reverse();
+        }
+        match self {
+            Self::I8 => a[0] as i8 as f64,
+            Self::U8 => a[0] as f64,
+            Self::I16 => i16::from_le_bytes([a[0], a[1]]) as f64,
+            Self::U16 => u16::from_le_bytes([a[0], a[1]]) as f64,
+            Self::I32 => i32::from_le_bytes([a[0], a[1], a[2], a[3]]) as f64,
+            Self::U32 => u32::from_le_bytes([a[0], a[1], a[2], a[3]]) as f64,
+            Self::I64 => i64::from_le_bytes(a) as f64,
+            Self::U64 => u64::from_le_bytes(a) as f64,
+            Self::F32 => f32::from_le_bytes([a[0], a[1], a[2], a[3]]) as f64,
+            Self::F64 => f64::from_le_bytes(a),
+        }
+    }
+}
+
+/// How the intensity values of a file map to grey: the range they are stored in, guessed from
+/// the values seen (Leica's -2048..2047, 0..1, 8, 12 or 16 bits, else the largest value).
+pub fn intensity_range(min: f64, max: f64) -> (f64, f64) {
+    if min < 0.0 && min >= -2048.0 && max <= 2047.0 {
+        return (-2048.0, 2047.0);
+    }
+    let low = min.min(0.0);
+    let high = [1.0, 255.0, 4095.0, 65535.0].into_iter().find(|&h| max <= h && max > h / 16.0).unwrap_or(max);
+    (low, high.max(low + 1e-9))
+}
+
+/// The grey of an intensity in `range`.
+pub fn grey(i: f64, range: (f64, f64)) -> [u8; 3] {
+    [(((i - range.0) / (range.1 - range.0)).clamp(0.0, 1.0) * 255.0).round() as u8; 3]
 }
 
 /// The local origin for a cloud near `p`: `p` in whole units when it is far from zero.

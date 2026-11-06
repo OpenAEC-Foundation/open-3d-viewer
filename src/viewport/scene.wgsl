@@ -20,10 +20,15 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-// exploded view: the offset (world) of every unit, row by row in a float texture (WebGL2 has no
-// storage buffers); unit 0 never moves
+// the state of every unit (an element, or the rest of a layer), row by row in a float texture
+// (WebGL2 has no storage buffers): xyz its offset (world) in the exploded view, w its flags
+// (`src/units.rs`); unit 0 never moves and has no flags
 @group(0) @binding(1) var offsets: texture_2d<f32>;
 const OFFSETS_WIDTH: u32 = 1024u;
+const UNIT_HIDDEN: u32 = 1u;
+const UNIT_SELECTED: u32 = 2u;
+// beyond the far plane: a triangle with its vertices here is clipped, so it draws nothing
+const NOWHERE = vec4<f32>(0.0, 0.0, 2.0, 1.0);
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -37,21 +42,35 @@ struct VertexOut {
     @location(0) world: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) @interpolate(flat) flags: u32,
 };
+
+fn unit_state(v: VertexIn) -> vec4<f32> {
+    return textureLoad(offsets, vec2<i32>(i32(v.unit % OFFSETS_WIDTH), i32(v.unit / OFFSETS_WIDTH)), 0);
+}
+
+fn unit_flags(state: vec4<f32>) -> u32 {
+    return u32(state.w + 0.5);
+}
 
 // Where a vertex is drawn: turned by the model matrix, then moved with its unit.
 fn place(v: VertexIn) -> vec4<f32> {
-    return u.model * vec4<f32>(v.position, 1.0) + vec4<f32>(textureLoad(offsets, vec2<i32>(i32(v.unit % OFFSETS_WIDTH), i32(v.unit / OFFSETS_WIDTH)), 0).xyz, 0.0);
+    return u.model * vec4<f32>(v.position, 1.0) + vec4<f32>(unit_state(v).xyz, 0.0);
 }
 
 @vertex
 fn vs_main(v: VertexIn) -> VertexOut {
     var out: VertexOut;
     let world = place(v);
+    let flags = unit_flags(unit_state(v));
     out.world = world.xyz;
     out.normal = (u.model * vec4<f32>(v.normal, 0.0)).xyz;
     out.color = v.color;
+    out.flags = flags;
     out.clip = u.view_proj * world;
+    if ((flags & UNIT_HIDDEN) != 0u) {
+        out.clip = NOWHERE;
+    }
     return out;
 }
 
@@ -122,13 +141,29 @@ fn shade(in: VertexOut) -> vec3<f32> {
     return base * light;
 }
 
+// A lit colour pulled towards the OpenAEC amber (#D97706): the selection.
+fn selected(lit: vec3<f32>) -> vec3<f32> {
+    let amber = to_linear(vec3<f32>(0.851, 0.467, 0.024));
+    let glow = 0.6 + 0.4 * clamp(dot(lit, vec3<f32>(0.333)), 0.0, 1.0);
+    return mix(lit, amber * glow, 0.6);
+}
+
+// Lit colour of a surface, in the selection colour when its unit is selected.
+fn surface(in: VertexOut) -> vec3<f32> {
+    let lit = shade(in);
+    if ((in.flags & UNIT_SELECTED) != 0u) {
+        return selected(lit);
+    }
+    return lit;
+}
+
 @fragment
 fn fs_lit(in: VertexOut) -> @location(0) vec4<f32> {
     // transparent materials (glass) are drawn in the glass pass
     if (clipped(in.world) || in.color.a < 0.99) {
         discard;
     }
-    return vec4<f32>(encode(shade(in)), 1.0);
+    return vec4<f32>(encode(surface(in)), 1.0);
 }
 
 // Transparent materials after everything opaque, blended, without writing depth; at least a
@@ -138,19 +173,16 @@ fn fs_glass(in: VertexOut) -> @location(0) vec4<f32> {
     if (clipped(in.world) || in.color.a >= 0.99) {
         discard;
     }
-    return vec4<f32>(encode(shade(in)), max(in.color.a, 0.12));
+    return vec4<f32>(encode(surface(in)), max(in.color.a, 0.12));
 }
 
-// Selected elements: the lit colour pulled towards the OpenAEC amber (#D97706).
+// Selected elements, drawn again over the lit pass.
 @fragment
 fn fs_highlight(in: VertexOut) -> @location(0) vec4<f32> {
     if (clipped(in.world)) {
         discard;
     }
-    let amber = to_linear(vec3<f32>(0.851, 0.467, 0.024));
-    let lit = shade(in);
-    let glow = 0.6 + 0.4 * clamp(dot(lit, vec3<f32>(0.333)), 0.0, 1.0);
-    return vec4<f32>(encode(mix(lit, amber * glow, 0.6)), 1.0);
+    return vec4<f32>(encode(selected(shade(in))), 1.0);
 }
 
 @fragment
@@ -191,6 +223,7 @@ fn vs_point(p: PointIn, @builtin(vertex_index) vi: u32) -> VertexOut {
     out.world = world.xyz;
     out.normal = vec3<f32>(0.0);
     out.color = p.color;
+    out.flags = 0u;
     return out;
 }
 
@@ -230,6 +263,10 @@ fn vs_face(v: VertexIn, @builtin(instance_index) face: u32) -> FaceOut {
     out.world = world.xyz;
     out.face = face;
     out.clip = u.view_proj * world;
+    // a hidden element does not count towards the cut fill
+    if ((unit_flags(unit_state(v)) & UNIT_HIDDEN) != 0u) {
+        out.clip = NOWHERE;
+    }
     return out;
 }
 

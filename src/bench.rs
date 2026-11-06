@@ -337,6 +337,14 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
 
 /// Copies the render target to the CPU and writes it as a PNG.
 fn write_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture, (w, h): (u32, u32), path: &Path) -> Result<(), String> {
+    let rgba = read_target(device, queue, target, (w, h))?;
+    crate::write_png(path, w, h, &rgba)?;
+    println!("wrote {}", path.display());
+    Ok(())
+}
+
+/// Copies the render target to the CPU: RGBA8, row by row.
+fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture, (w, h): (u32, u32)) -> Result<Vec<u8>, String> {
     let row = (w * 4).div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("bench.readback"),
@@ -362,14 +370,98 @@ fn write_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textu
         let start = (y * row) as usize;
         rgba.extend_from_slice(&data[start..start + (w * 4) as usize]);
     }
-    crate::write_png(path, w, h, &rgba)?;
-    println!("wrote {}", path.display());
-    Ok(())
+    Ok(rgba)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::explode::ExplodeIndex;
+    use crate::model::{Layer, Model};
+    use crate::units::{unit_state, UNIT_HIDDEN};
+
+    /// The colour in the middle of `model` rendered from above (64x64, solid), with `offsets`
+    /// as the units texture.
+    fn render_middle(model: &Arc<Model>, index: &Arc<ExplodeIndex>, offsets: Arc<Vec<[f32; 4]>>) -> [u8; 4] {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
+        let (w, h) = (64u32, 64u32);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut pipeline = ScenePipeline::new(&device, format);
+        let mut camera = Camera::default();
+        camera.set_preset(ViewPreset::Top);
+        camera.fit(&model.bounds, 1.0);
+        let p = ThemeKind::Light.palette();
+        let primitive = ScenePrimitive {
+            model: Some(model.clone()),
+            visible: vec![true; model.layers.len()],
+            selection: Vec::new(),
+            camera,
+            settings: RenderSettings {
+                mode: RenderMode::Solid,
+                grid: false,
+                background: srgb3(p.viewport),
+                grid_minor: srgb4(p.grid_minor),
+                grid_major: srgb4(p.grid_major),
+                model_matrix: glam::Mat4::IDENTITY,
+                section: None,
+                plane: None,
+                caps: false,
+                grids: false,
+                bounds: None,
+            },
+            explode: Some(index.clone()),
+            offsets,
+        };
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(w as f32, h as f32));
+        primitive.prepare(&mut pipeline, &device, &queue, &bounds, &Viewport::with_physical_size(iced::Size::new(w, h), 1.0));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        primitive.render(&pipeline, &mut encoder, &view, &iced::Rectangle { x: 0, y: 0, width: w, height: h });
+        queue.submit([encoder.finish()]);
+        let rgba = read_target(&device, &queue, &target, (w, h)).expect("read back");
+        let at = ((h / 2 * w + w / 2) * 4) as usize;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    }
+
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn hidden_unit_is_not_drawn() {
+        // two unit squares facing +Z: red element 10 at z = 0 under green element 20 at z = 1
+        let mut positions = Vec::new();
+        for z in [0.0, 1.0] {
+            positions.extend_from_slice(&[0.0, 0.0, z, 1.0, 0.0, z, 1.0, 1.0, z, 0.0, 1.0, z]);
+        }
+        let colors = [[255, 0, 0, 255]; 4].into_iter().chain([[0, 255, 0, 255]; 4]).collect();
+        let layer = Layer {
+            name: "Squares".into(),
+            positions,
+            normals: [0.0, 0.0, 1.0].repeat(8),
+            colors: Some(colors),
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            elements: vec![(10, 0, 6), (20, 6, 6)],
+            ..Layer::default()
+        };
+        let model = Arc::new(Model::new("squares".into(), "Test", vec![layer]));
+        let index = Arc::new(ExplodeIndex::new(&model));
+        let shown = render_middle(&model, &index, Arc::new(unit_state(&[], &[])));
+        assert!(shown[1] > shown[0], "the green square on top: {shown:?}");
+        let mut flags = vec![0u8; index.len()];
+        flags[index.unit(0, 4)] = UNIT_HIDDEN;
+        let hidden = render_middle(&model, &index, Arc::new(unit_state(&[], &flags)));
+        assert!(hidden[0] > hidden[1], "the red square once the green one is hidden: {hidden:?}");
+    }
 
     #[test]
     fn frame_stats_counts_frames_over_budget() {

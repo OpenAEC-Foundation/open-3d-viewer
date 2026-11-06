@@ -7,6 +7,7 @@
 //! a layer outside its elements, or a whole layer without elements. The units and their bounds at
 //! rest are indexed once per model; the renderer adds the offset of each vertex's unit in the
 //! vertex shader, so the geometry never changes and 0 % on every axis is the model as loaded.
+//! The same units carry the hidden and selected flags of `crate::units`.
 
 use crate::model::{Bounds, Model};
 use crate::viewport::render::transform_bounds;

@@ -30,6 +30,7 @@ pub mod remote_link;
 pub mod section;
 pub mod shell;
 mod theme;
+mod units;
 mod view_cube;
 mod viewport;
 #[cfg(target_arch = "wasm32")]

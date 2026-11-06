@@ -991,8 +991,9 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
 /// that leaves room for two million units.
 const OFFSETS_WIDTH: usize = 1024;
 
-/// The offsets of the exploded view for `units` units (at least one), zero: a float texture
-/// rather than a storage buffer, so the scene also draws through WebGL2.
+/// The state of `units` units (at least one), zero: the offset of the exploded view and the
+/// flags of `crate::units`. A float texture rather than a storage buffer, so the scene also
+/// draws through WebGL2.
 fn offsets_texture(device: &wgpu::Device, units: usize) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("o3v.explode.offsets"),
@@ -1006,7 +1007,8 @@ fn offsets_texture(device: &wgpu::Device, units: usize) -> wgpu::Texture {
     })
 }
 
-/// Writes `offsets` into the texture from unit 0, the last row padded with zeros.
+/// Writes the unit state (`crate::units::unit_state`) into the texture from unit 0, the last
+/// row padded with zeros.
 fn write_offsets(queue: &wgpu::Queue, texture: &wgpu::Texture, offsets: &[[f32; 4]]) {
     let rows = offsets.len().div_ceil(OFFSETS_WIDTH);
     let mut data = offsets.to_vec();

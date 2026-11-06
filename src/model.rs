@@ -380,10 +380,12 @@ impl Model {
     ///
     /// Structural parts come along with their documents untouched (source ids stay in the
     /// documents; [`StructuralPart::element_id`] gives the new element id), and the origins of
-    /// every source model are kept. A model whose anchor lies within [`ALIGN_LIMIT`] of the first
-    /// anchored model's is moved by the f64 difference (rounded once to f32), so both draw in one
-    /// frame; a farther model stays where it is, with a note in the project information. Models
-    /// without an anchor are never moved.
+    /// every source model are kept. When the model or the first anchored model has structural
+    /// parts, a model whose anchor lies within [`ALIGN_LIMIT`] of the first anchored model's is
+    /// moved by the f64 difference (rounded once to f32), so both draw in one frame; a farther
+    /// model stays where it is, with a note in the project information. Models without an anchor
+    /// are never moved, and models without structural parts (an IFC with another IFC) combine as
+    /// they always have.
     pub fn combine(models: &[std::sync::Arc<Model>]) -> Self {
         let mut layers = Vec::new();
         let mut props = HashMap::new();
@@ -392,8 +394,9 @@ impl Model {
         let mut origins = Vec::new();
         let mut parts = Vec::new();
         let mut next_id = 1u64;
-        // display alignment: to the first model that knows its anchor
-        let reference = models.iter().flat_map(|m| m.origins.iter()).find_map(|o| o.anchor);
+        // display alignment: to the first model that knows its anchor (and whether it has
+        // structural parts)
+        let reference = models.iter().find_map(|m| Some((m.origins.iter().find_map(|o| o.anchor)?, !m.structural.is_empty())));
         for model in models {
             let source = model.file_name();
             let ids: std::collections::BTreeSet<_> = model.props.keys().copied()
@@ -406,9 +409,12 @@ impl Model {
             }).collect();
             // the shift that aligns this model, and the translation that takes it there
             let anchor = model.origins.iter().find_map(|o| o.anchor);
+            // only where an analysis model takes part: meshes alone combine as they always have
+            let aligns = !model.structural.is_empty() || reference.is_some_and(|(_, structural)| structural);
             let (shift, far) = match (anchor, reference) {
-                (Some(a), Some(r)) if (a - r).length() < ALIGN_LIMIT => (Some(a - r), None),
-                (Some(a), Some(r)) => (None, Some((a - r).length())),
+                (Some(_), Some(_)) if !aligns => (None, None),
+                (Some(a), Some((r, _))) if (a - r).length() < ALIGN_LIMIT => (Some(a - r), None),
+                (Some(a), Some((r, _))) => (None, Some((a - r).length())),
                 _ => (None, None),
             };
             let current = model.origins.first().map_or(DVec3::ZERO, |o| o.shift);
@@ -513,32 +519,41 @@ impl Model {
         }
     }
 
-    /// Installs structural parts: indexes their objects by element id (a part whose ids are taken
-    /// by an earlier part gets fresh element ids for them) and adds their nodes to the bounds.
-    /// `origins` must cover the `model` of every part.
+    /// Installs structural parts: indexes their objects by element id (compact ids after the
+    /// model's own, see [`StructuralIndex::build`]) and adds their units (nodes, members with the
+    /// bulge of their arcs, surfaces) to the bounds. A model of only places-less objects
+    /// (sections, materials, load cases) gets a small box around the origin, so the camera, grid
+    /// and section box have something to frame. `origins` must cover the `model` of every part.
     pub fn set_structural(&mut self, parts: Vec<StructuralPart>) {
-        let (parts, index) = StructuralIndex::build(parts);
+        if parts.is_empty() {
+            self.structural = Vec::new();
+            self.structural_index = StructuralIndex::default();
+            return;
+        }
+        // compact structural ids start after every element id the model has
+        let first_free = self
+            .layers
+            .iter()
+            .flat_map(|l| l.elements.iter().map(|e| e.0))
+            .chain(self.props.keys().copied())
+            .filter(|&id| id <= crate::structural::MAX_SAFE_ID)
+            .max()
+            .map_or(1, |id| id + 1);
+        let (parts, index) = StructuralIndex::build(parts, first_free);
         self.structural = parts;
         self.structural_index = index;
-        for part in &self.structural {
-            let origin = self.origins.get(part.model as usize).copied().unwrap_or_default();
-            for p in part.doc.nodes.iter().map(|n| n.p).chain(crate::structural::curve_points(&part.doc)) {
-                let q = origin.display(p).as_vec3();
-                if q.is_finite() {
-                    self.bounds.extend(q.to_array());
-                }
-            }
+        for (_, b) in self.structural_index.unit_bounds(&self.structural, &self.origins) {
+            self.bounds.extend(b.min);
+            self.bounds.extend(b.max);
+        }
+        if !self.bounds.is_valid() {
+            self.bounds = Bounds { min: [-1.0; 3], max: [1.0; 3] };
         }
     }
 
     /// The structural object with element id `id`.
     pub fn structural_item(&self, id: u64) -> Option<StructuralItem<'_>> {
         self.structural_index.get(&self.structural, id)
-    }
-
-    /// True when a structural part has a node to draw.
-    pub fn has_structural_geometry(&self) -> bool {
-        self.structural.iter().any(|p| !p.doc.nodes.is_empty())
     }
 
     /// The display position (model space, f32) of world point `world` of source model `model`.

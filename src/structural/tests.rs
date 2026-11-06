@@ -31,6 +31,33 @@ fn app_with(model: Model) -> App {
 
 const N1: u64 = 72057594037927937; // sam_id(Node, 1)
 
+/// The element id of document id `source` in the first part of `model`.
+fn el(model: &Model, source: u64) -> u64 {
+    model.structural[0].element_of(source).expect("an object of the first part")
+}
+
+/// Every id in an MCP answer (`id`, `ids`, `object` and `unit` keys) survives a reader that takes
+/// JSON numbers as f64, as MCP clients in JavaScript do: a number at most 2^53, or a string.
+fn assert_ids_survive_f64(v: &Value) {
+    match v {
+        Value::Object(map) => {
+            for (k, x) in map {
+                if matches!(k.as_str(), "id" | "ids" | "object" | "unit") {
+                    for id in x.as_array().cloned().unwrap_or_else(|| vec![x.clone()]) {
+                        if let Some(n) = id.as_u64() {
+                            assert_eq!((n as f64) as u64, n, "{k}: {n} does not survive an f64");
+                            assert!(n <= MAX_SAFE_ID, "{k}: {n}");
+                        }
+                    }
+                }
+                assert_ids_survive_f64(x);
+            }
+        }
+        Value::Array(list) => list.iter().for_each(assert_ids_survive_f64),
+        _ => {}
+    }
+}
+
 #[test]
 fn nodes_only_samjson_opens_and_fits_to_view() {
     let model = loaders::load(&fixture("nodes_only.samjson")).expect("a nodes-only file opens");
@@ -44,7 +71,10 @@ fn nodes_only_samjson_opens_and_fits_to_view() {
     assert_eq!(model.bounds.max, [6.0, 4.0, 3.5]);
     // diagnostics are model notes
     assert!(model.project.info.iter().any(|(k, v)| k == "Model notes" && v == "1"));
-    assert!(model.project.info.iter().any(|(k, v)| k == "Note 1" && v.starts_with("named-support-expanded")));
+    assert!(model.project.info.iter().any(|(k, v)| k == "Note 1" && v.starts_with("named-support-expanded") && v.ends_with("(node 2)")));
+    // compact element ids, at or below 2^53, back to their source ids
+    assert_eq!(el(&model, N1), 1);
+    assert!(model.structural_index.element_ids().all(|id| id <= MAX_SAFE_ID));
 
     // the browser path: bytes, not a file
     let data = std::fs::read(fixture("nodes_only.samjson")).unwrap();
@@ -58,7 +88,7 @@ fn nodes_only_samjson_opens_and_fits_to_view() {
     assert!(app.camera.distance > 3.0);
     let explode = app.explode_index.as_ref().unwrap();
     assert_eq!(explode.len(), 5, "unit 0 and one unit per node");
-    assert_eq!(explode.unit_bounds(explode.structural_unit(N1).unwrap()).unwrap().min, [0.0; 3]);
+    assert_eq!(explode.unit_bounds(explode.structural_unit(1).unwrap()).unwrap().min, [0.0; 3]);
 }
 
 #[test]
@@ -67,9 +97,9 @@ fn the_portal_frame_opens_with_its_members() {
     let d = &model.structural[0].doc;
     assert_eq!((d.nodes.len(), d.members.len()), (4, 3));
     assert_eq!(model.bounds.size(), [6.0, 0.0, 4.0]);
-    let member = sam_id(IdKind::Member, 1);
+    let member = el(&model, sam_id(IdKind::Member, 1));
     let item = model.structural_item(member).unwrap();
-    assert_eq!(item.kind(), ItemKind::Member);
+    assert_eq!((item.kind(), item.source), (ItemKind::Member, sam_id(IdKind::Member, 1)));
     assert_eq!(item.unit_key(), Some(member));
     let props = model.element_props(member);
     let get = |k: &str| props.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
@@ -79,13 +109,31 @@ fn the_portal_frame_opens_with_its_members() {
     assert_eq!(get("Cardinal point").as_deref(), Some("8"));
     assert_eq!(model.element_bounds(member).unwrap().max, [0.0, 0.0, 4.0]);
     // a load sits on its member (the beam): its unit is the member's
-    let action = model.structural.iter().flat_map(|p| p.doc.actions.iter()).next().unwrap().id;
-    assert_eq!(model.structural_item(action).unwrap().unit_key(), Some(sam_id(IdKind::Member, 2)));
-    assert_eq!(model.element_bounds(action), model.element_bounds(sam_id(IdKind::Member, 2)));
+    let action = el(&model, model.structural[0].doc.actions[0].id);
+    let beam = el(&model, sam_id(IdKind::Member, 2));
+    assert_eq!(model.structural_item(action).unwrap().unit_key(), Some(beam));
+    assert_eq!(model.element_bounds(action), model.element_bounds(beam));
 }
 
 #[test]
-fn files_without_nodes_or_triangles_still_fail() {
+fn files_of_only_sections_open_and_empty_files_fail() {
+    // a section library: no nodes, but objects the MCP tools reach
+    let text = r#"{ "format": "sam-json", "version": 1, "source": {}, "units": "SI", "models": [ { "id": 1, "name": "Library",
+        "materials": [ { "id": 1, "name": "S235", "E": 2.1e11 } ],
+        "sections": [ { "id": 1, "name": "HEB 200", "material": 1, "shape": { "I": { "h": 0.2, "b": 0.2, "tw": 0.009, "tf": 0.015, "r": 0.018, "slope": 0 } } } ] } ] }"#;
+    let source = Source::Bytes { name: "library.samjson".into(), data: Arc::new(text.as_bytes().to_vec()) };
+    let model = loaders::load_with(&source, &Progress::default()).expect("a library opens");
+    assert_eq!(model.structural_index.len(), 2);
+    assert!(model.bounds.is_valid(), "a box around the origin to frame");
+    let mut app = app_with(model);
+    let found = run(&mut app, "find_structural", json!({ "kind": "section" })).unwrap();
+    assert_eq!(found["total"], json!(1));
+    let id = found["ids"][0].clone();
+    assert_eq!(run(&mut app, "get_structural_element", json!({ "id": id })).unwrap()["number"], json!("HEB 200"));
+    assert!(app.camera.distance.is_finite());
+
+    // an analysis model without any object, and no triangles: nothing to show
+
     let text = r#"{ "format": "sam-json", "version": 1, "source": {}, "units": "SI", "models": [ { "id": 1, "name": "Empty" } ] }"#;
     let source = Source::Bytes { name: "empty.samjson".into(), data: Arc::new(text.as_bytes().to_vec()) };
     let error = loaders::load_with(&source, &Progress::default()).unwrap_err();
@@ -227,16 +275,17 @@ fn combine_leaves_far_models_and_models_without_anchor_in_place() {
 #[test]
 fn explode_units_and_storeys_of_structural_objects() {
     let mut model = anchored("frame", DVec3::ZERO, &[[0.0, 0.0, 0.5], [4.0, 0.0, 3.5]]);
-    // storeys 00 (mesh element 7 at 0.5 m) and 01 (a second mesh element 8 at 3.5 m)
+    // storeys 00 (mesh element 7 at 0.5 m) and 01 (a second mesh element 6 at 3.5 m; added after
+    // the structural parts, so below their compact ids, which start after 7)
     model.project.levels = vec![("00".into(), 0.0), ("01".into(), 3.0)];
     model.props.insert(7, r#"{"level":"00"}"#.into());
-    model.props.insert(8, r#"{"level":"01"}"#.into());
+    model.props.insert(6, r#"{"level":"01"}"#.into());
     let mut upper = model.layers[0].clone();
     upper.positions.chunks_exact_mut(3).for_each(|p| p[2] = 3.5);
-    upper.elements = vec![(8, 0, 3)];
+    upper.elements = vec![(6, 0, 3)];
     model.layers.push(upper);
     let index = ExplodeIndex::new(&model);
-    let (n1, n2, m1) = (sam_id(IdKind::Node, 1), sam_id(IdKind::Node, 2), sam_id(IdKind::Member, 1));
+    let (n1, n2, m1) = (el(&model, sam_id(IdKind::Node, 1)), el(&model, sam_id(IdKind::Node, 2)), el(&model, sam_id(IdKind::Member, 1)));
     let (u1, u2, um) = (index.structural_unit(n1).unwrap(), index.structural_unit(n2).unwrap(), index.structural_unit(m1).unwrap());
     assert!(u1 != u2 && u2 != um && u1 != um);
     assert_eq!(index.unit_bounds(um).unwrap().max, [4.0, 0.0, 3.5]);
@@ -257,7 +306,9 @@ fn box_selection_finds_nodes_and_members() {
     let inside = |b: &Bounds| b.min[0] >= -0.5 && b.max[0] <= 0.5;
     let mut ids = model.structural_index.ids_in_box(&model.structural, &model.origins, inside);
     ids.sort_unstable();
-    assert_eq!(ids, vec![N1, N1 + 1, sam_id(IdKind::Member, 1)]);
+    let mut want = vec![el(&model, N1), el(&model, N1 + 1), el(&model, sam_id(IdKind::Member, 1))];
+    want.sort_unstable();
+    assert_eq!(ids, want);
 
     let mut app = app_with(model);
     let found = run(&mut app, "find_structural", json!({ "within": { "min": [-0.5, -1, -1], "max": [0.5, 1, 5] } })).unwrap();
@@ -269,11 +320,13 @@ fn box_selection_finds_nodes_and_members() {
 
 #[test]
 fn mcp_tools_answer_on_structural_objects() {
-    let mut app = app_with(loaders::load(&fixture("portal_frame.samjson")).unwrap());
-    let member = sam_id(IdKind::Member, 1);
+    let model = loaders::load(&fixture("portal_frame.samjson")).unwrap();
+    let (member, n1, n4) = (el(&model, sam_id(IdKind::Member, 1)), el(&model, N1), el(&model, N1 + 3));
+    let mut app = app_with(model);
 
     // get_element and find_elements return structural objects
-    let e = run(&mut app, "get_element", json!({ "id": N1 })).unwrap();
+    let e = run(&mut app, "get_element", json!({ "id": n1 })).unwrap();
+    assert_eq!(e["structural"]["source_id"], json!(N1.to_string()));
     assert_eq!(e["properties"]["Class"], json!("Structural node"));
     assert_eq!(e["properties"]["Support"], json!("fixed"));
     assert_eq!(e["bounds"]["min"], json!([0.0, 0.0, 0.0]));
@@ -284,6 +337,11 @@ fn mcp_tools_answer_on_structural_objects() {
     let by_text = run(&mut app, "find_elements", json!({ "text": "ipe 300" })).unwrap();
     assert!(by_text["total"].as_u64().unwrap() >= 1);
     assert!(run(&mut app, "zoom_to", json!({ "target": member })).is_ok());
+    // selecting comes with S3: the error says so rather than that the id does not exist
+    let refused = run(&mut app, "select", json!({ "id": member })).unwrap_err();
+    assert!(refused.contains("structural object") && refused.contains("S3"), "{refused}");
+    let refused = run(&mut app, "measure_between_elements", json!({ "a": member, "b": n1 })).unwrap_err();
+    assert!(refused.contains("structural object"), "{refused}");
 
     let list = run(&mut app, "list_structural", json!({})).unwrap();
     assert_eq!(list["parts"][0]["counts"]["nodes"], json!(4));
@@ -291,8 +349,21 @@ fn mcp_tools_answer_on_structural_objects() {
     assert_eq!(list["parts"][0]["counts"]["supports"], json!(2));
 
     let issues = run(&mut app, "get_structural_issues", json!({ "model": "portal" })).unwrap();
-    assert!(issues["issues"].as_array().unwrap().iter().any(|i| i["code"] == "named-support-expanded"));
+    let named = issues["issues"].as_array().unwrap().iter().find(|i| i["code"] == "named-support-expanded").unwrap().clone();
+    let named_node = named["source_object"].as_str().unwrap().parse::<u64>().unwrap();
+    assert_eq!(named["object"], json!(el(&app.model.as_ref().unwrap(), named_node)));
+    assert!(named["object_label"].as_str().unwrap().starts_with("node "));
     assert!(run(&mut app, "get_structural_issues", json!({ "model": 3 })).is_err());
+    // paged and filtered
+    let one = run(&mut app, "get_structural_issues", json!({ "limit": 1 })).unwrap();
+    assert_eq!(one["returned"], json!(1));
+    assert_eq!(one["truncated"], json!(issues["total"].as_u64().unwrap() > 1));
+    let by_code = run(&mut app, "get_structural_issues", json!({ "code": "named-support" })).unwrap();
+    assert!(by_code["total"].as_u64().unwrap() >= 1);
+    assert!(by_code["issues"].as_array().unwrap().iter().all(|i| i["code"] == "named-support-expanded"));
+    let about = run(&mut app, "get_structural_issues", json!({ "object": named["object"].clone() })).unwrap();
+    assert!(about["total"].as_u64().unwrap() >= 1);
+    assert!(about["issues"].as_array().unwrap().iter().all(|i| i["object"] == named["object"]));
 
     let m = run(&mut app, "get_structural_element", json!({ "id": member.to_string() })).unwrap();
     assert_eq!(m["kind"], json!("member"));
@@ -303,9 +374,24 @@ fn mcp_tools_answer_on_structural_objects() {
     assert!(run(&mut app, "get_structural_element", json!({ "id": 12345 })).is_err());
 
     let fixed = run(&mut app, "find_structural", json!({ "kind": "node", "support": "fixed" })).unwrap();
-    assert_eq!(fixed["ids"], json!([N1]));
+    assert_eq!(fixed["ids"], json!([n1]));
     let rollers = run(&mut app, "find_structural", json!({ "kind": "nodes", "support": "roller" })).unwrap();
-    assert_eq!(rollers["ids"], json!([N1 + 3]));
+    assert_eq!(rollers["ids"], json!([n4]));
+
+    // an id handed out goes through an f64 (a JavaScript MCP client) and back to the same object
+    let id = rollers["ids"][0].as_u64().unwrap();
+    let through_f64: Value = serde_json::from_str(&format!("{}", id as f64)).unwrap();
+    let node = run(&mut app, "get_structural_element", json!({ "id": through_f64 })).unwrap();
+    assert_eq!((node["kind"].clone(), node["number"].clone()), (json!("node"), json!("4")));
+    for (cmd, args) in [
+        ("find_structural", json!({})),
+        ("find_elements", json!({ "limit": 100 })),
+        ("get_structural_issues", json!({})),
+        ("get_structural_element", json!({ "id": member })),
+        ("get_element", json!({ "id": member })),
+    ] {
+        assert_ids_survive_f64(&run(&mut app, cmd, args).unwrap());
+    }
     let heb = run(&mut app, "find_structural", json!({ "kind": "member", "section": "heb" })).unwrap();
     assert_eq!(heb["total"], json!(2));
     let range = run(&mut app, "find_structural", json!({ "kind": "node", "number_from": 2, "number_to": 3, "limit": 1 })).unwrap();
@@ -327,4 +413,154 @@ fn non_structural_models_are_unchanged() {
     let state = run(&mut app, "get_state", json!({})).unwrap();
     assert!(state["model"].get("structural").is_none());
     assert_eq!(run(&mut app, "list_structural", json!({})).unwrap()["parts"], json!([]));
+}
+
+/// A sam-json document of `models`, each `(name, nodes)` with nodes `(number, [x, y, z], named
+/// support)`; `origin` left out when `None`.
+fn samjson(origin: Option<[f64; 3]>, models: &[(&str, &[(u64, [f64; 3], Option<&str>)])]) -> Source {
+    let models: Vec<Value> = models
+        .iter()
+        .enumerate()
+        .map(|(k, (name, nodes))| {
+            let nodes: Vec<Value> = nodes
+                .iter()
+                .map(|(n, p, support)| {
+                    let mut node = json!({ "id": sam_id(IdKind::Node, *n), "no": n.to_string(), "p": p, "frame": null });
+                    if let Some(s) = support {
+                        node["support"] = json!({ "named": s });
+                    }
+                    node
+                })
+                .collect();
+            json!({ "id": k + 1, "name": name, "nodes": nodes })
+        })
+        .collect();
+    let mut doc = json!({ "format": "sam-json", "version": 1, "source": {}, "units": "SI", "models": models });
+    if let Some(o) = origin {
+        doc["origin"] = json!(o);
+    }
+    Source::Bytes { name: "test.samjson".into(), data: Arc::new(doc.to_string().into_bytes()) }
+}
+
+#[test]
+fn two_analysis_models_of_one_file_keep_apart() {
+    // both number a node 1; the second's has a named support, so a note
+    let source = samjson(None, &[("Analytical", &[(1, [0.0, 0.0, 0.0], None)]), ("Physical axes", &[(1, [0.0, 0.0, 5.0], Some("pinned"))])]);
+    let model = loaders::load_with(&source, &Progress::default()).unwrap();
+    assert_eq!(model.origins.len(), 2, "one origin per analysis model");
+    let (a, b) = (model.structural[0].element_id(N1), model.structural[1].element_id(N1));
+    assert_ne!(a, b);
+    let (ia, ib) = (model.structural_item(a).unwrap(), model.structural_item(b).unwrap());
+    assert_ne!(ia.key(), ib.key(), "selection keys differ");
+    assert_eq!(model.element_bounds(b).unwrap().min, [0.0, 0.0, 5.0]);
+    // the note names the node by number and model, not by an id
+    let note = model.project.info.iter().find(|(k, _)| k == "Note 1").unwrap().1.clone();
+    assert!(note.ends_with("(node 1, Physical axes)"), "{note}");
+
+    // kept apart through combine, with the notes' objects still found
+    let other = Arc::new(anchored("other", DVec3::ZERO, &[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]));
+    let combined = Model::combine(&[Arc::new(model), other]);
+    assert_eq!(combined.origins.len(), 3);
+    let keys: std::collections::HashSet<_> = combined.structural_index.all(&combined.structural).iter().map(|i| i.key()).collect();
+    assert_eq!(keys.len(), combined.structural_index.len());
+    let mut app = app_with(combined);
+    let issues = run(&mut app, "get_structural_issues", json!({ "code": "named-support" })).unwrap();
+    let id = issues["issues"][0]["object"].clone();
+    let node = run(&mut app, "get_structural_element", json!({ "id": id })).unwrap();
+    assert_eq!((node["analysis_model"].clone(), node["world"].clone()), (json!("Physical axes"), json!([0.0, 0.0, 5.0])));
+}
+
+#[test]
+fn survey_coordinates_without_an_origin_get_an_anchor_and_align() {
+    let points = [(1, [155000.0, 463000.0, 0.0], None), (2, [155006.0, 463004.0, 3.5], None)];
+    let model = loaders::load_with(&samjson(None, &[("Survey", &points)]), &Progress::default()).unwrap();
+    // the middle of the nodes, rounded to metres, so the display keeps millimetres
+    assert_eq!(model.origins[0].anchor, Some(DVec3::new(155003.0, 463002.0, 2.0)));
+    assert_eq!(model.bounds.min, [-3.0, -2.0, -2.0]);
+    assert_eq!(model.bounds.max, [3.0, 2.0, 1.5]);
+    assert!(model.project.info.iter().any(|(k, v)| k == "World origin (metres)" && v.contains("chosen")));
+
+    // the same building from a file that gives its origin: aligned on Add, within 1 mm
+    let given = loaders::load_with(&samjson(Some([155000.0, 463000.0, 0.0]), &[("Given", &points)]), &Progress::default()).unwrap();
+    let combined = Model::combine(&[Arc::new(model), Arc::new(given)]);
+    assert!(!combined.project.info.iter().any(|(k, _)| k.ends_with("Not aligned")));
+    for k in 0..2 {
+        let b = |p: usize| combined.structural_item(combined.structural[p].element_id(N1 + k)).unwrap().bounds(&combined.origins).unwrap();
+        for axis in 0..3 {
+            assert!((b(0).min[axis] - b(1).min[axis]).abs() < 1e-3, "node {k} axis {axis}");
+        }
+    }
+
+    // a model near zero keeps zero
+    let near = loaders::load_with(&samjson(None, &[("Near", &[(1, [1.0, 2.0, 3.0], None)])]), &Progress::default()).unwrap();
+    assert_eq!(near.origins[0].anchor, Some(DVec3::ZERO));
+}
+
+#[test]
+fn model_bounds_hold_the_bulge_of_arcs() {
+    // an arc of 270 degrees from (1,0,0) through (0,1,0) to (0,-1,0): it passes x = -1
+    let mut doc = AnalysisModel::new(1, "Arc", SourceInfo::default());
+    for (k, p) in [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0]].into_iter().enumerate() {
+        doc.nodes.push(Node {
+            id: sam_id(IdKind::Node, k as u64 + 1),
+            number: (k + 1).to_string(),
+            p: DVec3::from_array(p),
+            frame: None,
+            support: None,
+            origin: bim_structural::NodeOrigin::Analytical,
+        });
+    }
+    doc.members.push(bim_structural::Member {
+        id: sam_id(IdKind::Member, 1),
+        number: "1".into(),
+        kind: bim_structural::MemberKind::Beam,
+        nodes: vec![sam_id(IdKind::Node, 1), sam_id(IdKind::Node, 2)],
+        geometry: Curve::Arc { mid: DVec3::new(0.0, 1.0, 0.0) },
+        z_ref: DVec3::Z,
+        orientation: Orientation::Default,
+        section: None,
+        section_rotation: 0.0,
+        insertion: Default::default(),
+        releases: [None, None],
+        material: None,
+        links: Vec::new(),
+    });
+    doc.rebuild_index();
+    let mut model = Model::new(PathBuf::from("arc.samjson"), "test", Vec::new());
+    model.set_structural(vec![StructuralPart::new(0, Arc::new(doc))]);
+    assert!(model.bounds.min[0] < -0.9, "{:?}", model.bounds);
+    let member = model.structural[0].element_id(sam_id(IdKind::Member, 1));
+    let b = model.element_bounds(member).unwrap();
+    for k in 0..3 {
+        assert!(model.bounds.min[k] <= b.min[k] && model.bounds.max[k] >= b.max[k], "model {:?} holds member {b:?}", model.bounds);
+    }
+}
+
+#[test]
+fn meshes_with_anchors_combine_as_before_and_an_analysis_model_aligns_to_them() {
+    // two anchored mesh models (IFC) 5 m apart: not moved, no note
+    let mesh = |name: &str, anchor: DVec3| {
+        let layer = Layer {
+            name: "L".into(),
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2],
+            elements: vec![(1, 0, 3)],
+            ..Layer::default()
+        };
+        let mut m = Model::new(PathBuf::from(name), "IFC", vec![layer]);
+        m.origins = vec![crate::model::Origin { anchor: Some(anchor), shift: DVec3::ZERO }];
+        Arc::new(m)
+    };
+    let (a, b) = (mesh("a.ifc", DVec3::new(155000.0, 463000.0, 0.0)), mesh("b.ifc", DVec3::new(155005.0, 463000.0, 0.0)));
+    let combined = Model::combine(&[a.clone(), b.clone()]);
+    assert_eq!(combined.layers[1].positions, b.layers[0].positions);
+    assert_eq!(combined.origins[1].shift, DVec3::ZERO);
+    assert!(!combined.project.info.iter().any(|(k, _)| k.ends_with("Not aligned")));
+
+    // an analysis model of the same site is moved onto the IFC
+    let sam = Arc::new(anchored("frame", DVec3::new(155010.0, 463020.0, 0.0), &[[155010.0, 463020.0, 0.0], [155011.0, 463020.0, 0.0]]));
+    let combined = Model::combine(&[a, sam]);
+    assert_eq!(combined.origins[1].shift, DVec3::new(10.0, 20.0, 0.0));
+    let node = combined.structural_item(combined.structural[0].element_id(N1)).unwrap().bounds(&combined.origins).unwrap();
+    assert_eq!(node.min, [10.0, 20.0, 0.0]);
 }

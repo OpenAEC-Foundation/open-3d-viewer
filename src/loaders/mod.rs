@@ -320,14 +320,20 @@ pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, Stri
     model.file_size = sources.iter().map(Source::len).sum();
     model.views = loaded.views;
     model.project = loaded.project;
-    model.origins = vec![Origin { anchor: loaded.origin, shift: glam::DVec3::ZERO }];
+    // one origin per analysis model (the first shared with the layers), all at the file's anchor:
+    // the origin index is the `model` of a structural object's key, so two analysis models of one
+    // file that number their objects alike keep apart
+    let origin = Origin { anchor: loaded.origin, shift: glam::DVec3::ZERO };
+    model.origins = vec![origin; loaded.structural.len().max(1)];
     if !loaded.structural.is_empty() {
-        model.set_structural(loaded.structural.into_iter().map(|m| StructuralPart::new(0, Arc::new(m))).collect());
+        let parts = loaded.structural.into_iter().enumerate().map(|(k, m)| StructuralPart::new(k as u32, Arc::new(m))).collect();
+        model.set_structural(parts);
     }
     model.load_time = start.elapsed();
     model.source_y_up = loader.source_y_up();
-    // a file of only analysis objects (nodes and members, no triangles) opens too
-    if model.layers.is_empty() && !model.has_structural_geometry() {
+    // a file of only analysis objects (nodes and members, or only sections, materials or load
+    // cases, no triangles) opens too
+    if model.layers.is_empty() && model.structural_index.is_empty() {
         return Err(format!("{}: no geometry found", model.file_name()));
     }
     Ok(model)

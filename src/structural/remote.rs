@@ -2,7 +2,7 @@
 //! `get_structural_element` and `find_structural`. Each is a function of the open model and the
 //! tool's arguments; `App::command` (`src/remote.rs`) calls them.
 
-use super::{has_unit, kind_from_name, kind_name, preset_family, StructuralItem};
+use super::{has_unit, id_json, kind_from_name, kind_name, object_label, preset_family, StructuralItem};
 use crate::model::{Bounds, Model};
 use crate::viewport::render::transform_bounds;
 use bim_structural::{support, Curve, ItemKind, ModelKind, Target};
@@ -92,23 +92,42 @@ pub fn list(model: &Model) -> Answer {
     }))
 }
 
-/// `get_structural_issues`: the diagnostics of one or all analysis models.
+/// The most points of a polyline or surface boundary `get_structural_element` lists.
+const MAX_POINTS: usize = 1000;
+
+/// A document id as JSON: always a decimal string (`sam_id`s are above 2^53).
+fn source_json(id: u64) -> Value {
+    Value::String(id.to_string())
+}
+
+/// `get_structural_issues`: the diagnostics of one or all analysis models, a page at a time;
+/// `code` keeps those whose code contains it, `object` those about one element.
 pub fn issues(model: &Model, a: &Value) -> Answer {
+    let code = a.get("code").and_then(Value::as_str).map(str::to_lowercase);
+    let object = match a.get("object") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().or_else(|| v.as_str()?.trim().parse().ok()).ok_or("object: an element id")?),
+    };
     let mut out = Vec::new();
     for i in parts_of(model, a)? {
         let part = &model.structural[i];
         for d in &part.doc.diagnostics {
+            let element = d.object.and_then(|id| part.element_of(id));
+            if code.as_ref().is_some_and(|c| !d.code.to_lowercase().contains(c.as_str())) || object.is_some_and(|o| element != Some(o)) {
+                continue;
+            }
             out.push(json!({
                 "part": i,
                 "model": part.doc.name,
-                "object": d.object.map(|id| part.element_id(id)),
-                "source_object": d.object,
+                "object": element.map(id_json),
+                "object_label": d.object.map(|id| object_label(&part.doc, id)),
+                "source_object": d.object.map(source_json),
                 "code": d.code,
                 "message": d.message,
             }));
         }
     }
-    Ok(json!({ "total": out.len(), "issues": out }))
+    Ok(crate::remote::paged("issues", out, crate::remote::page(a, 100, 1000)))
 }
 
 /// `get_structural_element`: one object with its coordinates (f64 world metres), frame, section,
@@ -124,19 +143,19 @@ fn element_json(model: &Model, item: &StructuralItem, mm: &Mat4) -> Value {
     let i = item.item.slot as usize;
     let origin = model.origins.get(item.part.model as usize).copied().unwrap_or_default();
     let mut out = json!({
-        "id": item.element,
+        "id": id_json(item.element),
         "kind": kind_name(item.kind()),
         "number": item.number(),
         "part": item.part_index,
         "model": item.part.model,
         "analysis_model": d.name,
-        "source_id": item.source,
-        "unit": item.unit_key(),
+        "source_id": source_json(item.source),
+        "unit": item.unit_key().map(id_json),
         "properties": props_value(item.props()),
         "bounds": item.bounds(&model.origins).map(|b| jbounds(&transform_bounds(&b, mm))),
     });
     let node_json = |id: u64| {
-        d.node(id).map(|n| json!({ "id": item.part.element_id(id), "number": n.number, "world": v3(n.p), "display": f32v(origin.display(n.p).as_vec3().to_array()) }))
+        d.node(id).map(|n| json!({ "id": item.part.element_of(id).map(id_json), "number": n.number, "world": v3(n.p), "display": f32v(origin.display(n.p).as_vec3().to_array()) }))
     };
     match item.kind() {
         ItemKind::Node => {
@@ -168,10 +187,14 @@ fn element_json(model: &Model, item: &StructuralItem, mm: &Mat4) -> Value {
             out["geometry"] = match &mem.geometry {
                 Curve::Line => json!("line"),
                 Curve::Arc { mid } => json!({ "arc": { "mid": v3(*mid) } }),
-                Curve::Polyline(p) => json!({ "polyline": p.iter().map(|x| v3(*x)).collect::<Vec<_>>() }),
+                Curve::Polyline(p) => json!({
+                    "polyline": p.iter().take(MAX_POINTS).map(|x| v3(*x)).collect::<Vec<_>>(),
+                    "points": p.len(),
+                    "truncated": p.len() > MAX_POINTS,
+                }),
             };
             out["section"] = mem.section.map_or(Value::Null, |(s, e)| {
-                let sec = |id: u64| d.section(id).map(|s| json!({ "id": item.part.element_id(id), "name": s.name }));
+                let sec = |id: u64| d.section(id).map(|s| json!({ "id": item.part.element_of(id).map(id_json), "name": s.name }));
                 json!({ "start": sec(s), "end": e.and_then(sec) })
             });
             let ins = &mem.insertion;
@@ -188,13 +211,15 @@ fn element_json(model: &Model, item: &StructuralItem, mm: &Mat4) -> Value {
         }
         ItemKind::Surface => {
             let s = &d.surfaces[i];
-            out["boundary"] = Value::Array(s.boundary.iter().filter_map(|&n| node_json(n)).collect());
+            out["boundary"] = Value::Array(s.boundary.iter().take(MAX_POINTS).filter_map(|&n| node_json(n)).collect());
+            out["boundary_nodes"] = json!(s.boundary.len());
+            out["boundary_truncated"] = json!(s.boundary.len() > MAX_POINTS);
         }
         ItemKind::Action => {
             let act = &d.actions[i];
             out["target"] = match &act.target {
-                Target::Node(id) | Target::Surface(id) | Target::Member { id, .. } => json!(item.part.element_id(*id)),
-                Target::Free(p) => json!(p.iter().map(|x| v3(*x)).collect::<Vec<_>>()),
+                Target::Node(id) | Target::Surface(id) | Target::Member { id, .. } => item.part.element_of(*id).map_or(Value::Null, id_json),
+                Target::Free(p) => json!(p.iter().take(MAX_POINTS).map(|x| v3(*x)).collect::<Vec<_>>()),
             };
         }
         _ => {}
@@ -304,7 +329,7 @@ pub fn find(model: &Model, a: &Value, mm: &Mat4) -> Answer {
     out.insert("offset".into(), json!(offset));
     out.insert("returned".into(), json!(page.len()));
     out.insert("truncated".into(), json!(offset + page.len() < total));
-    out.insert("ids".into(), json!(page));
+    out.insert("ids".into(), Value::Array(page.into_iter().map(id_json).collect()));
     Ok(Value::Object(out))
 }
 
@@ -312,9 +337,9 @@ pub fn find(model: &Model, a: &Value, mm: &Mat4) -> Answer {
 pub fn as_element(model: &Model, id: u64, mm: &Mat4) -> Option<Value> {
     let item = model.structural_item(id)?;
     Some(json!({
-        "id": id,
+        "id": id_json(id),
         "layers": [],
-        "structural": { "kind": kind_name(item.kind()), "number": item.number(), "part": item.part_index, "model": item.part.model, "source_id": item.source },
+        "structural": { "kind": kind_name(item.kind()), "number": item.number(), "part": item.part_index, "model": item.part.model, "source_id": source_json(item.source) },
         "properties": props_value(item.props()),
         "triangles": 0,
         "bounds": item.bounds(&model.origins).map(|b| jbounds(&transform_bounds(&b, mm))),

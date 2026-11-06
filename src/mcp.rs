@@ -143,11 +143,15 @@ pub fn tools() -> Vec<Value> {
             json!({ "id": { "type": ["integer", "string"] } }), &["id"], true),
         tool("list_structural", "The structural analysis models in the open model (from .samjson files): per model its name, kind (analytical or physical axes), source, origin (world metres) and counts of nodes, members, surfaces, line supports, sections, load cases, combinations, actions, result sets and supports, and how many model notes (diagnostics) it has.",
             json!({}), &[], true),
-        tool("get_structural_issues", "The model notes (diagnostics) of a structural analysis model: everything the importer skipped, guessed or converted (named supports expanded, default local axes, unknown profiles, ...), with the element id of the object each is about.",
-            json!({ "model": { "type": ["integer", "string"], "description": "Index from list_structural or (part of) the model's name; default all" } }), &[], true),
+        tool("get_structural_issues", "The model notes (diagnostics) of a structural analysis model: everything the importer skipped, guessed or converted (named supports expanded, default local axes, unknown profiles, ...), with the element id, kind and number of the object each is about, a page at a time.",
+            paging(json!({
+                "model": { "type": ["integer", "string"], "description": "Index from list_structural or (part of) the model's name; default all" },
+                "code": { "type": "string", "description": "Only notes whose code contains this, e.g. \"named-support\"" },
+                "object": { "type": ["integer", "string"], "description": "Only notes about this element id" }
+            }), 100, 1000), &[], true),
         tool("get_structural_element", "A structural object (node, member, surface, line support, section, material, load case, combination, load or result set) as the analysis model holds it: world coordinates in f64 metres, member frame, section, insertion (cardinal point, eccentricity, end offsets), releases and support DOF codes (ux uy uz rx ry rz: 1 restrained or connected, 0 free or released, s spring, n nonlinear) with their names.",
-            json!({ "id": { "type": ["integer", "string"], "description": "Element id (from find_structural, find_elements or get_structural_issues)" } }), &["id"], true),
-        tool("find_structural", "Find structural objects: element ids of one kind that pass the filters, a page at a time. With within, the nodes, members and surfaces inside a box (scene coordinates, as get_element's bounds): box selection.",
+            json!({ "id": { "type": ["integer", "string"], "description": "Element id (from find_structural, find_elements or get_structural_issues), as given; source ids are strings and are not element ids" } }), &["id"], true),
+        tool("find_structural", "Find structural objects: element ids of one kind that pass the filters, a page at a time. With within, the nodes, members and surfaces inside a box (scene coordinates, as get_element's bounds): box selection. Element ids are small integers; pass them back as given (a decimal string is accepted too).",
             paging(json!({
                 "kind": { "type": "string", "enum": ["node", "member", "surface", "line_support", "section", "material", "load_case", "combination", "action", "result_set"] },
                 "model": { "type": ["integer", "string"], "description": "Index from list_structural or (part of) the model's name" },

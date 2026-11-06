@@ -17,13 +17,22 @@ use glam::DVec3;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// First element id handed out when a structural id is already taken by an earlier part of the
-/// same model (kind byte 0xFF: no `sam_id` kind, far above IFC express ids).
-const FRESH_IDS: u64 = 0xFF << 56;
+/// The largest element id a JSON number keeps exactly when it is read as an f64 (2^53 - 1), as
+/// MCP clients written in JavaScript read every number. Element ids stay at or below it; a
+/// `sam_id` (kind byte in bits 56-63) never does, so structural objects get compact element ids
+/// and their source ids go out as strings.
+pub const MAX_SAFE_ID: u64 = (1 << 53) - 1;
+
+/// An id as JSON: a number when an f64 holds it exactly, else its decimal string (which every
+/// tool that takes an id accepts).
+pub fn id_json(id: u64) -> serde_json::Value {
+    if id <= MAX_SAFE_ID { serde_json::Value::from(id) } else { serde_json::Value::String(id.to_string()) }
+}
 
 /// A structural object's key as the selection will know it: the source model (index into
-/// `Model::origins`) and the id in its document. This is the seam to PR #91's
-/// `ElementKey { model, source }`: once that lands, a structural object's key is
+/// `Model::origins`, one per analysis model, so two analysis models of one file that number
+/// their objects alike have different keys) and the id in its document. This is the seam to PR
+/// #91's `ElementKey { model, source }`: once that lands, a structural object's key is
 /// `ElementKey { model: key.model, source: key.source }`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StructuralKey {
@@ -34,23 +43,45 @@ pub struct StructuralKey {
 /// One analysis model of a loaded file, as the viewer keeps it.
 #[derive(Debug, Clone)]
 pub struct StructuralPart {
-    /// The source model: index into `Model::origins`.
+    /// The source model: index into `Model::origins`. Each analysis model of a file has its own
+    /// (all at the file's anchor).
     pub model: u32,
     /// The document, f64 world metres of the source file (no anchor subtracted).
     pub doc: Arc<AnalysisModel>,
-    /// Element id per source id where they differ (combined models, ids taken by an earlier
-    /// part); every other object's element id is its source id.
+    /// Element id per source id where they differ (compact ids for source ids above
+    /// [`MAX_SAFE_ID`] or taken by an earlier part, combined models); every other object's
+    /// element id is its source id.
     ids: Option<Arc<HashMap<Id, u64>>>,
+    /// The diagnostics about each object (indices into `doc.diagnostics`), so properties find
+    /// their notes without scanning every diagnostic.
+    notes: Arc<HashMap<Id, Vec<u32>>>,
 }
 
 impl StructuralPart {
     pub fn new(model: u32, doc: Arc<AnalysisModel>) -> Self {
-        Self { model, doc, ids: None }
+        let mut notes: HashMap<Id, Vec<u32>> = HashMap::new();
+        for (k, d) in doc.diagnostics.iter().enumerate() {
+            if let Some(object) = d.object {
+                notes.entry(object).or_default().push(k as u32);
+            }
+        }
+        Self { model, doc, ids: None, notes: Arc::new(notes) }
     }
 
-    /// The element id of a document id.
+    /// The element id of a document id (the id itself when it has no element id of its own).
     pub fn element_id(&self, source: Id) -> u64 {
         self.ids.as_ref().and_then(|m| m.get(&source).copied()).unwrap_or(source)
+    }
+
+    /// The element id of a document id that names an object of this part; `None` for an id the
+    /// document does not hold.
+    pub fn element_of(&self, source: Id) -> Option<u64> {
+        self.doc.item(source).map(|_| self.element_id(source))
+    }
+
+    /// The diagnostics about the object with document id `source`.
+    pub fn notes_of(&self, source: Id) -> impl Iterator<Item = &bim_structural::Diagnostic> + '_ {
+        self.notes.get(&source).into_iter().flatten().filter_map(|&k| self.doc.diagnostics.get(k as usize))
     }
 
     /// The selection key of a document id.
@@ -62,7 +93,7 @@ impl StructuralPart {
     /// (for [`crate::model::Model::combine`]). The document is shared, not copied.
     pub fn renumbered(&self, model: u32, remap: impl Fn(u64) -> u64) -> Self {
         let ids = items(&self.doc).map(|(id, _)| (id, remap(self.element_id(id)))).collect();
-        Self { model, doc: self.doc.clone(), ids: Some(Arc::new(ids)) }
+        Self { model, doc: self.doc.clone(), ids: Some(Arc::new(ids)), notes: self.notes.clone() }
     }
 }
 
@@ -79,15 +110,6 @@ pub fn items(doc: &AnalysisModel) -> impl Iterator<Item = (Id, ItemRef)> + '_ {
         .chain(doc.combinations.iter().map(|x| x.id).enumerate().map(at(ItemKind::Combination)))
         .chain(doc.actions.iter().map(|x| x.id).enumerate().map(at(ItemKind::Action)))
         .chain(doc.results.iter().map(|x| x.id).enumerate().map(at(ItemKind::ResultSet)))
-}
-
-/// Points of member axes besides their nodes (arc mid points, polyline vertices), world metres.
-pub fn curve_points(doc: &AnalysisModel) -> impl Iterator<Item = DVec3> + '_ {
-    doc.members.iter().flat_map(|m| match &m.geometry {
-        Curve::Line => Vec::new(),
-        Curve::Arc { mid } => vec![*mid],
-        Curve::Polyline(points) => points.clone(),
-    })
 }
 
 /// The lower-case name of an item kind, as MCP tools take and give it.
@@ -126,8 +148,35 @@ pub fn kind_from_name(name: &str) -> Option<ItemKind> {
     find(&name).or_else(|| find(name.strip_suffix('s')?))
 }
 
-/// The class shown in the properties ("Class").
-fn class_name(kind: ItemKind) -> &'static str {
+/// The source numbering or name of an object, as text.
+fn number_of(d: &AnalysisModel, item: ItemRef, source: Id) -> String {
+    let i = item.slot as usize;
+    match item.kind {
+        ItemKind::Node => d.nodes[i].number.clone(),
+        ItemKind::Member => d.members[i].number.clone(),
+        ItemKind::Surface => d.surfaces[i].number.clone(),
+        ItemKind::LineSupport => d.line_supports[i].number.clone(),
+        ItemKind::Section => d.sections[i].name.clone(),
+        ItemKind::Material => d.materials[i].name.clone(),
+        ItemKind::LoadCase => d.load_cases[i].number.clone(),
+        ItemKind::Combination => d.combinations[i].number.clone(),
+        ItemKind::Action => bim_structural::id::number_of(source).to_string(),
+        ItemKind::ResultSet => d.results[i].number.clone(),
+    }
+}
+
+/// An object of a document as people name it: its kind and source number (`node 1`,
+/// `section HEB 200`), stable however the viewer numbers its elements; `source id N` for an id
+/// the document does not hold.
+pub fn object_label(d: &AnalysisModel, source: Id) -> String {
+    match d.item(source) {
+        Some(item) => format!("{} {}", kind_name(item.kind).replace('_', " "), number_of(d, item, source)),
+        None => format!("source id {source}"),
+    }
+}
+
+/// The class shown in the properties ("Class"), also the category `find_elements` lists.
+pub fn class_name(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Node => "Structural node",
         ItemKind::Member => "Structural member",
@@ -162,20 +211,29 @@ pub struct StructuralIndex {
 }
 
 impl StructuralIndex {
-    /// Indexes `parts`. An object whose element id an earlier part already uses gets a fresh one
-    /// (two analysis models of one file may number their nodes alike).
-    pub fn build(mut parts: Vec<StructuralPart>) -> (Vec<StructuralPart>, Self) {
+    /// Indexes `parts`. An object keeps the element id its part gives it when that is at most
+    /// [`MAX_SAFE_ID`] and no earlier object has it; every other object (a `sam_id` source id,
+    /// or an id taken by an earlier part: two analysis models of one file may number their nodes
+    /// alike) gets a compact one, counting up from `first_free` and past every id the parts keep.
+    /// `first_free` lies above the model's own element ids.
+    pub fn build(mut parts: Vec<StructuralPart>, first_free: u64) -> (Vec<StructuralPart>, Self) {
         let mut by_element: HashMap<u64, Entry> = HashMap::new();
-        let mut fresh = FRESH_IDS;
+        let mut next = parts
+            .iter()
+            .flat_map(|part| items(&part.doc).map(move |(source, _)| part.element_id(source)))
+            .filter(|&id| id <= MAX_SAFE_ID)
+            .fold(first_free.max(1), |next, id| next.max(id + 1));
         for (p, part) in parts.iter_mut().enumerate() {
             let mut moved: HashMap<Id, u64> = HashMap::new();
             for (source, item) in items(&part.doc) {
-                let mut element = part.element_id(source);
-                if by_element.contains_key(&element) {
-                    while by_element.contains_key(&fresh) {
-                        fresh += 1;
-                    }
-                    element = fresh;
+                let given = part.element_id(source);
+                let element = if given > MAX_SAFE_ID || by_element.contains_key(&given) {
+                    next += 1;
+                    next - 1
+                } else {
+                    given
+                };
+                if element != given {
                     moved.insert(source, element);
                 }
                 by_element.insert(element, Entry { part: p as u32, source, item });
@@ -277,20 +335,7 @@ impl<'a> StructuralItem<'a> {
 
     /// The source numbering or name, as text.
     pub fn number(&self) -> String {
-        let d = self.doc();
-        let i = self.slot();
-        match self.kind() {
-            ItemKind::Node => d.nodes[i].number.clone(),
-            ItemKind::Member => d.members[i].number.clone(),
-            ItemKind::Surface => d.surfaces[i].number.clone(),
-            ItemKind::LineSupport => d.line_supports[i].number.clone(),
-            ItemKind::Section => d.sections[i].name.clone(),
-            ItemKind::Material => d.materials[i].name.clone(),
-            ItemKind::LoadCase => d.load_cases[i].number.clone(),
-            ItemKind::Combination => d.combinations[i].number.clone(),
-            ItemKind::Action => bim_structural::id::number_of(self.source).to_string(),
-            ItemKind::ResultSet => d.results[i].number.clone(),
-        }
+        number_of(self.doc(), self.item, self.source)
     }
 
     /// The element id of the unit this object moves, hides and highlights with: itself for a
@@ -581,8 +626,7 @@ impl<'a> StructuralItem<'a> {
         });
         put("Source", d.source.format.clone());
         put("Source id", self.source.to_string());
-        let notes: Vec<String> =
-            d.diagnostics.iter().filter(|x| x.object == Some(self.source)).map(|x| format!("{}: {}", x.code, x.message)).collect();
+        let notes: Vec<String> = self.part.notes_of(self.source).map(|x| format!("{}: {}", x.code, x.message)).collect();
         put("Notes", notes.join("; "));
         out
     }
@@ -753,20 +797,66 @@ mod unit_tests {
     }
 
     #[test]
-    fn colliding_parts_get_fresh_ids() {
+    fn parts_get_compact_distinct_ids_and_keys() {
+        // two analysis models of one file (origins 0 and 1) that both number a node 1
         let a = Arc::new(nodes("A", &[[0.0; 3], [1.0, 0.0, 0.0]]));
         let b = Arc::new(nodes("B", &[[0.0, 0.0, 5.0]]));
-        let (parts, index) = StructuralIndex::build(vec![StructuralPart::new(0, a), StructuralPart::new(0, b)]);
+        let (parts, index) = StructuralIndex::build(vec![StructuralPart::new(0, a), StructuralPart::new(1, b)], 10);
         assert_eq!(index.len(), 3);
         let n1 = sam_id(IdKind::Node, 1);
-        assert_eq!(parts[0].element_id(n1), n1);
-        let moved = parts[1].element_id(n1);
-        assert_ne!(moved, n1);
-        let item = index.get(&parts, moved).unwrap();
+        // sam ids are above 2^53: every object gets a compact id after the model's own (10)
+        let mut ids = vec![parts[0].element_id(n1), parts[0].element_id(sam_id(IdKind::Node, 2)), parts[1].element_id(n1)];
+        assert_eq!(ids, vec![10, 11, 12]);
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
+        let first = index.get(&parts, 10).unwrap();
+        let item = index.get(&parts, 12).unwrap();
         assert_eq!((item.part_index, item.source, item.kind()), (1, n1, ItemKind::Node));
-        assert_eq!(item.key(), StructuralKey { model: 0, source: n1 });
-        let origins = [Origin::default()];
+        // the selection keys of the two node 1s differ
+        assert_eq!(first.key(), StructuralKey { model: 0, source: n1 });
+        assert_eq!(item.key(), StructuralKey { model: 1, source: n1 });
+        let origins = [Origin::default(); 2];
         assert_eq!(item.bounds(&origins).unwrap().min, [0.0, 0.0, 5.0]);
+        assert_eq!(parts[1].element_of(sam_id(IdKind::Node, 9)), None);
+
+        // ids at or below 2^53 that no earlier part has are kept; a taken one moves past them
+        let small = |name: &str| {
+            let mut m = nodes(name, &[[0.0; 3]]);
+            m.nodes[0].id = 7;
+            m.rebuild_index();
+            StructuralPart::new(0, Arc::new(m))
+        };
+        let (parts, _) = StructuralIndex::build(vec![small("C"), small("D")], 1);
+        assert_eq!((parts[0].element_id(7), parts[1].element_id(7)), (7, 8));
+    }
+
+    #[test]
+    fn ids_json_survive_an_f64() {
+        for id in [1, MAX_SAFE_ID, MAX_SAFE_ID + 1, sam_id(IdKind::Node, 9)] {
+            let v = id_json(id);
+            let back = match &v {
+                serde_json::Value::Number(n) => n.as_f64().unwrap() as u64,
+                serde_json::Value::String(s) => s.parse().unwrap(),
+                _ => unreachable!(),
+            };
+            assert_eq!(back, id, "{v}");
+        }
+        assert!(id_json(sam_id(IdKind::Node, 9)).is_string());
+    }
+
+    #[test]
+    fn notes_are_found_per_object() {
+        let mut m = nodes("A", &[[0.0; 3], [1.0, 0.0, 0.0]]);
+        let n2 = sam_id(IdKind::Node, 2);
+        for k in 0..3 {
+            m.diagnostics.push(bim_structural::Diagnostic { object: Some(n2), code: "c".into(), message: format!("m{k}") });
+        }
+        m.diagnostics.push(bim_structural::Diagnostic { object: None, code: "file".into(), message: String::new() });
+        let part = StructuralPart::new(0, Arc::new(m));
+        assert_eq!(part.notes_of(n2).count(), 3);
+        assert_eq!(part.notes_of(sam_id(IdKind::Node, 1)).count(), 0);
+        assert_eq!(object_label(&part.doc, n2), "node 2");
+        assert_eq!(object_label(&part.doc, 5), "source id 5");
     }
 
     #[test]

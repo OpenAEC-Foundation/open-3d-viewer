@@ -18,6 +18,10 @@ impl Loader for RvtLoader {
         "Revit"
     }
 
+    fn featured(&self) -> Option<u8> {
+        Some(1)
+    }
+
     fn extensions(&self) -> &'static [&'static str] {
         &["rvt", "rfa"]
     }

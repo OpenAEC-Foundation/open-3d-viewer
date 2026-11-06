@@ -12,7 +12,7 @@ rust-version = "1.96"
 repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
 default-run = "open-3d-viewer"
 
-# The desktop app includes Revit support; the web target uses byte-oriented readers.
+# The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
 members = ["crates/bim-structural"]
@@ -78,10 +78,11 @@ shapefile = { version = "0.9", features = ["encoding_rs"] }
 cadmpeg-codec-step = "0.6.8"
 cadmpeg-ir = "0.6.8"
 cadmpeg-tessellate = "0.6.8"
+# IFC parsing, units, placements, openings and tessellation from the IFClite library (MPL-2.0):
+# on the desktop on a large-stack worker pool, in the browser on the page's own thread.
+ifc-lite-processing = "=25.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
-ifc-lite-processing = "=25.0.1"
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.

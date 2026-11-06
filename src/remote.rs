@@ -61,6 +61,8 @@ pub struct RemoteState {
     pub pending_load: Vec<RemoteCall>,
     /// `screenshot` calls waiting for the capture.
     pub pending_shots: Vec<RemoteCall>,
+    /// `save_file` calls waiting until the file is written.
+    pub pending_save: Vec<RemoteCall>,
     /// Size of the last viewport screenshot handed out: screen coordinates in commands are in its
     /// pixels.
     pub shot_image: Option<(u32, u32)>,
@@ -113,7 +115,41 @@ pub fn serve() -> impl Stream<Item = Message> {
     })
 }
 
+/// The MCP endpoint over HTTP to start with the control port (OpenAEC SuperCloud), if any.
+#[cfg(not(target_arch = "wasm32"))]
+static MCP_HTTP: Mutex<Option<crate::mcp::HttpConfig>> = Mutex::new(None);
+
+/// Serves MCP over HTTP from this viewer, besides the control port: the same tools as
+/// `open-3d-viewer-mcp`, with the SuperCloud's names, and every call goes through
+/// [`App::remote`] as a call from the MCP server does.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn serve_mcp_http(config: crate::mcp::HttpConfig) {
+    *MCP_HTTP.lock().unwrap_or_else(|e| e.into_inner()) = Some(config);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn start_mcp_http(tx: &iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) {
+    let Some(config) = MCP_HTTP.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    let tx = Mutex::new(tx.clone());
+    let served = config.serve(move |body| {
+        let tx = tx.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        crate::mcp::handle_text(body, true, &mut |cmd: &str, args: &Value, timeout| {
+            let (call, rx) = RemoteCall::new(cmd, args.clone());
+            tx.unbounded_send(call).map_err(|_| "the viewer is closing".to_string())?;
+            rx.recv_timeout(timeout).unwrap_or_else(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => Err(format!("the viewer did not answer within {} s", timeout.as_secs())),
+                mpsc::RecvTimeoutError::Disconnected => Err("the viewer dropped the command".to_string()),
+            })
+        })
+    });
+    if let Err(e) = served {
+        eprintln!("MCP over HTTP: {e}");
+    }
+}
+
 fn listen(tx: iced::futures::channel::mpsc::UnboundedSender<RemoteCall>) -> std::io::Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    start_mcp_http(&tx);
     let port = std::env::var("O3V_REMOTE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
     let announcement = Announcement { port: listener.local_addr()?.port(), token: new_token(), pid: std::process::id() };
@@ -192,6 +228,14 @@ fn flag(a: &Value, key: &str) -> Option<bool> {
     a.get(key)?.as_bool()
 }
 
+/// A path from a remote client: in the work folder of the SuperCloud (`managed::confine`).
+fn confine(path: &str) -> Result<PathBuf, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::managed::confine(std::path::Path::new(path));
+    #[cfg(target_arch = "wasm32")]
+    Ok(PathBuf::from(path))
+}
+
 fn vec3(v: &Value) -> Option<Vec3> {
     match v {
         Value::Array(a) if a.len() == 3 => Some(Vec3::new(a[0].as_f64()? as f32, a[1].as_f64()? as f32, a[2].as_f64()? as f32)),
@@ -264,6 +308,7 @@ impl App {
     pub fn remote(&mut self, call: RemoteCall) -> Task<Message> {
         match call.cmd.as_str() {
             "open_file" => return self.remote_open(call),
+            "save_file" => return self.remote_save(call),
             "get_schedule" => {
                 let (answer, task) = self.remote_schedule(&call.args);
                 call.answer(answer);
@@ -354,9 +399,16 @@ impl App {
     // ---- files ----
 
     fn remote_open(&mut self, call: RemoteCall) -> Task<Message> {
-        let Some(path) = call.args.get("path").and_then(Value::as_str).map(PathBuf::from) else {
+        let Some(path) = call.args.get("path").and_then(Value::as_str) else {
             call.answer(Err("path is required".into()));
             return Task::none();
+        };
+        let path = match confine(path) {
+            Ok(p) => p,
+            Err(e) => {
+                call.answer(Err(e));
+                return Task::none();
+            }
         };
         if !path.is_file() {
             call.answer(Err(format!("no such file: {}", path.display())));
@@ -369,6 +421,58 @@ impl App {
         let task = self.update(Message::Open(path));
         self.remote.pending_load.push(call);
         task
+    }
+
+    /// Where `save_file` writes: `path` (in the work folder), else next to the open file as IFC.
+    /// Only formats the viewer writes, and an existing file only with `overwrite`.
+    pub(crate) fn save_target(&self, a: &Value) -> Result<PathBuf, String> {
+        let model = self.require_model()?;
+        if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+            return Err("a file is still loading or saving".into());
+        }
+        let default_ext = crate::export::registry()[0].extensions()[0];
+        let mut path = match a.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) {
+            Some(p) => confine(p)?,
+            None if model.path.as_os_str().is_empty() => return Err("the model has no file; give a path".into()),
+            None => confine(&model.path.with_extension(default_ext).to_string_lossy())?,
+        };
+        if path.extension().is_none() {
+            path.set_extension(default_ext);
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        crate::export::writer_for(&name).map_err(|e| format!("{e}: the viewer saves models as IFC (.ifc)"))?;
+        if path.parent().is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir()) {
+            return Err(format!("the folder of {} does not exist", path.display()));
+        }
+        if path.exists() && !flag(a, "overwrite").unwrap_or(false) {
+            return Err(format!("{} exists; pass overwrite: true to replace it, or another path", path.display()));
+        }
+        Ok(path)
+    }
+
+    fn remote_save(&mut self, call: RemoteCall) -> Task<Message> {
+        match self.save_target(&call.args) {
+            Ok(path) => {
+                let task = self.update(Message::SavePicked(Some(path)));
+                self.remote.pending_save.push(call);
+                task
+            }
+            Err(e) => {
+                call.answer(Err(e));
+                Task::none()
+            }
+        }
+    }
+
+    /// Answers the `save_file` calls once the file is written.
+    pub fn remote_saved(&mut self, result: &Result<(PathBuf, f32), String>) {
+        let answer = result.clone().map(|(path, secs)| {
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).ok();
+            json!({ "saved": path.display().to_string(), "bytes": bytes, "seconds": round(secs) })
+        });
+        for call in self.remote.pending_save.drain(..) {
+            call.answer(answer.clone());
+        }
     }
 
     /// Answers the `open_file` calls once a load has finished.
@@ -422,8 +526,9 @@ impl App {
             out["note"] = json!("Screen coordinates for pick, select, section_plane and measure are pixels of this image.");
         }
         if let Some(path) = a.get("save_to").and_then(Value::as_str) {
-            std::fs::write(path, &png).map_err(|e| format!("save_to {path}: {e}"))?;
-            out["saved_to"] = json!(path);
+            let path = confine(path)?;
+            std::fs::write(&path, &png).map_err(|e| format!("save_to {}: {e}", path.display()))?;
+            out["saved_to"] = json!(path.display().to_string());
         }
         out["png_base64"] = json!(base64(&png));
         Ok(out)
@@ -1408,6 +1513,26 @@ mod tests {
         let (call, rx) = RemoteCall::new(cmd, args);
         let _ = app.remote(call);
         rx.try_recv().expect("answered at once")
+    }
+
+    #[test]
+    fn saves_only_what_the_viewer_writes() {
+        let app = app();
+        // next to the open file, as IFC
+        assert_eq!(app.save_target(&json!({})), Ok(PathBuf::from("test.ifc")));
+        let dir = std::env::temp_dir().join(format!("o3v-save-target-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        assert_eq!(app.save_target(&json!({ "path": at("out") })), Ok(dir.join("out.ifc")));
+        assert!(app.save_target(&json!({ "path": at("out.glb") })).unwrap_err().contains("glb"));
+        assert!(app.save_target(&json!({ "path": at("missing/out.ifc") })).is_err());
+        // an existing file only with overwrite
+        std::fs::write(dir.join("old.ifc"), b"x").unwrap();
+        assert!(app.save_target(&json!({ "path": at("old.ifc") })).unwrap_err().contains("overwrite"));
+        assert_eq!(app.save_target(&json!({ "path": at("old.ifc"), "overwrite": true })), Ok(dir.join("old.ifc")));
+        let _ = std::fs::remove_dir_all(&dir);
+        // nothing open, nothing to save
+        assert!(App::default().save_target(&json!({})).is_err());
     }
 
     #[test]

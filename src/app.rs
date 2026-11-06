@@ -871,12 +871,15 @@ impl App {
                 self.status = Status::Saving { file, since: Instant::now() };
                 return save_task(model, path);
             }
-            Message::Saved(Ok((path, secs))) => {
-                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.status = Status::Loaded(format!("Saved {file} in {secs:.2} s"));
-            }
-            Message::Saved(Err(e)) => {
-                self.status = Status::Error(e);
+            Message::Saved(result) => {
+                self.remote_saved(&result);
+                self.status = match result {
+                    Ok((path, secs)) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        Status::Loaded(format!("Saved {file} in {secs:.2} s"))
+                    }
+                    Err(e) => Status::Error(e),
+                };
             }
             Message::TakeShot => {
                 return window::latest().and_then(window::screenshot).map(Message::Shot);

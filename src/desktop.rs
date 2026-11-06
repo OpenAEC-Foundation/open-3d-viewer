@@ -12,11 +12,15 @@
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
+//!
+//! In the OpenAEC SuperCloud (`managed`): OPENAEC_BEHEERD=1, OPENAEC_MAP (work folder),
+//! OPENAEC_TAAL, OPENAEC_THEMA, OPENAEC_OPEN (file to open), and OPENAEC_MCP_POORT with
+//! OPENAEC_MCP_GEHEIM (and optionally OPENAEC_MCP_ADRES) for the MCP endpoint over HTTP.
 
 use crate::app::{self, App, Message};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
-use crate::{bench, explode, export, gpu, loaders, shell, INTER_REGULAR, INTER_SEMIBOLD};
+use crate::{bench, explode, export, gpu, loaders, managed, shell, INTER_REGULAR, INTER_SEMIBOLD};
 use openaec_ui::design::ThemeId;
 use openaec_ui::Language;
 use std::path::PathBuf;
@@ -186,17 +190,28 @@ fn run_app(args: Args) -> iced::Result {
     if let Some(dir) = &dir {
         let _ = std::fs::create_dir_all(dir);
     }
+    // the MCP endpoint of the SuperCloud; its secret leaves the environment before any other
+    // thread or child process (a file dialog) can read it
+    let mcp_http = crate::mcp::HttpConfig::from_env(managed::managed());
+    std::env::remove_var("OPENAEC_MCP_GEHEIM");
     gpu::configure(args.gpu_backend.clone(), args.present_mode.clone(), dir.as_deref());
     let mut app = initial_state(&args);
     app.initial_view = args.view;
-    app.pending_open = args.file.clone();
+    app.pending_open = managed::start_file(args.file.clone());
+    managed::enter_work_folder();
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
     app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
+    match mcp_http {
+        Some(Ok(config)) if app.remote.enabled => crate::remote::serve_mcp_http(config),
+        Some(Ok(_)) => eprintln!("MCP over HTTP: off, as remote control is off"),
+        Some(Err(e)) => eprintln!("MCP over HTTP: not started: {e}"),
+        None => {}
+    }
     let mut studio = shell::Studio::new(app);
     if let Some(dir) = dir {
         studio = studio.with_settings_in(dir);
     }
-    studio.set_look(args.theme, args.language);
+    studio.set_look(args.theme.or_else(managed::theme), args.language.or_else(managed::language));
     shell::run(studio, window_icon())
 }
 

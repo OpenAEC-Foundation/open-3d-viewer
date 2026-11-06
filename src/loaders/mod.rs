@@ -45,6 +45,7 @@ mod vrml;
 mod amf;
 mod ifcx;
 mod step;
+mod sam;
 mod rhino;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
@@ -254,7 +255,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &rhino::RhinoLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &rhino::RhinoLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,

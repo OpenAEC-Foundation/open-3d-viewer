@@ -1,0 +1,36 @@
+[
+  {
+    "name": "Open 3D Viewer",
+    "source": "docs/branding/open-3d-viewer.png",
+    "sha256": "cd1a896a87dfa559a144633d9479330ae36a2e30c240fee0236e27902100874d",
+    "source_url": "https://dashboard.snapcraft.io/site_media/appmedia/2026/11/open-3d-viewer-logo-afgerond.png",
+    "outputs": [
+      {
+        "path": "assets/icons/icon.png",
+        "size": [
+          512,
+          512
+        ]
+      },
+      {
+        "path": "assets/icons/icon.ico"
+      },
+      {
+        "path": "assets/icons/icon.icns"
+      },
+      {
+        "path": "assets/icons/128x128.png",
+        "size": [
+          128,
+          128
+        ]
+      },
+      {
+        "path": "assets/logo.svg"
+      },
+      {
+        "path": "packaging/windows/icon.ico"
+      }
+    ]
+  }
+]

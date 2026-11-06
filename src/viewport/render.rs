@@ -11,6 +11,9 @@
 //! backend that matters (WebGL2 and WebGPU have no point size).
 
 use super::camera::Camera;
+use super::structural::{GpuStructural, StructUniforms, StructuralPipelines};
+use crate::structural::display::Marks;
+use crate::structural::pick::Lod;
 use crate::explode::ExplodeIndex;
 use crate::model::{Bounds, Model};
 use bytemuck::{Pod, Zeroable};
@@ -22,9 +25,9 @@ use iced::Rectangle;
 use crate::section::SectionBox;
 use std::sync::Arc;
 
-const SAMPLES: u32 = 4;
+pub(crate) const SAMPLES: u32 = 4;
 /// With stencil, for the cut fill of the section box.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
@@ -107,6 +110,9 @@ pub struct ScenePrimitive {
     pub explode: Option<Arc<ExplodeIndex>>,
     /// The offset (world) of every unit; written when it is another vector.
     pub offsets: Arc<Vec<[f32; 4]>>,
+    /// Structural instances drawn again on top: the selection and the hover.
+    pub structural_selected: Arc<Marks>,
+    pub structural_hovered: Arc<Marks>,
 }
 
 impl shader::Primitive for ScenePrimitive {
@@ -193,6 +199,9 @@ pub struct ScenePipeline {
     datum: Option<(wgpu::Buffer, u32)>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
     rect: (u32, u32, u32, u32),
+    /// Member axes and node glyphs (`super::structural`), and the model's instances.
+    structural: StructuralPipelines,
+    gpu_structural: Option<GpuStructural>,
 }
 
 impl shader::Pipeline for ScenePipeline {
@@ -495,6 +504,8 @@ impl ScenePipeline {
             mapped_at_creation: false,
         });
 
+        let structural = StructuralPipelines::new(device, format, &uniform_layout);
+
         Self {
             format,
             srgb: format.is_srgb(),
@@ -526,6 +537,8 @@ impl ScenePipeline {
             grid: None,
             datum: None,
             rect: (0, 0, 1, 1),
+            structural,
+            gpu_structural: None,
         }
     }
 
@@ -585,8 +598,14 @@ impl ScenePipeline {
         self.model = model.cloned();
         self.layers.clear();
         self.datum = None;
+        self.gpu_structural = None;
         self.resize_offsets(device, explode.map_or(1, ExplodeIndex::len));
         let Some(model) = model else { return };
+        // beside the datum grid: the structural instances, built on the load worker, with the units
+        // of the exploded view written in
+        if let Some(display) = &model.structural_display {
+            self.gpu_structural = GpuStructural::new(device, display, explode.map_or(&[][..], ExplodeIndex::display_units));
+        }
         let datum = datum_lines(&model.project.grids);
         if !datum.is_empty() {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -804,6 +823,11 @@ impl ScenePipeline {
         // the grid is never cut
         let no_clip = [[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]];
         queue.write_buffer(&self.world_uniforms, 0, bytemuck::bytes_of(&uniforms(Mat4::IDENTITY, 1.0, no_clip, [[0.0; 4]; 2])));
+        if self.gpu_structural.is_some() {
+            let proj11 = camera.projection(w as f32 / h as f32).y_axis.y;
+            let logical = (w as f32 / scale, h as f32 / scale);
+            self.structural.write(queue, &StructUniforms::new(logical, proj11, settings.background, &Lod::default()));
+        }
     }
 
     fn render(
@@ -862,6 +886,11 @@ impl ScenePipeline {
                         pass.draw(0..4, 0..layer.points);
                     }
                 }
+            }
+            // member axes and nodes, after the lit layers and point clouds, before the cut fill
+            if let Some(gpu) = &self.gpu_structural {
+                pass.set_bind_group(0, &self.model_group, &[]);
+                self.structural.draw(&mut pass, gpu, &primitive.structural_selected, &primitive.structural_hovered);
             }
             if !primitive.selection.is_empty() {
                 pass.set_pipeline(&self.highlight);

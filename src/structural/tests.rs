@@ -337,9 +337,21 @@ fn mcp_tools_answer_on_structural_objects() {
     let by_text = run(&mut app, "find_elements", json!({ "text": "ipe 300" })).unwrap();
     assert!(by_text["total"].as_u64().unwrap() >= 1);
     assert!(run(&mut app, "zoom_to", json!({ "target": member })).is_ok());
-    // selecting comes with S3: the error says so rather than that the id does not exist
-    let refused = run(&mut app, "select", json!({ "id": member })).unwrap_err();
-    assert!(refused.contains("structural object") && refused.contains("S3"), "{refused}");
+    // structural objects are selected through MCP like any element (phase S3), a node and a
+    // member together; the first one's properties show
+    let sel = run(&mut app, "select", json!({ "ids": [n1, member], "zoom": true })).unwrap();
+    assert_eq!(sel["element"], json!(n1));
+    assert_eq!(sel["structural"], json!([n1, member]));
+    assert_eq!(sel["properties"]["Class"], json!("Structural node"));
+    assert!(sel["bounds"].is_object());
+    assert_eq!(app.structural.selected, vec![n1, member]);
+    assert!(!app.structural.selected_marks.is_empty());
+    assert!(run(&mut app, "select", json!({ "clear": true })).unwrap().is_null());
+    assert!(app.structural.selected.is_empty());
+    // a section has no place in the model: nothing to select, and the error says why
+    let section = { let m = app.model.as_ref().unwrap(); el(m, m.structural[0].doc.sections[0].id) };
+    let refused = run(&mut app, "select", json!({ "id": section })).unwrap_err();
+    assert!(refused.contains("structural section"), "{refused}");
     let refused = run(&mut app, "measure_between_elements", json!({ "a": member, "b": n1 })).unwrap_err();
     assert!(refused.contains("structural object"), "{refused}");
 

@@ -110,6 +110,11 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlAnchorElement", "Location", "Url", "UrlSearchParams", "Blob", "BlobPropertyBag", "Response", "DragEvent", "DataTransfer", "FileList", "File", "console"] }
 console_error_panic_hook = "0.1"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Validates the WGSL shaders and translates them to WebGL2's GLSL in tests, without a GPU; the
+# version wgpu uses (MIT OR Apache-2.0)
+naga = { version = "27.0.3", features = ["wgsl-in", "glsl-out"] }
+
 [target.'cfg(unix)'.dependencies]
 # Stops cleanly on SIGTERM, after a save under way (MIT OR Apache-2.0)
 signal-hook = "0.3"

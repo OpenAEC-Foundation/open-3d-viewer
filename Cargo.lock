@@ -3136,6 +3136,7 @@ dependencies = [
  "las",
  "libloading",
  "log",
+ "naga",
  "openaec-ui",
  "openusd",
  "ply-reader",

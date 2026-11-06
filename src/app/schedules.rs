@@ -99,6 +99,7 @@ impl App {
     /// Selects the drawn elements of a schedule row; the first of them shows its properties.
     pub(super) fn select_row(&mut self, schedule: usize, row: usize) {
         let Some(model) = self.model.clone() else { return };
+        self.set_structural_selection(Vec::new());
         let Some(r) = self.schedules.get(schedule).and_then(|s| s.rows.get(row)) else { return };
         let ids: HashSet<u64> = r.elements.iter().copied().collect();
         let mut layer_of = HashMap::new();

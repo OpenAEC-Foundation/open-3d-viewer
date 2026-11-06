@@ -108,6 +108,8 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
                 settings,
                 explode: None,
                 offsets: Arc::default(),
+                structural_selected: Arc::default(),
+                structural_hovered: Arc::default(),
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

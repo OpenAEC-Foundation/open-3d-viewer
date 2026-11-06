@@ -171,7 +171,7 @@ pub fn tools() -> Vec<Value> {
                     "required": ["min", "max"]
                 }
             }), 1000, 10000), &[], true),
-        tool("select", "Select (highlight) elements by id as a click would, and show their properties in the properties panel; or clear the selection.",
+        tool("select", "Select (highlight) elements by id as a click would, and show their properties in the properties panel; or clear the selection. Structural nodes and members are selected too; a load or line support lights up the member or node it sits on (listed under `structural` in the answer).",
             json!({
                 "ids": { "type": "array", "items": { "type": ["integer", "string"] } },
                 "id": { "type": ["integer", "string"] },

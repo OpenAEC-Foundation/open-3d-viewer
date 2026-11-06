@@ -11,6 +11,7 @@ pub mod hinge;
 pub mod id;
 pub mod model;
 pub mod results;
+pub mod section;
 pub mod support;
 
 pub use id::{sam_id, Id, IdKind};

@@ -2,7 +2,8 @@
 //!
 //! One code base for two targets:
 //! - the desktop app (`src/main.rs`, [`desktop`]): command line, native window, file dialogs,
-//!   screenshots, benchmarks and remote control for AI agents (the MCP server);
+//!   screenshots, benchmarks and remote control for AI agents (the MCP server, `mcp.rs`, over
+//!   stdio from `open-3d-viewer-mcp` or over HTTP from the viewer itself in the SuperCloud);
 //! - the web app (`trunk build`, [`web`]): the same UI in the browser on WebGPU, with files
 //!   opened through the browser.
 //!
@@ -23,6 +24,8 @@ mod icons;
 pub mod loaders;
 #[cfg(not(target_arch = "wasm32"))]
 mod managed;
+#[cfg(not(target_arch = "wasm32"))]
+mod mcp;
 mod measure;
 pub mod model;
 mod remote;

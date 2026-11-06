@@ -9,6 +9,7 @@ use super::{Loader, DEFAULT_COLOR, Source};
 use crate::model::{flat_shaded, y_up_to_z_up, Layer};
 use glam::{Mat3, Mat4, Vec3};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub struct GltfLoader;
 
@@ -26,12 +27,11 @@ impl Loader for GltfLoader {
     }
 
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
-        let imported = match source.path() {
-            Some(path) => gltf::import(path),
+        let (doc, buffers, images) = match source.path() {
+            Some(path) => import_file(path)?,
             // bytes from the browser: .glb or .gltf with embedded buffers
-            None => gltf::import_slice(source.read()?),
+            None => gltf::import_slice(source.read()?).map_err(|e| format!("glTF: {e}"))?,
         };
-        let (doc, buffers, images) = imported.map_err(|e| format!("glTF: {e}"))?;
         let texture_average: Vec<[f32; 4]> = images.iter().map(average_color).collect();
 
         // (material index (None = default material), points) -> layer under construction
@@ -76,6 +76,62 @@ impl Loader for GltfLoader {
         }
         Ok(out)
     }
+}
+
+type Import = (gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>);
+
+/// `gltf::import`, with the files the glTF refers to (buffers, images) checked first: where the AI
+/// connection is held to the work folder, they must lie in it too (`super::check_reference`).
+fn import_file(path: &Path) -> Result<Import, String> {
+    let gltf::Gltf { document, blob } = gltf::Gltf::open(path).map_err(|e| format!("glTF: {e}"))?;
+    let base = path.parent().unwrap_or(Path::new("./"));
+    let buffers = document.buffers().filter_map(|b| match b.source() {
+        gltf::buffer::Source::Uri(uri) => Some(uri.to_string()),
+        gltf::buffer::Source::Bin => None,
+    });
+    let images = document.images().filter_map(|i| match i.source() {
+        gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
+        gltf::image::Source::View { .. } => None,
+    });
+    let uris: Vec<String> = buffers.chain(images).collect();
+    for file in uris.iter().filter_map(|uri| referenced_file(base, uri)) {
+        super::check_reference(path, &file).map_err(|e| format!("glTF: {e}"))?;
+    }
+    let buffers = gltf::import_buffers(&document, Some(base), blob).map_err(|e| format!("glTF: {e}"))?;
+    let images = gltf::import_images(&document, Some(base), &buffers).map_err(|e| format!("glTF: {e}"))?;
+    Ok((document, buffers, images))
+}
+
+/// The file a URI of a glTF names, as `gltf::import` reads it (`file:` URIs and relative paths,
+/// percent-decoded); none for embedded data and schemes it does not read.
+fn referenced_file(base: &Path, uri: &str) -> Option<PathBuf> {
+    if !uri.contains(':') {
+        return Some(base.join(percent_decoded(uri)));
+    }
+    uri.strip_prefix("file://").or_else(|| uri.strip_prefix("file:")).map(PathBuf::from)
+}
+
+fn percent_decoded(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b
+            .get(i + 1..i + 3)
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn add_primitive(
@@ -292,6 +348,22 @@ fn average_color(image: &gltf::image::Data) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
+    /// The files a glTF refers to, as the importer reads them (and the work folder checks them).
+    #[test]
+    fn finds_the_files_a_gltf_refers_to() {
+        let base = Path::new("/openaec/project");
+        let r = |uri: &str| super::referenced_file(base, uri);
+        assert_eq!(r("model.bin"), Some(base.join("model.bin")));
+        assert_eq!(r("../../home/user/x.bin"), Some(base.join("../../home/user/x.bin")));
+        assert_eq!(r("%2e%2e/secret%20file.bin"), Some(base.join("../secret file.bin")));
+        assert_eq!(r("file:///home/user/.config/secret"), Some(PathBuf::from("/home/user/.config/secret")));
+        assert_eq!(r("file:/etc/passwd"), Some(PathBuf::from("/etc/passwd")));
+        assert_eq!(r("data:application/octet-stream;base64,AAAA"), None);
+        assert_eq!(super::percent_decoded("a%2"), "a%2");
+    }
+
     /// A minimal glTF with one Y-up triangle standing in the XY plane (embedded base64 buffer).
     #[test]
     fn loads_embedded_triangle_and_converts_to_z_up() {

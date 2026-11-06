@@ -21,7 +21,7 @@ use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
 use crate::history::History;
 use crate::selection::{Pickable, Selection};
-use crate::units::{unit_state, UnitKey, UNIT_HIDDEN, UNIT_SELECTED};
+use crate::units::{unit_state, UnitKey, UnitKeySet, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
 use glam::{Mat4, Vec2, Vec3};
@@ -159,7 +159,7 @@ pub struct App {
     pub units: Arc<Vec<[f32; 4]>>,
     /// Elements (and the rest of layers) hidden with Hide or Isolate, by keys that stay when a
     /// model is added.
-    pub hidden: Arc<HashSet<UnitKey>>,
+    pub hidden: Arc<UnitKeySet>,
     /// Undo and redo of what is shown: hidden elements and layer and model switches.
     pub history: History<ViewState>,
     /// The selection box while it is dragged: from, to (viewport pixels).
@@ -1511,7 +1511,7 @@ impl App {
     /// Isolate: every unit of the shown models is hidden but the selected ones.
     fn isolate_selection(&mut self) {
         let Some(index) = self.explode_index.clone().filter(|_| !self.sel.is_empty()) else { return };
-        let keep: HashSet<UnitKey> = self.sel.items().iter().map(|&i| self.item_key(i)).collect();
+        let keep: UnitKeySet = self.sel.items().iter().map(|&i| self.item_key(i)).collect();
         let hidden = (1..index.len()).filter_map(|u| index.owner(u)).map(|o| self.unit_key(o)).filter(|k| !keep.contains(k)).collect();
         self.hidden = Arc::new(hidden);
         self.update_units();
@@ -2610,7 +2610,7 @@ fn ray_meets_box(origin: Vec3, dir: Vec3, (lo, hi): (Vec3, Vec3), max: f32) -> b
 /// switch, and per model its switch and its own layer switches.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewState {
-    pub hidden: Arc<HashSet<UnitKey>>,
+    pub hidden: Arc<UnitKeySet>,
     pub layers: Vec<bool>,
     pub models: Vec<(bool, Vec<bool>)>,
 }

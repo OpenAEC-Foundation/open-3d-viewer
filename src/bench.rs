@@ -9,6 +9,8 @@
 //! second and a p95 frame time of at most 8.33 ms, counting the frames over 16.67 ms.
 
 use crate::loaders;
+use crate::selection::Pickable;
+use crate::units::{unit_state, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::theme::{srgb3, srgb4, ThemeKind};
 use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{RenderMode, RenderSettings, ScenePipeline, ScenePrimitive};
@@ -196,25 +198,36 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             grids: true,
             bounds: None,
         };
-        let submit = |camera: Camera, pipeline: &mut ScenePipeline| {
+        // the units of every element, as the app uploads them, so their flags work
+        let index = Arc::new(crate::explode::ExplodeIndex::new(&model));
+        let submit = |camera: Camera, units: &Arc<Vec<[f32; 4]>>, pipeline: &mut ScenePipeline| {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
                 visible: vec![true; model.layers.len()],
                 camera,
                 settings,
-                explode: None,
-                offsets: Arc::default(),
+                explode: Some(index.clone()),
+                offsets: units.clone(),
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             primitive.render(pipeline, &mut encoder, &view, &clip);
             queue.submit([encoder.finish()])
         };
+        let plain: Arc<Vec<[f32; 4]>> = Arc::new(unit_state(&[], &[]));
+        // with elements, also every element selected and every second one hidden
+        let mut runs = Scenario::ALL.map(|s| (s.name().to_string(), s, plain.clone())).to_vec();
+        if index.len() > 1 {
+            let flags = |f: &dyn Fn(usize) -> u8| Arc::new(unit_state(&[], &(0..index.len()).map(f).collect::<Vec<u8>>()));
+            runs.push(("orbit, all selected".into(), Scenario::Orbit, flags(&|_| UNIT_SELECTED)));
+            runs.push(("orbit, half hidden".into(), Scenario::Orbit, flags(&|u| if u % 2 == 0 { UNIT_HIDDEN } else { 0 })));
+        }
         // the GPU upload, not counted
-        submit(camera, &mut pipeline);
+        submit(camera, &plain, &mut pipeline);
         device.poll(wgpu::PollType::wait_indefinitely()).ok();
         let mut all = true;
-        for scenario in Scenario::ALL {
+        for (name, scenario, units) in &runs {
+            let scenario = *scenario;
             let done: Arc<Mutex<Vec<Instant>>> = Arc::default();
             let mut pending = VecDeque::with_capacity(IN_FLIGHT + 1);
             let mut c = camera;
@@ -225,7 +238,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                     device.poll(wgpu::PollType::Wait { submission_index: oldest, timeout: None }).ok();
                 }
                 scenario.step(&mut c, i, h as f32);
-                pending.push_back(submit(c, &mut pipeline));
+                pending.push_back(submit(c, units, &mut pipeline));
                 let done = done.clone();
                 queue.on_submitted_work_done(move || done.lock().unwrap().push(Instant::now()));
             }
@@ -238,7 +251,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             all &= s.passes();
             println!(
                 "{} @ {w}x{h} 4xMSAA: {} frames, {:.0} fps, p95 {:.2} ms, max {:.2} ms, {} over 16.67 ms: {}",
-                scenario.name(),
+                name,
                 s.frames,
                 s.fps,
                 s.p95_ms,
@@ -246,6 +259,19 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 s.over_budget,
                 if s.passes() { "PASS" } else { "FAIL" }
             );
+        }
+        // hiding every element must be done within one frame
+        if index.len() > 1 {
+            let mut app = crate::app::App::default();
+            app.set_model(model.clone());
+            app.sel.extend(model.layers.iter().flat_map(|l| l.elements.iter().map(|e| Pickable::Element(e.0))));
+            app.selection_changed();
+            let t = Instant::now();
+            let _ = app.update(crate::app::Message::HideSelection);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            let pass = ms <= MAX_P95_MS;
+            all &= pass;
+            println!("hide {} elements: {ms:.2} ms in update: {}", app.hidden.len(), if pass { "PASS" } else { "FAIL" });
         }
         println!("120 fps criterion: {}", if all { "PASS" } else { "FAIL" });
         return Ok(());

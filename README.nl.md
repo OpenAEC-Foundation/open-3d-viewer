@@ -76,6 +76,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Standaardaanzichten.** Iso, boven, voor en rechts (`0`, `1`, `2`, `3`), perspectief of orthografisch (`P`, `O`), en de opgeslagen aanzichten van een Revit-model.
 - **Weergaven.** Volledig, draadmodel en volledig met randen (`S`, `W`, `E`), het grondraster (`G`) en **Z-as omdraaien** voor bestanden met de andere as omhoog.
 - **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, Allplan-elementcategorieën, Archicad-wanden, -vloeren, -kolommen, -liggers, -daken, -sparingen, -objecten, -terrein, -zones, -morphs, -trappen en -leuningen, IFCX-klassen, STEP-presentatielagen of -producten, CAD-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes en sparingsvolumes beginnen verborgen in eigen lagen; de sparingen blijven uit hun wanden en vloeren gesneden.
+- **Selecteren, verbergen en isoleren.** Ctrl-klik voegt een element toe of haalt het weg, Ctrl en slepen trekt een kader (naar rechts neemt het wat erin ligt, naar links wat het raakt), **Laag selecteren** voegt de rest van hun lagen toe, en de knop naast een eigenschap selecteert elk element met die waarde. **Verbergen** (`H`), **Isoleren** (`I`) en **Alles tonen** (`Ctrl+Shift+H`) werken per element, en `Ctrl+Z` en `Ctrl+Y` maken ongedaan en opnieuw wat er getoond wordt.
 - **Sneltoetsen.** Elke opdracht staat één keer in één lijst, die het lint, de titelbalk en het toetsenbord gebruiken. In **Instellingen** geef je elke opdracht je eigen toets.
 
 ## Meten, doorsnijden en uit elkaar halen
@@ -206,7 +207,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## MCP
 
-`open-3d-viewer-mcp` is een [MCP](https://modelcontextprotocol.io)-server waarmee een AI-agent (Claude Code, Claude Desktop of een andere MCP-client) de desktopviewer bedient zoals een mens dat doet: bestanden openen, schermafbeeldingen maken, de camera en de standaard- en opgeslagen aanzichten instellen, lagen tonen, verbergen en isoleren, elementen zoeken op eigenschap, selecteren, eigenschappen lezen, een doorsnedekader of -vlak zetten, het model uit elkaar trekken, de weergave wisselen, Revit-staten lezen en meten.
+`open-3d-viewer-mcp` is een [MCP](https://modelcontextprotocol.io)-server waarmee een AI-agent (Claude Code, Claude Desktop of een andere MCP-client) de desktopviewer bedient zoals een mens dat doet: bestanden openen, schermafbeeldingen maken, de camera en de standaard- en opgeslagen aanzichten instellen, lagen en elementen tonen, verbergen en isoleren, elementen zoeken op eigenschap, selecteren, eigenschappen lezen, een doorsnedekader of -vlak zetten, het model uit elkaar trekken, de weergave wisselen, Revit-staten lezen en meten.
 
 - **Je ziet wat hij doet.** Opdrachten gaan langs dezelfde weg als jouw klikken, in het venster op je scherm. Metingen blijven in beeld.
 - **Het blijft op je computer.** Het venster luistert alleen op `127.0.0.1`, met een willekeurig token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` of `O3V_REMOTE=0` zet het uit.
@@ -214,7 +215,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **290 unittests** in `src/` (285 draaien; 5 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 195 voor de lezers, 20 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 10 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **331 unittests** in `src/` (325 draaien; 6 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, één vraagt een GPU), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 195 voor de lezers, 39 voor de app, 9 voor de afstandsbediening, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 10 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -227,8 +228,7 @@ Bron van de getallen: `cargo test --release` en `cargo test --release -p openaec
 
 - **IFC en Revit openen alleen op de desktop.** De browserversie heeft die lezers niet.
 - **IGES-bestanden openen niet.** STEP-bestanden wel; IGES wordt nog niet gelezen.
-- **Elementen zijn niet een voor een te verbergen.** Zichtbaarheid werkt per laag en per model.
-- **Nog geen ongedaan maken.** Metingen en de doorsnede wis je met de hand.
+- **Ongedaan maken geldt alleen voor zichtbaarheid.** Metingen en de doorsnede wis je met de hand.
 - **De browserversie blokkeert tijdens het laden** van een groot model (nog geen worker-threads) en onthoudt je instellingen niet tussen bezoeken.
 - **Vijf iconen zijn tijdelijk.** De OpenAEC-iconenset heeft nog geen iconen voor volledig, draadmodel, randen, perspectief en orthografisch; de viewer gebruikt de dichtstbijzijnde.
 - **Geen loopmodus of verborgen-lijnenweergave.**

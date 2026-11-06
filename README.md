@@ -74,6 +74,7 @@ gh attestation verify open-3d-viewer_2026.45.11_amd64.deb --repo OpenAEC-Foundat
 - **Standard views.** Iso, top, front and right (`0`, `1`, `2`, `3`), perspective or orthographic (`P`, `O`), and the saved views of a Revit model.
 - **Render modes.** Solid, wireframe and solid with edges (`S`, `W`, `E`), the ground grid (`G`) and **Flip up** for files with the other up axis.
 - **Models, layers and properties.** The explorer lists the open models and their layers (IFC presentation layers or classes, Revit categories, SketchUp tags, Tekla classes, Allplan element categories, Archicad walls, slabs, columns, beams, roofs, openings, objects, terrain, zones, morphs, stairs and railings, IFCX classes, STEP presentation layers or products, CAD layers) with their colour and count; a click on an element shows its properties. IFC spaces and opening volumes start hidden in layers of their own; the openings stay cut from their walls and slabs.
+- **Select, hide and isolate.** Ctrl-click adds or removes an element, Ctrl and drag draws a box (to the right it takes what lies inside, to the left what it touches), **Select layer** adds the rest of their layers, and the button next to a property selects every element with that value. **Hide** (`H`), **Isolate** (`I`) and **Show all** (`Ctrl+Shift+H`) work per element, and `Ctrl+Z` and `Ctrl+Y` undo and redo what is shown.
 - **Shortcuts.** Every command has one entry in one list, used by the ribbon, the title bar and the keyboard. In **Settings** you give any command your own key.
 
 ## Measure, section and explode
@@ -204,7 +205,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## MCP
 
-`open-3d-viewer-mcp` is an [MCP](https://modelcontextprotocol.io) server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the desktop viewer as a person does: open files, take screenshots, set the camera and the standard and saved views, show, hide and isolate layers, find elements by property, select, read properties, set a section box or plane, pull the model apart, change the render mode, read Revit schedules and measure.
+`open-3d-viewer-mcp` is an [MCP](https://modelcontextprotocol.io) server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the desktop viewer as a person does: open files, take screenshots, set the camera and the standard and saved views, show, hide and isolate layers and elements, find elements by property, select, read properties, set a section box or plane, pull the model apart, change the render mode, read Revit schedules and measure.
 
 - **You see what it does.** Commands go through the same path as your clicks, in the window on your screen. Measurements stay in the view.
 - **It stays on your computer.** The window listens on `127.0.0.1` only, with a random token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` or `O3V_REMOTE=0` switches it off.
@@ -212,7 +213,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **290 unit tests** in `src/` (285 run; 5 are left out by default: two need local samples, three write sample or image files), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 195 for the loaders, 20 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 10 for IFC export, and more for the 3D view, view cube, remote control, model and exploded view.
+- **331 unit tests** in `src/` (325 run; 6 are left out by default: two need local samples, three write sample or image files, one needs a GPU), plus 2 for the MCP server and 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 195 for the loaders, 39 for the app, 9 for remote control, 17 for measuring, 8 for the window shell, 7 for the section tools, 10 for IFC export, and more for the 3D view, view cube, selection, undo, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -225,8 +226,7 @@ Count sources: `cargo test --release` and `cargo test --release -p openaec-ui --
 
 - **IFC and Revit open on the desktop only.** The browser version does not include those readers.
 - **IGES files do not open.** STEP files do; IGES is not read yet.
-- **Elements cannot be hidden one by one.** Visibility works per layer and per model.
-- **No undo yet.** Measurements and the section are cleared by hand.
+- **Undo covers visibility only.** Measurements and the section are cleared by hand.
 - **The browser version blocks while it loads** a large model (no worker threads yet) and does not keep your settings between visits.
 - **Five icons are stand-ins.** The OpenAEC icon set has no icons yet for solid, wireframe, edges, perspective and orthographic; the viewer uses the closest ones.
 - **No walk mode or hidden-line mode.**

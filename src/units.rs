@@ -4,6 +4,8 @@
 //! `scene.wgsl` reads the flags with the same values.
 
 use crate::model::ElementKey;
+use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// A unit that keeps its name when another model is added: an element by its key, or the
 /// triangles outside elements of a layer by its model and its index within that model.
@@ -11,6 +13,48 @@ use crate::model::ElementKey;
 pub enum UnitKey {
     Element(ElementKey),
     LayerRest { model: u32, layer: u32 },
+}
+
+/// A set of unit keys. It hashes with [`KeyHasher`]: hiding or isolating 10^5 elements fills it
+/// and every redraw of the flags looks them all up, which the default hasher makes too slow for
+/// one frame.
+pub type UnitKeySet = HashSet<UnitKey, BuildHasherDefault<KeyHasher>>;
+
+/// A fast hash for small integer keys (the multiply-rotate mix of rustc's FxHasher). The keys
+/// come from the model itself, not from outside, so it needs no protection against crafted
+/// collisions.
+#[derive(Default, Clone, Copy)]
+pub struct KeyHasher(u64);
+
+impl KeyHasher {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+impl Hasher for KeyHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.add(u64::from_le_bytes(word));
+        }
+    }
+    fn write_u32(&mut self, n: u32) {
+        self.add(n as u64);
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.add(n);
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.add(n as u64);
+    }
+    fn write_isize(&mut self, n: isize) {
+        self.add(n as u64);
+    }
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// Not drawn: no faces, edges or cut fill.

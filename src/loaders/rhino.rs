@@ -8,12 +8,16 @@
 //! extrusions (the analysis meshes when there are no render meshes); block instances with their
 //! nested blocks and transforms; point clouds and points as point layers. One layer per Rhino
 //! layer (its full path, `Parent::Child`), in the layer colour, hidden when the layer or one of
-//! its parents is off. Every object is a pickable element with its name, object type, layer, id,
+//! its parents is off; the members of a block instance on a layer that is off go to that hidden
+//! layer. Every object is a pickable element with its name, object type, layer, id,
 //! material and user text (attribute and geometry user strings); a block instance is one element.
 //! Objects take their display colour by layer, object or parent (blocks), or their material's
 //! diffuse colour and transparency when they have a material; black (Rhino's default layer
 //! colour) without a material draws in the viewer's grey; Brep face colours (Rhino 7) and mesh
-//! vertex colours are kept. Units are converted to metres; Rhino is Z up. Curves, annotations,
+//! vertex colours are kept. Units are converted to metres; Rhino is Z up; a model far from zero
+//! (survey coordinates) moves to a local origin, kept in the project information. Point clouds
+//! are thinned out while drawing; blocks, meshes and points are drawn up to limits, so that a
+//! damaged or hostile file cannot exhaust memory or run for ever. Curves, annotations,
 //! hatches, lights, SubD objects (Rhino stores no mesh for them) and polysurfaces or extrusions
 //! saved without a mesh ("save small") are left out and counted in the project information.
 //! Hidden objects, objects on layouts and block definition geometry outside an instance are not
@@ -22,7 +26,7 @@
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
 use glam::{DMat3, DMat4, DVec3};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 
 pub struct RhinoLoader;
@@ -232,10 +236,6 @@ impl<'a> Cur<'a> {
         Ok(f64::from_le_bytes(self.array()?))
     }
 
-    fn point(&mut self) -> R<DVec3> {
-        Ok(DVec3::new(self.f64()?, self.f64()?, self.f64()?))
-    }
-
     fn uuid(&mut self) -> R<Uuid> {
         Ok(Uuid(self.array()?))
     }
@@ -321,28 +321,40 @@ impl<'a> Cur<'a> {
     }
 
     /// `ReadCompressedBuffer`: the size, then a CRC, a method byte and the bytes, either stored
-    /// (method 0) or zlib-deflated in an anonymous chunk (method 1). `None` when empty.
-    fn compressed(&mut self) -> R<Option<Vec<u8>>> {
+    /// (method 0) or zlib-deflated in an anonymous chunk (method 1). `None` when empty, and when
+    /// the size is not `expected` (the bytes are then skipped without inflating them, so a small
+    /// stream cannot claim gigabytes).
+    fn compressed(&mut self, expected: usize) -> R<Option<Vec<u8>>> {
         let size = self.u32()? as usize;
         if size == 0 {
             return Ok(None);
         }
         let _crc = self.u32()?;
-        let bytes = match self.u8()? {
-            0 => self.take(size)?.to_vec(),
+        let method = self.u8()?;
+        let packed = match method {
+            0 => self.take(size)?,
             1 => {
                 let chunk = self.chunk()?;
-                let packed = &chunk.body.data[chunk.body.pos..];
-                let mut out = Vec::with_capacity(size.min(64 << 20));
-                flate2::read::ZlibDecoder::new(packed).take(size as u64).read_to_end(&mut out).map_err(|e| format!("Rhino 3dm: compressed mesh data: {e}"))?;
-                out
+                &chunk.body.data[chunk.body.pos..]
             }
             _ => return err("unknown compression method"),
         };
-        if bytes.len() != size {
+        if size != expected {
+            return Ok(None);
+        }
+        if method == 0 {
+            return Ok(Some(packed.to_vec()));
+        }
+        // deflate packs at most 1032 bytes into one: a larger size is a damaged record
+        if size > packed.len().saturating_mul(1032).saturating_add(64) {
+            return err("compressed data larger than its stream can hold");
+        }
+        let mut out = Vec::with_capacity(size.min(packed.len().saturating_mul(4)));
+        flate2::read::ZlibDecoder::new(packed).take(size as u64).read_to_end(&mut out).map_err(|e| format!("Rhino 3dm: compressed mesh data: {e}"))?;
+        if out.len() != size {
             return err("compressed data shorter than its size");
         }
-        Ok(Some(bytes))
+        Ok(Some(out))
     }
 
     /// `ReadObject`: an openNURBS object of any class, with its user data; `None` for a null
@@ -428,8 +440,9 @@ fn user_strings(mut c: Cur<'_>) -> R<Vec<(String, String)>> {
     if major != 1 {
         return Ok(Vec::new());
     }
-    let count = list.count(8)?;
-    let mut out = Vec::with_capacity(count);
+    // every entry is a chunk of at least 16 bytes: typecode, length, major and minor version
+    let count = list.count(16)?;
+    let mut out = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
         let (mut entry, major, _) = list.versioned(TCODE_ANONYMOUS_CHUNK)?;
         if major == 1 {
@@ -510,29 +523,33 @@ struct Mesh {
     normals: Option<Vec<[f32; 3]>>,
     colors: Option<Vec<[u8; 4]>>,
     faces: Vec<[u32; 4]>,
+    /// The triangles of the faces (a quad is two).
+    triangles: usize,
     /// The colour of the Brep face this mesh belongs to (Rhino 7 and later), over the object's.
     color: Option<[u8; 4]>,
 }
 
 #[derive(Debug, Clone)]
-enum Geometry {
+enum Geometry<'a> {
     /// Meshes and the object type to show ("Mesh", "Polysurface", ..).
     Meshes(Vec<Mesh>, &'static str),
     Instance { definition: Uuid, xform: DMat4 },
-    Points { points: Vec<DVec3>, colors: Option<Vec<[u8; 4]>>, kind: &'static str },
+    /// Points as stored, three doubles (24 bytes) each, and their colours (4 bytes each): read
+    /// only while drawing, so that a large cloud is thinned out without a copy of every point.
+    Points { points: &'a [u8], colors: Option<&'a [u8]>, kind: &'static str },
     /// Not drawn: why, for the count in the project information.
     Skipped(&'static str),
 }
 
 #[derive(Debug, Clone)]
-struct RhinoObject {
-    geometry: Geometry,
+struct RhinoObject<'a> {
+    geometry: Geometry<'a>,
     attributes: Attributes,
     user: Vec<(String, String)>,
 }
 
 #[derive(Debug, Default)]
-struct File {
+struct File<'a> {
     versions: Versions,
     application: String,
     /// Metres per model unit, and the unit's name.
@@ -541,14 +558,16 @@ struct File {
     layers: Vec<RhinoLayer>,
     materials: Vec<Material>,
     blocks: Vec<BlockDefinition>,
-    objects: Vec<RhinoObject>,
+    objects: Vec<RhinoObject<'a>>,
     /// Records that could not be read, by table.
     damaged: BTreeMap<&'static str, usize>,
+    /// Mesh vertices read so far, at most [`MAX_VERTICES`].
+    vertices: usize,
 }
 
 const MAGIC: &[u8] = b"3D Geometry File Format ";
 
-fn read(data: &[u8]) -> R<File> {
+fn read(data: &[u8]) -> R<File<'_>> {
     // The header may follow some bytes of other data (OLE wrappers of old files).
     let start = data.windows(MAGIC.len()).take(1 << 20).position(|w| w == MAGIC).ok_or("Rhino 3dm: not a Rhino file (no 3dm header)")?;
     let header = data.get(start..start + 32).ok_or("Rhino 3dm: the file is too short")?;
@@ -596,7 +615,8 @@ fn read(data: &[u8]) -> R<File> {
                 Ok(())
             }),
             TCODE_OBJECT_TABLE => table(body, TCODE_OBJECT_RECORD, &mut file, "objects", |c, f| {
-                f.objects.push(read_object(c)?);
+                let object = read_object(c, &mut f.vertices)?;
+                f.objects.push(object);
                 Ok(())
             }),
             _ => {}
@@ -606,7 +626,7 @@ fn read(data: &[u8]) -> R<File> {
 }
 
 /// The records of a table, up to its end; a damaged record is counted and skipped.
-fn table<'a>(mut c: Cur<'a>, record: u32, file: &mut File, name: &'static str, mut each: impl FnMut(Cur<'a>, &mut File) -> R<()>) {
+fn table<'a>(mut c: Cur<'a>, record: u32, file: &mut File<'a>, name: &'static str, mut each: impl FnMut(Cur<'a>, &mut File<'a>) -> R<()>) {
     while c.left() > 0 {
         let Ok(chunk) = c.chunk() else {
             *file.damaged.entry(name).or_default() += 1;
@@ -621,7 +641,7 @@ fn table<'a>(mut c: Cur<'a>, record: u32, file: &mut File, name: &'static str, m
     }
 }
 
-fn read_properties(mut c: Cur<'_>, file: &mut File) {
+fn read_properties(mut c: Cur<'_>, file: &mut File<'_>) {
     while let Ok(chunk) = c.chunk() {
         match chunk.typecode {
             TCODE_ENDOFTABLE => break,
@@ -637,7 +657,7 @@ fn read_properties(mut c: Cur<'_>, file: &mut File) {
     }
 }
 
-fn read_settings(mut c: Cur<'_>, file: &mut File) {
+fn read_settings(mut c: Cur<'_>, file: &mut File<'_>) {
     while let Ok(chunk) = c.chunk() {
         match chunk.typecode {
             TCODE_ENDOFTABLE => break,
@@ -848,8 +868,8 @@ fn read_block_definition(mut c: Cur<'_>) -> R<BlockDefinition> {
 }
 
 /// One record of the object table: the object type, the object, its attributes and the user
-/// data of the attributes.
-fn read_object(mut c: Cur<'_>) -> R<RhinoObject> {
+/// data of the attributes. `vertices` counts the mesh vertices read from the file so far.
+fn read_object<'a>(mut c: Cur<'a>, vertices: &mut usize) -> R<RhinoObject<'a>> {
     let kind = c.chunk()?;
     if kind.typecode != TCODE_OBJECT_RECORD_TYPE {
         return err("an object record without its type");
@@ -873,7 +893,11 @@ fn read_object(mut c: Cur<'_>) -> R<RhinoObject> {
     let geometry = match object {
         Some(object) => {
             user.extend(user_strings_of(&object.userdata));
-            read_geometry(object, object_type).unwrap_or(Geometry::Skipped("unreadable objects"))
+            match read_geometry(object, object_type, vertices) {
+                Ok(geometry) => geometry,
+                Err(e) if e == TOO_MANY_VERTICES => Geometry::Skipped("meshes beyond the vertex limit"),
+                Err(_) => Geometry::Skipped("unreadable objects"),
+            }
         }
         None => Geometry::Skipped("empty objects"),
     };
@@ -957,24 +981,38 @@ fn read_attributes(mut c: Cur<'_>) -> R<Attributes> {
             if minor >= 2 {
                 a.visible = c.bool()?;
             }
+            if minor >= 6 {
+                // display material references (1.3), decoration and plot colour and weight (1.4),
+                // line type (1.5), then the space (1.6): 1 for a layout. A short record keeps
+                // model space.
+                let mut space = || -> R<u8> {
+                    let n = c.count(32)?;
+                    c.take(32 * n)?;
+                    c.take(4 + 1 + 4 + 1 + 8 + 4)?;
+                    c.u8()
+                };
+                if matches!(space(), Ok(1)) {
+                    a.space = 2;
+                }
+            }
         }
     }
     Ok(a)
 }
 
-fn read_geometry(object: Object<'_>, object_type: u32) -> R<Geometry> {
+fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize) -> R<Geometry<'a>> {
     let mut c = object.data;
     let class = object.class;
     if class == ON_MESH {
-        return Ok(Geometry::Meshes(vec![read_mesh(&mut c)?], "Mesh"));
+        return Ok(Geometry::Meshes(vec![read_mesh(&mut c, vertices)?], "Mesh"));
     }
     if class == ON_BREP || BREP_ALIASES.contains(&class) {
-        let (meshes, faces) = read_brep(&mut c)?;
+        let (meshes, faces) = read_brep(&mut c, vertices)?;
         let kind = if faces == 1 { "Surface" } else { "Polysurface" };
         return Ok(if meshes.is_empty() { Geometry::Skipped("polysurfaces without a render mesh") } else { Geometry::Meshes(meshes, kind) });
     }
     if class == ON_EXTRUSION {
-        let mut meshes = read_extrusion(&mut c)?;
+        let mut meshes = read_extrusion(&mut c, vertices)?;
         if meshes.is_empty() {
             // Rhino 5: the meshes are user data of the extrusion
             if let Some((_, data)) = object.userdata.iter().find(|(id, _)| *id == ON_V5_EXTRUSION_MESH_CACHE) {
@@ -983,7 +1021,7 @@ fn read_geometry(object: Object<'_>, object_type: u32) -> R<Geometry> {
                     match data.object() {
                         Ok(Some(o)) if o.class == ON_MESH => {
                             let mut d = o.data;
-                            meshes.push(read_mesh(&mut d)?);
+                            meshes.push(read_mesh(&mut d, vertices)?);
                             break;
                         }
                         Ok(_) => {}
@@ -1009,21 +1047,21 @@ fn read_geometry(object: Object<'_>, object_type: u32) -> R<Geometry> {
             return err("a point cloud of an unknown version");
         }
         let count = c.count(24)?;
-        let points = (0..count).map(|_| c.point()).collect::<R<Vec<_>>>()?;
+        let points = c.take(24 * count)?;
         c.take(16 * 8 + 48 + 4)?; // plane, bounding box, flags
         let mut colors = None;
         if minor >= 1 {
             let normals = c.count(24)?;
             c.take(24 * normals)?;
             let n = c.count(4)?;
-            let list: Vec<[u8; 4]> = c.take(4 * n)?.chunks_exact(4).map(|b| [b[0], b[1], b[2], b[3]]).collect();
-            colors = (list.len() == points.len()).then_some(list);
+            let list = c.take(4 * n)?;
+            colors = (n == count).then_some(list);
         }
         return Ok(Geometry::Points { points, colors, kind: "Point cloud" });
     }
     if class == ON_POINT {
         c.version()?;
-        return Ok(Geometry::Points { points: vec![c.point()?], colors: None, kind: "Point" });
+        return Ok(Geometry::Points { points: c.take(24)?, colors: None, kind: "Point" });
     }
     if class == ON_SUBD {
         return Ok(Geometry::Skipped("SubD objects (no mesh in the file)"));
@@ -1043,15 +1081,29 @@ fn read_geometry(object: Object<'_>, object_type: u32) -> R<Geometry> {
     }))
 }
 
+/// At most this many mesh vertices are read from a file: compressed arrays could otherwise
+/// inflate far beyond the size of the file. Meshes beyond are left out and counted.
+const MAX_VERTICES: usize = MAX_DRAWN_VERTICES;
+const TOO_MANY_VERTICES: &str = "Rhino 3dm: more mesh vertices than the viewer reads";
+
 /// `ON_Mesh` (chunk version 1.x uncompressed, 3.x compressed): vertices, normals, colours and
 /// faces. Texture coordinates, curvatures, n-gons and double precision vertices are not read.
-fn read_mesh(c: &mut Cur<'_>) -> R<Mesh> {
+/// `vertices` counts the vertices read from the file so far; a mesh beyond [`MAX_VERTICES`] is
+/// not read. A mesh without faces draws nothing and is not read either.
+fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
     let (major, _) = c.version()?;
     if major != 1 && major != 3 {
         return err("a mesh of an unknown version");
     }
     let vcount = c.i32()?.max(0) as usize;
     let fcount = c.i32()?.max(0) as usize;
+    if fcount == 0 {
+        return Ok(Mesh::default());
+    }
+    if vcount > MAX_VERTICES - *vertices {
+        return Err(TOO_MANY_VERTICES.into());
+    }
+    *vertices += vcount;
     // texture and surface domains, surface scale, vertex, normal and texture boxes, closed
     c.take(64 + 16 + 24 + 24 + 16 + 4)?;
     if c.bool()? {
@@ -1063,10 +1115,10 @@ fn read_mesh(c: &mut Cur<'_>) -> R<Mesh> {
         }
     }
     let size = c.i32()?;
-    if !matches!(size, 1 | 2 | 4) && fcount > 0 {
+    if !matches!(size, 1 | 2 | 4) {
         return err("mesh faces of an unknown index size");
     }
-    let bytes = c.take(fcount.checked_mul(4 * size.max(0) as usize).ok_or("Rhino 3dm: too many mesh faces")?)?;
+    let bytes = c.take(fcount.checked_mul(4 * size as usize).ok_or("Rhino 3dm: too many mesh faces")?)?;
     let faces: Vec<[u32; 4]> = match size {
         1 => bytes.chunks_exact(4).map(|f| [f[0] as u32, f[1] as u32, f[2] as u32, f[3] as u32]).collect(),
         2 => bytes.chunks_exact(8).map(|f| std::array::from_fn(|k| u16::from_le_bytes([f[2 * k], f[2 * k + 1]]) as u32)).collect(),
@@ -1074,7 +1126,8 @@ fn read_mesh(c: &mut Cur<'_>) -> R<Mesh> {
     };
     let floats3 = |b: &[u8]| -> Vec<[f32; 3]> { b.chunks_exact(12).map(|p| std::array::from_fn(|k| f32::from_le_bytes(p[4 * k..4 * k + 4].try_into().unwrap()))).collect() };
     let colors4 = |b: &[u8]| -> Vec<[u8; 4]> { b.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect() };
-    let mut mesh = Mesh { faces, ..Mesh::default() };
+    let triangles = faces.iter().map(|f| if f[2] == f[3] { 1 } else { 2 }).sum();
+    let mut mesh = Mesh { faces, triangles, ..Mesh::default() };
     if major == 1 {
         let n = c.count(12)?;
         mesh.positions = floats3(c.take(12 * n)?);
@@ -1087,11 +1140,12 @@ fn read_mesh(c: &mut Cur<'_>) -> R<Mesh> {
         let n = c.count(4)?;
         mesh.colors = Some(colors4(c.take(4 * n)?));
     } else if vcount > 0 {
-        mesh.positions = floats3(&c.compressed()?.unwrap_or_default());
-        mesh.normals = c.compressed()?.map(|b| floats3(&b));
-        c.compressed()?; // texture coordinates
-        c.compressed()?; // curvatures
-        mesh.colors = c.compressed()?.map(|b| colors4(&b));
+        mesh.positions = floats3(&c.compressed(12 * vcount)?.unwrap_or_default());
+        mesh.normals = c.compressed(12 * vcount)?.map(|b| floats3(&b));
+        // texture coordinates and curvatures, skipped without inflating them
+        c.compressed(0)?;
+        c.compressed(0)?;
+        mesh.colors = c.compressed(4 * vcount)?.map(|b| colors4(&b));
     }
     let n = mesh.positions.len();
     if n != vcount {
@@ -1105,7 +1159,7 @@ fn read_mesh(c: &mut Cur<'_>) -> R<Mesh> {
 /// `ON_Brep` (chunk version 3.x): the curves, surfaces and topology are skipped as chunks; the
 /// face count, then the render meshes (or else the analysis meshes) of the faces. Returns the
 /// meshes and the face count.
-fn read_brep(c: &mut Cur<'_>) -> R<(Vec<Mesh>, usize)> {
+fn read_brep(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, usize)> {
     let (major, minor) = c.version()?;
     if major != 3 {
         // Rhino 1 and 2 trimmed surfaces
@@ -1136,7 +1190,7 @@ fn read_brep(c: &mut Cur<'_>) -> R<(Vec<Mesh>, usize)> {
             if list.bool()? {
                 if let Some(object) = list.object()?.filter(|o| o.class == ON_MESH) {
                     let mut d = object.data;
-                    let mut mesh = read_mesh(&mut d)?;
+                    let mut mesh = read_mesh(&mut d, vertices)?;
                     mesh.color = face_colors.get(face).copied().flatten();
                     out.push(mesh);
                 }
@@ -1173,7 +1227,7 @@ fn brep_face_colors(mut c: Cur<'_>) -> R<Vec<Option<[u8; 4]>>> {
 
 /// `ON_Extrusion`: the profile and path are skipped; from chunk version 1.3 (Rhino 6) the mesh
 /// cache, of which the render mesh (or else the first) is taken.
-fn read_extrusion(c: &mut Cur<'_>) -> R<Vec<Mesh>> {
+fn read_extrusion(c: &mut Cur<'_>, vertices: &mut usize) -> R<Vec<Mesh>> {
     let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
     if major != 1 {
         return err("an extrusion of an unknown version");
@@ -1192,7 +1246,7 @@ fn read_extrusion(c: &mut Cur<'_>) -> R<Vec<Mesh>> {
         let id = item.uuid()?;
         if let Some(object) = item.object()?.filter(|o| o.class == ON_MESH) {
             let mut d = object.data;
-            meshes.push((id, read_mesh(&mut d)?));
+            meshes.push((id, read_mesh(&mut d, vertices)?));
         }
     }
     let k = meshes.iter().position(|(id, _)| *id == RENDER_MESH_ID).unwrap_or(0);
@@ -1202,13 +1256,27 @@ fn read_extrusion(c: &mut Cur<'_>) -> R<Vec<Mesh>> {
 // ---------------------------------------------------------------------------------------------
 // From the file to layers: one layer per Rhino layer, objects and block instances as elements.
 
-/// Block instances nested deeper than this are left out (and cycles stop here).
+/// Block instances nested deeper than this are left out.
 const MAX_BLOCK_DEPTH: usize = 32;
 
+/// At most this many objects are drawn through block instances (every member of every placed
+/// instance counts): nested blocks multiply, and a damaged or hostile file could otherwise keep
+/// them going for ever. Smaller in the (unoptimised) tests, which run into it.
+const MAX_BLOCK_PARTS: usize = if cfg!(test) { 100_000 } else { 10_000_000 };
+
+/// At most this many triangles are drawn, block instances included, and at most three vertices
+/// per triangle, so that indices stay well within a u32. The browser has less memory.
+const MAX_TRIANGLES: usize = if cfg!(target_arch = "wasm32") { 8_000_000 } else { 40_000_000 };
+const MAX_DRAWN_VERTICES: usize = 3 * MAX_TRIANGLES;
+
 struct Scene<'f> {
-    file: &'f File,
+    file: &'f File<'f>,
     /// Rhino layer by the index objects use.
     layers: HashMap<i32, usize>,
+    /// Rhino layer by id, for the parents.
+    layer_ids: HashMap<Uuid, usize>,
+    /// The full path of a Rhino layer and whether it and its parents are on, worked out once.
+    lineages: HashMap<usize, (String, bool)>,
     materials: HashMap<i32, usize>,
     blocks: HashMap<Uuid, usize>,
     objects: HashMap<Uuid, usize>,
@@ -1216,6 +1284,22 @@ struct Scene<'f> {
     meshes: BTreeMap<Option<usize>, Layer>,
     points: BTreeMap<Option<usize>, Layer>,
     next_id: u64,
+    /// The block definitions being drawn: one met again contains itself.
+    expanding: HashSet<Uuid>,
+    /// Block members drawn so far, and whether the current instance was cut short by
+    /// [`MAX_BLOCK_PARTS`].
+    parts: usize,
+    cut: bool,
+    /// Triangles and vertices drawn so far.
+    triangles: usize,
+    vertices: usize,
+    /// The points of the file; every `stride`-th point met is drawn, at most `MAX_POINTS`.
+    total_points: usize,
+    stride: u64,
+    seen: u64,
+    kept: usize,
+    /// The local origin (metres) taken off everything drawn.
+    origin: Option<DVec3>,
     /// What was drawn and what was left out, by kind.
     drawn: BTreeMap<&'static str, usize>,
     skipped: BTreeMap<&'static str, usize>,
@@ -1228,8 +1312,40 @@ fn opaque(c: [u8; 4]) -> Rgba {
     [c[0], c[1], c[2], 255]
 }
 
+/// How an object is coloured: its display colour (by layer, object or parent) and its material.
+#[derive(Clone, Copy)]
+struct Paint<'f> {
+    color: Rgba,
+    material: Option<&'f Material>,
+}
+
+impl Paint<'_> {
+    /// The colour drawn: the material's diffuse colour and transparency when there is a
+    /// material, else the display colour.
+    fn rgba(&self) -> Rgba {
+        match self.material {
+            Some(m) => {
+                let alpha = (255.0 * (1.0 - m.transparency.clamp(0.0, 1.0))).round() as u8;
+                [m.diffuse[0], m.diffuse[1], m.diffuse[2], alpha]
+            }
+            None => display(self.color),
+        }
+    }
+}
+
+/// Where the members of a block instance are drawn.
+#[derive(Clone, Copy)]
+struct Placement<'f> {
+    xform: DMat4,
+    /// The instance's colour and material, for members by parent.
+    parent: Paint<'f>,
+    /// The Rhino layer of the outermost instance on a layer that is off: Rhino hides the whole
+    /// instance, so its members go to that (hidden) layer instead of their own.
+    off: Option<i32>,
+}
+
 impl<'f> Scene<'f> {
-    fn new(file: &'f File) -> Self {
+    fn new(file: &'f File<'f>) -> Self {
         let index = |n: usize, key: &dyn Fn(usize) -> i32| -> HashMap<i32, usize> {
             let mut map = HashMap::new();
             for k in 0..n {
@@ -1237,15 +1353,32 @@ impl<'f> Scene<'f> {
             }
             map
         };
+        let mut layer_ids = HashMap::new();
+        for (k, l) in file.layers.iter().enumerate().filter(|(_, l)| !l.id.is_nil()) {
+            layer_ids.entry(l.id).or_insert(k);
+        }
+        let total_points: usize = file.objects.iter().map(|o| if let Geometry::Points { points, .. } = &o.geometry { points.len() / 24 } else { 0 }).sum();
         Scene {
             file,
             layers: index(file.layers.len(), &|k| file.layers[k].index),
+            layer_ids,
+            lineages: HashMap::new(),
             materials: index(file.materials.len(), &|k| file.materials[k].index),
             blocks: file.blocks.iter().enumerate().map(|(k, b)| (b.id, k)).collect(),
             objects: file.objects.iter().enumerate().filter(|(_, o)| !o.attributes.id.is_nil()).map(|(k, o)| (o.attributes.id, k)).collect(),
             meshes: BTreeMap::new(),
             points: BTreeMap::new(),
             next_id: 1,
+            expanding: HashSet::new(),
+            parts: 0,
+            cut: false,
+            triangles: 0,
+            vertices: 0,
+            total_points,
+            stride: total_points.div_ceil(super::pointcloud::MAX_POINTS).max(1) as u64,
+            seen: 0,
+            kept: 0,
+            origin: None,
             drawn: BTreeMap::new(),
             skipped: BTreeMap::new(),
         }
@@ -1259,30 +1392,33 @@ impl<'f> Scene<'f> {
         self.materials.get(&index).map(|&k| &self.file.materials[k])
     }
 
-    /// The full path of a layer, `Parent::Child`.
-    fn path(&self, layer: &RhinoLayer) -> String {
-        let mut parts = vec![layer.name.clone()];
-        let mut parent = layer.parent;
-        for _ in 0..64 {
-            let Some(p) = self.file.layers.iter().find(|l| !parent.is_nil() && l.id == parent) else { break };
-            parts.push(p.name.clone());
-            parent = p.parent;
+    /// The full path of Rhino layer `k` (`Parent::Child`) and whether it and all its parents are
+    /// on. Parents are followed up to 64 levels, and a cycle of parents stops at the first layer
+    /// met again.
+    fn lineage(&mut self, k: usize) -> &(String, bool) {
+        if !self.lineages.contains_key(&k) {
+            let layers = &self.file.layers;
+            let mut chain = vec![k];
+            while chain.len() < 64 {
+                let parent = layers[chain[chain.len() - 1]].parent;
+                match self.layer_ids.get(&parent) {
+                    Some(&p) if !chain.contains(&p) => chain.push(p),
+                    _ => break,
+                }
+            }
+            let path = chain.iter().rev().map(|&p| layers[p].name.as_str()).collect::<Vec<_>>().join("::");
+            let shown = chain.iter().all(|&p| layers[p].visible);
+            self.lineages.insert(k, (path, shown));
         }
-        parts.reverse();
-        parts.join("::")
+        &self.lineages[&k]
     }
 
-    /// Whether a layer and all its parents are on.
-    fn shown(&self, layer: &RhinoLayer) -> bool {
-        let mut current = Some(layer);
-        for _ in 0..64 {
-            let Some(l) = current else { break };
-            if !l.visible {
-                return false;
-            }
-            current = self.file.layers.iter().find(|p| !l.parent.is_nil() && p.id == l.parent);
+    /// Whether the layer of index `index` and all its parents are on.
+    fn layer_shown(&mut self, index: i32) -> bool {
+        match self.layers.get(&index) {
+            Some(&k) => self.lineage(k).1,
+            None => true,
         }
-        true
     }
 
     fn viewer_layer(&mut self, layer: i32, points: bool) -> &mut Layer {
@@ -1291,8 +1427,12 @@ impl<'f> Scene<'f> {
             let map = if points { &mut self.points } else { &mut self.meshes };
             return map.get_mut(&key).unwrap();
         }
-        let (name, color, hidden) = match key.map(|k| &self.file.layers[k]) {
-            Some(l) => (self.path(l), display(opaque(l.color)), !self.shown(l)),
+        let (name, color, hidden) = match key {
+            Some(k) => {
+                let color = display(opaque(self.file.layers[k].color));
+                let (path, shown) = self.lineage(k).clone();
+                (path, color, !shown)
+            }
             None => ("Default".to_string(), display([0, 0, 0, 255]), false),
         };
         let map = if points { &mut self.points } else { &mut self.meshes };
@@ -1306,35 +1446,27 @@ impl<'f> Scene<'f> {
         })
     }
 
-    /// The colour of an object: its material's diffuse colour and transparency when it has a
-    /// material, else its display colour by layer, object or parent.
-    fn color(&self, a: &Attributes, parent: Option<Rgba>) -> Rgba {
+    /// The colour and material of an object; `parent` those of the block instance it is part
+    /// of. Colour and material each come by layer, object or parent, independently; by parent
+    /// outside a block is by layer, as in Rhino.
+    fn paint(&self, a: &Attributes, parent: Option<Paint<'f>>) -> Paint<'f> {
         let layer = self.layer(a.layer);
-        let material = match a.material_source {
-            1 => self.material(a.material),
-            3 => None,
+        let material = match (a.material_source, parent) {
+            (1, _) => self.material(a.material),
+            (3, Some(p)) => p.material,
             _ => layer.and_then(|l| self.material(l.material)),
         };
-        if a.material_source == 3 {
-            if let Some(p) = parent {
-                return p;
-            }
-        }
-        if let Some(m) = material {
-            let alpha = (255.0 * (1.0 - m.transparency.clamp(0.0, 1.0))).round() as u8;
-            return [m.diffuse[0], m.diffuse[1], m.diffuse[2], alpha];
-        }
         let layer_color = layer.map(|l| opaque(l.color)).unwrap_or([0, 0, 0, 255]);
-        let color = match a.color_source {
-            1 => opaque(a.color),
-            3 => parent.unwrap_or(layer_color),
+        let color = match (a.color_source, parent) {
+            (1, _) => opaque(a.color),
+            (3, Some(p)) => p.color,
             _ => layer_color,
         };
-        display(color)
+        Paint { color, material }
     }
 
     /// Element properties: name, object type, layer, id, material, block, user text.
-    fn props(&self, a: &Attributes, kind: &str, block: Option<&str>, user: &[(String, String)]) -> String {
+    fn props(&mut self, a: &Attributes, kind: &str, block: Option<&str>, user: &[(String, String)]) -> String {
         let mut p = serde_json::Map::new();
         if !a.name.is_empty() {
             p.insert("Name".into(), a.name.clone().into());
@@ -1345,15 +1477,10 @@ impl<'f> Scene<'f> {
         if let Some(b) = block {
             p.insert("Block".into(), b.into());
         }
-        if let Some(l) = self.layer(a.layer) {
-            p.insert("Layer".into(), self.path(l).into());
+        if let Some(&k) = self.layers.get(&a.layer) {
+            p.insert("Layer".into(), self.lineage(k).0.clone().into());
         }
-        let material = match a.material_source {
-            1 => self.material(a.material),
-            0 => self.layer(a.layer).and_then(|l| self.material(l.material)),
-            _ => None,
-        };
-        if let Some(m) = material.filter(|m| !m.name.is_empty()) {
+        if let Some(m) = self.paint(a, None).material.filter(|m| !m.name.is_empty()) {
             p.insert("Material".into(), m.name.clone().into());
         }
         if !a.id.is_nil() {
@@ -1368,7 +1495,8 @@ impl<'f> Scene<'f> {
 
     fn run(&mut self) {
         let root = DMat4::from_scale(DVec3::splat(self.file.meters));
-        for object in &self.file.objects {
+        let file = self.file;
+        for object in &file.objects {
             let a = &object.attributes;
             if a.mode == 3 {
                 continue; // block definition geometry, drawn by its instances
@@ -1386,11 +1514,16 @@ impl<'f> Scene<'f> {
             match &object.geometry {
                 Geometry::Skipped(why) => *self.skipped.entry(why).or_default() += 1,
                 Geometry::Instance { definition, xform } => {
-                    let name = self.blocks.get(definition).map(|&k| self.file.blocks[k].name.clone()).unwrap_or_default();
+                    let name = self.blocks.get(definition).map(|&k| file.blocks[k].name.clone()).unwrap_or_default();
                     let props = self.props(a, "Block instance", Some(&name), &object.user);
-                    let color = self.color(a, None);
+                    let off = (!self.layer_shown(a.layer)).then_some(a.layer);
+                    let at = Placement { xform: root * *xform, parent: self.paint(a, None), off };
                     let mut first = Some(props);
-                    let drawn = self.instance(*definition, root * *xform, color, id, &mut first, 1);
+                    self.cut = false;
+                    let drawn = self.instance(*definition, at, id, &mut first, 1);
+                    if self.cut {
+                        *self.skipped.entry("block instances cut short (too many parts)").or_default() += 1;
+                    }
                     *if drawn { self.drawn.entry("block instances") } else { self.skipped.entry("empty block instances") }.or_default() += 1;
                 }
                 geometry => {
@@ -1399,7 +1532,7 @@ impl<'f> Scene<'f> {
                         _ => "",
                     };
                     let props = self.props(a, kind, None, &object.user);
-                    let color = self.color(a, None);
+                    let color = self.paint(a, None).rgba();
                     let mut first = Some(props);
                     if self.draw(geometry, a.layer, root, color, id, &mut first) {
                         *self.drawn.entry(plural(kind)).or_default() += 1;
@@ -1409,62 +1542,128 @@ impl<'f> Scene<'f> {
         }
     }
 
-    /// Draws the objects of a block definition, placed by `xform`, as part of element `id`.
-    fn instance(&mut self, definition: Uuid, xform: DMat4, parent: Rgba, id: u64, props: &mut Option<String>, depth: usize) -> bool {
+    /// Draws the objects of a block definition, placed by `at`, as part of element `id`.
+    fn instance(&mut self, definition: Uuid, at: Placement<'f>, id: u64, props: &mut Option<String>, depth: usize) -> bool {
         if depth > MAX_BLOCK_DEPTH {
             *self.skipped.entry("blocks nested too deep").or_default() += 1;
             return false;
         }
         let Some(&k) = self.blocks.get(&definition) else { return false };
+        if !self.expanding.insert(definition) {
+            *self.skipped.entry("blocks that contain themselves").or_default() += 1;
+            return false;
+        }
         let file = self.file;
         let mut drawn = false;
         for uuid in &file.blocks[k].objects {
+            if self.parts >= MAX_BLOCK_PARTS {
+                self.cut = true;
+                break;
+            }
+            self.parts += 1;
             let Some(&o) = self.objects.get(uuid) else { continue };
             let object = &file.objects[o];
             let a = &object.attributes;
             if !a.visible {
                 continue;
             }
-            let color = self.color(a, Some(parent));
+            let paint = self.paint(a, Some(at.parent));
             drawn |= match &object.geometry {
-                Geometry::Instance { definition, xform: inner } => self.instance(*definition, xform * *inner, color, id, props, depth + 1),
-                geometry => self.draw(geometry, a.layer, xform, color, id, props),
+                Geometry::Instance { definition, xform: inner } => {
+                    let off = at.off.or_else(|| (!self.layer_shown(a.layer)).then_some(a.layer));
+                    self.instance(*definition, Placement { xform: at.xform * *inner, parent: paint, off }, id, props, depth + 1)
+                }
+                geometry => self.draw(geometry, at.off.unwrap_or(a.layer), at.xform, paint.rgba(), id, props),
             };
         }
+        self.expanding.remove(&definition);
         drawn
     }
 
+    /// The local origin, taken from the first point drawn (`first`): that point in whole metres
+    /// when it is far from zero, as the point cloud readers do, so that survey coordinates keep
+    /// their precision in f32.
+    fn origin(&mut self, first: Option<DVec3>) -> DVec3 {
+        match first {
+            Some(p) => *self.origin.get_or_insert_with(|| DVec3::from(super::pointcloud::origin_for(p.to_array()))),
+            None => self.origin.unwrap_or(DVec3::ZERO),
+        }
+    }
+
     /// Adds meshes or points to the layer of `layer`; the first part drawn carries the props.
-    fn draw(&mut self, geometry: &Geometry, layer: i32, xform: DMat4, color: Rgba, id: u64, props: &mut Option<String>) -> bool {
+    fn draw(&mut self, geometry: &Geometry<'_>, layer: i32, xform: DMat4, color: Rgba, id: u64, props: &mut Option<String>) -> bool {
         match geometry {
             Geometry::Meshes(meshes, _) => {
-                let target = self.viewer_layer(layer, false);
-                let first = target.indices.len() as u32;
-                for mesh in meshes {
-                    add_mesh(target, mesh, xform, color);
+                // the meshes within the triangle and vertex limits
+                let fits: Vec<&Mesh> = meshes
+                    .iter()
+                    .filter(|m| {
+                        let vertices = if m.normals.is_some() { m.positions.len() } else { 3 * m.triangles };
+                        let fits = self.triangles + m.triangles <= MAX_TRIANGLES && self.vertices + vertices <= MAX_DRAWN_VERTICES;
+                        if fits {
+                            self.triangles += m.triangles;
+                            self.vertices += vertices;
+                        }
+                        fits
+                    })
+                    .collect();
+                if fits.len() < meshes.len() {
+                    *self.skipped.entry("objects beyond the triangle limit").or_default() += 1;
                 }
-                let count = target.indices.len() as u32 - first;
+                let first = fits.iter().flat_map(|m| &m.positions).map(|p| xform.transform_point3(DVec3::from(p.map(f64::from)))).find(|p| p.is_finite());
+                let origin = self.origin(first);
+                let target = self.viewer_layer(layer, false);
+                let start = target.indices.len() as u32;
+                for mesh in fits {
+                    add_mesh(target, mesh, xform, origin, color);
+                }
+                let count = target.indices.len() as u32 - start;
                 if count == 0 {
                     return false;
                 }
-                target.elements.push((id, first, count));
+                target.elements.push((id, start, count));
                 if let Some(p) = props.take() {
                     target.props.push((id, p));
                 }
                 true
             }
             Geometry::Points { points, colors, .. } => {
+                let count = points.len() / 24;
+                if count == 0 {
+                    return false;
+                }
+                if self.kept >= super::pointcloud::MAX_POINTS {
+                    *self.skipped.entry("point objects beyond the point limit").or_default() += 1;
+                    return false;
+                }
+                let point = |k: usize| {
+                    let f = |i: usize| f64::from_le_bytes(points[24 * k + 8 * i..24 * k + 8 * i + 8].try_into().unwrap());
+                    xform.transform_point3(DVec3::new(f(0), f(1), f(2)))
+                };
+                let origin = self.origin((0..count).map(point).find(|p| p.is_finite()));
+                // thinned out while drawing: only every stride-th point of the file is converted
+                let (stride, mut seen, mut kept) = (self.stride, self.seen, self.kept);
                 let target = self.viewer_layer(layer, true);
-                for (k, p) in points.iter().enumerate() {
-                    let p = xform.transform_point3(*p);
+                for k in 0..count {
+                    let keep = seen % stride == 0;
+                    seen += 1;
+                    if !keep {
+                        continue;
+                    }
+                    if kept >= super::pointcloud::MAX_POINTS {
+                        break;
+                    }
+                    let p = point(k);
                     if !p.is_finite() {
                         continue;
                     }
-                    target.positions.extend(p.to_array().map(|v| v as f32));
-                    let c = colors.as_ref().map_or(color, |c| opaque(c[k]));
+                    target.positions.extend((p - origin).to_array().map(|v| v as f32));
+                    let c = colors.map_or(color, |c| [c[4 * k], c[4 * k + 1], c[4 * k + 2], 255]);
                     target.colors.get_or_insert_with(Vec::new).push(c);
+                    kept += 1;
                 }
-                !points.is_empty()
+                (self.seen, self.kept) = (seen, kept);
+                true
             }
             _ => false,
         }
@@ -1472,14 +1671,7 @@ impl<'f> Scene<'f> {
 
     fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>) {
         let mut layers: Vec<Layer> = std::mem::take(&mut self.meshes).into_values().chain(std::mem::take(&mut self.points).into_values()).collect();
-        // thin out point clouds beyond what the viewer draws
-        let total: usize = layers.iter().filter(|l| l.points).map(Layer::vertex_count).sum();
-        let stride = total.div_ceil(super::pointcloud::MAX_POINTS).max(1);
         for layer in &mut layers {
-            if layer.points && stride > 1 {
-                layer.positions = layer.positions.chunks_exact(3).step_by(stride).flatten().copied().collect();
-                layer.colors = layer.colors.take().map(|c| c.into_iter().step_by(stride).collect());
-            }
             // one colour for the whole layer: no vertex colours
             let base = [0, 1, 2].map(|k| (layer.color[k] * 255.0).round() as u8);
             if layer.colors.as_ref().is_some_and(|c| c.iter().all(|c| c[..3] == base && c[3] == 255)) {
@@ -1492,12 +1684,15 @@ impl<'f> Scene<'f> {
             info.push(("Rhino application".into(), file.application.clone()));
         }
         info.push(("Rhino units".into(), if file.meters == 1.0 { file.unit.to_string() } else { format!("{} (converted to metres)", file.unit) }));
+        if let Some(o) = self.origin.filter(|o| *o != DVec3::ZERO) {
+            info.push(("Rhino world origin (metres)".into(), format!("{}, {}, {}", o.x, o.y, o.z)));
+        }
         let list = |m: &BTreeMap<&str, usize>| m.iter().map(|(k, n)| format!("{n} {k}")).collect::<Vec<_>>().join(", ");
         if !self.drawn.is_empty() {
             info.push(("Rhino objects drawn".into(), list(&self.drawn)));
         }
-        if stride > 1 {
-            info.push(("Rhino points".into(), format!("{total} in the file, every {stride}th drawn")));
+        if self.stride > 1 {
+            info.push(("Rhino points".into(), format!("{} in the file, every {}th drawn", self.total_points, self.stride)));
         }
         if !self.skipped.is_empty() {
             info.push(("Rhino objects left out".into(), list(&self.skipped)));
@@ -1539,13 +1734,15 @@ fn version_name(archive: u32) -> String {
     format!("Rhino {rhino} (archive version {archive})")
 }
 
-/// Adds the triangles of a mesh, transformed, with its normals (or flat ones) and colours.
-fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, color: Rgba) {
+/// Adds the triangles of a mesh, transformed and moved by `-origin`, with its normals (or flat
+/// ones) and colours.
+fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: Rgba) {
     let n = mesh.positions.len() as u32;
     let normal_matrix = DMat3::from_mat4(xform).inverse().transpose();
     let mirrored = xform.determinant() < 0.0;
     let color = mesh.color.map_or(color, opaque);
-    let point = |i: u32| xform.transform_point3(DVec3::from(mesh.positions[i as usize].map(f64::from)));
+    // in f64 up to the local origin, so that survey coordinates keep their precision
+    let point = |i: u32| xform.transform_point3(DVec3::from(mesh.positions[i as usize].map(f64::from))) - origin;
     let vertex_color = |i: u32| mesh.colors.as_ref().map_or(color, |c| {
         let c = c[i as usize];
         [c[0], c[1], c[2], 255 - c[3]]
@@ -1592,7 +1789,7 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, color: Rgba) {
     }
 }
 
-fn convert(file: &File) -> (Vec<Layer>, Vec<(String, String)>) {
+fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>) {
     let mut scene = Scene::new(file);
     scene.run();
     scene.finish()
@@ -1992,6 +2189,14 @@ mod tests {
             mesh.extend(i32b(0));
         }
         let old_attributes = |id: Uuid, name: &str| cat(&[&[0x12], &id.0, &i32b(0), &i32b(-1), &[0; 4], &[0; 20], &i32b(1), &[0, 0, 0, 0], &wstr(name), &wstr(""), &i32b(0), &[1]]);
+        // version 1.6 (Rhino 4): display material references, plot fields, line type, then the
+        // space, 1 for a layout
+        let attributes_1_6 = |id: Uuid, space: u8| {
+            let mut a = old_attributes(id, "");
+            a[0] = 0x16;
+            a.extend(cat(&[&i32b(0), &i32b(0), &[0], &[0; 4], &[0], &f64s(&[0.0]), &i32b(-1), &[space]]));
+            a
+        };
         let triangle = w.mesh(&[[0.0, 0.0, 5.0], [1.0, 0.0, 5.0], [0.0, 1.0, 5.0]], &[[0, 1, 2, 2]], None, None, true);
         let extrusion = cat(&[&w.object(Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0"), b"curve", &[]), &[0; 155], &i32b(1), &[1, 1]]);
         let cache = cat(&[&w.object(ON_MESH, &triangle, &[]), &w.object(Uuid::default(), &[], &[]), &w.object(Uuid::default(), &[], &[])]);
@@ -1999,12 +2204,15 @@ mod tests {
         let objects = w.table(TCODE_OBJECT_TABLE, &[
             w.record(0x20, &w.object(ON_MESH, &mesh, &[]), &old_attributes(id(2), "Floor"), &[]),
             w.record(0x4000_0000, &extrusion, &old_attributes(id(3), ""), &[]),
+            w.record(0x20, &w.object(ON_MESH, &triangle, &[]), &attributes_1_6(id(4), 0), &[]),
+            // a logo on a layout
+            w.record(0x20, &w.object(ON_MESH, &w.mesh(&[[0.0, 0.0, 90.0], [1.0, 0.0, 90.0], [0.0, 1.0, 90.0]], &[[0, 1, 2, 2]], None, None, true), &[]), &attributes_1_6(id(5), 1), &[]),
         ]);
         let (model, info) = load("old.3dm", w.file(4, 200_809_010, 4, &[materials, layers, objects]));
         assert_eq!(model.layers.len(), 1);
         let layer = &model.layers[0];
         assert_eq!(layer.name, "Default");
-        assert_eq!(layer.triangle_count(), 3);
+        assert_eq!(layer.triangle_count(), 4);
         // the layer's material colours everything
         assert_eq!(layer.colors.as_ref().unwrap()[0], [150, 100, 50, 255]);
         assert_eq!(model.bounds.min, [0.0, 0.0, 0.0]);
@@ -2012,6 +2220,7 @@ mod tests {
         assert!(model.props.values().any(|p| p.contains("\"Name\":\"Floor\"") && p.contains("Oak")));
         assert_eq!(entry(&info, "Rhino file version"), "Rhino 4 (archive version 4)");
         assert_eq!(entry(&info, "Rhino units"), "metres");
+        assert_eq!(entry(&info, "Rhino objects left out"), "1 objects on layouts");
     }
 
     #[test]
@@ -2053,5 +2262,172 @@ mod tests {
         data.extend([1, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0]);
         let source = Source::Bytes { name: "x.3dm".into(), data: Arc::new(data) };
         assert!(RhinoLoader.load(&source).is_err());
+    }
+
+    /// A block definition record (Rhino 6 layout) with the ids of its objects.
+    fn block(w: &W, id: Uuid, name: &str, objects: &[Uuid]) -> Vec<u8> {
+        let model_attributes = w.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK, 1, 0, &cat(&[&[0], &[1], &id.0, &[0], &[0], &[1], &wstr(name)]));
+        let units = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&i32b(2), &f64s(&[0.001]), &wstr("")]));
+        let list = cat(&[&i32b(objects.len() as i32), &objects.iter().flat_map(|o| o.0).collect::<Vec<u8>>()]);
+        let definition = cat(&[&model_attributes, &i32b(1), &units, &wstr(""), &wstr(""), &wstr(""), &f64s(&[0.0; 6]), &[1], &list, &[0]]);
+        w.chunk(TCODE_INSTANCE_DEFINITION_RECORD, &w.object(ON_INSTANCE_DEFINITION, &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &definition), &[]))
+    }
+
+    /// A block instance of `definition`, moved by `by`.
+    fn instance(w: &W, definition: Uuid, by: DVec3) -> Vec<u8> {
+        let mut xform = DMat4::from_translation(by).transpose().to_cols_array().to_vec();
+        xform.extend([0.0; 6]);
+        w.object(ON_INSTANCE_REF, &cat(&[&[0x10], &definition.0, &f64s(&xform)]), &[])
+    }
+
+    fn triangle(w: &W) -> Vec<u8> {
+        w.object(ON_MESH, &w.mesh(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &[[0, 1, 2, 2]], None, None, false), &[])
+    }
+
+    /// Block definition geometry: mode 3.
+    const DEFINITION: (u8, [u8; 1]) = (12, [3]);
+
+    #[test]
+    fn blocks_that_contain_themselves_stop() {
+        // block A holds a triangle and, twice, an instance of itself: without a check every level
+        // doubles, 2^32 instances before the depth limit
+        let w = W { big: true };
+        let layers = w.table(TCODE_LAYER_TABLE, &[w.layer(0, "Default", [0, 0, 0, 0], true, id(1), Uuid::default(), -1)]);
+        let blocks = w.table(TCODE_INSTANCE_DEFINITION_TABLE, &[block(&w, id(50), "A", &[id(60), id(60), id(61)])]);
+        let definition = vec![(DEFINITION.0, DEFINITION.1.to_vec())];
+        let objects = w.table(TCODE_OBJECT_TABLE, &[
+            w.record(0x1000, &instance(&w, id(50), DVec3::X), &attributes(id(60), 0, &definition), &[]),
+            w.record(0x20, &triangle(&w), &attributes(id(61), 0, &definition), &[]),
+            w.record(0x1000, &instance(&w, id(50), DVec3::ZERO), &attributes(id(62), 0, &[]), &[]),
+        ]);
+        let (model, info) = load("cycle.3dm", w.file(70, 2_400_000_000, 4, &[layers, blocks, objects]));
+        assert_eq!(model.triangle_count(), 1);
+        assert_eq!(entry(&info, "Rhino objects left out"), "2 blocks that contain themselves");
+    }
+
+    #[test]
+    fn wide_nested_blocks_stop_at_the_part_limit() {
+        // 20 levels of blocks, each with its next level 4 times: 4^20 instances, but no cycle
+        let w = W { big: true };
+        let layers = w.table(TCODE_LAYER_TABLE, &[w.layer(0, "Default", [0, 0, 0, 0], true, id(1), Uuid::default(), -1)]);
+        let level = |k: u8| Uuid([k, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let member = |k: u8| Uuid([k, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]);
+        let blocks: Vec<Vec<u8>> = (0..20).map(|k| block(&w, level(k), "level", &[member(k + 1); 4])).collect();
+        let definition = vec![(DEFINITION.0, DEFINITION.1.to_vec())];
+        let mut objects: Vec<Vec<u8>> = (1..20).map(|k| w.record(0x1000, &instance(&w, level(k), DVec3::ZERO), &attributes(member(k), 0, &definition), &[])).collect();
+        objects.push(w.record(0x1000, &instance(&w, level(0), DVec3::ZERO), &attributes(id(70), 0, &[]), &[]));
+        objects.push(w.record(0x20, &triangle(&w), &attributes(id(71), 0, &[]), &[]));
+        let file = w.file(70, 2_400_000_000, 4, &[layers, w.table(TCODE_INSTANCE_DEFINITION_TABLE, &blocks), w.table(TCODE_OBJECT_TABLE, &objects)]);
+        let (model, info) = load("wide.3dm", file);
+        assert_eq!(model.triangle_count(), 1);
+        assert!(entry(&info, "Rhino objects left out").contains("1 block instances cut short (too many parts)"), "{info:?}");
+    }
+
+    /// An `ON_Mesh` 3.x of one triangle whose vertex array is `positions` (size, CRC, method and
+    /// bytes as `compressed` writes them), claiming `vcount` vertices.
+    fn mesh_with(vcount: i32, positions: &[u8]) -> Vec<u8> {
+        cat(&[&[0x30], &i32b(vcount), &i32b(1), &[0; 153], &i32b(4), &[0, 1, 2, 2].map(i32b).concat(), positions, &[0; 16]])
+    }
+
+    fn read_test_mesh(data: &[u8]) -> R<Mesh> {
+        let mut c = Cur { data, pos: 0, v: Versions { archive: 70, opennurbs: 2_400_000_000 } };
+        read_mesh(&mut c, &mut 0)
+    }
+
+    #[test]
+    fn compressed_arrays_are_checked_before_inflating() {
+        let w = W { big: true };
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(&vec![0; 1 << 20]).unwrap();
+        let zeros = z.finish().unwrap();
+        // a few kilobytes that claim almost 4 GiB for 3 vertices: not inflated
+        let bomb = cat(&[&0xFFFF_0000u32.to_le_bytes(), &[0; 4], &[1], &w.chunk(TCODE_ANONYMOUS_CHUNK, &zeros)]);
+        assert_eq!(read_test_mesh(&mesh_with(3, &bomb)).unwrap_err(), "Rhino 3dm: mesh vertices of the wrong size");
+        // a size that matches the vertex count but more than the stream can inflate to
+        let packed = cat(&[&(12u32 * 1_000_000).to_le_bytes(), &[0; 4], &[1], &w.chunk(TCODE_ANONYMOUS_CHUNK, &zeros[..64])]);
+        assert_eq!(read_test_mesh(&mesh_with(1_000_000, &packed)).unwrap_err(), "Rhino 3dm: compressed data larger than its stream can hold");
+        // more vertices than the viewer reads
+        assert_eq!(read_test_mesh(&mesh_with(i32::MAX, &bomb)).unwrap_err(), TOO_MANY_VERTICES);
+        // the well-formed mesh reads
+        let points = w.compressed(&[[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]].iter().flatten().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>(), true);
+        let mesh = read_test_mesh(&mesh_with(3, &points)).unwrap();
+        assert_eq!((mesh.positions.len(), mesh.triangles), (3, 1));
+        // no faces and a face index size that would overflow a 32-bit multiplication
+        let empty = cat(&[&[0x30], &i32b(3), &i32b(0), &[0; 153], &i32b(i32::MAX)]);
+        assert!(read_test_mesh(&empty).unwrap().faces.is_empty());
+    }
+
+    #[test]
+    fn user_text_counts_need_room_for_their_entries() {
+        // 1000 entries in 8000 bytes: each entry needs at least 16
+        let w = W { big: false };
+        let list = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&i32b(1000), &vec![0; 8000]]));
+        let c = Cur { data: &list, pos: 0, v: Versions { archive: 4, opennurbs: 0 } };
+        assert_eq!(user_strings(c).unwrap_err(), "Rhino 3dm: a count larger than its record");
+    }
+
+    #[test]
+    fn layer_parent_cycles_end() {
+        let w = W { big: true };
+        let layers = w.table(TCODE_LAYER_TABLE, &[
+            w.layer(0, "A", [0, 0, 0, 0], true, id(1), id(2), -1),
+            w.layer(1, "B", [0, 0, 0, 0], false, id(2), id(1), -1),
+            w.layer(2, "C", [0, 0, 0, 0], true, id(3), id(3), -1),
+        ]);
+        let objects = w.table(TCODE_OBJECT_TABLE, &[w.record(0x20, &triangle(&w), &attributes(id(10), 0, &[]), &[]), w.record(0x20, &triangle(&w), &attributes(id(11), 2, &[]), &[])]);
+        let (model, _) = load("cycle.3dm", w.file(70, 2_400_000_000, 4, &[layers, objects]));
+        let names: Vec<(&str, bool)> = model.layers.iter().map(|l| (l.name.as_str(), l.hidden)).collect();
+        assert_eq!(names, [("B::A", true), ("C", false)]);
+    }
+
+    #[test]
+    fn block_instances_take_layer_visibility_and_paint_from_parent() {
+        let w = W { big: true };
+        let layers = w.table(TCODE_LAYER_TABLE, &[
+            w.layer(0, "Default", [0, 0, 0, 0], true, id(1), Uuid::default(), -1),
+            w.layer(1, "Furniture", [0, 0, 200, 0], false, id(2), Uuid::default(), -1),
+            w.layer(2, "Green", [0, 200, 0, 0], true, id(3), Uuid::default(), -1),
+            w.layer(3, "Glass", [100, 100, 100, 0], true, id(4), Uuid::default(), 0),
+        ]);
+        let glass = cat(&[&w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&0x0Cu32.to_le_bytes(), &i32b(0), &wstr("Glass")])), &[0; 16], &[0; 4], &[0, 0, 255, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.5])]);
+        let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &glass), &[]))]);
+        let blocks = w.table(TCODE_INSTANCE_DEFINITION_TABLE, &[block(&w, id(50), "Chair", &[id(60)])]);
+        // the chair: red by object, material by parent, on the default layer
+        let red = [(12, vec![3]), (6, vec![255, 0, 0, 0]), (13, vec![1]), (16, vec![3])];
+        let objects = w.table(TCODE_OBJECT_TABLE, &[
+            w.record(0x20, &triangle(&w), &attributes(id(60), 0, &red), &[]),
+            // on a layer that is off: the chair goes to that (hidden) layer
+            w.record(0x1000, &instance(&w, id(50), DVec3::ZERO), &attributes(id(70), 1, &[]), &[]),
+            // on a green layer without a material: the chair stays red
+            w.record(0x1000, &instance(&w, id(50), DVec3::Z), &attributes(id(71), 2, &[]), &[]),
+            // material by parent outside a block: the layer's material
+            w.record(0x20, &triangle(&w), &attributes(id(72), 3, &[(16, vec![3])]), &[]),
+        ]);
+        let (model, _) = load("chairs.3dm", w.file(70, 2_400_000_000, 4, &[materials, layers, blocks, objects]));
+        let names: Vec<(&str, bool, usize)> = model.layers.iter().map(|l| (l.name.as_str(), l.hidden, l.triangle_count())).collect();
+        assert_eq!(names, [("Default", false, 1), ("Furniture", true, 1), ("Glass", false, 1)]);
+        assert_eq!(model.layers[0].colors.as_ref().unwrap(), &[[255, 0, 0, 255]; 3]);
+        assert_eq!(model.layers[2].colors.as_ref().unwrap(), &[[0, 0, 255, 128]; 3]);
+    }
+
+    #[test]
+    fn survey_coordinates_move_to_a_local_origin() {
+        // a block placed and a point cloud at Dutch RD coordinates, in metres
+        let w = W { big: true };
+        let layers = w.table(TCODE_LAYER_TABLE, &[w.layer(0, "Default", [0, 0, 0, 0], true, id(1), Uuid::default(), -1)]);
+        let blocks = w.table(TCODE_INSTANCE_DEFINITION_TABLE, &[block(&w, id(50), "Tree", &[id(60)])]);
+        let points = [155_000.125, 463_000.0625, 1.0, 155_010.5, 463_020.25, 2.0];
+        let cloud = w.object(ON_POINT_CLOUD, &cat(&[&[0x10], &i32b(2), &f64s(&points), &[0; 180]]), &[]);
+        let objects = w.table(TCODE_OBJECT_TABLE, &[
+            w.record(0x20, &triangle(&w), &attributes(id(60), 0, &[(DEFINITION.0, DEFINITION.1.to_vec())]), &[]),
+            w.record(0x1000, &instance(&w, id(50), DVec3::new(155_000.25, 463_000.5, 0.0)), &attributes(id(70), 0, &[]), &[]),
+            w.record(0x2, &cloud, &attributes(id(71), 0, &[]), &[]),
+        ]);
+        let (model, info) = load("rd.3dm", w.file(70, 2_400_000_000, 4, &[layers, blocks, objects]));
+        assert_eq!(entry(&info, "Rhino world origin (metres)"), "155000, 463000, 0");
+        let mesh = &model.layers[0];
+        assert_eq!(mesh.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
+        let cloud = &model.layers[1];
+        assert_eq!(cloud.positions, [0.125, 0.0625, 1.0, 10.5, 20.25, 2.0]);
     }
 }

@@ -109,6 +109,7 @@ jobs:
           viewer=target/release/open-3d-viewer
           mcp=target/release/open-3d-viewer-mcp
           desktop=packaging/linux/org.openaec.Open3DViewer.desktop
+          mime=packaging/linux/org.openaec.Open3DViewer.xml
           icon=assets/icons/icon.png
           stage=$(mktemp -d)
           # .tar.gz
@@ -123,6 +124,7 @@ jobs:
           install -Dm755 "$mcp" "$deb/usr/bin/open-3d-viewer-mcp"
           install -Dm644 "$vertex" "$deb/usr/lib/open-3d-viewer/libvertex.so"
           install -Dm644 "$desktop" "$deb/usr/share/applications/org.openaec.Open3DViewer.desktop"
+          install -Dm644 "$mime" "$deb/usr/share/mime/packages/org.openaec.Open3DViewer.xml"
           install -Dm644 "$icon" "$deb/usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png"
           install -Dm644 LICENSE "$deb/usr/share/doc/open-3d-viewer/copyright"
           mkdir -p "$deb/DEBIAN"
@@ -144,7 +146,7 @@ jobs:
           # .rpm
           rpmtop=$(mktemp -d)
           mkdir -p "$rpmtop"/{SOURCES,SPECS,RPMS,BUILD,BUILDROOT}
-          cp "$viewer" "$mcp" "$vertex" "$desktop" "$icon" LICENSE "$rpmtop/SOURCES/"
+          cp "$viewer" "$mcp" "$vertex" "$desktop" "$mime" "$icon" LICENSE "$rpmtop/SOURCES/"
           rpmbuild -bb --define "_topdir $rpmtop" --define "number $NUMBER" packaging/linux/open-3d-viewer.spec
           cp "$rpmtop"/RPMS/x86_64/*.rpm "$out/open-3d-viewer_${NUMBER}_x86_64.rpm"
           # AppImage

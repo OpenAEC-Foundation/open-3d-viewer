@@ -47,8 +47,13 @@ jobs:
         run: |
           cargo test --release --locked
           cargo test --release --locked -p openaec-ui --lib
+      # Headless structural analysis model: unit tests, sam-json conformance, sam-check
+      - name: Tests (bim-structural)
+        run: cargo test --release --locked -p bim-structural
       - name: Web build (wasm32)
-        run: cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
+        run: |
+          cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
+          cargo check --locked --target wasm32-unknown-unknown -p bim-structural
 
   desktop:
     needs: test

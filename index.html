@@ -32,6 +32,7 @@
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
       }
       #install.shown { display: flex; }
+      #install span { white-space: nowrap; }
       #install button { font: inherit; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
       #install-yes { background: #f5960a; color: #281e0f; font-weight: 600; }
       #install-no { background: transparent; color: #d6d6d8; }
@@ -48,7 +49,7 @@
   </head>
   <body>
     <div id="install" role="dialog" aria-label="Install">
-      <span>Install Open 3D Viewer as an app</span>
+      <span>Install as an app</span>
       <button id="install-yes" type="button">Install</button>
       <button id="install-no" type="button" aria-label="Not now">✕</button>
     </div>

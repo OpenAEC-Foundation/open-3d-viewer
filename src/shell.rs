@@ -773,7 +773,7 @@ impl Studio {
         let folded = compact && self.ribbon_folded;
         let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
         // a phone has no room for the version, and the web app has no remote control
-        let status: Element<'_, Msg> = if compact { w::status_bar(look, left, Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width / self.prefs.scale() as f32)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
             w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { 0 }, Msg::RibbonTab),
@@ -843,7 +843,8 @@ impl Studio {
         {
             let _ = (WindowActions::<Msg>::clone, WindowIcons::clone);
             let c = look.color;
-            let name = container(w::body(look, name)).width(Length::Fill).center_x(Length::Fill);
+            // a phone has no room for the file name next to the buttons (the status bar has it)
+            let name: Element<'_, Msg> = if self.compact() { Space::new().width(Length::Fill).into() } else { container(w::body(look, name)).width(Length::Fill).center_x(Length::Fill).into() };
             container(row(quick).spacing(2).push(name).extend(extra).spacing(2).padding([0, 4]).align_y(iced::Alignment::Center))
                 .height(32)
                 .width(Length::Fill)
@@ -1080,6 +1081,16 @@ impl Studio {
     }
 }
 
+/// `text` cut to what fits on one line of the status bar `width` wide (logical pixels).
+fn one_line(text: &str, width: f32) -> String {
+    // the status bar's 11 px text is about 6.5 px a character, between 10 px of padding each side
+    let fits = ((width - 20.0) / 6.5).max(8.0) as usize;
+    if text.chars().count() <= fits {
+        return text.to_string();
+    }
+    text.chars().take(fits - 1).chain(std::iter::once('…')).collect()
+}
+
 /// Starts the viewer in its window: the shell around `studio`, with the shared fonts and no
 /// system title bar (the shell draws its own).
 pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
@@ -1095,7 +1106,9 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>) -> iced::Result {
         .scale_factor(|s: &Studio| s.prefs.scale() as f32)
         .font(crate::INTER_REGULAR)
         .font(crate::INTER_SEMIBOLD)
-        .antialiasing(true)
+        // not in the browser: on WebGL2 (most phones) iced's multisampled overlay pass keeps
+        // stale pixels, so a view cube stays behind where it was after the layout moves
+        .antialiasing(cfg!(not(target_arch = "wasm32")))
         .default_font(fonts::BODY);
     fonts::FILES
         .iter()

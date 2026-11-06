@@ -1960,11 +1960,20 @@ impl App {
             (None, _) => Some(center(self.welcome(p)).into()),
             _ => None,
         };
-        let hint = container(
-            text(l.text(
+        // a phone (a narrow view) is used with fingers
+        let hint = if self.viewport_size.0 < 600.0 {
+            l.text(
+                "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken en slepen: pannen",
+                "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press and drag: pan",
+            )
+        } else {
+            l.text(
                 "Klik: selecteren · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend",
                 "Click: select · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit",
-            ))
+            )
+        };
+        let hint = container(
+            text(hint)
                 .size(11)
                 .color(p.text_muted),
         )

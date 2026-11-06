@@ -45,6 +45,7 @@ mod vrml;
 mod amf;
 mod ifcx;
 mod step;
+mod rhino;
 
 use crate::model::{Layer, Model, ProjectData, SavedView};
 use std::borrow::Cow;
@@ -52,6 +53,23 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use web_time::Instant;
+
+/// A file that the model `model` refers to (a glTF buffer or image, an OBJ material library). Where
+/// the AI connection is held to the work folder (`managed::confined`), a model in the work folder
+/// may only refer to files in it, so opening it reads nothing outside. A model the user opened
+/// elsewhere is the user's own choice and is not limited.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn check_reference(model: &Path, file: &Path) -> Result<(), String> {
+    if crate::managed::confined() && crate::managed::confine(model).is_ok() {
+        crate::managed::confine(file).map_err(|e| format!("refers to a file outside the work folder: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn check_reference(_: &Path, _: &Path) -> Result<(), String> {
+    Ok(())
+}
 
 
 /// Where a model comes from: a file on disk (desktop, command line, remote control) or the bytes
@@ -229,7 +247,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &rhino::RhinoLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -359,7 +377,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP"), ("3dm", "Rhino")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }

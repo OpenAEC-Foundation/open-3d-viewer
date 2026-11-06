@@ -37,7 +37,7 @@ Elke release staat op de [releasepagina](https://github.com/OpenAEC-Foundation/o
 |----------|-----------|
 | **Windows** | `.exe`-installer (x64, zonder beheerdersrechten) of `.zip` |
 | **macOS** | `.dmg` (universeel: Apple silicon en Intel) |
-| **Linux** | `.deb`, `.rpm`, `.AppImage` of `.tar.gz` |
+| **Linux** | `.deb`, `.rpm`, `.AppImage` of `.tar.gz`, voor x86_64 en arm64 |
 
 Als de OpenAEC Installer een nieuwere versie heeft, meldt de titelbalk van de viewer dat, en **Bijwerken** geeft het over aan de installer. Elk bestand is ondertekend: Windows met Authenticode, macOS met een Developer ID en genotariseerd door Apple, Linux met de OpenPGP-sleutel van OpenAEC (een `.asc` naast elk pakket en naast `SHA256SUMS`), en alles met een build-attestatie van GitHub. De release notes zeggen per platform of het ondertekend is; een release waar een handtekening ontbreekt, staat als pre-release.
 
@@ -104,26 +104,31 @@ Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere b
 
 ## OpenAEC Linux (SuperCloud)
 
-De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; deze repository publiceert dus geen eigen Docker-image.
+De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; deze repository publiceert dus geen eigen Docker-image. De viewer volgt het SuperCloud-contract voor een desktop-app in een gestreamde desktop (route B van [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md)): bestanden uit Docs openen via een pad in de werkmap, en de assistent van de SuperCloud bedient de viewer via zijn MCP-server.
 
-- **Zonder FUSE:** `./open-3d-viewer_<versie>_amd64.AppImage --appimage-extract`, dan `squashfs-root/AppRun [BESTAND]`.
+- **x86_64 en arm64:** de AppImage, `.deb`, `.rpm` en `.tar.gz` komen voor allebei (de servers van de SuperCloud zijn ARM); de lezer voor Vertex BD en BTL (`libvertex.so`) bestaat alleen voor x86_64.
+- **Zonder FUSE:** `./open-3d-viewer_<versie>_amd64.AppImage --appimage-extract` (of `_arm64.AppImage`), dan `squashfs-root/AppRun [BESTAND]`. Een relatief `BESTAND` wordt in de werkmap gezocht als het niet in de huidige map staat.
 - **Zonder GPU:** het 3D-beeld tekent met de software-renderers van Mesa, lavapipe (Vulkan, `mesa-vulkan-drivers`) of llvmpipe (OpenGL, `libegl-mesa0`). Zonder een van beide opent het venster, maar blijft het 3D-beeld leeg.
 - **Onder Wayland**, met een kleine compositor zoals labwc, en zonder systeemvak, notificatiedienst, keyring of D-Bus-sessie.
-- **Stoppen:** de viewer leest alleen modellen en schrijft exports, dus er is geen onbewaard werk; op `SIGTERM` stopt hij.
+- **Stoppen:** op `SIGTERM` maakt de viewer een opslag die bezig is eerst af (hoogstens 8 seconden, binnen de 10 seconden van Docker); lukt dat niet, dan haalt hij het halve tijdelijke bestand (`.part`) weg, zodat er niets half in de werkmap blijft. Dan stopt hij. Ander onbewaard werk is er niet: de viewer verandert geen modellen, en wat hij toont (camera, doorsnedes, metingen) wordt niet tussen sessies bewaard.
 
 | Variabele | Wat hij doet |
 |-----------|--------------|
-| `OPENAEC_BEHEERD=1` | Beheerde modus: geen updatemelding (de SuperCloud ververst het image). De viewer downloadt zelf nooit updates. |
-| `OPENAEC_MAP` | De werkmap (`/openaec` in de SuperCloud): de dialogen voor openen en opslaan beginnen daar. |
+| `OPENAEC_BEHEERD=1` | Beheerde modus: geen updatemelding (de SuperCloud ververst het image), en de viewer draait in de werkmap. De viewer downloadt zelf nooit updates. |
+| `OPENAEC_MAP` | De werkmap (`/openaec` in de SuperCloud): de dialogen voor openen en opslaan beginnen daar, en de MCP-tools nemen paden relatief daaraan. In beheerde modus, en altijd met de MCP-server over HTTP, komen ze niet bij bestanden daarbuiten (ook niet via koppelingen, of via bestanden waar een glTF of OBJ in de werkmap naar verwijst); zonder werkmap komen ze bij geen enkel bestand. |
+| `OPENAEC_TAAL` | De taal van de gebruiker: `nl` of `en` (andere talen krijgen Engels). `--language` gaat voor. |
+| `OPENAEC_THEMA` | Het thema: `light`, `dark`, `blueprint`, `high-contrast-dark` of `high-contrast-light`. `--theme` gaat voor. |
+| `OPENAEC_OPEN` | Een bestand om bij de start te openen als de opdrachtregel er geen noemt. |
+| `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` | De MCP-server over HTTP voor de assistent van de SuperCloud, zie [MCP](#mcp). |
 | `XDG_CONFIG_HOME` | Instellingen (voorkeuren, eigen sneltoetsen, de MCP-koppeling) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, standaard onder `~/.config`. |
-| `O3V_REMOTE=0` | Geen bedieningspoort voor de MCP-server. `O3V_REMOTE_PORT` legt de poort vast (anders een vrije). |
+| `O3V_REMOTE=0` | Geen bedieningspoort voor de MCP-server (en geen MCP over HTTP). `O3V_REMOTE_PORT` legt de poort vast (anders een vrije). |
 | `WGPU_BACKEND` | `vulkan` of `gl` om de grafische backend te kiezen; standaard de eerste die werkt. |
 
 Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` en `--language en|nl`.
 
-**Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert alleen op `127.0.0.1`, voor zijn eigen MCP-server (zie [MCP](#mcp)). De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
+**Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert op `127.0.0.1` voor zijn eigen MCP-server (zie [MCP](#mcp)) en, alleen met `OPENAEC_MCP_POORT` en `OPENAEC_MCP_GEHEIM`, op die poort voor de assistent van de SuperCloud. De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
 
-Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): de release pakt de AppImage uit, start hem onder labwc zonder scherm of GPU, controleert dat het venster en een model in het 3D-beeld tekenen, bewaart de schermafbeeldingen en zet het geheugengebruik zonder geopend bestand in de releasenotes.
+Elke pull request en elke release start de Linux-build zo op GitHub Actions, op x86_64 en arm64 ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): de release pakt de AppImage uit, start hem onder labwc zonder scherm of GPU, controleert dat het venster en een model in het 3D-beeld tekenen, bedient hem via MCP zoals de assistent van de SuperCloud dat doet (een bestand openen via zijn pad in de werkmap, de IFC ernaast opslaan, een model buiten de werkmap geweigerd zien) en stopt hem met `SIGTERM` terwijl hij opslaat, bewaart de schermafbeeldingen en zet het geheugengebruik zonder geopend bestand in de releasenotes.
 
 ## Wat hier staat
 
@@ -207,15 +212,16 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## MCP
 
-`open-3d-viewer-mcp` is een [MCP](https://modelcontextprotocol.io)-server waarmee een AI-agent (Claude Code, Claude Desktop of een andere MCP-client) de desktopviewer bedient zoals een mens dat doet: bestanden openen, schermafbeeldingen maken, de camera en de standaard- en opgeslagen aanzichten instellen, lagen en elementen tonen, verbergen en isoleren, elementen zoeken op eigenschap, selecteren, eigenschappen lezen, een doorsnedekader of -vlak zetten, het model uit elkaar trekken, de weergave wisselen, Revit-staten lezen en meten.
+`open-3d-viewer-mcp` is een [MCP](https://modelcontextprotocol.io)-server waarmee een AI-agent (Claude Code, Claude Desktop of een andere MCP-client) de desktopviewer bedient zoals een mens dat doet: bestanden openen, schermafbeeldingen maken, de camera en de standaard- en opgeslagen aanzichten instellen, lagen en elementen tonen, verbergen en isoleren, elementen zoeken op eigenschap, selecteren, eigenschappen lezen, een doorsnedekader of -vlak zetten, het model uit elkaar trekken, de weergave wisselen, Revit-staten lezen, meten, ongedaan maken en opnieuw doen wat er getoond wordt, en het model als IFC opslaan.
 
 - **Je ziet wat hij doet.** Opdrachten gaan langs dezelfde weg als jouw klikken, in het venster op je scherm. Metingen blijven in beeld.
 - **Het blijft op je computer.** Het venster luistert alleen op `127.0.0.1`, met een willekeurig token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` of `O3V_REMOTE=0` zet het uit.
-- **Installeren:** zet `open-3d-viewer-mcp` naast de viewer (de installers doen dat) en registreer hem, bijvoorbeeld `claude mcp add open-3d-viewer -- "C:\pad\naar\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` geeft de JSON voor andere clients.
+- **Installeren:** zet `open-3d-viewer-mcp` naast de viewer (de installers doen dat) en registreer hem, bijvoorbeeld `claude mcp add open-3d-viewer -- "C:\pad\naar\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` geeft de JSON voor andere clients, en `--list-tools` de definities van de tools.
+- **In de OpenAEC SuperCloud** gebruikt de assistent dezelfde tools, met het voorvoegsel `viewer3d_` zodat ze niet botsen met die van andere tools (contract: [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md), route B). `viewer3d_open` opent een bestand via zijn pad in de werkmap (waar de SuperCloud het bestand uit Docs neerzet), `viewer3d_opslaan` slaat het model ernaast op als IFC (de SuperCloud bewaart het als nieuwe versie in Docs; een bestaand bestand wordt alleen vervangen met `overwrite: true`, ook niet een dat tijdens het opslaan verscheen; een geopende IFC wordt niet door de export van de viewer vervangen maar komt ernaast als `<naam>-viewer.ifc`), en `viewer3d_stand` zegt wat er open is; de andere zijn `viewer3d_` plus de namen hierboven. Met `OPENAEC_MCP_POORT` en `OPENAEC_MCP_GEHEIM` (16 tekens of meer) serveert de viewer ze zelf over HTTP op `http://<OPENAEC_MCP_ADRES>:<poort>/mcp` (adres `0.0.0.0` in beheerde modus, anders `127.0.0.1`): elk verzoek stuurt `Authorization: Bearer <geheim>` (in constante tijd vergeleken), verzoeken met een `Origin`-kop worden geweigerd, hoogstens 32 verbindingen tegelijk met 30 seconden voor een verzoek, en het geheim gaat bij de start uit de omgeving van de viewer. `open-3d-viewer-mcp --prefixed` (of `OPENAEC_BEHEERD=1`) geeft dezelfde namen over stdio. Aanroepen onder de namen zonder voorvoegsel blijven overal werken.
 
 ## Testen en betrouwbaarheid
 
-- **331 unittests** in `src/` (325 draaien; 6 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, één vraagt een GPU), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 195 voor de lezers, 39 voor de app, 9 voor de afstandsbediening, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 10 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
+- **352 unittests** in `src/` (346 draaien; 6 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, één vraagt een GPU), plus 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 196 voor de lezers, 42 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 11 voor IFC-export, 13 voor de afstandsbediening, 8 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.

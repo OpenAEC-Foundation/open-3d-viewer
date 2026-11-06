@@ -284,8 +284,7 @@ impl App {
             Err(e) => return (Err(e), Task::none()),
         };
         let s = &self.schedules[i];
-        let offset = a.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let limit = a.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
+        let (offset, limit) = crate::remote::page(a, 100, 200);
         let rows: Vec<Value> = s
             .rows
             .iter()

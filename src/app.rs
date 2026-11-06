@@ -498,15 +498,15 @@ fn save_dialog_task(model: &Model) -> Task<Message> {
     Task::done(Message::SavePicked(Some(PathBuf::from(save_name(model)))))
 }
 
-/// Saves the model on a worker thread.
+/// Saves the model on a worker thread; an existing file is only replaced when `replace`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn save_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
+pub fn save_task(model: Arc<Model>, path: PathBuf, replace: bool) -> Task<Message> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
                 let start = Instant::now();
-                let _ = tx.send(export::save(&model, &path).map(|()| (path, start.elapsed().as_secs_f32())));
+                let _ = tx.send(export::save(&model, &path, replace).map(|()| (path, start.elapsed().as_secs_f32())));
             });
             rx.await.unwrap_or_else(|_| Err("save thread stopped".to_string()))
         },
@@ -516,7 +516,7 @@ pub fn save_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
 
 /// Saves the model in the browser: written in memory and handed over as a download.
 #[cfg(target_arch = "wasm32")]
-pub fn save_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
+pub fn save_task(model: Arc<Model>, path: PathBuf, _replace: bool) -> Task<Message> {
     Task::perform(
         async move {
             crate::web::next_frame().await;
@@ -540,6 +540,22 @@ impl App {
 
     pub fn theme(&self) -> Theme {
         self.theme.theme()
+    }
+
+    /// Starts saving the model to `path` (Save as, or `save_file`). One save at a time: a dialog
+    /// that was open before another save started gets nothing, so the `Saved` that follows is
+    /// always the answer to the save that is running.
+    pub(crate) fn start_save(&mut self, mut path: PathBuf, replace: bool) -> Task<Message> {
+        let Some(model) = self.model.clone() else { return Task::none() };
+        if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+            return Task::none();
+        }
+        if path.extension().is_none() {
+            path.set_extension(export::registry()[0].extensions()[0]);
+        }
+        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.status = Status::Saving { file, since: Instant::now() };
+        save_task(model, path, replace)
     }
 
     pub(crate) fn model_matrix(&self) -> Mat4 {
@@ -903,21 +919,17 @@ impl App {
                 return save_dialog_task(model);
             }
             Message::SavePicked(None) => {}
-            Message::SavePicked(Some(mut path)) => {
-                let Some(model) = self.model.clone() else { return Task::none() };
-                if path.extension().is_none() {
-                    path.set_extension(export::registry()[0].extensions()[0]);
-                }
-                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.status = Status::Saving { file, since: Instant::now() };
-                return save_task(model, path);
-            }
-            Message::Saved(Ok((path, secs))) => {
-                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.status = Status::Loaded(format!("Saved {file} in {secs:.2} s"));
-            }
-            Message::Saved(Err(e)) => {
-                self.status = Status::Error(e);
+            // the dialog asked before replacing a file
+            Message::SavePicked(Some(path)) => return self.start_save(path, true),
+            Message::Saved(result) => {
+                self.remote_saved(&result);
+                self.status = match result {
+                    Ok((path, secs)) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        Status::Loaded(format!("Saved {file} in {secs:.2} s"))
+                    }
+                    Err(e) => Status::Error(e),
+                };
             }
             Message::TakeShot => {
                 return window::latest().and_then(window::screenshot).map(Message::Shot);

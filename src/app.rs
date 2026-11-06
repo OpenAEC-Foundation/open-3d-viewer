@@ -3484,6 +3484,19 @@ mod tests {
     }
 
     #[test]
+    fn ids_stay_the_same_after_add() {
+        let mut app = App::default();
+        let name = |app: &App, id: u64| app.model.as_ref().unwrap().element_props(id).first().map(|p| p.1.clone());
+        app.set_model(named_square("a", 7, 0.0));
+        app.add_model(named_square("b", 7, 2.0));
+        assert_eq!(name(&app, 7).as_deref(), Some("a"), "the first model keeps its ids");
+        let b = app.model.as_ref().unwrap().element_with_key(crate::model::ElementKey { model: 1, source: 7 }).unwrap();
+        app.add_model(named_square("c", 7, 4.0));
+        assert_eq!(name(&app, 7).as_deref(), Some("a"));
+        assert_eq!(name(&app, b).as_deref(), Some("b"), "an added model keeps its ids when the next is added");
+    }
+
+    #[test]
     fn keys_survive_add_model() {
         let mut app = App::default();
         app.set_model(named_square("a", 7, 0.0));

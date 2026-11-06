@@ -347,8 +347,9 @@ pub struct SavedView {
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Model {
-    /// Compose loaded files in the app, giving each source's element IDs a unique
-    /// namespace. Original IDs remain in their source properties.
+    /// Compose loaded files in the app. The first file keeps its element ids; the elements of
+    /// the others are numbered after the highest id so far, so adding a file changes no id.
+    /// [`Model::element_key`] names every element by its file and its own id.
     pub fn combine(models: &[std::sync::Arc<Model>]) -> Self {
         let mut layers = Vec::new();
         let mut props = HashMap::new();
@@ -360,9 +361,11 @@ impl Model {
             let source = model.file_name();
             let sources: std::collections::BTreeSet<_> = model.props.keys().copied()
                 .chain(model.layers.iter().flat_map(|layer| layer.elements.iter().map(|e| e.0))).collect();
+            // the first model keeps its own ids, the others follow after the highest id so far, so
+            // no id changes when another model is added
             let remap: HashMap<_, _> = sources.into_iter().map(|id| {
-                let mapped = next_id;
-                next_id += 1;
+                let mapped = if m == 0 { id } else { next_id };
+                next_id = next_id.max(mapped.saturating_add(1));
                 let key = ElementKey { model: m as u32, source: id };
                 keys.insert(mapped, key);
                 ids.insert(key, mapped);

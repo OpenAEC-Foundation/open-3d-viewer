@@ -254,6 +254,8 @@ pub enum Message {
     MeasureFinish,
     /// The edges of layers, built in the background for snapping.
     MeasureEdges(crate::measure::Edges),
+    /// A structural hover grid built off the UI thread (`None`: the build was dropped).
+    StructuralGrid(Option<structural::BuiltGrid>),
     MeasureDelete(usize),
     MeasureClear,
     MeasureLength(LengthUnit),
@@ -720,6 +722,7 @@ impl App {
                 self.visible[layer] = entry.visible && *shown;
             }
         }
+        self.refresh_structural_visibility();
     }
 
     fn set_layer_visible(&mut self, layer: usize, shown: bool) {
@@ -734,6 +737,7 @@ impl App {
             }
         }
         if let Some(value) = self.visible.get_mut(layer) { *value = shown; }
+        self.refresh_structural_visibility();
     }
 
     fn set_scene(&mut self, model: Arc<Model>) {
@@ -811,7 +815,11 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         self.refresh_hover();
-        self.structural.note_camera(self.camera);
+        // the structural hover goes when the camera moves (it no longer lies under the cursor) and
+        // while measuring or placing a section plane
+        if self.structural.note_camera(self.camera) || self.measure.tool.is_some() || self.plane_picking {
+            self.set_structural_hover(None);
+        }
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
             None => task,
@@ -983,6 +991,15 @@ impl App {
                     let layers: Vec<_> = m.layers.iter().enumerate().filter(|(_, layer)| filter.is_empty() || layer.name.to_lowercase().contains(&filter)).map(|(i, _)| i).collect();
                     for layer in layers { self.set_layer_visible(layer, v); }
                 }
+                // unfiltered, it shows or hides the structural objects too (a model of only those
+                // has no layers: its entry follows)
+                if filter.is_empty() {
+                    self.structural.all_hidden = !v;
+                    for entry in self.models.iter_mut().filter(|e| e.layers.is_empty()) {
+                        entry.visible = v;
+                    }
+                    self.refresh_structural_visibility();
+                }
             }
             Message::ToggleLayerGroup(group) => {
                 if !self.open_layer_groups.remove(&group) {
@@ -1022,14 +1039,14 @@ impl App {
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
-                    if self.measure.tool.is_none() {
-                        self.hover_structural(x, y, width, height);
+                    if self.measure.tool.is_none() && !self.plane_picking {
+                        return self.hover_structural(x, y, width, height);
                     }
                 }
                 Navigate::HoverOff => {
                     self.hover_request = None;
                     self.measure.hover = None;
-                    self.set_structural_hover(None);
+                    self.structural_hover_off();
                 }
                 Navigate::Pinch { dx, dy, steps, x, y, width, height } => {
                     self.anim = None;
@@ -1187,6 +1204,7 @@ impl App {
                 }
             }
             Message::MeasureFinish => self.measure.finish(),
+            Message::StructuralGrid(built) => return self.structural_grid_built(built),
             Message::MeasureEdges(edges) => {
                 if self.model.as_ref().is_some_and(|m| m.id == edges.0) {
                     self.measure.add_edges(edges.1);
@@ -2121,6 +2139,7 @@ impl App {
             crosshair: self.measure.tool.is_some() && !self.plane_picking,
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
+            structural_shown: self.structural.shown_marks.as_ref(),
         })
             .width(Fill)
             .height(Fill);

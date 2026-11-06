@@ -5,8 +5,14 @@
 //! offsets of the exploded view), so the up-axis override, the section and the exploded view apply
 //! to every instance; the structural state is the separate [`StructUniforms`] at `@group(1)`, so the
 //! scene's uniforms and its hot pipelines do not change. Each pipeline comes three times: plain,
-//! selected and hovered; the selection and the hover draw their instance ranges again on top, as
-//! the mesh highlight does with index ranges.
+//! selected and hovered. The selection and the hover are drawn again on top from small instance
+//! buffers of their own, gathered when they change ([`GpuStructural::gather`]), so a selection of
+//! any size costs one draw per pipeline and glyph kind. Instances of hidden source models are
+//! left out of the plain draw by range (a part's instances are contiguous).
+//!
+//! The pipelines are made the first time a model with structural objects is uploaded, so a scene
+//! without them never compiles the shader (on WebGL2 every pipeline is a GLSL program linked
+//! before the first frame).
 //!
 //! WebGL2 has no `base_vertex` and no first instance: every glyph kind has its own slice of the
 //! library's vertex and index buffers, and instance ranges are bound with `set_vertex_buffer` at an
@@ -136,42 +142,89 @@ impl GlyphLibrary {
     }
 }
 
-/// The instances of a model's [`StructuralDisplay`] on the GPU, with the units of the exploded
-/// view written in.
+/// The instances of a model's [`StructuralDisplay`] (or of a selection of them) on the GPU, with
+/// the units of the exploded view written in.
 pub struct GpuStructural {
     segs: Option<(wgpu::Buffer, u32)>,
     glyphs: Option<wgpu::Buffer>,
-    /// (kind, first glyph, count), as in the display.
+    /// (kind, first glyph, count), in kind order.
     kinds: Vec<(GlyphKind, u32, u32)>,
+}
+
+/// The instances of `ranges` of `display` (all: `None`), units written in, and their glyph kinds.
+fn instances(
+    display: &StructuralDisplay,
+    units: &[u32],
+    ranges: Option<&Marks>,
+) -> (Vec<SegInstance>, Vec<GlyphInstance>, Vec<(GlyphKind, u32, u32)>) {
+    let unit = |item: u32| units.get(item as usize).copied().unwrap_or(0);
+    let all_segs = [(0, display.segs.len() as u32)];
+    let all_glyphs = [(0, display.glyphs.len() as u32)];
+    let seg_ranges = ranges.map_or(&all_segs[..], |m| &m.segs[..]);
+    let glyph_ranges = ranges.map_or(&all_glyphs[..], |m| &m.glyphs[..]);
+    let clamp = |(first, count): (u32, u32), len: usize| (first as usize).min(len)..((first + count) as usize).min(len);
+    let mut segs = Vec::new();
+    for &r in seg_ranges {
+        let r = clamp(r, display.segs.len());
+        segs.extend(display.segs[r.clone()].iter().zip(&display.seg_item[r]).map(|(s, &item)| SegInstance { unit: unit(item), ..*s }));
+    }
+    // the ranges are sorted and the display's glyphs sorted by kind: so are these
+    let (mut glyphs, mut kinds) = (Vec::new(), Vec::new());
+    for &(kind, k0, kn) in &display.glyph_kinds {
+        let first = glyphs.len() as u32;
+        for &(a, n) in glyph_ranges {
+            let (a, b) = (a.max(k0), (a + n).min(k0 + kn));
+            if a < b {
+                let r = clamp((a, b - a), display.glyphs.len());
+                glyphs.extend(display.glyphs[r.clone()].iter().zip(&display.glyph_item[r]).map(|(g, &item)| GlyphInstance { unit: unit(item), ..*g }));
+            }
+        }
+        let count = glyphs.len() as u32 - first;
+        if count > 0 {
+            kinds.push((kind, first, count));
+        }
+    }
+    (segs, glyphs, kinds)
 }
 
 impl GpuStructural {
     /// Uploads `display`, its items in units `units` (one per display item; empty: unit 0).
     pub fn new(device: &wgpu::Device, display: &StructuralDisplay, units: &[u32]) -> Option<Self> {
-        if display.is_empty() {
+        Self::upload(device, instances(display, units, None), "o3v.structural")
+    }
+
+    /// Uploads the instances of `marks` only (the selection or the hover), to draw on top.
+    pub fn gather(device: &wgpu::Device, display: &StructuralDisplay, units: &[u32], marks: &Marks) -> Option<Self> {
+        if marks.is_empty() {
             return None;
         }
-        let unit = |item: u32| units.get(item as usize).copied().unwrap_or(0);
-        let segs = (!display.segs.is_empty()).then(|| {
-            let data: Vec<SegInstance> =
-                display.segs.iter().zip(&display.seg_item).map(|(s, &item)| SegInstance { unit: unit(item), ..*s }).collect();
+        Self::upload(device, instances(display, units, Some(marks)), "o3v.structural.marked")
+    }
+
+    fn upload(
+        device: &wgpu::Device,
+        (segs, glyphs, kinds): (Vec<SegInstance>, Vec<GlyphInstance>, Vec<(GlyphKind, u32, u32)>),
+        label: &str,
+    ) -> Option<Self> {
+        if segs.is_empty() && glyphs.is_empty() {
+            return None;
+        }
+        let segs = (!segs.is_empty()).then(|| {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("o3v.structural.segs"),
-                contents: bytemuck::cast_slice(&data),
+                label: Some(label),
+                contents: bytemuck::cast_slice(&segs),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            (buffer, data.len() as u32)
+            (buffer, segs.len() as u32)
         });
-        let glyphs = (!display.glyphs.is_empty()).then(|| {
-            let data: Vec<GlyphInstance> =
-                display.glyphs.iter().zip(&display.glyph_item).map(|(g, &item)| GlyphInstance { unit: unit(item), ..*g }).collect();
+        let glyphs = (!glyphs.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("o3v.structural.glyphs"),
-                contents: bytemuck::cast_slice(&data),
+                label: Some(label),
+                contents: bytemuck::cast_slice(&glyphs),
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
-        Some(Self { segs, glyphs, kinds: display.glyph_kinds.clone() })
+        Some(Self { segs, glyphs, kinds })
     }
 }
 
@@ -252,7 +305,7 @@ impl StructuralPipelines {
             },
             wgpu::VertexBufferLayout { array_stride: GLYPH_STRIDE, step_mode: wgpu::VertexStepMode::Instance, attributes: &glyph_attributes },
         ];
-        let make = |label: &str, vs: &str, fs: &str, buffers: &[wgpu::VertexBufferLayout], topology| {
+        let make = |label: &str, vs: &str, fs: &str, buffers: &[wgpu::VertexBufferLayout], topology, bias| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -268,7 +321,7 @@ impl StructuralPipelines {
                     depth_write_enabled: true,
                     depth_compare: wgpu::CompareFunction::LessEqual,
                     stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
+                    bias,
                 }),
                 multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
                 fragment: Some(wgpu::FragmentState {
@@ -283,9 +336,15 @@ impl StructuralPipelines {
         };
         let strip = wgpu::PrimitiveTopology::TriangleStrip;
         let list = wgpu::PrimitiveTopology::TriangleList;
-        let seg = ["vs_seg", "vs_seg_selected", "vs_seg_hovered"].map(|vs| make("o3v.structural.seg", vs, "fs_seg", &seg_layout, strip));
-        let glyph =
-            ["vs_glyph", "vs_glyph_selected", "vs_glyph_hovered"].map(|vs| make("o3v.structural.glyph", vs, "fs_glyph", &glyph_layout, list));
+        // A marked line meets the depth its plain line wrote (the shader gives both the line's own
+        // depth); pulled a little towards the eye it wins that tie wherever the two triangulations
+        // round apart. Marked glyphs are larger and cover the plain ones by themselves.
+        let plain = wgpu::DepthBiasState::default();
+        let ahead = wgpu::DepthBiasState { constant: -4, slope_scale: -1.0, clamp: 0.0 };
+        let seg = [("vs_seg", plain), ("vs_seg_selected", ahead), ("vs_seg_hovered", ahead)]
+            .map(|(vs, bias)| make("o3v.structural.seg", vs, "fs_seg", &seg_layout, strip, bias));
+        let glyph = ["vs_glyph", "vs_glyph_selected", "vs_glyph_hovered"]
+            .map(|vs| make("o3v.structural.glyph", vs, "fs_glyph", &glyph_layout, list, plain));
         Self { uniforms, group, seg, glyph, library: GlyphLibrary::new(device) }
     }
 
@@ -293,30 +352,49 @@ impl StructuralPipelines {
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(uniforms));
     }
 
-    /// Draws the instances, then the selection and the hover on top. The scene's model group must
-    /// be bound at 0; the structural group is bound here at 1.
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, gpu: &GpuStructural, selected: &Marks, hovered: &Marks) {
+    /// Draws the instances (only the ranges of `shown`, when some source models are hidden), then
+    /// the selection and the hover on top from their own gathered instances. The scene's model
+    /// group must be bound at 0; the structural group is bound here at 1.
+    pub fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        gpu: &GpuStructural,
+        shown: Option<&Marks>,
+        selected: Option<&GpuStructural>,
+        hovered: Option<&GpuStructural>,
+    ) {
         pass.set_bind_group(1, &self.group, &[]);
+        match shown {
+            None => self.draw_all(pass, gpu, Mark::Plain),
+            Some(shown) => self.draw_ranges(pass, gpu, shown),
+        }
+        for (mark, marked) in [(Mark::Selected, selected), (Mark::Hovered, hovered)] {
+            if let Some(marked) = marked {
+                self.draw_all(pass, marked, mark);
+            }
+        }
+    }
+
+    /// Every instance of `gpu`: one draw for the segments, one per glyph kind.
+    fn draw_all(&self, pass: &mut wgpu::RenderPass<'_>, gpu: &GpuStructural, mark: Mark) {
         if let Some((segs, count)) = &gpu.segs {
-            pass.set_pipeline(&self.seg[Mark::Plain as usize]);
+            pass.set_pipeline(&self.seg[mark as usize]);
             pass.set_vertex_buffer(0, segs.slice(..));
             pass.draw(0..4, 0..*count);
         }
         if let Some(glyphs) = &gpu.glyphs {
-            pass.set_pipeline(&self.glyph[Mark::Plain as usize]);
+            pass.set_pipeline(&self.glyph[mark as usize]);
             for &(kind, first, count) in &gpu.kinds {
                 self.draw_glyphs(pass, glyphs, kind, first, count);
             }
         }
-        for (mark, marks) in [(Mark::Selected, selected), (Mark::Hovered, hovered)] {
-            self.draw_marks(pass, gpu, mark, marks);
-        }
     }
 
-    fn draw_marks(&self, pass: &mut wgpu::RenderPass<'_>, gpu: &GpuStructural, mark: Mark, marks: &Marks) {
-        if let (Some((segs, total)), false) = (&gpu.segs, marks.segs.is_empty()) {
-            pass.set_pipeline(&self.seg[mark as usize]);
-            for &(first, count) in &marks.segs {
+    /// The instance ranges of `ranges`, plain (few: one per run of parts shown).
+    fn draw_ranges(&self, pass: &mut wgpu::RenderPass<'_>, gpu: &GpuStructural, ranges: &Marks) {
+        if let (Some((segs, total)), false) = (&gpu.segs, ranges.segs.is_empty()) {
+            pass.set_pipeline(&self.seg[Mark::Plain as usize]);
+            for &(first, count) in &ranges.segs {
                 let count = count.min(total.saturating_sub(first));
                 if count > 0 {
                     pass.set_vertex_buffer(0, segs.slice(first as u64 * SEG_STRIDE..(first + count) as u64 * SEG_STRIDE));
@@ -324,9 +402,9 @@ impl StructuralPipelines {
                 }
             }
         }
-        if let (Some(glyphs), false) = (&gpu.glyphs, marks.glyphs.is_empty()) {
-            pass.set_pipeline(&self.glyph[mark as usize]);
-            for &(first, count) in &marks.glyphs {
+        if let (Some(glyphs), false) = (&gpu.glyphs, ranges.glyphs.is_empty()) {
+            pass.set_pipeline(&self.glyph[Mark::Plain as usize]);
+            for &(first, count) in &ranges.glyphs {
                 // a range may run over kinds: one draw per kind it covers
                 for &(kind, k0, kn) in &gpu.kinds {
                     let (a, b) = (first.max(k0), (first + count).min(k0 + kn));
@@ -363,6 +441,34 @@ mod tests {
         let (v, i) = cube();
         assert_eq!((v.len(), i.len()), (24, 36));
         assert!(v.iter().all(|v| v.position.iter().all(|c| c.abs() == 0.5)));
+    }
+
+    /// The selection and the hover are gathered into instances of their own, in kind order, with
+    /// the units written in.
+    #[test]
+    fn marked_instances_are_gathered_in_order() {
+        use crate::structural::display::{style, DisplayItem};
+        let mut d = StructuralDisplay::default();
+        let seg = |x: f32| SegInstance { a: [x, 0.0, 0.0], a_off: [0.0; 3], b: [x + 1.0, 0.0, 0.0], b_off: [0.0; 3], color: [0; 4], unit: 0, style: style::AXIS };
+        let node = |x: f32| GlyphInstance { pos: [x, 0.0, 0.0], rot: [0.0, 0.0, 0.0, 1.0], color: [0; 4], unit: 0, size: [0.0; 2], param: [0.0; 2], kind_lod: 0 };
+        d.segs = (0..5).map(|k| seg(k as f32)).collect();
+        d.seg_item = vec![0, 1, 2, 3, 4];
+        d.glyphs = (0..4).map(|k| node(k as f32)).collect();
+        d.glyph_item = vec![5, 6, 7, 8];
+        d.glyph_kinds = vec![(GlyphKind::Node, 0, 4)];
+        d.items = (0..9).map(|k| DisplayItem { element: k, kind: bim_structural::ItemKind::Member, model: 0, segs: (0, 0), glyphs: (0, 0) }).collect();
+        let units: Vec<u32> = (0..9).map(|k| 10 + k).collect();
+        let marks = Marks { segs: vec![(1, 1), (3, 2)], glyphs: vec![(0, 1), (2, 2)] };
+        let (segs, glyphs, kinds) = instances(&d, &units, Some(&marks));
+        assert_eq!(segs.iter().map(|s| (s.a[0], s.unit)).collect::<Vec<_>>(), vec![(1.0, 11), (3.0, 13), (4.0, 14)]);
+        assert_eq!(glyphs.iter().map(|g| (g.pos[0], g.unit)).collect::<Vec<_>>(), vec![(0.0, 15), (2.0, 17), (3.0, 18)]);
+        assert_eq!(kinds, vec![(GlyphKind::Node, 0, 3)]);
+        // everything; ranges past the end are clamped
+        let (segs, glyphs, kinds) = instances(&d, &[], None);
+        assert_eq!((segs.len(), glyphs.len(), kinds), (5, 4, vec![(GlyphKind::Node, 0, 4)]));
+        let past = Marks { segs: vec![(4, 9)], glyphs: vec![] };
+        let (segs, glyphs, kinds) = instances(&d, &[], Some(&past));
+        assert_eq!((segs.len(), glyphs.len(), kinds.len()), (1, 0, 0));
     }
 
     #[test]

@@ -6,7 +6,9 @@
 //! Instead of a file, FILE may name a generated scenario: `synthetic:N` (N boxes, each its own
 //! element), `structural:N` (a 3D frame of N members with their nodes, fixed supports on the
 //! ground nodes and hinges at 10 % of the member ends), or several joined with `+`
-//! (`structural:100000+synthetic:100000`), combined as Add does.
+//! (`structural:100000+synthetic:100000`), combined as Add does. For a model with structural
+//! objects it also times, on the CPU, deriving the display, building the hover grid and a click,
+//! and renders a last pass with every third member selected.
 
 use crate::loaders;
 use crate::model::{Layer, Model};
@@ -45,6 +47,7 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
             d.segs.len(),
             d.glyphs.len()
         );
+        structural_timings(&model, (1920.0, 1080.0));
     }
 
     // WGPU_BACKEND picks the backend, as for the window
@@ -101,7 +104,16 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
         }
     }
     let last = (section.max != section.min).then_some(section);
-    for (mode, section) in [(RenderMode::Solid, None), (RenderMode::SolidEdges, None), (RenderMode::SolidEdges, last)] {
+    // every third member selected: drawn again on top from its own instances
+    let third = model.structural_display.as_ref().filter(|d| !d.is_empty()).map(|d| {
+        let members = d.items.iter().enumerate().filter(|(_, i)| i.kind == bim_structural::ItemKind::Member);
+        Arc::new(d.marks(members.step_by(3).map(|(k, _)| k as u32)))
+    });
+    let mut passes = vec![(RenderMode::Solid, None, None), (RenderMode::SolidEdges, None, None), (RenderMode::SolidEdges, last, None)];
+    if let Some(third) = &third {
+        passes.push((RenderMode::Solid, None, Some(third.clone())));
+    }
+    for (mode, section, selected) in passes {
         let is_last = mode == RenderMode::SolidEdges && (section.is_some() || last.is_none()) && section == last;
         let camera = match (is_last, view_camera) {
             (true, Some(c)) => c,
@@ -120,6 +132,7 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
             grids: true,
             bounds: None,
         };
+        let selected_marks: Arc<crate::structural::display::Marks> = selected.clone().unwrap_or_default();
         let frame = |camera: Camera, pipeline: &mut ScenePipeline| {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
@@ -129,8 +142,9 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
                 settings,
                 explode: None,
                 offsets: Arc::default(),
-                structural_selected: Arc::default(),
+                structural_selected: selected_marks.clone(),
                 structural_hovered: Arc::default(),
+                structural_shown: None,
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -158,13 +172,58 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
         let median = times.get(times.len() / 2).copied().unwrap_or(0.0);
         let p95 = times.get(times.len() * 95 / 100).copied().unwrap_or(0.0);
         println!(
-            "{mode:?}{} @ {w}x{h} 4xMSAA: first frame (upload) {:.1} ms, {frames} frames: mean {mean:.2} ms ({:.0} fps), median {median:.2} ms, p95 {p95:.2} ms",
+            "{mode:?}{}{} @ {w}x{h} 4xMSAA: first frame (upload) {:.1} ms, {frames} frames: mean {mean:.2} ms ({:.0} fps), median {median:.2} ms, p95 {p95:.2} ms",
             if section.is_some() { " + section box" } else { "" },
+            match &selected {
+                Some(m) => format!(" + every 3rd member selected ({} ranges)", m.segs.len() + m.glyphs.len()),
+                None => String::new(),
+            },
             first.as_secs_f64() * 1000.0,
             1000.0 / mean
         );
     }
     Ok(())
+}
+
+/// Times the CPU side of the structural objects for a viewport of `size` logical pixels: deriving
+/// the display, building the hover grid (zoomed to fit and zoomed in) and a click that scans every
+/// instance against one that looks in the grid. Medians of a few runs.
+fn structural_timings(model: &Model, size: (f32, f32)) {
+    use crate::structural::display::StructuralDisplay;
+    use crate::structural::pick::{Lod, Scene, View};
+    let median = |mut f: Box<dyn FnMut() -> usize + '_>| {
+        let mut runs: Vec<(f64, usize)> = (0..5)
+            .map(|_| {
+                let t = Instant::now();
+                let n = f();
+                (t.elapsed().as_secs_f64() * 1000.0, n)
+            })
+            .collect();
+        runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        runs[2]
+    };
+    let (ms, _) = median(Box::new(|| StructuralDisplay::build(&model.structural, &model.origins).items.len()));
+    println!("structural display derived in {ms:.1} ms");
+    let Some(display) = model.structural_display.as_deref() else { return };
+    let mut camera = Camera::default();
+    camera.set_preset(ViewPreset::Iso);
+    camera.fit(&model.bounds, size.0 / size.1);
+    for (name, zoom) in [("zoomed to fit", 1.0), ("zoomed in 4x", 0.25)] {
+        let mut c = camera;
+        c.distance *= zoom;
+        let aspect = size.0 / size.1;
+        let view = View { view_proj: c.view_proj(aspect), model: glam::Mat4::IDENTITY, proj11: c.projection(aspect).y_axis.y, size: glam::Vec2::new(size.0, size.1) };
+        let scene = Scene { display, units: &[], offsets: &[], view, lod: Lod::default(), shown_items: None };
+        let (grid_ms, entries) = median(Box::new(|| scene.grid().len()));
+        let grid = scene.grid();
+        let cursor = glam::Vec2::new(size.0 * 0.5, size.1 * 0.5);
+        let all = |_: glam::Vec3| true;
+        let (scan_ms, _) = median(Box::new(|| scene.hits(cursor, &all).len()));
+        let (cell_ms, _) = median(Box::new(|| grid.hits(&scene, cursor, &all).len()));
+        println!(
+            "structural {name}: hover grid built in {grid_ms:.1} ms ({entries} entries, off the UI thread), click {scan_ms:.2} ms scanning everything, {cell_ms:.3} ms in the grid"
+        );
+    }
 }
 
 /// The model of `--bench FILE`: a file, or generated scenarios joined with `+` (see the module
@@ -250,8 +309,8 @@ pub fn structural(n: usize) -> Model {
 }
 
 /// A 3D grid frame of `n` members (columns 4 m, beams 6 m both ways, up to ten storeys) with
-/// their nodes, fixed supports on the ground nodes and a moment hinge at the start of every tenth
-/// member.
+/// their nodes, fixed supports on the ground nodes and a moment hinge at both ends of every tenth
+/// member (10 % of the member ends).
 pub fn structural_frame(n: usize) -> AnalysisModel {
     const BAY: f64 = 6.0;
     const STOREY: f64 = 4.0;
@@ -306,7 +365,7 @@ pub fn structural_frame(n: usize) -> AnalysisModel {
             section: None,
             section_rotation: 0.0,
             insertion: Insertion::default(),
-            releases: [(e % 10 == 0).then(|| hinge.clone()), None],
+            releases: [0, 1].map(|_| (e % 10 == 0).then(|| hinge.clone())),
             material: None,
             links: Vec::new(),
         });
@@ -378,15 +437,20 @@ mod tests {
             assert!(used.iter().all(|id| f.node(*id).is_some()));
             // supports on the ground nodes only
             assert!(f.nodes.iter().all(|nd| nd.support.is_some() == (nd.p.z == 0.0)));
-            assert_eq!(f.members.iter().filter(|m| m.releases[0].is_some()).count(), n.div_ceil(10));
+            // 10 % of the member ends hinged: both ends of every tenth member
+            let hinged: usize = f.members.iter().map(|m| m.releases.iter().filter(|r| r.is_some()).count()).sum();
+            assert_eq!(hinged, 2 * n.div_ceil(10));
+            assert!(f.members.iter().all(|m| m.releases[0].is_some() == m.releases[1].is_some()));
             // no member of zero length
             assert!(f.members.iter().all(|m| f.member_ends(m).is_some_and(|(a, b)| a.distance(b) > 1.0)));
         }
     }
 
-    /// Renders the portal frame fixture offscreen, from the front, with one member selected, and
-    /// checks the axes, the nodes and the selection are drawn where they project; writes
-    /// `target/structural-renders/portal_frame.png`. `cargo test --release --lib bench -- --ignored`.
+    /// Renders the portal frame fixture offscreen, from the front with one member selected, and
+    /// checks the axes, the nodes and the selection are drawn where they project; then in the iso
+    /// view with one member selected and one hovered, and checks both are marked along their whole
+    /// length. Writes `target/structural-renders/portal_frame.png` and `portal_frame_iso.png`.
+    /// `cargo test --release --lib bench -- --ignored`.
     #[test]
     #[ignore = "needs a GPU; writes a PNG file"]
     fn renders_the_portal_frame() {
@@ -430,31 +494,34 @@ mod tests {
         };
         // the last member selected
         let member = display.items.iter().rposition(|i| i.kind == bim_structural::ItemKind::Member).unwrap() as u32;
-        let primitive = ScenePrimitive {
-            model: Some(model.clone()),
-            visible: Vec::new(),
-            selection: Vec::new(),
-            camera,
-            settings,
-            explode: None,
-            offsets: Arc::default(),
-            structural_selected: Arc::new(display.marks([member])),
-            structural_hovered: Arc::new(Marks::default()),
-        };
         let viewport = Viewport::with_physical_size(iced::Size::new(w, h), 1.0);
         let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(w as f32, h as f32));
-        primitive.prepare(&mut pipeline, &device, &queue, &bounds, &viewport);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        primitive.render(&pipeline, &mut encoder, &view, &iced::Rectangle { x: 0, y: 0, width: w, height: h });
-        queue.submit([encoder.finish()]);
-        let rgba = read_target(&device, &queue, &target, (w, h)).expect("read back");
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/structural-renders");
-        std::fs::create_dir_all(&dir).expect("folder");
-        crate::write_png(&dir.join("portal_frame.png"), w, h, &rgba).expect("png");
-
-        let vp = camera.view_proj(w as f32 / h as f32);
-        let pixel = |q: [f32; 3]| {
-            let c = vp * glam::Vec3::from(q).extend(1.0);
+        let mut render = |camera: Camera, selected: Marks, hovered: Marks, name: &str| {
+            let primitive = ScenePrimitive {
+                model: Some(model.clone()),
+                visible: Vec::new(),
+                selection: Vec::new(),
+                camera,
+                settings,
+                explode: None,
+                offsets: Arc::default(),
+                structural_selected: Arc::new(selected),
+                structural_hovered: Arc::new(hovered),
+                structural_shown: None,
+            };
+            primitive.prepare(&mut pipeline, &device, &queue, &bounds, &viewport);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            primitive.render(&pipeline, &mut encoder, &view, &iced::Rectangle { x: 0, y: 0, width: w, height: h });
+            queue.submit([encoder.finish()]);
+            let rgba = read_target(&device, &queue, &target, (w, h)).expect("read back");
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/structural-renders");
+            std::fs::create_dir_all(&dir).expect("folder");
+            crate::write_png(&dir.join(name), w, h, &rgba).expect("png");
+            rgba
+        };
+        let rgba = render(camera, display.marks([member]), Marks::default(), "portal_frame.png");
+        let pixel = |rgba: &[u8], camera: &Camera, q: [f32; 3]| {
+            let c = camera.view_proj(w as f32 / h as f32) * glam::Vec3::from(q).extend(1.0);
             let (x, y) = (((c.x / c.w + 1.0) * 0.5 * w as f32) as usize, ((1.0 - c.y / c.w) * 0.5 * h as f32) as usize);
             let at = 4 * (y * w as usize + x);
             [rgba[at], rgba[at + 1], rgba[at + 2]]
@@ -464,18 +531,41 @@ mod tests {
         assert!(near([rgba[0], rgba[1], rgba[2]], bg, 2), "background in the corner");
         let axis = [28u8, 77, 135];
         let amber = [217u8, 119, 6];
+        // the axis colour 65 % of the way to the hover tint (light background)
+        let hover = [167u8, 130, 77];
         for (k, item) in display.items.iter().enumerate() {
             match item.kind {
                 bim_structural::ItemKind::Member => {
                     let s = display.segs[item.segs.0 as usize];
                     let mid = [0, 1, 2].map(|i| 0.5 * (s.a[i] + s.b[i]));
                     let want = if k as u32 == member { amber } else { axis };
-                    assert!(near(pixel(mid), want, 40), "member {k}: {:?}, want {want:?}", pixel(mid));
+                    let got = pixel(&rgba, &camera, mid);
+                    assert!(near(got, want, 40), "member {k}: {got:?}, want {want:?}");
                 }
                 _ => {
                     let g = display.glyphs[item.glyphs.0 as usize];
-                    assert!(!near(pixel(g.pos), bg, 30), "node {k} drawn: {:?}", pixel(g.pos));
+                    assert!(!near(pixel(&rgba, &camera, g.pos), bg, 30), "node {k} drawn: {:?}", pixel(&rgba, &camera, g.pos));
                 }
+            }
+        }
+
+        // in perspective from the side, members recede: their two ends lie at different depths. The
+        // selected and the hovered member are wider on top and must win the depth test along their
+        // whole length, not only on the half where the wider quad happens to lie in front.
+        let mut iso = Camera::default();
+        iso.set_preset(ViewPreset::Iso);
+        iso.fit(&model.bounds, w as f32 / h as f32);
+        let first = display.items.iter().position(|i| i.kind == bim_structural::ItemKind::Member).unwrap() as u32;
+        let rgba = render(iso, display.marks([member]), display.marks([first]), "portal_frame_iso.png");
+        let vp = iso.view_proj(w as f32 / h as f32);
+        for (k, want) in [(member, amber), (first, hover)] {
+            let s = display.segs[display.items[k as usize].segs.0 as usize];
+            let (za, zb) = ((vp * glam::Vec3::from(s.a).extend(1.0)), (vp * glam::Vec3::from(s.b).extend(1.0)));
+            assert!((za.z / za.w - zb.z / zb.w).abs() > 1e-4, "member {k} recedes");
+            for t in [0.2f32, 0.35, 0.65, 0.8] {
+                let q = [0, 1, 2].map(|i| s.a[i] + (s.b[i] - s.a[i]) * t);
+                let got = pixel(&rgba, &iso, q);
+                assert!(near(got, want, 40), "member {k} at {t}: {got:?}, want {want:?}");
             }
         }
     }

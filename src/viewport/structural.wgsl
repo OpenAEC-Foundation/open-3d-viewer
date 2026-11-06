@@ -72,7 +72,8 @@ fn style_scale(style: u32) -> f32 {
 }
 
 // Corner `vi` (strip order: a-left, b-left, a-right, b-right) of the quad of segment `s`, a line
-// width wide, with half a width of cap at both ends so joints close.
+// width wide, with half a width of cap at both ends so joints close. Its depth is the line's,
+// whatever the width.
 fn seg_vertex(s: SegIn, vi: u32, mark: u32) -> VertexOut {
     var out: VertexOut;
     let k = style_scale(s.style);
@@ -123,9 +124,19 @@ fn seg_vertex(s: SegIn, vi: u32, mark: u32) -> VertexOut {
         width = width + 2.0;
     }
     let along = select(-1.0, 1.0, at_b);
-    let px = (n * side + d * along) * (0.5 * width);
+    let cap = 0.5 * width;
+    let px = (n * side + d * along) * cap;
     var c = select(ca, cb, at_b);
-    c = vec4<f32>(c.xy + px * 2.0 * su.viewport.zw * c.w, c.zw);
+    // The depth of the line itself, carried on along it over the cap, so the quad's depth at a
+    // pixel does not depend on its width: a selected or hovered member drawn wider on top meets
+    // the depth its plain line wrote, along the whole length (window depth is linear on screen).
+    let za = ca.z / ca.w;
+    let zb = cb.z / cb.w;
+    var z = select(za, zb, at_b);
+    if (len >= 1e-6) {
+        z = z + (zb - za) * along * cap / len;
+    }
+    c = vec4<f32>(c.xy + px * 2.0 * su.viewport.zw * c.w, z * c.w, c.w);
     out.clip = c;
     out.world = select(wa, wb, at_b);
     return out;

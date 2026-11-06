@@ -1066,8 +1066,13 @@ impl App {
         };
         let mut selection = Vec::new();
         let mut structural = Vec::new();
+        // the first element given that is not structural: its properties show
+        let mut first_mesh = None;
         for &id in &ids {
             let ranges = model.element_ranges(id);
+            if !ranges.is_empty() && first_mesh.is_none() {
+                first_mesh = Some(id);
+            }
             if ranges.is_empty() {
                 // a structural object is drawn from its document: a node or member itself, a load
                 // or line support through the item it sits on
@@ -1088,7 +1093,7 @@ impl App {
             return Err("no elements given".into());
         }
         // the first element given decides whose properties show
-        self.selected = selection.first().map(|&(layer, ..)| (layer, ids.iter().copied().find(|id| !structural.contains(id))));
+        self.selected = selection.first().map(|&(layer, ..)| (layer, first_mesh));
         self.selection = selection;
         self.set_structural_selection(structural);
         if flag(a, "zoom").unwrap_or(false) {
@@ -1170,7 +1175,15 @@ impl App {
         let (w, h) = self.viewport_size;
         let structural = self.pick_structural(vx, vy, w, h, hit.as_ref().map(|h| h.point));
         if flag(a, "select").unwrap_or(false) {
-            self.pick(vx, vy, w, h);
+            match &structural {
+                // what was found is selected, as a click would (no second pick)
+                Some(s) if self.measure.tool.is_none() && !self.plane_picking => {
+                    self.selected = None;
+                    self.selection.clear();
+                    self.set_structural_selection(vec![s.element]);
+                }
+                _ => self.pick(vx, vy, w, h),
+            }
         }
         // a structural node or member drawn there (within 8 px of a node, 6 px of a member)
         if let (Some(s), Some(model)) = (structural, self.model.as_ref()) {

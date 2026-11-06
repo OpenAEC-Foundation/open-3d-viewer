@@ -21,7 +21,6 @@ use crate::model::Origin;
 use bim_structural::{frame, Curve, ItemKind};
 use bytemuck::{Pod, Zeroable};
 use glam::DVec3;
-use std::collections::HashMap;
 
 /// Chords per circular arc.
 pub const ARC_SEGMENTS: usize = 16;
@@ -98,6 +97,8 @@ impl GlyphKind {
 pub struct DisplayItem {
     pub element: u64,
     pub kind: ItemKind,
+    /// The source model of its part (`StructuralPart::model`, an index into `Model::origins`).
+    pub model: u32,
     /// First segment and count.
     pub segs: (u32, u32),
     /// First glyph and count.
@@ -131,7 +132,8 @@ pub struct StructuralDisplay {
     /// Per kind present: (kind, first glyph, count), in [`GlyphKind`] order.
     pub glyph_kinds: Vec<(GlyphKind, u32, u32)>,
     pub items: Vec<DisplayItem>,
-    item_of: HashMap<u64, u32>,
+    /// (element id, item), sorted by element id.
+    item_of: Vec<(u64, u32)>,
 }
 
 impl StructuralDisplay {
@@ -144,25 +146,38 @@ impl StructuralDisplay {
             let doc = &part.doc;
             let origin = origins.get(part.model as usize).copied().unwrap_or_default();
             let display = |p: DVec3| origin.display(p).as_vec3().to_array();
-            // the shortest member at each node, for the world cap and the level of detail
-            let mut shortest: HashMap<u64, f64> = HashMap::new();
+            // the ends of every member, and the shortest member at each node (by its slot), for
+            // the world cap and the level of detail
+            let slot = |id: u64| doc.item(id).filter(|r| r.kind == ItemKind::Node).map(|r| r.slot as usize);
+            let mut shortest = vec![f64::INFINITY; doc.nodes.len()];
+            let mut ends: Vec<Option<(DVec3, DVec3)>> = Vec::with_capacity(doc.members.len());
             for m in &doc.members {
-                let Some((a, b)) = doc.member_ends(m) else { continue };
+                let slots = (m.nodes.first().and_then(|&n| slot(n)), m.nodes.last().and_then(|&n| slot(n)));
+                let (Some(sa), Some(sb)) = slots else {
+                    ends.push(None);
+                    continue;
+                };
+                let (a, b) = (doc.nodes[sa].p, doc.nodes[sb].p);
+                ends.push(Some((a, b)));
                 let len = frame::curve_length(a, b, &m.geometry);
                 if !(len > 0.0 && len.is_finite()) {
                     continue;
                 }
-                for n in &m.nodes {
-                    let s = shortest.entry(*n).or_insert(f64::INFINITY);
-                    *s = s.min(len);
+                let mut note = |s: usize| shortest[s] = shortest[s].min(len);
+                match m.nodes.len() {
+                    2 => {
+                        note(sa);
+                        note(sb);
+                    }
+                    _ => m.nodes.iter().filter_map(|&n| slot(n)).for_each(note),
                 }
             }
-            for n in &doc.nodes {
+            for (k, n) in doc.nodes.iter().enumerate() {
                 if !n.p.is_finite() {
                     continue;
                 }
-                let item = d.push_item(part.element_id(n.id), ItemKind::Node);
-                let len = shortest.get(&n.id).copied().filter(|l| l.is_finite()).unwrap_or(0.0);
+                let item = d.push_item(part.element_id(n.id), ItemKind::Node, part.model);
+                let len = Some(shortest[k]).filter(|l| l.is_finite()).unwrap_or(0.0);
                 let g = GlyphInstance {
                     pos: display(n.p),
                     rot: [0.0, 0.0, 0.0, 1.0],
@@ -174,28 +189,42 @@ impl StructuralDisplay {
                 };
                 glyphs[GlyphKind::Node as usize].push((g, item));
             }
-            for m in &doc.members {
+            let axis = |a: DVec3, b: DVec3| SegInstance {
+                a: display(a),
+                a_off: [0.0; 3],
+                b: display(b),
+                b_off: [0.0; 3],
+                color: [0; 4],
+                unit: 0,
+                style: style::AXIS,
+            };
+            for (m, ends) in doc.members.iter().zip(ends) {
+                let Some((a, b)) = ends else { continue };
+                let first = d.segs.len() as u32;
+                // a plain line between two nodes, the common case, without the points vector
+                if m.nodes.len() == 2 && matches!(m.geometry, Curve::Line) {
+                    if !(a.is_finite() && b.is_finite()) || a == b {
+                        continue;
+                    }
+                    let item = d.push_item(part.element_id(m.id), ItemKind::Member, part.model);
+                    d.segs.push(axis(a, b));
+                    d.seg_item.push(item);
+                    d.items[item as usize].segs = (first, 1);
+                    continue;
+                }
                 let points = member_points(doc, m);
                 if points.len() < 2 {
                     continue;
                 }
-                let item = d.push_item(part.element_id(m.id), ItemKind::Member);
-                let first = d.segs.len() as u32;
+                let item = d.push_item(part.element_id(m.id), ItemKind::Member, part.model);
                 for w in points.windows(2) {
-                    d.segs.push(SegInstance {
-                        a: display(w[0]),
-                        a_off: [0.0; 3],
-                        b: display(w[1]),
-                        b_off: [0.0; 3],
-                        color: [0; 4],
-                        unit: 0,
-                        style: style::AXIS,
-                    });
+                    d.segs.push(axis(w[0], w[1]));
                     d.seg_item.push(item);
                 }
                 d.items[item as usize].segs = (first, d.segs.len() as u32 - first);
             }
         }
+        d.item_of.sort_unstable();
         for (kind, list) in GlyphKind::ALL.into_iter().zip(glyphs) {
             if list.is_empty() {
                 continue;
@@ -213,10 +242,10 @@ impl StructuralDisplay {
         d
     }
 
-    fn push_item(&mut self, element: u64, kind: ItemKind) -> u32 {
+    fn push_item(&mut self, element: u64, kind: ItemKind, model: u32) -> u32 {
         let item = self.items.len() as u32;
-        self.items.push(DisplayItem { element, kind, segs: (0, 0), glyphs: (0, 0) });
-        self.item_of.insert(element, item);
+        self.items.push(DisplayItem { element, kind, model, segs: (0, 0), glyphs: (0, 0) });
+        self.item_of.push((element, item));
         item
     }
 
@@ -226,7 +255,8 @@ impl StructuralDisplay {
 
     /// The item that draws element `element`.
     pub fn item(&self, element: u64) -> Option<u32> {
-        self.item_of.get(&element).copied()
+        let k = self.item_of.binary_search_by_key(&element, |e| e.0).ok()?;
+        Some(self.item_of[k].1)
     }
 
     /// The glyph kind of glyph `g`.

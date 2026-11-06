@@ -73,6 +73,8 @@ pub struct Viewport3D<'a> {
     /// Structural instances drawn again on top: the selection and the hover.
     pub structural_selected: &'a Arc<crate::structural::display::Marks>,
     pub structural_hovered: &'a Arc<crate::structural::display::Marks>,
+    /// The structural instances of the source models shown (`None`: all are).
+    pub structural_shown: Option<&'a Arc<crate::structural::display::Marks>>,
 }
 
 #[derive(Default)]
@@ -250,6 +252,7 @@ where
             offsets: self.offsets.clone(),
             structural_selected: self.structural_selected.clone(),
             structural_hovered: self.structural_hovered.clone(),
+            structural_shown: self.structural_shown.cloned(),
         }
     }
 

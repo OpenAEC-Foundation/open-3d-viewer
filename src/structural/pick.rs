@@ -3,9 +3,11 @@
 //! A click projects every node and member segment as the renderer draws them (moved by the
 //! exploded view, cut by the section box and plane, nodes dropped by the level of detail) and
 //! takes the nearest node within [`NODE_PX`] pixels, else the nearest member within
-//! [`MEMBER_PX`]. A segment that crosses the near plane is clipped against `w = NEAR_W` first, as
-//! the vertex shader does. The hover looks in a [`HoverGrid`] of the projected instances, built
-//! once the camera has come to rest, instead of scanning everything on every mouse move.
+//! [`MEMBER_PX`]. What lies in front of the camera's near plane is not drawn (the rasterizer
+//! clips it), so a segment that crosses it is clipped there first and a node centre in front of it
+//! is dropped. The hover, and a click while one is fresh, look in a [`HoverGrid`] of the projected
+//! instances, built off the UI thread once the camera has come to rest, instead of scanning
+//! everything on every mouse move.
 
 use super::display::{GlyphInstance, GlyphKind, StructuralDisplay};
 use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
@@ -14,9 +16,6 @@ use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 pub const NODE_PX: f32 = 8.0;
 /// A member is picked within this many pixels of its axis.
 pub const MEMBER_PX: f32 = 6.0;
-/// Segments are clipped against `w = NEAR_W` before they are projected (`NEAR_W` in
-/// structural.wgsl).
-pub const NEAR_W: f32 = 1e-5;
 
 /// Sizes in logical pixels that decide what is drawn: the default glyph size, the size below
 /// which a glyph is dropped, and how far apart (projected) the ends of a node's shortest member
@@ -59,21 +58,29 @@ pub fn glyph_drawn(g: &GlyphInstance, wpp: f32, lod: &Lod) -> bool {
     !(kind == GlyphKind::Node as u32 && g.param[0] > 0.0 && g.param[0] / wpp < lod.node_cluster_px)
 }
 
-/// Clips the clip-space segment `a`-`b` to `w >= near`: the clipped ends and their parameters
-/// along the segment, `None` when it lies wholly behind.
-pub fn clip_near(a: Vec4, b: Vec4, near: f32) -> Option<(Vec4, Vec4, f32, f32)> {
-    match (a.w >= near, b.w >= near) {
+/// Whether clip point `c` lies beyond the camera's near plane (wgpu's depth range starts at
+/// `z = 0`), where the rasterizer keeps it. The shader's own `NEAR_W` only guards the widening of
+/// segments; it does not decide what is visible.
+pub fn in_front_of_near(c: Vec4) -> bool {
+    c.z >= 0.0 && c.w > 0.0
+}
+
+/// Clips the clip-space segment `a`-`b` to the near plane (`z >= 0`), as the rasterizer does: the
+/// clipped ends and their parameters along the segment, `None` when it lies wholly before it.
+pub fn clip_near(a: Vec4, b: Vec4) -> Option<(Vec4, Vec4, f32, f32)> {
+    match (a.z >= 0.0, b.z >= 0.0) {
         (true, true) => Some((a, b, 0.0, 1.0)),
         (false, false) => None,
         (false, true) => {
-            let t = (near - a.w) / (b.w - a.w);
+            let t = a.z / (a.z - b.z);
             Some((a.lerp(b, t), b, t, 1.0))
         }
         (true, false) => {
-            let t = (near - a.w) / (b.w - a.w);
+            let t = a.z / (a.z - b.z);
             Some((a, a.lerp(b, t), 0.0, t))
         }
     }
+    .filter(|(a, b, ..)| a.w > 0.0 && b.w > 0.0)
 }
 
 /// The parameter along a segment (in the space before projection) of the point at screen
@@ -134,9 +141,15 @@ pub struct Scene<'a> {
     pub offsets: &'a [[f32; 4]],
     pub view: View,
     pub lod: Lod,
+    /// Per display item: whether its source model is shown (`None`: all are).
+    pub shown_items: Option<&'a [bool]>,
 }
 
 impl Scene<'_> {
+    fn item_shown(&self, item: u32) -> bool {
+        self.shown_items.is_none_or(|s| s.get(item as usize).copied().unwrap_or(true))
+    }
+
     fn offset(&self, item: u32) -> Vec3 {
         let unit = self.units.get(item as usize).copied().unwrap_or(0) as usize;
         self.offsets.get(unit).map_or(Vec3::ZERO, |o| Vec3::new(o[0], o[1], o[2]))
@@ -153,9 +166,12 @@ impl Scene<'_> {
             return None;
         }
         let item = self.display.glyph_item[g];
+        if !self.item_shown(item) {
+            return None;
+        }
         let world = self.world(glyph.pos, item);
         let clip = self.view.view_proj * world.extend(1.0);
-        if clip.w < NEAR_W || !shown(world) {
+        if !in_front_of_near(clip) || !shown(world) {
             return None;
         }
         let wpp = world_per_pixel(clip.w, self.view.size.y, self.view.proj11);
@@ -171,9 +187,12 @@ impl Scene<'_> {
     fn project_seg(&self, s: usize) -> Option<([Vec2; 2], [Vec3; 2], [f32; 2])> {
         let seg = self.display.segs.get(s)?;
         let item = self.display.seg_item[s];
+        if !self.item_shown(item) {
+            return None;
+        }
         let (wa, wb) = (self.world(seg.a, item), self.world(seg.b, item));
         let (ca, cb) = (self.view.view_proj * wa.extend(1.0), self.view.view_proj * wb.extend(1.0));
-        let (ca, cb, ta, tb) = clip_near(ca, cb, NEAR_W)?;
+        let (ca, cb, ta, tb) = clip_near(ca, cb)?;
         Some(([self.view.to_screen(ca), self.view.to_screen(cb)], [wa.lerp(wb, ta), wa.lerp(wb, tb)], [ca.w, cb.w]))
     }
 
@@ -193,11 +212,17 @@ impl Scene<'_> {
         Some(Hit { item, element: self.display.items[item as usize].element, node: false, px, world })
     }
 
-    /// The node or member under `cursor`, looking at everything.
-    pub fn pick(&self, cursor: Vec2, shown: &dyn Fn(Vec3) -> bool) -> Option<Hit> {
+    /// Every node within [`NODE_PX`] and member within [`MEMBER_PX`] of `cursor`, looking at
+    /// everything.
+    pub fn hits(&self, cursor: Vec2, shown: &dyn Fn(Vec3) -> bool) -> Vec<Hit> {
         let nodes = (0..self.display.glyphs.len()).filter_map(|g| self.node_hit(g, cursor, shown));
         let segs = (0..self.display.segs.len()).filter_map(|s| self.seg_hit(s, cursor, shown));
-        best(nodes.chain(segs))
+        nodes.chain(segs).collect()
+    }
+
+    /// The node or member under `cursor`, looking at everything.
+    pub fn pick(&self, cursor: Vec2, shown: &dyn Fn(Vec3) -> bool) -> Option<Hit> {
+        best(self.hits(cursor, shown))
     }
 
     /// Puts the drawn nodes and segments into the cells of a screen grid, for the hover.
@@ -209,26 +234,39 @@ impl Scene<'_> {
             let (c, r) = ((p.x / CELL).floor(), (p.y / CELL).floor());
             (c >= 0.0 && r >= 0.0 && (c as usize) < cols && (r as usize) < rows).then(|| r as usize * cols + c as usize)
         };
+        // the model matrix and the camera in one; a unit's offset is a world translation, so its
+        // shift in clip space is the same for every point of the unit
+        let full = self.view.view_proj * self.view.model;
+        let shifts: Vec<Vec4> = self.offsets.iter().map(|o| self.view.view_proj * Vec4::new(o[0], o[1], o[2], 0.0)).collect();
+        let clip = |p: [f32; 3], item: u32| {
+            let unit = self.units.get(item as usize).copied().unwrap_or(0) as usize;
+            full * Vec3::from_array(p).extend(1.0) + shifts.get(unit).copied().unwrap_or(Vec4::ZERO)
+        };
         let mut pairs: Vec<(u32, u32)> = Vec::new();
         for (g, glyph) in self.display.glyphs.iter().enumerate() {
-            if glyph.kind_lod & 0xff != GlyphKind::Node as u32 {
-                continue;
-            }
             let item = self.display.glyph_item[g];
-            let clip = self.view.view_proj * self.world(glyph.pos, item).extend(1.0);
-            if clip.w < NEAR_W {
+            if glyph.kind_lod & 0xff != GlyphKind::Node as u32 || !self.item_shown(item) {
                 continue;
             }
-            if let Some(c) = cell_of(self.view.to_screen(clip)) {
-                pairs.push((c as u32, g as u32));
+            let c = clip(glyph.pos, item);
+            if !in_front_of_near(c) {
+                continue;
+            }
+            if let Some(cell) = cell_of(self.view.to_screen(c)) {
+                pairs.push((cell as u32, g as u32));
             }
         }
         let screen = (Vec2::splat(-CELL), size + CELL);
-        for s in 0..self.display.segs.len() {
-            let Some(([a, b], ..)) = self.project_seg(s) else { continue };
-            let Some((a, b)) = clip_to_rect(a, b, screen.0, screen.1) else { continue };
+        for (s, seg) in self.display.segs.iter().enumerate() {
+            let item = self.display.seg_item[s];
+            if !self.item_shown(item) {
+                continue;
+            }
+            let Some((ca, cb, ..)) = clip_near(clip(seg.a, item), clip(seg.b, item)) else { continue };
+            let Some((a, b)) = clip_to_rect(self.view.to_screen(ca), self.view.to_screen(cb), screen.0, screen.1) else { continue };
             // walk the segment in half cells; a cursor within MEMBER_PX of it is in one of the
-            // cells it visits or in a neighbour
+            // cells it visits or in a neighbour. A straight line never comes back to a cell it
+            // has left, so no pair repeats.
             let steps = (a.distance(b) / (CELL * 0.5)).ceil().max(1.0) as usize;
             let mut last = None;
             for k in 0..=steps {
@@ -239,8 +277,7 @@ impl Scene<'_> {
                 }
             }
         }
-        pairs.sort_unstable();
-        pairs.dedup();
+        // a counting sort by cell (linear), keeping the order within a cell
         let mut starts = vec![0u32; cols * rows + 1];
         for &(c, _) in &pairs {
             starts[c as usize + 1] += 1;
@@ -248,7 +285,13 @@ impl Scene<'_> {
         for i in 1..starts.len() {
             starts[i] += starts[i - 1];
         }
-        HoverGrid { cols, rows, starts, entries: pairs.into_iter().map(|p| p.1).collect() }
+        let mut next = starts.clone();
+        let mut entries = vec![0u32; pairs.len()];
+        for (c, e) in pairs {
+            entries[next[c as usize] as usize] = e;
+            next[c as usize] += 1;
+        }
+        HoverGrid { cols, rows, starts, entries }
     }
 }
 
@@ -279,6 +322,12 @@ impl HoverGrid {
     /// The node or member under `cursor`, looking only at the cells around it. `scene` must be
     /// the one the grid was built from.
     pub fn pick(&self, scene: &Scene, cursor: Vec2, shown: &dyn Fn(Vec3) -> bool) -> Option<Hit> {
+        best(self.hits(scene, cursor, shown))
+    }
+
+    /// Every node and member near `cursor` ([`Scene::hits`]), looking only at the cells around
+    /// it; one may come more than once.
+    pub fn hits(&self, scene: &Scene, cursor: Vec2, shown: &dyn Fn(Vec3) -> bool) -> Vec<Hit> {
         let (c, r) = ((cursor.x / CELL).floor() as i64, (cursor.y / CELL).floor() as i64);
         let mut hits = Vec::new();
         for rr in r - 1..=r + 1 {
@@ -297,12 +346,12 @@ impl HoverGrid {
                 }
             }
         }
-        best(hits)
+        hits
     }
 }
 
 /// A node within [`NODE_PX`] wins over any member; else the nearest.
-fn best(hits: impl IntoIterator<Item = Hit>) -> Option<Hit> {
+pub fn best(hits: impl IntoIterator<Item = Hit>) -> Option<Hit> {
     hits.into_iter().min_by(|a, b| (!a.node).cmp(&!b.node).then(a.px.total_cmp(&b.px)))
 }
 
@@ -354,7 +403,7 @@ mod tests {
         let mut d = StructuralDisplay::default();
         let items = [(10u64, bim_structural::ItemKind::Node), (11, bim_structural::ItemKind::Node), (12, bim_structural::ItemKind::Node), (20, bim_structural::ItemKind::Member)];
         for (k, (element, kind)) in items.into_iter().enumerate() {
-            d.items.push(crate::structural::display::DisplayItem { element, kind, segs: (0, 0), glyphs: (k as u32, 1) });
+            d.items.push(crate::structural::display::DisplayItem { element, kind, model: 0, segs: (0, 0), glyphs: (k as u32, 1) });
         }
         d.items[3].glyphs = (0, 0);
         d.items[3].segs = (0, 1);
@@ -387,7 +436,7 @@ mod tests {
     fn a_node_within_8_px_wins_over_the_member() {
         let d = display();
         let v = view(&top_camera(10.0), Vec2::new(800.0, 600.0));
-        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default() };
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: None };
         let all = |_: Vec3| true;
         let n1 = screen_of(&v, Vec3::new(4.0, 0.0, 0.0));
         // 5 px off the end node, right on the member: the node
@@ -411,7 +460,7 @@ mod tests {
     fn section_clipped_elements_are_not_pickable() {
         let d = display();
         let v = view(&top_camera(10.0), Vec2::new(800.0, 600.0));
-        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default() };
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: None };
         // a section box that keeps x < 3
         let keep = |w: Vec3| w.x < 3.0;
         let n1 = screen_of(&v, Vec3::new(4.0, 0.0, 0.0));
@@ -432,7 +481,7 @@ mod tests {
         // unit 1 (the end node) moves 5 m along y
         let units = [0, 1, 0, 0];
         let offsets = [[0.0; 4], [0.0, 5.0, 0.0, 0.0]];
-        let scene = Scene { display: &d, units: &units, offsets: &offsets, view: v, lod: Lod::default() };
+        let scene = Scene { display: &d, units: &units, offsets: &offsets, view: v, lod: Lod::default(), shown_items: None };
         let all = |_: Vec3| true;
         let moved = screen_of(&v, Vec3::new(4.0, 5.0, 0.0));
         assert_eq!(scene.pick(moved, &all).map(|h| h.element), Some(11));
@@ -445,7 +494,7 @@ mod tests {
         let d = display();
         let all = |_: Vec3| true;
         let far = view(&top_camera(5000.0), Vec2::new(800.0, 600.0));
-        let scene = Scene { display: &d, units: &[], offsets: &[], view: far, lod: Lod::default() };
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: far, lod: Lod::default(), shown_items: None };
         // 4 m members at 5 km: under 6 px; the member is still picked
         let at = screen_of(&far, Vec3::new(4.0, 0.0, 0.0));
         assert_eq!(scene.pick(at, &all).map(|h| h.node), Some(false));
@@ -469,15 +518,15 @@ mod tests {
 
     #[test]
     fn segments_are_clipped_at_the_near_plane() {
-        let (a, b) = (Vec4::new(0.0, 0.0, 0.0, -1.0), Vec4::new(2.0, 4.0, 1.0, 3.0));
-        let (ca, cb, ta, tb) = clip_near(a, b, 1.0).unwrap();
-        assert_eq!((ta, tb), (0.5, 1.0));
-        assert_eq!(ca, Vec4::new(1.0, 2.0, 0.5, 1.0));
+        let (a, b) = (Vec4::new(0.0, 0.0, -1.0, 1.0), Vec4::new(4.0, 8.0, 3.0, 5.0));
+        let (ca, cb, ta, tb) = clip_near(a, b).unwrap();
+        assert_eq!((ta, tb), (0.25, 1.0));
+        assert_eq!(ca, Vec4::new(1.0, 2.0, 0.0, 2.0));
         assert_eq!(cb, b);
         // the other way round
-        let (ca, cb, ta, tb) = clip_near(b, a, 1.0).unwrap();
-        assert_eq!((ta, tb, ca, cb.w), (0.0, 0.5, b, 1.0));
-        assert!(clip_near(a, Vec4::new(0.0, 0.0, 0.0, 0.5), 1.0).is_none());
+        let (ca, cb, ta, tb) = clip_near(b, a).unwrap();
+        assert_eq!((ta, tb, ca, cb.z), (0.0, 0.75, b, 0.0));
+        assert!(clip_near(a, Vec4::new(0.0, 0.0, -0.5, 0.5)).is_none());
         // a member running from behind the camera to in front of it is still picked
         let mut d = display();
         let mut c = top_camera(10.0);
@@ -489,11 +538,64 @@ mod tests {
         d.segs[0].b = [0.0, 0.0, -1.0];
         d.glyphs.clear();
         d.glyph_item.clear();
-        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default() };
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: None };
         let at = screen_of(&v, Vec3::new(0.0, 0.0, -1.0));
         let hit = scene.pick(at, &|_| true).expect("the visible part");
         assert_eq!(hit.element, 20);
         assert_eq!(scene.grid().pick(&scene, at, &|_| true).map(|h| h.element), Some(20));
+    }
+
+    /// Between `w = 1e-5` (the shader's guard) and the camera's near plane nothing is drawn, so
+    /// nothing there is picked: neither a node centre nor that part of a member.
+    #[test]
+    fn nothing_before_the_near_plane_is_picked() {
+        let mut d = display();
+        let c = top_camera(10.0);
+        let v = view(&c, Vec2::new(800.0, 600.0));
+        let eye = c.eye();
+        let forward = (c.target - eye).normalize();
+        // the near plane is at 0.2 % of the distance, 0.02 m; this node is 0.01 m from the eye
+        let close = eye + forward * 0.01;
+        d.glyphs = vec![node(close.to_array(), 0.0)];
+        d.glyph_item = vec![0];
+        d.glyph_kinds = vec![(GlyphKind::Node, 0, 1)];
+        for k in 1..3 {
+            d.items[k].glyphs = (0, 0);
+        }
+        // a member across the view, wholly before the near plane
+        let side = forward.cross(Vec3::Y).normalize();
+        d.segs[0].a = (close + side * 0.004).to_array();
+        d.segs[0].b = (eye + forward * 0.015 - side * 0.004).to_array();
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: None };
+        let all = |_: Vec3| true;
+        let centre = Vec2::new(400.0, 300.0);
+        let w = (v.view_proj * close.extend(1.0)).w;
+        assert!(w > 1e-5 && w < 0.02, "between the guard and the near plane: {w}");
+        assert!(scene.hits(centre, &all).is_empty(), "{:?}", scene.hits(centre, &all));
+        assert!(scene.grid().is_empty());
+        // beyond the near plane the node is picked
+        d.glyphs[0].pos = (eye + forward * 0.5).to_array();
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: None };
+        assert_eq!(scene.pick(centre, &all).map(|h| h.node), Some(true));
+        assert_eq!(scene.grid().pick(&scene, centre, &all).map(|h| h.node), Some(true));
+    }
+
+    #[test]
+    fn hidden_items_are_not_picked() {
+        let d = display();
+        let v = view(&top_camera(10.0), Vec2::new(800.0, 600.0));
+        let all = |_: Vec3| true;
+        let n1 = screen_of(&v, Vec3::new(4.0, 0.0, 0.0));
+        // the end node (item 1) hidden: the member under it is found instead
+        let shown = [true, false, true, true];
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: Some(&shown) };
+        assert_eq!(scene.pick(n1, &all).map(|h| h.element), Some(20));
+        assert_eq!(scene.grid().pick(&scene, n1, &all).map(|h| h.element), Some(20));
+        // the member hidden too: nothing
+        let shown = [true, false, true, false];
+        let scene = Scene { display: &d, units: &[], offsets: &[], view: v, lod: Lod::default(), shown_items: Some(&shown) };
+        assert!(scene.pick(n1, &all).is_none());
+        assert!(scene.grid().pick(&scene, n1, &all).is_none());
     }
 
     #[test]

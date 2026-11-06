@@ -274,6 +274,10 @@ pub enum Message {
     /// Go back to the visibility before the last change (layers, models, hidden elements).
     Undo,
     Redo,
+    /// Select every element whose property (key, value) has this value.
+    SelectWhere(String, String),
+    /// Select everything on the layers the selection touches.
+    SelectLayerOfSelection,
     /// Hide the selected elements; the selection empties.
     HideSelection,
     /// Hide every element but the selected ones.
@@ -1228,6 +1232,14 @@ impl App {
                     self.restore_view_state(state);
                 }
             }
+            Message::SelectWhere(key, value) => {
+                if let Some(model) = self.model.clone() {
+                    self.sel.clear();
+                    self.sel.extend(model.elements_with(&key, &value).into_iter().map(Pickable::Element));
+                    self.selection_changed();
+                }
+            }
+            Message::SelectLayerOfSelection => self.select_layer_of_selection(),
             Message::HideSelection => self.hide_selection(),
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
@@ -1402,6 +1414,26 @@ impl App {
             }
         }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
+    }
+
+    /// Select layer: adds every element (and every layer without elements) of the layers the
+    /// selection touches.
+    fn select_layer_of_selection(&mut self) {
+        let Some(model) = self.model.clone().filter(|_| !self.sel.is_empty()) else { return };
+        let layers: std::collections::BTreeSet<usize> = self.selection.iter().map(|r| r.0).collect();
+        let items: Vec<Pickable> = layers
+            .into_iter()
+            .filter_map(|l| model.layers.get(l).map(|layer| (l, layer)))
+            .flat_map(|(l, layer)| {
+                if layer.elements.is_empty() {
+                    vec![Pickable::Layer(l)]
+                } else {
+                    layer.elements.iter().map(|e| Pickable::Element(e.0)).collect()
+                }
+            })
+            .collect();
+        self.sel.extend(items);
+        self.selection_changed();
     }
 
     /// Adds what the box `rect` (viewport pixels of a viewport of width × height) holds to the
@@ -2023,7 +2055,21 @@ impl App {
             props.sort_by_key(|(k, _)| PROP_ORDER.iter().position(|o| o.0 == k).unwrap_or(PROP_ORDER.len()));
             for (k, v) in props {
                 let label = PROP_ORDER.iter().find(|o| o.0 == k).map_or(k.as_str(), |o| l.text(o.1, o.2)).to_string();
-                content = content.push(prop_row(p, label, v));
+                if element.is_none() {
+                    content = content.push(prop_row(p, label, v));
+                    continue;
+                }
+                // every element with this value, one click away
+                let pick = button(svg(icons::handle(crate::b2::small("view.fit-selection"))).width(12).height(12))
+                    .padding(2)
+                    .style(move |_, s| p.row_button(s))
+                    .on_press(Message::SelectWhere(k.clone(), v.clone()));
+                let pick = iced::widget::tooltip(
+                    pick,
+                    container(text(l.text("Alles met deze waarde selecteren", "Select all with this value")).size(11)).padding(4).style(move |_| container::Style { background: Some(Background::Color(p.surface)), border: Border { color: p.text_muted, width: 1.0, radius: 3.0.into() }, text_color: Some(p.text), ..container::Style::default() }),
+                    iced::widget::tooltip::Position::Left,
+                );
+                content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
             }
             content = content.push(rule::horizontal(1));
         }
@@ -3297,6 +3343,39 @@ mod tests {
         let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
         assert_ne!(app.units[unit][0], 0.0, "still moved apart");
         assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn select_where_selects_all_matches() {
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Walls".into(),
+            positions: vec![0.0; 27],
+            indices: (0..9).collect(),
+            elements: vec![(1, 0, 3), (2, 3, 3), (3, 6, 3)],
+            props: vec![(1, r#"{"level":"00"}"#.into()), (2, r#"{"level":"01"}"#.into()), (3, r#"{"level":"00"}"#.into())],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer])));
+        app.click(Some(Pickable::Element(2)), false);
+        let _ = app.update(Message::SelectWhere("level".into(), "00".into()));
+        assert_eq!(app.sel.items(), &[Pickable::Element(1), Pickable::Element(3)]);
+    }
+
+    #[test]
+    fn select_layer_of_selection() {
+        use crate::model::Layer;
+        let walls = two_squares().layers[0].clone();
+        let mesh = Layer { name: "Mesh".into(), positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], indices: vec![0, 1, 2], ..Layer::default() };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![walls, mesh])));
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::SelectLayerOfSelection);
+        assert_eq!(app.sel.items(), &[Pickable::Element(20), Pickable::Element(10)]);
+        app.click(Some(Pickable::Layer(1)), true);
+        let _ = app.update(Message::SelectLayerOfSelection);
+        assert_eq!(app.sel.len(), 3);
     }
 
     #[test]

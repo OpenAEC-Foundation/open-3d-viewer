@@ -455,6 +455,28 @@ impl Model {
         self.layers.iter().map(Layer::point_count).sum()
     }
 
+    /// The elements whose property `key` is `value`, both ignoring case, in layer order and each
+    /// once. `category` falls back to the element's first layer name, as the remote
+    /// `find_elements` does.
+    pub fn elements_with(&self, key: &str, value: &str) -> Vec<u64> {
+        let (key, value) = (key.to_lowercase(), value.to_lowercase());
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            for &(id, ..) in &layer.elements {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let found = self.element_props(id).into_iter().find(|(k, _)| k.to_lowercase() == key).map(|(_, v)| v.to_lowercase());
+                let found = found.or_else(|| (key == "category").then(|| layer.name.to_lowercase()));
+                if found.as_deref() == Some(value.as_str()) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+
     /// The key of element `id`: its model and its id in that model's file.
     pub fn element_key(&self, id: u64) -> ElementKey {
         self.keys.get(&id).copied().unwrap_or(ElementKey { model: 0, source: id })
@@ -707,6 +729,23 @@ mod tests {
             ..Layer::default()
         };
         std::sync::Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn elements_with_matches_exactly_ignoring_case() {
+        let walls = Layer {
+            name: "Walls".into(),
+            positions: vec![0.0; 18],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            elements: vec![(1, 0, 3), (2, 3, 3)],
+            props: vec![(1, r#"{"level":"00"}"#.into()), (2, r#"{"category":"Wall","level":"01"}"#.into())],
+            ..Layer::default()
+        };
+        let m = Model::new(PathBuf::from("x.rvt"), "Revit", vec![walls]);
+        assert_eq!(m.elements_with("category", "walls"), vec![1], "falls back to the layer name");
+        assert_eq!(m.elements_with("Category", "WALL"), vec![2]);
+        assert_eq!(m.elements_with("level", "0"), Vec::<u64>::new(), "exact, not a part");
+        assert_eq!(m.elements_with("LEVEL", "01"), vec![2]);
     }
 
     #[test]

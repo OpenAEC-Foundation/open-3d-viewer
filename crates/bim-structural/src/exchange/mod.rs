@@ -120,4 +120,26 @@ mod tests {
             "{SCHEMA_PATH} is stale; regenerate with `UPDATE_SCHEMA=1 cargo test -p bim-structural schema_is_not_stale`"
         );
     }
+
+    /// Every object in the schema, enum variant bodies included, refuses unknown fields.
+    #[test]
+    fn schema_objects_are_closed() {
+        fn walk(v: &serde_json::Value, path: &str, open: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    if map.contains_key("properties") && map.get("additionalProperties") != Some(&serde_json::Value::Bool(false)) {
+                        open.push(path.to_string());
+                    }
+                    for (k, x) in map {
+                        walk(x, &format!("{path}/{k}"), open);
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().enumerate().for_each(|(i, x)| walk(x, &format!("{path}/{i}"), open)),
+                _ => {}
+            }
+        }
+        let mut open = Vec::new();
+        walk(&json_schema(), "", &mut open);
+        assert!(open.is_empty(), "objects without additionalProperties: false: {open:#?}");
+    }
 }

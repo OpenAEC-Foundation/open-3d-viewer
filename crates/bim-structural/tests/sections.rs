@@ -238,3 +238,38 @@ fn cardinal_anchors_l_100x10() {
     assert!((centroid.x - u0 - 0.0282).abs() < 0.0002 && (centroid.y - v0 - 0.0282).abs() < 0.0002, "{centroid}");
     within(props_of(&shape).area, 19.2e-4, 0.005, "L A table");
 }
+
+#[test]
+fn plain_c_shear_centre_is_the_u_closed_form() {
+    // A plain cold-formed channel (lip 0) is a U with tf = tw = t: e = 3 b'² t / (6 b' t + h' t)
+    // from the web centreline with b' = b − t/2 (the flange runs to its free tip), h' = h − t.
+    let (h, b, t) = (0.2, 0.07, 0.002);
+    let c = props_of(&Shape::C { h, b, t, lip: 0.0, r: 0.003 });
+    let (bp, hp) = (b - t / 2.0, h - t);
+    let e = 3.0 * bp * bp * t / (6.0 * bp * t + hp * t);
+    let shear = DVec2::new(-b / 2.0 + t / 2.0 - e, 0.0);
+    assert!((c.shear_centre - shear).length() < 1e-12, "{} vs {shear}", c.shear_centre);
+    assert!((shear.x + 0.057338).abs() < 1e-6);
+    // The same dimensions as a U give the same shear centre, so anchors 15-19 agree.
+    let u = props_of(&Shape::U { h, b, tw: t, tf: t, r1: 0.0, r2: 0.0, slope: 0.0 });
+    assert!((u.shear_centre - c.shear_centre).length() < 1e-12);
+    for cp in 15..=19 {
+        let (a, b) = (cardinal_anchor(&c, cp).unwrap(), cardinal_anchor(&u, cp).unwrap());
+        assert!((a - b).length() < 1e-12, "CP {cp}: {a} vs {b}");
+    }
+    // With a lip the flange centreline ends on the lip centreline: (b − t) in the closed form.
+    let lipped = props_of(&Shape::C { h, b, t, lip: 0.02, r: 0.003 });
+    let (a, w, cc) = (h - t, b - t, 0.02 - t / 2.0);
+    let m = w * (3.0 * a * a * w + cc * (6.0 * a * a - 8.0 * cc * cc)) / (a.powi(3) + 6.0 * a * a * w + cc * (8.0 * cc * cc - 12.0 * a * cc + 6.0 * a * a));
+    assert!((lipped.shear_centre.x - (-b / 2.0 + t / 2.0 - m)).abs() < 1e-12);
+}
+
+#[test]
+fn properties_beyond_f64_are_unavailable() {
+    let huge = Shape::I { h: 1e200, b: 1e199, tw: 1e197, tf: 1e198, r: 0.0, slope: 0.0 };
+    assert!(section::check(&huge).is_ok());
+    let (p, src) = section::compute(&huge, None);
+    assert_eq!(src, PropsSource::Unavailable);
+    assert!(section::props_finite(&SectionProps { bbox: [DVec2::splat(-1.0), DVec2::ONE], area: 1.0, ..p }));
+    assert!(!section::props_finite(&p));
+}

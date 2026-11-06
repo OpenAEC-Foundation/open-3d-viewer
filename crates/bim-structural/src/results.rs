@@ -260,7 +260,7 @@ impl<'a> Reader<'a> {
     }
     fn check_len(&self, count: usize, size: usize) -> Result<(), String> {
         match count.checked_mul(size) {
-            Some(n) if self.at + n <= self.bytes.len() => Ok(()),
+            Some(n) if self.at.checked_add(n).is_some_and(|end| end <= self.bytes.len()) => Ok(()),
             _ => Err(format!("block truncated: {count} values of {size} bytes do not fit")),
         }
     }
@@ -323,7 +323,8 @@ pub fn decode(bytes: &[u8]) -> Result<ResultBlock, String> {
     let stations = r.u32()? as usize;
     let table = if kind.is_member() {
         let member = r.u64s(rows)?;
-        let offsets = r.u32s(rows + 1)?;
+        // Checked: on 32-bit targets `rows + 1` can overflow for a corrupt header.
+        let offsets = r.u32s(rows.checked_add(1).ok_or("block truncated: row count overflows")?)?;
         check_offsets(&offsets, stations)?;
         let x = r.f64s(stations)?;
         if kind == TableKind::Envelope {
@@ -384,6 +385,12 @@ mod tests {
             let mut longer = bytes.clone();
             longer.push(0);
             assert!(decode(&longer).is_err());
+        }
+        // Corrupt headers with huge counts are errors, never overflows (on any pointer width).
+        for rows in [u32::MAX, 0x1FFF_FFFF] {
+            let mut bad = encode(&blocks[0]);
+            bad[16..20].copy_from_slice(&rows.to_le_bytes());
+            assert!(decode(&bad).is_err());
         }
         let header = encode(&blocks[2]);
         assert_eq!(header.len(), 4 + 2 + 2 + 8 + 4 + 4 + 3 * 8 + 6 * 3 * 8);

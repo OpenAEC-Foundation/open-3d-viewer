@@ -1,17 +1,25 @@
 //! `sam-check model.samjson [blocks.samr...]`: checks a `sam-json` v1 document and its sidecar
 //! result blocks against every conformance rule. Exit code 0 when there are no errors, 1 when
-//! there are, 2 on a usage or I/O error.
+//! there are, 2 on a usage or I/O error; `-h`/`--help` prints the usage and exits 0.
 
 use std::process::ExitCode;
 
 use bim_structural::exchange;
 
 fn main() -> ExitCode {
+    const USAGE: &str = concat!(
+        "usage: sam-check model.samjson [blocks.samr...]\n",
+        "Checks a sam-json v1 document (schema, ids, references, member z, cardinal points,\n",
+        "DOFs, frames, sections, loads, inline and sidecar result blocks).",
+    );
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        eprintln!("usage: sam-check model.samjson [blocks.samr...]");
-        eprintln!("Checks a sam-json v1 document (schema, ids, references, member z, cardinal points,");
-        eprintln!("DOFs, frames, sections, loads, inline and sidecar result blocks).");
+    // Help asked for is a success; a missing model is a usage error.
+    if matches!(args.first().map(String::as_str), Some("-h" | "--help")) {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    if args.is_empty() {
+        eprintln!("{USAGE}");
         return ExitCode::from(2);
     }
     let text = match std::fs::read_to_string(&args[0]) {

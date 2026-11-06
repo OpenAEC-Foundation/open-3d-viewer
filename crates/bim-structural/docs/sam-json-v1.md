@@ -11,7 +11,9 @@ readers implement, and the format of the test fixtures.
 - Conformance check: `cargo run -p bim-structural --bin sam-check -- model.samjson [blocks.samr...]`.
 - Example: [`../tests/fixtures/portal_frame.samjson`](../tests/fixtures/portal_frame.samjson).
 
-Unknown fields are rejected everywhere. A producer gives only what its source holds and never
+Unknown fields are rejected everywhere, inside enum variants (shapes, loads, DOFs, targets, …)
+as well as in objects. Numbers are read exactly (shortest round-trip printing, correctly rounded
+parsing), so `read(write(d)) == d` bit for bit. A producer gives only what its source holds and never
 invents data: where a source has only a type name for a support or release, it writes the name.
 
 ## Conventions
@@ -118,7 +120,10 @@ all optional) are the source's values: they win for labels, never for geometry. 
 computes area, centroid and second moments exactly from the outline (lines and arcs), and the
 shear centre from symmetry or a closed form (`L`, `T`, `U`, `C`, `AsymI`); for `polygon` and
 `composite` it uses the imported `shear_centre` when given, else the centroid (flagged
-approximate). `shear_centre` is needed for cardinal points 15-19 on such shapes.
+approximate, with a `shear-centre-approximated` diagnostic). `shear_centre` is needed for
+cardinal points 15-19 on such shapes. The profile origin is the bounding-box centre: the
+parametric shapes are centred by construction, and `polygon` and `composite` outlines must be
+given centred (within 1e-6 m).
 
 ## Nodes and supports
 
@@ -303,24 +308,26 @@ then min N … Mz), followed by `u64[6][stations]` governing result set ids for 
 | `load-ref` | Action loads and combination terms name existing cases or combinations. |
 | `result-ref` | Result sets are for an existing case or combination. |
 | `link-ref` | Links start at a node, member or surface of the model. |
-| `member-nodes` | A member has at least two nodes, distinct ends, no repeated node and a non-zero length. |
+| `member-nodes` | A member has at least two nodes, no node twice (so distinct ends) and a non-zero length. |
 | `member-z` | `z` has unit length and is perpendicular to the axis at the start, within 1e-9. |
-| `cardinal-point` | Cardinal points are 0-19. |
+| `cardinal-point` | Cardinal points are 0-19; 15-19 need a known shear centre (a closed form for the shape, or `props.shear_centre` for `polygon` and `composite`). |
 | `dofs` | Supports and releases give `dofs` or `named`. Warnings: a name not in the tables, a negative stiffness. |
 | `dof-frame` | A `"node"` support frame needs the node's `frame`; a `{"member": id}` frame names a member at that node; line supports have no node frame. |
 | `node-frame` | Node frames are orthonormal and right-handed within 1e-9. |
-| `rigid-transform` | `global_transform` and `shared_frame` are rotations plus translations (no scale, no mirror). |
+| `rigid-transform` | `global_transform` and `shared_frame` are rotations plus translations (no scale, no mirror). With `gravity_was: "+z"` the rotation of `global_transform` maps +Z to −Z (within 1e-9); with `"-z"` it does not. |
 | `dimension` | A plane model's normal has unit length. |
-| `section-shape` | Section dimensions are positive and fit together (flanges, fillets and lips inside the profile). |
+| `section-shape` | Section dimensions are positive and fit together (flanges, fillets and lips inside the profile); `polygon` and `composite` outlines are centred on their bounding box (1e-6 m); the computed properties are finite. |
 | `surface-boundary` | Surface boundaries have at least three distinct nodes and a positive thickness; line-support polylines at least two points. |
 | `load-position` | Member load positions and spans lie on the member (0..L) and ascend. |
-| `result-block` | Inline and sidecar blocks decode, are listed in `tables`, belong to their set and refer to existing members or nodes. |
+| `load-target` | The load kind fits its target: `nodal_force` and `displacement` on a node; `member_point` and `member_distributed` on a member or member span; `surface` on a surface or a free polygon; `temperature` on a member, member span or surface. |
+| `result-block` | Inline and sidecar blocks decode, are listed in `tables`, belong to their set and refer to existing members or nodes. Set ids are unique per model only, so a sidecar block is accepted when it fits one of the models that have its set. |
 | `stations` | Stations ascend within 0..L (1e-6 m), with jumps as exact pairs (never three equal stations). |
 
 ## Reader behaviour
 
 `exchange::read` validates first and refuses a document with errors. It then shifts plain ids,
 expands named supports and releases (adding diagnostics), classifies support presets, computes
-section properties from the shapes, sorts actions by load case, decodes inline blocks and sets
+section properties from the shapes (noting `shear-centre-approximated` once per section, and
+leaving the properties unavailable when they are not finite), sorts actions by load case, decodes inline blocks and sets
 `source.format` to `sam-json/1`. `exchange::write` always writes supports and releases with
 their DOFs (and their name when they have one) and ids in shifted form; `read(write(d)) == d`.

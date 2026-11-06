@@ -93,12 +93,19 @@ pub fn is_known(name: &str) -> bool {
 /// taken as restrained and the out-of-plane rotations follow the in-plane one. Other normals
 /// classify as in 3D.
 ///
-/// Springs and nonlinear DOFs give `Spring` when no DOF is restrained, else `Custom`.
+/// Springs and nonlinear DOFs give `Spring` when no DOF is restrained (in a plane model: no
+/// in-plane DOF), else `Custom`.
 pub fn classify(dofs: &Dofs, dimension: Dimension) -> SupportPreset {
     match dimension {
         Dimension::Space3d => classify_3d(dofs),
         Dimension::Plane2d { normal } => match axis_of(normal) {
             Some(k) => {
+                // Spring or custom from the in-plane DOFs alone: the out-of-plane translation
+                // forced to restrained below is not a restraint of the support.
+                let in_plane = [&dofs[(k + 1) % 3], &dofs[(k + 2) % 3], &dofs[3 + k]];
+                if in_plane.iter().any(|d| is_elastic(d)) {
+                    return if in_plane.iter().any(|d| matches!(d, Dof::Fixed)) { SupportPreset::Custom } else { SupportPreset::Spring };
+                }
                 let mut d = dofs.clone();
                 d[k] = Dof::Fixed;
                 for j in 0..3 {
@@ -118,8 +125,12 @@ fn axis_of(n: DVec3) -> Option<usize> {
     (0..3).find(|&k| n[k].abs() > 1.0 - 1e-9)
 }
 
+fn is_elastic(d: &Dof) -> bool {
+    matches!(d, Dof::Spring(_) | Dof::Nonlinear { .. })
+}
+
 fn classify_3d(dofs: &Dofs) -> SupportPreset {
-    let elastic = dofs.iter().any(|d| matches!(d, Dof::Spring(_) | Dof::Nonlinear { .. }));
+    let elastic = dofs.iter().any(is_elastic);
     let fixed = |d: &Dof| matches!(d, Dof::Fixed);
     let free = |d: &Dof| matches!(d, Dof::Free);
     if elastic {
@@ -202,5 +213,16 @@ mod tests {
         assert_eq!(classify(&pinned, xz), SupportPreset::Pinned);
         let fixed = dofs_from_code("101010").unwrap();
         assert_eq!(classify(&fixed, xz), SupportPreset::Fixed);
+        // A vertical spring with ux and ry free is a spring support, as in 3D; with an in-plane
+        // DOF restrained it is custom. Elastic out-of-plane DOFs say nothing.
+        let spring = [Dof::Free, Dof::Free, Dof::Spring(1e7), Dof::Free, Dof::Free, Dof::Free];
+        assert_eq!(classify(&spring, xz), SupportPreset::Spring);
+        assert_eq!(classify(&spring, Dimension::Space3d), SupportPreset::Spring);
+        let two = [Dof::Spring(1e6), Dof::Free, Dof::Spring(1e6), Dof::Free, Dof::Free, Dof::Free];
+        assert_eq!(classify(&two, xz), SupportPreset::Spring);
+        let mixed = [Dof::Fixed, Dof::Free, Dof::Spring(1e7), Dof::Free, Dof::Free, Dof::Free];
+        assert_eq!(classify(&mixed, xz), SupportPreset::Custom);
+        let out_of_plane = [Dof::Fixed, Dof::Spring(1e7), Dof::Fixed, Dof::Free, Dof::Free, Dof::Free];
+        assert_eq!(classify(&out_of_plane, xz), SupportPreset::Pinned);
     }
 }

@@ -44,11 +44,12 @@ pub enum Rule {
     ResultRef,
     /// Links start at a node, member or surface of the model.
     LinkRef,
-    /// A member has at least two nodes, distinct ends and a non-zero length.
+    /// A member has at least two nodes, no node twice (so distinct ends) and a non-zero length.
     MemberNodes,
     /// `z` is a unit vector perpendicular to the member axis at its start (within 1e-9).
     MemberZ,
-    /// Cardinal points are 0-19.
+    /// Cardinal points are 0-19; 15-19 need a known shear centre (a closed form for the shape,
+    /// or `props.shear_centre` for `polygon` and `composite`).
     CardinalPoint,
     /// Supports and releases give `dofs` or a `named` type (unknown names and negative
     /// springs are warnings).
@@ -58,17 +59,24 @@ pub enum Rule {
     DofFrame,
     /// Node frames are orthonormal and right-handed (within 1e-9).
     NodeFrame,
-    /// `global_transform` and `shared_frame` are rigid (rotation and translation).
+    /// `global_transform` and `shared_frame` are rigid (rotation and translation), and
+    /// `global_transform` agrees with `gravity_was`: with `"+z"` its rotation maps +Z to −Z
+    /// (within 1e-9), with `"-z"` it does not.
     RigidTransform,
     /// A plane model's normal is a unit vector.
     Dimension,
-    /// Section dimensions are positive and fit together.
+    /// Section dimensions are positive and fit together, `polygon` and `composite` outlines are
+    /// centred on their bounding box (within 1e-6 m), and the properties are finite.
     SectionShape,
     /// Surface boundaries have at least three distinct nodes and a positive thickness; line
     /// support polylines have at least two points.
     SurfaceBoundary,
     /// Load positions lie on the member and ascend.
     LoadPosition,
+    /// The load kind fits its target: `nodal_force` and `displacement` on a node,
+    /// `member_point` and `member_distributed` on a member or member span, `surface` on a
+    /// surface or free polygon, `temperature` on a member, member span or surface.
+    LoadTarget,
     /// Result blocks decode and match their set, kind, table list and ids.
     ResultBlock,
     /// Stations ascend within the member, with jumps as exact pairs.
@@ -76,7 +84,7 @@ pub enum Rule {
 }
 
 impl Rule {
-    pub const ALL: [Rule; 26] = [
+    pub const ALL: [Rule; 27] = [
         Rule::Schema,
         Rule::Format,
         Rule::Finite,
@@ -101,6 +109,7 @@ impl Rule {
         Rule::SectionShape,
         Rule::SurfaceBoundary,
         Rule::LoadPosition,
+        Rule::LoadTarget,
         Rule::ResultBlock,
         Rule::Stations,
     ];
@@ -132,6 +141,7 @@ impl Rule {
             Rule::SectionShape => "section-shape",
             Rule::SurfaceBoundary => "surface-boundary",
             Rule::LoadPosition => "load-position",
+            Rule::LoadTarget => "load-target",
             Rule::ResultBlock => "result-block",
             Rule::Stations => "stations",
         }
@@ -526,9 +536,25 @@ pub fn validate(doc: &w::Document) -> Report {
         r.error(Rule::Format, "/units", format!("expected \"SI\", got {:?}", doc.units));
     }
 
-    // rigid transforms
-    if let Err(e) = is_rigid(&doc.source.global_transform) {
-        r.error(Rule::RigidTransform, "/source/global_transform", e);
+    // rigid transforms, and the gravity flip recorded in both places
+    match is_rigid(&doc.source.global_transform) {
+        Err(e) => r.error(Rule::RigidTransform, "/source/global_transform", e),
+        Ok(()) => {
+            let m = &doc.source.global_transform;
+            let z_to = DVec3::new(m[8], m[9], m[10]); // the image of +Z
+            let flipped = (z_to + DVec3::Z).length() <= 1e-9;
+            match doc.source.conventions.gravity_was {
+                w::Gravity::PosZ if !flipped => r.error(
+                    Rule::RigidTransform,
+                    "/source/global_transform",
+                    format!("gravity_was is \"+z\" but the rotation maps +Z to {z_to}, not to −Z"),
+                ),
+                w::Gravity::NegZ if flipped => {
+                    r.error(Rule::RigidTransform, "/source/global_transform", "the rotation maps +Z to −Z but gravity_was is \"-z\"")
+                }
+                _ => {}
+            }
+        }
     }
 
     let mut model_ids = HashSet::new();
@@ -634,14 +660,34 @@ fn validate_model(m: &w::Model, base: &str, r: &mut Report) {
         _ => {}
     };
 
-    // sections and materials
+    // sections and materials; sections without a known shear centre
+    let mut no_shear_centre: HashSet<Id> = HashSet::new();
     for (i, s) in m.sections.iter().enumerate() {
         material_ref(r, format!("{base}/sections/{i}/material"), s.material);
         let shape = super::convert_shape(&s.shape);
-        if !matches!(shape, crate::model::Shape::Unknown) {
-            if let Err(e) = section::check(&shape) {
-                r.error(Rule::SectionShape, format!("{base}/sections/{i}/shape"), e.to_string());
+        if matches!(shape, crate::model::Shape::Unknown) {
+            continue;
+        }
+        let path = format!("{base}/sections/{i}/shape");
+        if let Err(e) = section::check(&shape) {
+            r.error(Rule::SectionShape, path, e.to_string());
+            continue;
+        }
+        let Ok(outline) = section::outline(&shape, section::CHORD_TOL, section::MAX_PER_QUARTER) else { continue };
+        // Parametric shapes are centred by construction; free outlines must be centred too.
+        if matches!(shape, crate::model::Shape::Polygon { .. } | crate::model::Shape::Composite(_)) {
+            let [lo, hi] = outline.bbox();
+            let centre = (lo + hi) * 0.5;
+            if centre.abs().max_element() > 1e-6 {
+                r.error(Rule::SectionShape, path.clone(), format!("the bounding-box centre is at {centre}, not at the profile origin (0, 0)"));
             }
+        }
+        if !section::props_finite(&section::props(&outline)) {
+            r.error(Rule::SectionShape, path, "the section properties are not finite (dimensions out of range)");
+        }
+        let known = !matches!(outline.shear_centre, section::ShearCentre::Unknown) || s.props.as_ref().is_some_and(|p| p.shear_centre.is_some());
+        if !known {
+            no_shear_centre.insert(normalise(IdKind::Section, s.id));
         }
     }
 
@@ -683,8 +729,20 @@ fn validate_model(m: &w::Model, base: &str, r: &mut Report) {
             }
         }
         material_ref(r, format!("{path}/material"), mem.material);
-        if mem.insertion.cardinal_point > 19 {
-            r.error(Rule::CardinalPoint, format!("{path}/insertion/cardinal_point"), format!("{} is not 0-19", mem.insertion.cardinal_point));
+        let cp = mem.insertion.cardinal_point;
+        if cp > 19 {
+            r.error(Rule::CardinalPoint, format!("{path}/insertion/cardinal_point"), format!("{cp} is not 0-19"));
+        } else if cp >= 15 {
+            let sections = mem.section.map(|(a, b)| [Some(a), b]).unwrap_or_default();
+            for id in sections.into_iter().flatten() {
+                if no_shear_centre.contains(&normalise(IdKind::Section, id)) {
+                    r.error(
+                        Rule::CardinalPoint,
+                        format!("{path}/insertion/cardinal_point"),
+                        format!("cardinal point {cp} needs the shear centre, but section {id} has none (give props.shear_centre)"),
+                    );
+                }
+            }
         }
         for (k, rel) in mem.releases.iter().enumerate() {
             if let Some(rel) = rel {
@@ -701,8 +759,9 @@ fn validate_model(m: &w::Model, base: &str, r: &mut Report) {
             r.error(Rule::MemberNodes, format!("{path}/nodes"), "start and end node are the same");
             continue;
         }
-        if mem.nodes.windows(2).any(|p| p[0] == p[1]) {
-            r.error(Rule::MemberNodes, format!("{path}/nodes"), "a node repeats in sequence");
+        let mut once = HashSet::new();
+        if let Some(n) = mem.nodes.iter().find(|n| !once.insert(**n)) {
+            r.error(Rule::MemberNodes, format!("{path}/nodes"), format!("node {n} appears more than once"));
         }
         let (Some(a), Some(b)) = (ix.nodes.get(&first), ix.nodes.get(&last)) else { continue };
         let (pa, pb) = (v3(a.p), v3(b.p));
@@ -804,6 +863,16 @@ fn validate_model(m: &w::Model, base: &str, r: &mut Report) {
                 }
             }
         }
+        let fits = matches!(
+            (&a.kind, &a.target),
+            (w::Load::NodalForce { .. } | w::Load::Displacement { .. }, w::Target::Node(_))
+                | (w::Load::MemberPoint { .. } | w::Load::MemberDistributed { .. }, w::Target::Member(_) | w::Target::MemberSpan { .. })
+                | (w::Load::Surface { .. }, w::Target::Surface(_) | w::Target::Free(_))
+                | (w::Load::Temperature { .. }, w::Target::Member(_) | w::Target::MemberSpan { .. } | w::Target::Surface(_))
+        );
+        if !fits {
+            r.error(Rule::LoadTarget, format!("{path}/kind"), format!("a {} load cannot act on a {} target", load_name(&a.kind), target_name(&a.target)));
+        }
         if let Some(len) = member_len {
             let on = |x: f64| x >= -1e-9 && x <= len + 1e-9;
             match &a.kind {
@@ -856,6 +925,27 @@ fn validate_model(m: &w::Model, base: &str, r: &mut Report) {
         if !(ix.nodes.contains_key(&l.analytical) || ix.members.contains_key(&l.analytical) || ix.surfaces.contains(&l.analytical)) {
             r.error(Rule::LinkRef, format!("{base}/links/{i}/analytical"), format!("{} is not a node, member or surface of the model", l.analytical));
         }
+    }
+}
+
+fn load_name(l: &w::Load) -> &'static str {
+    match l {
+        w::Load::NodalForce { .. } => "nodal_force",
+        w::Load::MemberPoint { .. } => "member_point",
+        w::Load::MemberDistributed { .. } => "member_distributed",
+        w::Load::Surface { .. } => "surface",
+        w::Load::Temperature { .. } => "temperature",
+        w::Load::Displacement { .. } => "displacement",
+    }
+}
+
+fn target_name(t: &w::Target) -> &'static str {
+    match t {
+        w::Target::Node(_) => "node",
+        w::Target::Member(_) => "member",
+        w::Target::MemberSpan { .. } => "member_span",
+        w::Target::Surface(_) => "surface",
+        w::Target::Free(_) => "free",
     }
 }
 
@@ -942,13 +1032,36 @@ pub fn validate_block(doc: &w::Document, name: &str, bytes: &[u8]) -> Report {
             return r;
         }
     };
-    for m in &doc.models {
-        if let Some(rs) = m.results.iter().find(|rs| rs.id == block.set || normalise(IdKind::ResultSet, rs.id) == block.set) {
-            let ix = Index::new(m);
-            check_block(&mut r, name, &ix, rs, &block);
-            return r;
-        }
+    // Set ids are unique only within a model and the block names no model: check it against
+    // every model with that set and accept it when it fits one of them.
+    let candidates: Vec<(&w::Model, &w::ResultSet)> = doc
+        .models
+        .iter()
+        .filter_map(|m| m.results.iter().find(|rs| rs.id == block.set || normalise(IdKind::ResultSet, rs.id) == block.set).map(|rs| (m, rs)))
+        .collect();
+    let reports: Vec<Report> = candidates
+        .iter()
+        .map(|(m, rs)| {
+            let mut one = Report::default();
+            check_block(&mut one, name, &Index::new(m), rs, &block);
+            one
+        })
+        .collect();
+    if reports.is_empty() {
+        r.error(Rule::ResultBlock, name.to_string(), format!("no result set {} in the document", block.set));
+        return r;
     }
-    r.error(Rule::ResultBlock, name.to_string(), format!("no result set {} in the document", block.set));
+    if let Some(fit) = reports.iter().find(|x| x.is_ok()) {
+        return fit.clone();
+    }
+    if reports.len() > 1 {
+        let models: Vec<String> = candidates.iter().map(|(m, _)| m.id.to_string()).collect();
+        r.error(
+            Rule::ResultBlock,
+            name.to_string(),
+            format!("result set {} is in {} models ({}) and the block fits none of them; the first one's findings follow", block.set, reports.len(), models.join(", ")),
+        );
+    }
+    r.issues.extend(reports.into_iter().next().unwrap_or_default().issues);
     r
 }

@@ -77,6 +77,7 @@
           "additionalProperties": false,
           "properties": {
             "surface_edge": {
+              "additionalProperties": false,
               "properties": {
                 "from": {
                   "format": "uint64",
@@ -238,6 +239,7 @@
           "additionalProperties": false,
           "properties": {
             "arc": {
+              "additionalProperties": false,
               "properties": {
                 "mid": {
                   "items": {
@@ -322,6 +324,7 @@
           "description": "A plane model with the unit normal of its plane.",
           "properties": {
             "2d": {
+              "additionalProperties": false,
               "properties": {
                 "normal": {
                   "items": {
@@ -365,6 +368,7 @@
           "additionalProperties": false,
           "properties": {
             "linear": {
+              "additionalProperties": false,
               "properties": {
                 "q1": {
                   "format": "double",
@@ -391,6 +395,7 @@
           "additionalProperties": false,
           "properties": {
             "trapezoidal": {
+              "additionalProperties": false,
               "properties": {
                 "a": {
                   "format": "double",
@@ -526,6 +531,7 @@
           "additionalProperties": false,
           "properties": {
             "failure": {
+              "additionalProperties": false,
               "properties": {
                 "k": {
                   "format": "double",
@@ -552,6 +558,7 @@
           "additionalProperties": false,
           "properties": {
             "slippage": {
+              "additionalProperties": false,
               "properties": {
                 "gap": {
                   "format": "double",
@@ -873,6 +880,7 @@
           "additionalProperties": false,
           "properties": {
             "matched": {
+              "additionalProperties": false,
               "properties": {
                 "distance": {
                   "format": "double",
@@ -898,6 +906,7 @@
           "additionalProperties": false,
           "properties": {
             "nodal_force": {
+              "additionalProperties": false,
               "properties": {
                 "f": {
                   "items": {
@@ -938,6 +947,7 @@
           "additionalProperties": false,
           "properties": {
             "member_point": {
+              "additionalProperties": false,
               "properties": {
                 "f": {
                   "items": {
@@ -983,6 +993,7 @@
           "additionalProperties": false,
           "properties": {
             "member_distributed": {
+              "additionalProperties": false,
               "properties": {
                 "dir": {
                   "items": {
@@ -1017,6 +1028,7 @@
           "additionalProperties": false,
           "properties": {
             "surface": {
+              "additionalProperties": false,
               "properties": {
                 "dir": {
                   "items": {
@@ -1047,6 +1059,7 @@
           "additionalProperties": false,
           "properties": {
             "temperature": {
+              "additionalProperties": false,
               "properties": {
                 "dt": {
                   "format": "double",
@@ -1078,6 +1091,7 @@
           "additionalProperties": false,
           "properties": {
             "displacement": {
+              "additionalProperties": false,
               "properties": {
                 "u": {
                   "items": {
@@ -1602,6 +1616,7 @@
           "additionalProperties": false,
           "properties": {
             "derived_from_physical": {
+              "additionalProperties": false,
               "properties": {
                 "approximate": {
                   "type": "boolean"
@@ -1647,6 +1662,7 @@
           "additionalProperties": false,
           "properties": {
             "beta": {
+              "additionalProperties": false,
               "properties": {
                 "angle": {
                   "format": "double",
@@ -1974,6 +1990,7 @@
           "additionalProperties": false,
           "properties": {
             "I": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2021,6 +2038,7 @@
           "additionalProperties": false,
           "properties": {
             "AsymI": {
+              "additionalProperties": false,
               "properties": {
                 "bb": {
                   "format": "double",
@@ -2072,6 +2090,7 @@
           "additionalProperties": false,
           "properties": {
             "U": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2123,6 +2142,7 @@
           "additionalProperties": false,
           "properties": {
             "L": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2164,6 +2184,7 @@
           "additionalProperties": false,
           "properties": {
             "T": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2205,6 +2226,7 @@
           "additionalProperties": false,
           "properties": {
             "C": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2246,6 +2268,7 @@
           "additionalProperties": false,
           "properties": {
             "Z": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2287,6 +2310,7 @@
           "additionalProperties": false,
           "properties": {
             "Rect": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2313,6 +2337,7 @@
           "additionalProperties": false,
           "properties": {
             "Circle": {
+              "additionalProperties": false,
               "properties": {
                 "d": {
                   "format": "double",
@@ -2334,6 +2359,7 @@
           "additionalProperties": false,
           "properties": {
             "Chs": {
+              "additionalProperties": false,
               "properties": {
                 "d": {
                   "format": "double",
@@ -2360,6 +2386,7 @@
           "additionalProperties": false,
           "properties": {
             "Rhs": {
+              "additionalProperties": false,
               "properties": {
                 "b": {
                   "format": "double",
@@ -2401,6 +2428,7 @@
           "additionalProperties": false,
           "properties": {
             "polygon": {
+              "additionalProperties": false,
               "properties": {
                 "holes": {
                   "default": [],
@@ -2743,6 +2771,7 @@
           "description": "Part of a member, absolute metres from its start node.",
           "properties": {
             "member_span": {
+              "additionalProperties": false,
               "properties": {
                 "member": {
                   "format": "uint64",

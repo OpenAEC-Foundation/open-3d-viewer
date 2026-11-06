@@ -573,9 +573,11 @@ pub fn outline(shape: &Shape, chord_tol: f64, max_per_quarter: u32) -> Result<Ou
                 ]
             };
             out.outer.push(Contour::rounded(&corners));
-            // Lipped channel, centreline dimensions a (web), w (flange), c (lip).
+            // Lipped channel, centreline dimensions a (web), w (flange), c (lip). With a lip the
+            // flange centreline ends on the lip centreline (b − t); without one it runs to the
+            // free tip (b − t/2), and m reduces to the U closed form with tf = tw = t.
             let a = h - t;
-            let w = b - t;
+            let w = if lip > 0.0 { b - t } else { b - t / 2.0 };
             let c = if lip > 0.0 { lip - t / 2.0 } else { 0.0 };
             let m = w * (3.0 * a * a * w + c * (6.0 * a * a - 8.0 * c * c))
                 / (a.powi(3) + 6.0 * a * a * w + c * (8.0 * c * c - 12.0 * a * c + 6.0 * a * a));
@@ -762,8 +764,17 @@ pub fn props(outline: &Outline2) -> SectionProps {
     }
 }
 
+/// Whether every property is a finite number and the area positive (false when the
+/// dimensions are beyond what f64 integrals can hold).
+pub fn props_finite(p: &SectionProps) -> bool {
+    let scalars = [p.area, p.iy, p.iz, p.iyz, p.it.unwrap_or(0.0)];
+    let points = [p.centroid, p.shear_centre, p.bbox[0], p.bbox[1]];
+    p.area > 0.0 && scalars.iter().all(|x| x.is_finite()) && points.iter().all(|q| q.is_finite())
+}
+
 /// Outline and properties of a shape, with the shear centre from the imported properties when
-/// the shape gives none.
+/// the shape gives none. `Unavailable` (with default properties) when the shape has no outline
+/// or its properties are not finite.
 pub fn compute(shape: &Shape, imported: Option<&ImportedProps>) -> (SectionProps, PropsSource) {
     let outline = match outline(shape, CHORD_TOL, MAX_PER_QUARTER) {
         Ok(o) => o,
@@ -775,6 +786,9 @@ pub fn compute(shape: &Shape, imported: Option<&ImportedProps>) -> (SectionProps
         Shape::Chs { d, t } => Some(PI * (d.powi(4) - (d - 2.0 * t).powi(4)) / 32.0),
         _ => None,
     };
+    if !props_finite(&p) {
+        return (SectionProps::default(), PropsSource::Unavailable);
+    }
     let source = match outline.shear_centre {
         ShearCentre::Centroid | ShearCentre::At(_) => PropsSource::Computed,
         ShearCentre::Unknown => match imported.and_then(|i| i.shear_centre) {

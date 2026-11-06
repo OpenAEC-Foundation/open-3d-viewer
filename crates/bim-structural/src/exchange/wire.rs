@@ -170,6 +170,7 @@ pub struct Model {
 
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub enum Dimension {
     #[default]
     #[serde(rename = "3d")]
@@ -226,6 +227,7 @@ pub struct Section {
 /// Section shapes in metres, origin at the bounding-box centre. Radii and slopes default to 0.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub enum Shape {
     I {
         h: f64,
@@ -366,7 +368,7 @@ pub struct Node {
 
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeOrigin {
     #[default]
     Analytical,
@@ -376,7 +378,7 @@ pub enum NodeOrigin {
 /// One DOF: restrained (`fixed`), free, or elastic.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Dof {
     Fixed,
     Free,
@@ -470,7 +472,7 @@ pub enum MemberKind {
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Curve {
     #[default]
     Line,
@@ -482,7 +484,7 @@ pub enum Curve {
 /// Provenance of `z`; never interpreted.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Orientation {
     IfcAxis,
     Beta { angle: f64, rule: String },
@@ -601,7 +603,7 @@ pub struct LineSupport {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Carrier {
     Member(u64),
     SurfaceEdge { surface: u64, from: u64, to: u64 },
@@ -679,7 +681,7 @@ pub struct Action {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Target {
     Node(u64),
     Member(u64),
@@ -700,7 +702,7 @@ pub enum LoadFrame {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Load {
     NodalForce {
         f: V3,
@@ -732,7 +734,7 @@ pub enum Load {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Distribution {
     Uniform(f64),
     Linear { q1: f64, q2: f64 },
@@ -829,7 +831,7 @@ pub struct Link {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "schema"), derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LinkSource {
     IfcRelAssignsToProduct,
     RevitAssociation,

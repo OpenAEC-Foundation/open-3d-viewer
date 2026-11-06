@@ -391,8 +391,18 @@ fn model_in(m: &w::Model, source: &SourceInfo) -> Result<AnalysisModel, String> 
             let shape = shape_in(&x.shape);
             let imported = x.props.as_ref().map(imported_in);
             let (props, props_source) = section::compute(&shape, imported.as_ref());
+            let id = normalise(IdKind::Section, x.id);
+            // Once per section: a document this reader wrote already carries the note.
+            let noted = diags.iter().any(|d| d.object == Some(id) && d.code == "shear-centre-approximated");
+            if props_source == PropsSource::ShearCentreApproximate && !noted {
+                new_diags.push(Diagnostic {
+                    object: Some(id),
+                    code: "shear-centre-approximated".into(),
+                    message: format!("section \"{}\": no shear centre for this shape and none imported; the centroid is used", x.name),
+                });
+            }
             Section {
-                id: normalise(IdKind::Section, x.id),
+                id,
                 name: x.name.clone(),
                 shape,
                 props,

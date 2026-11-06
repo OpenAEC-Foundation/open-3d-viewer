@@ -10,7 +10,7 @@ use crate::model::{Bounds, Model, ViewKind};
 use crate::remote_link::{self, Announcement};
 use crate::section::{SectionBox, SectionPlane};
 use crate::viewport::camera::ViewPreset;
-use crate::viewport::render::RenderMode;
+use crate::viewport::render::{transform_bounds, RenderMode};
 use glam::Vec3;
 use iced::futures::{SinkExt, Stream, StreamExt};
 use iced::{window, Task};
@@ -251,7 +251,7 @@ pub(crate) fn page(a: &Value, default: usize, max: usize) -> (usize, usize) {
 }
 
 /// One page of `items` as `{total, offset, returned, truncated, <key>: [...]}`.
-fn paged(key: &str, items: Vec<Value>, (offset, limit): (usize, usize)) -> Value {
+pub(crate) fn paged(key: &str, items: Vec<Value>, (offset, limit): (usize, usize)) -> Value {
     let total = items.len();
     let shown: Vec<Value> = items.into_iter().skip(offset).take(limit).collect();
     let mut out = json!({ "total": total, "offset": offset, "returned": shown.len(), "truncated": offset.saturating_add(shown.len()) < total });
@@ -407,6 +407,10 @@ impl App {
             "list_schedules" => self.schedules_json(),
             "list_sheets" => self.sheets_json(),
             "find_elements" => self.find_elements(a),
+            "list_structural" => crate::structural::remote::list(&*self.require_model()?),
+            "get_structural_issues" => crate::structural::remote::issues(&*self.require_model()?, a),
+            "get_structural_element" => crate::structural::remote::element(&*self.require_model()?, a, &self.model_matrix()),
+            "find_structural" => crate::structural::remote::find(&*self.require_model()?, a, &self.model_matrix()),
             "get_element" => {
                 let id = a.get("id").and_then(id_of).ok_or("id is required")?;
                 self.element_json(id)
@@ -599,7 +603,7 @@ impl App {
     fn model_json(&self) -> Value {
         let Some(m) = &self.model else { return Value::Null };
         let elements: usize = element_layers(m).len();
-        json!({
+        let mut out = json!({
             "file": m.path.display().to_string(),
             "format": m.format,
             "file_size_bytes": m.file_size,
@@ -616,7 +620,19 @@ impl App {
             "bounds": self.world_bounds().map(|b| jbounds(&b)),
             "units": "metres (Revit, SketchUp, glTF); OBJ, STL and PLY keep the file's own units",
             "up_axis": "Z",
-        })
+        });
+        if !m.structural.is_empty() {
+            let count = |f: fn(&bim_structural::AnalysisModel) -> usize| m.structural.iter().map(|p| f(&p.doc)).sum::<usize>();
+            out["structural"] = json!({
+                "models": m.structural.len(),
+                "nodes": count(|d| d.nodes.len()),
+                "members": count(|d| d.members.len()),
+                "surfaces": count(|d| d.surfaces.len()),
+                "objects": m.structural_index.len(),
+                "note": "structural objects are elements: get_element, find_elements and the *_structural tools take their ids",
+            });
+        }
+        out
     }
 
     fn camera_json(&self) -> Value {
@@ -868,8 +884,21 @@ impl App {
         let group_by = a.get("group_by").and_then(Value::as_str);
         let (offset, limit) = page(a, 50, 100);
 
-        let mut matches: Vec<(u64, Vec<usize>, Vec<(String, String)>)> = Vec::new();
-        for (id, layers) in element_layers(&model) {
+        // elements with triangles (listed under their first layer), then structural objects
+        // drawn from their document (listed under their analysis model)
+        let drawn = element_layers(&model);
+        let structural: Vec<crate::structural::StructuralItem> = if model.structural.is_empty() {
+            Vec::new()
+        } else {
+            model.structural_index.all(&model.structural).into_iter().filter(|item| !drawn.contains_key(&item.element)).collect()
+        };
+        let passes = |id: u64, props: &[(String, String)]| {
+            let value = |key: &str| props.iter().find(|(k, _)| k.to_lowercase() == key).map(|(_, v)| v.to_lowercase());
+            conditions.iter().all(|(k, v)| value(k).is_some_and(|x| x == *v || x.contains(v.as_str())))
+                && (text.is_empty() || props.iter().any(|(_, v)| v.to_lowercase().contains(&text)) || id.to_string() == text)
+        };
+        let mut matches: Vec<(u64, Listed, Vec<(String, String)>)> = Vec::new();
+        for (id, layers) in drawn {
             if !layer.is_empty() && !layers.iter().any(|&l| model.layers[l].name.to_lowercase().contains(&layer)) {
                 continue;
             }
@@ -877,14 +906,24 @@ impl App {
             if !props.iter().any(|(k, _)| k == "category") {
                 props.push(("category".into(), model.layers[layers[0]].name.clone()));
             }
-            let value = |key: &str| props.iter().find(|(k, _)| k.to_lowercase() == key).map(|(_, v)| v.to_lowercase());
-            if !conditions.iter().all(|(k, v)| value(k).is_some_and(|x| x == *v || x.contains(v.as_str()))) {
+            if passes(id, &props) {
+                matches.push((id, Listed::Layer(layers[0]), props));
+            }
+        }
+        for item in structural {
+            if !layer.is_empty() && !format!("structural: {}", item.doc().name.to_lowercase()).contains(&layer) {
                 continue;
             }
-            if !text.is_empty() && !props.iter().any(|(_, v)| v.to_lowercase().contains(&text)) && id.to_string() != text {
+            // a structural object's category is its class: test it before building properties
+            let class = crate::structural::class_name(item.kind());
+            if conditions.iter().any(|(k, v)| (k == "category" || k == "class") && !class.to_lowercase().contains(v.as_str())) {
                 continue;
             }
-            matches.push((id, layers, props));
+            let mut props = item.props();
+            props.push(("category".into(), class.into()));
+            if passes(item.element, &props) {
+                matches.push((item.element, Listed::Structural(item.part_index as usize), props));
+            }
         }
         let total = matches.len();
         if let Some(key) = group_by {
@@ -899,11 +938,19 @@ impl App {
             .into_iter()
             .skip(offset)
             .take(limit)
-            .map(|(id, layers, props)| {
+            .map(|(id, listed, props)| {
+                let (layer, structural) = match listed {
+                    Listed::Layer(l) => (model.layers[l].name.clone(), false),
+                    Listed::Structural(p) => (format!("Structural: {}", model.structural[p].doc.name), true),
+                };
                 let keep = ["category", "family", "type", "name", "level", "class"];
-                let summary: Map<String, Value> =
-                    props.into_iter().filter(|(k, _)| keep.contains(&k.as_str())).map(|(k, v)| (k, Value::String(v))).collect();
-                json!({ "id": id, "layer": model.layers[layers[0]].name, "properties": summary })
+                let keep_structural = ["Class", "Number", "Name", "Kind", "Section", "Support"];
+                let summary: Map<String, Value> = props
+                    .into_iter()
+                    .filter(|(k, _)| keep.contains(&k.as_str()) || (structural && keep_structural.contains(&k.as_str())))
+                    .map(|(k, v)| (k, Value::String(v)))
+                    .collect();
+                json!({ "id": crate::structural::id_json(id), "layer": layer, "properties": summary })
             })
             .collect();
         Ok(json!({ "total": total, "offset": offset, "returned": shown.len(), "truncated": offset.saturating_add(shown.len()) < total, "elements": shown }))
@@ -930,7 +977,8 @@ impl App {
         let model = self.require_model()?;
         let ranges = model.element_ranges(id);
         if ranges.is_empty() {
-            return Err(format!("no element {id}"));
+            // a structural object: drawn from its document, not from triangles
+            return crate::structural::remote::as_element(&model, id, &self.model_matrix()).ok_or_else(|| format!("no element {id}"));
         }
         let tris = self.element_triangles(&model, id);
         let mut b = Bounds::empty();
@@ -950,7 +998,7 @@ impl App {
         let mut layers: Vec<&str> = ranges.iter().map(|r| model.layers[r.0].name.as_str()).collect();
         layers.dedup();
         Ok(json!({
-            "id": id,
+            "id": crate::structural::id_json(id),
             "layers": layers,
             "properties": props_json(model.element_props(id)),
             "triangles": tris.len(),
@@ -972,9 +1020,17 @@ impl App {
             v => vec![id_of(v).ok_or("target: \"model\", \"selection\", an element id or a list of ids")?],
         };
         let mut b = Bounds::empty();
+        let mm = self.model_matrix();
         for id in ids {
-            for t in self.element_triangles(&model, id) {
+            let tris = self.element_triangles(&model, id);
+            for t in &tris {
                 t.iter().for_each(|p| b.extend(p.to_array()));
+            }
+            // a structural object: its point, segment or target box
+            if let Some(s) = model.structural_item(id).filter(|_| tris.is_empty()).and_then(|item| item.bounds(&model.origins)) {
+                let w = transform_bounds(&s, &mm);
+                b.extend(w.min);
+                b.extend(w.max);
             }
         }
         if b.is_valid() { Ok(b) } else { Err("no such elements".into()) }
@@ -996,7 +1052,7 @@ impl App {
         for &id in &ids {
             let ranges = model.element_ranges(id);
             if ranges.is_empty() {
-                return Err(format!("no element {id}"));
+                return Err(not_drawn(&model, id, "selecting"));
             }
             selection.extend(ranges);
         }
@@ -1395,7 +1451,7 @@ impl App {
         let idb = a.get("b").and_then(id_of).ok_or("b (element id) is required")?;
         let (ta, tb) = (self.element_triangles(&model, ida), self.element_triangles(&model, idb));
         if ta.is_empty() || tb.is_empty() {
-            return Err(format!("no element {}", if ta.is_empty() { ida } else { idb }));
+            return Err(not_drawn(&model, if ta.is_empty() { ida } else { idb }, "measuring between"));
         }
         let (d, p, q) = closest_between(&ta, &tb);
         self.add_measurement(a, vec![p, q], format!("{d:.3} m"));
@@ -1410,6 +1466,25 @@ impl App {
 }
 
 /// Element id → the layers that draw it, for every element in the model.
+/// Where `find_elements` lists a match: the first layer of its triangles, or the structural part
+/// it is in (names resolved for the page shown only).
+enum Listed {
+    Layer(usize),
+    Structural(usize),
+}
+
+/// Why an element without triangles cannot be selected or measured: a structural object is drawn
+/// from its document (selection of those comes with phase S3), anything else does not exist.
+fn not_drawn(model: &Model, id: u64, what: &str) -> String {
+    match model.structural_item(id) {
+        Some(item) => format!(
+            "{id} is a structural object ({}): {what} structural objects is not supported yet (phase S3); get_element and get_structural_element take its id",
+            crate::structural::kind_name(item.kind())
+        ),
+        None => format!("no element {id}"),
+    }
+}
+
 fn element_layers(model: &Model) -> BTreeMap<u64, Vec<usize>> {
     let mut out: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for (l, layer) in model.layers.iter().enumerate() {

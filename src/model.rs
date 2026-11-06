@@ -1,6 +1,8 @@
 //! The neutral scene model every loader produces: Z-up, metres (or file units), one
 //! triangle mesh or point cloud per layer.
 
+use crate::structural::{StructuralIndex, StructuralItem, StructuralPart};
+use glam::DVec3;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -126,7 +128,46 @@ pub struct Model {
     pub views: Vec<SavedView>,
     /// What the file says about the project besides geometry (Revit).
     pub project: ProjectData,
+    /// Structural analysis models (nodes, members, supports, ...): typed document objects with
+    /// element ids, drawn from the document rather than from layer triangles. Set with
+    /// [`Model::set_structural`].
+    pub structural: Vec<StructuralPart>,
+    /// Element id → structural object, built by [`Model::set_structural`].
+    pub structural_index: StructuralIndex,
+    /// Where each source model sits in the world (f64, Z up, metres); index = the `model` of a
+    /// [`StructuralPart`]. One entry for a loaded file, one per file for a combined model.
+    pub origins: Vec<Origin>,
 }
+
+/// Where a source model's display coordinates sit in the world, in f64 (Z up, metres).
+///
+/// A display point `q` (the f32 positions of the layers, relative to the model's anchor) is the
+/// world point `anchor + q - shift`. `shift` is the translation [`Model::combine`] applied to
+/// align the model with the first one (display alignment on Add, under 10 km).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Origin {
+    /// The anchor the loader subtracted; `None` when the format has none (the display
+    /// coordinates are the file's own).
+    pub anchor: Option<DVec3>,
+    /// The translation applied to the display coordinates by [`Model::combine`].
+    pub shift: DVec3,
+}
+
+impl Origin {
+    /// The display coordinates of a world point, in f64.
+    pub fn display(&self, world: DVec3) -> DVec3 {
+        world - self.anchor.unwrap_or(DVec3::ZERO) + self.shift
+    }
+
+    /// The world point of display coordinates.
+    pub fn world(&self, display: DVec3) -> DVec3 {
+        display - self.shift + self.anchor.unwrap_or(DVec3::ZERO)
+    }
+}
+
+/// Above this distance between two models' anchors, [`Model::combine`] does not align them: the
+/// f32 display would lose millimetres.
+pub const ALIGN_LIMIT: f64 = 10_000.0;
 
 /// Project data besides geometry (Revit): project information, levels, phases, grids, rooms,
 /// sheets.
@@ -336,41 +377,97 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 impl Model {
     /// Compose loaded files in the app, giving each source's element IDs a unique
     /// namespace. Original IDs remain in their source properties.
+    ///
+    /// Structural parts come along with their documents untouched (source ids stay in the
+    /// documents; [`StructuralPart::element_id`] gives the new element id), and the origins of
+    /// every source model are kept. When the model or the first anchored model has structural
+    /// parts, a model whose anchor lies within [`ALIGN_LIMIT`] of the first anchored model's is
+    /// moved by the f64 difference (rounded once to f32), so both draw in one frame; a farther
+    /// model stays where it is, with a note in the project information. Models without an anchor
+    /// are never moved, and models without structural parts (an IFC with another IFC) combine as
+    /// they always have.
     pub fn combine(models: &[std::sync::Arc<Model>]) -> Self {
         let mut layers = Vec::new();
         let mut props = HashMap::new();
         let mut views = Vec::new();
         let mut project = ProjectData::default();
+        let mut origins = Vec::new();
+        let mut parts = Vec::new();
         let mut next_id = 1u64;
+        // display alignment: to the first model that knows its anchor (and whether it has
+        // structural parts)
+        let reference = models.iter().find_map(|m| Some((m.origins.iter().find_map(|o| o.anchor)?, !m.structural.is_empty())));
         for model in models {
             let source = model.file_name();
             let ids: std::collections::BTreeSet<_> = model.props.keys().copied()
-                .chain(model.layers.iter().flat_map(|layer| layer.elements.iter().map(|e| e.0))).collect();
+                .chain(model.layers.iter().flat_map(|layer| layer.elements.iter().map(|e| e.0)))
+                .chain(model.structural_index.element_ids()).collect();
             let remap: HashMap<_, _> = ids.into_iter().map(|id| {
                 let mapped = next_id;
                 next_id += 1;
                 (id, mapped)
             }).collect();
+            // the shift that aligns this model, and the translation that takes it there
+            let anchor = model.origins.iter().find_map(|o| o.anchor);
+            // only where an analysis model takes part: meshes alone combine as they always have
+            let aligns = !model.structural.is_empty() || reference.is_some_and(|(_, structural)| structural);
+            let (shift, far) = match (anchor, reference) {
+                (Some(_), Some(_)) if !aligns => (None, None),
+                (Some(a), Some((r, _))) if (a - r).length() < ALIGN_LIMIT => (Some(a - r), None),
+                (Some(a), Some((r, _))) => (None, Some((a - r).length())),
+                _ => (None, None),
+            };
+            let current = model.origins.first().map_or(DVec3::ZERO, |o| o.shift);
+            let moved = shift.map(|s| s - current).filter(|t| *t != DVec3::ZERO);
+            let first_origin = origins.len() as u32;
+            origins.extend(model.origins.iter().map(|o| Origin { anchor: o.anchor, shift: shift.unwrap_or(o.shift) }));
+            if model.origins.is_empty() {
+                origins.push(Origin::default());
+            }
+            if let Some(d) = far {
+                project.info.push((format!("{source} / Not aligned"), format!(
+                    "its origin is {d:.0} m from the first model's, more than {:.0} km: drawn in its own coordinates",
+                    ALIGN_LIMIT / 1000.0
+                )));
+            }
             for layer in &model.layers {
                 let mut layer = layer.clone();
                 layer.name = format!("{source} / {}", layer.name);
                 for element in &mut layer.elements { element.0 = remap[&element.0]; }
+                if let Some(t) = moved {
+                    translate(&mut layer.positions, t);
+                }
                 layers.push(layer);
             }
             props.extend(model.props.iter().map(|(id, value)| (remap[id], value.clone())));
+            parts.extend(model.structural.iter().map(|part| part.renumbered(first_origin + part.model, |id| remap[&id])));
             let first_view = views.len();
             project.sheets.extend(model.project.sheets.iter().cloned().map(|mut sheet| {
                 sheet.viewports.iter_mut().for_each(|v| v.view = v.view.map(|i| i + first_view));
                 Sheet::new(format!("{source} / {}", sheet.number), sheet.name, sheet.paper, sheet.viewports)
             }));
+            let t = moved.map_or(glam::Vec3::ZERO, |t| t.as_vec3());
             views.extend(model.views.iter().cloned().map(|mut view| {
                 view.name = format!("{source} / {}", view.name);
+                if let Some(c) = &mut view.camera {
+                    c.eye = (glam::Vec3::from_array(c.eye) + t).to_array();
+                }
+                if let Some(c) = &mut view.clip {
+                    // the box frame turns about its pivot: moving pivot and limits moves the box
+                    c.pivot += t;
+                    c.min += t;
+                    c.max += t;
+                }
                 view
             }));
             project.info.extend(model.project.info.iter().map(|(key, value)| (format!("{source} / {key}"), value.clone())));
-            project.levels.extend(model.project.levels.iter().cloned());
+            project.levels.extend(model.project.levels.iter().map(|(name, z)| (name.clone(), z + t.z)));
             project.phases.extend(model.project.phases.iter().cloned());
-            project.grids.extend(model.project.grids.iter().cloned());
+            project.grids.extend(model.project.grids.iter().cloned().map(|mut g| {
+                g.a = (glam::Vec3::from_array(g.a) + t).to_array();
+                g.b = (glam::Vec3::from_array(g.b) + t).to_array();
+                g
+            }));
             project.rooms.extend(model.project.rooms.iter().cloned());
         }
         project.levels.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
@@ -379,6 +476,8 @@ impl Model {
         combined.props = props;
         combined.views = views;
         combined.project = project;
+        combined.origins = origins;
+        combined.set_structural(parts);
         combined.file_size = models.iter().map(|m| m.file_size).sum();
         combined.load_time = models.iter().map(|m| m.load_time).sum();
         combined
@@ -414,7 +513,70 @@ impl Model {
             props,
             views: Vec::new(),
             project: ProjectData::default(),
+            structural: Vec::new(),
+            structural_index: StructuralIndex::default(),
+            origins: vec![Origin::default()],
         }
+    }
+
+    /// Installs structural parts: indexes their objects by element id (compact ids after the
+    /// model's own, see [`StructuralIndex::build`]) and adds their units (nodes, members with the
+    /// bulge of their arcs, surfaces) to the bounds. A model of only places-less objects
+    /// (sections, materials, load cases) gets a small box around the origin, so the camera, grid
+    /// and section box have something to frame. `origins` must cover the `model` of every part.
+    pub fn set_structural(&mut self, parts: Vec<StructuralPart>) {
+        if parts.is_empty() {
+            self.structural = Vec::new();
+            self.structural_index = StructuralIndex::default();
+            return;
+        }
+        // compact structural ids start after every element id the model has
+        let first_free = self
+            .layers
+            .iter()
+            .flat_map(|l| l.elements.iter().map(|e| e.0))
+            .chain(self.props.keys().copied())
+            .filter(|&id| id <= crate::structural::MAX_SAFE_ID)
+            .max()
+            .map_or(1, |id| id + 1);
+        let (parts, index) = StructuralIndex::build(parts, first_free);
+        self.structural = parts;
+        self.structural_index = index;
+        for (_, b) in self.structural_index.unit_bounds(&self.structural, &self.origins) {
+            self.bounds.extend(b.min);
+            self.bounds.extend(b.max);
+        }
+        if !self.bounds.is_valid() {
+            self.bounds = Bounds { min: [-1.0; 3], max: [1.0; 3] };
+        }
+    }
+
+    /// The structural object with element id `id`.
+    pub fn structural_item(&self, id: u64) -> Option<StructuralItem<'_>> {
+        self.structural_index.get(&self.structural, id)
+    }
+
+    /// The display position (model space, f32) of world point `world` of source model `model`.
+    pub fn display_point(&self, model: u32, world: DVec3) -> [f32; 3] {
+        self.origins.get(model as usize).copied().unwrap_or_default().display(world).as_vec3().to_array()
+    }
+
+    /// The bounds of an element at rest (model space): a structural object's point, segment or
+    /// target box, else the box of its triangles.
+    pub fn element_bounds(&self, id: u64) -> Option<Bounds> {
+        if let Some(item) = self.structural_item(id) {
+            return item.bounds(&self.origins);
+        }
+        let mut b = Bounds::empty();
+        for (l, first, count) in self.element_ranges(id) {
+            let layer = &self.layers[l];
+            for &i in layer.indices.get(first as usize..(first + count) as usize).unwrap_or(&[]) {
+                if let Some(p) = layer.positions.get(3 * i as usize..3 * i as usize + 3) {
+                    b.extend([p[0], p[1], p[2]]);
+                }
+            }
+        }
+        b.is_valid().then_some(b)
     }
 
     pub fn file_name(&self) -> String {
@@ -444,14 +606,26 @@ impl Model {
     }
 
     /// The properties of an element as (key, value) pairs in file order.
+    /// Structural objects keep no stored properties: theirs are built from the document.
     pub fn element_props(&self, id: u64) -> Vec<(String, String)> {
-        let Some(json) = self.props.get(&id) else { return Vec::new() };
+        let Some(json) = self.props.get(&id) else {
+            return self.structural_item(id).map(|item| item.props()).unwrap_or_default();
+        };
         match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json) {
             Ok(map) => map
                 .into_iter()
                 .map(|(k, v)| (k, v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))
                 .collect(),
             Err(_) => Vec::new(),
+        }
+    }
+}
+
+/// Moves xyz triples by `t`, each coordinate rounded once from f64.
+fn translate(positions: &mut [f32], t: DVec3) {
+    for p in positions.chunks_exact_mut(3) {
+        for k in 0..3 {
+            p[k] = (p[k] as f64 + t[k]) as f32;
         }
     }
 }

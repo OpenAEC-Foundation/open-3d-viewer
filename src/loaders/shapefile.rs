@@ -300,7 +300,7 @@ fn read(shp: &[u8], dbf: Option<&[u8]>, prj: Option<&str>, cpg: Option<&str>, de
     if skipped > 0 {
         info.push(("Skipped shapes".into(), skipped.to_string()));
     }
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 /// Joins layers of the same name (MultiPatch rings and strips both in `Buildings`).

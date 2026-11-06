@@ -63,10 +63,10 @@ fn load(source: &Source, progress: &Progress, pts: bool) -> Result<Loaded, Strin
     progress.set(Phase::Convert);
     if !pts && super::ascgrid::is_grid(&data) {
         let (layers, info) = super::ascgrid::read(&data, &source.stem(), super::ascgrid::MAX_CELLS).map_err(|e| format!("{}: {e}", source.name()))?;
-        return Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } });
+        return Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } });
     }
     let (layers, info) = read(&data, &source.stem(), pts, MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 /// Fields read per line; further columns are counted, not kept.

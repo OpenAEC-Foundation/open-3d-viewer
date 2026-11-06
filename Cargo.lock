@@ -3117,6 +3117,7 @@ name = "open-3d-viewer"
 version = "2026.45.12"
 dependencies = [
  "acadrust",
+ "bim-structural",
  "bytemuck",
  "cadmpeg-codec-step",
  "cadmpeg-ir",

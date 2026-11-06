@@ -32,13 +32,13 @@ impl Loader for ObjLoader {
         progress.set(Phase::Read);
         let layers = self.load(source)?;
         if layers.iter().any(|l| !l.indices.is_empty()) {
-            return Ok(Loaded { layers, views: Vec::new(), project: ProjectData::default() });
+            return Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData::default() });
         }
         // no faces: the vertices are a point cloud
         progress.set(Phase::Convert);
         let data = source.read()?;
         let (layers, info) = points(&data, &source.stem(), MAX_POINTS);
-        Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
     }
 
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {

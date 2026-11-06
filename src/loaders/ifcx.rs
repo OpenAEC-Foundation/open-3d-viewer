@@ -607,7 +607,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     if layers.is_empty() {
         return Err("IFCX: no meshes found".into());
     }
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 #[cfg(test)]

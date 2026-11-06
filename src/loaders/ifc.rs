@@ -169,7 +169,9 @@ impl Loader for IfcLoader {
             ],
             ..ProjectData::default()
         };
-        Ok(Loaded { layers: layers.into_values().collect(), views: Vec::new(), project })
+        // the anchor subtracted above: it places this model when models are combined
+        let origin = Some(glam::DVec3::from_array(anchor));
+        Ok(Loaded { structural: Vec::new(), origin, layers: layers.into_values().collect(), views: Vec::new(), project })
     }
 }
 
@@ -211,6 +213,10 @@ mod tests {
         }
         assert!(model.props.values().any(|p| p.contains("GlobalId") && p.contains("IfcType")));
         assert!(model.layers.iter().any(|l| l.colors.as_ref().is_some_and(|c| c.iter().any(|v| v[0] > v[1]))));
+        // the anchor the loader subtracted is kept as the model's origin, for combining
+        let anchor = model.origins[0].anchor.expect("an IFC keeps its anchor");
+        let text = format!("{}, {}, {}", anchor.x, anchor.y, anchor.z);
+        assert!(model.project.info.iter().any(|(k, v)| k == "IFC world origin (metres)" && *v == text), "{text}");
         assert!(crate::loaders::supported_extensions().contains(&"ifc"));
     }
 

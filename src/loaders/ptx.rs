@@ -30,7 +30,7 @@ impl Loader for PtxLoader {
         let data = source.read()?;
         progress.set(Phase::Convert);
         let (layers, info) = read(&data, &source.stem(), MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;
-        Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
     }
 }
 

@@ -44,9 +44,11 @@ mod vrml;
 mod amf;
 mod ifcx;
 mod step;
+mod sam;
 mod rhino;
 
-use crate::model::{Layer, Model, ProjectData, SavedView};
+use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
+use crate::structural::StructuralPart;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -199,7 +201,7 @@ pub trait Loader: Send + Sync {
     /// what else the file holds.
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
-        self.load(source).map(|layers| Loaded { layers, views: Vec::new(), project: ProjectData::default() })
+        self.load(source).map(|layers| Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData::default() })
     }
     /// True when the format is Y up and `load` converted it to Z up.
     fn source_y_up(&self) -> bool {
@@ -227,11 +229,17 @@ pub trait Loader: Send + Sync {
     }
 }
 
-/// What a loader read: the layers and the views saved in the file.
+/// What a loader read: the layers, the views saved in the file and the structural analysis
+/// models.
 pub struct Loaded {
     pub layers: Vec<Layer>,
     pub views: Vec<SavedView>,
     pub project: ProjectData,
+    /// Structural analysis models, in f64 world metres of the file (no anchor subtracted).
+    pub structural: Vec<bim_structural::AnalysisModel>,
+    /// The anchor the loader subtracted from the layer positions (world metres, Z up), when the
+    /// format has one; it places the model when models are combined.
+    pub origin: Option<glam::DVec3>,
 }
 
 /// Loaders from other crates, see [`add`].
@@ -251,7 +259,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &rhino::RhinoLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &rhino::RhinoLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -372,9 +380,20 @@ pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, Stri
     model.file_size = sources.iter().map(Source::len).sum();
     model.views = loaded.views;
     model.project = loaded.project;
+    // one origin per analysis model (the first shared with the layers), all at the file's anchor:
+    // the origin index is the `model` of a structural object's key, so two analysis models of one
+    // file that number their objects alike keep apart
+    let origin = Origin { anchor: loaded.origin, shift: glam::DVec3::ZERO };
+    model.origins = vec![origin; loaded.structural.len().max(1)];
+    if !loaded.structural.is_empty() {
+        let parts = loaded.structural.into_iter().enumerate().map(|(k, m)| StructuralPart::new(k as u32, Arc::new(m))).collect();
+        model.set_structural(parts);
+    }
     model.load_time = start.elapsed();
     model.source_y_up = loader.source_y_up();
-    if model.layers.is_empty() {
+    // a file of only analysis objects (nodes and members, or only sections, materials or load
+    // cases, no triangles) opens too
+    if model.layers.is_empty() && model.structural_index.is_empty() {
         return Err(format!("{}: no geometry found", model.file_name()));
     }
     Ok(model)

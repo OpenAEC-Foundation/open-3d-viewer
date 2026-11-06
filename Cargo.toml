@@ -36,6 +36,9 @@ iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-s
 # see vendor/openaec-ui/NOTICE.md): snapshot of the OpenAEC Style Repo, see vendor/UPSTREAM.md
 openaec-ui = { path = "vendor/openaec-ui", features = ["gpu-renderer"] }
 glam = { version = "0.30", features = ["bytemuck"] }
+# The structural analysis model (nodes, members, supports, sections, loads, results) and its
+# sam-json exchange format; headless, in this workspace
+bim-structural = { path = "crates/bim-structural" }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
 serde = { version = "1", features = ["derive"] }

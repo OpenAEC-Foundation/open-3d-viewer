@@ -10,7 +10,7 @@ use crate::model::{Bounds, Model, ViewKind};
 use crate::remote_link::{self, Announcement};
 use crate::section::{SectionBox, SectionPlane};
 use crate::viewport::camera::ViewPreset;
-use crate::viewport::render::RenderMode;
+use crate::viewport::render::{transform_bounds, RenderMode};
 use glam::Vec3;
 use iced::futures::{SinkExt, Stream, StreamExt};
 use iced::{window, Task};
@@ -407,6 +407,10 @@ impl App {
             "list_schedules" => self.schedules_json(),
             "list_sheets" => self.sheets_json(),
             "find_elements" => self.find_elements(a),
+            "list_structural" => crate::structural::remote::list(&*self.require_model()?),
+            "get_structural_issues" => crate::structural::remote::issues(&*self.require_model()?, a),
+            "get_structural_element" => crate::structural::remote::element(&*self.require_model()?, a, &self.model_matrix()),
+            "find_structural" => crate::structural::remote::find(&*self.require_model()?, a, &self.model_matrix()),
             "get_element" => {
                 let id = a.get("id").and_then(id_of).ok_or("id is required")?;
                 self.element_json(id)
@@ -599,7 +603,7 @@ impl App {
     fn model_json(&self) -> Value {
         let Some(m) = &self.model else { return Value::Null };
         let elements: usize = element_layers(m).len();
-        json!({
+        let mut out = json!({
             "file": m.path.display().to_string(),
             "format": m.format,
             "file_size_bytes": m.file_size,
@@ -616,7 +620,19 @@ impl App {
             "bounds": self.world_bounds().map(|b| jbounds(&b)),
             "units": "metres (Revit, SketchUp, glTF); OBJ, STL and PLY keep the file's own units",
             "up_axis": "Z",
-        })
+        });
+        if !m.structural.is_empty() {
+            let count = |f: fn(&bim_structural::AnalysisModel) -> usize| m.structural.iter().map(|p| f(&p.doc)).sum::<usize>();
+            out["structural"] = json!({
+                "models": m.structural.len(),
+                "nodes": count(|d| d.nodes.len()),
+                "members": count(|d| d.members.len()),
+                "surfaces": count(|d| d.surfaces.len()),
+                "objects": m.structural_index.len(),
+                "note": "structural objects are elements: get_element, find_elements and the *_structural tools take their ids",
+            });
+        }
+        out
     }
 
     fn camera_json(&self) -> Value {
@@ -868,14 +884,30 @@ impl App {
         let group_by = a.get("group_by").and_then(Value::as_str);
         let (offset, limit) = page(a, 50, 100);
 
-        let mut matches: Vec<(u64, Vec<usize>, Vec<(String, String)>)> = Vec::new();
-        for (id, layers) in element_layers(&model) {
-            if !layer.is_empty() && !layers.iter().any(|&l| model.layers[l].name.to_lowercase().contains(&layer)) {
+        // (id, the layer it is listed under, properties, structural)
+        let mut matches: Vec<(u64, String, Vec<(String, String)>, bool)> = Vec::new();
+        // elements with triangles, then structural objects drawn from their document
+        let drawn = element_layers(&model);
+        let structural = model
+            .structural_index
+            .all(&model.structural)
+            .into_iter()
+            .filter(|item| !drawn.contains_key(&item.element))
+            .map(|item| (item.element, Vec::new(), Some(format!("Structural: {}", item.doc().name))));
+        let elements = drawn.iter().map(|(id, layers)| (*id, layers.clone(), None)).chain(structural);
+        for (id, layers, part) in elements {
+            let names: Vec<&str> = match &part {
+                Some(name) => vec![name.as_str()],
+                None => layers.iter().map(|&l| model.layers[l].name.as_str()).collect(),
+            };
+            if !layer.is_empty() && !names.iter().any(|n| n.to_lowercase().contains(&layer)) {
                 continue;
             }
             let mut props = model.element_props(id);
             if !props.iter().any(|(k, _)| k == "category") {
-                props.push(("category".into(), model.layers[layers[0]].name.clone()));
+                // a structural object's category is its class
+                let class = props.iter().find(|(k, _)| part.is_some() && k == "Class").map(|(_, v)| v.clone());
+                props.push(("category".into(), class.unwrap_or_else(|| names[0].to_string())));
             }
             let value = |key: &str| props.iter().find(|(k, _)| k.to_lowercase() == key).map(|(_, v)| v.to_lowercase());
             if !conditions.iter().all(|(k, v)| value(k).is_some_and(|x| x == *v || x.contains(v.as_str()))) {
@@ -884,12 +916,12 @@ impl App {
             if !text.is_empty() && !props.iter().any(|(_, v)| v.to_lowercase().contains(&text)) && id.to_string() != text {
                 continue;
             }
-            matches.push((id, layers, props));
+            matches.push((id, names[0].to_string(), props, part.is_some()));
         }
         let total = matches.len();
         if let Some(key) = group_by {
             let mut groups: BTreeMap<String, usize> = BTreeMap::new();
-            for (_, _, props) in &matches {
+            for (_, _, props, _) in &matches {
                 let v = props.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map_or("(none)".to_string(), |(_, v)| v.clone());
                 *groups.entry(v).or_default() += 1;
             }
@@ -899,11 +931,15 @@ impl App {
             .into_iter()
             .skip(offset)
             .take(limit)
-            .map(|(id, layers, props)| {
+            .map(|(id, layer, props, structural)| {
                 let keep = ["category", "family", "type", "name", "level", "class"];
-                let summary: Map<String, Value> =
-                    props.into_iter().filter(|(k, _)| keep.contains(&k.as_str())).map(|(k, v)| (k, Value::String(v))).collect();
-                json!({ "id": id, "layer": model.layers[layers[0]].name, "properties": summary })
+                let keep_structural = ["Class", "Number", "Name", "Kind", "Section", "Support"];
+                let summary: Map<String, Value> = props
+                    .into_iter()
+                    .filter(|(k, _)| keep.contains(&k.as_str()) || (structural && keep_structural.contains(&k.as_str())))
+                    .map(|(k, v)| (k, Value::String(v)))
+                    .collect();
+                json!({ "id": id, "layer": layer, "properties": summary })
             })
             .collect();
         Ok(json!({ "total": total, "offset": offset, "returned": shown.len(), "truncated": offset.saturating_add(shown.len()) < total, "elements": shown }))
@@ -930,7 +966,8 @@ impl App {
         let model = self.require_model()?;
         let ranges = model.element_ranges(id);
         if ranges.is_empty() {
-            return Err(format!("no element {id}"));
+            // a structural object: drawn from its document, not from triangles
+            return crate::structural::remote::as_element(&model, id, &self.model_matrix()).ok_or_else(|| format!("no element {id}"));
         }
         let tris = self.element_triangles(&model, id);
         let mut b = Bounds::empty();
@@ -972,9 +1009,17 @@ impl App {
             v => vec![id_of(v).ok_or("target: \"model\", \"selection\", an element id or a list of ids")?],
         };
         let mut b = Bounds::empty();
+        let mm = self.model_matrix();
         for id in ids {
-            for t in self.element_triangles(&model, id) {
+            let tris = self.element_triangles(&model, id);
+            for t in &tris {
                 t.iter().for_each(|p| b.extend(p.to_array()));
+            }
+            // a structural object: its point, segment or target box
+            if let Some(s) = model.structural_item(id).filter(|_| tris.is_empty()).and_then(|item| item.bounds(&model.origins)) {
+                let w = transform_bounds(&s, &mm);
+                b.extend(w.min);
+                b.extend(w.max);
             }
         }
         if b.is_valid() { Ok(b) } else { Err("no such elements".into()) }

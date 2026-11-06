@@ -6,6 +6,8 @@
 //! is written into `Model::props` per object at load. See
 //! `docs/superpowers/specs/2026-11-06-structural-model-design.md`.
 
+pub mod remote;
+
 use crate::model::{Bounds, Origin};
 use bim_structural::{
     frame, hinge, support, AnalysisModel, Curve, Dof, DofFrame, Hinge, Id, ItemKind, ItemRef, Load, LoadRef, ModelKind,
@@ -725,6 +727,9 @@ fn shape_name(shape: &Shape) -> &'static str {
         Shape::Unknown => "unknown",
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod unit_tests {

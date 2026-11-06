@@ -104,7 +104,7 @@ pub fn tools() -> Vec<Value> {
     };
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
+        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), structural analysis models in sam-json (.samjson), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
             json!({ "path": { "type": "string", "description": "Path of the file: absolute, or relative to the work folder (OPENAEC_MAP) when there is one" } }), &["path"], false),
         save,
         screenshot,
@@ -139,8 +139,34 @@ pub fn tools() -> Vec<Value> {
                 "layer": { "type": "string", "description": "Only elements on layers whose name contains this" },
                 "group_by": { "type": "string", "description": "Property to count by, e.g. \"level\" or \"type\"" }
             }), 50, 100), &[], true),
-        tool("get_element", "All properties of an element plus its measurements: bounding box (min, max, size, centre), surface area, and volume when its mesh is closed.",
+        tool("get_element", "All properties of an element plus its measurements: bounding box (min, max, size, centre), surface area, and volume when its mesh is closed. Structural nodes, members and the other analysis objects are elements too (properties built from the analysis model, bounds from their nodes).",
             json!({ "id": { "type": ["integer", "string"] } }), &["id"], true),
+        tool("list_structural", "The structural analysis models in the open model (from .samjson files): per model its name, kind (analytical or physical axes), source, origin (world metres) and counts of nodes, members, surfaces, line supports, sections, load cases, combinations, actions, result sets and supports, and how many model notes (diagnostics) it has.",
+            json!({}), &[], true),
+        tool("get_structural_issues", "The model notes (diagnostics) of a structural analysis model: everything the importer skipped, guessed or converted (named supports expanded, default local axes, unknown profiles, ...), with the element id of the object each is about.",
+            json!({ "model": { "type": ["integer", "string"], "description": "Index from list_structural or (part of) the model's name; default all" } }), &[], true),
+        tool("get_structural_element", "A structural object (node, member, surface, line support, section, material, load case, combination, load or result set) as the analysis model holds it: world coordinates in f64 metres, member frame, section, insertion (cardinal point, eccentricity, end offsets), releases and support DOF codes (ux uy uz rx ry rz: 1 restrained or connected, 0 free or released, s spring, n nonlinear) with their names.",
+            json!({ "id": { "type": ["integer", "string"], "description": "Element id (from find_structural, find_elements or get_structural_issues)" } }), &["id"], true),
+        tool("find_structural", "Find structural objects: element ids of one kind that pass the filters, a page at a time. With within, the nodes, members and surfaces inside a box (scene coordinates, as get_element's bounds): box selection.",
+            paging(json!({
+                "kind": { "type": "string", "enum": ["node", "member", "surface", "line_support", "section", "material", "load_case", "combination", "action", "result_set"] },
+                "model": { "type": ["integer", "string"], "description": "Index from list_structural or (part of) the model's name" },
+                "support": { "type": "string", "description": "Nodes with this support: fixed, pinned, roller, sliding, spring, free, custom, a support name from the file, or any" },
+                "section": { "type": "string", "description": "Members (or sections) whose section name contains this" },
+                "member_kind": { "type": "string", "enum": ["beam", "truss", "cable", "tension_only", "compression_only", "rigid", "spring"] },
+                "number": { "type": "string", "description": "Exact source number" },
+                "number_from": { "type": "number", "description": "Source numbers from this (numeric)" },
+                "number_to": { "type": "number", "description": "Source numbers up to this (numeric)" },
+                "within": {
+                    "type": "object",
+                    "properties": {
+                        "min": vec3_schema("Lower corner [x, y, z]"),
+                        "max": vec3_schema("Upper corner [x, y, z]"),
+                        "crossing": { "type": "boolean", "description": "Also objects that only cross the box (default: wholly inside)" }
+                    },
+                    "required": ["min", "max"]
+                }
+            }), 1000, 10000), &[], true),
         tool("select", "Select (highlight) elements by id as a click would, and show their properties in the properties panel; or clear the selection.",
             json!({
                 "ids": { "type": "array", "items": { "type": ["integer", "string"] } },

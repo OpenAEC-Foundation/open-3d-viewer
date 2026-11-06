@@ -8,6 +8,7 @@ use crate::app::{face_at, pick_triangle, App, Message, Status};
 use crate::explode::ExplodeMode;
 use crate::model::{Bounds, Model, ViewKind};
 use crate::remote_link::{self, Announcement};
+use crate::selection::Pickable;
 use crate::section::{SectionBox, SectionPlane};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::{transform_bounds, RenderMode};
@@ -416,6 +417,20 @@ impl App {
                 self.element_json(id)
             }
             "select" => self.remote_select(a),
+            "hide_elements" => self.remote_hide(a, Message::HideSelection),
+            "isolate_elements" => self.remote_hide(a, Message::IsolateSelection),
+            "show_all_elements" => {
+                let _ = self.update(Message::ShowAllElements);
+                Ok(self.visibility_json())
+            }
+            "undo" => {
+                let _ = self.update(Message::Undo);
+                Ok(self.visibility_json())
+            }
+            "redo" => {
+                let _ = self.update(Message::Redo);
+                Ok(self.visibility_json())
+            }
             "pick" => self.remote_pick(a),
             "set_view" => self.remote_set_view(a),
             "set_camera" => self.set_camera(a),
@@ -737,6 +752,8 @@ impl App {
             "section_plane": self.plane_json(),
             "placing_section_plane": self.plane_picking,
             "selection": self.selection_json(),
+            "selection_count": self.sel.len(),
+            "hidden_count": self.hidden.len(),
             "active_view": self.active_view.and_then(|i| self.model.as_ref()?.views.get(i).map(|v| v.name.clone())),
             "shown_sheet": self.active_sheet.and_then(|i| self.model.as_ref()?.project.sheets.get(i).map(|s| s.title.clone())),
             "shown_schedule": self.active_schedule.and_then(|i| self.schedules.get(i).map(|s| s.name.clone())),
@@ -1051,11 +1068,42 @@ impl App {
         if b.is_valid() { Ok(b) } else { Err("no such elements".into()) }
     }
 
+    /// `hide_elements` and `isolate_elements`: the elements in `ids`, or else the selection, as
+    /// Hide (which clears the selection) and Isolate (which keeps it) do.
+    fn remote_hide(&mut self, a: &Value, message: Message) -> Answer {
+        let model = self.require_model()?;
+        if let Some(Value::Array(list)) = a.get("ids") {
+            let ids: Vec<u64> = list.iter().filter_map(id_of).collect();
+            let drawn: std::collections::HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+            if let Some(&id) = ids.iter().find(|id| !drawn.contains(id)) {
+                return Err(not_drawn(&model, id, "hiding"));
+            }
+            self.sel.clear();
+            self.sel.extend(ids.into_iter().map(Pickable::Element));
+            self.selection_changed();
+        }
+        if self.sel.is_empty() {
+            return Err("ids (list of element ids) is required when nothing is selected".into());
+        }
+        let _ = self.update(message);
+        Ok(self.visibility_json())
+    }
+
+    /// What is hidden and what undo can do, after a visibility command.
+    fn visibility_json(&self) -> Value {
+        json!({
+            "hidden_count": self.hidden.len(),
+            "selection_count": self.sel.len(),
+            "can_undo": self.history.can_undo(),
+            "can_redo": self.history.can_redo(),
+        })
+    }
+
     fn remote_select(&mut self, a: &Value) -> Answer {
         let model = self.require_model()?;
         if flag(a, "clear").unwrap_or(false) {
-            self.selected = None;
-            self.selection.clear();
+            self.sel.clear();
+            self.selection_changed();
             self.set_structural_selection(Vec::new());
             return Ok(Value::Null);
         }
@@ -1064,38 +1112,35 @@ impl App {
             (_, Some(v)) => vec![id_of(v).ok_or("id must be an element id")?],
             _ => return Err("ids (list of element ids), id or clear is required".into()),
         };
-        let mut selection = Vec::new();
-        let mut structural = Vec::new();
-        // the first element given that is not structural: its properties show
-        let mut first_mesh = None;
-        for &id in &ids {
-            let ranges = model.element_ranges(id);
-            if !ranges.is_empty() && first_mesh.is_none() {
-                first_mesh = Some(id);
-            }
-            if ranges.is_empty() {
-                // a structural object is drawn from its document: a node or member itself, a load
-                // or line support through the item it sits on
-                match model.structural_item(id) {
-                    Some(item) if item.unit_key().is_some() => structural.push(id),
-                    Some(item) => {
-                        return Err(format!(
-                            "{id} is a structural {} without a place in the model (nothing to select); get_element and get_structural_element take its id",
-                            crate::structural::kind_name(item.kind())
-                        ))
-                    }
-                    None => return Err(format!("no element {id}")),
-                }
-            }
-            selection.extend(ranges);
-        }
-        if selection.is_empty() && structural.is_empty() {
+        if ids.is_empty() {
             return Err("no elements given".into());
         }
-        // the first element given decides whose properties show
-        self.selected = selection.first().map(|&(layer, ..)| (layer, first_mesh));
-        self.selection = selection;
-        self.set_structural_selection(structural);
+        let drawn: std::collections::HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        // a structural object is drawn from its document: a node or member itself, a load or line
+        // support through the item it sits on
+        let mut structural = Vec::new();
+        for &id in ids.iter().filter(|id| !drawn.contains(id)) {
+            match model.structural_item(id) {
+                Some(item) if item.unit_key().is_some() => structural.push(id),
+                Some(item) => {
+                    return Err(format!(
+                        "{id} is a structural {} without a place in the model (nothing to select); get_element and get_structural_element take its id",
+                        crate::structural::kind_name(item.kind())
+                    ))
+                }
+                None => return Err(not_drawn(&model, id, "selecting")),
+            }
+        }
+        let add = flag(a, "add").unwrap_or(false);
+        if !add {
+            self.sel.clear();
+        }
+        self.sel.extend(ids.iter().filter(|id| drawn.contains(id)).map(|&id| Pickable::Element(id)));
+        self.selection_changed();
+        let mut chosen = if add { self.structural.selected.clone() } else { Vec::new() };
+        let mut seen: std::collections::HashSet<u64> = chosen.iter().copied().collect();
+        chosen.extend(structural.into_iter().filter(|id| seen.insert(*id)));
+        self.set_structural_selection(chosen);
         if flag(a, "zoom").unwrap_or(false) {
             if let Some(b) = self.selection_bounds() {
                 self.frame(&b);
@@ -1134,7 +1179,7 @@ impl App {
         // the exploded view moves the triangles: their offsets back in model space
         let back = mm.inverse();
         let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
-        let (layer, triangle) = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep, None)?;
+        let (layer, triangle) = pick_triangle(&model, &self.visible, origin, dir, &shift, &keep, &self.hidden_test(), None)?;
         let s = model.layers[layer].indices.get(3 * triangle).map_or(Vec3::ZERO, |&i| shift(layer, i));
         let (point, normal) = face_at(&model.layers[layer], triangle, origin - s, dir)?;
         let (point, mut normal) = (mm.transform_point3(point + s), mm.transform_vector3(normal).normalize_or_zero());
@@ -1177,12 +1222,8 @@ impl App {
         if flag(a, "select").unwrap_or(false) {
             match &structural {
                 // what was found is selected, as a click would (no second pick)
-                Some(s) if self.measure.tool.is_none() && !self.plane_picking => {
-                    self.selected = None;
-                    self.selection.clear();
-                    self.set_structural_selection(vec![s.element]);
-                }
-                _ => self.pick(vx, vy, w, h),
+                Some(s) if self.measure.tool.is_none() && !self.plane_picking => self.click_structural(s.element, false),
+                _ => self.pick(vx, vy, w, h, false),
             }
         }
         // a structural node or member drawn there (within 8 px of a node, 6 px of a member)
@@ -1715,6 +1756,39 @@ mod tests {
         let (call, rx) = RemoteCall::new(cmd, args);
         let _ = app.remote(call);
         rx.try_recv().expect("answered at once")
+    }
+
+    #[test]
+    fn remote_hide_and_show_all() {
+        let mut app = app();
+        run(&mut app, "hide_elements", json!({ "ids": [7] })).expect("hide");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["hidden_count"], 1);
+        run(&mut app, "select", json!({ "id": 8 })).expect("select");
+        run(&mut app, "isolate_elements", json!({})).expect("isolate the selection");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["hidden_count"], 1, "only 7 is hidden");
+        run(&mut app, "show_all_elements", json!({})).expect("show all");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["hidden_count"], 0);
+        assert!(run(&mut app, "hide_elements", json!({ "ids": [99] })).is_err());
+    }
+
+    #[test]
+    fn remote_select_add() {
+        let mut app = app();
+        run(&mut app, "select", json!({ "id": 7 })).expect("select");
+        run(&mut app, "select", json!({ "id": 8, "add": true })).expect("add");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["selection_count"], 2);
+        run(&mut app, "select", json!({ "id": 8 })).expect("replace");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["selection_count"], 1);
+    }
+
+    #[test]
+    fn remote_undo_restores_hidden() {
+        let mut app = app();
+        run(&mut app, "hide_elements", json!({ "ids": [7, 8] })).expect("hide");
+        run(&mut app, "undo", json!({})).expect("undo");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["hidden_count"], 0);
+        run(&mut app, "redo", json!({})).expect("redo");
+        assert_eq!(run(&mut app, "get_state", json!({})).unwrap()["hidden_count"], 2);
     }
 
     #[test]

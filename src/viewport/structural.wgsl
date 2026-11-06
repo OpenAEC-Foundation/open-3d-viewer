@@ -21,8 +21,7 @@ struct StructUniforms {
 
 @group(1) @binding(0) var<uniform> su: StructUniforms;
 
-// Clip position of everything not drawn: outside the view.
-const NOWHERE: vec4<f32> = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+// Everything not drawn goes to `NOWHERE` (scene.wgsl): outside the view.
 // Segments are clipped against this clip w before they are spread on screen (`pick::NEAR_W`).
 const NEAR_W: f32 = 1e-5;
 const GLYPH_NODE: u32 = 0u;

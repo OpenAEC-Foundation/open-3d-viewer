@@ -9,8 +9,10 @@
 //! below); a member with a solid shares one unit with its triangles. The units and their bounds at
 //! rest are indexed once per model; the renderer adds the offset of each vertex's unit in the
 //! vertex shader, so the geometry never changes and 0 % on every axis is the model as loaded.
+//! The same units carry the hidden and selected flags of `crate::units`.
 
 use crate::model::{Bounds, Model};
+use crate::units::FastHashMap;
 use crate::viewport::render::transform_bounds;
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -31,11 +33,24 @@ pub enum ExplodeMode {
     Elements,
 }
 
+/// What a unit is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnitOwner {
+    Element(u64),
+    /// The triangles of a layer (index in `Model::layers`) outside its elements.
+    LayerRest(usize),
+}
+
 /// The units of a model at rest.
 #[derive(Debug)]
 pub struct ExplodeIndex {
     /// Per layer, the unit of every vertex (0: none, never moves).
     pub vertex_units: Vec<Vec<u32>>,
+    /// Per unit (0: none): the element it is, or the layer whose triangles outside elements it is.
+    owners: Vec<Option<UnitOwner>>,
+    /// The unit of every element, and per layer the unit of its triangles outside elements.
+    element_units: FastHashMap<u64, u32>,
+    rest_units: Vec<Option<u32>>,
     /// Per unit (0 unused): bounds at rest (model space).
     bounds: Vec<Bounds>,
     /// Per unit: storey, 0 for the lowest (None: no level).
@@ -60,10 +75,12 @@ impl ExplodeIndex {
     pub fn new(model: &Model) -> Self {
         // per unit: the element it is (None: the rest of a layer)
         let mut elements: Vec<Option<u64>> = vec![None];
-        let mut element_units: HashMap<u64, u32> = HashMap::new();
+        let mut element_units: FastHashMap<u64, u32> = FastHashMap::default();
         let mut bounds = vec![Bounds::empty()];
         let mut vertex_units = Vec::with_capacity(model.layers.len());
-        for layer in &model.layers {
+        let mut owners: Vec<Option<UnitOwner>> = vec![None];
+        let mut rest_units = Vec::with_capacity(model.layers.len());
+        for (l, layer) in model.layers.iter().enumerate() {
             let mut units = vec![0u32; layer.vertex_count()];
             // index ranges with their element, the gaps between them included (sorted by first index)
             let mut runs = Vec::with_capacity(2 * layer.elements.len() + 1);
@@ -85,10 +102,12 @@ impl ExplodeIndex {
                 let unit = match element {
                     Some(id) => *element_units.entry(id).or_insert_with(|| {
                         elements.push(Some(id));
+                        owners.push(Some(UnitOwner::Element(id)));
                         elements.len() as u32 - 1
                     }),
                     None => *rest.get_or_insert_with(|| {
                         elements.push(None);
+                        owners.push(Some(UnitOwner::LayerRest(l)));
                         elements.len() as u32 - 1
                     }),
                 };
@@ -102,12 +121,14 @@ impl ExplodeIndex {
                 }
             }
             vertex_units.push(units);
+            rest_units.push(rest);
         }
         // structural units, after the layers: a member drawn as a solid keeps its triangles' unit
         let mut structural = HashMap::new();
         for (id, b) in model.structural_index.unit_bounds(&model.structural, &model.origins) {
             let unit = *element_units.entry(id).or_insert_with(|| {
                 elements.push(Some(id));
+                owners.push(Some(UnitOwner::Element(id)));
                 elements.len() as u32 - 1
             });
             bounds.resize(elements.len(), Bounds::empty());
@@ -169,7 +190,7 @@ impl ExplodeIndex {
             .as_ref()
             .map(|d| d.items.iter().map(|i| structural.get(&i.element).copied().unwrap_or(0)).collect())
             .unwrap_or_default();
-        Self { vertex_units, bounds, storey, storeys, rest, building, structural, display_units }
+        Self { vertex_units, owners, element_units, rest_units, bounds, storey, storeys, rest, building, structural, display_units }
     }
 
     /// The unit of a structural node, member or surface.
@@ -205,6 +226,22 @@ impl ExplodeIndex {
     /// The unit of vertex `vertex` of layer `layer` (0 when unknown).
     pub fn unit(&self, layer: usize, vertex: u32) -> usize {
         self.vertex_units.get(layer).and_then(|u| u.get(vertex as usize)).map_or(0, |&u| u as usize)
+    }
+
+    /// The unit of element `id`.
+    pub fn element_unit(&self, id: u64) -> Option<usize> {
+        self.element_units.get(&id).map(|&u| u as usize)
+    }
+
+    /// The unit of the triangles of layer `layer` outside its elements (all of them for a layer
+    /// without elements).
+    pub fn layer_rest_unit(&self, layer: usize) -> Option<usize> {
+        self.rest_units.get(layer).copied().flatten().map(|u| u as usize)
+    }
+
+    /// What unit `unit` is (None for unit 0).
+    pub fn owner(&self, unit: usize) -> Option<UnitOwner> {
+        self.owners.get(unit).copied().flatten()
     }
 
     /// The offset (world, w unused) of every unit for `amount` (0..1 per axis) in `mode`, the

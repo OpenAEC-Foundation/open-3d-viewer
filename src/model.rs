@@ -110,6 +110,15 @@ impl Bounds {
     }
 }
 
+/// An element as its own file names it: the index of its model among the open ones and its id
+/// in that file. It stays the same when another model is added; the id in the shown model
+/// ([`Model::combine`] renumbers) does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ElementKey {
+    pub model: u32,
+    pub source: u64,
+}
+
 /// A loaded model.
 #[derive(Debug)]
 pub struct Model {
@@ -125,6 +134,10 @@ pub struct Model {
     pub source_y_up: bool,
     /// Element properties (flat JSON object per element id).
     pub props: HashMap<u64, String>,
+    /// For a combined model ([`Model::combine`]): the key of every element and back; empty for
+    /// a model of one file, whose ids are the keys.
+    pub keys: HashMap<u64, ElementKey>,
+    pub ids: HashMap<ElementKey, u64>,
     /// Views saved in the file (Revit), in world coordinates.
     pub views: Vec<SavedView>,
     /// What the file says about the project besides geometry (Revit).
@@ -379,8 +392,10 @@ pub struct SavedView {
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Model {
-    /// Compose loaded files in the app, giving each source's element IDs a unique
-    /// namespace. Original IDs remain in their source properties.
+    /// Compose loaded files in the app. The first file keeps its element ids; the elements of
+    /// the others are numbered after the highest id so far that a JSON number holds exactly
+    /// ([`crate::structural::MAX_SAFE_ID`]), so adding a file changes no id and the new ids stay
+    /// compact. [`Model::element_key`] names every element by its file and its own id.
     ///
     /// Structural parts come along with their documents untouched (source ids stay in the
     /// documents; [`StructuralPart::element_id`] gives the new element id), and the origins of
@@ -398,17 +413,25 @@ impl Model {
         let mut origins = Vec::new();
         let mut parts = Vec::new();
         let mut next_id = 1u64;
+        let (mut keys, mut ids) = (HashMap::new(), HashMap::new());
         // display alignment: to the first model that knows its anchor (and whether it has
         // structural parts)
         let reference = models.iter().find_map(|m| Some((m.origins.iter().find_map(|o| o.anchor)?, !m.structural.is_empty())));
-        for model in models {
+        for (m, model) in models.iter().enumerate() {
             let source = model.file_name();
-            let ids: std::collections::BTreeSet<_> = model.props.keys().copied()
+            let sources: std::collections::BTreeSet<_> = model.props.keys().copied()
                 .chain(model.layers.iter().flat_map(|layer| layer.elements.iter().map(|e| e.0)))
                 .chain(model.structural_index.element_ids()).collect();
-            let remap: HashMap<_, _> = ids.into_iter().map(|id| {
-                let mapped = next_id;
-                next_id += 1;
+            // the first model keeps its own ids, the others follow after the highest JSON-safe id
+            // so far, so no id changes when another model is added and the new ids stay compact
+            let remap: HashMap<_, _> = sources.into_iter().map(|id| {
+                let mapped = if m == 0 { id } else { next_id };
+                if mapped <= crate::structural::MAX_SAFE_ID {
+                    next_id = next_id.max(mapped + 1);
+                }
+                let key = ElementKey { model: m as u32, source: id };
+                keys.insert(mapped, key);
+                ids.insert(key, mapped);
                 (id, mapped)
             }).collect();
             // the shift that aligns this model, and the translation that takes it there
@@ -478,6 +501,8 @@ impl Model {
         project.levels.dedup();
         let mut combined = Self::new(format!("{} models", models.len()).into(), "Multiple models", layers);
         combined.props = props;
+        combined.keys = keys;
+        combined.ids = ids;
         combined.views = views;
         combined.project = project;
         combined.origins = origins;
@@ -515,6 +540,8 @@ impl Model {
             bounds,
             source_y_up: false,
             props,
+            keys: HashMap::new(),
+            ids: HashMap::new(),
             views: Vec::new(),
             project: ProjectData::default(),
             structural: Vec::new(),
@@ -601,6 +628,41 @@ impl Model {
     /// The points of the point cloud layers.
     pub fn point_count(&self) -> usize {
         self.layers.iter().map(Layer::point_count).sum()
+    }
+
+    /// The elements whose property `key` is `value`, both ignoring case, in layer order and each
+    /// once. `category` falls back to the element's first layer name, as the remote
+    /// `find_elements` does.
+    pub fn elements_with(&self, key: &str, value: &str) -> Vec<u64> {
+        let (key, value) = (key.to_lowercase(), value.to_lowercase());
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            for &(id, ..) in &layer.elements {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let found = self.element_props(id).into_iter().find(|(k, _)| k.to_lowercase() == key).map(|(_, v)| v.to_lowercase());
+                let found = found.or_else(|| (key == "category").then(|| layer.name.to_lowercase()));
+                if found.as_deref() == Some(value.as_str()) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+
+    /// The key of element `id`: its model and its id in that model's file.
+    pub fn element_key(&self, id: u64) -> ElementKey {
+        self.keys.get(&id).copied().unwrap_or(ElementKey { model: 0, source: id })
+    }
+
+    /// The element with `key`, as this model numbers it.
+    pub fn element_with_key(&self, key: ElementKey) -> Option<u64> {
+        if self.keys.is_empty() {
+            return (key.model == 0).then_some(key.source);
+        }
+        self.ids.get(&key).copied()
     }
 
     /// Where an element is drawn: (layer, first index, index count) per range.
@@ -842,6 +904,60 @@ pub fn smooth_normals(positions: &[f32], indices: &[u32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model of one square, element `id`, at x.
+    fn square(name: &str, id: u64, x: f32) -> std::sync::Arc<Model> {
+        let layer = Layer {
+            name: "Walls".into(),
+            positions: vec![x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x + 1.0, 1.0, 0.0, x, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            elements: vec![(id, 0, 6)],
+            props: vec![(id, format!(r#"{{"Name":"{name}"}}"#))],
+            ..Layer::default()
+        };
+        std::sync::Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn elements_with_matches_exactly_ignoring_case() {
+        let walls = Layer {
+            name: "Walls".into(),
+            positions: vec![0.0; 18],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            elements: vec![(1, 0, 3), (2, 3, 3)],
+            props: vec![(1, r#"{"level":"00"}"#.into()), (2, r#"{"category":"Wall","level":"01"}"#.into())],
+            ..Layer::default()
+        };
+        let m = Model::new(PathBuf::from("x.rvt"), "Revit", vec![walls]);
+        assert_eq!(m.elements_with("category", "walls"), vec![1], "falls back to the layer name");
+        assert_eq!(m.elements_with("Category", "WALL"), vec![2]);
+        assert_eq!(m.elements_with("level", "0"), Vec::<u64>::new(), "exact, not a part");
+        assert_eq!(m.elements_with("LEVEL", "01"), vec![2]);
+    }
+
+    #[test]
+    fn combine_keeps_source_ids_as_keys() {
+        let m = Model::combine(&[square("a", 7, 0.0), square("b", 7, 2.0)]);
+        let ids: Vec<u64> = m.layers.iter().map(|l| l.elements[0].0).collect();
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(m.element_key(ids[0]), ElementKey { model: 0, source: 7 });
+        assert_eq!(m.element_key(ids[1]), ElementKey { model: 1, source: 7 });
+    }
+
+    #[test]
+    fn element_with_key_inverts_element_key() {
+        let m = Model::combine(&[square("a", 7, 0.0), square("b", 9, 2.0)]);
+        for id in m.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)) {
+            assert_eq!(m.element_with_key(m.element_key(id)), Some(id));
+        }
+    }
+
+    #[test]
+    fn single_model_keys_are_identity() {
+        let m = square("a", 42, 0.0);
+        assert_eq!(m.element_key(42), ElementKey { model: 0, source: 42 });
+        assert_eq!(m.element_with_key(ElementKey { model: 0, source: 42 }), Some(42));
+    }
 
     #[test]
     fn y_up_conversion() {

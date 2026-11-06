@@ -3,32 +3,162 @@
 //! cuts the model with a section box (lower 60 %, filled cuts). With `O3V_BENCH_PNG=path` the
 //! first section frame is also written as a PNG. `WGPU_BACKEND` chooses the backend.
 //!
+//! These frame times are latencies: the bench waits for the GPU after every frame. With
+//! `--throughput` it instead keeps two frames in flight, as a swap chain does, and checks the
+//! 120 fps criterion per camera scenario (orbit, pan, zoom): at least 120 submitted frames per
+//! second and a p95 frame time of at most 8.33 ms, counting the frames over 16.67 ms.
+//!
 //! Instead of a file, FILE may name a generated scenario: `synthetic:N` (N boxes, each its own
 //! element), `structural:N` (a 3D frame of N members with their nodes, fixed supports on the
 //! ground nodes and hinges at 10 % of the member ends), or several joined with `+`
 //! (`structural:100000+synthetic:100000`), combined as Add does. For a model with structural
 //! objects it also times, on the CPU, deriving the display, building the hover grid and a click,
-//! and renders a last pass with every third member selected.
+//! and adds a pass (and a throughput run) with every third member selected.
 
 use crate::loaders;
-use crate::model::{Layer, Model};
+use crate::model::Model;
+use crate::structural::display::Marks;
 use crate::structural::StructuralPart;
 use bim_structural::{
     dofs_all, frame, sam_id, AnalysisModel, Curve, Dof, DofFrame, Hinge, IdKind, Insertion, Member, MemberKind, Node, NodeOrigin,
     Orientation, SourceInfo, Support, SupportPreset,
 };
 use glam::DVec3;
+use crate::selection::Pickable;
+use crate::units::{unit_state, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::theme::{srgb3, srgb4, ThemeKind};
 use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{RenderMode, RenderSettings, ScenePipeline, ScenePrimitive};
 use iced::futures::executor::block_on;
 use iced::wgpu;
 use iced::widget::shader::{Primitive, Viewport};
+use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use web_time::Instant;
 
-pub fn run(file: &Path, frames: u32) -> Result<(), String> {
+/// The 120 fps criterion: submitted frames per second, p95 frame time, and the time after which
+/// a frame counts as late.
+const MIN_FPS: f64 = 120.0;
+const MAX_P95_MS: f64 = 8.33;
+const LATE_MS: f64 = 16.67;
+/// Frames in flight in the throughput mode, as with a double-buffered swap chain.
+const IN_FLIGHT: usize = 2;
+
+/// Frame times of one scenario.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameStats {
+    pub frames: u32,
+    pub fps: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+    pub over_budget: u32,
+}
+
+impl FrameStats {
+    /// Meets the 120 fps criterion.
+    pub fn passes(&self) -> bool {
+        self.fps >= MIN_FPS && self.p95_ms <= MAX_P95_MS
+    }
+}
+
+/// Stats of `durations_ms` (one per frame) over `wall_s` seconds: p95 by nearest rank.
+pub fn frame_stats(durations_ms: &[f64], wall_s: f64) -> FrameStats {
+    let mut sorted = durations_ms.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let n = sorted.len();
+    let p95_ms = if n == 0 { 0.0 } else { sorted[((0.95 * n as f64).ceil() as usize).clamp(1, n) - 1] };
+    FrameStats {
+        frames: n as u32,
+        fps: if wall_s > 0.0 { n as f64 / wall_s } else { 0.0 },
+        p95_ms,
+        max_ms: sorted.last().copied().unwrap_or(0.0),
+        over_budget: sorted.iter().filter(|&&d| d > LATE_MS).count() as u32,
+    }
+}
+
+/// How the camera moves from frame to frame in the throughput mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scenario {
+    Orbit,
+    Pan,
+    Zoom,
+}
+
+impl Scenario {
+    pub const ALL: [Scenario; 3] = [Scenario::Orbit, Scenario::Pan, Scenario::Zoom];
+
+    fn name(self) -> &'static str {
+        match self {
+            Scenario::Orbit => "orbit",
+            Scenario::Pan => "pan",
+            Scenario::Zoom => "zoom",
+        }
+    }
+
+    /// Moves the camera for `frame`; pan and zoom turn back every 100 frames, so the model
+    /// stays in view.
+    fn step(self, camera: &mut Camera, frame: u32, height: f32) {
+        let back = if (frame / 100) % 2 == 0 { 1.0 } else { -1.0 };
+        match self {
+            Scenario::Orbit => camera.orbit(4.0, 0.0),
+            Scenario::Pan => camera.pan(3.0 * back, 0.0, height),
+            Scenario::Zoom => camera.zoom(0.02 * back),
+        }
+    }
+}
+
+/// The GPU to bench: `O3V_BENCH_GPU=low` (or `integrated`) asks for the integrated one, for the
+/// baseline on integrated graphics; otherwise the high-performance one.
+pub fn power_preference(asked: Option<&str>) -> wgpu::PowerPreference {
+    match asked {
+        Some("low" | "integrated") => wgpu::PowerPreference::LowPower,
+        _ => wgpu::PowerPreference::HighPerformance,
+    }
+}
+
+/// Boxes per layer of the synthetic model.
+const SYNTHETIC_LAYER: usize = 10_000;
+
+/// A reference model that needs no file (`--bench synthetic:N`): `n` boxes of 1 m with 0.5 m
+/// gaps on a square grid, each box its own element (ids 1..=n, 12 triangles), 10 000 elements
+/// per layer.
+pub fn synthetic(n: usize) -> crate::model::Model {
+    use crate::model::{Layer, Model};
+    // the six faces of a unit box: normal and four corners, counter-clockwise from outside
+    const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        ([0.0, 0.0, -1.0], [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]]),
+        ([0.0, 0.0, 1.0], [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]]),
+        ([0.0, -1.0, 0.0], [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [0.0, 0.0, 1.0]]),
+        ([0.0, 1.0, 0.0], [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]]),
+        ([-1.0, 0.0, 0.0], [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 0.0]]),
+        ([1.0, 0.0, 0.0], [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]]),
+    ];
+    let side = (n as f64).sqrt().ceil().max(1.0) as usize;
+    let mut layers = Vec::new();
+    for (part, first) in (0..n).step_by(SYNTHETIC_LAYER).enumerate() {
+        let mut layer = Layer { name: format!("Boxes {}", part + 1), color: [0.75, 0.72, 0.66], ..Layer::default() };
+        for i in first..(first + SYNTHETIC_LAYER).min(n) {
+            let (x, y) = ((i % side) as f32 * 1.5, (i / side) as f32 * 1.5);
+            let id = i as u64 + 1;
+            let start = layer.indices.len() as u32;
+            for (normal, corners) in FACES {
+                let base = layer.vertex_count() as u32;
+                for c in corners {
+                    layer.positions.extend_from_slice(&[x + c[0], y + c[1], c[2]]);
+                    layer.normals.extend_from_slice(&normal);
+                }
+                layer.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+            layer.elements.push((id, start, 36));
+            layer.props.push((id, format!(r#"{{"Name":"Box {id}"}}"#)));
+        }
+        layers.push(layer);
+    }
+    Model::new(format!("synthetic-{n}").into(), "Synthetic", layers)
+}
+
+pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
     let model = Arc::new(scenario(file)?);
     println!(
         "{}: {} layers, {} vertices, {} triangles, {} points, loaded in {:.2} s",
@@ -49,11 +179,16 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
         );
         structural_timings(&model, (1920.0, 1080.0));
     }
+    // every third member selected: drawn again on top from its own instances
+    let third: Option<Arc<Marks>> = model.structural_display.as_ref().filter(|d| !d.is_empty()).map(|d| {
+        let members = d.items.iter().enumerate().filter(|(_, i)| i.kind == bim_structural::ItemKind::Member);
+        Arc::new(d.marks(members.step_by(3).map(|(k, _)| k as u32)))
+    });
 
     // WGPU_BACKEND picks the backend, as for the window
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
+        power_preference: power_preference(std::env::var("O3V_BENCH_GPU").ok().as_deref()),
         force_fallback_adapter: false,
         compatible_surface: None,
     }))
@@ -85,6 +220,125 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
     camera.fit(&model.bounds, w as f32 / h as f32);
     let p = ThemeKind::Light.palette();
 
+    if throughput {
+        let settings = RenderSettings {
+            mode: RenderMode::Solid,
+            grid: true,
+            background: srgb3(p.viewport),
+            grid_minor: srgb4(p.grid_minor),
+            grid_major: srgb4(p.grid_major),
+            model_matrix: glam::Mat4::IDENTITY,
+            section: None,
+            plane: None,
+            caps: false,
+            grids: true,
+            bounds: None,
+        };
+        // the units of every element, as the app uploads them, so their flags work
+        let index = Arc::new(crate::explode::ExplodeIndex::new(&model));
+        let submit = |camera: Camera, units: &Arc<Vec<[f32; 4]>>, marked: &Arc<Marks>, pipeline: &mut ScenePipeline| {
+            let primitive = ScenePrimitive {
+                model: Some(model.clone()),
+                visible: vec![true; model.layers.len()],
+                camera,
+                settings,
+                explode: Some(index.clone()),
+                offsets: units.clone(),
+                structural_selected: marked.clone(),
+                structural_hovered: Arc::default(),
+                structural_shown: None,
+            };
+            primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            primitive.render(pipeline, &mut encoder, &view, &clip);
+            queue.submit([encoder.finish()])
+        };
+        let plain: Arc<Vec<[f32; 4]>> = Arc::new(unit_state(&[], &[]));
+        // with elements, also every element selected and every second one hidden
+        let none: Arc<Marks> = Arc::default();
+        let mut runs = Scenario::ALL.map(|s| (s.name().to_string(), s, plain.clone(), none.clone())).to_vec();
+        if index.len() > 1 {
+            let flags = |f: &dyn Fn(usize) -> u8| Arc::new(unit_state(&[], &(0..index.len()).map(f).collect::<Vec<u8>>()));
+            runs.push(("orbit, all selected".into(), Scenario::Orbit, flags(&|_| UNIT_SELECTED), none.clone()));
+            runs.push(("orbit, half hidden".into(), Scenario::Orbit, flags(&|u| if u % 2 == 0 { UNIT_HIDDEN } else { 0 }), none.clone()));
+        }
+        if let Some(third) = &third {
+            runs.push(("orbit, every 3rd member selected".into(), Scenario::Orbit, plain.clone(), third.clone()));
+        }
+        // the GPU upload, not counted
+        submit(camera, &plain, &none, &mut pipeline);
+        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        let mut all = true;
+        for (name, scenario, units, marked) in &runs {
+            let scenario = *scenario;
+            let done: Arc<Mutex<Vec<Instant>>> = Arc::default();
+            let mut pending = VecDeque::with_capacity(IN_FLIGHT + 1);
+            let mut c = camera;
+            let start = Instant::now();
+            for i in 0..frames {
+                if pending.len() >= IN_FLIGHT {
+                    let oldest = pending.pop_front();
+                    device.poll(wgpu::PollType::Wait { submission_index: oldest, timeout: None }).ok();
+                }
+                scenario.step(&mut c, i, h as f32);
+                pending.push_back(submit(c, units, marked, &mut pipeline));
+                let done = done.clone();
+                queue.on_submitted_work_done(move || done.lock().unwrap().push(Instant::now()));
+            }
+            device.poll(wgpu::PollType::wait_indefinitely()).ok();
+            let ends = done.lock().unwrap().clone();
+            let durations: Vec<f64> =
+                std::iter::once(start).chain(ends.iter().copied()).collect::<Vec<_>>().windows(2).map(|w| (w[1] - w[0]).as_secs_f64() * 1000.0).collect();
+            let wall = ends.last().map_or(0.0, |t| (*t - start).as_secs_f64());
+            let s = frame_stats(&durations, wall);
+            all &= s.passes();
+            println!(
+                "{} @ {w}x{h} 4xMSAA: {} frames, {:.0} fps, p95 {:.2} ms, max {:.2} ms, {} over 16.67 ms: {}",
+                name,
+                s.frames,
+                s.fps,
+                s.p95_ms,
+                s.max_ms,
+                s.over_budget,
+                if s.passes() { "PASS" } else { "FAIL" }
+            );
+        }
+        // selecting, isolating and hiding every element must each be done within one frame
+        let mut timed = |what: String, ms: f64| {
+            let pass = ms <= MAX_P95_MS;
+            all &= pass;
+            println!("{what}: {ms:.2} ms in update: {}", if pass { "PASS" } else { "FAIL" });
+        };
+        if index.len() > 1 {
+            let mut app = crate::app::App::default();
+            app.set_model(model.clone());
+            app.fit();
+            let (vw, vh) = app.viewport_size;
+            // a crossing box over the whole viewport: everything it touches
+            let boxed = crate::viewport::Navigate::Box { x0: vw, y0: vh, x1: 0.0, y1: 0.0, width: vw, height: vh, done: true };
+            let t = Instant::now();
+            let _ = app.update(crate::app::Message::Navigate(boxed));
+            timed(format!("box select {} elements", app.sel.len()), t.elapsed().as_secs_f64() * 1000.0);
+            app.click(model.layers[0].elements.first().map(|e| Pickable::Element(e.0)), false);
+            let t = Instant::now();
+            let _ = app.update(crate::app::Message::IsolateSelection);
+            timed(format!("isolate 1 of {} elements", app.hidden.len() + 1), t.elapsed().as_secs_f64() * 1000.0);
+        }
+        if index.len() > 1 {
+            let mut app = crate::app::App::default();
+            app.set_model(model.clone());
+            app.sel.extend(model.layers.iter().flat_map(|l| l.elements.iter().map(|e| Pickable::Element(e.0))));
+            app.selection_changed();
+            let t = Instant::now();
+            let _ = app.update(crate::app::Message::HideSelection);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            timed(format!("hide {} elements", app.hidden.len()), ms);
+        }
+        drop(timed);
+        println!("120 fps criterion: {}", if all { "PASS" } else { "FAIL" });
+        return Ok(());
+    }
+
     // lower 60 % of the model, a little turned
     let mut section = crate::section::SectionBox::around(&model.bounds);
     section.max.z = section.min.z + (section.max.z - section.min.z) * 0.6;
@@ -104,11 +358,6 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
         }
     }
     let last = (section.max != section.min).then_some(section);
-    // every third member selected: drawn again on top from its own instances
-    let third = model.structural_display.as_ref().filter(|d| !d.is_empty()).map(|d| {
-        let members = d.items.iter().enumerate().filter(|(_, i)| i.kind == bim_structural::ItemKind::Member);
-        Arc::new(d.marks(members.step_by(3).map(|(k, _)| k as u32)))
-    });
     let mut passes = vec![(RenderMode::Solid, None, None), (RenderMode::SolidEdges, None, None), (RenderMode::SolidEdges, last, None)];
     if let Some(third) = &third {
         passes.push((RenderMode::Solid, None, Some(third.clone())));
@@ -132,12 +381,11 @@ pub fn run(file: &Path, frames: u32) -> Result<(), String> {
             grids: true,
             bounds: None,
         };
-        let selected_marks: Arc<crate::structural::display::Marks> = selected.clone().unwrap_or_default();
+        let selected_marks: Arc<Marks> = selected.clone().unwrap_or_default();
         let frame = |camera: Camera, pipeline: &mut ScenePipeline| {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
                 visible: vec![true; model.layers.len()],
-                selection: Vec::new(),
                 camera,
                 settings,
                 explode: None,
@@ -256,51 +504,6 @@ pub fn scenario(file: &Path) -> Result<Model, String> {
     Ok(model)
 }
 
-/// `n` boxes of 1 m with 0.5 m gaps on a square grid, each its own element (ids 1..=n, 12
-/// triangles), 10 000 elements per layer (`Boxes 1`, `Boxes 2`, ...), properties
-/// `{"Name":"Box i"}`.
-pub fn synthetic(n: usize) -> Model {
-    const PER_LAYER: usize = 10_000;
-    let side = (n as f64).sqrt().ceil().max(1.0) as usize;
-    let mut layers = Vec::new();
-    for (l, first) in (0..n).step_by(PER_LAYER).enumerate() {
-        let mut layer = Layer { name: format!("Boxes {}", l + 1), color: [0.72, 0.72, 0.74], ..Layer::default() };
-        for i in first..(first + PER_LAYER).min(n) {
-            let (x, y) = ((i % side) as f32 * 1.5, (i / side) as f32 * 1.5);
-            let start = layer.indices.len() as u32;
-            push_box(&mut layer, [x, y, 0.0], [x + 1.0, y + 1.0, 1.0]);
-            let id = i as u64 + 1;
-            layer.elements.push((id, start, layer.indices.len() as u32 - start));
-            layer.props.push((id, format!("{{\"Name\":\"Box {id}\"}}")));
-        }
-        layers.push(layer);
-    }
-    Model::new(format!("synthetic:{n}").into(), "Synthetic boxes", layers)
-}
-
-/// A box from `lo` to `hi`, flat-shaded (4 vertices per face).
-fn push_box(layer: &mut Layer, lo: [f32; 3], hi: [f32; 3]) {
-    for axis in 0..3 {
-        for high in [false, true] {
-            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-            let base = (layer.positions.len() / 3) as u32;
-            for (a, b) in [(false, false), (true, false), (true, true), (false, true)] {
-                let mut p = [0.0f32; 3];
-                p[axis] = if high { hi[axis] } else { lo[axis] };
-                p[u] = if a { hi[u] } else { lo[u] };
-                p[v] = if b { hi[v] } else { lo[v] };
-                layer.positions.extend_from_slice(&p);
-                let mut n = [0.0f32; 3];
-                n[axis] = if high { 1.0 } else { -1.0 };
-                layer.normals.extend_from_slice(&n);
-            }
-            // outward: counter-clockwise seen from outside
-            let quad = if high { [0, 1, 2, 0, 2, 3] } else { [0, 2, 1, 0, 3, 2] };
-            layer.indices.extend(quad.map(|k| base + k));
-        }
-    }
-}
-
 /// A model of only [`structural_frame`]`(n)`.
 pub fn structural(n: usize) -> Model {
     let mut model = Model::new(format!("structural:{n}").into(), "Structural frame (generated)", Vec::new());
@@ -382,7 +585,7 @@ fn write_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textu
     Ok(())
 }
 
-/// Copies the render target (RGBA8) to the CPU, row by row.
+/// Copies the render target to the CPU: RGBA8, row by row.
 fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture, (w, h): (u32, u32)) -> Result<Vec<u8>, String> {
     let row = (w * 4).div_ceil(256) * 256;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -415,6 +618,112 @@ fn read_target(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Textur
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::explode::ExplodeIndex;
+    use crate::model::{Layer, Model};
+    use crate::units::{unit_state, UNIT_HIDDEN};
+
+    /// The colour in the middle of `model` rendered from above (64x64, solid), with `offsets`
+    /// as the units texture.
+    fn render_middle(model: &Arc<Model>, index: &Arc<ExplodeIndex>, offsets: Arc<Vec<[f32; 4]>>) -> [u8; 4] {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("adapter");
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
+        let (w, h) = (64u32, 64u32);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut pipeline = ScenePipeline::new(&device, format);
+        let mut camera = Camera::default();
+        camera.set_preset(ViewPreset::Top);
+        camera.fit(&model.bounds, 1.0);
+        let p = ThemeKind::Light.palette();
+        let primitive = ScenePrimitive {
+            model: Some(model.clone()),
+            visible: vec![true; model.layers.len()],
+            camera,
+            settings: RenderSettings {
+                mode: RenderMode::Solid,
+                grid: false,
+                background: srgb3(p.viewport),
+                grid_minor: srgb4(p.grid_minor),
+                grid_major: srgb4(p.grid_major),
+                model_matrix: glam::Mat4::IDENTITY,
+                section: None,
+                plane: None,
+                caps: false,
+                grids: false,
+                bounds: None,
+            },
+            explode: Some(index.clone()),
+            offsets,
+            structural_selected: Arc::default(),
+            structural_hovered: Arc::default(),
+            structural_shown: None,
+        };
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(w as f32, h as f32));
+        primitive.prepare(&mut pipeline, &device, &queue, &bounds, &Viewport::with_physical_size(iced::Size::new(w, h), 1.0));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        primitive.render(&pipeline, &mut encoder, &view, &iced::Rectangle { x: 0, y: 0, width: w, height: h });
+        queue.submit([encoder.finish()]);
+        let rgba = read_target(&device, &queue, &target, (w, h)).expect("read back");
+        let at = ((h / 2 * w + w / 2) * 4) as usize;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    }
+
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn hidden_unit_is_not_drawn() {
+        // two unit squares facing +Z: red element 10 at z = 0 under green element 20 at z = 1
+        let mut positions = Vec::new();
+        for z in [0.0, 1.0] {
+            positions.extend_from_slice(&[0.0, 0.0, z, 1.0, 0.0, z, 1.0, 1.0, z, 0.0, 1.0, z]);
+        }
+        let colors = [[255, 0, 0, 255]; 4].into_iter().chain([[0, 255, 0, 255]; 4]).collect();
+        let layer = Layer {
+            name: "Squares".into(),
+            positions,
+            normals: [0.0, 0.0, 1.0].repeat(8),
+            colors: Some(colors),
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            elements: vec![(10, 0, 6), (20, 6, 6)],
+            ..Layer::default()
+        };
+        let model = Arc::new(Model::new("squares".into(), "Test", vec![layer]));
+        let index = Arc::new(ExplodeIndex::new(&model));
+        let shown = render_middle(&model, &index, Arc::new(unit_state(&[], &[])));
+        assert!(shown[1] > shown[0], "the green square on top: {shown:?}");
+        let mut flags = vec![0u8; index.len()];
+        flags[index.unit(0, 4)] = UNIT_HIDDEN;
+        let hidden = render_middle(&model, &index, Arc::new(unit_state(&[], &flags)));
+        assert!(hidden[0] > hidden[1], "the red square once the green one is hidden: {hidden:?}");
+    }
+
+    #[test]
+    fn frame_stats_counts_frames_over_budget() {
+        let s = frame_stats(&[5.0, 5.0, 20.0, 8.0], 0.038);
+        assert_eq!(s.frames, 4);
+        assert_eq!(s.over_budget, 1);
+        assert_eq!(s.max_ms, 20.0);
+        assert_eq!(s.p95_ms, 20.0);
+        assert!((s.fps - 105.26).abs() < 0.01);
+    }
+
+    #[test]
+    fn power_preference_picks_the_integrated_gpu_on_request() {
+        assert_eq!(power_preference(Some("low")), wgpu::PowerPreference::LowPower);
+        assert_eq!(power_preference(Some("integrated")), wgpu::PowerPreference::LowPower);
+        assert_eq!(power_preference(Some("high")), wgpu::PowerPreference::HighPerformance);
+        assert_eq!(power_preference(None), wgpu::PowerPreference::HighPerformance);
+    }
 
     #[test]
     fn synthetic_has_one_element_per_box() {
@@ -423,7 +732,14 @@ mod tests {
         assert_eq!(ids, (1..=25).collect());
         assert_eq!(m.triangle_count(), 25 * 12);
         assert_eq!(m.element_props(7).first().map(|(k, v)| (k.as_str(), v.as_str())), Some(("Name", "Box 7")));
-        assert_eq!(synthetic(25_000).layers.len(), 3);
+    }
+
+    #[test]
+    fn passes_needs_fps_and_p95() {
+        let s = |fps, p95_ms| FrameStats { frames: 300, fps, p95_ms, max_ms: p95_ms, over_budget: 0 };
+        assert!(s(130.0, 8.0).passes());
+        assert!(!s(130.0, 9.0).passes());
+        assert!(!s(110.0, 7.0).passes());
     }
 
     #[test]
@@ -454,7 +770,6 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; writes a PNG file"]
     fn renders_the_portal_frame() {
-        use crate::structural::display::Marks;
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/bim-structural/tests/fixtures/portal_frame.samjson");
         let model = Arc::new(loaders::load(&path).expect("portal frame"));
         let display = model.structural_display.clone().expect("a display");
@@ -500,7 +815,6 @@ mod tests {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
                 visible: Vec::new(),
-                selection: Vec::new(),
                 camera,
                 settings,
                 explode: None,

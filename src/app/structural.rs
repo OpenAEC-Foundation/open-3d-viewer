@@ -2,10 +2,12 @@
 //! (drawn again on top, as the mesh highlight) and the hover highlight.
 //!
 //! The selection holds element ids (a load or line support may be selected; its member or node is
-//! what lights up, see `StructuralItem::unit_key`). Main has one selection mechanism, ranges
-//! redrawn highlighted; structural instances follow it with instance ranges ([`Marks`]), which
-//! the renderer gathers into instances of their own. Ctrl-click multi-select, hide, isolate and
-//! undo come with the units-texture flags of PR #91; the seam is
+//! what lights up, see `StructuralItem::unit_key`). Meshes are selected through the flags of their
+//! units (`App::sel`); structural instances keep a selection of their own beside the mesh
+//! selection (`App::sel`), drawn from instance ranges ([`Marks`]) that the renderer gathers into
+//! instances of their own. A plain click replaces both; Ctrl-click adds or removes a node or
+//! member ([`App::click_structural`]). Box select, hide, isolate and undo of structural objects
+//! through the units-texture flags of #91 are not wired up yet; the seam is
 //! [`App::set_structural_selection`], which takes any number of ids.
 //!
 //! Hiding a model of a combined set (the models list), or hiding every layer, hides its structural
@@ -233,6 +235,24 @@ impl App {
         self.structural.selected = ids;
     }
 
+    /// A click on structural element `id`: without `add` it is the selection (the mesh selection
+    /// cleared); with `add` (Ctrl) it is added, or removed when it was selected, and the rest of the
+    /// selection stays.
+    pub(crate) fn click_structural(&mut self, id: u64, add: bool) {
+        if !add {
+            self.click(None, false);
+            return self.set_structural_selection(vec![id]);
+        }
+        let mut ids = self.structural.selected.clone();
+        match ids.iter().position(|&s| s == id) {
+            Some(k) => {
+                ids.remove(k);
+            }
+            None => ids.push(id),
+        }
+        self.set_structural_selection(ids);
+    }
+
     /// The instance ranges that draw `ids`: a node or member itself, the item a load or line
     /// support sits on.
     fn structural_marks(&self, ids: &[u64]) -> Marks {
@@ -422,7 +442,7 @@ mod tests {
         let node = display.items.iter().position(|i| i.kind == bim_structural::ItemKind::Node).unwrap();
         let g = display.items[node].glyphs.0 as usize;
         let (x, y) = screen(&app, display.glyphs[g].pos);
-        let _ = app.update(Message::Navigate(Navigate::Pick { x: x + 4.0, y: y - 3.0, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: x + 4.0, y: y - 3.0, width: w, height: h, add: false }));
         assert_eq!(app.structural.selected, vec![display.items[node].element]);
         assert!(app.selected.is_none() && app.selection.is_empty());
         assert_eq!(app.structural.selected_marks.glyphs, vec![(g as u32, 1)]);
@@ -434,16 +454,29 @@ mod tests {
         let seg = display.segs[s];
         let mid = [0, 1, 2].map(|k| 0.5 * (seg.a[k] + seg.b[k]));
         let (x, y) = screen(&app, mid);
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y: y + 2.0, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y: y + 2.0, width: w, height: h, add: false }));
         assert_eq!(app.structural.selected, vec![display.items[member].element]);
         assert_eq!(app.structural.selected_marks.segs, vec![display.items[member].segs]);
         assert!(app.selection_bounds().is_some(), "zoom to selection frames it");
         // empty space clears it; so does Esc
-        let _ = app.update(Message::Navigate(Navigate::Pick { x: 2.0, y: 2.0, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: 2.0, y: 2.0, width: w, height: h, add: false }));
         assert!(app.structural.selected.is_empty() && app.structural.selected_marks.is_empty());
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         assert!(!app.structural.selected.is_empty());
         let _ = app.update(Message::Escape);
+        assert!(app.structural.selected.is_empty());
+        // Ctrl-click adds a node to the member, and again removes it
+        let (nx, ny) = screen(&app, display.glyphs[g].pos);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: nx, y: ny, width: w, height: h, add: true }));
+        assert_eq!(app.structural.selected, vec![display.items[member].element, display.items[node].element]);
+        assert_eq!(app.structural.selected_marks.glyphs, vec![(g as u32, 1)]);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: nx, y: ny, width: w, height: h, add: true }));
+        assert_eq!(app.structural.selected, vec![display.items[member].element]);
+        // Ctrl-click on empty space keeps it; a plain click there clears it
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: 2.0, y: 2.0, width: w, height: h, add: true }));
+        assert_eq!(app.structural.selected.len(), 1);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: 2.0, y: 2.0, width: w, height: h, add: false }));
         assert!(app.structural.selected.is_empty());
     }
 
@@ -461,11 +494,11 @@ mod tests {
         app.section = Some(b);
         app.section_on = true;
         let (x, y) = screen(&app, display.glyphs[low].pos);
-        let _ = app.update(Message::Navigate(Navigate::Pick { x: x + 5.0, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: x + 5.0, y, width: w, height: h, add: false }));
         let item = display.glyph_item[low] as usize;
         assert_eq!(app.structural.selected, vec![display.items[item].element], "a node within 8 px inside the box");
         let (x, y) = screen(&app, display.glyphs[top].pos);
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         let top_element = display.items[display.glyph_item[top] as usize].element;
         assert!(!app.structural.selected.contains(&top_element), "cut away");
     }
@@ -607,13 +640,13 @@ mod tests {
         let (x, y) = screen(&app, display.glyphs[g].pos);
         let node = display.items[display.glyph_item[g] as usize].element;
         assert!(app.structural.shown_marks.is_none());
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         assert_eq!(app.structural.selected, vec![node]);
         // the analysis model is the first of the list
         let _ = app.update(Message::ModelVisible(0, false));
         assert_eq!(app.structural.shown_marks.as_deref(), Some(&Marks::default()), "nothing of it drawn");
         assert!(app.structural.selected.is_empty());
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         assert!(app.structural.selected.is_empty(), "not picked while hidden");
         rest(&mut app);
         hover(&mut app, x, y);
@@ -622,7 +655,7 @@ mod tests {
         let _ = app.update(Message::ModelVisible(0, true));
         let _ = app.update(Message::ModelVisible(1, false));
         assert!(app.structural.shown_marks.is_none());
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         assert_eq!(app.structural.selected, vec![node]);
         // hide all, show all
         let _ = app.update(Message::AllLayers(false));

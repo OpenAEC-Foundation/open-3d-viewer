@@ -47,6 +47,8 @@ struct Args {
     ortho: bool,
     view_tab: bool,
     frames: Option<u32>,
+    /// `--bench` keeps two frames in flight and checks the 120 fps criterion.
+    throughput: bool,
     /// Do not take remote control commands (the MCP server).
     no_remote: bool,
     save_as: Option<PathBuf>,
@@ -102,6 +104,7 @@ fn parse_args() -> Result<Args, String> {
                 })
             }
             "--ortho" => args.ortho = true,
+            "--throughput" => args.throughput = true,
             "--view-tab" => args.view_tab = true,
             "--no-remote" => args.no_remote = true,
             "--gpu-backend" => args.gpu_backend = Some(gpu::parse_backend(&value()?)?),
@@ -141,7 +144,7 @@ pub fn main() {
         }
     };
     let code = if let Some(file) = &args.bench {
-        bench::run(file, args.frames.unwrap_or(300))
+        bench::run(file, args.frames.unwrap_or(300), args.throughput)
     } else if let Some(out) = &args.save_as {
         save_as(&args, out)
     } else if let Some(out) = &args.screenshot {

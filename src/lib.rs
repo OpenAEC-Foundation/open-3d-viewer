@@ -18,6 +18,7 @@ mod bench;
 pub mod desktop;
 mod explode;
 pub mod export;
+mod history;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu;
 mod icons;
@@ -31,10 +32,12 @@ pub mod model;
 mod remote;
 pub mod remote_link;
 pub mod section;
+mod selection;
 pub mod shell;
 pub mod structural;
 mod swipe;
 mod theme;
+mod units;
 mod view_cube;
 mod viewport;
 #[cfg(target_arch = "wasm32")]

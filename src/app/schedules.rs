@@ -4,6 +4,7 @@
 
 use super::{group_header, App, Message, FONT, FONT_BOLD};
 use crate::model::Schedule;
+use crate::selection::Pickable;
 use crate::theme::Palette;
 use iced::widget::operation::AbsoluteOffset;
 use iced::widget::scrollable::{Direction, RelativeOffset, Scrollbar, Viewport};
@@ -12,7 +13,7 @@ use iced::widget::{button, column, container, operation, row, rule, scrollable, 
 use iced::{Center, Element, Fill, FillPortion, Padding, Task};
 use openaec_ui::Language;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// The document tab of the 3D view.
 pub const VIEW_3D: &str = "3d";
@@ -101,16 +102,11 @@ impl App {
         let Some(model) = self.model.clone() else { return };
         self.set_structural_selection(Vec::new());
         let Some(r) = self.schedules.get(schedule).and_then(|s| s.rows.get(row)) else { return };
-        let ids: HashSet<u64> = r.elements.iter().copied().collect();
-        let mut layer_of = HashMap::new();
-        self.selection.clear();
-        for (l, layer) in model.layers.iter().enumerate() {
-            for &(id, first, count) in layer.elements.iter().filter(|e| ids.contains(&e.0)) {
-                self.selection.push((l, first, count));
-                layer_of.entry(id).or_insert(l);
-            }
-        }
-        self.selected = r.elements.iter().find_map(|id| Some((*layer_of.get(id)?, Some(*id))));
+        let drawn: HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        let items: Vec<Pickable> = r.elements.iter().filter(|id| drawn.contains(id)).map(|&id| Pickable::Element(id)).collect();
+        self.sel.clear();
+        self.sel.extend(items);
+        self.selection_changed();
     }
 
     /// The explorer group of the schedules, by name (Revit's "Schedules/Quantities").

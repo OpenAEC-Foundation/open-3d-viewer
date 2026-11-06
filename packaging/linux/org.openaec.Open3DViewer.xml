@@ -11,4 +11,9 @@
       <match type="string" value="3D Geometry File Format " offset="0"/>
     </magic>
   </mime-type>
+  <mime-type type="application/x-samjson">
+    <comment>Structural analysis model (sam-json)</comment>
+    <sub-class-of type="application/json"/>
+    <glob pattern="*.samjson"/>
+  </mime-type>
 </mime-info>

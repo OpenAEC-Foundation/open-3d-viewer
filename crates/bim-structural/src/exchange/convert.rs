@@ -378,6 +378,10 @@ fn model_in(m: &w::Model, source: &SourceInfo) -> Result<AnalysisModel, String> 
         .map(|d| Diagnostic { object: d.object, code: d.code.clone(), message: d.message.clone() })
         .collect::<Vec<_>>();
     let mut new_diags = Vec::new();
+    // the sections a document this reader wrote already notes (one set, so a file with many
+    // diagnostics is not scanned once per section)
+    let noted_shear_centre: std::collections::HashSet<Id> =
+        diags.iter().filter(|d| d.code == "shear-centre-approximated").filter_map(|d| d.object).collect();
 
     out.materials = m
         .materials
@@ -393,7 +397,7 @@ fn model_in(m: &w::Model, source: &SourceInfo) -> Result<AnalysisModel, String> 
             let (props, props_source) = section::compute(&shape, imported.as_ref());
             let id = normalise(IdKind::Section, x.id);
             // Once per section: a document this reader wrote already carries the note.
-            let noted = diags.iter().any(|d| d.object == Some(id) && d.code == "shear-centre-approximated");
+            let noted = noted_shear_centre.contains(&id);
             if props_source == PropsSource::ShearCentreApproximate && !noted {
                 new_diags.push(Diagnostic {
                     object: Some(id),

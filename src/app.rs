@@ -1481,7 +1481,10 @@ impl App {
             if section.is_none() && plane.is_none() {
                 return false;
             }
-            let (b, o) = (index.unit_bounds(u), self.units.get(u).map_or(Vec3::ZERO, |s| Vec3::new(s[0], s[1], s[2])));
+            let Some(b) = index.unit_bounds(u as u32) else {
+                return false;
+            };
+            let o = self.units.get(u).map_or(Vec3::ZERO, |s| Vec3::new(s[0], s[1], s[2]));
             let corners = [0, 1, 2, 3, 4, 5, 6, 7].map(|i| {
                 let pick = |a: usize| if i >> a & 1 == 0 { b.min[a] } else { b.max[a] };
                 mm.transform_point3(Vec3::new(pick(0), pick(1), pick(2))) + o
@@ -3472,6 +3475,29 @@ mod tests {
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
         let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
         assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
+    }
+
+    #[test]
+    fn box_select_finds_structural_nodes_and_members() {
+        use bim_structural::{sam_id, IdKind};
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/bim-structural/tests/fixtures/portal_frame.samjson");
+        let model = crate::loaders::load(&path).expect("portal frame");
+        let el = |source| model.structural[0].element_of(source).expect("a structural object");
+        let mut want = vec![el(sam_id(IdKind::Node, 1)), el(sam_id(IdKind::Node, 2)), el(sam_id(IdKind::Member, 1))];
+        want.sort_unstable();
+        let mut app = App::default();
+        app.set_model(Arc::new(model));
+        app.camera.set_preset(ViewPreset::Front);
+        app.fit();
+        // a window around the left column (x = 0): its two nodes and the column, wholly inside
+        let (w, h) = app.viewport_size;
+        let (ax, ay) = screen_point(&app, Vec3::new(-0.5, 0.0, 5.0));
+        let (bx, by) = screen_point(&app, Vec3::new(0.5, 0.0, -1.0));
+        let (x0, x1) = (ax.min(bx), ax.max(bx));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true }));
+        let mut got: Vec<u64> = app.sel.items().iter().filter_map(|i| match i { Pickable::Element(id) => Some(*id), _ => None }).collect();
+        got.sort_unstable();
+        assert_eq!(got, want);
     }
 
     #[test]

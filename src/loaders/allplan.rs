@@ -1693,7 +1693,7 @@ fn build_at(drawing: &Drawing, painted: Option<&Painted>, z: f64) -> Result<Load
     project.info.extend(painted.iter().flat_map(|p| p.info.iter().cloned()));
     // Empty layers are left out.
     let layers = layers.into_iter().filter(|layer| !layer.indices.is_empty()).collect();
-    Ok(Loaded { layers, views: Vec::new(), project })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
 
 /// What the reader shows, for the project info.
@@ -2195,7 +2195,7 @@ fn build_project(project: &Project) -> Result<Loaded, String> {
     let mut data = ProjectData::default();
     data.info = info;
     let layers = layers.into_iter().filter(|layer| !layer.indices.is_empty()).collect();
-    Ok(Loaded { layers, views: Vec::new(), project: data })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: data })
 }
 
 #[cfg(test)]

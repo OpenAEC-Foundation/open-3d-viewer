@@ -446,7 +446,7 @@ fn read(data: &[u8]) -> Result<Loaded, String> {
     if skipped > 0 {
         info.push(("GeoJSON skipped geometries".into(), skipped.to_string()));
     }
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 #[cfg(test)]

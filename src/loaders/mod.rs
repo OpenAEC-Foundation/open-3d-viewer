@@ -11,7 +11,6 @@ mod obj;
 mod stl;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt;
-#[cfg(not(target_arch = "wasm32"))]
 mod ifc;
 
 mod skp;
@@ -45,9 +44,11 @@ mod vrml;
 mod amf;
 mod ifcx;
 mod step;
+mod sam;
 mod rhino;
 
-use crate::model::{Layer, Model, ProjectData, SavedView};
+use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
+use crate::structural::StructuralPart;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -200,7 +201,7 @@ pub trait Loader: Send + Sync {
     /// what else the file holds.
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
         progress.set(Phase::Read);
-        self.load(source).map(|layers| Loaded { layers, views: Vec::new(), project: ProjectData::default() })
+        self.load(source).map(|layers| Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData::default() })
     }
     /// True when the format is Y up and `load` converted it to Z up.
     fn source_y_up(&self) -> bool {
@@ -221,13 +222,24 @@ pub trait Loader: Send + Sync {
     fn load_stack(&self, sources: &[Source], progress: &Progress) -> Result<Loaded, String> {
         self.load_with(sources.last().ok_or("no file")?, progress)
     }
+    /// Where the format stands among those the start screen names (lower first); `None` for the
+    /// formats only the file dialog lists. See [`featured_formats`].
+    fn featured(&self) -> Option<u8> {
+        None
+    }
 }
 
-/// What a loader read: the layers and the views saved in the file.
+/// What a loader read: the layers, the views saved in the file and the structural analysis
+/// models.
 pub struct Loaded {
     pub layers: Vec<Layer>,
     pub views: Vec<SavedView>,
     pub project: ProjectData,
+    /// Structural analysis models, in f64 world metres of the file (no anchor subtracted).
+    pub structural: Vec<bim_structural::AnalysisModel>,
+    /// The anchor the loader subtracted from the layer positions (world metres, Z up), when the
+    /// format has one; it places the model when models are combined.
+    pub origin: Option<glam::DVec3>,
 }
 
 /// Loaders from other crates, see [`add`].
@@ -247,7 +259,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &rhino::RhinoLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &rhino::RhinoLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -255,7 +267,6 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &vertex::VertexLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &vertex::BtlLoader,
-        #[cfg(not(target_arch = "wasm32"))]
         &ifc::IfcLoader,
         // last: `.txt` and `.csv` are only point clouds when nothing else claims them
         &xyz::XyzLoader,
@@ -266,6 +277,61 @@ pub fn registry() -> Vec<&'static dyn Loader> {
 /// All supported extensions, for the file dialog filter.
 pub fn supported_extensions() -> Vec<&'static str> {
     registry().iter().flat_map(|l| l.extensions().iter().copied()).collect()
+}
+
+/// The formats the start screen names, from the same registry as the file dialog (so a build
+/// names only what it opens): the featured format names in order, and how many other formats
+/// this build opens.
+pub fn featured_formats() -> (Vec<&'static str>, usize) {
+    let loaders = registry();
+    let mut featured: Vec<(u8, &'static str)> = loaders.iter().filter_map(|l| l.featured().map(|rank| (rank, l.name()))).collect();
+    featured.sort();
+    featured.dedup_by_key(|(_, name)| *name);
+    let featured: Vec<&'static str> = featured.into_iter().map(|(_, name)| name).collect();
+    let mut others: Vec<&'static str> = loaders.iter().map(|l| l.name()).filter(|name| !featured.contains(name)).collect();
+    others.sort_unstable();
+    others.dedup();
+    (featured, others.len())
+}
+
+/// Where the desktop app is downloaded.
+pub const DESKTOP_DOWNLOAD: &str = "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest";
+
+/// Formats the desktop app opens but the browser build cannot (their readers open the file in
+/// parts from disk or load a native library): the format name and its extensions.
+const DESKTOP_ONLY: &[(&str, &[&str])] = &[("Revit", &["rvt", "rfa"]), ("Vertex BD", &["vxz", "vxm"]), ("BTL", &["btl"])];
+
+/// The desktop-only format of files with extension `ext` (lower case) when none of `loaders`
+/// (this build's registry) opens them.
+fn desktop_only(ext: &str, loaders: &[&'static dyn Loader]) -> Option<&'static str> {
+    if loaders.iter().any(|l| l.extensions().contains(&ext)) {
+        return None;
+    }
+    DESKTOP_ONLY.iter().find(|(_, extensions)| extensions.contains(&ext)).map(|(name, _)| *name)
+}
+
+/// The message for a file of a desktop-only format, in Dutch or English: short, so it fits the
+/// status bar of a phone; the shell then offers the download ([`DESKTOP_DOWNLOAD`]) as a button.
+pub fn desktop_only_message(format: &str, dutch: bool) -> String {
+    match dutch {
+        true => format!("{format} vereist de desktop-app"),
+        false => format!("{format} needs the desktop app"),
+    }
+}
+
+/// The desktop-only format a load error is about, so the status bar can show the message in the
+/// chosen language (load errors are English).
+pub fn desktop_only_error(error: &str) -> Option<&'static str> {
+    DESKTOP_ONLY.iter().map(|(name, _)| *name).find(|name| error == desktop_only_message(name, false))
+}
+
+/// The error for a file whose extension none of `loaders` claims: a pointer to the desktop app
+/// for the formats only it opens, otherwise unsupported.
+fn unsupported(ext: &str, loaders: &[&'static dyn Loader]) -> String {
+    match desktop_only(ext, loaders) {
+        Some(format) => desktop_only_message(format, false),
+        None => format!("Unsupported file type: .{ext}"),
+    }
 }
 
 /// Loads a file with the loader matching its extension.
@@ -283,12 +349,14 @@ fn loader_for(source: &Source) -> Result<&'static dyn Loader, String> {
     let ext = source.extension();
     // A folder goes to the loader that opens folders with its extension.
     let folder = source.path().is_some_and(Path::is_dir);
-    registry()
-        .into_iter()
+    let loaders = registry();
+    loaders
+        .iter()
+        .copied()
         .find(|l| if folder { l.folder_extensions() } else { l.extensions() }.contains(&ext.as_str()))
         .ok_or_else(|| match folder {
             true => format!("{}: folders open only as a project folder of a supported format", source.name()),
-            false => format!("Unsupported file type: .{ext}"),
+            false => unsupported(&ext, &loaders),
         })
 }
 
@@ -312,9 +380,20 @@ pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, Stri
     model.file_size = sources.iter().map(Source::len).sum();
     model.views = loaded.views;
     model.project = loaded.project;
+    // one origin per analysis model (the first shared with the layers), all at the file's anchor:
+    // the origin index is the `model` of a structural object's key, so two analysis models of one
+    // file that number their objects alike keep apart
+    let origin = Origin { anchor: loaded.origin, shift: glam::DVec3::ZERO };
+    model.origins = vec![origin; loaded.structural.len().max(1)];
+    if !loaded.structural.is_empty() {
+        let parts = loaded.structural.into_iter().enumerate().map(|(k, m)| StructuralPart::new(k as u32, Arc::new(m))).collect();
+        model.set_structural(parts);
+    }
     model.load_time = start.elapsed();
     model.source_y_up = loader.source_y_up();
-    if model.layers.is_empty() {
+    // a file of only analysis objects (nodes and members, or only sections, materials or load
+    // cases, no triangles) opens too
+    if model.layers.is_empty() && model.structural_index.is_empty() {
         return Err(format!("{}: no geometry found", model.file_name()));
     }
     Ok(model)
@@ -425,6 +504,66 @@ mod tests {
 
     #[test]
     fn rejects_unknown_extension() {
-        assert!(load(Path::new("x.unknownext")).is_err());
+        let error = load(Path::new("x.unknownext")).unwrap_err();
+        assert_eq!(error, "Unsupported file type: .unknownext");
+        assert_eq!(desktop_only_error(&error), None);
+    }
+
+    #[test]
+    fn registers_ifc_on_every_target() {
+        // the browser build opens IFC too (issue #92): the file dialog and the start screen offer it
+        let loader = registry().into_iter().find(|l| l.extensions().contains(&"ifc")).expect("IFC loader");
+        assert_eq!(loader.name(), "IFC");
+        assert!(loader.extensions().contains(&"ifczip"));
+        assert!(featured_formats().0.contains(&"IFC"));
+        assert_eq!(desktop_only("ifc", &registry()), None);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn desktop_only_formats_are_the_desktop_loaders() {
+        // each format the browser points to the desktop app for is one the desktop opens
+        let desktop = registry();
+        for (name, extensions) in DESKTOP_ONLY {
+            for extension in *extensions {
+                let loader = desktop.iter().find(|l| l.extensions().contains(extension)).expect(extension);
+                assert_eq!(loader.name(), *name);
+                assert_eq!(desktop_only(extension, &desktop), None, "{extension}");
+            }
+        }
+        assert!(featured_formats().0.contains(&"Revit"));
+    }
+
+    #[test]
+    fn points_desktop_only_formats_to_the_desktop_app() {
+        // as in the browser build: the registry without the desktop-only loaders
+        let web: Vec<&'static dyn Loader> =
+            registry().into_iter().filter(|l| !DESKTOP_ONLY.iter().any(|(name, _)| *name == l.name())).collect();
+        for (extension, format) in [("rvt", "Revit"), ("rfa", "Revit"), ("vxz", "Vertex BD"), ("vxm", "Vertex BD"), ("btl", "BTL")] {
+            let error = unsupported(extension, &web);
+            assert_eq!(error, format!("{format} needs the desktop app"));
+            assert_eq!(desktop_only_error(&error), Some(format));
+            assert!(desktop_only_message(format, true).contains("vereist de desktop-app"));
+        }
+        assert_eq!(unsupported("abc", &web), "Unsupported file type: .abc");
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    fn browser_points_revit_to_the_desktop_app() {
+        let source = Source::Bytes { name: "house.RVT".into(), data: Arc::new(Vec::new()) };
+        let error = load_with(&source, &Progress::default()).unwrap_err();
+        assert_eq!(desktop_only_error(&error), Some("Revit"));
+        assert!(!featured_formats().0.contains(&"Revit"));
+    }
+
+    #[test]
+    fn featured_formats_come_from_the_registry_in_order() {
+        let (featured, others) = featured_formats();
+        let names: Vec<&str> = registry().iter().map(|l| l.name()).collect();
+        assert!(featured.iter().all(|name| names.contains(name)));
+        assert_eq!(&featured[..2], ["IFC", if cfg!(target_arch = "wasm32") { "SketchUp" } else { "Revit" }]);
+        assert!(featured.ends_with(&["SketchUp", "glTF", "OBJ", "STL", "PLY"]), "{featured:?}");
+        assert!(others > 20, "{others}");
     }
 }

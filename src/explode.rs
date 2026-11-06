@@ -4,7 +4,9 @@
 //! `ExplodeManager`.
 //!
 //! What moves together is a unit: an element (all its ranges, over all layers), the triangles of
-//! a layer outside its elements, or a whole layer without elements. The units and their bounds at
+//! a layer outside its elements, or a whole layer without elements. Structural nodes, members and
+//! surfaces are units too (their bounds a point or a segment box, their storey the nearest level
+//! below); a member with a solid shares one unit with its triangles. The units and their bounds at
 //! rest are indexed once per model; the renderer adds the offset of each vertex's unit in the
 //! vertex shader, so the geometry never changes and 0 % on every axis is the model as loaded.
 //! The same units carry the hidden and selected flags of `crate::units`.
@@ -60,6 +62,10 @@ pub struct ExplodeIndex {
     /// The units on a storey at rest (model space): the building, without site or terrain, for
     /// the storey spacing.
     building: Bounds,
+    /// The unit of every structural node, member and surface (by element id). Loads, supports,
+    /// hinges and the other decorations take the unit of the item they sit on
+    /// (`StructuralItem::unit_key`).
+    structural: HashMap<u64, u32>,
 }
 
 impl ExplodeIndex {
@@ -114,6 +120,19 @@ impl ExplodeIndex {
             vertex_units.push(units);
             rest_units.push(rest);
         }
+        // structural units, after the layers: a member drawn as a solid keeps its triangles' unit
+        let mut structural = HashMap::new();
+        for (id, b) in model.structural_index.unit_bounds(&model.structural, &model.origins) {
+            let unit = *element_units.entry(id).or_insert_with(|| {
+                elements.push(Some(id));
+                owners.push(Some(UnitOwner::Element(id)));
+                elements.len() as u32 - 1
+            });
+            bounds.resize(elements.len(), Bounds::empty());
+            bounds[unit as usize].extend(b.min);
+            bounds[unit as usize].extend(b.max);
+            structural.insert(id, unit);
+        }
 
         // storeys: the level of every element ("level" in its properties, Revit), low to high by
         // the levels' elevations when all of them are known, else by the average base of their
@@ -145,6 +164,13 @@ impl ExplodeIndex {
                 storey[u as usize] = Some(i as u32);
             }
         }
+        // a structural unit without a level of its own: the nearest storey at or below its base
+        for &u in structural.values() {
+            let base = bounds[u as usize].min[2];
+            if storey[u as usize].is_none() && base.is_finite() {
+                storey[u as usize] = order.iter().rposition(|(z, _)| *z <= base + 1e-3).map(|i| i as u32);
+            }
+        }
 
         let (mut rest, mut building) = (Bounds::empty(), Bounds::empty());
         for (b, storey) in bounds.iter().zip(&storey).filter(|(b, _)| b.is_valid()) {
@@ -156,7 +182,17 @@ impl ExplodeIndex {
             }
         }
         let storeys = if building.is_valid() { order.len() } else { 0 };
-        Self { vertex_units, owners, element_units, rest_units, bounds, storey, storeys, rest, building }
+        Self { vertex_units, owners, element_units, rest_units, bounds, storey, storeys, rest, building, structural }
+    }
+
+    /// The unit of a structural node, member or surface.
+    pub fn structural_unit(&self, id: u64) -> Option<u32> {
+        self.structural.get(&id).copied()
+    }
+
+    /// The bounds of a unit at rest (model space).
+    pub fn unit_bounds(&self, unit: u32) -> Option<Bounds> {
+        self.bounds.get(unit as usize).copied().filter(Bounds::is_valid)
     }
 
     /// Units, the unused unit 0 included: the length of [`ExplodeIndex::offsets`].
@@ -193,11 +229,6 @@ impl ExplodeIndex {
     /// What unit `unit` is (None for unit 0).
     pub fn owner(&self, unit: usize) -> Option<UnitOwner> {
         self.owners.get(unit).copied().flatten()
-    }
-
-    /// The bounds of unit `unit` at rest (model space); empty when unknown.
-    pub fn unit_bounds(&self, unit: usize) -> Bounds {
-        self.bounds.get(unit).copied().unwrap_or_else(Bounds::empty)
     }
 
     /// The offset (world, w unused) of every unit for `amount` (0..1 per axis) in `mode`, the

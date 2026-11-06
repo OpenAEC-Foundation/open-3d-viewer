@@ -196,7 +196,7 @@ fn read(text: &str) -> Result<Loaded, String> {
             info.push((format!("Coordinate system {}", attr.name()), attr.value().into()));
         }
     }
-    Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
 }
 
 #[cfg(test)]

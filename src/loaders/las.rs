@@ -33,7 +33,7 @@ impl Loader for LasLoader {
         .map_err(|e| format!("{}: {e}", source.name()))?;
         let (layers, info) = read(reader, &source.stem(), MAX_POINTS).map_err(|e| format!("{}: {e}", source.name()))?;
         progress.set(Phase::Convert);
-        Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
     }
 }
 

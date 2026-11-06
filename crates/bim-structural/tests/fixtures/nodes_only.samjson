@@ -1,0 +1,31 @@
+{
+  "format": "sam-json",
+  "version": 1,
+  "source": {
+    "application": "hand-authored fixture (open-3d-viewer)",
+    "file": "nodes_only.samjson",
+    "conventions": { "result_signs": "verified" },
+    "eccentricity_policy": "explicit"
+  },
+  "units": "SI",
+  "origin": [155000.0, 463000.0, 0.0],
+  "models": [
+    {
+      "id": 1,
+      "name": "Survey nodes",
+      "dimension": "3d",
+      "nodes": [
+        {
+          "id": 72057594037927937,
+          "no": "1",
+          "p": [155000.0, 463000.0, 0.0],
+          "frame": null,
+          "support": { "dofs": ["fixed", "fixed", "fixed", "fixed", "fixed", "fixed"], "frame": "global" }
+        },
+        { "id": 72057594037927938, "no": "2", "p": [155006.0, 463000.0, 0.0], "frame": null, "support": { "named": "pinned" } },
+        { "id": 72057594037927939, "no": "3", "p": [155006.0, 463004.0, 0.0], "frame": null },
+        { "id": 72057594037927940, "no": "4", "p": [155000.0, 463004.0, 3.5], "frame": null }
+      ]
+    }
+  ]
+}

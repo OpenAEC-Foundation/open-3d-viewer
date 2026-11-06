@@ -18,6 +18,10 @@ impl Loader for RvtLoader {
         "Revit"
     }
 
+    fn featured(&self) -> Option<u8> {
+        Some(1)
+    }
+
     fn extensions(&self) -> &'static [&'static str] {
         &["rvt", "rfa"]
     }
@@ -68,7 +72,7 @@ impl Loader for RvtLoader {
         project.sheets = sheets(&doc, &view_ids, &views, &layers);
         // the schedules take seconds on a large project: computed once the model shows
         project.schedules = Later::new(move || schedules(&doc));
-        Ok(Loaded { layers, views, project })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
     }
 }
 

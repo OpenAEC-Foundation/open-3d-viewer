@@ -6,6 +6,7 @@ pub struct SkpLoader;
 
 impl Loader for SkpLoader {
     fn name(&self) -> &'static str { "SketchUp" }
+    fn featured(&self) -> Option<u8> { Some(2) }
     fn extensions(&self) -> &'static [&'static str] { &["skp"] }
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)
@@ -19,6 +20,6 @@ impl Loader for SkpLoader {
             name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false
         }).collect();
         let project = ProjectData::default();
-        Ok(Loaded { layers, views: Vec::new(), project })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
     }
 }

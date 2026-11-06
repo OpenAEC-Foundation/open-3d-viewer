@@ -1,11 +1,13 @@
-//! Desktop IFC import through the standalone IFClite processing library.
+//! IFC import through the standalone IFClite processing library, on the desktop and in the browser.
+//! The desktop runs the geometry on IFClite's large-stack worker pool; the browser has no threads,
+//! so there it runs on the page's own thread (the page waits while a large file converts).
 //! Meshes are in metres, Z up. Preserve the model's world rotation while keeping
 //! georeferenced positions near the origin; record the removed anchor in project data.
 //! A zipped IFC (`.ifczip`, as buildingSMART defines it) opens the first `.ifc` in the archive.
 
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{Layer, ProjectData};
-use ifc_lite_processing::{process, run_on_geometry_pool, ProcessingRequest};
+use ifc_lite_processing::{process, ProcessingRequest};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub struct IfcLoader;
@@ -50,6 +52,10 @@ impl Loader for IfcLoader {
         "IFC"
     }
 
+    fn featured(&self) -> Option<u8> {
+        Some(0)
+    }
+
     fn extensions(&self) -> &'static [&'static str] {
         &["ifc", "ifczip"]
     }
@@ -70,12 +76,15 @@ impl Loader for IfcLoader {
             return Err("IFC: expected an ISO-10303-21 STEP file".into());
         }
         progress.set(Phase::Convert);
-        // IFClite supplies a large-stack worker pool for nested placements/CSG.
         // Disable GPU instancing because this viewer consumes flat triangle meshes.
-        let result = run_on_geometry_pool(|| {
-            process(header, &ProcessingRequest::full_pass().instancing(false), &mut ())
-        })
-        .map_err(|error| format!("IFC: cannot start geometry processing: {error}"))?;
+        let request = ProcessingRequest::full_pass().instancing(false);
+        // IFClite supplies a large-stack worker pool for nested placements/CSG.
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = ifc_lite_processing::run_on_geometry_pool(|| process(header, &request, &mut ()))
+            .map_err(|error| format!("IFC: cannot start geometry processing: {error}"))?;
+        // The browser cannot start threads: IFClite's parallel steps fall back to this thread.
+        #[cfg(target_arch = "wasm32")]
+        let result = process(header, &request, &mut ());
         let world = result.frame.world_mapper();
         let direction = result.frame.direction_mapper();
         let anchor = result.frame.to_world([0.0; 3]);
@@ -160,7 +169,9 @@ impl Loader for IfcLoader {
             ],
             ..ProjectData::default()
         };
-        Ok(Loaded { layers: layers.into_values().collect(), views: Vec::new(), project })
+        // the anchor subtracted above: it places this model when models are combined
+        let origin = Some(glam::DVec3::from_array(anchor));
+        Ok(Loaded { structural: Vec::new(), origin, layers: layers.into_values().collect(), views: Vec::new(), project })
     }
 }
 
@@ -202,6 +213,10 @@ mod tests {
         }
         assert!(model.props.values().any(|p| p.contains("GlobalId") && p.contains("IfcType")));
         assert!(model.layers.iter().any(|l| l.colors.as_ref().is_some_and(|c| c.iter().any(|v| v[0] > v[1]))));
+        // the anchor the loader subtracted is kept as the model's origin, for combining
+        let anchor = model.origins[0].anchor.expect("an IFC keeps its anchor");
+        let text = format!("{}, {}, {}", anchor.x, anchor.y, anchor.z);
+        assert!(model.project.info.iter().any(|(k, v)| k == "IFC world origin (metres)" && *v == text), "{text}");
         assert!(crate::loaders::supported_extensions().contains(&"ifc"));
     }
 

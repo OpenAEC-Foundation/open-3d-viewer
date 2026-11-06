@@ -30,6 +30,118 @@
       },
       {
         "path": "packaging/windows/icon.ico"
+      },
+      {
+        "path": "web/icons/icon-192.png",
+        "size": [
+          192,
+          192
+        ]
+      },
+      {
+        "path": "web/icons/icon-512.png",
+        "size": [
+          512,
+          512
+        ]
+      },
+      {
+        "path": "web/icons/maskable-192.png",
+        "size": [
+          192,
+          192
+        ],
+        "scale": 1.0,
+        "background": "#E89F17"
+      },
+      {
+        "path": "web/icons/maskable-512.png",
+        "size": [
+          512,
+          512
+        ],
+        "scale": 1.0,
+        "background": "#E89F17"
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-mdpi/ic_launcher.png",
+        "size": [
+          48,
+          48
+        ]
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png",
+        "size": [
+          108,
+          108
+        ],
+        "scale": 0.7,
+        "background": "#E89F17"
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-hdpi/ic_launcher.png",
+        "size": [
+          72,
+          72
+        ]
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png",
+        "size": [
+          162,
+          162
+        ],
+        "scale": 0.7,
+        "background": "#E89F17"
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
+        "size": [
+          96,
+          96
+        ]
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png",
+        "size": [
+          216,
+          216
+        ],
+        "scale": 0.7,
+        "background": "#E89F17"
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png",
+        "size": [
+          144,
+          144
+        ]
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png",
+        "size": [
+          324,
+          324
+        ],
+        "scale": 0.7,
+        "background": "#E89F17"
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+        "size": [
+          192,
+          192
+        ]
+      },
+      {
+        "path": "packaging/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+        "size": [
+          432,
+          432
+        ],
+        "scale": 0.7,
+        "background": "#E89F17"
       }
     ]
   }

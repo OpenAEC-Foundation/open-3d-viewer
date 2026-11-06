@@ -33,7 +33,7 @@ impl Loader for E57Loader {
         }
         .map_err(error)?;
         progress.set(Phase::Convert);
-        Ok(Loaded { layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
     }
 }
 

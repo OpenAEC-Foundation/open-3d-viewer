@@ -23,10 +23,9 @@ pub fn units_in_box(index: &ExplodeIndex, offsets: &[[f32; 4]], view_proj: Mat4,
     (1..index.len())
         .filter(|&u| !hidden(u))
         .filter(|&u| {
-            let b = index.unit_bounds(u);
-            if !b.is_valid() {
+            let Some(b) = index.unit_bounds(u as u32) else {
                 return false;
-            }
+            };
             let shift = offsets.get(u).map_or(Vec3::ZERO, |o| Vec3::new(o[0], o[1], o[2]));
             let (min, max) = (Vec3::from(b.min) + shift, Vec3::from(b.max) + shift);
             // the corners on screen, without allocating: 10^5 units are boxed at once

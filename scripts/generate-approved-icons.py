@@ -28,6 +28,21 @@ for app in json.loads((ROOT / 'docs/branding/icons.json').read_text()):
             image.resize((256, 256), Image.Resampling.LANCZOS).save(path, sizes=[(s,s) for s in (16,24,32,48,64,128,256)])
         elif suffix == '.icns':
             image.resize((1024,1024), Image.Resampling.LANCZOS).save(path)
+        elif 'scale' in output:
+            # Full-bleed icons that a platform masks: maskable web icons (safe zone: a circle of
+            # 80 % of the size) and Android adaptive-icon foregrounds (66 of 108 dp). The tile is
+            # flattened onto its own colour, without its 1 px outline and rounded corners, so no
+            # seam shows; the lettering reaches 0.79 of the half width, so scale 1.0 fits 80 %.
+            background = output['background']
+            border = 3
+            tile = image.crop((border, border, image.width - border, image.height - border))
+            flat = Image.new('RGBA', tile.size, background)
+            flat.alpha_composite(tile)
+            canvas = Image.new('RGBA', size, background)
+            inner = round(size[0] * output['scale'])
+            offset = ((size[0] - inner) // 2, (size[1] - inner) // 2)
+            canvas.alpha_composite(flat.resize((inner, inner), Image.Resampling.LANCZOS), offset)
+            canvas.save(path, optimize=True)
         else:
             image.resize(size, Image.Resampling.LANCZOS).save(path, optimize=True)
     print(app['name'] + ': ' + str(len(app['outputs'])) + ' icons regenerated')

@@ -10,7 +10,7 @@
 use std::sync::OnceLock;
 
 use iced::widget::canvas::{self, Frame, Path};
-use iced::{alignment, mouse, Color, Point, Rectangle, Size, Vector};
+use iced::{alignment, mouse, touch, Color, Point, Rectangle, Size, Vector};
 
 use crate::viewport::camera::ViewPreset as CameraPreset;
 use openaec_ui::fonts;
@@ -694,7 +694,8 @@ where
     ) -> Option<canvas::Action<Message>> {
         let publish = |e: CubeEvent| Some(canvas::Action::publish(Message::from(e)).and_capture());
         match event {
-            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            // a finger works as the mouse: a tap on a face snaps to it, a drag on the cube orbits
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) | iced::Event::Touch(touch::Event::FingerMoved { .. }) => {
                 if let Some((start, last)) = state.press {
                     let now = cursor.position()?;
                     let now = Point::new(now.x - bounds.x, now.y - bounds.y);
@@ -712,13 +713,14 @@ where
                 }
                 None
             }
-            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) | iced::Event::Touch(touch::Event::FingerPressed { .. }) => {
                 let p = cursor.position_in(bounds).filter(|p| over_cube(*p, bounds))?;
                 state.press = Some((p, p));
                 state.dragged = false;
                 Some(canvas::Action::capture())
             }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+            | iced::Event::Touch(touch::Event::FingerLifted { .. } | touch::Event::FingerLost { .. }) => {
                 let (start, _) = state.press.take()?;
                 if std::mem::take(&mut state.dragged) {
                     return Some(canvas::Action::capture());

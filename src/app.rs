@@ -3,6 +3,7 @@
 
 mod schedules;
 mod sheets;
+mod structural;
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
@@ -178,6 +179,8 @@ pub struct App {
     hover_scene: Option<HoverScene>,
     /// Boxes around blocks of triangles of the model, for the ray of a click or hover.
     pick_index: Option<PickIndex>,
+    /// The selection and hover of structural nodes and members.
+    pub(crate) structural: structural::StructuralView,
 }
 
 type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>, Arc<UnitKeySet>);
@@ -266,6 +269,8 @@ pub enum Message {
     MeasureFinish,
     /// The edges of layers, built in the background for snapping.
     MeasureEdges(crate::measure::Edges),
+    /// A structural hover grid built off the UI thread (`None`: the build was dropped).
+    StructuralGrid(Option<structural::BuiltGrid>),
     MeasureDelete(usize),
     MeasureClear,
     MeasureLength(LengthUnit),
@@ -391,6 +396,7 @@ impl Default for App {
             hover_last: None,
             hover_scene: None,
             pick_index: None,
+            structural: Default::default(),
         }
     }
 }
@@ -629,6 +635,17 @@ impl App {
                 }
             }
         }
+        // structural objects: their point or segment box (a load's: its member's), moved with
+        // their unit
+        for &id in &self.structural.selected {
+            let Some(item) = model.structural_item(id) else { continue };
+            let Some(at_rest) = item.bounds(&model.origins) else { continue };
+            let unit = item.unit_key().and_then(|u| self.explode_index.as_ref()?.structural_unit(u));
+            let o = unit.and_then(|u| self.explode_offsets.get(u as usize)).map_or(Vec3::ZERO, |o| Vec3::new(o[0], o[1], o[2]));
+            let w = transform_bounds(&at_rest, &mm);
+            b.extend((Vec3::from(w.min) + o).to_array());
+            b.extend((Vec3::from(w.max) + o).to_array());
+        }
         b.is_valid().then_some(b)
     }
 
@@ -741,6 +758,7 @@ impl App {
                 self.visible[layer] = entry.visible && *shown;
             }
         }
+        self.refresh_structural_visibility();
     }
 
     fn set_layer_visible(&mut self, layer: usize, shown: bool) {
@@ -755,6 +773,7 @@ impl App {
             }
         }
         if let Some(value) = self.visible.get_mut(layer) { *value = shown; }
+        self.refresh_structural_visibility();
     }
 
     fn set_scene(&mut self, model: Arc<Model>) {
@@ -780,6 +799,7 @@ impl App {
         self.sel.clear();
         self.selected = None;
         self.selection.clear();
+        self.structural.reset();
         self.measure.reset();
         self.measurements.clear();
         self.flip_up = false;
@@ -836,6 +856,11 @@ impl App {
             self.history.record(before);
         }
         self.refresh_hover();
+        // the structural hover goes when the camera moves (it no longer lies under the cursor) and
+        // while measuring or placing a section plane
+        if self.structural.note_camera(self.camera) || self.measure.tool.is_some() || self.plane_picking {
+            self.set_structural_hover(None);
+        }
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
             None => task,
@@ -997,6 +1022,7 @@ impl App {
                     entry.visible = shown;
                     self.sel.clear();
                     self.selection_changed();
+                    self.set_structural_selection(Vec::new());
                     self.restore_model_visibility();
                 }
             }
@@ -1005,6 +1031,15 @@ impl App {
                 if let Some(m) = &self.model {
                     let layers: Vec<_> = m.layers.iter().enumerate().filter(|(_, layer)| filter.is_empty() || layer.name.to_lowercase().contains(&filter)).map(|(i, _)| i).collect();
                     for layer in layers { self.set_layer_visible(layer, v); }
+                }
+                // unfiltered, it shows or hides the structural objects too (a model of only those
+                // has no layers: its entry follows)
+                if filter.is_empty() {
+                    self.structural.all_hidden = !v;
+                    for entry in self.models.iter_mut().filter(|e| e.layers.is_empty()) {
+                        entry.visible = v;
+                    }
+                    self.refresh_structural_visibility();
                 }
             }
             Message::ToggleLayerGroup(group) => {
@@ -1052,10 +1087,14 @@ impl App {
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
+                    if self.measure.tool.is_none() && !self.plane_picking {
+                        return self.hover_structural(x, y, width, height);
+                    }
                 }
                 Navigate::HoverOff => {
                     self.hover_request = None;
                     self.measure.hover = None;
+                    self.structural_hover_off();
                 }
                 Navigate::Pinch { dx, dy, steps, x, y, width, height } => {
                     self.anim = None;
@@ -1213,6 +1252,7 @@ impl App {
                 }
             }
             Message::MeasureFinish => self.measure.finish(),
+            Message::StructuralGrid(built) => return self.structural_grid_built(built),
             Message::MeasureEdges(edges) => {
                 if self.model.as_ref().is_some_and(|m| m.id == edges.0) {
                     self.measure.add_edges(edges.1);
@@ -1273,6 +1313,7 @@ impl App {
                 if !self.measure.escape() {
                     self.sel.clear();
                     self.selection_changed();
+                    self.set_structural_selection(Vec::new());
                 }
             }
         }
@@ -1365,6 +1406,14 @@ impl App {
             }
             return;
         }
+        // a structural node or member, unless a triangle lies clearly in front of it; Ctrl adds or
+        // removes it, keeping the rest of the selection
+        let mm = self.model_matrix();
+        let triangle = hit.and_then(|(l, t, s)| face_at(&model.layers[l], t, origin - s, dir).map(|(p, _)| mm.transform_point3(p + s)));
+        if let Some(h) = self.pick_structural(x, y, width, height, triangle) {
+            self.click_structural(h.element, add);
+            return;
+        }
         self.click(hit.map(|(l, t, _)| pickable_at(&model, l, t)), add);
     }
 
@@ -1373,6 +1422,10 @@ impl App {
     /// A click on `hit` (None: empty space). Without `add` it selects only `hit`, so empty space
     /// clears; with `add` (Ctrl) it adds or removes `hit` and keeps the selection on empty space.
     pub(crate) fn click(&mut self, hit: Option<Pickable>, add: bool) {
+        // structural objects are selected apart (`app::structural`); a plain click replaces them too
+        if !add {
+            self.set_structural_selection(Vec::new());
+        }
         match (hit, add) {
             (Some(item), true) => self.sel.toggle(item),
             (None, true) => return,
@@ -2064,7 +2117,7 @@ impl App {
 
         // project data while nothing is selected
         let pd = &model.project;
-        if self.selected.is_none() {
+        if self.selected.is_none() && self.structural.selected.is_empty() {
             if !pd.info.is_empty() {
                 content = content.push(section(l.text("Project", "Project")));
                 for (k, v) in &pd.info {
@@ -2127,6 +2180,18 @@ impl App {
                     iced::widget::tooltip::Position::Left,
                 );
                 content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
+            }
+            content = content.push(rule::horizontal(1));
+        }
+
+        // structural objects: properties built from the document
+        if let Some(&id) = self.structural.selected.first() {
+            content = content.push(section(l.text("Selectie", "Selection")));
+            if self.structural.selected.len() > 1 {
+                content = content.push(prop(l.text("Geselecteerd", "Selected"), self.structural.selected.len().to_string()));
+            }
+            for (k, v) in model.element_props(id) {
+                content = content.push(prop_row(p, k, v));
             }
             content = content.push(rule::horizontal(1));
         }
@@ -2365,7 +2430,11 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
-            hover: self.measure.tool.is_some() && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on()) && !self.plane_picking,
+            crosshair: self.measure.tool.is_some() && !self.plane_picking,
+            structural_selected: &self.structural.selected_marks,
+            structural_hovered: &self.structural.hovered_marks,
+            structural_shown: self.structural.shown_marks.as_ref(),
         })
             .width(Fill)
             .height(Fill);

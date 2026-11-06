@@ -11,6 +11,9 @@
 //! backend that matters (WebGL2 and WebGPU have no point size).
 
 use super::camera::Camera;
+use super::structural::{GpuStructural, StructUniforms, StructuralPipelines};
+use crate::structural::display::Marks;
+use crate::structural::pick::Lod;
 use crate::explode::ExplodeIndex;
 use crate::model::{Bounds, Model};
 use bytemuck::{Pod, Zeroable};
@@ -22,9 +25,9 @@ use iced::Rectangle;
 use crate::section::SectionBox;
 use std::sync::Arc;
 
-const SAMPLES: u32 = 4;
+pub(crate) const SAMPLES: u32 = 4;
 /// With stencil, for the cut fill of the section box.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
@@ -106,6 +109,11 @@ pub struct ScenePrimitive {
     /// The state of every unit (`crate::units`): its offset (world) in the exploded view and
     /// its flags (hidden, selected); written when it is another vector.
     pub offsets: Arc<Vec<[f32; 4]>>,
+    /// Structural instances drawn again on top: the selection and the hover.
+    pub structural_selected: Arc<Marks>,
+    pub structural_hovered: Arc<Marks>,
+    /// The structural instances of the source models shown (`None`: all are).
+    pub structural_shown: Option<Arc<Marks>>,
 }
 
 impl shader::Primitive for ScenePrimitive {
@@ -191,6 +199,12 @@ pub struct ScenePipeline {
     datum: Option<(wgpu::Buffer, u32)>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
     rect: (u32, u32, u32, u32),
+    /// Member axes and node glyphs (`super::structural`), made with the first model that has
+    /// any, and the model's instances.
+    structural: Option<StructuralPipelines>,
+    gpu_structural: Option<GpuStructural>,
+    /// The structural selection and hover as last gathered (the marks they were gathered from).
+    structural_marked: [(Arc<Marks>, Option<GpuStructural>); 2],
 }
 
 impl shader::Pipeline for ScenePipeline {
@@ -514,6 +528,9 @@ impl ScenePipeline {
             grid: None,
             datum: None,
             rect: (0, 0, 1, 1),
+            structural: None,
+            gpu_structural: None,
+            structural_marked: Default::default(),
         }
     }
 
@@ -573,8 +590,18 @@ impl ScenePipeline {
         self.model = model.cloned();
         self.layers.clear();
         self.datum = None;
+        self.gpu_structural = None;
+        self.structural_marked = Default::default();
         self.resize_offsets(device, explode.map_or(1, ExplodeIndex::len));
         let Some(model) = model else { return };
+        // beside the datum grid: the structural instances, built on the load worker, with the units
+        // of the exploded view written in
+        if let Some(display) = &model.structural_display {
+            self.gpu_structural = GpuStructural::new(device, display, explode.map_or(&[][..], ExplodeIndex::display_units));
+            if self.gpu_structural.is_some() && self.structural.is_none() {
+                self.structural = Some(StructuralPipelines::new(device, self.format, &self.uniform_layout));
+            }
+        }
         let datum = datum_lines(&model.project.grids);
         if !datum.is_empty() {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -747,6 +774,7 @@ impl ScenePipeline {
         queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&[x as f32, y as f32, 0.0, 0.0]));
 
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
+        self.gather_structural_marks(device, primitive);
         if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
             let n = primitive.offsets.len().min(self.offsets_len);
             if n > 0 {
@@ -792,6 +820,26 @@ impl ScenePipeline {
         // the grid is never cut
         let no_clip = [[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]];
         queue.write_buffer(&self.world_uniforms, 0, bytemuck::bytes_of(&uniforms(Mat4::IDENTITY, 1.0, no_clip, [[0.0; 4]; 2])));
+        if let (Some(structural), Some(_)) = (&self.structural, &self.gpu_structural) {
+            let proj11 = camera.projection(w as f32 / h as f32).y_axis.y;
+            let logical = (w as f32 / scale, h as f32 / scale);
+            structural.write(queue, &StructUniforms::new(logical, proj11, settings.background, &Lod::default()));
+        }
+    }
+
+    /// Gathers the instances of the structural selection and hover into buffers of their own when
+    /// they changed (another `Arc`), so drawing them costs a draw per pipeline whatever their size.
+    fn gather_structural_marks(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
+        let display = primitive.model.as_ref().and_then(|m| m.structural_display.as_ref()).filter(|_| self.gpu_structural.is_some());
+        let units = primitive.explode.as_deref().map_or(&[][..], ExplodeIndex::display_units);
+        for (k, marks) in [&primitive.structural_selected, &primitive.structural_hovered].into_iter().enumerate() {
+            let (last, gathered) = &mut self.structural_marked[k];
+            if Arc::ptr_eq(last, marks) {
+                continue;
+            }
+            *last = marks.clone();
+            *gathered = display.and_then(|d| GpuStructural::gather(device, d, units, marks));
+        }
     }
 
     fn render(
@@ -850,6 +898,12 @@ impl ScenePipeline {
                         pass.draw(0..4, 0..layer.points);
                     }
                 }
+            }
+            // member axes and nodes, after the lit layers and point clouds, before the cut fill
+            if let (Some(structural), Some(gpu)) = (&self.structural, &self.gpu_structural) {
+                pass.set_bind_group(0, &self.model_group, &[]);
+                let [(_, selected), (_, hovered)] = &self.structural_marked;
+                structural.draw(&mut pass, gpu, primitive.structural_shown.as_deref(), selected.as_ref(), hovered.as_ref());
             }
             if primitive.settings.caps && mode != RenderMode::Wireframe {
                 pass.set_bind_group(0, &self.model_group, &[]);

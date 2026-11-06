@@ -812,8 +812,9 @@ impl Studio {
         let c = look.color;
         let tabs = [l.text("Start", "Home")];
         let mut left = vec![self.status_text()];
-        if !self.app.selection.is_empty() {
-            left.push(format!("{} {}", self.app.selection.len(), l.text("geselecteerd", "selected")));
+        let selected = self.app.selection.len() + self.app.structural.selected.len();
+        if selected > 0 {
+            left.push(format!("{selected} {}", l.text("geselecteerd", "selected")));
         }
         let compact = self.compact();
         let folded = compact && self.ribbon_folded;

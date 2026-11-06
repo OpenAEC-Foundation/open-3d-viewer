@@ -289,8 +289,10 @@ open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-cont
 open-3d-viewer [FILE] --screenshot OUT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAME] [--explode X,Y,Z]
 open-3d-viewer FILE --save-as OUT.ifc
-open-3d-viewer --bench FILE [--frames 300] [--throughput]
+open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300] [--throughput]
 ```
+
+`--bench` also takes generated scenarios: `synthetic:N` (N boxes, each an element), `structural:N` (a 3D frame of N members with nodes, supports and hinges), or several joined with `+`, such as `structural:100000+synthetic:100000`.
 
 Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.11`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
 

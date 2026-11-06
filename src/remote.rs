@@ -695,9 +695,23 @@ impl App {
         }
     }
 
-    /// The selected elements (or layer) and the first one's properties.
+    /// The selected elements (or layer) and the first one's properties; structural objects listed
+    /// apart (`structural`), their first one's properties shown when no mesh element is
+    /// selected.
     fn selection_json(&self) -> Value {
-        let (Some(model), Some((layer, element))) = (&self.model, self.selected) else { return Value::Null };
+        let Some(model) = &self.model else { return Value::Null };
+        let structural: Vec<Value> = self.structural.selected.iter().map(|&id| crate::structural::id_json(id)).collect();
+        let Some((layer, element)) = self.selected else {
+            let Some(&first) = self.structural.selected.first() else { return Value::Null };
+            return json!({
+                "layer": Value::Null,
+                "element": crate::structural::id_json(first),
+                "elements": [],
+                "structural": structural,
+                "properties": props_json(model.element_props(first)),
+                "bounds": self.selection_bounds().map(|b| jbounds(&b)),
+            });
+        };
         let mut ids: Vec<u64> = self
             .selection
             .iter()
@@ -710,6 +724,7 @@ impl App {
             "element": element,
             "elements": ids,
             "properties": element.map(|id| props_json(model.element_props(id))),
+            "structural": structural,
             "bounds": self.selection_bounds().map(|b| jbounds(&b)),
         })
     }
@@ -1089,6 +1104,7 @@ impl App {
         if flag(a, "clear").unwrap_or(false) {
             self.sel.clear();
             self.selection_changed();
+            self.set_structural_selection(Vec::new());
             return Ok(Value::Null);
         }
         let ids: Vec<u64> = match (a.get("ids"), a.get("id")) {
@@ -1100,14 +1116,31 @@ impl App {
             return Err("no elements given".into());
         }
         let drawn: std::collections::HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
-        if let Some(&id) = ids.iter().find(|id| !drawn.contains(id)) {
-            return Err(not_drawn(&model, id, "selecting"));
+        // a structural object is drawn from its document: a node or member itself, a load or line
+        // support through the item it sits on
+        let mut structural = Vec::new();
+        for &id in ids.iter().filter(|id| !drawn.contains(id)) {
+            match model.structural_item(id) {
+                Some(item) if item.unit_key().is_some() => structural.push(id),
+                Some(item) => {
+                    return Err(format!(
+                        "{id} is a structural {} without a place in the model (nothing to select); get_element and get_structural_element take its id",
+                        crate::structural::kind_name(item.kind())
+                    ))
+                }
+                None => return Err(not_drawn(&model, id, "selecting")),
+            }
         }
-        if !flag(a, "add").unwrap_or(false) {
+        let add = flag(a, "add").unwrap_or(false);
+        if !add {
             self.sel.clear();
         }
-        self.sel.extend(ids.iter().map(|&id| Pickable::Element(id)));
+        self.sel.extend(ids.iter().filter(|id| drawn.contains(id)).map(|&id| Pickable::Element(id)));
         self.selection_changed();
+        let mut chosen = if add { self.structural.selected.clone() } else { Vec::new() };
+        let mut seen: std::collections::HashSet<u64> = chosen.iter().copied().collect();
+        chosen.extend(structural.into_iter().filter(|id| seen.insert(*id)));
+        self.set_structural_selection(chosen);
         if flag(a, "zoom").unwrap_or(false) {
             if let Some(b) = self.selection_bounds() {
                 self.frame(&b);
@@ -1184,8 +1217,26 @@ impl App {
         let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
         let (vx, vy) = self.to_viewport(x, y);
         let hit = self.hit_at(vx, vy);
+        let (w, h) = self.viewport_size;
+        let structural = self.pick_structural(vx, vy, w, h, hit.as_ref().map(|h| h.point));
         if flag(a, "select").unwrap_or(false) {
-            self.pick(vx, vy, self.viewport_size.0, self.viewport_size.1, false);
+            match &structural {
+                // what was found is selected, as a click would (no second pick)
+                Some(s) if self.measure.tool.is_none() && !self.plane_picking => self.click_structural(s.element, false),
+                _ => self.pick(vx, vy, w, h, false),
+            }
+        }
+        // a structural node or member drawn there (within 8 px of a node, 6 px of a member)
+        if let (Some(s), Some(model)) = (structural, self.model.as_ref()) {
+            return Ok(json!({
+                "hit": true,
+                "structural": if s.node { "node" } else { "member" },
+                "element": crate::structural::id_json(s.element),
+                "point": jv(s.world),
+                "pixels_away": round(s.px),
+                "properties": props_json(model.element_props(s.element)),
+                "distance_from_camera": round(s.world.distance(self.camera.eye())),
+            }));
         }
         Ok(match hit {
             Some(h) => {
@@ -1522,12 +1573,12 @@ enum Listed {
     Structural(usize),
 }
 
-/// Why an element without triangles cannot be selected or measured: a structural object is drawn
-/// from its document (selection of those comes with phase S3), anything else does not exist.
+/// Why an element without triangles cannot be measured: a structural object is drawn from its
+/// document (measuring between those is not supported yet), anything else does not exist.
 fn not_drawn(model: &Model, id: u64, what: &str) -> String {
     match model.structural_item(id) {
         Some(item) => format!(
-            "{id} is a structural object ({}): {what} structural objects is not supported yet (phase S3); get_element and get_structural_element take its id",
+            "{id} is a structural object ({}): {what} structural objects is not supported yet; get_element and get_structural_element take its id",
             crate::structural::kind_name(item.kind())
         ),
         None => format!("no element {id}"),

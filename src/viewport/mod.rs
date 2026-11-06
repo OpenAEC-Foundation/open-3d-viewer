@@ -13,6 +13,7 @@
 pub mod box_select;
 pub mod camera;
 pub mod render;
+pub mod structural;
 
 use crate::explode::ExplodeIndex;
 use crate::model::Model;
@@ -68,8 +69,16 @@ pub struct Viewport3D<'a> {
     /// The exploded view: the units of the model and the offset (world) of each.
     pub explode: Option<&'a Arc<ExplodeIndex>>,
     pub offsets: &'a Arc<Vec<[f32; 4]>>,
-    /// Report where the cursor is ([`Navigate::Hover`]): while measuring.
+    /// Report where the cursor is ([`Navigate::Hover`]): while measuring, and over structural
+    /// models (their hover highlight).
     pub hover: bool,
+    /// Show the crosshair cursor (measuring) instead of the hand.
+    pub crosshair: bool,
+    /// Structural instances drawn again on top: the selection and the hover.
+    pub structural_selected: &'a Arc<crate::structural::display::Marks>,
+    pub structural_hovered: &'a Arc<crate::structural::display::Marks>,
+    /// The structural instances of the source models shown (`None`: all are).
+    pub structural_shown: Option<&'a Arc<crate::structural::display::Marks>>,
 }
 
 #[derive(Default)]
@@ -258,6 +267,9 @@ where
             settings: self.settings,
             explode: self.explode.cloned(),
             offsets: self.offsets.clone(),
+            structural_selected: self.structural_selected.clone(),
+            structural_hovered: self.structural_hovered.clone(),
+            structural_shown: self.structural_shown.cloned(),
         }
     }
 
@@ -266,7 +278,7 @@ where
             Some((Drag::Orbit, _)) => mouse::Interaction::Grabbing,
             Some((Drag::Pan, _)) => mouse::Interaction::Move,
             Some((Drag::Box, _)) => mouse::Interaction::Crosshair,
-            None if cursor.is_over(bounds) && self.hover => mouse::Interaction::Crosshair,
+            None if cursor.is_over(bounds) && self.crosshair => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
         }

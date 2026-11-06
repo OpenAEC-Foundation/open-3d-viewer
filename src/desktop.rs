@@ -10,7 +10,7 @@
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
-//!   open-3d-viewer --bench FILE [--frames 300]
+//!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
 //!
 //! In the OpenAEC SuperCloud (`managed`): OPENAEC_BEHEERD=1, OPENAEC_MAP (work folder),

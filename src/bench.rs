@@ -7,8 +7,23 @@
 //! `--throughput` it instead keeps two frames in flight, as a swap chain does, and checks the
 //! 120 fps criterion per camera scenario (orbit, pan, zoom): at least 120 submitted frames per
 //! second and a p95 frame time of at most 8.33 ms, counting the frames over 16.67 ms.
+//!
+//! Instead of a file, FILE may name a generated scenario: `synthetic:N` (N boxes, each its own
+//! element), `structural:N` (a 3D frame of N members with their nodes, fixed supports on the
+//! ground nodes and hinges at 10 % of the member ends), or several joined with `+`
+//! (`structural:100000+synthetic:100000`), combined as Add does. For a model with structural
+//! objects it also times, on the CPU, deriving the display, building the hover grid and a click,
+//! and adds a pass (and a throughput run) with every third member selected.
 
 use crate::loaders;
+use crate::model::Model;
+use crate::structural::display::Marks;
+use crate::structural::StructuralPart;
+use bim_structural::{
+    dofs_all, frame, sam_id, AnalysisModel, Curve, Dof, DofFrame, Hinge, IdKind, Insertion, Member, MemberKind, Node, NodeOrigin,
+    Orientation, SourceInfo, Support, SupportPreset,
+};
+use glam::DVec3;
 use crate::selection::Pickable;
 use crate::units::{unit_state, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::theme::{srgb3, srgb4, ThemeKind};
@@ -144,10 +159,7 @@ pub fn synthetic(n: usize) -> crate::model::Model {
 }
 
 pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
-    let model = Arc::new(match file.to_str().and_then(|f| f.strip_prefix("synthetic:")) {
-        Some(n) => synthetic(n.parse().map_err(|_| "synthetic:N needs a number of boxes")?),
-        None => loaders::load(file)?,
-    });
+    let model = Arc::new(scenario(file)?);
     println!(
         "{}: {} layers, {} vertices, {} triangles, {} points, loaded in {:.2} s",
         model.file_name(),
@@ -157,6 +169,21 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
         model.point_count(),
         model.load_time.as_secs_f32()
     );
+    if let Some(d) = &model.structural_display {
+        println!(
+            "structural: {} nodes, {} members, {} segment instances, {} glyph instances",
+            d.items.iter().filter(|i| i.kind == bim_structural::ItemKind::Node).count(),
+            d.items.iter().filter(|i| i.kind == bim_structural::ItemKind::Member).count(),
+            d.segs.len(),
+            d.glyphs.len()
+        );
+        structural_timings(&model, (1920.0, 1080.0));
+    }
+    // every third member selected: drawn again on top from its own instances
+    let third: Option<Arc<Marks>> = model.structural_display.as_ref().filter(|d| !d.is_empty()).map(|d| {
+        let members = d.items.iter().enumerate().filter(|(_, i)| i.kind == bim_structural::ItemKind::Member);
+        Arc::new(d.marks(members.step_by(3).map(|(k, _)| k as u32)))
+    });
 
     // WGPU_BACKEND picks the backend, as for the window
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
@@ -209,7 +236,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
         };
         // the units of every element, as the app uploads them, so their flags work
         let index = Arc::new(crate::explode::ExplodeIndex::new(&model));
-        let submit = |camera: Camera, units: &Arc<Vec<[f32; 4]>>, pipeline: &mut ScenePipeline| {
+        let submit = |camera: Camera, units: &Arc<Vec<[f32; 4]>>, marked: &Arc<Marks>, pipeline: &mut ScenePipeline| {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
                 visible: vec![true; model.layers.len()],
@@ -217,6 +244,9 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 settings,
                 explode: Some(index.clone()),
                 offsets: units.clone(),
+                structural_selected: marked.clone(),
+                structural_hovered: Arc::default(),
+                structural_shown: None,
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -225,17 +255,21 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
         };
         let plain: Arc<Vec<[f32; 4]>> = Arc::new(unit_state(&[], &[]));
         // with elements, also every element selected and every second one hidden
-        let mut runs = Scenario::ALL.map(|s| (s.name().to_string(), s, plain.clone())).to_vec();
+        let none: Arc<Marks> = Arc::default();
+        let mut runs = Scenario::ALL.map(|s| (s.name().to_string(), s, plain.clone(), none.clone())).to_vec();
         if index.len() > 1 {
             let flags = |f: &dyn Fn(usize) -> u8| Arc::new(unit_state(&[], &(0..index.len()).map(f).collect::<Vec<u8>>()));
-            runs.push(("orbit, all selected".into(), Scenario::Orbit, flags(&|_| UNIT_SELECTED)));
-            runs.push(("orbit, half hidden".into(), Scenario::Orbit, flags(&|u| if u % 2 == 0 { UNIT_HIDDEN } else { 0 })));
+            runs.push(("orbit, all selected".into(), Scenario::Orbit, flags(&|_| UNIT_SELECTED), none.clone()));
+            runs.push(("orbit, half hidden".into(), Scenario::Orbit, flags(&|u| if u % 2 == 0 { UNIT_HIDDEN } else { 0 }), none.clone()));
+        }
+        if let Some(third) = &third {
+            runs.push(("orbit, every 3rd member selected".into(), Scenario::Orbit, plain.clone(), third.clone()));
         }
         // the GPU upload, not counted
-        submit(camera, &plain, &mut pipeline);
+        submit(camera, &plain, &none, &mut pipeline);
         device.poll(wgpu::PollType::wait_indefinitely()).ok();
         let mut all = true;
-        for (name, scenario, units) in &runs {
+        for (name, scenario, units, marked) in &runs {
             let scenario = *scenario;
             let done: Arc<Mutex<Vec<Instant>>> = Arc::default();
             let mut pending = VecDeque::with_capacity(IN_FLIGHT + 1);
@@ -247,7 +281,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                     device.poll(wgpu::PollType::Wait { submission_index: oldest, timeout: None }).ok();
                 }
                 scenario.step(&mut c, i, h as f32);
-                pending.push_back(submit(c, units, &mut pipeline));
+                pending.push_back(submit(c, units, marked, &mut pipeline));
                 let done = done.clone();
                 queue.on_submitted_work_done(move || done.lock().unwrap().push(Instant::now()));
             }
@@ -285,10 +319,13 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             let t = Instant::now();
             let _ = app.update(crate::app::Message::Navigate(boxed));
             timed(format!("box select {} elements", app.sel.len()), t.elapsed().as_secs_f64() * 1000.0);
-            app.click(model.layers[0].elements.first().map(|e| Pickable::Element(e.0)), false);
-            let t = Instant::now();
-            let _ = app.update(crate::app::Message::IsolateSelection);
-            timed(format!("isolate 1 of {} elements", app.hidden.len() + 1), t.elapsed().as_secs_f64() * 1000.0);
+            // a model of only structural objects has units but no layer to isolate an element of
+            if let Some(first) = model.layers.iter().find_map(|l| l.elements.first()) {
+                app.click(Some(Pickable::Element(first.0)), false);
+                let t = Instant::now();
+                let _ = app.update(crate::app::Message::IsolateSelection);
+                timed(format!("isolate 1 of {} elements", app.hidden.len() + 1), t.elapsed().as_secs_f64() * 1000.0);
+            }
         }
         if index.len() > 1 {
             let mut app = crate::app::App::default();
@@ -324,7 +361,11 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
         }
     }
     let last = (section.max != section.min).then_some(section);
-    for (mode, section) in [(RenderMode::Solid, None), (RenderMode::SolidEdges, None), (RenderMode::SolidEdges, last)] {
+    let mut passes = vec![(RenderMode::Solid, None, None), (RenderMode::SolidEdges, None, None), (RenderMode::SolidEdges, last, None)];
+    if let Some(third) = &third {
+        passes.push((RenderMode::Solid, None, Some(third.clone())));
+    }
+    for (mode, section, selected) in passes {
         let is_last = mode == RenderMode::SolidEdges && (section.is_some() || last.is_none()) && section == last;
         let camera = match (is_last, view_camera) {
             (true, Some(c)) => c,
@@ -343,6 +384,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             grids: true,
             bounds: None,
         };
+        let selected_marks: Arc<Marks> = selected.clone().unwrap_or_default();
         let frame = |camera: Camera, pipeline: &mut ScenePipeline| {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
@@ -351,6 +393,9 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 settings,
                 explode: None,
                 offsets: Arc::default(),
+                structural_selected: selected_marks.clone(),
+                structural_hovered: Arc::default(),
+                structural_shown: None,
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -378,13 +423,161 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
         let median = times.get(times.len() / 2).copied().unwrap_or(0.0);
         let p95 = times.get(times.len() * 95 / 100).copied().unwrap_or(0.0);
         println!(
-            "{mode:?}{} @ {w}x{h} 4xMSAA: first frame (upload) {:.1} ms, {frames} frames: mean {mean:.2} ms ({:.0} fps), median {median:.2} ms, p95 {p95:.2} ms",
+            "{mode:?}{}{} @ {w}x{h} 4xMSAA: first frame (upload) {:.1} ms, {frames} frames: mean {mean:.2} ms ({:.0} fps), median {median:.2} ms, p95 {p95:.2} ms",
             if section.is_some() { " + section box" } else { "" },
+            match &selected {
+                Some(m) => format!(" + every 3rd member selected ({} ranges)", m.segs.len() + m.glyphs.len()),
+                None => String::new(),
+            },
             first.as_secs_f64() * 1000.0,
             1000.0 / mean
         );
     }
     Ok(())
+}
+
+/// Times the CPU side of the structural objects for a viewport of `size` logical pixels: deriving
+/// the display, building the hover grid (zoomed to fit and zoomed in) and a click that scans every
+/// instance against one that looks in the grid. Medians of a few runs.
+fn structural_timings(model: &Model, size: (f32, f32)) {
+    use crate::structural::display::StructuralDisplay;
+    use crate::structural::pick::{Lod, Scene, View};
+    let median = |mut f: Box<dyn FnMut() -> usize + '_>| {
+        let mut runs: Vec<(f64, usize)> = (0..5)
+            .map(|_| {
+                let t = Instant::now();
+                let n = f();
+                (t.elapsed().as_secs_f64() * 1000.0, n)
+            })
+            .collect();
+        runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        runs[2]
+    };
+    let (ms, _) = median(Box::new(|| StructuralDisplay::build(&model.structural, &model.origins).items.len()));
+    println!("structural display derived in {ms:.1} ms");
+    let Some(display) = model.structural_display.as_deref() else { return };
+    let mut camera = Camera::default();
+    camera.set_preset(ViewPreset::Iso);
+    camera.fit(&model.bounds, size.0 / size.1);
+    for (name, zoom) in [("zoomed to fit", 1.0), ("zoomed in 4x", 0.25)] {
+        let mut c = camera;
+        c.distance *= zoom;
+        let aspect = size.0 / size.1;
+        let view = View { view_proj: c.view_proj(aspect), model: glam::Mat4::IDENTITY, proj11: c.projection(aspect).y_axis.y, size: glam::Vec2::new(size.0, size.1) };
+        let scene = Scene { display, units: &[], offsets: &[], view, lod: Lod::default(), shown_items: None };
+        let (grid_ms, entries) = median(Box::new(|| scene.grid().len()));
+        let grid = scene.grid();
+        let cursor = glam::Vec2::new(size.0 * 0.5, size.1 * 0.5);
+        let all = |_: glam::Vec3| true;
+        let (scan_ms, _) = median(Box::new(|| scene.hits(cursor, &all).len()));
+        let (cell_ms, _) = median(Box::new(|| grid.hits(&scene, cursor, &all).len()));
+        println!(
+            "structural {name}: hover grid built in {grid_ms:.1} ms ({entries} entries, off the UI thread), click {scan_ms:.2} ms scanning everything, {cell_ms:.3} ms in the grid"
+        );
+    }
+}
+
+/// The model of `--bench FILE`: a file, or generated scenarios joined with `+` (see the module
+/// documentation).
+pub fn scenario(file: &Path) -> Result<Model, String> {
+    let name = file.to_string_lossy().into_owned();
+    let generated = |part: &str| -> Option<Result<Model, String>> {
+        let (kind, n) = part.split_once(':')?;
+        if !matches!(kind, "synthetic" | "structural") {
+            return None;
+        }
+        let Ok(n) = n.parse::<usize>() else { return Some(Err(format!("{part}: {kind}:N with N a whole number"))) };
+        Some(Ok(if kind == "synthetic" { synthetic(n) } else { structural(n) }))
+    };
+    let parts: Vec<&str> = name.split('+').collect();
+    if !parts.iter().all(|p| generated(p).is_some()) {
+        return loaders::load(file);
+    }
+    let start = Instant::now();
+    let mut models = Vec::new();
+    for p in &parts {
+        models.push(Arc::new(generated(p).expect("checked")?));
+    }
+    let mut model = match models.len() {
+        1 => Arc::try_unwrap(models.pop().expect("one")).map_err(|_| "shared model".to_string())?,
+        _ => Model::combine(&models),
+    };
+    model.path = name.into();
+    model.load_time = start.elapsed();
+    Ok(model)
+}
+
+/// A model of only [`structural_frame`]`(n)`.
+pub fn structural(n: usize) -> Model {
+    let mut model = Model::new(format!("structural:{n}").into(), "Structural frame (generated)", Vec::new());
+    model.set_structural(vec![StructuralPart::new(0, Arc::new(structural_frame(n)))]);
+    model
+}
+
+/// A 3D grid frame of `n` members (columns 4 m, beams 6 m both ways, up to ten storeys) with
+/// their nodes, fixed supports on the ground nodes and a moment hinge at both ends of every tenth
+/// member (10 % of the member ends).
+pub fn structural_frame(n: usize) -> AnalysisModel {
+    const BAY: f64 = 6.0;
+    const STOREY: f64 = 4.0;
+    let levels = ((n as f64 / 3.0).cbrt().round() as usize).clamp(1, 10);
+    let k = ((n as f64 / (3.0 * levels as f64)).sqrt().ceil() as usize + 1).max(2);
+    let lattice = |i: usize, j: usize, z: usize| (z * k + j) * k + i;
+    let mut ends: Vec<(usize, usize)> = Vec::with_capacity(n);
+    'levels: for z in 1..=levels {
+        for j in 0..k {
+            for i in 0..k {
+                let column = Some((lattice(i, j, z - 1), lattice(i, j, z)));
+                let beam_x = (i + 1 < k).then(|| (lattice(i, j, z), lattice(i + 1, j, z)));
+                let beam_y = (j + 1 < k).then(|| (lattice(i, j, z), lattice(i, j + 1, z)));
+                for member in [column, beam_x, beam_y].into_iter().flatten() {
+                    if ends.len() == n {
+                        break 'levels;
+                    }
+                    ends.push(member);
+                }
+            }
+        }
+    }
+    let mut used = vec![false; k * k * (levels + 1)];
+    for &(a, b) in &ends {
+        used[a] = true;
+        used[b] = true;
+    }
+    let at = |l: usize| DVec3::new((l % k) as f64 * BAY, (l / k % k) as f64 * BAY, (l / (k * k)) as f64 * STOREY);
+    let node_id = |l: usize| sam_id(IdKind::Node, l as u64 + 1);
+    let mut m = AnalysisModel::new(1, "Bench frame", SourceInfo::default());
+    for l in (0..used.len()).filter(|&l| used[l]) {
+        let ground = l < k * k;
+        m.nodes.push(Node {
+            id: node_id(l),
+            number: (l + 1).to_string(),
+            p: at(l),
+            frame: None,
+            support: ground.then(|| Support { dofs: dofs_all(Dof::Fixed), frame: DofFrame::Global, named: None, preset: SupportPreset::Fixed }),
+            origin: NodeOrigin::Analytical,
+        });
+    }
+    let hinge = Hinge { dofs: [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Free], named: None };
+    for (e, &(a, b)) in ends.iter().enumerate() {
+        m.members.push(Member {
+            id: sam_id(IdKind::Member, e as u64 + 1),
+            number: (e + 1).to_string(),
+            kind: MemberKind::Beam,
+            nodes: vec![node_id(a), node_id(b)],
+            geometry: Curve::Line,
+            z_ref: frame::default_z_ref(at(b) - at(a)),
+            orientation: Orientation::Default,
+            section: None,
+            section_rotation: 0.0,
+            insertion: Insertion::default(),
+            releases: [0, 1].map(|_| (e % 10 == 0).then(|| hinge.clone())),
+            material: None,
+            links: Vec::new(),
+        });
+    }
+    m.rebuild_index();
+    m
 }
 
 /// Copies the render target to the CPU and writes it as a PNG.
@@ -475,6 +668,9 @@ mod tests {
             },
             explode: Some(index.clone()),
             offsets,
+            structural_selected: Arc::default(),
+            structural_hovered: Arc::default(),
+            structural_shown: None,
         };
         let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(w as f32, h as f32));
         primitive.prepare(&mut pipeline, &device, &queue, &bounds, &Viewport::with_physical_size(iced::Size::new(w, h), 1.0));
@@ -547,5 +743,160 @@ mod tests {
         assert!(s(130.0, 8.0).passes());
         assert!(!s(130.0, 9.0).passes());
         assert!(!s(110.0, 7.0).passes());
+    }
+
+    #[test]
+    fn the_structural_frame_has_n_members_supports_and_hinges() {
+        for n in [1, 7, 300, 2000] {
+            let f = structural_frame(n);
+            assert_eq!(f.members.len(), n, "n = {n}");
+            // every member end is a node of the model, and every node is used
+            let used: std::collections::HashSet<u64> = f.members.iter().flat_map(|m| m.nodes.iter().copied()).collect();
+            assert_eq!(used.len(), f.nodes.len());
+            assert!(used.iter().all(|id| f.node(*id).is_some()));
+            // supports on the ground nodes only
+            assert!(f.nodes.iter().all(|nd| nd.support.is_some() == (nd.p.z == 0.0)));
+            // 10 % of the member ends hinged: both ends of every tenth member
+            let hinged: usize = f.members.iter().map(|m| m.releases.iter().filter(|r| r.is_some()).count()).sum();
+            assert_eq!(hinged, 2 * n.div_ceil(10));
+            assert!(f.members.iter().all(|m| m.releases[0].is_some() == m.releases[1].is_some()));
+            // no member of zero length
+            assert!(f.members.iter().all(|m| f.member_ends(m).is_some_and(|(a, b)| a.distance(b) > 1.0)));
+        }
+    }
+
+    /// Renders the portal frame fixture offscreen, from the front with one member selected, and
+    /// checks the axes, the nodes and the selection are drawn where they project; then in the iso
+    /// view with one member selected and one hovered, and checks both are marked along their whole
+    /// length. Writes `target/structural-renders/portal_frame.png` and `portal_frame_iso.png`.
+    /// `cargo test --release --lib bench -- --ignored`.
+    #[test]
+    #[ignore = "needs a GPU; writes a PNG file"]
+    fn renders_the_portal_frame() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/bim-structural/tests/fixtures/portal_frame.samjson");
+        let model = Arc::new(loaders::load(&path).expect("portal frame"));
+        let display = model.structural_display.clone().expect("a display");
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("an adapter");
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a device");
+        let (w, h) = (960u32, 600u32);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test.target"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut pipeline = ScenePipeline::new(&device, format);
+        let mut camera = Camera::default();
+        camera.set_preset(ViewPreset::Front);
+        camera.fit(&model.bounds, w as f32 / h as f32);
+        let p = ThemeKind::Light.palette();
+        let settings = RenderSettings {
+            mode: RenderMode::Solid,
+            grid: false,
+            background: srgb3(p.viewport),
+            grid_minor: srgb4(p.grid_minor),
+            grid_major: srgb4(p.grid_major),
+            model_matrix: glam::Mat4::IDENTITY,
+            section: None,
+            plane: None,
+            caps: false,
+            grids: false,
+            bounds: None,
+        };
+        // the last member selected
+        let member = display.items.iter().rposition(|i| i.kind == bim_structural::ItemKind::Member).unwrap() as u32;
+        let viewport = Viewport::with_physical_size(iced::Size::new(w, h), 1.0);
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(w as f32, h as f32));
+        let mut render = |camera: Camera, selected: Marks, hovered: Marks, name: &str| {
+            let primitive = ScenePrimitive {
+                model: Some(model.clone()),
+                visible: Vec::new(),
+                camera,
+                settings,
+                explode: None,
+                offsets: Arc::default(),
+                structural_selected: Arc::new(selected),
+                structural_hovered: Arc::new(hovered),
+                structural_shown: None,
+            };
+            primitive.prepare(&mut pipeline, &device, &queue, &bounds, &viewport);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            primitive.render(&pipeline, &mut encoder, &view, &iced::Rectangle { x: 0, y: 0, width: w, height: h });
+            queue.submit([encoder.finish()]);
+            let rgba = read_target(&device, &queue, &target, (w, h)).expect("read back");
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/structural-renders");
+            std::fs::create_dir_all(&dir).expect("folder");
+            crate::write_png(&dir.join(name), w, h, &rgba).expect("png");
+            rgba
+        };
+        let rgba = render(camera, display.marks([member]), Marks::default(), "portal_frame.png");
+        let pixel = |rgba: &[u8], camera: &Camera, q: [f32; 3]| {
+            let c = camera.view_proj(w as f32 / h as f32) * glam::Vec3::from(q).extend(1.0);
+            let (x, y) = (((c.x / c.w + 1.0) * 0.5 * w as f32) as usize, ((1.0 - c.y / c.w) * 0.5 * h as f32) as usize);
+            let at = 4 * (y * w as usize + x);
+            [rgba[at], rgba[at + 1], rgba[at + 2]]
+        };
+        let near = |a: [u8; 3], b: [u8; 3], tol: i32| (0..3).all(|k| (a[k] as i32 - b[k] as i32).abs() <= tol);
+        let bg = settings.background.map(|v| (v * 255.0).round() as u8);
+        assert!(near([rgba[0], rgba[1], rgba[2]], bg, 2), "background in the corner");
+        let axis = [28u8, 77, 135];
+        let amber = [217u8, 119, 6];
+        // the axis colour 65 % of the way to the hover tint (light background)
+        let hover = [167u8, 130, 77];
+        for (k, item) in display.items.iter().enumerate() {
+            match item.kind {
+                bim_structural::ItemKind::Member => {
+                    let s = display.segs[item.segs.0 as usize];
+                    let mid = [0, 1, 2].map(|i| 0.5 * (s.a[i] + s.b[i]));
+                    let want = if k as u32 == member { amber } else { axis };
+                    let got = pixel(&rgba, &camera, mid);
+                    assert!(near(got, want, 40), "member {k}: {got:?}, want {want:?}");
+                }
+                _ => {
+                    let g = display.glyphs[item.glyphs.0 as usize];
+                    assert!(!near(pixel(&rgba, &camera, g.pos), bg, 30), "node {k} drawn: {:?}", pixel(&rgba, &camera, g.pos));
+                }
+            }
+        }
+
+        // in perspective from the side, members recede: their two ends lie at different depths. The
+        // selected and the hovered member are wider on top and must win the depth test along their
+        // whole length, not only on the half where the wider quad happens to lie in front.
+        let mut iso = Camera::default();
+        iso.set_preset(ViewPreset::Iso);
+        iso.fit(&model.bounds, w as f32 / h as f32);
+        let first = display.items.iter().position(|i| i.kind == bim_structural::ItemKind::Member).unwrap() as u32;
+        let rgba = render(iso, display.marks([member]), display.marks([first]), "portal_frame_iso.png");
+        let vp = iso.view_proj(w as f32 / h as f32);
+        for (k, want) in [(member, amber), (first, hover)] {
+            let s = display.segs[display.items[k as usize].segs.0 as usize];
+            let (za, zb) = ((vp * glam::Vec3::from(s.a).extend(1.0)), (vp * glam::Vec3::from(s.b).extend(1.0)));
+            assert!((za.z / za.w - zb.z / zb.w).abs() > 1e-4, "member {k} recedes");
+            for t in [0.2f32, 0.35, 0.65, 0.8] {
+                let q = [0, 1, 2].map(|i| s.a[i] + (s.b[i] - s.a[i]) * t);
+                let got = pixel(&rgba, &iso, q);
+                assert!(near(got, want, 40), "member {k} at {t}: {got:?}, want {want:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn scenarios_generate_and_combine() {
+        let m = scenario(Path::new("structural:300")).unwrap();
+        let d = m.structural_display.as_ref().expect("a display");
+        assert_eq!(d.segs.len(), 300);
+        assert_eq!(d.glyphs.len(), m.structural[0].doc.nodes.len());
+        let both = scenario(Path::new("structural:300+synthetic:50")).unwrap();
+        assert_eq!(both.triangle_count(), 50 * 12);
+        assert_eq!(both.structural_display.as_ref().unwrap().segs.len(), 300);
+        assert_eq!(both.file_name(), "structural:300+synthetic:50");
+        assert!(scenario(Path::new("structural:many")).is_err());
     }
 }

@@ -1,0 +1,25 @@
+[package]
+name = "bim-structural"
+version = "0.1.0"
+description = "Headless structural analysis model: document types, conventions, presets, sam-json v1 exchange, section geometry and member frames"
+authors = ["Open 3D Viewer Studio Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+publish = false
+
+[dependencies]
+# f64 vectors and matrices (MIT OR Apache-2.0); no default features beyond std
+glam = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# JSON Schema of sam-json v1 from the serde types (MIT); only with feature `schema` and in tests
+schemars = { version = "1", optional = true }
+
+[features]
+# Exposes `exchange::json_schema()`.
+schema = ["dep:schemars"]
+
+[dev-dependencies]
+schemars = "1"

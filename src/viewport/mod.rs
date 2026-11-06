@@ -28,8 +28,9 @@ pub enum Navigate {
     /// The viewport moved or changed size (logical pixels, origin in the window), for
     /// fit-to-view and to cut the viewport out of window screenshots.
     Resized { x: f32, y: f32, width: f32, height: f32 },
-    /// Left click at (x, y) in the viewport (logical pixels).
-    Pick { x: f32, y: f32, width: f32, height: f32 },
+    /// Left click at (x, y) in the viewport (logical pixels); `add`: with Ctrl, to add to the
+    /// selection.
+    Pick { x: f32, y: f32, width: f32, height: f32, add: bool },
     /// The cursor rests at (x, y) in the viewport (only while `hover` is on).
     Hover { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor left the viewport.
@@ -40,7 +41,6 @@ pub struct Viewport3D<'a> {
     pub model: Option<&'a Arc<Model>>,
     pub visible: &'a [bool],
     /// Highlighted index ranges: (layer, first index, index count).
-    pub selection: &'a [(usize, u32, u32)],
     pub camera: Camera,
     pub settings: RenderSettings,
     /// The exploded view: the units of the model and the offset (world) of each.
@@ -56,6 +56,8 @@ pub struct State {
     /// Where the left button went down, for click detection.
     press: Option<Point>,
     shift: bool,
+    /// Ctrl (Cmd on macOS) is held: a click adds to the selection.
+    command: bool,
     bounds: Rectangle,
     /// Where the cursor moved to since the last frame, reported on the next frame.
     hover: Option<Point>,
@@ -112,6 +114,7 @@ where
             }
             Event::Keyboard(iced::keyboard::Event::ModifiersChanged(m)) => {
                 state.shift = m.shift();
+                state.command = m.command();
                 None
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
@@ -134,7 +137,7 @@ where
                 let press = state.press.take();
                 if let (Some((Drag::Orbit, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
-                        return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height });
+                        return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command });
                     }
                 }
                 if drag.is_some() && self.hover {
@@ -196,7 +199,6 @@ where
         ScenePrimitive {
             model: self.model.cloned(),
             visible: self.visible.to_vec(),
-            selection: self.selection.to_vec(),
             camera: self.camera,
             settings: self.settings,
             explode: self.explode.cloned(),

@@ -176,19 +176,14 @@ fn fs_glass(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(encode(surface(in)), max(in.color.a, 0.12));
 }
 
-// Selected elements, drawn again over the lit pass.
-@fragment
-fn fs_highlight(in: VertexOut) -> @location(0) vec4<f32> {
-    if (clipped(in.world)) {
-        discard;
-    }
-    return vec4<f32>(encode(selected(shade(in))), 1.0);
-}
-
 @fragment
 fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
     if (clipped(in.world)) {
         discard;
+    }
+    // the edges of a selected element in the selection colour, so wireframe shows it too
+    if ((in.flags & UNIT_SELECTED) != 0u) {
+        return vec4<f32>(encode(to_linear(vec3<f32>(0.851, 0.467, 0.024))), 1.0);
     }
     return vec4<f32>(encode(to_linear(in.color.rgb) * u.params.y), in.color.a);
 }

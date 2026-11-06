@@ -28,6 +28,7 @@ pub mod model;
 mod remote;
 pub mod remote_link;
 pub mod section;
+mod selection;
 pub mod shell;
 mod theme;
 mod units;

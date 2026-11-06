@@ -8,6 +8,7 @@ use crate::app::{face_at, pick_triangle, App, Message, Status};
 use crate::explode::ExplodeMode;
 use crate::model::{Bounds, Model, ViewKind};
 use crate::remote_link::{self, Announcement};
+use crate::selection::Pickable;
 use crate::section::{SectionBox, SectionPlane};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
@@ -810,8 +811,8 @@ impl App {
     fn remote_select(&mut self, a: &Value) -> Answer {
         let model = self.require_model()?;
         if flag(a, "clear").unwrap_or(false) {
-            self.selected = None;
-            self.selection.clear();
+            self.sel.clear();
+            self.selection_changed();
             return Ok(Value::Null);
         }
         let ids: Vec<u64> = match (a.get("ids"), a.get("id")) {
@@ -819,17 +820,16 @@ impl App {
             (_, Some(v)) => vec![id_of(v).ok_or("id must be an element id")?],
             _ => return Err("ids (list of element ids), id or clear is required".into()),
         };
-        let mut selection = Vec::new();
-        for &id in &ids {
-            let ranges = model.element_ranges(id);
-            if ranges.is_empty() {
-                return Err(format!("no element {id}"));
-            }
-            selection.extend(ranges);
+        if ids.is_empty() {
+            return Err("no elements given".into());
         }
-        let Some(&(layer, ..)) = selection.first() else { return Err("no elements given".into()) };
-        self.selected = Some((layer, Some(ids[0])));
-        self.selection = selection;
+        let drawn: std::collections::HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        if let Some(id) = ids.iter().find(|id| !drawn.contains(id)) {
+            return Err(format!("no element {id}"));
+        }
+        self.sel.clear();
+        self.sel.extend(ids.iter().map(|&id| Pickable::Element(id)));
+        self.selection_changed();
         if flag(a, "zoom").unwrap_or(false) {
             if let Some(b) = self.selection_bounds() {
                 self.frame(&b);
@@ -907,7 +907,7 @@ impl App {
         let (vx, vy) = self.to_viewport(x, y);
         let hit = self.hit_at(vx, vy);
         if flag(a, "select").unwrap_or(false) {
-            self.pick(vx, vy, self.viewport_size.0, self.viewport_size.1);
+            self.pick(vx, vy, self.viewport_size.0, self.viewport_size.1, false);
         }
         Ok(match hit {
             Some(h) => {

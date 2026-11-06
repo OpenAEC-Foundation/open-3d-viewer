@@ -19,6 +19,8 @@ use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
 use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
+use crate::selection::{Pickable, Selection};
+use crate::units::{unit_state, UNIT_SELECTED};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
 use glam::{Mat4, Vec2, Vec3};
@@ -98,7 +100,10 @@ pub struct App {
     pub pending_open: Option<PathBuf>,
     /// The picked layer and, for BIM formats, the element in it.
     pub selected: Option<(usize, Option<u64>)>,
-    /// Index ranges of the selection, for the highlight: (layer, first index, index count).
+    /// What is selected, in pick order; `selected` and `selection` follow it (see
+    /// [`App::selection_changed`]).
+    pub sel: Selection,
+    /// Index ranges of the selection: (layer, first index, index count).
     pub selection: Vec<(usize, u32, u32)>,
     /// A running camera transition: from, to, start.
     pub anim: Option<(Camera, Camera, Instant)>,
@@ -149,6 +154,8 @@ pub struct App {
     /// The offset (world) of every unit as drawn, and the world bounds while apart; shared with
     /// the renderer, replaced when they change.
     pub explode_offsets: Arc<Vec<[f32; 4]>>,
+    /// What the renderer gets per unit: the explode offset and the flags (`crate::units`).
+    pub units: Arc<Vec<[f32; 4]>>,
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
@@ -321,6 +328,7 @@ impl Default for App {
             pending_open: None,
             selected: None,
             selection: Vec::new(),
+            sel: Selection::default(),
             anim: None,
             section: None,
             section_on: false,
@@ -347,6 +355,7 @@ impl Default for App {
             explode: [0.0; 3],
             explode_index: None,
             explode_offsets: Arc::default(),
+            units: Arc::default(),
             explode_bounds: None,
             measure: MeasureState::default(),
             hover_request: None,
@@ -558,6 +567,7 @@ impl App {
         if let Some(b) = self.world_bounds() {
             self.camera.scene_radius = self.camera.scene_radius.max(b.radius());
         }
+        self.update_units();
     }
 
     /// World bounds of the selected triangles.
@@ -720,6 +730,7 @@ impl App {
         self.open_sheets.clear();
         self.active_sheet = None;
         self.explorer_open[0] = false;
+        self.sel.clear();
         self.selected = None;
         self.selection.clear();
         self.measure.reset();
@@ -937,8 +948,8 @@ impl App {
             Message::ModelVisible(i, shown) => {
                 if let Some(entry) = self.models.get_mut(i) {
                     entry.visible = shown;
-                    self.selection.clear();
-                    self.selected = None;
+                    self.sel.clear();
+                    self.selection_changed();
                     self.restore_model_visibility();
                 }
             }
@@ -983,7 +994,7 @@ impl App {
                     self.viewport_origin = (x, y);
                     self.viewport_size = (width, height);
                 }
-                Navigate::Pick { x, y, width, height } => self.pick(x, y, width, height),
+                Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -1177,8 +1188,8 @@ impl App {
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape => {
                 if !self.measure.escape() {
-                    self.selected = None;
-                    self.selection.clear();
+                    self.sel.clear();
+                    self.selection_changed();
                 }
             }
         }
@@ -1233,7 +1244,7 @@ impl App {
     /// whole layer when the format has no elements); empty space clears the selection. While
     /// placing the section plane, puts it on the face under the cursor instead; while measuring,
     /// hands the click to the measure tool, with what is highlighted under the cursor.
-    pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
+    pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
         if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
@@ -1246,7 +1257,7 @@ impl App {
             self.measure.click(&model, &hover, &self.model_matrix());
             // the measured element is also selected (shows its properties)
             if tool == Tool::Volume {
-                self.select(&model, Some((hover.layer, hover.triangle)));
+                self.click(Some(pickable_at(&model, hover.layer, hover.triangle)), false);
             }
             return;
         }
@@ -1269,18 +1280,51 @@ impl App {
             }
             return;
         }
-        self.select(&model, hit.map(|(l, t, _)| (l, t)));
+        self.click(hit.map(|(l, t, _)| pickable_at(&model, l, t)), add);
     }
 
     /// Selects the element of triangle `t` of layer `l` (the whole layer without elements), or
     /// nothing.
-    fn select(&mut self, model: &Model, hit: Option<(usize, usize)>) {
-        self.selected = hit.map(|(l, t)| (l, model.layers[l].element_at(t)));
-        self.selection = match self.selected {
-            Some((_, Some(id))) => model.element_ranges(id),
-            Some((l, None)) => vec![(l, 0, model.layers[l].indices.len() as u32)],
-            None => Vec::new(),
+    /// A click on `hit` (None: empty space). Without `add` it selects only `hit`, so empty space
+    /// clears; with `add` (Ctrl) it adds or removes `hit` and keeps the selection on empty space.
+    pub(crate) fn click(&mut self, hit: Option<Pickable>, add: bool) {
+        match (hit, add) {
+            (Some(item), true) => self.sel.toggle(item),
+            (None, true) => return,
+            (hit, false) => self.sel.set(hit),
+        }
+        self.selection_changed();
+    }
+
+    /// After `sel` changed: the shown element (the first picked), the index ranges and the flags
+    /// of the units.
+    pub(crate) fn selection_changed(&mut self) {
+        let model = self.model.clone();
+        self.selected = model.as_deref().and_then(|m| match self.sel.primary()? {
+            Pickable::Element(id) => Some((m.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == id))?, Some(id))),
+            Pickable::Layer(l) => (l < m.layers.len()).then_some((l, None)),
+        });
+        self.selection = model.as_deref().map(|m| self.sel.ranges(m)).unwrap_or_default();
+        self.update_units();
+    }
+
+    /// The state the renderer gets per unit: the explode offsets and the selected flags.
+    fn update_units(&mut self) {
+        let Some(index) = self.explode_index.clone() else {
+            self.units = Arc::default();
+            return;
         };
+        let mut flags = vec![0u8; index.len()];
+        for &item in self.sel.items() {
+            let unit = match item {
+                Pickable::Element(id) => index.element_unit(id),
+                Pickable::Layer(l) => index.layer_rest_unit(l),
+            };
+            if let Some(f) = unit.and_then(|u| flags.get_mut(u)) {
+                *f |= UNIT_SELECTED;
+            }
+        }
+        self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
     }
 
     /// The camera's view of a viewport of width × height.
@@ -1791,6 +1835,10 @@ impl App {
         // the selection
         if let Some((li, element)) = self.selected {
             content = content.push(section(l.text("Selectie", "Selection")));
+            if self.sel.len() > 1 {
+                let count = format!("{} {}", self.sel.len(), l.text("elementen geselecteerd", "elements selected"));
+                content = content.push(container(text(count).size(12).color(p.text_secondary)).padding([2, 8]));
+            }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
@@ -2036,11 +2084,10 @@ impl App {
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),
             visible: &self.visible,
-            selection: &self.selection,
             camera: self.camera,
             settings,
             explode: self.explode_index.as_ref(),
-            offsets: &self.explode_offsets,
+            offsets: &self.units,
             hover: self.measure.tool.is_some() && !self.plane_picking,
         })
             .width(Fill)
@@ -2336,6 +2383,15 @@ fn ray_meets_box(origin: Vec3, dir: Vec3, (lo, hi): (Vec3, Vec3), max: f32) -> b
         }
     }
     true
+}
+
+/// What a click on triangle `t` of layer `l` selects: its element, or the layer when the format
+/// has no elements.
+fn pickable_at(model: &Model, l: usize, t: usize) -> Pickable {
+    match model.layers[l].element_at(t) {
+        Some(id) => Pickable::Element(id),
+        None => Pickable::Layer(l),
+    }
 }
 
 /// The nearest triangle hit by the ray `origin + t·dir` (t > 0) among the visible layers:
@@ -2913,6 +2969,65 @@ mod tests {
         Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]))
     }
 
+    /// Where world point `p` is in the viewport of `app`, as the viewport reports a click.
+    fn screen_point(app: &App, p: Vec3) -> (f32, f32) {
+        let (w, h) = app.viewport_size;
+        let n = (app.camera.view_proj(w / h) * app.model_matrix()).project_point3(p);
+        ((n.x + 1.0) * 0.5 * w, (1.0 - n.y) * 0.5 * h)
+    }
+
+    #[test]
+    fn ctrl_click_adds_and_removes() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        app.click(Some(Pickable::Element(10)), true);
+        assert_eq!(app.sel.len(), 2);
+        assert_eq!(app.sel.primary(), Some(Pickable::Element(20)));
+        app.click(Some(Pickable::Element(10)), true);
+        assert_eq!(app.sel.len(), 1);
+    }
+
+    #[test]
+    fn plain_click_on_empty_space_clears_but_ctrl_click_keeps() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(10)), false);
+        app.click(None, true);
+        assert_eq!(app.sel.len(), 1);
+        assert_eq!(app.selected, Some((0, Some(10))));
+        app.click(None, false);
+        assert!(app.sel.is_empty());
+        assert_eq!(app.selected, None);
+        assert!(app.selection.is_empty());
+    }
+
+    #[test]
+    fn ctrl_pick_reaches_click_with_add() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        let (x, y) = screen_point(&app, Vec3::new(2.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: true }));
+        assert_eq!(app.sel.items(), &[Pickable::Element(10), Pickable::Element(20)]);
+        assert_eq!(app.selection, vec![(0, 0, 6), (0, 6, 6)]);
+    }
+
+    #[test]
+    fn selected_units_carry_the_selected_flag() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let index = app.explode_index.clone().expect("units");
+        let flags = |id: u64| app.units[index.element_unit(id).expect("unit")][3] as u8;
+        assert_eq!(flags(20) & UNIT_SELECTED, UNIT_SELECTED);
+        assert_eq!(flags(10), 0);
+    }
+
     #[test]
     fn the_exploded_view_is_picked_and_framed_where_it_is_drawn() {
         let mut app = App::default();
@@ -2976,7 +3091,7 @@ mod tests {
         // a few pixels off the corners: they snap
         for (corner, off) in [(Vec3::new(0.0, 0.0, 0.0), 0.01), (Vec3::new(2.0, 1.0, 0.0), -0.01)] {
             let (x, y) = screen(corner + Vec3::new(off, off, 0.0));
-            let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+            let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         }
         assert_eq!(app.measure.results.len(), 1);
         let (_, d) = app.measure.results[0].value();
@@ -3024,7 +3139,7 @@ mod tests {
         let highlighted = app.measure.hover.clone().expect("hover");
         assert_eq!(highlighted.kind, SnapKind::Corner);
         // the click lands a pixel or two off: it takes the highlighted corner
-        let _ = app.update(Message::Navigate(Navigate::Pick { x: cx + 5.0, y: cy - 3.0, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: cx + 5.0, y: cy - 3.0, width: w, height: h, add: false }));
         assert_eq!(app.measure.picks, vec![highlighted.snap]);
         // orbiting drops the highlight; leaving the viewport too
         hover(&mut app, x, y);
@@ -3039,7 +3154,7 @@ mod tests {
         assert!(app.measure.hover.is_some());
         let _ = app.update(Message::Layer(0, false));
         assert!(app.measure.hover.is_none(), "looked again: nothing shown there");
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         assert_eq!(app.measure.picks.len(), 1, "only the corner from before");
     }
 

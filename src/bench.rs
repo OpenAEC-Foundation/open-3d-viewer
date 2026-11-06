@@ -200,7 +200,6 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
                 visible: vec![true; model.layers.len()],
-                selection: Vec::new(),
                 camera,
                 settings,
                 explode: None,
@@ -294,7 +293,6 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             let primitive = ScenePrimitive {
                 model: Some(model.clone()),
                 visible: vec![true; model.layers.len()],
-                selection: Vec::new(),
                 camera,
                 settings,
                 explode: None,
@@ -407,7 +405,6 @@ mod tests {
         let primitive = ScenePrimitive {
             model: Some(model.clone()),
             visible: vec![true; model.layers.len()],
-            selection: Vec::new(),
             camera,
             settings: RenderSettings {
                 mode: RenderMode::Solid,

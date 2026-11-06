@@ -93,6 +93,15 @@ impl Scenario {
     }
 }
 
+/// The GPU to bench: `O3V_BENCH_GPU=low` (or `integrated`) asks for the integrated one, for the
+/// baseline on integrated graphics; otherwise the high-performance one.
+pub fn power_preference(asked: Option<&str>) -> wgpu::PowerPreference {
+    match asked {
+        Some("low" | "integrated") => wgpu::PowerPreference::LowPower,
+        _ => wgpu::PowerPreference::HighPerformance,
+    }
+}
+
 /// Boxes per layer of the synthetic model.
 const SYNTHETIC_LAYER: usize = 10_000;
 
@@ -152,7 +161,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
     // WGPU_BACKEND picks the backend, as for the window
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
+        power_preference: power_preference(std::env::var("O3V_BENCH_GPU").ok().as_deref()),
         force_fallback_adapter: false,
         compatible_surface: None,
     }))
@@ -513,6 +522,14 @@ mod tests {
         assert_eq!(s.max_ms, 20.0);
         assert_eq!(s.p95_ms, 20.0);
         assert!((s.fps - 105.26).abs() < 0.01);
+    }
+
+    #[test]
+    fn power_preference_picks_the_integrated_gpu_on_request() {
+        assert_eq!(power_preference(Some("low")), wgpu::PowerPreference::LowPower);
+        assert_eq!(power_preference(Some("integrated")), wgpu::PowerPreference::LowPower);
+        assert_eq!(power_preference(Some("high")), wgpu::PowerPreference::HighPerformance);
+        assert_eq!(power_preference(None), wgpu::PowerPreference::HighPerformance);
     }
 
     #[test]

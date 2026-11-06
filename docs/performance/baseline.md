@@ -51,4 +51,35 @@ Selection and hiding go through the flags of the units texture, so the bench now
 
 The first measurement of hiding 100 000 elements took 8.78 ms and failed. Hashing the keys of the hidden set was most of it; a faster hash (`units::KeyHasher`) brought it to 2.95 ms.
 
-**Integrated graphics:** not measured yet. Run the same commands on a computer with integrated graphics only and add its rows here; later phases compare against them.
+## Reference models and integrated graphics, 2026-11-06
+
+Commit `176114c`, the setup of Phase 1 (units uploaded). `O3V_BENCH_GPU=low` selects the integrated GPU of the same laptop, an Intel RaptorLake-S Mobile Graphics Controller (Vulkan). The reference models now cover every renderer path the spec names:
+- `synthetic:100000`;
+- `test-models/test-kavel.skp`;
+- `37_model.ifc`, 194 MB, IFC 4;
+- `Example File Location Analysis.rvt`, 87 MB, 3 075 578 triangles;
+- `warmoeskade-047.e57`, a 234 MB scan of 5 124 788 points.
+
+Only the first two are in the repository. The table gives fps and p95 frame time in ms per camera scenario.
+
+| Model | GPU | orbit | pan | zoom | orbit, all selected | orbit, half hidden | Criterion |
+|---|---|---|---|---|---|---|---|
+| `synthetic:100000` | discrete | 843, 1.44 | 875, 1.41 | 856, 1.21 | 852, 2.01 | 1155, 0.98 | pass |
+| | integrated | 44, 29.05 | 47, 23.84 | 39, 27.72 | 43, 31.49 | 146, 8.69 | fail |
+| `test-kavel.skp` | discrete | 4169, 0.26 | 4248, 0.27 | 3839, 0.30 | 3926, 0.32 | 3938, 0.32 | pass |
+| | integrated | 422, 3.96 | 474, 2.76 | 440, 3.93 | 475, 3.18 | 484, 3.36 | pass |
+| `37_model.ifc` | discrete | 364, 4.49 | 363, 4.47 | 331, 5.58 | 376, 5.37 | 458, 4.99 | pass |
+| | integrated | 75, 14.55 | 74, 14.37 | 70, 15.61 | 76, 14.10 | 81, 13.50 | fail |
+| `Example File Location Analysis.rvt` | discrete | 411, 2.70 | 468, 2.27 | 455, 2.46 | 431, 2.42 | 465, 2.29 | pass |
+| | integrated | 60, 20.19 | 61, 21.50 | 63, 17.94 | 65, 16.53 | 65, 17.15 | fail |
+| `warmoeskade-047.e57` | discrete | 125, 10.37 | 136, 9.16 | 140, 8.78 | | | **fail** |
+| | integrated | 18, 59.78 | 17, 60.81 | 17, 64.35 | | | fail |
+
+- **The point cloud misses the criterion on the reference PC.** The fps are above 120, but the p95 is 8.8 to 10.4 ms, and the orbit and pan runs each have one frame over 16.67 ms. Drawing point clouds needs renderer work, in a plan of its own, as Phase 0 requires.
+- **Integrated graphics:** these rows are the baseline for the rule "no regression against the baseline". They were measured with the Phase 1 code; the Phase 0 code was not measured on this GPU.
+- **Times in `update` vary with the laptop's state.** Here the times for 100 000 elements were:
+  - box select of everything: 16.93 ms (7.16 to 7.61 ms in three earlier runs);
+  - isolate one: 10.47 ms (5.38 to 5.66 ms earlier);
+  - hide everything: 5.51 ms (2.65 to 2.96 ms earlier).
+
+  On the integrated GPU's run they were 14.56, 10.39 and 5.17 ms. Hiding stays within one frame; box selecting and isolating 100 000 elements take one to two frames. The models of a few thousand elements stay below 0.5 ms. Run the same commands on a computer with integrated graphics only and add its rows here; later phases compare against them.

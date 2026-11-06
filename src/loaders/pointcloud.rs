@@ -186,7 +186,7 @@ pub fn grey(i: f64, range: (f64, f64)) -> [u8; 3] {
 }
 
 /// The local origin for a cloud near `p`: `p` in whole units when it is far from zero.
-fn origin_for(p: [f64; 3]) -> [f64; 3] {
+pub fn origin_for(p: [f64; 3]) -> [f64; 3] {
     match p.iter().any(|v| v.abs() > FAR) {
         true => p.map(f64::floor),
         false => [0.0; 3],

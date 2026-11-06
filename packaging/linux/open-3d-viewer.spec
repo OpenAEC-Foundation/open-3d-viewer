@@ -22,6 +22,7 @@ install -Dm755 %{_sourcedir}/open-3d-viewer-mcp %{buildroot}/usr/bin/open-3d-vie
 install -Dm644 %{_sourcedir}/libvertex.so %{buildroot}/usr/lib/open-3d-viewer/libvertex.so
 %endif
 install -Dm644 %{_sourcedir}/org.openaec.Open3DViewer.desktop %{buildroot}/usr/share/applications/org.openaec.Open3DViewer.desktop
+install -Dm644 %{_sourcedir}/org.openaec.Open3DViewer.xml %{buildroot}/usr/share/mime/packages/org.openaec.Open3DViewer.xml
 install -Dm644 %{_sourcedir}/icon.png %{buildroot}/usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png
 install -Dm644 %{_sourcedir}/LICENSE %{buildroot}/usr/share/licenses/open-3d-viewer/LICENSE
 
@@ -32,5 +33,6 @@ install -Dm644 %{_sourcedir}/LICENSE %{buildroot}/usr/share/licenses/open-3d-vie
 /usr/lib/open-3d-viewer/libvertex.so
 %endif
 /usr/share/applications/org.openaec.Open3DViewer.desktop
+/usr/share/mime/packages/org.openaec.Open3DViewer.xml
 /usr/share/icons/hicolor/512x512/apps/org.openaec.Open3DViewer.png
 /usr/share/licenses/open-3d-viewer/LICENSE

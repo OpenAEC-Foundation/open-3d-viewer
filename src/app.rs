@@ -19,6 +19,7 @@ use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
 use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
+use crate::history::History;
 use crate::selection::{Pickable, Selection};
 use crate::units::{unit_state, UnitKey, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
@@ -159,6 +160,8 @@ pub struct App {
     /// Elements (and the rest of layers) hidden with Hide or Isolate, by keys that stay when a
     /// model is added.
     pub hidden: Arc<HashSet<UnitKey>>,
+    /// Undo and redo of what is shown: hidden elements and layer and model switches.
+    pub history: History<ViewState>,
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
@@ -266,6 +269,9 @@ pub enum Message {
     MeasureVolume(VolumeUnit),
     /// Decimals shown for a category.
     MeasureDecimals(Category, u8),
+    /// Go back to the visibility before the last change (layers, models, hidden elements).
+    Undo,
+    Redo,
     /// Hide the selected elements; the selection empties.
     HideSelection,
     /// Hide every element but the selected ones.
@@ -366,6 +372,7 @@ impl Default for App {
             explode_offsets: Arc::default(),
             units: Arc::default(),
             hidden: Arc::default(),
+            history: History::new(),
             explode_bounds: None,
             measure: MeasureState::default(),
             hover_request: None,
@@ -683,6 +690,7 @@ impl App {
     /// Installs a freshly loaded model (also used by the headless screenshot path).
     pub fn set_model(&mut self, model: Arc<Model>) {
         self.hidden = Arc::default();
+        self.history.clear();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
         self.set_scene(model);
     }
@@ -794,7 +802,11 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = changes_visibility(&message).then(|| self.view_state());
         let task = self.handle(message);
+        if let Some(before) = before.filter(|b| *b != self.view_state()) {
+            self.history.record(before);
+        }
         self.refresh_hover();
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
@@ -1196,6 +1208,16 @@ impl App {
                     Category::Angle => u.angle_decimals = n,
                 }
             }
+            Message::Undo => {
+                if let Some(state) = self.history.undo(self.view_state()) {
+                    self.restore_view_state(state);
+                }
+            }
+            Message::Redo => {
+                if let Some(state) = self.history.redo(self.view_state()) {
+                    self.restore_view_state(state);
+                }
+            }
             Message::HideSelection => self.hide_selection(),
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
@@ -1370,6 +1392,31 @@ impl App {
             }
         }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
+    }
+
+    /// What is shown now, for undo.
+    fn view_state(&self) -> ViewState {
+        ViewState {
+            hidden: self.hidden.clone(),
+            layers: self.visible.clone(),
+            models: self.models.iter().map(|e| (e.visible, e.layer_visibility.clone())).collect(),
+        }
+    }
+
+    /// Shows what `s` says. A state from before an Add has fewer layers and models: those it has
+    /// are restored, the newer ones stay as they are.
+    fn restore_view_state(&mut self, s: ViewState) {
+        self.hidden = s.hidden;
+        for (shown, value) in self.visible.iter_mut().zip(s.layers) {
+            *shown = value;
+        }
+        for (entry, (visible, layers)) in self.models.iter_mut().zip(s.models) {
+            entry.visible = visible;
+            for (shown, value) in entry.layer_visibility.iter_mut().zip(layers) {
+                *shown = value;
+            }
+        }
+        self.update_units();
     }
 
     /// The stable key of a selected item.
@@ -2474,6 +2521,29 @@ fn ray_meets_box(origin: Vec3, dir: Vec3, (lo, hi): (Vec3, Vec3), max: f32) -> b
     true
 }
 
+/// What is shown, as undo keeps it: the elements hidden with Hide or Isolate, every layer's
+/// switch, and per model its switch and its own layer switches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewState {
+    pub hidden: Arc<HashSet<UnitKey>>,
+    pub layers: Vec<bool>,
+    pub models: Vec<(bool, Vec<bool>)>,
+}
+
+/// The messages that change what is shown, and so go into the undo history when they do.
+fn changes_visibility(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::Layer(..)
+            | Message::AllLayers(_)
+            | Message::LayerGroup(..)
+            | Message::ModelVisible(..)
+            | Message::HideSelection
+            | Message::IsolateSelection
+            | Message::ShowAllElements
+    )
+}
+
 /// What a click on triangle `t` of layer `l` selects: its element, or the layer when the format
 /// has no elements.
 fn pickable_at(model: &Model, l: usize, t: usize) -> Pickable {
@@ -3188,6 +3258,46 @@ mod tests {
         let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
         assert_ne!(app.units[unit][0], 0.0, "still moved apart");
         assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn undo_restores_hidden_and_layers() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(10)), false);
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::Layer(0, false));
+        assert!(!app.visible[0]);
+        let _ = app.update(Message::Undo);
+        assert!(app.visible[0]);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, UNIT_HIDDEN);
+        let _ = app.update(Message::Undo);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, 0);
+        let _ = app.update(Message::Redo);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn no_entry_for_noop() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        let _ = app.update(Message::ShowAllElements);
+        let _ = app.update(Message::Layer(0, true));
+        assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn undo_survives_add_model() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        app.click(Some(Pickable::Element(7)), false);
+        let _ = app.update(Message::HideSelection);
+        app.add_model(named_square("b", 7, 2.0));
+        let id = app.model.as_ref().unwrap().element_with_key(crate::model::ElementKey { model: 0, source: 7 }).unwrap();
+        assert_eq!(element_flags(&app, id) & UNIT_HIDDEN, UNIT_HIDDEN);
+        let _ = app.update(Message::Undo);
+        assert_eq!(element_flags(&app, id) & UNIT_HIDDEN, 0);
+        assert_eq!(app.visible.len(), 2, "the added model's layer stays");
     }
 
     #[test]

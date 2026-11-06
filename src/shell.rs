@@ -462,6 +462,8 @@ impl Studio {
                 .toggle(app.plane.is_some() || app.plane_picking)
                 .enabled(loaded),
             Command::new("section.flip", l.text("Omdraaien", "Flip"), go(Message::FlipPlane)).icon(small("transform.mirror"), large("transform.mirror")).enabled(app.plane.is_some()),
+            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.history.can_undo()),
+            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.history.can_redo()),
             Command::new("object.hide", l.text("Verbergen", "Hide"), go(Message::HideSelection))
                 .icon(small("object.hide"), large("object.hide"))
                 .shortcut(key('h'))

@@ -17,6 +17,7 @@ mod bench;
 pub mod desktop;
 mod explode;
 pub mod export;
+mod history;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu;
 mod icons;

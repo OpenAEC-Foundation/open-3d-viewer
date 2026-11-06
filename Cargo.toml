@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.45.11"
+version = "2026.45.12"
 description = "Open 3D Viewer Studio: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open 3D Viewer Studio Contributors"]
 license = "LGPL-3.0-or-later"
@@ -103,6 +103,10 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlAnchorElement", "Location", "Url", "UrlSearchParams", "Blob", "BlobPropertyBag", "Response", "DragEvent", "DataTransfer", "FileList", "File", "console"] }
 console_error_panic_hook = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+# Stops cleanly on SIGTERM, after a save under way (MIT OR Apache-2.0)
+signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 # Which GPU the window gets, before wgpu starts (`gpu`); the version wgpu-hal uses (MIT OR Apache-2.0)

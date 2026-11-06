@@ -4,186 +4,28 @@
 //!
 //! It speaks MCP over stdio (JSON-RPC, one message per line) and passes every tool call on to the
 //! running viewer through its local control port (`remote_link`). When no viewer runs it starts
-//! one: `O3V_VIEWER`, else the viewer next to this program.
+//! one: `O3V_VIEWER`, else the viewer next to this program. The tools and their handling are in
+//! `mcp.rs`, which the viewer also serves over HTTP for the OpenAEC SuperCloud.
 //!
 //! Usage:
 //!   open-3d-viewer-mcp                  (started by the MCP client)
+//!   open-3d-viewer-mcp --prefixed       (tool names with the prefix viewer3d_, as in the SuperCloud;
+//!                                        also with OPENAEC_BEHEERD=1 or O3V_MCP_PREFIX=1)
 //!   open-3d-viewer-mcp --print-config   (the JSON to add it to an MCP client)
+//!   open-3d-viewer-mcp --list-tools     (the tool definitions as JSON, with the prefix)
 
 #[path = "../remote_link.rs"]
 mod remote_link;
+
+#[path = "../mcp.rs"]
+#[allow(dead_code)] // the HTTP endpoint is the viewer's
+mod mcp;
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
-
-const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
-The scene is Z up, in metres for Revit, SketchUp and glTF. Start with open_file (or get_state to see what is open), \
-then screenshot to look at the viewport. Pixel coordinates (pick, screen points in measure_* and section_plane) are \
-pixels of the last viewport screenshot. Elements (BIM) have ids and properties: find them with find_elements, \
-inspect with get_element (size, area, volume), highlight with select. Measurements are drawn in the viewport until \
-clear_measurements. Camera and section commands land at once, so a screenshot right after shows the result.";
-
-fn point_schema(what: &str) -> Value {
-    json!({
-        "description": format!("{what}: [x, y, z] in world coordinates, {{\"screen\": [x, y], \"snap\": true}} for what is under that pixel of the last viewport screenshot (snap = nearest corner of the face), or {{\"element\": id}} for the centre of an element"),
-        "oneOf": [
-            { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-            { "type": "object", "properties": { "screen": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "snap": { "type": "boolean" } }, "required": ["screen"] },
-            { "type": "object", "properties": { "element": { "type": ["integer", "string"] } }, "required": ["element"] }
-        ]
-    })
-}
-
-fn vec3_schema(description: &str) -> Value {
-    json!({ "type": "array", "items": { "type": ["number", "null"] }, "minItems": 3, "maxItems": 3, "description": description })
-}
-
-fn target_schema(description: &str) -> Value {
-    json!({
-        "description": format!("{description}: \"model\", \"selection\", an element id or a list of element ids"),
-        "oneOf": [
-            { "type": "string" },
-            { "type": "integer" },
-            { "type": "array", "items": { "type": ["integer", "string"] } }
-        ]
-    })
-}
-
-fn tool(name: &str, description: &str, properties: Value, required: &[&str], read_only: bool) -> Value {
-    json!({
-        "name": name,
-        "description": description,
-        "inputSchema": { "type": "object", "properties": properties, "required": required },
-        "annotations": { "readOnlyHint": read_only, "destructiveHint": false, "openWorldHint": false },
-    })
-}
-
-fn tools() -> Vec<Value> {
-    vec![
-        tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd) ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
-            json!({ "path": { "type": "string", "description": "Absolute path of the file" } }), &["path"], false),
-        tool("screenshot", "Capture what the viewer shows as a PNG image. 'viewport' (default) is the 3D view only; its pixels are the coordinates for pick and screen points. 'window' is the whole window with ribbon and panels.",
-            json!({
-                "area": { "type": "string", "enum": ["viewport", "window"] },
-                "max_size": { "type": "integer", "description": "Longest side in pixels (default 1600)" },
-                "save_to": { "type": "string", "description": "Also write the PNG to this path" }
-            }), &[], true),
-        tool("list_layers", "The model's layers (Revit categories, SketchUp tags, glTF materials, OBJ groups) with index, visibility, triangle and element counts and colour.",
-            json!({ "filter": { "type": "string", "description": "Only layers whose name contains this" } }), &[], true),
-        tool("set_layer_visibility", "Show or hide layers, or isolate them (show only these).",
-            json!({
-                "layers": { "description": "Layer indices and/or names (exact, else contains), or \"all\"", "oneOf": [{ "type": "string" }, { "type": "integer" }, { "type": "array", "items": { "type": ["integer", "string"] } }] },
-                "visible": { "type": "boolean" },
-                "isolate": { "type": "boolean", "description": "Show only these layers" }
-            }), &["layers"], false),
-        tool("list_views", "Views saved in the file (Revit: 3D views, floor plans, sections, elevations) with index, kind and level.", json!({}), &[], true),
-        tool("apply_view", "Show a saved view: its camera and what it shows (section box, plan range).",
-            json!({ "view": { "type": ["integer", "string"], "description": "Index or name of the view" } }), &["view"], false),
-        tool("get_project_info", "Project data from the file: project information, levels with elevations, phases, grid lines and rooms.", json!({}), &[], true),
-        tool("list_schedules", "Schedules in the file (Revit): index, name, column headings and row count. They are computed a few seconds after the model is in ('computing': true until then).", json!({}), &[], true),
-        tool("get_schedule", "The rows of a schedule (Revit) as Revit shows them, computed from the elements, with the element ids of each row (usable with select). With show, the table opens under the 3D view.",
-            json!({
-                "schedule": { "type": ["integer", "string"], "description": "Index or name of the schedule" },
-                "offset": { "type": "integer" },
-                "limit": { "type": "integer", "description": "Default 100" },
-                "show": { "type": "boolean", "description": "Open the schedule's table in the window" }
-            }), &["schedule"], false),
-        tool("list_sheets", "Sheets in the file (Revit, beta): index, number, name and the names of the views placed on each.", json!({}), &[], true),
-        tool("get_sheet", "A sheet (Revit, beta): its paper and the views placed on it, as boxes in sheet millimetres (x right, y up) with title, detail number, scale and the view index for apply_view. With show, the sheet opens in its tab in the window.",
-            json!({
-                "sheet": { "type": ["integer", "string"], "description": "Index, sheet number or name" },
-                "show": { "type": "boolean", "description": "Open the sheet in the window" }
-            }), &["sheet"], false),
-        tool("find_elements", "Find BIM elements by their properties (category, family, type, level, name, ... as the properties panel shows them). Matching is case-insensitive and on 'contains'. With group_by, returns counts per value instead (e.g. walls per level).",
-            json!({
-                "text": { "type": "string", "description": "Any property value contains this (or the element id)" },
-                "where": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Property conditions, e.g. {\"category\": \"Doors\", \"level\": \"Level 1\"}" },
-                "layer": { "type": "string", "description": "Only elements on layers whose name contains this" },
-                "group_by": { "type": "string", "description": "Property to count by, e.g. \"level\" or \"type\"" },
-                "limit": { "type": "integer", "description": "Default 50" },
-                "offset": { "type": "integer" }
-            }), &[], true),
-        tool("get_element", "All properties of an element plus its measurements: bounding box (min, max, size, centre), surface area, and volume when its mesh is closed.",
-            json!({ "id": { "type": ["integer", "string"] } }), &["id"], true),
-        tool("select", "Select (highlight) elements by id as a click would, and show their properties in the properties panel; or clear the selection.",
-            json!({
-                "ids": { "type": "array", "items": { "type": ["integer", "string"] } },
-                "id": { "type": ["integer", "string"] },
-                "zoom": { "type": "boolean", "description": "Also frame the selection" },
-                "clear": { "type": "boolean" }
-            }), &[], false),
-        tool("pick", "What is under a pixel of the last viewport screenshot: the 3D point, face normal, layer, element and its properties. With select: true it also selects it, as a click.",
-            json!({
-                "x": { "type": "number" }, "y": { "type": "number" },
-                "select": { "type": "boolean" }
-            }), &["x", "y"], false),
-        tool("set_view", "Turn the camera to a standard view and frame the model (as the view cube).",
-            json!({ "preset": { "type": "string", "enum": ["iso", "top", "bottom", "front", "back", "left", "right"] } }), &["preset"], false),
-        tool("set_camera", "Place the camera: eye and target points, or yaw/pitch (degrees; yaw 0 looks from +X, pitch 90 from above), distance to the target, field of view and projection. Omitted values stay.",
-            json!({
-                "eye": vec3_schema("Camera position [x, y, z]"),
-                "target": vec3_schema("Point looked at [x, y, z]"),
-                "yaw_deg": { "type": "number" }, "pitch_deg": { "type": "number" },
-                "distance": { "type": "number" }, "fov_deg": { "type": "number" },
-                "projection": { "type": "string", "enum": ["perspective", "orthographic"] }
-            }), &[], false),
-        tool("navigate", "Move the camera relative to where it is, as dragging and the wheel do: orbit around the target (degrees), pan (metres, screen right/up), move forward (metres) and zoom (factor, 2 = twice as close).",
-            json!({
-                "orbit_yaw_deg": { "type": "number" }, "orbit_pitch_deg": { "type": "number" },
-                "pan_right": { "type": "number" }, "pan_up": { "type": "number" },
-                "move_forward": { "type": "number" }, "zoom": { "type": "number" }
-            }), &[], false),
-        tool("zoom_to", "Frame the model, the selection or elements from the current direction.",
-            json!({ "target": target_schema("What to frame") }), &[], false),
-        tool("set_display", "Display settings: render mode (solid, wireframe, edges), ground grid, the model's grid lines, flip up axis (for files with Y up), fill of cut faces.",
-            json!({
-                "mode": { "type": "string", "enum": ["solid", "wireframe", "edges"] },
-                "grid": { "type": "boolean" }, "grid_lines": { "type": "boolean" },
-                "flip_up": { "type": "boolean" }, "section_fill": { "type": "boolean" }
-            }), &[], false),
-        tool("explode", "The exploded view: pull the model apart per storey (Revit levels) or per element, by a percentage per axis, and switch it on or off. Frame it afterwards with zoom_to.",
-            json!({
-                "enabled": { "type": "boolean" },
-                "mode": { "type": "string", "enum": ["storeys", "elements"] },
-                "percent": { "type": "array", "items": { "type": ["number", "null"] }, "minItems": 3, "maxItems": 3, "description": "[x, y, z] from 0 to 100; null keeps a value" }
-            }), &[], false),
-        tool("section_box", "The section box: switch it on or off, fit it around the model, selection or elements, set its limits (min/max [x, y, z] in the box's frame; null keeps a value) or turn it about the vertical. Everything outside the box is cut away.",
-            json!({
-                "enabled": { "type": "boolean" },
-                "fit": target_schema("Put the box around"),
-                "min": vec3_schema("Lower limits [x, y, z]; null keeps a value"),
-                "max": vec3_schema("Upper limits [x, y, z]; null keeps a value"),
-                "turn_deg": { "type": "number" },
-                "reset": { "type": "boolean", "description": "Back around the whole model" }
-            }), &[], false),
-        tool("section_plane", "A single cutting plane; everything on the side its normal points to is cut away. Place it on an axis (axis z, at 1.2 cuts away everything above 1.2 m: a floor plan cut), by a point and normal, or on the face under a screenshot pixel (as clicking a face). Then flip, move it along its normal, or remove it.",
-            json!({
-                "axis": { "type": "string", "enum": ["x", "y", "z"] },
-                "at": { "type": "number", "description": "Coordinate along the axis" },
-                "point": vec3_schema("A point on the plane"),
-                "normal": vec3_schema("Normal, towards the side that is cut away"),
-                "screen": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Pixel [x, y] of the last viewport screenshot" },
-                "flip": { "type": "boolean", "description": "Cut away the other side" },
-                "move": { "type": "number", "description": "Move along the normal (metres)" },
-                "offset": { "type": "number", "description": "Set the position along the normal" },
-                "remove": { "type": "boolean" }
-            }), &[], false),
-        tool("measure_distance", "Measure the distance between two points (also horizontal and vertical parts) and draw it in the viewport.",
-            json!({ "a": point_schema("First point"), "b": point_schema("Second point"), "show": { "type": "boolean", "description": "Draw it (default true)" } }), &["a", "b"], false),
-        tool("measure_angle", "Measure the angle at a vertex between two points and draw it in the viewport.",
-            json!({ "a": point_schema("First point"), "vertex": point_schema("The vertex"), "b": point_schema("Second point"), "show": { "type": "boolean" } }), &["a", "vertex", "b"], false),
-        tool("measure_between_elements", "Shortest distance between two elements (clearance), with the closest points, drawn in the viewport.",
-            json!({ "a": { "type": ["integer", "string"] }, "b": { "type": ["integer", "string"] }, "show": { "type": "boolean" } }), &["a", "b"], false),
-        tool("clear_measurements", "Remove the measurements drawn in the viewport.", json!({}), &[], false),
-        tool("cancel", "Press Esc: stop placing a section plane, else clear the selection.", json!({}), &[], false),
-    ]
-}
 
 // ---- the viewer -------------------------------------------------------------------------------
 
@@ -288,50 +130,10 @@ fn viewer_exe() -> Option<PathBuf> {
         .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
 }
 
-// ---- MCP --------------------------------------------------------------------------------------
-
-fn call_tool(viewer: &mut Viewer, name: &str, args: &Value) -> Value {
-    if !tools().iter().any(|t| t["name"] == name) {
-        return json!({ "content": [{ "type": "text", "text": format!("unknown tool '{name}'") }], "isError": true });
-    }
-    let timeout = Duration::from_secs(if name == "open_file" { 900 } else { 60 });
-    match viewer.call(name, args, timeout) {
-        Ok(mut result) => {
-            let image = result.as_object_mut().and_then(|o| o.remove("png_base64"));
-            let text = serde_json::to_string_pretty(&result).unwrap_or_default();
-            let mut content = vec![];
-            if let Some(Value::String(data)) = image {
-                content.push(json!({ "type": "image", "data": data, "mimeType": "image/png" }));
-            }
-            content.push(json!({ "type": "text", "text": text }));
-            json!({ "content": content, "isError": false })
-        }
-        Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
-    }
-}
-
-fn handle(viewer: &mut Viewer, msg: &Value) -> Option<Value> {
-    let id = msg.get("id")?.clone(); // notifications get no answer
-    let params = msg.get("params").cloned().unwrap_or(Value::Null);
-    let result = match msg["method"].as_str().unwrap_or("") {
-        "initialize" => {
-            let asked = params["protocolVersion"].as_str().unwrap_or("");
-            let version = PROTOCOL_VERSIONS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOL_VERSIONS[0]);
-            json!({
-                "protocolVersion": version,
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "open-3d-viewer", "title": "Open 3D Viewer Studio", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": INSTRUCTIONS,
-            })
-        }
-        "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
-        "tools/call" => call_tool(viewer, params["name"].as_str().unwrap_or(""), params.get("arguments").unwrap_or(&json!({}))),
-        method => {
-            return Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("method not found: {method}") } }));
-        }
-    };
-    Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+/// Tool names with the SuperCloud prefix: asked for, or in managed mode (OpenAEC Linux).
+fn prefixed() -> bool {
+    let on = |name| matches!(std::env::var(name).as_deref(), Ok("1"));
+    std::env::args().any(|a| a == "--prefixed") || on("O3V_MCP_PREFIX") || on("OPENAEC_BEHEERD")
 }
 
 fn main() {
@@ -342,7 +144,13 @@ fn main() {
         println!("\nClaude Code:  claude mcp add open-3d-viewer -- \"{exe}\"");
         return;
     }
+    if std::env::args().any(|a| a == "--list-tools") {
+        println!("{}", serde_json::to_string_pretty(&json!({ "tools": mcp::tool_list(true) })).unwrap_or_default());
+        return;
+    }
+    let prefixed = prefixed();
     let mut viewer = Viewer { conn: None };
+    let mut call = |cmd: &str, args: &Value, timeout: Duration| viewer.call(cmd, args, timeout);
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -350,46 +158,10 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let answer = match serde_json::from_str::<Value>(&line) {
-            Ok(Value::Array(batch)) => {
-                let answers: Vec<Value> = batch.iter().filter_map(|m| handle(&mut viewer, m)).collect();
-                (!answers.is_empty()).then(|| Value::Array(answers))
-            }
-            Ok(msg) => handle(&mut viewer, &msg),
-            Err(e) => Some(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": e.to_string() } })),
-        };
-        if let Some(answer) = answer {
+        if let Some(answer) = mcp::handle_text(&line, prefixed, &mut call) {
             if writeln!(stdout, "{answer}").and_then(|_| stdout.flush()).is_err() {
                 break;
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tools_have_unique_names_and_object_schemas() {
-        let tools = tools();
-        let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        let n = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), n);
-        assert!(tools.iter().all(|t| t["inputSchema"]["type"] == "object"));
-    }
-
-    #[test]
-    fn answers_initialize_and_lists_tools() {
-        let mut viewer = Viewer { conn: None };
-        let init = handle(&mut viewer, &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-03-26" } })).unwrap();
-        assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
-        assert!(handle(&mut viewer, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
-        let list = handle(&mut viewer, &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).unwrap();
-        assert!(list["result"]["tools"].as_array().unwrap().len() > 20);
-        let bad = handle(&mut viewer, &json!({ "jsonrpc": "2.0", "id": 3, "method": "nope" })).unwrap();
-        assert_eq!(bad["error"]["code"], -32601);
     }
 }

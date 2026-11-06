@@ -40,7 +40,16 @@ impl Loader for ObjLoader {
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         let options = tobj::LoadOptions { triangulate: true, single_index: true, ..Default::default() };
         let (models, materials) = match source.path() {
-            Some(path) => tobj::load_obj(path, &options),
+            // as tobj::load_obj, with the material libraries checked as references
+            // (`super::check_reference`): one that may not be read leaves the model grey
+            Some(path) => {
+                let file = std::fs::File::open(path).map_err(|e| format!("OBJ: {e}"))?;
+                tobj::load_obj_buf(&mut std::io::BufReader::new(file), &options, |mtl| {
+                    let mtl = path.parent().map_or_else(|| mtl.to_path_buf(), |dir| dir.join(mtl));
+                    super::check_reference(path, &mtl).map_err(|_| tobj::LoadError::OpenFileFailed)?;
+                    tobj::load_mtl(mtl)
+                })
+            }
             // bytes from the browser: no side files, so no .mtl colours
             None => {
                 let data = source.read()?;

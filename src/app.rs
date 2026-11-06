@@ -30,6 +30,7 @@ use iced::widget::{
     button, canvas, center, column, container, row, rule, scrollable, shader, slider, stack, svg, text, text_input, Space,
 };
 use iced::{event, keyboard, window, Center, Element, Fill, Font, Length, Subscription, Task, Theme};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use web_time::Instant;
@@ -118,6 +119,8 @@ pub struct App {
     pub show_grids: bool,
     /// Explorer groups opened: views, rooms, layers, schedules, sheets.
     pub explorer_open: [bool; 5],
+    /// Groups of layers opened in the explorer (closed by default).
+    pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
     pub open_sheets: Vec<usize>,
     pub active_sheet: Option<usize>,
@@ -187,6 +190,10 @@ pub enum Message {
     TogglePropertiesPanel,
     Layer(usize, bool),
     AllLayers(bool),
+    /// Open or close a group of layers in the explorer (see [`LAYER_GROUP`]).
+    ToggleLayerGroup(String),
+    /// Show or hide every layer of a group.
+    LayerGroup(String, bool),
     LayerFilter(String),
     Navigate(Navigate),
     Cube(CubeEvent),
@@ -324,6 +331,7 @@ impl Default for App {
             active_view: None,
             show_grids: true,
             explorer_open: [false, false, true, false, false],
+            open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
             open_schedules: Vec::new(),
@@ -938,6 +946,17 @@ impl App {
                 let filter = self.layer_filter.to_lowercase();
                 if let Some(m) = &self.model {
                     let layers: Vec<_> = m.layers.iter().enumerate().filter(|(_, layer)| filter.is_empty() || layer.name.to_lowercase().contains(&filter)).map(|(i, _)| i).collect();
+                    for layer in layers { self.set_layer_visible(layer, v); }
+                }
+            }
+            Message::ToggleLayerGroup(group) => {
+                if !self.open_layer_groups.remove(&group) {
+                    self.open_layer_groups.insert(group);
+                }
+            }
+            Message::LayerGroup(group, v) => {
+                if let Some(m) = &self.model {
+                    let layers: Vec<usize> = (0..m.layers.len()).filter(|&i| layer_group(&m.layers[i].name).0 == Some(group.as_str())).collect();
                     for layer in layers { self.set_layer_visible(layer, v); }
                 }
             }
@@ -1614,20 +1633,22 @@ impl App {
                 .padding([4, 0])
                 .into(),
             ));
-            for i in order {
+            let eye_icon = move |visible: bool, partly: bool| {
+                svg(icons::handle(if visible || partly { icons::EYE } else { icons::EYE_OFF }))
+                    .width(14)
+                    .height(14)
+                    .style(move |_, _| svg::Style { color: Some(if visible { p.text_secondary } else { p.text_muted }) })
+            };
+            let layer_row = |i: usize, label: String| -> Element<'static, Message> {
                 let layer = &model.layers[i];
                 let visible = self.visible.get(i).copied().unwrap_or(true);
                 let [r, g, b] = layer.color;
                 let swatch = container(Space::new().width(10).height(10)).style(move |_| Palette::swatch(iced::Color::from_rgb(r, g, b)));
-                let eye = svg(icons::handle(if visible { icons::EYE } else { icons::EYE_OFF }))
-                    .width(14)
-                    .height(14)
-                    .style(move |_, _| svg::Style { color: Some(if visible { p.text_secondary } else { p.text_muted }) });
-                let item = button(
+                button(
                     row![
-                        eye,
+                        eye_icon(visible, false),
                         swatch,
-                        text(layer.name.clone())
+                        text(label)
                             .size(12)
                             .color(if visible { p.text } else { p.text_muted })
                             .wrapping(Wrapping::WordOrGlyph)
@@ -1640,8 +1661,54 @@ impl App {
                 .padding([3, 6])
                 .width(Fill)
                 .style(move |_, s| p.row_button(s))
-                .on_press(Message::Layer(i, !visible));
-                body = body.push(indent(item.into()));
+                .on_press(Message::Layer(i, !visible))
+                .into()
+            };
+            // Layers named "Group › Layer" (a BTL panel and its member types) sit under their
+            // group, which shows or hides them together; the others follow on their own.
+            let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+            for &i in &order {
+                if let (Some(group), _) = layer_group(&model.layers[i].name) {
+                    match groups.iter_mut().find(|(g, _)| *g == group) {
+                        Some((_, members)) => members.push(i),
+                        None => groups.push((group, vec![i])),
+                    }
+                }
+            }
+            for (group, members) in &groups {
+                let shown = members.iter().filter(|&&i| self.visible.get(i).copied().unwrap_or(true)).count();
+                let (all, some) = (shown == members.len(), shown > 0);
+                let open = searching || self.open_layer_groups.contains(*group);
+                use openaec_ui::icons::Icon;
+                let arrow = svg(svg::Handle::from_memory(if open { Icon::DisclosureExpanded } else { Icon::DisclosureCollapsed }.bytes()))
+                    .width(12)
+                    .height(12)
+                    .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
+                let triangles: usize = members.iter().map(|&i| model.layers[i].triangle_count()).sum();
+                let eye = button(eye_icon(some, some && !all)).padding([3, 4]).style(move |_, s| p.row_button(s)).on_press(Message::LayerGroup(group.to_string(), !all));
+                let title = button(
+                    row![
+                        arrow,
+                        text(group.to_string()).size(12).font(FONT_BOLD).color(if some { p.text } else { p.text_muted }).wrapping(Wrapping::WordOrGlyph).width(Fill),
+                        text(format_count(triangles)).size(10).color(p.text_muted),
+                    ]
+                    .spacing(6)
+                    .align_y(Center),
+                )
+                .padding([3, 6])
+                .width(Fill)
+                .style(move |_, s| p.row_button(s))
+                .on_press(Message::ToggleLayerGroup(group.to_string()));
+                body = body.push(indent(row![eye, title].spacing(0).align_y(Center).into()));
+                if open {
+                    for &i in members {
+                        let label = layer_group(&model.layers[i].name).1.to_string();
+                        body = body.push(indent(indent(layer_row(i, label))));
+                    }
+                }
+            }
+            for &i in order.iter().filter(|&&i| layer_group(&model.layers[i].name).0.is_none()) {
+                body = body.push(indent(layer_row(i, model.layers[i].name.clone())));
             }
         }
 
@@ -2495,6 +2562,17 @@ fn prop_row(p: Palette, label: String, value: String) -> Element<'static, Messag
 }
 
 /// The header of an explorer group: open/closed arrow, title, optional tag, count.
+/// Separates a group from a layer in a layer name: "Panel Be1 › STUD".
+pub const LAYER_GROUP: &str = " › ";
+
+/// The group of a layer name and the layer's own name (the whole name without a group).
+fn layer_group(name: &str) -> (Option<&str>, &str) {
+    match name.split_once(LAYER_GROUP) {
+        Some((group, rest)) if !group.trim().is_empty() && !rest.trim().is_empty() => (Some(group), rest),
+        _ => (None, name),
+    }
+}
+
 fn group_header(p: Palette, title: &str, tag: Option<&'static str>, count: usize, open: bool, msg: Message) -> Element<'static, Message> {
     use openaec_ui::icons::Icon;
     let arrow = svg(svg::Handle::from_memory(if open { Icon::DisclosureExpanded } else { Icon::DisclosureCollapsed }.bytes()))
@@ -2624,6 +2702,14 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_groups_split_on_the_arrow() {
+        assert_eq!(layer_group("Panel Be1 › STUD"), (Some("Panel Be1"), "STUD"));
+        assert_eq!(layer_group("Walls"), (None, "Walls"));
+        // A name that only starts or ends with the separator is not grouped.
+        assert_eq!(layer_group(" › STUD"), (None, " › STUD"));
+    }
 
     fn simulator(app: &App) -> iced_test::Simulator<'_, Message> {
         iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view())

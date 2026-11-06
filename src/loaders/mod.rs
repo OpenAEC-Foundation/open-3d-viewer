@@ -23,6 +23,8 @@ mod cad;
 mod allplan;
 mod dgn;
 mod archicad;
+#[cfg(not(target_arch = "wasm32"))]
+mod vertex;
 mod threemf;
 mod collada;
 mod fbx;
@@ -231,6 +233,10 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &vertex::VertexLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &vertex::BtlLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &ifc::IfcLoader,
         // last: `.txt` and `.csv` are only point clouds when nothing else claims them

@@ -78,6 +78,8 @@ cadmpeg-tessellate = "0.6.8"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.
 ifc-lite-processing = "=25.0.1"
+# Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
+libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
 rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
 rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306", default-features = false }

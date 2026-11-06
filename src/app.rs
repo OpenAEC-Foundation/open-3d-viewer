@@ -20,7 +20,7 @@ use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
 use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
 use crate::selection::{Pickable, Selection};
-use crate::units::{unit_state, UnitKey, UNIT_SELECTED};
+use crate::units::{unit_state, UnitKey, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
 use glam::{Mat4, Vec2, Vec3};
@@ -156,6 +156,9 @@ pub struct App {
     pub explode_offsets: Arc<Vec<[f32; 4]>>,
     /// What the renderer gets per unit: the explode offset and the flags (`crate::units`).
     pub units: Arc<Vec<[f32; 4]>>,
+    /// Elements (and the rest of layers) hidden with Hide or Isolate, by keys that stay when a
+    /// model is added.
+    pub hidden: Arc<HashSet<UnitKey>>,
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
@@ -263,6 +266,12 @@ pub enum Message {
     MeasureVolume(VolumeUnit),
     /// Decimals shown for a category.
     MeasureDecimals(Category, u8),
+    /// Hide the selected elements; the selection empties.
+    HideSelection,
+    /// Hide every element but the selected ones.
+    IsolateSelection,
+    /// Show every element that Hide or Isolate hid.
+    ShowAllElements,
     /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
     Escape,
     /// A frame while loading (animates the loading card).
@@ -356,6 +365,7 @@ impl Default for App {
             explode_index: None,
             explode_offsets: Arc::default(),
             units: Arc::default(),
+            hidden: Arc::default(),
             explode_bounds: None,
             measure: MeasureState::default(),
             hover_request: None,
@@ -672,6 +682,7 @@ impl App {
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
     pub fn set_model(&mut self, model: Arc<Model>) {
+        self.hidden = Arc::default();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
         self.set_scene(model);
     }
@@ -1185,6 +1196,9 @@ impl App {
                     Category::Angle => u.angle_decimals = n,
                 }
             }
+            Message::HideSelection => self.hide_selection(),
+            Message::IsolateSelection => self.isolate_selection(),
+            Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape => {
                 if !self.measure.escape() {
@@ -1320,6 +1334,7 @@ impl App {
     }
 
     /// The unit of the shown model with `key`, if it is there.
+    #[cfg(test)]
     pub(crate) fn unit_of_key(&self, key: UnitKey) -> Option<usize> {
         let index = self.explode_index.as_ref()?;
         match key {
@@ -1347,7 +1362,57 @@ impl App {
                 *f |= UNIT_SELECTED;
             }
         }
+        if !self.hidden.is_empty() {
+            for (u, f) in flags.iter_mut().enumerate().skip(1) {
+                if index.owner(u).is_some_and(|o| self.hidden.contains(&self.unit_key(o))) {
+                    *f |= UNIT_HIDDEN;
+                }
+            }
+        }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
+    }
+
+    /// The stable key of a selected item.
+    fn item_key(&self, item: Pickable) -> UnitKey {
+        self.unit_key(match item {
+            Pickable::Element(id) => UnitOwner::Element(id),
+            Pickable::Layer(l) => UnitOwner::LayerRest(l),
+        })
+    }
+
+    /// Hide: the selection joins the hidden elements and empties.
+    fn hide_selection(&mut self) {
+        if self.sel.is_empty() {
+            return;
+        }
+        let mut hidden = (*self.hidden).clone();
+        hidden.extend(self.sel.items().iter().map(|&i| self.item_key(i)));
+        self.hidden = Arc::new(hidden);
+        self.sel.clear();
+        self.selection_changed();
+    }
+
+    /// Isolate: every unit of the shown models is hidden but the selected ones.
+    fn isolate_selection(&mut self) {
+        let Some(index) = self.explode_index.clone().filter(|_| !self.sel.is_empty()) else { return };
+        let keep: HashSet<UnitKey> = self.sel.items().iter().map(|&i| self.item_key(i)).collect();
+        let hidden = (1..index.len()).filter_map(|u| index.owner(u)).map(|o| self.unit_key(o)).filter(|k| !keep.contains(k)).collect();
+        self.hidden = Arc::new(hidden);
+        self.update_units();
+    }
+
+    /// Show all: nothing stays hidden by Hide or Isolate; layer and model switches stay as they are.
+    fn show_all_elements(&mut self) {
+        if !self.hidden.is_empty() {
+            self.hidden = Arc::default();
+            self.update_units();
+        }
+    }
+
+    /// Whether vertex `v` of layer `l` belongs to a hidden unit, as drawn now.
+    pub(crate) fn hidden_test(&self) -> impl Fn(usize, u32) -> bool + '_ {
+        let index = self.explode_index.as_deref();
+        move |l, v| index.is_some_and(|ix| self.units.get(ix.unit(l, v)).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0))
     }
 
     /// The camera's view of a viewport of width × height.
@@ -1379,7 +1444,8 @@ impl App {
         // the exploded view moves the triangles: their offsets back in model space
         let back = mm.inverse();
         let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
-        let hit = pick_triangle(model, &self.visible, origin, dir, &shift, &keep, index).map(|(l, t)| {
+        let hidden = self.hidden_test();
+        let hit = pick_triangle(model, &self.visible, origin, dir, &shift, &keep, &hidden, index).map(|(l, t)| {
             let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
             (l, t, s)
         });
@@ -2429,6 +2495,7 @@ pub fn pick_triangle(
     dir: Vec3,
     shift: &dyn Fn(usize, u32) -> Vec3,
     keep: &dyn Fn(Vec3) -> bool,
+    hidden: &dyn Fn(usize, u32) -> bool,
     index: Option<&PickIndex>,
 ) -> Option<(usize, usize)> {
     let mut best: Option<(f32, usize, usize)> = None;
@@ -2450,7 +2517,7 @@ pub fn pick_triangle(
             }
             for (i, tri) in block.chunks_exact(3).enumerate() {
                 let t = b * TRI_BLOCK + i;
-                if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) {
+                if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) || hidden(l, tri[0]) {
                     continue;
                 }
                 let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
@@ -2929,19 +2996,19 @@ mod tests {
         };
         let model = Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]);
         let still = |_: usize, _: u32| Vec3::ZERO;
-        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None);
+        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, None);
         let (l, t) = hit.expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(20));
         let index = PickIndex::new(&model);
-        assert_eq!(pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, Some(&index)), hit);
+        assert_eq!(pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, Some(&index)), hit);
         assert_eq!(model.element_ranges(20), vec![(0, 6, 6)]);
         let props = model.element_props(20);
         assert!(props.contains(&("level".to_string(), "00 begane grond".to_string())), "{props:?}");
-        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None).is_none());
-        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None).is_none());
+        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, None).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, None).is_none());
         // a section box below z = 0.5 cuts the upper square away: the lower one is hit
         let below = |p: Vec3| p.z < 0.5;
-        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below, None).expect("hit");
+        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below, &|_, _| false, None).expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(10));
     }
 
@@ -2962,16 +3029,16 @@ mod tests {
         let down = Vec3::new(0.0, 0.0, -1.0);
         for x in [0.3, 255.5, 256.7, 1400.2, 1998.9, 1999.5] {
             let origin = Vec3::new(x, 0.6, 5.0);
-            let plain = pick_triangle(&model, &[true], origin, down, &still, &|_| true, None);
-            assert_eq!(pick_triangle(&model, &[true], origin, down, &still, &|_| true, Some(&index)), plain, "x = {x}");
+            let plain = pick_triangle(&model, &[true], origin, down, &still, &|_| true, &|_, _| false, None);
+            assert_eq!(pick_triangle(&model, &[true], origin, down, &still, &|_| true, &|_, _| false, Some(&index)), plain, "x = {x}");
             assert_eq!(plain.is_some(), x.rem_euclid(2.0) < 1.0, "x = {x}");
         }
         // a slanted ray, across many blocks
         let slanted = Vec3::new(-0.3, 0.0, -1.0);
         let origin = Vec3::new(1001.0, 0.5, 2.0);
         assert_eq!(
-            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, Some(&index)),
-            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, None),
+            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, &|_, _| false, Some(&index)),
+            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, &|_, _| false, None),
         );
     }
 
@@ -3011,6 +3078,116 @@ mod tests {
             ..Layer::default()
         };
         Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    /// Two unit squares facing +Z, element 10 at z = 0 under element 20 at z = 1.
+    fn stacked_squares() -> Arc<Model> {
+        use crate::model::Layer;
+        let mut positions = Vec::new();
+        for z in [0.0, 1.0] {
+            positions.extend_from_slice(&[0.0, 0.0, z, 1.0, 0.0, z, 1.0, 1.0, z, 0.0, 1.0, z]);
+        }
+        let layer = Layer {
+            name: "Slabs".into(),
+            positions,
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            elements: vec![(10, 0, 6), (20, 6, 6)],
+            ..Layer::default()
+        };
+        Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]))
+    }
+
+    /// The flags of the unit of element `id`.
+    fn element_flags(app: &App, id: u64) -> u8 {
+        let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(id)).expect("unit");
+        app.units.get(unit).map_or(0, |s| s[3] as u8)
+    }
+
+    #[test]
+    fn hide_hides_selected_units_and_clears_selection() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        assert_eq!(element_flags(&app, 20) & UNIT_HIDDEN, UNIT_HIDDEN);
+        assert_eq!(element_flags(&app, 10), 0);
+        assert!(app.sel.is_empty());
+    }
+
+    #[test]
+    fn isolate_hides_everything_else() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::IsolateSelection);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, UNIT_HIDDEN);
+        assert_eq!(element_flags(&app, 20) & UNIT_HIDDEN, 0);
+        assert!(app.sel.contains(Pickable::Element(20)));
+    }
+
+    #[test]
+    fn show_all_clears_hidden() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::ShowAllElements);
+        assert!(app.hidden.is_empty());
+        assert_eq!(element_flags(&app, 20), 0);
+    }
+
+    #[test]
+    fn pick_passes_through_hidden_element() {
+        let mut app = App::default();
+        app.set_model(stacked_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 1.0));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        assert_eq!(app.sel.primary(), Some(Pickable::Element(20)));
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        assert_eq!(app.sel.primary(), Some(Pickable::Element(10)));
+    }
+
+    #[test]
+    fn hide_works_for_formats_without_elements() {
+        use crate::model::Layer;
+        let layer = Layer { name: "Mesh".into(), positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], indices: vec![0, 1, 2], ..Layer::default() };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        app.click(Some(Pickable::Layer(0)), false);
+        let _ = app.update(Message::HideSelection);
+        let unit = app.explode_index.as_ref().and_then(|i| i.layer_rest_unit(0)).expect("unit");
+        assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn hidden_survive_add_model() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        app.click(Some(Pickable::Element(7)), false);
+        let _ = app.update(Message::HideSelection);
+        app.add_model(named_square("b", 7, 2.0));
+        let model = app.model.clone().unwrap();
+        let id = model.element_with_key(crate::model::ElementKey { model: 0, source: 7 }).unwrap();
+        let other = model.element_with_key(crate::model::ElementKey { model: 1, source: 7 }).unwrap();
+        assert_eq!(element_flags(&app, id) & UNIT_HIDDEN, UNIT_HIDDEN);
+        assert_eq!(element_flags(&app, other), 0);
+    }
+
+    #[test]
+    fn explode_and_hidden_combine() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        let _ = app.update(Message::ToggleExplode);
+        let _ = app.update(Message::Explode(0, 50.0));
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
+        assert_ne!(app.units[unit][0], 0.0, "still moved apart");
+        assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
     }
 
     #[test]
@@ -3100,9 +3277,9 @@ mod tests {
         // no levels: elements mode; the middle is x 1.5, so the squares move by -2 and +2
         let down = Vec3::new(0.0, 0.0, -1.0);
         let shift = |l: usize, i: u32| app.explode_offset(l, i);
-        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true, None);
+        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true, &|_, _| false, None);
         assert_eq!(hit.map(|(l, t)| model.layers[l].element_at(t)), Some(Some(20)));
-        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true, None).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true, &|_, _| false, None).is_none());
         let b = app.world_bounds().unwrap();
         assert_eq!((b.min[0], b.max[0]), (-2.0, 5.0));
         app.selection = model.element_ranges(20);

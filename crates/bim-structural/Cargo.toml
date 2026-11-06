@@ -23,3 +23,7 @@ schema = ["dep:schemars"]
 
 [dev-dependencies]
 schemars = "1"
+
+[[bin]]
+name = "sam-check"
+path = "src/bin/sam-check.rs"

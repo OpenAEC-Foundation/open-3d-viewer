@@ -6,6 +6,7 @@
 //! `docs/superpowers/specs/2026-11-06-structural-model-design.md` in the repository.
 
 pub mod base64;
+pub mod exchange;
 pub mod frame;
 pub mod hinge;
 pub mod id;

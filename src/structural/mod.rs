@@ -6,6 +6,8 @@
 //! is written into `Model::props` per object at load. See
 //! `docs/superpowers/specs/2026-11-06-structural-model-design.md`.
 
+pub mod display;
+pub mod pick;
 pub mod remote;
 
 use crate::model::{Bounds, Origin};
@@ -633,7 +635,7 @@ impl<'a> StructuralItem<'a> {
 }
 
 /// Points along the arc from `a` through `mid` to `b`, for its bounds.
-fn arc_samples(a: DVec3, mid: DVec3, b: DVec3) -> Vec<DVec3> {
+pub(crate) fn arc_samples(a: DVec3, mid: DVec3, b: DVec3) -> Vec<DVec3> {
     let Some((c, n, _)) = frame::circle_through(a, mid, b) else { return Vec::new() };
     let (u, w) = (a - c, b - c);
     let angle = |v: DVec3| {

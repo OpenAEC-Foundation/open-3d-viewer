@@ -51,6 +51,9 @@ pub struct ExplodeIndex {
     /// hinges and the other decorations take the unit of the item they sit on
     /// (`StructuralItem::unit_key`).
     structural: HashMap<u64, u32>,
+    /// The unit of every item of the model's structural display (nodes, members), in display
+    /// order: written into the instances when they are uploaded.
+    display_units: Vec<u32>,
 }
 
 impl ExplodeIndex {
@@ -161,12 +164,22 @@ impl ExplodeIndex {
             }
         }
         let storeys = if building.is_valid() { order.len() } else { 0 };
-        Self { vertex_units, bounds, storey, storeys, rest, building, structural }
+        let display_units = model
+            .structural_display
+            .as_ref()
+            .map(|d| d.items.iter().map(|i| structural.get(&i.element).copied().unwrap_or(0)).collect())
+            .unwrap_or_default();
+        Self { vertex_units, bounds, storey, storeys, rest, building, structural, display_units }
     }
 
     /// The unit of a structural node, member or surface.
     pub fn structural_unit(&self, id: u64) -> Option<u32> {
         self.structural.get(&id).copied()
+    }
+
+    /// The unit of every item of the model's structural display, in display order.
+    pub fn display_units(&self) -> &[u32] {
+        &self.display_units
     }
 
     /// The bounds of a unit at rest (model space).

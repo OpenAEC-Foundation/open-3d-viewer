@@ -1,6 +1,7 @@
 //! The neutral scene model every loader produces: Z-up, metres (or file units), one
 //! triangle mesh or point cloud per layer.
 
+use crate::structural::display::StructuralDisplay;
 use crate::structural::{StructuralIndex, StructuralItem, StructuralPart};
 use glam::DVec3;
 use std::collections::HashMap;
@@ -134,6 +135,9 @@ pub struct Model {
     pub structural: Vec<StructuralPart>,
     /// Element id → structural object, built by [`Model::set_structural`].
     pub structural_index: StructuralIndex,
+    /// What the renderer draws of the structural parts (member axes, node glyphs), derived with
+    /// them by [`Model::set_structural`]: on the load worker for a loaded file, never per frame.
+    pub structural_display: Option<Arc<StructuralDisplay>>,
     /// Where each source model sits in the world (f64, Z up, metres); index = the `model` of a
     /// [`StructuralPart`]. One entry for a loaded file, one per file for a combined model.
     pub origins: Vec<Origin>,
@@ -515,6 +519,7 @@ impl Model {
             project: ProjectData::default(),
             structural: Vec::new(),
             structural_index: StructuralIndex::default(),
+            structural_display: None,
             origins: vec![Origin::default()],
         }
     }
@@ -528,6 +533,7 @@ impl Model {
         if parts.is_empty() {
             self.structural = Vec::new();
             self.structural_index = StructuralIndex::default();
+            self.structural_display = None;
             return;
         }
         // compact structural ids start after every element id the model has
@@ -542,6 +548,7 @@ impl Model {
         let (parts, index) = StructuralIndex::build(parts, first_free);
         self.structural = parts;
         self.structural_index = index;
+        self.structural_display = Some(Arc::new(StructuralDisplay::build(&self.structural, &self.origins)));
         for (_, b) in self.structural_index.unit_bounds(&self.structural, &self.origins) {
             self.bounds.extend(b.min);
             self.bounds.extend(b.max);

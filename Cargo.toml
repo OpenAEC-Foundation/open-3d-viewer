@@ -13,7 +13,9 @@ repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
 default-run = "open-3d-viewer"
 
 # The desktop app includes Revit support; the web target uses byte-oriented readers.
+# Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
+members = ["crates/bim-structural"]
 
 [lib]
 name = "open_3d_viewer"

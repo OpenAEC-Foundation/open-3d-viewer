@@ -93,6 +93,8 @@ pub struct App {
     pub layer_filter: String,
     pub status: Status,
     pub viewport_size: (f32, f32),
+    /// The last press was a finger's, not the mouse's: the hint shows the touch gestures.
+    pub fingers: bool,
     /// View preset to apply when the next model arrives (command line).
     pub initial_view: Option<ViewPreset>,
     /// `--window-screenshot`: capture the real window once the model is shown, then exit.
@@ -286,6 +288,8 @@ pub enum Message {
     ShowAllElements,
     /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
     Escape,
+    /// A finger (`true`) or a mouse button (`false`) went down.
+    Pressed(bool),
     /// A frame while loading (animates the loading card).
     Tick,
     TakeShot,
@@ -344,6 +348,7 @@ impl Default for App {
             layer_filter: String::new(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
+            fingers: false,
             initial_view: None,
             window_shot: None,
             pending_open: None,
@@ -1052,6 +1057,13 @@ impl App {
                     self.hover_request = None;
                     self.measure.hover = None;
                 }
+                Navigate::Pinch { dx, dy, steps, x, y, width, height } => {
+                    self.anim = None;
+                    self.measure.hover = None;
+                    self.camera.pan(dx, dy, height);
+                    let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
+                    self.camera.zoom_at(steps, ndc, width / height.max(1.0));
+                }
             },
             Message::ApplyView(i) => self.apply_view(i),
             Message::ToggleGrids => self.show_grids = !self.show_grids,
@@ -1127,6 +1139,7 @@ impl App {
                     s.turn_by(degrees.to_radians() - s.turn);
                 }
             }
+            Message::Pressed(fingers) => self.fingers = fingers,
             Message::Tick => {
                 if let Some((from, to, start)) = self.anim {
                     let t = (start.elapsed().as_secs_f32() / ANIM_SECONDS).min(1.0);
@@ -1277,6 +1290,8 @@ impl App {
         };
         let events = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Open(path)),
+            iced::Event::Touch(iced::touch::Event::FingerPressed { .. }) => Some(Message::Pressed(true)),
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Message::Pressed(false)),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
                 if status == event::Status::Ignored =>
             {
@@ -2001,7 +2016,10 @@ impl App {
             .on_input(Message::LayerFilter)
             .size(12)
             .padding([5, 8]);
-        column![search, scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4)]
+        let id = iced::widget::Id::new("explorer");
+        let list = scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).id(id.clone()).height(Fill).spacing(4);
+        // a finger drags the list, also where it starts on a row
+        column![search, crate::swipe::swipe(id, false, list)]
             .spacing(8)
             .into()
     }
@@ -2231,7 +2249,8 @@ impl App {
                 if model.source_y_up != self.flip_up { l.text("Y (omgezet)", "Y (converted)").into() } else { "Z".into() },
             ));
         // the scrollbar gets its own strip next to the text
-        scrollable(content).height(Fill).spacing(4).into()
+        let id = iced::widget::Id::new("properties");
+        crate::swipe::swipe(id.clone(), false, scrollable(content).id(id).height(Fill).spacing(4))
     }
 
     /// The measurements in the properties pane: each result with its details and a delete button,
@@ -2355,11 +2374,20 @@ impl App {
             (None, _) => Some(center(self.welcome(p)).into()),
             _ => None,
         };
-        let hint = container(
-            text(l.text(
+        // the gestures for whatever pressed last: fingers on a phone or tablet, else the mouse
+        let hint = if self.fingers {
+            l.text(
+                "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken en slepen: pannen",
+                "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press and drag: pan",
+            )
+        } else {
+            l.text(
                 "Klik: selecteren · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend",
                 "Click: select · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit",
-            ))
+            )
+        };
+        let hint = container(
+            text(hint)
                 .size(11)
                 .color(p.text_muted),
         )
@@ -3166,6 +3194,55 @@ mod tests {
             .collect();
         assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 40.0 && *dy == 10.0)), "{nav:?}");
         assert!(nav.iter().any(|n| matches!(n, Navigate::Zoom { steps, .. } if *steps == 1.0)), "{nav:?}");
+    }
+
+    #[test]
+    fn touch_orbits_pinches_pans_and_taps() {
+        use iced::touch::{Event as T, Finger};
+        let navigation = |events: &[T], wait: bool| -> Vec<Navigate> {
+            let mut app = App::default();
+            app.status = Status::Loaded(String::new());
+            app.model = None;
+            let mut ui = simulator(&app);
+            for (i, event) in events.iter().enumerate() {
+                if wait && i == 1 {
+                    std::thread::sleep(std::time::Duration::from_millis(550));
+                }
+                ui.simulate([iced::Event::Touch(*event)]);
+            }
+            ui.into_messages().filter_map(|m| if let Message::Navigate(n) = m { Some(n) } else { None }).collect()
+        };
+        let (one, two) = (Finger(1), Finger(2));
+        let p = |x, y| iced::Point::new(x, y);
+
+        // one finger drags: orbit, and no pick
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(760.0, 320.0) }, T::FingerLifted { id: one, position: p(760.0, 320.0) }], false);
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 60.0 && *dy == 20.0)), "{nav:?}");
+        assert!(!nav.iter().any(|n| matches!(n, Navigate::Pick { .. })), "{nav:?}");
+
+        // a tap picks where the finger went down
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerLifted { id: one, position: p(702.0, 301.0) }], false);
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Pick { .. })), "{nav:?}");
+
+        // a long press, then a drag: pan (as a right drag)
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(740.0, 300.0) }, T::FingerLifted { id: one, position: p(740.0, 300.0) }], true);
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Pan { dx, .. } if *dx == 40.0)), "{nav:?}");
+        assert!(!nav.iter().any(|n| matches!(n, Navigate::Orbit { .. } | Navigate::Pick { .. })), "{nav:?}");
+
+        // two fingers spread: zoom in about their middle; the last finger alone does not orbit
+        let nav = navigation(
+            &[
+                T::FingerPressed { id: one, position: p(600.0, 300.0) },
+                T::FingerPressed { id: two, position: p(800.0, 300.0) },
+                T::FingerMoved { id: two, position: p(1000.0, 300.0) },
+                T::FingerLifted { id: one, position: p(600.0, 300.0) },
+                T::FingerMoved { id: two, position: p(900.0, 350.0) },
+                T::FingerLifted { id: two, position: p(900.0, 350.0) },
+            ],
+            false,
+        );
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Pinch { steps, dx, .. } if *steps > 0.0 && *dx == 100.0)), "{nav:?}");
+        assert!(!nav.iter().any(|n| matches!(n, Navigate::Orbit { .. } | Navigate::Pick { .. })), "{nav:?}");
     }
 
     #[test]

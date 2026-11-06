@@ -1,0 +1,2950 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "destabilising": {
+          "type": "boolean"
+        },
+        "frame": {
+          "$ref": "#/$defs/LoadFrame"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/Load"
+        },
+        "load": {
+          "$ref": "#/$defs/LoadRef"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        }
+      },
+      "required": [
+        "id",
+        "load",
+        "target",
+        "frame",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ActionType": {
+      "oneOf": [
+        {
+          "enum": [
+            "permanent",
+            "variable",
+            "accidental"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "user"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Carrier": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "member"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "surface_edge": {
+              "additionalProperties": false,
+              "properties": {
+                "from": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "surface": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "to": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "surface",
+                "from",
+                "to"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "surface_edge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "polyline": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "polyline"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Combination": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "no": {
+          "type": "string"
+        },
+        "purpose": {
+          "$ref": "#/$defs/Purpose"
+        },
+        "terms": {
+          "description": "`[load, factor]` pairs; shown, never evaluated.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/LoadRef"
+              },
+              {
+                "format": "double",
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "name",
+        "purpose",
+        "terms"
+      ],
+      "type": "object"
+    },
+    "CompositePart": {
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "$ref": "#/$defs/Shape"
+        },
+        "transform": {
+          "description": "Column-major 2×3 `[xx, xy, yx, yy, tx, ty]`.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": "array"
+        }
+      },
+      "required": [
+        "shape",
+        "transform"
+      ],
+      "type": "object"
+    },
+    "Conventions": {
+      "additionalProperties": false,
+      "properties": {
+        "gravity_was": {
+          "$ref": "#/$defs/Gravity",
+          "default": "-z"
+        },
+        "local_z_rule": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mz_sign_was": {
+          "$ref": "#/$defs/MzSign",
+          "default": "tension_minus_y"
+        },
+        "reactions_were": {
+          "$ref": "#/$defs/ReactionSense",
+          "default": "on_structure"
+        },
+        "result_signs": {
+          "$ref": "#/$defs/SignStatus",
+          "default": "assumed_canonical"
+        }
+      },
+      "type": "object"
+    },
+    "Curve": {
+      "oneOf": [
+        {
+          "enum": [
+            "line"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "arc": {
+              "additionalProperties": false,
+              "properties": {
+                "mid": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "mid"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "arc"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The vertices strictly between the start and end node.",
+          "properties": {
+            "polyline": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "polyline"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "default": "",
+          "type": "string"
+        },
+        "object": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    },
+    "Dimension": {
+      "oneOf": [
+        {
+          "enum": [
+            "3d"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A plane model with the unit normal of its plane.",
+          "properties": {
+            "2d": {
+              "additionalProperties": false,
+              "properties": {
+                "normal": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "normal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "2d"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Distribution": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "uniform": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "uniform"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "linear": {
+              "additionalProperties": false,
+              "properties": {
+                "q1": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "q2": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "q1",
+                "q2"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "linear"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "trapezoidal": {
+              "additionalProperties": false,
+              "properties": {
+                "a": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "q1": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "q2": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "a",
+                "b",
+                "q1",
+                "q2"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "trapezoidal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`[x, q]` pairs, x ascending.",
+          "properties": {
+            "polygonal": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "polygonal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "parabolic": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "parabolic"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sine": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "sine"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Dof": {
+      "description": "One DOF: restrained (`fixed`), free, or elastic.",
+      "oneOf": [
+        {
+          "enum": [
+            "fixed",
+            "free"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "spring": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "spring"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "tension_only": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "tension_only"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "compression_only": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "compression_only"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "failure": {
+              "additionalProperties": false,
+              "properties": {
+                "k": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "limit": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "k",
+                "limit"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "failure"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "slippage": {
+              "additionalProperties": false,
+              "properties": {
+                "gap": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "k": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "k",
+                "gap"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "slippage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Displacement-force pairs.",
+          "properties": {
+            "diagram": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "diagram"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DofFrame": {
+      "oneOf": [
+        {
+          "enum": [
+            "global"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "node",
+          "description": "The node's `frame`.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The local frame of this member.",
+          "properties": {
+            "member": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "member"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EccentricityPolicy": {
+      "enum": [
+        "cardinal_cancels_position",
+        "additive",
+        "explicit"
+      ],
+      "type": "string"
+    },
+    "EndOffsets": {
+      "additionalProperties": false,
+      "description": "Rigid offsets from node to member end.",
+      "properties": {
+        "end": {
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "frame": {
+          "$ref": "#/$defs/OffsetFrame",
+          "default": "local"
+        },
+        "start": {
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Gravity": {
+      "enum": [
+        "-z",
+        "+z"
+      ],
+      "type": "string"
+    },
+    "Inline": {
+      "additionalProperties": false,
+      "description": "Base64 result blocks.",
+      "properties": {
+        "envelope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_deformations": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "member_forces": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node_displacements": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reactions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Insertion": {
+      "additionalProperties": false,
+      "properties": {
+        "cardinal_point": {
+          "default": 0,
+          "description": "IFC4 IfcCardinalPointReference 1-19, 0 = none.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eccentricity": {
+          "default": [
+            0.0,
+            0.0
+          ],
+          "description": "Member-wide (ey, ez), local axes; the profile moves by +e.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "end_offsets": {
+          "$ref": "#/$defs/EndOffsets",
+          "default": {
+            "end": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "frame": "local",
+            "start": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "profile_offsets": {
+          "description": "IfcMaterialProfileWithOffsets at start and end.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "profile_position": {
+          "description": "The profile definition's own Position, `[xx, xy, yx, yy, tx, ty]`.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LineSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "along": {
+          "$ref": "#/$defs/Carrier"
+        },
+        "dofs": {
+          "description": "Springs per length.",
+          "items": {
+            "$ref": "#/$defs/Dof"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "frame": {
+          "$ref": "#/$defs/DofFrame"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "named": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "no": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "along"
+      ],
+      "type": "object"
+    },
+    "Link": {
+      "additionalProperties": false,
+      "properties": {
+        "analytical": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "physical": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/LinkSource"
+        }
+      },
+      "required": [
+        "analytical",
+        "physical",
+        "source"
+      ],
+      "type": "object"
+    },
+    "LinkSource": {
+      "oneOf": [
+        {
+          "enum": [
+            "ifc_rel_assigns_to_product",
+            "revit_association"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "matched": {
+              "additionalProperties": false,
+              "properties": {
+                "distance": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "distance"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "matched"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Load": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "nodal_force": {
+              "additionalProperties": false,
+              "properties": {
+                "f": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "m": {
+                  "default": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "f"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "nodal_force"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "member_point": {
+              "additionalProperties": false,
+              "properties": {
+                "f": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "m": {
+                  "default": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "x": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "f"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "member_point"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "member_distributed": {
+              "additionalProperties": false,
+              "properties": {
+                "dir": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "dist": {
+                  "$ref": "#/$defs/Distribution"
+                },
+                "moment": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "dir",
+                "dist"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "member_distributed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "surface": {
+              "additionalProperties": false,
+              "properties": {
+                "dir": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "dist": {
+                  "$ref": "#/$defs/SurfaceDistribution"
+                }
+              },
+              "required": [
+                "dir",
+                "dist"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "surface"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "temperature": {
+              "additionalProperties": false,
+              "properties": {
+                "dt": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "dt_y": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "dt_z": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "dt"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "temperature"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "displacement": {
+              "additionalProperties": false,
+              "properties": {
+                "u": {
+                  "items": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "maxItems": 6,
+                  "minItems": 6,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "u"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "displacement"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LoadCase": {
+      "additionalProperties": false,
+      "properties": {
+        "action_source": {
+          "default": "",
+          "type": "string"
+        },
+        "action_type": {
+          "$ref": "#/$defs/ActionType"
+        },
+        "coefficient": {
+          "default": 1.0,
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "no": {
+          "type": "string"
+        },
+        "self_weight": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "name",
+        "action_type"
+      ],
+      "type": "object"
+    },
+    "LoadFrame": {
+      "enum": [
+        "global",
+        "local",
+        "global_projected"
+      ],
+      "type": "string"
+    },
+    "LoadRef": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "case": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "case"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "combination": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "combination"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Material": {
+      "additionalProperties": false,
+      "properties": {
+        "E": {
+          "description": "Young's modulus, Pa.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "G": {
+          "description": "Shear modulus, Pa.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "alpha_t": {
+          "description": "Thermal expansion, 1/K.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nu": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "rho": {
+          "description": "Density, kg/m³.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Member": {
+      "additionalProperties": false,
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/Curve",
+          "default": "line"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "insertion": {
+          "$ref": "#/$defs/Insertion",
+          "default": {
+            "cardinal_point": 0,
+            "eccentricity": [
+              0.0,
+              0.0
+            ],
+            "end_offsets": {
+              "end": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "frame": "local",
+              "start": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/MemberKind"
+        },
+        "links": {
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "material": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "no": {
+          "type": "string"
+        },
+        "nodes": {
+          "description": "Start, intermediate (ordered along the member), end.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "orientation": {
+          "$ref": "#/$defs/Orientation",
+          "default": "default"
+        },
+        "releases": {
+          "default": [
+            null,
+            null
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Release"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "section": {
+          "default": null,
+          "description": "Start and end (taper) section.",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "section_rotation": {
+          "format": "double",
+          "type": "number"
+        },
+        "z": {
+          "description": "Unit local z, perpendicular to the axis; always given.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "kind",
+        "nodes",
+        "z"
+      ],
+      "type": "object"
+    },
+    "MemberKind": {
+      "enum": [
+        "beam",
+        "truss",
+        "cable",
+        "tension_only",
+        "compression_only",
+        "rigid",
+        "spring"
+      ],
+      "type": "string"
+    },
+    "Model": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "type": "array"
+        },
+        "combinations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Combination"
+          },
+          "type": "array"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "dimension": {
+          "$ref": "#/$defs/Dimension",
+          "default": "3d"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/ModelKind"
+        },
+        "line_supports": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LineSupport"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/Link"
+          },
+          "type": "array"
+        },
+        "load_cases": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LoadCase"
+          },
+          "type": "array"
+        },
+        "materials": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Material"
+          },
+          "type": "array"
+        },
+        "members": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Member"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nodes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        },
+        "results": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResultSet"
+          },
+          "type": "array"
+        },
+        "sections": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Section"
+          },
+          "type": "array"
+        },
+        "shared_frame": {
+          "description": "Column-major 4×4, world metres (IFC SharedPlacement); identity when absent.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        },
+        "surfaces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Surface"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ModelKind": {
+      "enum": [
+        "analytical",
+        "physical_axes"
+      ],
+      "type": "string"
+    },
+    "MzSign": {
+      "enum": [
+        "tension_minus_y",
+        "tension_plus_y"
+      ],
+      "type": "string"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "properties": {
+        "frame": {
+          "default": null,
+          "description": "Skewed support frame: the frame's x, y and z axes in global coordinates.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "no": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/NodeOrigin"
+        },
+        "p": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "support": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Support"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "p"
+      ],
+      "type": "object"
+    },
+    "NodeOrigin": {
+      "oneOf": [
+        {
+          "enum": [
+            "analytical"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "derived_from_physical": {
+              "additionalProperties": false,
+              "properties": {
+                "approximate": {
+                  "type": "boolean"
+                },
+                "element": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "element",
+                "approximate"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "derived_from_physical"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OffsetFrame": {
+      "enum": [
+        "local",
+        "global"
+      ],
+      "type": "string"
+    },
+    "Orientation": {
+      "description": "Provenance of `z`; never interpreted.",
+      "oneOf": [
+        {
+          "enum": [
+            "ifc_axis",
+            "default"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "beta": {
+              "additionalProperties": false,
+              "properties": {
+                "angle": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "rule": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "angle",
+                "rule"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "beta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ref_node": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ref_node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ref_vector": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "ref_vector"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Props": {
+      "additionalProperties": false,
+      "description": "Section properties as the source gives them; all optional.",
+      "properties": {
+        "A": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "It": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "Iy": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "Iyz": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "Iz": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "centroid": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "shear_centre": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Purpose": {
+      "oneOf": [
+        {
+          "enum": [
+            "uls",
+            "sls",
+            "als"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "user"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReactionSense": {
+      "enum": [
+        "on_structure",
+        "on_support"
+      ],
+      "type": "string"
+    },
+    "Release": {
+      "additionalProperties": false,
+      "description": "A member-end release (always member local): `dofs` (`fixed` = connected), `named`, or both.",
+      "properties": {
+        "dofs": {
+          "items": {
+            "$ref": "#/$defs/Dof"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "named": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ResultFor": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "case": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "case"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "combination": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "combination"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "envelope": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "envelope"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ResultSet": {
+      "additionalProperties": false,
+      "properties": {
+        "for": {
+          "$ref": "#/$defs/ResultFor"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Inline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Inline result blocks, base64, by table name."
+        },
+        "linear": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "no": {
+          "type": "string"
+        },
+        "tables": {
+          "description": "The tables this set has.",
+          "items": {
+            "$ref": "#/$defs/TableName"
+          },
+          "type": "array"
+        },
+        "theory": {
+          "$ref": "#/$defs/Theory"
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "name",
+        "for",
+        "theory",
+        "linear",
+        "tables"
+      ],
+      "type": "object"
+    },
+    "Section": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "material": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "props": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Props"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "$ref": "#/$defs/Shape"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "shape"
+      ],
+      "type": "object"
+    },
+    "Shape": {
+      "description": "Section shapes in metres, origin at the bounding-box centre. Radii and slopes default to 0.",
+      "oneOf": [
+        {
+          "enum": [
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "I": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "slope": {
+                  "default": 0.0,
+                  "description": "Inner flange face slope, rad.",
+                  "format": "double",
+                  "type": "number"
+                },
+                "tf": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "tw": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "b",
+                "tw",
+                "tf"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "I"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AsymI": {
+              "additionalProperties": false,
+              "properties": {
+                "bb": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "bt": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "tfb": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "tft": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "tw": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "bt",
+                "bb",
+                "tw",
+                "tft",
+                "tfb"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "AsymI"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "U": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r1": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "r2": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "slope": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "tf": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "tw": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "b",
+                "tw",
+                "tf"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "U"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "L": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r1": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "r2": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "t": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "b",
+                "t"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "L"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "T": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "tf": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "tw": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "b",
+                "tw",
+                "tf"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "T"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "C": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "lip": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "r": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "t": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "b",
+                "t"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "C"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Z": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "tf": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "tw": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "h",
+                "b",
+                "tw",
+                "tf"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Z"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Rect": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "b",
+                "h"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Rect"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Circle": {
+              "additionalProperties": false,
+              "properties": {
+                "d": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "d"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Circle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Chs": {
+              "additionalProperties": false,
+              "properties": {
+                "d": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "t": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "d",
+                "t"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Chs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Rhs": {
+              "additionalProperties": false,
+              "properties": {
+                "b": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "h": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "r_in": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "r_out": {
+                  "default": 0.0,
+                  "format": "double",
+                  "type": "number"
+                },
+                "t": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "b",
+                "h",
+                "t"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "polygon": {
+              "additionalProperties": false,
+              "properties": {
+                "holes": {
+                  "default": [],
+                  "items": {
+                    "items": {
+                      "items": {
+                        "format": "double",
+                        "type": "number"
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "outer": {
+                  "items": {
+                    "items": {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "outer"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "polygon"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "composite": {
+              "items": {
+                "$ref": "#/$defs/CompositePart"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "composite"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SignStatus": {
+      "enum": [
+        "verified",
+        "assumed_canonical"
+      ],
+      "type": "string"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "application": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conventions": {
+          "$ref": "#/$defs/Conventions",
+          "default": {
+            "gravity_was": "-z",
+            "mz_sign_was": "tension_minus_y",
+            "reactions_were": "on_structure",
+            "result_signs": "assumed_canonical"
+          }
+        },
+        "eccentricity_policy": {
+          "$ref": "#/$defs/EccentricityPolicy",
+          "default": "explicit"
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "global_transform": {
+          "default": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "description": "Column-major 4×4 applied to reach the Z-up global frame (rigid).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Support": {
+      "additionalProperties": false,
+      "description": "A nodal or line support: `dofs`, or a `named` type from the preset table, or both.",
+      "properties": {
+        "dofs": {
+          "items": {
+            "$ref": "#/$defs/Dof"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "frame": {
+          "$ref": "#/$defs/DofFrame"
+        },
+        "named": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Surface": {
+      "additionalProperties": false,
+      "properties": {
+        "boundary": {
+          "description": "Node loop.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/SurfaceKind"
+        },
+        "links": {
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "material": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "no": {
+          "type": "string"
+        },
+        "offset_z": {
+          "format": "double",
+          "type": "number"
+        },
+        "openings": {
+          "items": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Thickness"
+        },
+        "x_dir": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "no",
+        "kind",
+        "boundary",
+        "thickness"
+      ],
+      "type": "object"
+    },
+    "SurfaceDistribution": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "uniform": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "uniform"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bilinear": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "bilinear"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`[u, v, p]` samples in the surface plane.",
+          "properties": {
+            "sampled": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "sampled"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SurfaceKind": {
+      "enum": [
+        "plate",
+        "membrane",
+        "shell",
+        "rigid",
+        "load_transfer"
+      ],
+      "type": "string"
+    },
+    "TableName": {
+      "enum": [
+        "member_forces",
+        "member_deformations",
+        "node_displacements",
+        "reactions",
+        "envelope"
+      ],
+      "type": "string"
+    },
+    "Target": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "node": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "member"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Part of a member, absolute metres from its start node.",
+          "properties": {
+            "member_span": {
+              "additionalProperties": false,
+              "properties": {
+                "member": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "span": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "member",
+                "span"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "member_span"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "surface": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "surface"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "free": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "free"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Theory": {
+      "enum": [
+        "first_order",
+        "second_order",
+        "third_order",
+        "full_nonlinear"
+      ],
+      "type": "string"
+    },
+    "Thickness": {
+      "oneOf": [
+        {
+          "enum": [
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "uniform": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "uniform"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Three points of the plane `[x, y, z, t]`.",
+          "properties": {
+            "linear": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "linear"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://github.com/OpenAEC-Foundation/open-3d-viewer/blob/main/crates/bim-structural/schema/sam-json-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A `sam-json` v1 document.",
+  "properties": {
+    "format": {
+      "description": "Always \"sam-json\".",
+      "type": "string"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/$defs/Model"
+      },
+      "type": "array"
+    },
+    "origin": {
+      "default": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "description": "The anchor the viewer subtracts for display, world metres.",
+      "items": {
+        "format": "double",
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    },
+    "units": {
+      "description": "Always \"SI\".",
+      "type": "string"
+    },
+    "version": {
+      "description": "Always 1.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "source",
+    "units",
+    "models"
+  ],
+  "title": "sam-json v1",
+  "type": "object"
+}

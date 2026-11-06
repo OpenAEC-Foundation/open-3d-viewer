@@ -220,7 +220,7 @@ fn run_app(args: Args) -> iced::Result {
         studio = studio.with_settings_in(dir);
     }
     studio.set_look(args.theme.or_else(managed::theme), args.language.or_else(managed::language));
-    shell::run(studio, window_icon())
+    shell::run(studio, window_icon(), true)
 }
 
 /// How long a save under way may take to finish after SIGTERM: within Docker's 10 s before it

@@ -50,6 +50,23 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 gh attestation verify open-3d-viewer_2026.45.11_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
 
+## Android
+
+The viewer runs on Android phones and tablets: it is the browser version, installed as an app.
+
+- **Install from the browser (recommended).** Open [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com) in Chrome and tap **Install** in the bar that appears, or choose **Install app** (or **Add to home screen**) in Chrome's menu. The app gets its own icon, opens full screen without the address bar, and starts without a network once it has been opened. It updates itself with the website.
+- **APK.** Every run of [`android.yml`](.github/workflows/android.yml) on `main` ([the list of those runs](https://github.com/OpenAEC-Foundation/open-3d-viewer/actions/workflows/android.yml?query=branch%3Amain+event%3Apush)) keeps an `open-3d-viewer-android-*.apk` under *Artifacts* on the run's page (you need to be signed in to GitHub; the download is a `.zip` holding the APK). Copy it to the phone, open it and allow installing from that source. The APK is a [Trusted Web Activity](https://developer.chrome.com/docs/android/trusted-web-activity): the same web app, opened by Chrome as an app of its own. It is a debug build with a throw-away key, so Android may warn about it, installing a newer one means uninstalling the old one first, and Chrome shows a thin address bar at the top until the site lists the app's release key in `/.well-known/assetlinks.json`. It is not in the Play Store.
+
+On a touch screen **one finger orbits**, **two fingers pinch to zoom** and **move together to pan**, a **tap selects** an element (or places a measuring point), and a **long press, then drag, pans** (as the right mouse button does). At phone width the window is compact: the ribbon scrolls sideways under your finger and folds away when you tap **Home**, and the two panel buttons at the top right swap the 3D view for the explorer or the properties.
+
+What works and what does not on Android:
+
+- Every format of the browser version opens through **Open** (Android's file picker) or a `?file=` link. IFC and Revit do not, as in any browser.
+- The 3D view needs WebGPU or WebGL2; a current Chrome has one of them on most phones of the last years.
+- A large model loads slowly and the app waits while it does; a phone has less memory than a computer, so a very large model can stop the tab.
+- Typing into the explorer's search field does not bring up the on-screen keyboard (iced has no on-screen keyboard support in the browser yet).
+- There is no native Android build: iced 0.14, the interface library, cannot start on Android by itself, so the app is the web version, installed from Chrome or wrapped in the APK.
+
 ## Why use it?
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
@@ -136,8 +153,9 @@ Every pull request and every release starts the Linux build this way on GitHub A
 | [`src/loaders/`](src/loaders/) | One adapter per file format; [`src/export/`](src/export/) writes IFC 4 |
 | [`src/bin/open-3d-viewer-mcp.rs`](src/bin/open-3d-viewer-mcp.rs) | The MCP server for AI agents |
 | [`vendor/openaec-ui/`](vendor/openaec-ui/), [`assets/b2/`](assets/b2/) | The shared OpenAEC window shell and icons, copied from [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 |
-| [`packaging/`](packaging/) | The Windows installer, the macOS app bundle and the Linux packages |
-| [`.github/workflows/`](.github/workflows/) | `build.yml` tests every change, `release.yml` builds and signs a release, `live.yml` publishes the browser version |
+| [`packaging/`](packaging/) | The Windows installer, the macOS app bundle, the Linux packages and the Android app ([`packaging/android/`](packaging/android/)) |
+| [`web/`](web/) | What makes the browser version an installable app: the web app manifest, the service worker and the icons |
+| [`.github/workflows/`](.github/workflows/) | `build.yml` tests every change, `release.yml` builds and signs a release, `live.yml` publishes the browser version, `android.yml` builds the Android APK |
 | [`scripts/`](scripts/) | The README images, the B2 icon copy and the product video, all made by script |
 | [`test-models/`](test-models/) | The models the tests open |
 
@@ -221,7 +239,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **364 unit tests** in `src/` (358 run; 6 are left out by default: two need local samples, three write sample or image files, one needs a GPU), plus 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 208 for the loaders, 42 for the app, 17 for measuring, 8 for the window shell, 7 for the section tools, 11 for IFC export, 13 for remote control, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), and more for the 3D view, view cube, selection, undo, model and exploded view.
+- **370 unit tests** in `src/` (364 run; 6 are left out by default: two need local samples, three write sample or image files, one needs a GPU), plus 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 208 for the loaders, 43 for the app, 17 for measuring, 9 for the window shell, 7 for the section tools, 11 for IFC export, 13 for remote control, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), and more for the 3D view, view cube, selection, undo, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -235,6 +253,7 @@ Count sources: `cargo test --release` and `cargo test --release -p openaec-ui --
 - **IFC and Revit open on the desktop only.** The browser version does not include those readers.
 - **IGES files do not open.** STEP files do; IGES is not read yet.
 - **Undo covers visibility only.** Measurements and the section are cleared by hand.
+- **On Android** the app is the browser version (installed from Chrome, or the APK around it), with the same limits; see [Android](#android).
 - **The browser version blocks while it loads** a large model (no worker threads yet) and does not keep your settings between visits.
 - **Five icons are stand-ins.** The OpenAEC icon set has no icons yet for solid, wireframe, edges, perspective and orthographic; the viewer uses the closest ones.
 - **No walk mode or hidden-line mode.**
@@ -277,7 +296,7 @@ Open 3D Viewer Studio is part of the [OpenAEC Foundation](https://github.com/Ope
 
 ## License
 
-The viewer's own source is LGPL-3.0-or-later. See [LICENSE](LICENSE). The Inter font is under the SIL Open Font License (`assets/fonts/Inter-LICENSE.txt`); `vendor/openaec-ui` and its fonts and icons are described in its [`NOTICE.md`](vendor/openaec-ui/NOTICE.md). IFClite and acadrust are MPL-2.0. The desktop app links the OpenAEC Revit library `rvt-dll`, which keeps its own proprietary licence, so the desktop builds are not wholly open source; the browser version does not include it.
+The viewer's own source is LGPL-3.0-or-later. See [LICENSE](LICENSE). The Inter font is under the SIL Open Font License (`assets/fonts/Inter-LICENSE.txt`); `vendor/openaec-ui` and its fonts and icons are described in its [`NOTICE.md`](vendor/openaec-ui/NOTICE.md). IFClite and acadrust are MPL-2.0. The Android APK also holds Google's [Android Browser Helper](https://github.com/GoogleChrome/android-browser-helper) and the AndroidX libraries it uses, under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). The desktop app links the OpenAEC Revit library `rvt-dll`, which keeps its own proprietary licence, so the desktop builds are not wholly open source; the browser version does not include it.
 
 ## Trademarks
 

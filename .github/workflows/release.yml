@@ -524,7 +524,7 @@ jobs:
           set -euo pipefail
           yes() { [[ "$1" == true ]] && echo "ja" || echo "**nee**"; }
           cat > notes.md <<EOF
-          **Open 3D Viewer Studio** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
+          **Open 3D Viewer Studio** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Bekijk wat hij doet in de [productvideo](https://www.youtube.com/watch?v=cxHO8M8W2Ow) (73 s). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
 
           | Systeem | Bestand |
           | --- | --- |

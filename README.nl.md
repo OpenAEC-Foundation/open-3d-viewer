@@ -19,30 +19,15 @@
 
 </div>
 
-## Wat deze repository is
-
-Deze repository is de volledige broncode van **Open 3D Viewer Studio**, de 3D-viewer van de [OpenAEC Foundation](https://github.com/OpenAEC-Foundation). Architecten, constructeurs en bouwers sturen elkaar modellen in allerlei formaten; met deze viewer open je ze allemaal zonder het programma waarmee ze gemaakt zijn. Je loopt om het model heen, klikt een element aan en leest zijn eigenschappen, meet, snijdt het open, trekt het uit elkaar per verdieping of per element, en slaat het op als IFC.
+**Open 3D Viewer Studio** is de 3D-viewer van de [OpenAEC Foundation](https://github.com/OpenAEC-Foundation). Architecten, constructeurs en bouwers sturen elkaar modellen in allerlei formaten; met deze viewer open je ze allemaal zonder het programma waarmee ze gemaakt zijn. Je loopt om het model heen, klikt een element aan en leest zijn eigenschappen, meet, snijdt het open, trekt het uit elkaar per verdieping of per element, en slaat het op als IFC.
 
 Eén Rust-codebasis levert drie dingen: de **desktopapp** voor Windows, macOS en Linux, de **browserversie** op [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com), en de **MCP-server** waarmee AI-agents de desktopapp bedienen. Daarnaast staat hier wat van die code ondertekende installers en een live website maakt.
-
-| Map | Wat erin staat |
-|-----|----------------|
-| [`src/`](src/) | De viewer: het venster ([`shell.rs`](src/shell.rs)), de app-toestand ([`app.rs`](src/app.rs)), de 3D-weergave ([`viewport/`](src/viewport/)), meten, doorsnedes, uit elkaar halen, en de afstandsbediening voor de MCP-server |
-| [`src/loaders/`](src/loaders/) | Eén adapter per bestandsformaat; [`src/export/`](src/export/) schrijft IFC 4 |
-| [`src/bin/open-3d-viewer-mcp.rs`](src/bin/open-3d-viewer-mcp.rs) | De MCP-server voor AI-agents |
-| [`vendor/openaec-ui/`](vendor/openaec-ui/), [`assets/b2/`](assets/b2/) | De gedeelde OpenAEC-vensterschil en iconen, overgenomen uit [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 |
-| [`packaging/`](packaging/) | De Windows-installer, de macOS-appbundel en de Linux-pakketten |
-| [`.github/workflows/`](.github/workflows/) | `build.yml` test elke wijziging, `release.yml` bouwt en ondertekent een release, `live.yml` publiceert de browserversie |
-| [`scripts/`](scripts/) | De README-beelden, de kopie van de B2-iconen en de productvideo, allemaal met een script gemaakt |
-| [`test-models/`](test-models/) | De modellen die de tests openen |
-
-De lezers voor SketchUp, Tekla en PLY, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). Deze repository legt elk vast op een vaste commit.
 
 ![Een SketchUp-model van een huis op zijn kavel in de viewer, met de modellen en lagen links en de bestandseigenschappen rechts, thema Licht](docs/images/readme/hero.png)
 
 ## Probeer het
 
-**[Open de browserversie](https://open-3d-viewer.open-aec.com)**. Sleep een model op de pagina of kies **Openen**, en draai dan met de linkermuisknop, verschuif met de middelste knop en zoom met het wiel. Je hebt een browser met WebGPU nodig: een recente Chrome, Edge, Firefox of Safari. Je bestand blijft op je computer; er wordt niets geüpload.
+**[Open de browserversie](https://open-3d-viewer.open-aec.com)**. Sleep een model op de pagina of kies **Openen**, en draai dan met de linkermuisknop, verschuif met de middelste knop en zoom met het wiel. Je hebt een browser met WebGPU nodig: een recente Chrome, Edge, Firefox of Safari. Je bestand blijft op je computer; er wordt niets geüpload. Wil je eerst zien wat hij doet, bekijk dan de [productvideo](https://www.youtube.com/watch?v=cxHO8M8W2Ow) (73 s).
 
 ## Download
 
@@ -62,31 +47,8 @@ Zelf een download controleren:
 sha256sum -c SHA256SUMS --ignore-missing
 gpg --import docs/openaec-releases.asc   # OpenAEC Foundation Releases, vingerafdruk 13F6 D414 ADEE 4ED4 CD09 AC60 601D 86C9 3C50 4D29
 gpg --verify SHA256SUMS.asc SHA256SUMS
-gh attestation verify open-3d-viewer_2026.45.10_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
+gh attestation verify open-3d-viewer_2026.45.11_amd64.deb --repo OpenAEC-Foundation/open-3d-viewer
 ```
-
-## OpenAEC Linux (SuperCloud)
-
-De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; deze repository publiceert dus geen eigen Docker-image.
-
-- **Zonder FUSE:** `./open-3d-viewer_<versie>_amd64.AppImage --appimage-extract`, dan `squashfs-root/AppRun [BESTAND]`.
-- **Zonder GPU:** het 3D-beeld tekent met de software-renderers van Mesa, lavapipe (Vulkan, `mesa-vulkan-drivers`) of llvmpipe (OpenGL, `libegl-mesa0`). Zonder een van beide opent het venster, maar blijft het 3D-beeld leeg.
-- **Onder Wayland**, met een kleine compositor zoals labwc, en zonder systeemvak, notificatiedienst, keyring of D-Bus-sessie.
-- **Stoppen:** de viewer leest alleen modellen en schrijft exports, dus er is geen onbewaard werk; op `SIGTERM` stopt hij.
-
-| Variabele | Wat hij doet |
-|-----------|--------------|
-| `OPENAEC_BEHEERD=1` | Beheerde modus: geen updatemelding (de SuperCloud ververst het image). De viewer downloadt zelf nooit updates. |
-| `OPENAEC_MAP` | De werkmap (`/openaec` in de SuperCloud): de dialogen voor openen en opslaan beginnen daar. |
-| `XDG_CONFIG_HOME` | Instellingen (voorkeuren, eigen sneltoetsen, de MCP-koppeling) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, standaard onder `~/.config`. |
-| `O3V_REMOTE=0` | Geen bedieningspoort voor de MCP-server. `O3V_REMOTE_PORT` legt de poort vast (anders een vrije). |
-| `WGPU_BACKEND` | `vulkan` of `gl` om de grafische backend te kiezen; standaard de eerste die werkt. |
-
-Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` en `--language en|nl`.
-
-**Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert alleen op `127.0.0.1`, voor zijn eigen MCP-server (zie [MCP](#mcp)). De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
-
-Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): de release pakt de AppImage uit, start hem onder labwc zonder scherm of GPU, controleert dat het venster en een model in het 3D-beeld tekenen, bewaart de schermafbeeldingen en zet het geheugengebruik zonder geopend bestand in de releasenotes.
 
 ## Waarom gebruiken?
 
@@ -129,6 +91,53 @@ De desktopapp opent Revit-bestanden (`.rvt`, `.rfa`) via de Revit-bibliotheek [`
 ![Een Revit-model met de Door Schedule als tabel onder de 3D-weergave, thema Donker](docs/images/readme/schedule.png)
 
 De beelden op deze pagina maakt [`scripts/build_readme_images.py`](scripts/build_readme_images.py), dat het echte venster rendert met `open-3d-viewer --screenshot`. Het beeld van de staat gebruikt het Autodesk-voorbeeld `snowdon_arch_2025.rvt`.
+
+## Grafische kaart
+
+Het venster tekent met wgpu. Op Windows gebruikt het DirectX 12 als de grafische kaart van Intel is, omdat de Vulkan-driver van Intel het hele venster wit kan laten flitsen terwijl je draait ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)), en OpenGL op Intel-chips die te oud zijn voor DirectX 12 in wgpu (Haswell, Broadwell); andere kaarten houden de keuze van wgpu. Bij elke start schrijft het venster wat het kreeg (kaart, driver, backend, oppervlakformaat) naar `gpu.log` in de instellingenmap: `%APPDATA%\OpenAEC\Open 3D Viewer Studio` op Windows, `~/.config/OpenAEC/Open 3D Viewer Studio` op Linux en macOS.
+
+Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere backend of presentatiemodus, en meld in een issue welke helpt, samen met `gpu.log`:
+
+- **Eenmalig:** `open-3d-viewer.exe --gpu-backend vulkan` (of `dx12`, `gl`) en `--present-mode mailbox` (of `fifo`, `vsync`, `no_vsync`). Mailbox werkt met DirectX 12 en Vulkan, niet met OpenGL.
+- **Altijd:** zet de gebruikersvariabele `WGPU_BACKEND` of `ICED_PRESENT_MODE` op een van deze waarden, bijvoorbeeld `setx WGPU_BACKEND vulkan` in een opdrachtprompt, en start de viewer opnieuw.
+
+## OpenAEC Linux (SuperCloud)
+
+De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; deze repository publiceert dus geen eigen Docker-image.
+
+- **Zonder FUSE:** `./open-3d-viewer_<versie>_amd64.AppImage --appimage-extract`, dan `squashfs-root/AppRun [BESTAND]`.
+- **Zonder GPU:** het 3D-beeld tekent met de software-renderers van Mesa, lavapipe (Vulkan, `mesa-vulkan-drivers`) of llvmpipe (OpenGL, `libegl-mesa0`). Zonder een van beide opent het venster, maar blijft het 3D-beeld leeg.
+- **Onder Wayland**, met een kleine compositor zoals labwc, en zonder systeemvak, notificatiedienst, keyring of D-Bus-sessie.
+- **Stoppen:** de viewer leest alleen modellen en schrijft exports, dus er is geen onbewaard werk; op `SIGTERM` stopt hij.
+
+| Variabele | Wat hij doet |
+|-----------|--------------|
+| `OPENAEC_BEHEERD=1` | Beheerde modus: geen updatemelding (de SuperCloud ververst het image). De viewer downloadt zelf nooit updates. |
+| `OPENAEC_MAP` | De werkmap (`/openaec` in de SuperCloud): de dialogen voor openen en opslaan beginnen daar. |
+| `XDG_CONFIG_HOME` | Instellingen (voorkeuren, eigen sneltoetsen, de MCP-koppeling) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, standaard onder `~/.config`. |
+| `O3V_REMOTE=0` | Geen bedieningspoort voor de MCP-server. `O3V_REMOTE_PORT` legt de poort vast (anders een vrije). |
+| `WGPU_BACKEND` | `vulkan` of `gl` om de grafische backend te kiezen; standaard de eerste die werkt. |
+
+Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` en `--language en|nl`.
+
+**Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert alleen op `127.0.0.1`, voor zijn eigen MCP-server (zie [MCP](#mcp)). De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
+
+Elke pull request en elke release start de Linux-build zo op GitHub Actions ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): de release pakt de AppImage uit, start hem onder labwc zonder scherm of GPU, controleert dat het venster en een model in het 3D-beeld tekenen, bewaart de schermafbeeldingen en zet het geheugengebruik zonder geopend bestand in de releasenotes.
+
+## Wat hier staat
+
+| Map | Wat erin staat |
+|-----|----------------|
+| [`src/`](src/) | De viewer: het venster ([`shell.rs`](src/shell.rs)), de app-toestand ([`app.rs`](src/app.rs)), de 3D-weergave ([`viewport/`](src/viewport/)), meten, doorsnedes, uit elkaar halen, en de afstandsbediening voor de MCP-server |
+| [`src/loaders/`](src/loaders/) | Eén adapter per bestandsformaat; [`src/export/`](src/export/) schrijft IFC 4 |
+| [`src/bin/open-3d-viewer-mcp.rs`](src/bin/open-3d-viewer-mcp.rs) | De MCP-server voor AI-agents |
+| [`vendor/openaec-ui/`](vendor/openaec-ui/), [`assets/b2/`](assets/b2/) | De gedeelde OpenAEC-vensterschil en iconen, overgenomen uit [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 |
+| [`packaging/`](packaging/) | De Windows-installer, de macOS-appbundel en de Linux-pakketten |
+| [`.github/workflows/`](.github/workflows/) | `build.yml` test elke wijziging, `release.yml` bouwt en ondertekent een release, `live.yml` publiceert de browserversie |
+| [`scripts/`](scripts/) | De README-beelden, de kopie van de B2-iconen en de productvideo, allemaal met een script gemaakt |
+| [`test-models/`](test-models/) | De modellen die de tests openen |
+
+De lezers voor SketchUp, Tekla en PLY, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). Deze repository legt elk vast op een vaste commit.
 
 ## Uitwisseling
 
@@ -203,18 +212,9 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 - **Het blijft op je computer.** Het venster luistert alleen op `127.0.0.1`, met een willekeurig token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` of `O3V_REMOTE=0` zet het uit.
 - **Installeren:** zet `open-3d-viewer-mcp` naast de viewer (de installers doen dat) en registreer hem, bijvoorbeeld `claude mcp add open-3d-viewer -- "C:\pad\naar\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` geeft de JSON voor andere clients.
 
-## Grafische kaart
-
-Het venster tekent met wgpu. Op Windows gebruikt het DirectX 12 als de grafische kaart van Intel is, omdat de Vulkan-driver van Intel het hele venster wit kan laten flitsen terwijl je draait ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)), en OpenGL op Intel-chips die te oud zijn voor DirectX 12 in wgpu (Haswell, Broadwell); andere kaarten houden de keuze van wgpu. Bij elke start schrijft het venster wat het kreeg (kaart, driver, backend, oppervlakformaat) naar `gpu.log` in de instellingenmap: `%APPDATA%\OpenAEC\Open 3D Viewer Studio` op Windows, `~/.config/OpenAEC/Open 3D Viewer Studio` op Linux en macOS.
-
-Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere backend of presentatiemodus, en meld in een issue welke helpt, samen met `gpu.log`:
-
-- **Eenmalig:** `open-3d-viewer.exe --gpu-backend vulkan` (of `dx12`, `gl`) en `--present-mode mailbox` (of `fifo`, `vsync`, `no_vsync`). Mailbox werkt met DirectX 12 en Vulkan, niet met OpenGL.
-- **Altijd:** zet de gebruikersvariabele `WGPU_BACKEND` of `ICED_PRESENT_MODE` op een van deze waarden, bijvoorbeeld `setx WGPU_BACKEND vulkan` in een opdrachtprompt, en start de viewer opnieuw.
-
 ## Testen en betrouwbaarheid
 
-- **274 unittests** in `src/` (270 draaien; 4 staan standaard uit, waarvan één een lokaal voorbeeld vraagt), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 181 voor de lezers, 16 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 10 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **290 unittests** in `src/` (285 draaien; 5 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden), plus 2 voor de MCP-server en 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 195 voor de lezers, 20 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 10 voor IFC-export, en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -226,7 +226,8 @@ Bron van de getallen: `cargo test --release` en `cargo test --release -p openaec
 ## Huidige beperkingen
 
 - **IFC en Revit openen alleen op de desktop.** De browserversie heeft die lezers niet.
-- **Een aantal formaten ontbreekt.** STEP en IGES openen niet.
+- **IGES-bestanden openen niet.** STEP-bestanden wel; IGES wordt nog niet gelezen.
+- **Elementen zijn niet een voor een te verbergen.** Zichtbaarheid werkt per laag en per model.
 - **Nog geen ongedaan maken.** Metingen en de doorsnede wis je met de hand.
 - **De browserversie blokkeert tijdens het laden** van een groot model (nog geen worker-threads) en onthoudt je instellingen niet tussen bezoeken.
 - **Vijf iconen zijn tijdelijk.** De OpenAEC-iconenset heeft nog geen iconen voor volledig, draadmodel, randen, perspectief en orthografisch; de viewer gebruikt de dichtstbijzijnde.
@@ -236,7 +237,7 @@ Iets gevonden? [Maak een issue](https://github.com/OpenAEC-Foundation/open-3d-vi
 
 ## Onder de motorkap
 
-De viewer is geschreven in Rust. De interface is [iced](https://iced.rs) 0.14 en de 3D-weergave is een eigen wgpu-pipeline met 4x MSAA in de `shader`-widget van iced, zodat dezelfde code native draait en als WebAssembly op WebGPU, zonder webview of JavaScript-framework. Het venster volgt de OpenAEC-standaardapplicatie: schil, ontwerptokens, lettertypen en B2-iconen komen uit [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 (`vendor/openaec-ui`, `assets/b2`). IFC wordt gelezen met [IFClite](https://github.com/LTplus-AG/ifc-lite) en DWG/DXF met [acadrust](https://github.com/HakanSeven12/acadrust). Op een computer met geïntegreerde AMD-grafische kaart laadt een Revit-voorbeeld van 18,8 MB in ongeveer 2,5 s en tekent het met ongeveer 110 beelden per seconde op 1920x1080 (`open-3d-viewer --bench`).
+De viewer is geschreven in Rust. De interface is [iced](https://iced.rs) 0.14 en de 3D-weergave is een eigen wgpu-pipeline met 4x MSAA in de `shader`-widget van iced, zodat dezelfde code native draait en als WebAssembly op WebGPU, zonder webview of JavaScript-framework. Het venster volgt de OpenAEC-standaardapplicatie: schil, ontwerptokens, lettertypen en B2-iconen komen uit [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 (`vendor/openaec-ui`, `assets/b2`). IFC wordt gelezen met [IFClite](https://github.com/LTplus-AG/ifc-lite) en DWG/DXF met [acadrust](https://github.com/hakanaktt/acadrust). Op een computer met geïntegreerde AMD-grafische kaart laadt een Revit-voorbeeld van 18,8 MB in ongeveer 2,5 s en tekent het met ongeveer 110 beelden per seconde op 1920x1080 (`open-3d-viewer --bench`).
 
 ## Bijdragen
 
@@ -252,7 +253,7 @@ cd open-3d-viewer
 cargo run --release -- test-models/test-kavel.skp
 ```
 
-Vereist Rust 1.89 of later (met de MSVC-toolchain op Windows) en leestoegang tot de privé-formaatrepositories van OpenAEC hierboven; zet `CARGO_NET_GIT_FETCH_WITH_CLI=true` zodat Cargo je Git-inloggegevens gebruikt. De browserversie vraagt ook `rustup target add wasm32-unknown-unknown` en `cargo install --locked trunk`; daarna serveert `trunk serve --release` hem op `http://127.0.0.1:8080`. De scripts in `scripts/` vragen Python 3.
+Vereist Rust 1.96 of later (met de MSVC-toolchain op Windows) en leestoegang tot de privé-formaatrepositories van OpenAEC hierboven; zet `CARGO_NET_GIT_FETCH_WITH_CLI=true` zodat Cargo je Git-inloggegevens gebruikt. De browserversie vraagt ook `rustup target add wasm32-unknown-unknown` en `cargo install --locked trunk`; daarna serveert `trunk serve --release` hem op `http://127.0.0.1:8080`. De scripts in `scripts/` vragen Python 3.
 
 De opdrachtregel:
 
@@ -264,7 +265,7 @@ open-3d-viewer BESTAND --save-as UIT.ifc
 open-3d-viewer --bench BESTAND [--frames 300]
 ```
 
-Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.10`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.
+Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.11`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.
 
 Open 3D Viewer Studio hoort bij de familie van apps van de [OpenAEC Foundation](https://github.com/OpenAEC-Foundation).
 

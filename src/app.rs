@@ -178,7 +178,7 @@ pub struct App {
     pick_index: Option<PickIndex>,
 }
 
-type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>);
+type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>, Arc<UnitKeySet>);
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -837,12 +837,12 @@ impl App {
     }
 
     fn hover_scene(&self) -> HoverScene {
-        (self.active_section(), self.plane, self.visible.clone())
+        (self.active_section(), self.plane, self.visible.clone(), self.hidden.clone())
     }
 
     fn hover_scene_holds(&self) -> bool {
-        self.hover_scene.as_ref().is_some_and(|(section, plane, visible)| {
-            *section == self.active_section() && *plane == self.plane && *visible == self.visible
+        self.hover_scene.as_ref().is_some_and(|(section, plane, visible, hidden)| {
+            *section == self.active_section() && *plane == self.plane && *visible == self.visible && Arc::ptr_eq(hidden, &self.hidden)
         })
     }
 
@@ -3343,6 +3343,23 @@ mod tests {
         let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
         assert_ne!(app.units[unit][0], 0.0, "still moved apart");
         assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn hiding_drops_the_measure_highlight() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let _ = app.update(Message::Measure(Tool::Distance));
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Hover { x, y, width: w, height: h }));
+        app.hover_last = None;
+        assert!(app.measure.hover.is_some());
+        app.click(Some(Pickable::Element(10)), false);
+        let _ = app.update(Message::HideSelection);
+        assert!(app.measure.hover.is_none(), "looked again: nothing shown there");
     }
 
     #[test]

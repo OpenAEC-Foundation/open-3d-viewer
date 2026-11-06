@@ -53,6 +53,23 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use web_time::Instant;
 
+/// A file that the model `model` refers to (a glTF buffer or image, an OBJ material library). Where
+/// the AI connection is held to the work folder (`managed::confined`), a model in the work folder
+/// may only refer to files in it, so opening it reads nothing outside. A model the user opened
+/// elsewhere is the user's own choice and is not limited.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn check_reference(model: &Path, file: &Path) -> Result<(), String> {
+    if crate::managed::confined() && crate::managed::confine(model).is_ok() {
+        crate::managed::confine(file).map_err(|e| format!("refers to a file outside the work folder: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn check_reference(_: &Path, _: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 
 /// Where a model comes from: a file on disk (desktop, command line, remote control) or the bytes
 /// of a file the browser handed over (web).

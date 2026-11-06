@@ -12,11 +12,15 @@
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
+//!
+//! In the OpenAEC SuperCloud (`managed`): OPENAEC_BEHEERD=1, OPENAEC_MAP (work folder),
+//! OPENAEC_TAAL, OPENAEC_THEMA, OPENAEC_OPEN (file to open), and OPENAEC_MCP_POORT with
+//! OPENAEC_MCP_GEHEIM (and optionally OPENAEC_MCP_ADRES) for the MCP endpoint over HTTP.
 
 use crate::app::{self, App, Message};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
-use crate::{bench, explode, export, gpu, loaders, shell, INTER_REGULAR, INTER_SEMIBOLD};
+use crate::{bench, explode, export, gpu, loaders, managed, shell, INTER_REGULAR, INTER_SEMIBOLD};
 use openaec_ui::design::ThemeId;
 use openaec_ui::Language;
 use std::path::PathBuf;
@@ -158,7 +162,7 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let file = args.file.as_ref().ok_or("--save-as needs a FILE to convert")?;
     let model = loaders::load(file)?;
     let start = web_time::Instant::now();
-    export::save(&model, out)?;
+    export::save(&model, out, true)?;
     println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }
@@ -186,18 +190,75 @@ fn run_app(args: Args) -> iced::Result {
     if let Some(dir) = &dir {
         let _ = std::fs::create_dir_all(dir);
     }
+    // the MCP endpoint of the SuperCloud; its secret leaves the environment before any other
+    // thread or child process (a file dialog) can read it
+    let mcp_http = crate::mcp::HttpConfig::from_env(managed::managed());
+    std::env::remove_var("OPENAEC_MCP_GEHEIM");
     gpu::configure(args.gpu_backend.clone(), args.present_mode.clone(), dir.as_deref());
     let mut app = initial_state(&args);
     app.initial_view = args.view;
-    app.pending_open = args.file.clone();
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
     app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
+    // the work folder, as an absolute path before the app moves into it; with the HTTP endpoint
+    // on, the MCP tools reach only files in it, also outside managed mode
+    managed::fix_work_folder(app.remote.enabled && matches!(mcp_http, Some(Ok(_))));
+    app.pending_open = managed::start_file(args.file.clone());
+    managed::enter_work_folder();
+    #[cfg(unix)]
+    stop_on_sigterm();
+    match mcp_http {
+        Some(Ok(config)) if app.remote.enabled => crate::remote::serve_mcp_http(config),
+        Some(Ok(_)) => eprintln!("MCP over HTTP: off, as remote control is off"),
+        Some(Err(e)) => eprintln!("MCP over HTTP: not started: {e}"),
+        None => {}
+    }
     let mut studio = shell::Studio::new(app);
     if let Some(dir) = dir {
         studio = studio.with_settings_in(dir);
     }
-    studio.set_look(args.theme, args.language);
+    studio.set_look(args.theme.or_else(managed::theme), args.language.or_else(managed::language));
     shell::run(studio, window_icon(), true)
+}
+
+/// How long a save under way may take to finish after SIGTERM: within Docker's 10 s before it
+/// kills the process.
+#[cfg(unix)]
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// SIGTERM (the SuperCloud ends the session, the desktop logs out; OpenAEC-Blueprint#61): a save
+/// under way is finished first, for [`STOP_GRACE`] at most, else its temporary file is removed so
+/// no half file stays in the work folder; then the viewer stops. That is all the unsaved work
+/// there is: the viewer does not change models, and what it shows (camera, sections,
+/// measurements) is not kept between sessions.
+#[cfg(unix)]
+fn stop_on_sigterm() {
+    let mut signals = match signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM]) {
+        Ok(signals) => signals,
+        Err(e) => return eprintln!("SIGTERM: {e}"),
+    };
+    let stop = move || {
+        if signals.forever().next().is_none() {
+            return;
+        }
+        let until = std::time::Instant::now() + STOP_GRACE;
+        let saving = !export::writing().is_empty();
+        while !export::writing().is_empty() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let unfinished = export::writing();
+        for part in &unfinished {
+            let _ = std::fs::remove_file(part);
+            eprintln!("SIGTERM: a save was not finished; removed {}", part.display());
+        }
+        if saving && unfinished.is_empty() {
+            // the answer to the save_file call that waited for it goes out
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        std::process::exit(if unfinished.is_empty() { 0 } else { 1 });
+    };
+    if let Err(e) = std::thread::Builder::new().name("sigterm".into()).spawn(stop) {
+        eprintln!("SIGTERM: {e}");
+    }
 }
 
 /// The earlier stand-alone window (own ribbon and panels); kept for `--window-screenshot`.

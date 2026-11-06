@@ -8,6 +8,7 @@ mod ifc;
 use crate::model::Model;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// A file format writer.
 pub trait Writer: Send + Sync {
@@ -40,25 +41,68 @@ pub fn writer_for(file_name: &str) -> Result<Box<dyn Writer>, String> {
         .ok_or_else(|| format!("Cannot save as .{ext}"))
 }
 
-/// Saves a model with the writer matching the extension of `path`. Writes next to the target and
-/// renames, so a failed save leaves no half file behind.
-pub fn save(model: &Model, path: &Path) -> Result<(), String> {
+/// Saves a model with the writer matching the extension of `path`, through [`write_file`]: a failed
+/// save leaves no half file behind, and an existing file is only replaced when `replace`.
+pub fn save(model: &Model, path: &Path, replace: bool) -> Result<(), String> {
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let writer = writer_for(&file_name)?;
+    write_file(path, replace, |out| writer.write(model, &file_name, out)).map_err(|e| format!("Cannot save {file_name}: {e}"))
+}
+
+/// The temporary files of the writes under way, so a stop (SIGTERM) can wait for them or clean up.
+static WRITING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// The temporary files of the writes under way.
+pub fn writing() -> Vec<PathBuf> {
+    WRITING.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Writes `path` through a temporary file next to it (`<path>.part`) that is renamed into place at
+/// the end, so a failed write leaves no half file. The temporary file is always a new one, never
+/// written through a link someone left at its name. Without `replace`, a file at `path` is never
+/// replaced, also not one made while writing (a large model takes minutes to save).
+pub fn write_file(path: &Path, replace: bool, write: impl FnOnce(&mut dyn io::Write) -> io::Result<()>) -> io::Result<()> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
-    let written = (|| -> io::Result<()> {
-        let mut out = io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&part)?);
-        writer.write(model, &file_name, &mut out)?;
-        out.into_inner().map_err(|e| e.into_error())?.sync_all()
-    })();
-    match written.and_then(|()| std::fs::rename(&part, path)) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            Err(format!("Cannot save {file_name}: {e}"))
+    let create = || std::fs::OpenOptions::new().write(true).create_new(true).open(&part);
+    let file = match create() {
+        // left by a stop, or a link: remove that name itself (not what a link leads to)
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&part)?;
+            create()?
         }
+        other => other?,
+    };
+    WRITING.lock().unwrap_or_else(|e| e.into_inner()).push(part.clone());
+    let written = (|| {
+        let mut out = io::BufWriter::with_capacity(1 << 20, file);
+        write(&mut out)?;
+        out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        put_in_place(&part, path, replace)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    WRITING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != part);
+    written
+}
+
+fn put_in_place(part: &Path, path: &Path, replace: bool) -> io::Result<()> {
+    if replace {
+        return std::fs::rename(part, path);
+    }
+    let exists = || io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists (made while writing); nothing replaced", path.display()));
+    // a hard link is never made over anything at `path`, which a rename would replace
+    match std::fs::hard_link(part, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(part);
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(exists()),
+        // a file system without hard links: check, then rename
+        Err(_) if path.symlink_metadata().is_ok() => Err(exists()),
+        Err(_) => std::fs::rename(part, path),
     }
 }
 
@@ -92,7 +136,7 @@ mod tests {
                 continue;
             }
             let out = dir.join(path.file_stem().unwrap()).with_extension("ifc");
-            super::save(&model, &out).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            super::save(&model, &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.starts_with("ISO-10303-21;") && text.trim_end().ends_with("END-ISO-10303-21;"));
             assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());
@@ -100,5 +144,39 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
         assert!(saved >= 3, "only {saved} test models saved");
+    }
+
+    /// Files are written new and put in place at the end: an existing file only with `replace`,
+    /// and never through a link left at the temporary name.
+    #[test]
+    fn writes_new_files_and_replaces_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("o3v-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.ifc");
+        let write = |text: &'static [u8]| move |out: &mut dyn std::io::Write| out.write_all(text);
+        super::write_file(&path, false, write(b"one")).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"one");
+        // made while a save without overwrite ran: kept
+        let err = super::write_file(&path, false, write(b"two")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), b"one");
+        super::write_file(&path, true, write(b"three")).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"three");
+        // a stale temporary file is no obstacle, and nothing is left behind
+        std::fs::write(dir.join("b.ifc.part"), b"stale").unwrap();
+        super::write_file(&dir.join("b.ifc"), false, write(b"b")).unwrap();
+        #[cfg(unix)]
+        {
+            let outside = dir.join("outside");
+            std::fs::write(&outside, b"keep").unwrap();
+            std::os::unix::fs::symlink(&outside, dir.join("c.ifc.part")).unwrap();
+            super::write_file(&dir.join("c.ifc"), false, write(b"c")).unwrap();
+            assert_eq!(std::fs::read(&outside).unwrap(), b"keep", "written through the link");
+            assert_eq!(std::fs::read(dir.join("c.ifc")).unwrap(), b"c");
+        }
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "part")).collect();
+        assert!(left.is_empty(), "{left:?}");
+        assert!(!super::writing().iter().any(|p| p.starts_with(&dir)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

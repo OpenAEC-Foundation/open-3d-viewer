@@ -64,6 +64,11 @@ jobs:
             exe: open-3d-viewer
             mcp: open-3d-viewer-mcp
             archive: open-3d-viewer-linux-x64.tar.gz
+          # the SuperCloud's servers are ARM (OpenAEC-Blueprint docs/supercloud-koppeling.md)
+          - platform: ubuntu-22.04-arm
+            exe: open-3d-viewer
+            mcp: open-3d-viewer-mcp
+            archive: open-3d-viewer-linux-arm64.tar.gz
           - platform: macos-latest
             exe: open-3d-viewer
             mcp: open-3d-viewer-mcp
@@ -96,27 +101,35 @@ jobs:
           path: ${{ matrix.archive }}
           if-no-files-found: error
 
-  # The Linux build without a GPU or a desktop, as OpenAEC Linux runs it (OpenAEC-Blueprint#61);
-  # release.yml does the same with the AppImage.
+  # The Linux build without a GPU or a desktop, as OpenAEC Linux runs it (OpenAEC-Blueprint#61),
+  # with the MCP endpoint the SuperCloud uses; release.yml does the same with the AppImage.
   linux-headless:
     needs: desktop
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
-          name: open-3d-viewer-linux-x64.tar.gz
+          name: open-3d-viewer-linux-${{ matrix.arch }}.tar.gz
       - name: labwc, grim and Mesa's software renderers
         run: sudo apt-get update && sudo apt-get install -y labwc grim mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri vulkan-tools
       - name: Start without a GPU and take screenshots
         run: |
           mkdir -p "$RUNNER_TEMP/app"
-          tar -xzf open-3d-viewer-linux-x64.tar.gz -C "$RUNNER_TEMP/app"
+          tar -xzf open-3d-viewer-linux-${{ matrix.arch }}.tar.gz -C "$RUNNER_TEMP/app"
           packaging/linux/headless-test.sh "$RUNNER_TEMP/app/open-3d-viewer" test-models/test-cube.obj headless
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: linux-headless
+          name: linux-headless-${{ matrix.arch }}
           path: headless/
           if-no-files-found: ignore
 

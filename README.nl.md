@@ -38,7 +38,6 @@ Elke release staat op de [releasepagina](https://github.com/OpenAEC-Foundation/o
 | **Windows** | `.exe`-installer (x64, zonder beheerdersrechten) of `.zip` |
 | **macOS** | `.dmg` (universeel: Apple silicon en Intel) |
 | **Linux** | `.deb`, `.rpm`, `.AppImage` of `.tar.gz`, voor x86_64 en arm64 |
-| **Docker** | `ghcr.io/openaec-foundation/open-3d-viewer`, zie [Docker](#docker) |
 
 Als de OpenAEC Installer een nieuwere versie heeft, meldt de titelbalk van de viewer dat, en **Bijwerken** geeft het over aan de installer. Elk bestand is ondertekend: Windows met Authenticode, macOS met een Developer ID en genotariseerd door Apple, Linux met de OpenPGP-sleutel van OpenAEC (een `.asc` naast elk pakket en naast `SHA256SUMS`), en alles met een build-attestatie van GitHub. De release notes zeggen per platform of het ondertekend is; een release waar een handtekening ontbreekt, staat als pre-release.
 
@@ -104,7 +103,7 @@ Flikkert het venster, blijft het zwart of is het traag, probeer dan een andere b
 
 ## OpenAEC Linux (SuperCloud)
 
-De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; voor een container met alleen de viewer, zie [Docker](#docker). De viewer volgt het SuperCloud-contract voor een desktop-app in een gestreamde desktop (route B van [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md)): bestanden uit Docs openen via een pad in de werkmap, en de assistent van de SuperCloud bedient de viewer via zijn MCP-server.
+De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC SuperCloud waarin de tools van elke gebruiker als gewone Linux-programma's op de server draaien, gestreamd naar de browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). De SuperCloud bouwt dat ene image uit de AppImage van een release; deze repository publiceert dus geen eigen Docker-image. De viewer volgt het SuperCloud-contract voor een desktop-app in een gestreamde desktop (route B van [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md)): bestanden uit Docs openen via een pad in de werkmap, en de assistent van de SuperCloud bedient de viewer via zijn MCP-server.
 
 - **x86_64 en arm64:** de AppImage, `.deb`, `.rpm` en `.tar.gz` komen voor allebei (de servers van de SuperCloud zijn ARM); de lezer voor Vertex BD en BTL (`libvertex.so`) bestaat alleen voor x86_64.
 - **Zonder FUSE:** `./open-3d-viewer_<versie>_amd64.AppImage --appimage-extract` (of `_arm64.AppImage`), dan `squashfs-root/AppRun [BESTAND]`. Een relatief `BESTAND` wordt in de werkmap gezocht als het niet in de huidige map staat.
@@ -129,32 +128,6 @@ Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|b
 **Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert op `127.0.0.1` voor zijn eigen MCP-server (zie [MCP](#mcp)) en, alleen met `OPENAEC_MCP_POORT` en `OPENAEC_MCP_GEHEIM`, op die poort voor de assistent van de SuperCloud. De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
 
 Elke pull request en elke release start de Linux-build zo op GitHub Actions, op x86_64 en arm64 ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): de release pakt de AppImage uit, start hem onder labwc zonder scherm of GPU, controleert dat het venster en een model in het 3D-beeld tekenen, bedient hem via MCP zoals de assistent van de SuperCloud dat doet (een bestand openen via zijn pad in de werkmap, de IFC ernaast opslaan), bewaart de schermafbeeldingen en zet het geheugengebruik zonder geopend bestand in de releasenotes.
-
-## Docker
-
-Bij elke release hoort een Docker-image waarin de Linux-app op zichzelf draait, schermvullend, gestreamd naar de browser op poort 3000 ([#27](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/27)). Het wordt gebouwd uit de `.deb` van de release met het sjabloon van de OpenAEC Blueprint ([`packaging/docker`](packaging/docker)), voor `linux/amd64`.
-
-```bash
-docker run -p 3000:3000 -v <map>:/openaec ghcr.io/openaec-foundation/open-3d-viewer:latest
-```
-
-Open http://localhost:3000. In `/openaec` staan je bestanden (de dialogen beginnen daar); `/config` bewaart de instellingen van de viewer, dus koppel daar een volume om ze te houden. Het image krijgt de versie van de release (bijvoorbeeld `:2026.45.10`) en `latest`, en is ondertekend met cosign (keyless, GitHub OIDC), met een build-attestatie en een SBOM:
-
-```bash
-cosign verify ghcr.io/openaec-foundation/open-3d-viewer:latest --certificate-identity-regexp 'https://github.com/OpenAEC-Foundation/open-3d-viewer/' --certificate-oidc-issuer https://token.actions.githubusercontent.com
-```
-
-| Variabele | Standaard | Wat |
-|-----------|-----------|-----|
-| `OPENAEC_LANG` | (leeg) | Taal: `nl` of `en`. |
-| `OPENAEC_THEME` | (leeg) | Thema: `light`, `dark`, `blueprint`, `high-contrast-dark` of `high-contrast-light`. |
-| `OPENAEC_OPEN` | (leeg) | Een bestand onder `/openaec` om bij de start te openen. |
-| `OPENAEC_MCP_GEHEIM` | (leeg) | Een geheim van 16 tekens of meer: zet de MCP-server voor de assistent van de SuperCloud aan, binnen de container op `http://<container>:3001/mcp`. Elk verzoek stuurt `Authorization: Bearer <geheim>`; verzoeken met een `Origin`-kop (een browser) worden geweigerd. Publiceer deze poort niet; hij is voor het interne netwerk. |
-| `OPENAEC_MCP_POORT` | `3001` | Zijn poort. |
-| `OPENAEC_SCREEN` | `1920x1080` | Grootte van het virtuele scherm. |
-| `OPENAEC_RESTART` | `1` | `0`: de container start de viewer niet opnieuw als die sluit. |
-
-De viewer draait als gebruiker `openaec` (uid 1000), zonder `--privileged`, FUSE of GPU: het 3D-beeld tekent met de software-renderers van Mesa. `GET /gezond` op poort 3000 antwoordt `OK` zolang de viewer en de stream draaien, en de `HEALTHCHECK` van het image gebruikt dat. De container staat in beheerde modus (geen updatemelding; een nieuw image brengt de update) en maakt geen uitgaande verbindingen. De stream op poort 3000 heeft geen wachtwoord: zet hem niet direct op internet. Elke release bouwt het image, controleert dat de container gezond wordt, de viewer als gewone gebruiker draait en te fotograferen is, test de MCP-server erin, en zet het geheugengebruik in rust in de releasenotes, voordat het gepubliceerd wordt.
 
 ## Wat hier staat
 

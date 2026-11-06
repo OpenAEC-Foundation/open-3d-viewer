@@ -38,7 +38,6 @@ Every release is on the [releases page](https://github.com/OpenAEC-Foundation/op
 | **Windows** | `.exe` installer (x64, no administrator rights needed) or `.zip` |
 | **macOS** | `.dmg` (universal: Apple silicon and Intel) |
 | **Linux** | `.deb`, `.rpm`, `.AppImage` or `.tar.gz`, for x86_64 and arm64 |
-| **Docker** | `ghcr.io/openaec-foundation/open-3d-viewer`, see [Docker](#docker) |
 
 When the OpenAEC Installer has a newer version, the title bar of the viewer says so, and **Update** hands over to the installer. Every file is signed: Windows with Authenticode, macOS with a Developer ID and notarized by Apple, Linux with the OpenAEC OpenPGP key (`.asc` next to each package and to `SHA256SUMS`), and all of them with a GitHub build attestation. The release notes say per platform whether it is signed; a release that misses a signature is marked as a pre-release.
 
@@ -102,7 +101,7 @@ If the window flickers, stays black or is slow, try another backend or present m
 
 ## OpenAEC Linux (SuperCloud)
 
-The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC SuperCloud in which each user's tools run on the server as regular Linux programs, streamed to the browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). The SuperCloud builds that one image from the AppImage of a release; for a container of the viewer alone, see [Docker](#docker). The viewer follows the SuperCloud contract for a desktop app in a streamed desktop (route B of [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md)): files from Docs open by a path in the work folder, and the SuperCloud's assistant drives the viewer through its MCP server.
+The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC SuperCloud in which each user's tools run on the server as regular Linux programs, streamed to the browser ([OpenAEC-Blueprint#61](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/issues/61)). The SuperCloud builds that one image from the AppImage of a release, so this repository publishes no Docker image of its own. The viewer follows the SuperCloud contract for a desktop app in a streamed desktop (route B of [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md)): files from Docs open by a path in the work folder, and the SuperCloud's assistant drives the viewer through its MCP server.
 
 - **x86_64 and arm64:** the AppImage, `.deb`, `.rpm` and `.tar.gz` come for both (the SuperCloud's servers are ARM); the Vertex BD and BTL reader (`libvertex.so`) exists for x86_64 only.
 - **Without FUSE:** `./open-3d-viewer_<version>_amd64.AppImage --appimage-extract` (or `_arm64.AppImage`), then `squashfs-root/AppRun [FILE]`. A relative `FILE` is looked up in the work folder when it is not in the current folder.
@@ -127,32 +126,6 @@ A file to open goes on the command line, as do `--theme light|dark|blueprint|hig
 **Network:** the viewer makes no outgoing connections and has no telemetry. It listens on `127.0.0.1` for its own MCP server (see [MCP](#mcp)) and, only with `OPENAEC_MCP_POORT` and `OPENAEC_MCP_GEHEIM`, on that port for the SuperCloud's assistant. The file dialogs go through the XDG desktop portal, or `zenity` when there is none.
 
 Every pull request and every release starts the Linux build this way on GitHub Actions, on x86_64 and arm64 ([`packaging/linux/headless-test.sh`](packaging/linux/headless-test.sh)): the release extracts the AppImage, starts it under labwc without a screen or GPU, checks that the window and a model in the 3D view draw, drives it over MCP as the SuperCloud's assistant does (open a file by its path in the work folder, save the IFC next to it), keeps the screenshots, and puts the memory in use with no file open in the release notes.
-
-## Docker
-
-With every release comes a Docker image in which the Linux app runs on its own, full screen, streamed to the browser on port 3000 ([#27](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/27)). It is built from the release's `.deb` with the OpenAEC Blueprint's template ([`packaging/docker`](packaging/docker)), for `linux/amd64`.
-
-```bash
-docker run -p 3000:3000 -v <folder>:/openaec ghcr.io/openaec-foundation/open-3d-viewer:latest
-```
-
-Open http://localhost:3000. `/openaec` holds your files (the dialogs start there); `/config` keeps the viewer's settings, so mount a volume there to keep them. The image is tagged with the release version (for example `:2026.45.10`) and `latest`, and signed with cosign (keyless, GitHub OIDC) with a build attestation and an SBOM:
-
-```bash
-cosign verify ghcr.io/openaec-foundation/open-3d-viewer:latest --certificate-identity-regexp 'https://github.com/OpenAEC-Foundation/open-3d-viewer/' --certificate-oidc-issuer https://token.actions.githubusercontent.com
-```
-
-| Variable | Default | What |
-|----------|---------|------|
-| `OPENAEC_LANG` | (empty) | Language: `nl` or `en`. |
-| `OPENAEC_THEME` | (empty) | Theme: `light`, `dark`, `blueprint`, `high-contrast-dark` or `high-contrast-light`. |
-| `OPENAEC_OPEN` | (empty) | A file under `/openaec` to open at the start. |
-| `OPENAEC_MCP_GEHEIM` | (empty) | A secret of 16 characters or more: switches on the MCP server for the SuperCloud's assistant, inside the container on `http://<container>:3001/mcp`. Every request sends `Authorization: Bearer <secret>`; requests with an `Origin` header (a browser) are refused. Do not publish this port; it is for the internal network. |
-| `OPENAEC_MCP_POORT` | `3001` | Its port. |
-| `OPENAEC_SCREEN` | `1920x1080` | Size of the virtual screen. |
-| `OPENAEC_RESTART` | `1` | `0`: the container does not start the viewer again when it closes. |
-
-The viewer runs as user `openaec` (uid 1000), without `--privileged`, FUSE or GPU: the 3D view draws with Mesa's software renderers. `GET /gezond` on port 3000 answers `OK` while the viewer and the stream run, and the image's `HEALTHCHECK` uses it. The container is in managed mode (no update notice; a new image brings the update) and makes no outgoing connections. The stream on port 3000 has no password: do not put it on the internet directly. Every release builds the image, checks that the container becomes healthy, runs the viewer as a regular user and can be photographed, tests the MCP server in it, and puts the memory at rest in the release notes, before it is published.
 
 ## What is in this repository
 

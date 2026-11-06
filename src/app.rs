@@ -1619,7 +1619,10 @@ impl App {
             .on_input(Message::LayerFilter)
             .size(12)
             .padding([5, 8]);
-        column![search, scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4)]
+        let id = iced::widget::Id::new("explorer");
+        let list = scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).id(id.clone()).height(Fill).spacing(4);
+        // a finger drags the list, also where it starts on a row
+        column![search, crate::swipe::swipe(id, false, list)]
             .spacing(8)
             .into()
     }
@@ -1831,7 +1834,8 @@ impl App {
                 if model.source_y_up != self.flip_up { l.text("Y (omgezet)", "Y (converted)").into() } else { "Z".into() },
             ));
         // the scrollbar gets its own strip next to the text
-        scrollable(content).height(Fill).spacing(4).into()
+        let id = iced::widget::Id::new("properties");
+        crate::swipe::swipe(id.clone(), false, scrollable(content).id(id).height(Fill).spacing(4))
     }
 
     /// The measurements in the properties pane: each result with its details and a delete button,

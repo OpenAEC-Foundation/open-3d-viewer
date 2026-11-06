@@ -29,6 +29,7 @@ mod remote;
 pub mod remote_link;
 pub mod section;
 pub mod shell;
+mod swipe;
 mod theme;
 mod view_cube;
 mod viewport;

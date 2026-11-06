@@ -4,6 +4,10 @@
 //! Also left drag orbits, Shift + left or right drag pans, and a left click (press and release on
 //! the same spot) picks. While measuring, the cursor position is reported once per frame as it
 //! moves, so the app can highlight what a click would pick.
+//!
+//! On a touch screen (phones and tablets, through the web app): one finger orbits, two fingers
+//! pinch to zoom and move together to pan, a tap picks, and a long press (half a second) before
+//! dragging pans, as a right drag does with the mouse.
 //! The camera lives in the application state; the widget reports navigation as messages.
 
 pub mod camera;
@@ -13,10 +17,17 @@ use crate::explode::ExplodeIndex;
 use crate::model::Model;
 use camera::Camera;
 use iced::mouse;
+use iced::touch;
 use iced::widget::shader;
 use iced::{Event, Point, Rectangle};
 use render::{RenderSettings, ScenePrimitive};
 use std::sync::Arc;
+use web_time::{Duration, Instant};
+
+/// How long a finger rests before a drag pans instead of orbiting.
+const LONG_PRESS: Duration = Duration::from_millis(500);
+/// How far a finger may wander and still tap (logical pixels): fingers jitter more than a mouse.
+const TAP_SLOP: f32 = 10.0;
 
 /// Navigation requests from the viewport.
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +45,9 @@ pub enum Navigate {
     Hover { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor left the viewport.
     HoverOff,
+    /// Two fingers moved: pan by (dx, dy) and zoom `steps` (as wheel steps) about their middle
+    /// (x, y), in a viewport of width × height (logical pixels).
+    Pinch { dx: f32, dy: f32, steps: f32, x: f32, y: f32, width: f32, height: f32 },
 }
 
 pub struct Viewport3D<'a> {
@@ -61,6 +75,21 @@ pub struct State {
     hover: Option<Point>,
     /// A hover was reported and not yet switched off.
     hovering: bool,
+    /// The fingers on the viewport: id and position (in the viewport) at the last report.
+    fingers: Vec<(touch::Finger, Point)>,
+    /// What the fingers do, from the first finger down until the last one lifts.
+    gesture: Option<Gesture>,
+}
+
+/// A touch gesture.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Gesture {
+    /// One finger is down and has not moved yet: a tap, a long press or the start of a drag.
+    Press { at: Point, since: Instant },
+    Orbit,
+    Pan,
+    /// Two fingers or more; the gesture ends with them, without orbiting when one lifts first.
+    Pinch,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -188,6 +217,7 @@ where
                 };
                 publish(Navigate::Zoom { steps, x: at.x, y: at.y, width: bounds.width, height: bounds.height })
             }
+            Event::Touch(touch) => self.touch(state, *touch, bounds),
             _ => None,
         }
     }
@@ -211,6 +241,93 @@ where
             None if cursor.is_over(bounds) && self.hover => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
+        }
+    }
+}
+
+impl Viewport3D<'_> {
+    /// One finger orbits (or pans after a long press), two fingers pinch and pan, a tap picks.
+    fn touch<Message: From<Navigate>>(&self, state: &mut State, event: touch::Event, bounds: Rectangle) -> Option<shader::Action<Message>> {
+        let publish = |n: Navigate| Some(shader::Action::publish(Message::from(n)).and_capture());
+        let local = |p: Point| Point::new(p.x - bounds.x, p.y - bounds.y);
+        match event {
+            touch::Event::FingerPressed { id, position } => {
+                // a gesture starts inside the viewport; further fingers join it wherever they land
+                if state.fingers.is_empty() && !bounds.contains(position) {
+                    return None;
+                }
+                let at = local(position);
+                state.fingers.retain(|(f, _)| *f != id);
+                state.fingers.push((id, at));
+                state.hover = None;
+                state.gesture = Some(match state.fingers.len() {
+                    1 => Gesture::Press { at, since: Instant::now() },
+                    _ => Gesture::Pinch,
+                });
+                Some(shader::Action::capture())
+            }
+            touch::Event::FingerMoved { id, position } => {
+                let index = state.fingers.iter().position(|(f, _)| *f == id)?;
+                let at = local(position);
+                let gesture = state.gesture?;
+                if gesture == Gesture::Pinch {
+                    if state.fingers.len() < 2 || index > 1 {
+                        // the fingers that are left wait until all are lifted
+                        state.fingers[index].1 = at;
+                        return Some(shader::Action::capture());
+                    }
+                    let (a, b) = (state.fingers[0].1, state.fingers[1].1);
+                    state.fingers[index].1 = at;
+                    let (c, d) = (state.fingers[0].1, state.fingers[1].1);
+                    let (before, after) = (a.distance(b).max(1.0), c.distance(d).max(1.0));
+                    let middle = Point::new((c.x + d.x) / 2.0, (c.y + d.y) / 2.0);
+                    // wheel steps zoom by 0.85 each: the step count that scales the view as the fingers did
+                    let steps = (after / before).ln() / -(0.85f32.ln());
+                    return publish(Navigate::Pinch {
+                        dx: middle.x - (a.x + b.x) / 2.0,
+                        dy: middle.y - (a.y + b.y) / 2.0,
+                        steps,
+                        x: middle.x,
+                        y: middle.y,
+                        width: bounds.width,
+                        height: bounds.height,
+                    });
+                }
+                let last = state.fingers[index].1;
+                let drag = match gesture {
+                    Gesture::Press { at: start, since } => {
+                        if start.distance(at) < TAP_SLOP {
+                            return Some(shader::Action::capture());
+                        }
+                        let drag = if since.elapsed() >= LONG_PRESS { Gesture::Pan } else { Gesture::Orbit };
+                        state.gesture = Some(drag);
+                        drag
+                    }
+                    other => other,
+                };
+                state.fingers[index].1 = at;
+                let (dx, dy) = (at.x - last.x, at.y - last.y);
+                match drag {
+                    Gesture::Pan => publish(Navigate::Pan { dx, dy, height: bounds.height }),
+                    _ => publish(Navigate::Orbit { dx, dy }),
+                }
+            }
+            touch::Event::FingerLifted { id, position } | touch::Event::FingerLost { id, position } => {
+                let index = state.fingers.iter().position(|(f, _)| *f == id)?;
+                state.fingers.remove(index);
+                if !state.fingers.is_empty() {
+                    return Some(shader::Action::capture());
+                }
+                let gesture = state.gesture.take();
+                let lifted = matches!(event, touch::Event::FingerLifted { .. });
+                match gesture {
+                    // a short tap picks, as a click; a long press without moving does nothing
+                    Some(Gesture::Press { at, since }) if lifted && since.elapsed() < LONG_PRESS && at.distance(local(position)) < TAP_SLOP => {
+                        publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height })
+                    }
+                    _ => Some(shader::Action::capture()),
+                }
+            }
         }
     }
 }

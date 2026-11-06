@@ -936,6 +936,13 @@ impl App {
                     self.hover_request = None;
                     self.measure.hover = None;
                 }
+                Navigate::Pinch { dx, dy, steps, x, y, width, height } => {
+                    self.anim = None;
+                    self.measure.hover = None;
+                    self.camera.pan(dx, dy, height);
+                    let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
+                    self.camera.zoom_at(steps, ndc, width / height.max(1.0));
+                }
             },
             Message::ApplyView(i) => self.apply_view(i),
             Message::ToggleGrids => self.show_grids = !self.show_grids,
@@ -2670,6 +2677,55 @@ mod tests {
             .collect();
         assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 40.0 && *dy == 10.0)), "{nav:?}");
         assert!(nav.iter().any(|n| matches!(n, Navigate::Zoom { steps, .. } if *steps == 1.0)), "{nav:?}");
+    }
+
+    #[test]
+    fn touch_orbits_pinches_pans_and_taps() {
+        use iced::touch::{Event as T, Finger};
+        let navigation = |events: &[T], wait: bool| -> Vec<Navigate> {
+            let mut app = App::default();
+            app.status = Status::Loaded(String::new());
+            app.model = None;
+            let mut ui = simulator(&app);
+            for (i, event) in events.iter().enumerate() {
+                if wait && i == 1 {
+                    std::thread::sleep(std::time::Duration::from_millis(550));
+                }
+                ui.simulate([iced::Event::Touch(*event)]);
+            }
+            ui.into_messages().filter_map(|m| if let Message::Navigate(n) = m { Some(n) } else { None }).collect()
+        };
+        let (one, two) = (Finger(1), Finger(2));
+        let p = |x, y| iced::Point::new(x, y);
+
+        // one finger drags: orbit, and no pick
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(760.0, 320.0) }, T::FingerLifted { id: one, position: p(760.0, 320.0) }], false);
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Orbit { dx, dy } if *dx == 60.0 && *dy == 20.0)), "{nav:?}");
+        assert!(!nav.iter().any(|n| matches!(n, Navigate::Pick { .. })), "{nav:?}");
+
+        // a tap picks where the finger went down
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerLifted { id: one, position: p(702.0, 301.0) }], false);
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Pick { .. })), "{nav:?}");
+
+        // a long press, then a drag: pan (as a right drag)
+        let nav = navigation(&[T::FingerPressed { id: one, position: p(700.0, 300.0) }, T::FingerMoved { id: one, position: p(740.0, 300.0) }, T::FingerLifted { id: one, position: p(740.0, 300.0) }], true);
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Pan { dx, .. } if *dx == 40.0)), "{nav:?}");
+        assert!(!nav.iter().any(|n| matches!(n, Navigate::Orbit { .. } | Navigate::Pick { .. })), "{nav:?}");
+
+        // two fingers spread: zoom in about their middle; the last finger alone does not orbit
+        let nav = navigation(
+            &[
+                T::FingerPressed { id: one, position: p(600.0, 300.0) },
+                T::FingerPressed { id: two, position: p(800.0, 300.0) },
+                T::FingerMoved { id: two, position: p(1000.0, 300.0) },
+                T::FingerLifted { id: one, position: p(600.0, 300.0) },
+                T::FingerMoved { id: two, position: p(900.0, 350.0) },
+                T::FingerLifted { id: two, position: p(900.0, 350.0) },
+            ],
+            false,
+        );
+        assert!(nav.iter().any(|n| matches!(n, Navigate::Pinch { steps, dx, .. } if *steps > 0.0 && *dx == 100.0)), "{nav:?}");
+        assert!(!nav.iter().any(|n| matches!(n, Navigate::Orbit { .. } | Navigate::Pick { .. })), "{nav:?}");
     }
 
     #[test]

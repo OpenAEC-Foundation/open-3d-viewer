@@ -91,8 +91,52 @@ impl Scenario {
     }
 }
 
+/// Boxes per layer of the synthetic model.
+const SYNTHETIC_LAYER: usize = 10_000;
+
+/// A reference model that needs no file (`--bench synthetic:N`): `n` boxes of 1 m with 0.5 m
+/// gaps on a square grid, each box its own element (ids 1..=n, 12 triangles), 10 000 elements
+/// per layer.
+pub fn synthetic(n: usize) -> crate::model::Model {
+    use crate::model::{Layer, Model};
+    // the six faces of a unit box: normal and four corners, counter-clockwise from outside
+    const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        ([0.0, 0.0, -1.0], [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]]),
+        ([0.0, 0.0, 1.0], [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]]),
+        ([0.0, -1.0, 0.0], [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [0.0, 0.0, 1.0]]),
+        ([0.0, 1.0, 0.0], [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]]),
+        ([-1.0, 0.0, 0.0], [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 0.0]]),
+        ([1.0, 0.0, 0.0], [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]]),
+    ];
+    let side = (n as f64).sqrt().ceil().max(1.0) as usize;
+    let mut layers = Vec::new();
+    for (part, first) in (0..n).step_by(SYNTHETIC_LAYER).enumerate() {
+        let mut layer = Layer { name: format!("Boxes {}", part + 1), color: [0.75, 0.72, 0.66], ..Layer::default() };
+        for i in first..(first + SYNTHETIC_LAYER).min(n) {
+            let (x, y) = ((i % side) as f32 * 1.5, (i / side) as f32 * 1.5);
+            let id = i as u64 + 1;
+            let start = layer.indices.len() as u32;
+            for (normal, corners) in FACES {
+                let base = layer.vertex_count() as u32;
+                for c in corners {
+                    layer.positions.extend_from_slice(&[x + c[0], y + c[1], c[2]]);
+                    layer.normals.extend_from_slice(&normal);
+                }
+                layer.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+            layer.elements.push((id, start, 36));
+            layer.props.push((id, format!(r#"{{"Name":"Box {id}"}}"#)));
+        }
+        layers.push(layer);
+    }
+    Model::new(format!("synthetic-{n}").into(), "Synthetic", layers)
+}
+
 pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
-    let model = Arc::new(loaders::load(file)?);
+    let model = Arc::new(match file.to_str().and_then(|f| f.strip_prefix("synthetic:")) {
+        Some(n) => synthetic(n.parse().map_err(|_| "synthetic:N needs a number of boxes")?),
+        None => loaders::load(file)?,
+    });
     println!(
         "{}: {} layers, {} vertices, {} triangles, {} points, loaded in {:.2} s",
         model.file_name(),
@@ -335,6 +379,15 @@ mod tests {
         assert_eq!(s.max_ms, 20.0);
         assert_eq!(s.p95_ms, 20.0);
         assert!((s.fps - 105.26).abs() < 0.01);
+    }
+
+    #[test]
+    fn synthetic_has_one_element_per_box() {
+        let m = synthetic(25);
+        let ids: std::collections::BTreeSet<u64> = m.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        assert_eq!(ids, (1..=25).collect());
+        assert_eq!(m.triangle_count(), 25 * 12);
+        assert_eq!(m.element_props(7).first().map(|(k, v)| (k.as_str(), v.as_str())), Some(("Name", "Box 7")));
     }
 
     #[test]

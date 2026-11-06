@@ -3,6 +3,16 @@
 //! Hiding or highlighting an element is one write of that texture; the geometry never changes.
 //! `scene.wgsl` reads the flags with the same values.
 
+use crate::model::ElementKey;
+
+/// A unit that keeps its name when another model is added: an element by its key, or the
+/// triangles outside elements of a layer by its model and its index within that model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnitKey {
+    Element(ElementKey),
+    LayerRest { model: u32, layer: u32 },
+}
+
 /// Not drawn: no faces, edges or cut fill.
 pub const UNIT_HIDDEN: u8 = 1;
 /// Drawn in the selection colour.

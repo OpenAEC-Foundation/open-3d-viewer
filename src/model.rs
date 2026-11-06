@@ -107,6 +107,15 @@ impl Bounds {
     }
 }
 
+/// An element as its own file names it: the index of its model among the open ones and its id
+/// in that file. It stays the same when another model is added; the id in the shown model
+/// ([`Model::combine`] renumbers) does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ElementKey {
+    pub model: u32,
+    pub source: u64,
+}
+
 /// A loaded model.
 #[derive(Debug)]
 pub struct Model {
@@ -122,6 +131,10 @@ pub struct Model {
     pub source_y_up: bool,
     /// Element properties (flat JSON object per element id).
     pub props: HashMap<u64, String>,
+    /// For a combined model ([`Model::combine`]): the key of every element and back; empty for
+    /// a model of one file, whose ids are the keys.
+    pub keys: HashMap<u64, ElementKey>,
+    pub ids: HashMap<ElementKey, u64>,
     /// Views saved in the file (Revit), in world coordinates.
     pub views: Vec<SavedView>,
     /// What the file says about the project besides geometry (Revit).
@@ -342,13 +355,17 @@ impl Model {
         let mut views = Vec::new();
         let mut project = ProjectData::default();
         let mut next_id = 1u64;
-        for model in models {
+        let (mut keys, mut ids) = (HashMap::new(), HashMap::new());
+        for (m, model) in models.iter().enumerate() {
             let source = model.file_name();
-            let ids: std::collections::BTreeSet<_> = model.props.keys().copied()
+            let sources: std::collections::BTreeSet<_> = model.props.keys().copied()
                 .chain(model.layers.iter().flat_map(|layer| layer.elements.iter().map(|e| e.0))).collect();
-            let remap: HashMap<_, _> = ids.into_iter().map(|id| {
+            let remap: HashMap<_, _> = sources.into_iter().map(|id| {
                 let mapped = next_id;
                 next_id += 1;
+                let key = ElementKey { model: m as u32, source: id };
+                keys.insert(mapped, key);
+                ids.insert(key, mapped);
                 (id, mapped)
             }).collect();
             for layer in &model.layers {
@@ -377,6 +394,8 @@ impl Model {
         project.levels.dedup();
         let mut combined = Self::new(format!("{} models", models.len()).into(), "Multiple models", layers);
         combined.props = props;
+        combined.keys = keys;
+        combined.ids = ids;
         combined.views = views;
         combined.project = project;
         combined.file_size = models.iter().map(|m| m.file_size).sum();
@@ -412,6 +431,8 @@ impl Model {
             bounds,
             source_y_up: false,
             props,
+            keys: HashMap::new(),
+            ids: HashMap::new(),
             views: Vec::new(),
             project: ProjectData::default(),
         }
@@ -432,6 +453,19 @@ impl Model {
     /// The points of the point cloud layers.
     pub fn point_count(&self) -> usize {
         self.layers.iter().map(Layer::point_count).sum()
+    }
+
+    /// The key of element `id`: its model and its id in that model's file.
+    pub fn element_key(&self, id: u64) -> ElementKey {
+        self.keys.get(&id).copied().unwrap_or(ElementKey { model: 0, source: id })
+    }
+
+    /// The element with `key`, as this model numbers it.
+    pub fn element_with_key(&self, key: ElementKey) -> Option<u64> {
+        if self.keys.is_empty() {
+            return (key.model == 0).then_some(key.source);
+        }
+        self.ids.get(&key).copied()
     }
 
     /// Where an element is drawn: (layer, first index, index count) per range.
@@ -661,6 +695,43 @@ pub fn smooth_normals(positions: &[f32], indices: &[u32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A model of one square, element `id`, at x.
+    fn square(name: &str, id: u64, x: f32) -> std::sync::Arc<Model> {
+        let layer = Layer {
+            name: "Walls".into(),
+            positions: vec![x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x + 1.0, 1.0, 0.0, x, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            elements: vec![(id, 0, 6)],
+            props: vec![(id, format!(r#"{{"Name":"{name}"}}"#))],
+            ..Layer::default()
+        };
+        std::sync::Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn combine_keeps_source_ids_as_keys() {
+        let m = Model::combine(&[square("a", 7, 0.0), square("b", 7, 2.0)]);
+        let ids: Vec<u64> = m.layers.iter().map(|l| l.elements[0].0).collect();
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(m.element_key(ids[0]), ElementKey { model: 0, source: 7 });
+        assert_eq!(m.element_key(ids[1]), ElementKey { model: 1, source: 7 });
+    }
+
+    #[test]
+    fn element_with_key_inverts_element_key() {
+        let m = Model::combine(&[square("a", 7, 0.0), square("b", 9, 2.0)]);
+        for id in m.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)) {
+            assert_eq!(m.element_with_key(m.element_key(id)), Some(id));
+        }
+    }
+
+    #[test]
+    fn single_model_keys_are_identity() {
+        let m = square("a", 42, 0.0);
+        assert_eq!(m.element_key(42), ElementKey { model: 0, source: 42 });
+        assert_eq!(m.element_with_key(ElementKey { model: 0, source: 42 }), Some(42));
+    }
 
     #[test]
     fn y_up_conversion() {

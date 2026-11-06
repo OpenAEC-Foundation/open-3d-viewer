@@ -6,7 +6,7 @@ mod sheets;
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
-use crate::explode::{ExplodeIndex, ExplodeMode};
+use crate::explode::{ExplodeIndex, ExplodeMode, UnitOwner};
 use crate::export;
 use crate::icons;
 use crate::loaders;
@@ -20,7 +20,7 @@ use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
 use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
 use crate::selection::{Pickable, Selection};
-use crate::units::{unit_state, UNIT_SELECTED};
+use crate::units::{unit_state, UnitKey, UNIT_SELECTED};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
 use glam::{Mat4, Vec2, Vec3};
@@ -1306,6 +1306,29 @@ impl App {
         });
         self.selection = model.as_deref().map(|m| self.sel.ranges(m)).unwrap_or_default();
         self.update_units();
+    }
+
+    /// The stable key of a unit of the shown model.
+    pub(crate) fn unit_key(&self, owner: UnitOwner) -> UnitKey {
+        match owner {
+            UnitOwner::Element(id) => UnitKey::Element(self.model.as_ref().map_or(crate::model::ElementKey { model: 0, source: id }, |m| m.element_key(id))),
+            UnitOwner::LayerRest(l) => {
+                let (model, entry) = self.models.iter().enumerate().find(|(_, e)| e.layers.contains(&l)).map_or((0, 0..0), |(m, e)| (m, e.layers.clone()));
+                UnitKey::LayerRest { model: model as u32, layer: (l - entry.start) as u32 }
+            }
+        }
+    }
+
+    /// The unit of the shown model with `key`, if it is there.
+    pub(crate) fn unit_of_key(&self, key: UnitKey) -> Option<usize> {
+        let index = self.explode_index.as_ref()?;
+        match key {
+            UnitKey::Element(k) => index.element_unit(self.model.as_ref()?.element_with_key(k)?),
+            UnitKey::LayerRest { model, layer } => {
+                let start = self.models.get(model as usize).map_or(0, |e| e.layers.start);
+                index.layer_rest_unit(start + layer as usize)
+            }
+        }
     }
 
     /// The state the renderer gets per unit: the explode offsets and the selected flags.
@@ -2974,6 +2997,45 @@ mod tests {
         let (w, h) = app.viewport_size;
         let n = (app.camera.view_proj(w / h) * app.model_matrix()).project_point3(p);
         ((n.x + 1.0) * 0.5 * w, (1.0 - n.y) * 0.5 * h)
+    }
+
+    /// A model of one square, element `id`, at x, named `name`.
+    fn named_square(name: &str, id: u64, x: f32) -> Arc<Model> {
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Walls".into(),
+            positions: vec![x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x + 1.0, 1.0, 0.0, x, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            elements: vec![(id, 0, 6)],
+            props: vec![(id, format!(r#"{{"Name":"{name}"}}"#))],
+            ..Layer::default()
+        };
+        Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn keys_survive_add_model() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        let key = app.model.as_ref().unwrap().element_key(7);
+        let before = app.model.as_ref().unwrap().element_props(7);
+        app.add_model(named_square("b", 7, 2.0));
+        let model = app.model.clone().unwrap();
+        let id = model.element_with_key(key).expect("still there");
+        assert_eq!(model.element_props(id), before);
+    }
+
+    #[test]
+    fn unit_keys_round_trip_after_add() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        app.add_model(named_square("b", 7, 2.0));
+        let index = app.explode_index.clone().unwrap();
+        for unit in 1..index.len() {
+            let key = app.unit_key(index.owner(unit).unwrap());
+            assert_eq!(app.unit_of_key(key), Some(unit));
+        }
+        assert_eq!(app.unit_key(UnitOwner::LayerRest(1)), UnitKey::LayerRest { model: 1, layer: 0 });
     }
 
     #[test]

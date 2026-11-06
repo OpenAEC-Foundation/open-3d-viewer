@@ -58,6 +58,8 @@ acadrust = { git = "https://github.com/hakanaktt/acadrust", rev = "299dc758f958b
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
 tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
+# Private standalone Inventor library (parts and assemblies, clean-room); reads in the browser too.
+inventor-read = { git = "https://github.com/OpenAEC-Foundation/inventor-dll", rev = "c496ca45a1419f2620a60c703c0996efd56b0fd3" }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -67,6 +69,10 @@ openusd = { version = "0.8", default-features = false }
 # Point clouds: LAS and LAZ (las MIT, laz Apache-2.0) and E57 (MIT), all pure Rust
 las = { version = "0.11", features = ["laz"] }
 e57 = "0.11"
+
+[dev-dependencies]
+# Inventor files written in the tests from the specification
+inventor-read = { git = "https://github.com/OpenAEC-Foundation/inventor-dll", rev = "c496ca45a1419f2620a60c703c0996efd56b0fd3", features = ["synth"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # IFC parsing, units, placements, openings and tessellation from the existing IFClite library.

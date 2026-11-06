@@ -6,7 +6,7 @@ mod sheets;
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
-use crate::explode::{ExplodeIndex, ExplodeMode};
+use crate::explode::{ExplodeIndex, ExplodeMode, UnitOwner};
 use crate::export;
 use crate::icons;
 use crate::loaders;
@@ -19,6 +19,9 @@ use crate::viewport::camera::{Camera, ViewPreset};
 use crate::viewport::render::{transform_bounds, RenderMode, RenderSettings};
 use crate::model::{Bounds, ViewKind};
 use crate::section::{PlaneMove, PlaneOverlay, SectionBox, SectionEvent, SectionOverlay, SectionPlane};
+use crate::history::History;
+use crate::selection::{Pickable, Selection};
+use crate::units::{unit_state, UnitKey, UnitKeySet, UNIT_HIDDEN, UNIT_SELECTED};
 use crate::view_cube::{view_from, CubeEvent, CubeOverlay, CubeTarget};
 use crate::viewport::{Navigate, Viewport3D};
 use glam::{Mat4, Vec2, Vec3};
@@ -100,7 +103,10 @@ pub struct App {
     pub pending_open: Option<PathBuf>,
     /// The picked layer and, for BIM formats, the element in it.
     pub selected: Option<(usize, Option<u64>)>,
-    /// Index ranges of the selection, for the highlight: (layer, first index, index count).
+    /// What is selected, in pick order; `selected` and `selection` follow it (see
+    /// [`App::selection_changed`]).
+    pub sel: Selection,
+    /// Index ranges of the selection: (layer, first index, index count).
     pub selection: Vec<(usize, u32, u32)>,
     /// A running camera transition: from, to, start.
     pub anim: Option<(Camera, Camera, Instant)>,
@@ -151,6 +157,15 @@ pub struct App {
     /// The offset (world) of every unit as drawn, and the world bounds while apart; shared with
     /// the renderer, replaced when they change.
     pub explode_offsets: Arc<Vec<[f32; 4]>>,
+    /// What the renderer gets per unit: the explode offset and the flags (`crate::units`).
+    pub units: Arc<Vec<[f32; 4]>>,
+    /// Elements (and the rest of layers) hidden with Hide or Isolate, by keys that stay when a
+    /// model is added.
+    pub hidden: Arc<UnitKeySet>,
+    /// Undo and redo of what is shown: hidden elements and layer and model switches.
+    pub history: History<ViewState>,
+    /// The selection box while it is dragged: from, to (viewport pixels).
+    pub box_select: Option<(Vec2, Vec2)>,
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
@@ -165,7 +180,7 @@ pub struct App {
     pick_index: Option<PickIndex>,
 }
 
-type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>);
+type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>, Arc<UnitKeySet>);
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -258,6 +273,19 @@ pub enum Message {
     MeasureVolume(VolumeUnit),
     /// Decimals shown for a category.
     MeasureDecimals(Category, u8),
+    /// Go back to the visibility before the last change (layers, models, hidden elements).
+    Undo,
+    Redo,
+    /// Select every element whose property (key, value) has this value.
+    SelectWhere(String, String),
+    /// Select everything on the layers the selection touches.
+    SelectLayerOfSelection,
+    /// Hide the selected elements; the selection empties.
+    HideSelection,
+    /// Hide every element but the selected ones.
+    IsolateSelection,
+    /// Show every element that Hide or Isolate hid.
+    ShowAllElements,
     /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
     Escape,
     /// A finger (`true`) or a mouse button (`false`) went down.
@@ -326,6 +354,7 @@ impl Default for App {
             pending_open: None,
             selected: None,
             selection: Vec::new(),
+            sel: Selection::default(),
             anim: None,
             section: None,
             section_on: false,
@@ -352,6 +381,10 @@ impl Default for App {
             explode: [0.0; 3],
             explode_index: None,
             explode_offsets: Arc::default(),
+            units: Arc::default(),
+            hidden: Arc::default(),
+            history: History::new(),
+            box_select: None,
             explode_bounds: None,
             measure: MeasureState::default(),
             hover_request: None,
@@ -579,6 +612,7 @@ impl App {
         if let Some(b) = self.world_bounds() {
             self.camera.scene_radius = self.camera.scene_radius.max(b.radius());
         }
+        self.update_units();
     }
 
     /// World bounds of the selected triangles.
@@ -683,6 +717,8 @@ impl App {
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
     pub fn set_model(&mut self, model: Arc<Model>) {
+        self.hidden = Arc::default();
+        self.history.clear();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
         self.set_scene(model);
     }
@@ -741,6 +777,7 @@ impl App {
         self.open_sheets.clear();
         self.active_sheet = None;
         self.explorer_open[0] = false;
+        self.sel.clear();
         self.selected = None;
         self.selection.clear();
         self.measure.reset();
@@ -793,7 +830,11 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = changes_visibility(&message).then(|| self.view_state());
         let task = self.handle(message);
+        if let Some(before) = before.filter(|b| *b != self.view_state()) {
+            self.history.record(before);
+        }
         self.refresh_hover();
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
@@ -817,12 +858,12 @@ impl App {
     }
 
     fn hover_scene(&self) -> HoverScene {
-        (self.active_section(), self.plane, self.visible.clone())
+        (self.active_section(), self.plane, self.visible.clone(), self.hidden.clone())
     }
 
     fn hover_scene_holds(&self) -> bool {
-        self.hover_scene.as_ref().is_some_and(|(section, plane, visible)| {
-            *section == self.active_section() && *plane == self.plane && *visible == self.visible
+        self.hover_scene.as_ref().is_some_and(|(section, plane, visible, hidden)| {
+            *section == self.active_section() && *plane == self.plane && *visible == self.visible && Arc::ptr_eq(hidden, &self.hidden)
         })
     }
 
@@ -954,8 +995,8 @@ impl App {
             Message::ModelVisible(i, shown) => {
                 if let Some(entry) = self.models.get_mut(i) {
                     entry.visible = shown;
-                    self.selection.clear();
-                    self.selected = None;
+                    self.sel.clear();
+                    self.selection_changed();
                     self.restore_model_visibility();
                 }
             }
@@ -1000,7 +1041,14 @@ impl App {
                     self.viewport_origin = (x, y);
                     self.viewport_size = (width, height);
                 }
-                Navigate::Pick { x, y, width, height } => self.pick(x, y, width, height),
+                Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
+                Navigate::Box { x0, y0, x1, y1, width, height, done } => {
+                    let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
+                    self.box_select = (!done).then_some(rect);
+                    if done {
+                        self.select_box(rect, width, height);
+                    }
+                }
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -1199,11 +1247,32 @@ impl App {
                     Category::Angle => u.angle_decimals = n,
                 }
             }
+            Message::Undo => {
+                if let Some(state) = self.history.undo(self.view_state()) {
+                    self.restore_view_state(state);
+                }
+            }
+            Message::Redo => {
+                if let Some(state) = self.history.redo(self.view_state()) {
+                    self.restore_view_state(state);
+                }
+            }
+            Message::SelectWhere(key, value) => {
+                if let Some(model) = self.model.clone() {
+                    self.sel.clear();
+                    self.sel.extend(model.elements_with(&key, &value).into_iter().map(Pickable::Element));
+                    self.selection_changed();
+                }
+            }
+            Message::SelectLayerOfSelection => self.select_layer_of_selection(),
+            Message::HideSelection => self.hide_selection(),
+            Message::IsolateSelection => self.isolate_selection(),
+            Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape => {
                 if !self.measure.escape() {
-                    self.selected = None;
-                    self.selection.clear();
+                    self.sel.clear();
+                    self.selection_changed();
                 }
             }
         }
@@ -1260,7 +1329,7 @@ impl App {
     /// whole layer when the format has no elements); empty space clears the selection. While
     /// placing the section plane, puts it on the face under the cursor instead; while measuring,
     /// hands the click to the measure tool, with what is highlighted under the cursor.
-    pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32) {
+    pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
         if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
@@ -1273,7 +1342,7 @@ impl App {
             self.measure.click(&model, &hover, &self.model_matrix());
             // the measured element is also selected (shows its properties)
             if tool == Tool::Volume {
-                self.select(&model, Some((hover.layer, hover.triangle)));
+                self.click(Some(pickable_at(&model, hover.layer, hover.triangle)), false);
             }
             return;
         }
@@ -1296,18 +1365,224 @@ impl App {
             }
             return;
         }
-        self.select(&model, hit.map(|(l, t, _)| (l, t)));
+        self.click(hit.map(|(l, t, _)| pickable_at(&model, l, t)), add);
     }
 
     /// Selects the element of triangle `t` of layer `l` (the whole layer without elements), or
     /// nothing.
-    fn select(&mut self, model: &Model, hit: Option<(usize, usize)>) {
-        self.selected = hit.map(|(l, t)| (l, model.layers[l].element_at(t)));
-        self.selection = match self.selected {
-            Some((_, Some(id))) => model.element_ranges(id),
-            Some((l, None)) => vec![(l, 0, model.layers[l].indices.len() as u32)],
-            None => Vec::new(),
+    /// A click on `hit` (None: empty space). Without `add` it selects only `hit`, so empty space
+    /// clears; with `add` (Ctrl) it adds or removes `hit` and keeps the selection on empty space.
+    pub(crate) fn click(&mut self, hit: Option<Pickable>, add: bool) {
+        match (hit, add) {
+            (Some(item), true) => self.sel.toggle(item),
+            (None, true) => return,
+            (hit, false) => self.sel.set(hit),
+        }
+        self.selection_changed();
+    }
+
+    /// After `sel` changed: the shown element (the first picked), the index ranges and the flags
+    /// of the units.
+    pub(crate) fn selection_changed(&mut self) {
+        let model = self.model.clone();
+        self.selected = model.as_deref().and_then(|m| match self.sel.primary()? {
+            Pickable::Element(id) => Some((m.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == id))?, Some(id))),
+            Pickable::Layer(l) => (l < m.layers.len()).then_some((l, None)),
+        });
+        self.selection = model.as_deref().map(|m| self.sel.ranges(m)).unwrap_or_default();
+        self.update_units();
+    }
+
+    /// The stable key of a unit of the shown model.
+    pub(crate) fn unit_key(&self, owner: UnitOwner) -> UnitKey {
+        match owner {
+            UnitOwner::Element(id) => UnitKey::Element(self.model.as_ref().map_or(crate::model::ElementKey { model: 0, source: id }, |m| m.element_key(id))),
+            UnitOwner::LayerRest(l) => {
+                let (model, entry) = self.models.iter().enumerate().find(|(_, e)| e.layers.contains(&l)).map_or((0, 0..0), |(m, e)| (m, e.layers.clone()));
+                UnitKey::LayerRest { model: model as u32, layer: (l - entry.start) as u32 }
+            }
+        }
+    }
+
+    /// The unit of the shown model with `key`, if it is there.
+    #[cfg(test)]
+    pub(crate) fn unit_of_key(&self, key: UnitKey) -> Option<usize> {
+        let index = self.explode_index.as_ref()?;
+        match key {
+            UnitKey::Element(k) => index.element_unit(self.model.as_ref()?.element_with_key(k)?),
+            UnitKey::LayerRest { model, layer } => {
+                let start = self.models.get(model as usize).map_or(0, |e| e.layers.start);
+                index.layer_rest_unit(start + layer as usize)
+            }
+        }
+    }
+
+    /// The state the renderer gets per unit: the explode offsets and the selected flags.
+    fn update_units(&mut self) {
+        let Some(index) = self.explode_index.clone() else {
+            self.units = Arc::default();
+            return;
         };
+        let mut flags = vec![0u8; index.len()];
+        for &item in self.sel.items() {
+            let unit = match item {
+                Pickable::Element(id) => index.element_unit(id),
+                Pickable::Layer(l) => index.layer_rest_unit(l),
+            };
+            if let Some(f) = unit.and_then(|u| flags.get_mut(u)) {
+                *f |= UNIT_SELECTED;
+            }
+        }
+        if !self.hidden.is_empty() {
+            for (u, f) in flags.iter_mut().enumerate().skip(1) {
+                if index.owner(u).is_some_and(|o| self.hidden.contains(&self.unit_key(o))) {
+                    *f |= UNIT_HIDDEN;
+                }
+            }
+        }
+        self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
+    }
+
+    /// Select layer: adds every element (and every layer without elements) of the layers the
+    /// selection touches.
+    fn select_layer_of_selection(&mut self) {
+        let Some(model) = self.model.clone().filter(|_| !self.sel.is_empty()) else { return };
+        let layers: std::collections::BTreeSet<usize> = self.selection.iter().map(|r| r.0).collect();
+        let items: Vec<Pickable> = layers
+            .into_iter()
+            .filter_map(|l| model.layers.get(l).map(|layer| (l, layer)))
+            .flat_map(|(l, layer)| {
+                if layer.elements.is_empty() {
+                    vec![Pickable::Layer(l)]
+                } else {
+                    layer.elements.iter().map(|e| Pickable::Element(e.0)).collect()
+                }
+            })
+            .collect();
+        self.sel.extend(items);
+        self.selection_changed();
+    }
+
+    /// Adds what the box `rect` (viewport pixels of a viewport of width × height) holds to the
+    /// selection: elements, and layers without elements; nothing hidden or switched off.
+    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32) {
+        let (Some(model), Some(index)) = (self.model.clone(), self.explode_index.clone()) else { return };
+        // the elements on layers that are switched on; with every layer on, all of them
+        let all_on = self.visible.iter().all(|&v| v);
+        let shown_elements: crate::units::FastHashSet<u64> = if all_on {
+            Default::default()
+        } else {
+            model.layers.iter().enumerate().filter(|(l, _)| self.visible.get(*l).copied().unwrap_or(true)).flat_map(|(_, layer)| layer.elements.iter().map(|e| e.0)).collect()
+        };
+        let view_proj = self.camera.view_proj(width.max(1.0) / height.max(1.0)) * self.model_matrix();
+        // what the section box or plane cuts away wholly is not boxed either
+        let (section, plane, mm) = (self.active_section(), self.plane, self.model_matrix());
+        let cut_away = |u: usize| {
+            if section.is_none() && plane.is_none() {
+                return false;
+            }
+            let Some(b) = index.unit_bounds(u as u32) else {
+                return false;
+            };
+            let o = self.units.get(u).map_or(Vec3::ZERO, |s| Vec3::new(s[0], s[1], s[2]));
+            let corners = [0, 1, 2, 3, 4, 5, 6, 7].map(|i| {
+                let pick = |a: usize| if i >> a & 1 == 0 { b.min[a] } else { b.max[a] };
+                mm.transform_point3(Vec3::new(pick(0), pick(1), pick(2))) + o
+            });
+            let mut world = Bounds::empty();
+            corners.iter().for_each(|c| world.extend(c.to_array()));
+            let outside_box = section.is_some_and(|s| {
+                let local = s.local_bounds(&world);
+                (0..3).any(|a| local.max[a] < s.min[a] || local.min[a] > s.max[a])
+            });
+            outside_box || plane.is_some_and(|p| corners.iter().all(|&c| p.cuts(c)))
+        };
+        let hidden = |u: usize| {
+            let off = self.units.get(u).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0) || cut_away(u);
+            off || match index.owner(u) {
+                Some(UnitOwner::Element(id)) => !all_on && !shown_elements.contains(&id),
+                Some(UnitOwner::LayerRest(l)) => !self.visible.get(l).copied().unwrap_or(true) || !model.layers[l].elements.is_empty(),
+                None => true,
+            }
+        };
+        let units = crate::viewport::box_select::units_in_box(&index, &self.units, view_proj, (width, height), rect, &hidden);
+        let items: Vec<Pickable> = units
+            .into_iter()
+            .filter_map(|u| match index.owner(u)? {
+                UnitOwner::Element(id) => Some(Pickable::Element(id)),
+                UnitOwner::LayerRest(l) => Some(Pickable::Layer(l)),
+            })
+            .collect();
+        self.sel.extend(items);
+        self.selection_changed();
+    }
+
+    /// What is shown now, for undo.
+    fn view_state(&self) -> ViewState {
+        ViewState {
+            hidden: self.hidden.clone(),
+            layers: self.visible.clone(),
+            models: self.models.iter().map(|e| (e.visible, e.layer_visibility.clone())).collect(),
+        }
+    }
+
+    /// Shows what `s` says. A state from before an Add has fewer layers and models: those it has
+    /// are restored, the newer ones stay as they are.
+    fn restore_view_state(&mut self, s: ViewState) {
+        self.hidden = s.hidden;
+        for (shown, value) in self.visible.iter_mut().zip(s.layers) {
+            *shown = value;
+        }
+        for (entry, (visible, layers)) in self.models.iter_mut().zip(s.models) {
+            entry.visible = visible;
+            for (shown, value) in entry.layer_visibility.iter_mut().zip(layers) {
+                *shown = value;
+            }
+        }
+        self.update_units();
+    }
+
+    /// The stable key of a selected item.
+    fn item_key(&self, item: Pickable) -> UnitKey {
+        self.unit_key(match item {
+            Pickable::Element(id) => UnitOwner::Element(id),
+            Pickable::Layer(l) => UnitOwner::LayerRest(l),
+        })
+    }
+
+    /// Hide: the selection joins the hidden elements and empties.
+    fn hide_selection(&mut self) {
+        if self.sel.is_empty() {
+            return;
+        }
+        let mut hidden = (*self.hidden).clone();
+        hidden.extend(self.sel.items().iter().map(|&i| self.item_key(i)));
+        self.hidden = Arc::new(hidden);
+        self.sel.clear();
+        self.selection_changed();
+    }
+
+    /// Isolate: every unit of the shown models is hidden but the selected ones.
+    fn isolate_selection(&mut self) {
+        let Some(index) = self.explode_index.clone().filter(|_| !self.sel.is_empty()) else { return };
+        let keep: UnitKeySet = self.sel.items().iter().map(|&i| self.item_key(i)).collect();
+        let hidden = (1..index.len()).filter_map(|u| index.owner(u)).map(|o| self.unit_key(o)).filter(|k| !keep.contains(k)).collect();
+        self.hidden = Arc::new(hidden);
+        self.update_units();
+    }
+
+    /// Show all: nothing stays hidden by Hide or Isolate; layer and model switches stay as they are.
+    fn show_all_elements(&mut self) {
+        if !self.hidden.is_empty() {
+            self.hidden = Arc::default();
+            self.update_units();
+        }
+    }
+
+    /// Whether vertex `v` of layer `l` belongs to a hidden unit, as drawn now.
+    pub(crate) fn hidden_test(&self) -> impl Fn(usize, u32) -> bool + '_ {
+        let index = self.explode_index.as_deref();
+        move |l, v| index.is_some_and(|ix| self.units.get(ix.unit(l, v)).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0))
     }
 
     /// The camera's view of a viewport of width × height.
@@ -1339,7 +1614,8 @@ impl App {
         // the exploded view moves the triangles: their offsets back in model space
         let back = mm.inverse();
         let shift = |l: usize, i: u32| back.transform_vector3(self.explode_offset(l, i));
-        let hit = pick_triangle(model, &self.visible, origin, dir, &shift, &keep, index).map(|(l, t)| {
+        let hidden = self.hidden_test();
+        let hit = pick_triangle(model, &self.visible, origin, dir, &shift, &keep, &hidden, index).map(|(l, t)| {
             let s = model.layers[l].indices.get(3 * t).map_or(Vec3::ZERO, |&i| shift(l, i));
             (l, t, s)
         });
@@ -1821,6 +2097,10 @@ impl App {
         // the selection
         if let Some((li, element)) = self.selected {
             content = content.push(section(l.text("Selectie", "Selection")));
+            if self.sel.len() > 1 {
+                let count = format!("{} {}", self.sel.len(), l.text("elementen geselecteerd", "elements selected"));
+                content = content.push(container(text(count).size(12).color(p.text_secondary)).padding([2, 8]));
+            }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
@@ -1832,7 +2112,21 @@ impl App {
             props.sort_by_key(|(k, _)| PROP_ORDER.iter().position(|o| o.0 == k).unwrap_or(PROP_ORDER.len()));
             for (k, v) in props {
                 let label = PROP_ORDER.iter().find(|o| o.0 == k).map_or(k.as_str(), |o| l.text(o.1, o.2)).to_string();
-                content = content.push(prop_row(p, label, v));
+                if element.is_none() {
+                    content = content.push(prop_row(p, label, v));
+                    continue;
+                }
+                // every element with this value, one click away
+                let pick = button(svg(icons::handle(crate::b2::small("view.fit-selection"))).width(12).height(12))
+                    .padding(2)
+                    .style(move |_, s| p.row_button(s))
+                    .on_press(Message::SelectWhere(k.clone(), v.clone()));
+                let pick = iced::widget::tooltip(
+                    pick,
+                    container(text(l.text("Alles met deze waarde selecteren", "Select all with this value")).size(11)).padding(4).style(move |_| container::Style { background: Some(Background::Color(p.surface)), border: Border { color: p.text_muted, width: 1.0, radius: 3.0.into() }, text_color: Some(p.text), ..container::Style::default() }),
+                    iced::widget::tooltip::Position::Left,
+                );
+                content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
             }
             content = content.push(rule::horizontal(1));
         }
@@ -2067,11 +2361,10 @@ impl App {
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),
             visible: &self.visible,
-            selection: &self.selection,
             camera: self.camera,
             settings,
             explode: self.explode_index.as_ref(),
-            offsets: &self.explode_offsets,
+            offsets: &self.units,
             hover: self.measure.tool.is_some() && !self.plane_picking,
         })
             .width(Fill)
@@ -2186,12 +2479,14 @@ impl App {
             .width(Fill)
             .height(Fill)
         });
+        let boxed = self.box_select.map(|(from, to)| canvas(crate::viewport::box_select::BoxOverlay { from, to }).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(section)
             .push(plane)
             .push(measures)
             .push(measurements)
+            .push(boxed)
             .push(picking)
             .push(cube)
             .push(overlay)
@@ -2378,6 +2673,38 @@ fn ray_meets_box(origin: Vec3, dir: Vec3, (lo, hi): (Vec3, Vec3), max: f32) -> b
     true
 }
 
+/// What is shown, as undo keeps it: the elements hidden with Hide or Isolate, every layer's
+/// switch, and per model its switch and its own layer switches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewState {
+    pub hidden: Arc<UnitKeySet>,
+    pub layers: Vec<bool>,
+    pub models: Vec<(bool, Vec<bool>)>,
+}
+
+/// The messages that change what is shown, and so go into the undo history when they do.
+fn changes_visibility(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::Layer(..)
+            | Message::AllLayers(_)
+            | Message::LayerGroup(..)
+            | Message::ModelVisible(..)
+            | Message::HideSelection
+            | Message::IsolateSelection
+            | Message::ShowAllElements
+    )
+}
+
+/// What a click on triangle `t` of layer `l` selects: its element, or the layer when the format
+/// has no elements.
+fn pickable_at(model: &Model, l: usize, t: usize) -> Pickable {
+    match model.layers[l].element_at(t) {
+        Some(id) => Pickable::Element(id),
+        None => Pickable::Layer(l),
+    }
+}
+
 /// The nearest triangle hit by the ray `origin + t·dir` (t > 0) among the visible layers:
 /// (layer, triangle), skipping hits that `keep` rejects (the section box). A triangle is where
 /// `shift` (layer, vertex) moves its first vertex: the exploded view, whose units never share a
@@ -2390,6 +2717,7 @@ pub fn pick_triangle(
     dir: Vec3,
     shift: &dyn Fn(usize, u32) -> Vec3,
     keep: &dyn Fn(Vec3) -> bool,
+    hidden: &dyn Fn(usize, u32) -> bool,
     index: Option<&PickIndex>,
 ) -> Option<(usize, usize)> {
     let mut best: Option<(f32, usize, usize)> = None;
@@ -2411,7 +2739,7 @@ pub fn pick_triangle(
             }
             for (i, tri) in block.chunks_exact(3).enumerate() {
                 let t = b * TRI_BLOCK + i;
-                if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) {
+                if tri.iter().any(|&i| 3 * i as usize + 2 >= pos.len()) || hidden(l, tri[0]) {
                     continue;
                 }
                 let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
@@ -2939,19 +3267,19 @@ mod tests {
         };
         let model = Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]);
         let still = |_: usize, _: u32| Vec3::ZERO;
-        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None);
+        let hit = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, None);
         let (l, t) = hit.expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(20));
         let index = PickIndex::new(&model);
-        assert_eq!(pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, Some(&index)), hit);
+        assert_eq!(pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, Some(&index)), hit);
         assert_eq!(model.element_ranges(20), vec![(0, 6, 6)]);
         let props = model.element_props(20);
         assert!(props.contains(&("level".to_string(), "00 begane grond".to_string())), "{props:?}");
-        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None).is_none());
-        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, None).is_none());
+        assert!(pick_triangle(&model, &[false], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, None).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(3.0, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &|_| true, &|_, _| false, None).is_none());
         // a section box below z = 0.5 cuts the upper square away: the lower one is hit
         let below = |p: Vec3| p.z < 0.5;
-        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below, None).expect("hit");
+        let (l, t) = pick_triangle(&model, &[true], Vec3::new(0.3, 0.6, 5.0), Vec3::new(0.0, 0.0, -1.0), &still, &below, &|_, _| false, None).expect("hit");
         assert_eq!(model.layers[l].element_at(t), Some(10));
     }
 
@@ -2972,16 +3300,16 @@ mod tests {
         let down = Vec3::new(0.0, 0.0, -1.0);
         for x in [0.3, 255.5, 256.7, 1400.2, 1998.9, 1999.5] {
             let origin = Vec3::new(x, 0.6, 5.0);
-            let plain = pick_triangle(&model, &[true], origin, down, &still, &|_| true, None);
-            assert_eq!(pick_triangle(&model, &[true], origin, down, &still, &|_| true, Some(&index)), plain, "x = {x}");
+            let plain = pick_triangle(&model, &[true], origin, down, &still, &|_| true, &|_, _| false, None);
+            assert_eq!(pick_triangle(&model, &[true], origin, down, &still, &|_| true, &|_, _| false, Some(&index)), plain, "x = {x}");
             assert_eq!(plain.is_some(), x.rem_euclid(2.0) < 1.0, "x = {x}");
         }
         // a slanted ray, across many blocks
         let slanted = Vec3::new(-0.3, 0.0, -1.0);
         let origin = Vec3::new(1001.0, 0.5, 2.0);
         assert_eq!(
-            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, Some(&index)),
-            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, None),
+            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, &|_, _| false, Some(&index)),
+            pick_triangle(&model, &[true], origin, slanted, &still, &|_| true, &|_, _| false, None),
         );
     }
 
@@ -3002,6 +3330,372 @@ mod tests {
         Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]))
     }
 
+    /// Where world point `p` is in the viewport of `app`, as the viewport reports a click.
+    fn screen_point(app: &App, p: Vec3) -> (f32, f32) {
+        let (w, h) = app.viewport_size;
+        let n = (app.camera.view_proj(w / h) * app.model_matrix()).project_point3(p);
+        ((n.x + 1.0) * 0.5 * w, (1.0 - n.y) * 0.5 * h)
+    }
+
+    /// A model of one square, element `id`, at x, named `name`.
+    fn named_square(name: &str, id: u64, x: f32) -> Arc<Model> {
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Walls".into(),
+            positions: vec![x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x + 1.0, 1.0, 0.0, x, 1.0, 0.0],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            elements: vec![(id, 0, 6)],
+            props: vec![(id, format!(r#"{{"Name":"{name}"}}"#))],
+            ..Layer::default()
+        };
+        Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    /// Two unit squares facing +Z, element 10 at z = 0 under element 20 at z = 1.
+    fn stacked_squares() -> Arc<Model> {
+        use crate::model::Layer;
+        let mut positions = Vec::new();
+        for z in [0.0, 1.0] {
+            positions.extend_from_slice(&[0.0, 0.0, z, 1.0, 0.0, z, 1.0, 1.0, z, 0.0, 1.0, z]);
+        }
+        let layer = Layer {
+            name: "Slabs".into(),
+            positions,
+            indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            elements: vec![(10, 0, 6), (20, 6, 6)],
+            ..Layer::default()
+        };
+        Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer]))
+    }
+
+    /// The flags of the unit of element `id`.
+    fn element_flags(app: &App, id: u64) -> u8 {
+        let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(id)).expect("unit");
+        app.units.get(unit).map_or(0, |s| s[3] as u8)
+    }
+
+    #[test]
+    fn hide_hides_selected_units_and_clears_selection() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        assert_eq!(element_flags(&app, 20) & UNIT_HIDDEN, UNIT_HIDDEN);
+        assert_eq!(element_flags(&app, 10), 0);
+        assert!(app.sel.is_empty());
+    }
+
+    #[test]
+    fn isolate_hides_everything_else() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::IsolateSelection);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, UNIT_HIDDEN);
+        assert_eq!(element_flags(&app, 20) & UNIT_HIDDEN, 0);
+        assert!(app.sel.contains(Pickable::Element(20)));
+    }
+
+    #[test]
+    fn show_all_clears_hidden() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::ShowAllElements);
+        assert!(app.hidden.is_empty());
+        assert_eq!(element_flags(&app, 20), 0);
+    }
+
+    #[test]
+    fn pick_passes_through_hidden_element() {
+        let mut app = App::default();
+        app.set_model(stacked_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 1.0));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        assert_eq!(app.sel.primary(), Some(Pickable::Element(20)));
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        assert_eq!(app.sel.primary(), Some(Pickable::Element(10)));
+    }
+
+    #[test]
+    fn hide_works_for_formats_without_elements() {
+        use crate::model::Layer;
+        let layer = Layer { name: "Mesh".into(), positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], indices: vec![0, 1, 2], ..Layer::default() };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.obj"), "OBJ", vec![layer])));
+        app.click(Some(Pickable::Layer(0)), false);
+        let _ = app.update(Message::HideSelection);
+        let unit = app.explode_index.as_ref().and_then(|i| i.layer_rest_unit(0)).expect("unit");
+        assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn hidden_survive_add_model() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        app.click(Some(Pickable::Element(7)), false);
+        let _ = app.update(Message::HideSelection);
+        app.add_model(named_square("b", 7, 2.0));
+        let model = app.model.clone().unwrap();
+        let id = model.element_with_key(crate::model::ElementKey { model: 0, source: 7 }).unwrap();
+        let other = model.element_with_key(crate::model::ElementKey { model: 1, source: 7 }).unwrap();
+        assert_eq!(element_flags(&app, id) & UNIT_HIDDEN, UNIT_HIDDEN);
+        assert_eq!(element_flags(&app, other), 0);
+    }
+
+    #[test]
+    fn explode_and_hidden_combine() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        let _ = app.update(Message::ToggleExplode);
+        let _ = app.update(Message::Explode(0, 50.0));
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
+        assert_ne!(app.units[unit][0], 0.0, "still moved apart");
+        assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn box_select_skips_what_the_section_cuts_away() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        // a section box around the first square only
+        app.section = Some(SectionBox::around(&Bounds { min: [-0.5, -0.5, -1.0], max: [1.5, 1.5, 1.0] }));
+        app.section_on = true;
+        let (w, h) = app.viewport_size;
+        let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
+        let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
+    }
+
+    #[test]
+    fn box_select_finds_structural_nodes_and_members() {
+        use bim_structural::{sam_id, IdKind};
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/bim-structural/tests/fixtures/portal_frame.samjson");
+        let model = crate::loaders::load(&path).expect("portal frame");
+        let el = |source| model.structural[0].element_of(source).expect("a structural object");
+        let mut want = vec![el(sam_id(IdKind::Node, 1)), el(sam_id(IdKind::Node, 2)), el(sam_id(IdKind::Member, 1))];
+        want.sort_unstable();
+        let mut app = App::default();
+        app.set_model(Arc::new(model));
+        app.camera.set_preset(ViewPreset::Front);
+        app.fit();
+        // a window around the left column (x = 0): its two nodes and the column, wholly inside
+        let (w, h) = app.viewport_size;
+        let (ax, ay) = screen_point(&app, Vec3::new(-0.5, 0.0, 5.0));
+        let (bx, by) = screen_point(&app, Vec3::new(0.5, 0.0, -1.0));
+        let (x0, x1) = (ax.min(bx), ax.max(bx));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true }));
+        let mut got: Vec<u64> = app.sel.items().iter().filter_map(|i| match i { Pickable::Element(id) => Some(*id), _ => None }).collect();
+        got.sort_unstable();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn hiding_drops_the_measure_highlight() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let _ = app.update(Message::Measure(Tool::Distance));
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Hover { x, y, width: w, height: h }));
+        app.hover_last = None;
+        assert!(app.measure.hover.is_some());
+        app.click(Some(Pickable::Element(10)), false);
+        let _ = app.update(Message::HideSelection);
+        assert!(app.measure.hover.is_none(), "looked again: nothing shown there");
+    }
+
+    #[test]
+    fn select_where_selects_all_matches() {
+        use crate::model::Layer;
+        let layer = Layer {
+            name: "Walls".into(),
+            positions: vec![0.0; 27],
+            indices: (0..9).collect(),
+            elements: vec![(1, 0, 3), (2, 3, 3), (3, 6, 3)],
+            props: vec![(1, r#"{"level":"00"}"#.into()), (2, r#"{"level":"01"}"#.into()), (3, r#"{"level":"00"}"#.into())],
+            ..Layer::default()
+        };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![layer])));
+        app.click(Some(Pickable::Element(2)), false);
+        let _ = app.update(Message::SelectWhere("level".into(), "00".into()));
+        assert_eq!(app.sel.items(), &[Pickable::Element(1), Pickable::Element(3)]);
+    }
+
+    #[test]
+    fn select_layer_of_selection() {
+        use crate::model::Layer;
+        let walls = two_squares().layers[0].clone();
+        let mesh = Layer { name: "Mesh".into(), positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], indices: vec![0, 1, 2], ..Layer::default() };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("x.rvt"), "Revit", vec![walls, mesh])));
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::SelectLayerOfSelection);
+        assert_eq!(app.sel.items(), &[Pickable::Element(20), Pickable::Element(10)]);
+        app.click(Some(Pickable::Layer(1)), true);
+        let _ = app.update(Message::SelectLayerOfSelection);
+        assert_eq!(app.sel.len(), 3);
+    }
+
+    #[test]
+    fn ctrl_drag_box_adds_what_it_holds() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
+        let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false }));
+        assert!(app.box_select.is_some(), "drawn while dragging");
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        assert!(app.box_select.is_none());
+        assert_eq!(app.sel.len(), 2);
+    }
+
+    #[test]
+    fn undo_restores_hidden_and_layers() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(10)), false);
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::Layer(0, false));
+        assert!(!app.visible[0]);
+        let _ = app.update(Message::Undo);
+        assert!(app.visible[0]);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, UNIT_HIDDEN);
+        let _ = app.update(Message::Undo);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, 0);
+        let _ = app.update(Message::Redo);
+        assert_eq!(element_flags(&app, 10) & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn no_entry_for_noop() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        let _ = app.update(Message::ShowAllElements);
+        let _ = app.update(Message::Layer(0, true));
+        assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn undo_survives_add_model() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        app.click(Some(Pickable::Element(7)), false);
+        let _ = app.update(Message::HideSelection);
+        app.add_model(named_square("b", 7, 2.0));
+        let id = app.model.as_ref().unwrap().element_with_key(crate::model::ElementKey { model: 0, source: 7 }).unwrap();
+        assert_eq!(element_flags(&app, id) & UNIT_HIDDEN, UNIT_HIDDEN);
+        let _ = app.update(Message::Undo);
+        assert_eq!(element_flags(&app, id) & UNIT_HIDDEN, 0);
+        assert_eq!(app.visible.len(), 2, "the added model's layer stays");
+    }
+
+    #[test]
+    fn ids_stay_the_same_after_add() {
+        let mut app = App::default();
+        let name = |app: &App, id: u64| app.model.as_ref().unwrap().element_props(id).first().map(|p| p.1.clone());
+        app.set_model(named_square("a", 7, 0.0));
+        app.add_model(named_square("b", 7, 2.0));
+        assert_eq!(name(&app, 7).as_deref(), Some("a"), "the first model keeps its ids");
+        let b = app.model.as_ref().unwrap().element_with_key(crate::model::ElementKey { model: 1, source: 7 }).unwrap();
+        app.add_model(named_square("c", 7, 4.0));
+        assert_eq!(name(&app, 7).as_deref(), Some("a"));
+        assert_eq!(name(&app, b).as_deref(), Some("b"), "an added model keeps its ids when the next is added");
+    }
+
+    #[test]
+    fn keys_survive_add_model() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        let key = app.model.as_ref().unwrap().element_key(7);
+        let before = app.model.as_ref().unwrap().element_props(7);
+        app.add_model(named_square("b", 7, 2.0));
+        let model = app.model.clone().unwrap();
+        let id = model.element_with_key(key).expect("still there");
+        assert_eq!(model.element_props(id), before);
+    }
+
+    #[test]
+    fn unit_keys_round_trip_after_add() {
+        let mut app = App::default();
+        app.set_model(named_square("a", 7, 0.0));
+        app.add_model(named_square("b", 7, 2.0));
+        let index = app.explode_index.clone().unwrap();
+        for unit in 1..index.len() {
+            let key = app.unit_key(index.owner(unit).unwrap());
+            assert_eq!(app.unit_of_key(key), Some(unit));
+        }
+        assert_eq!(app.unit_key(UnitOwner::LayerRest(1)), UnitKey::LayerRest { model: 1, layer: 0 });
+    }
+
+    #[test]
+    fn ctrl_click_adds_and_removes() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        app.click(Some(Pickable::Element(10)), true);
+        assert_eq!(app.sel.len(), 2);
+        assert_eq!(app.sel.primary(), Some(Pickable::Element(20)));
+        app.click(Some(Pickable::Element(10)), true);
+        assert_eq!(app.sel.len(), 1);
+    }
+
+    #[test]
+    fn plain_click_on_empty_space_clears_but_ctrl_click_keeps() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(10)), false);
+        app.click(None, true);
+        assert_eq!(app.sel.len(), 1);
+        assert_eq!(app.selected, Some((0, Some(10))));
+        app.click(None, false);
+        assert!(app.sel.is_empty());
+        assert_eq!(app.selected, None);
+        assert!(app.selection.is_empty());
+    }
+
+    #[test]
+    fn ctrl_pick_reaches_click_with_add() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        let (x, y) = screen_point(&app, Vec3::new(2.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: true }));
+        assert_eq!(app.sel.items(), &[Pickable::Element(10), Pickable::Element(20)]);
+        assert_eq!(app.selection, vec![(0, 0, 6), (0, 6, 6)]);
+    }
+
+    #[test]
+    fn selected_units_carry_the_selected_flag() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(20)), false);
+        let index = app.explode_index.clone().expect("units");
+        let flags = |id: u64| app.units[index.element_unit(id).expect("unit")][3] as u8;
+        assert_eq!(flags(20) & UNIT_SELECTED, UNIT_SELECTED);
+        assert_eq!(flags(10), 0);
+    }
+
     #[test]
     fn the_exploded_view_is_picked_and_framed_where_it_is_drawn() {
         let mut app = App::default();
@@ -3012,9 +3706,9 @@ mod tests {
         // no levels: elements mode; the middle is x 1.5, so the squares move by -2 and +2
         let down = Vec3::new(0.0, 0.0, -1.0);
         let shift = |l: usize, i: u32| app.explode_offset(l, i);
-        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true, None);
+        let hit = pick_triangle(&model, &[true], Vec3::new(4.5, 0.5, 5.0), down, &shift, &|_| true, &|_, _| false, None);
         assert_eq!(hit.map(|(l, t)| model.layers[l].element_at(t)), Some(Some(20)));
-        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true, None).is_none());
+        assert!(pick_triangle(&model, &[true], Vec3::new(2.5, 0.5, 5.0), down, &shift, &|_| true, &|_, _| false, None).is_none());
         let b = app.world_bounds().unwrap();
         assert_eq!((b.min[0], b.max[0]), (-2.0, 5.0));
         app.selection = model.element_ranges(20);
@@ -3065,7 +3759,7 @@ mod tests {
         // a few pixels off the corners: they snap
         for (corner, off) in [(Vec3::new(0.0, 0.0, 0.0), 0.01), (Vec3::new(2.0, 1.0, 0.0), -0.01)] {
             let (x, y) = screen(corner + Vec3::new(off, off, 0.0));
-            let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+            let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         }
         assert_eq!(app.measure.results.len(), 1);
         let (_, d) = app.measure.results[0].value();
@@ -3113,7 +3807,7 @@ mod tests {
         let highlighted = app.measure.hover.clone().expect("hover");
         assert_eq!(highlighted.kind, SnapKind::Corner);
         // the click lands a pixel or two off: it takes the highlighted corner
-        let _ = app.update(Message::Navigate(Navigate::Pick { x: cx + 5.0, y: cy - 3.0, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: cx + 5.0, y: cy - 3.0, width: w, height: h, add: false }));
         assert_eq!(app.measure.picks, vec![highlighted.snap]);
         // orbiting drops the highlight; leaving the viewport too
         hover(&mut app, x, y);
@@ -3128,7 +3822,7 @@ mod tests {
         assert!(app.measure.hover.is_some());
         let _ = app.update(Message::Layer(0, false));
         assert!(app.measure.hover.is_none(), "looked again: nothing shown there");
-        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
         assert_eq!(app.measure.picks.len(), 1, "only the corner from before");
     }
 

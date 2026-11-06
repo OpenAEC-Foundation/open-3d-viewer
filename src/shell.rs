@@ -494,6 +494,23 @@ impl Studio {
                 .toggle(app.plane.is_some() || app.plane_picking)
                 .enabled(loaded),
             Command::new("section.flip", l.text("Omdraaien", "Flip"), go(Message::FlipPlane)).icon(small("transform.mirror"), large("transform.mirror")).enabled(app.plane.is_some()),
+            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.history.can_undo()),
+            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.history.can_redo()),
+            Command::new("selection.layer", l.text("Laag selecteren", "Select layer"), go(Message::SelectLayerOfSelection))
+                .icon(small("view.fit-selection"), large("view.fit-selection"))
+                .enabled(!app.sel.is_empty()),
+            Command::new("object.hide", l.text("Verbergen", "Hide"), go(Message::HideSelection))
+                .icon(small("object.hide"), large("object.hide"))
+                .shortcut(key('h'))
+                .enabled(!app.sel.is_empty()),
+            Command::new("object.isolate", l.text("Isoleren", "Isolate"), go(Message::IsolateSelection))
+                .icon(small("object.show"), large("object.show"))
+                .shortcut(key('i'))
+                .enabled(!app.sel.is_empty()),
+            Command::new("object.show-all", l.text("Alles tonen", "Show all"), go(Message::ShowAllElements))
+                .icon(small("object.show"), large("object.show"))
+                .shortcut(Shortcut::ctrl_shift('h'))
+                .enabled(!app.hidden.is_empty()),
             Command::new("section.selection", l.text("Om selectie", "To selection"), go(Message::SectionToSelection))
                 .icon(small("section.fit-selection"), large("section.fit-selection"))
                 .enabled(!app.selection.is_empty()),
@@ -899,6 +916,7 @@ impl Studio {
             w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
             w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
             w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+            w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
             w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
             w::ribbon_group(look, l.text("Meten", "Measure"), measure),
             w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),

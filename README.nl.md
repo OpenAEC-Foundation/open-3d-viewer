@@ -93,6 +93,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Standaardaanzichten.** Iso, boven, voor en rechts (`0`, `1`, `2`, `3`), perspectief of orthografisch (`P`, `O`), en de opgeslagen aanzichten van een Revit-model.
 - **Weergaven.** Volledig, draadmodel en volledig met randen (`S`, `W`, `E`), het grondraster (`G`) en **Z-as omdraaien** voor bestanden met de andere as omhoog.
 - **Modellen, lagen en eigenschappen.** De verkenner toont de geopende modellen en hun lagen (IFC-presentatielagen of -klassen, Revit-categorieën, SketchUp-tags, Tekla-klassen, Allplan-elementcategorieën, Archicad-wanden, -vloeren, -kolommen, -liggers, -daken, -sparingen, -objecten, -terrein, -zones, -morphs, -trappen en -leuningen, IFCX-klassen, STEP-presentatielagen of -producten, CAD-lagen, Rhino-lagen) met hun kleur en aantal; een klik op een element toont zijn eigenschappen. IFC-ruimtes en sparingsvolumes beginnen verborgen in eigen lagen; de sparingen blijven uit hun wanden en vloeren gesneden.
+- **Selecteren, verbergen en isoleren.** Ctrl-klik voegt een element toe of haalt het weg, Ctrl en slepen trekt een kader (naar rechts neemt het wat erin ligt, naar links wat het raakt), **Laag selecteren** voegt de rest van hun lagen toe, en de knop naast een eigenschap selecteert elk element met die waarde. **Verbergen** (`H`), **Isoleren** (`I`) en **Alles tonen** (`Ctrl+Shift+H`) werken per element, en `Ctrl+Z` en `Ctrl+Y` maken ongedaan en opnieuw wat er getoond wordt.
 - **Sneltoetsen.** Elke opdracht staat één keer in één lijst, die het lint, de titelbalk en het toetsenbord gebruiken. In **Instellingen** geef je elke opdracht je eigen toets.
 
 ## Meten, doorsnijden en uit elkaar halen
@@ -233,7 +234,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## MCP
 
-`open-3d-viewer-mcp` is een [MCP](https://modelcontextprotocol.io)-server waarmee een AI-agent (Claude Code, Claude Desktop of een andere MCP-client) de desktopviewer bedient zoals een mens dat doet: bestanden openen, schermafbeeldingen maken, de camera en de standaard- en opgeslagen aanzichten instellen, lagen tonen, verbergen en isoleren, elementen zoeken op eigenschap, selecteren, eigenschappen lezen, een doorsnedekader of -vlak zetten, het model uit elkaar trekken, de weergave wisselen, Revit-staten lezen, meten, constructieve rekenmodellen lezen (`list_structural`, `get_structural_issues`, `get_structural_element`, `find_structural`) en het model als IFC opslaan.
+`open-3d-viewer-mcp` is een [MCP](https://modelcontextprotocol.io)-server waarmee een AI-agent (Claude Code, Claude Desktop of een andere MCP-client) de desktopviewer bedient zoals een mens dat doet: bestanden openen, schermafbeeldingen maken, de camera en de standaard- en opgeslagen aanzichten instellen, lagen en elementen tonen, verbergen en isoleren, elementen zoeken op eigenschap, selecteren, eigenschappen lezen, een doorsnedekader of -vlak zetten, het model uit elkaar trekken, de weergave wisselen, Revit-staten lezen, meten, constructieve rekenmodellen lezen (`list_structural`, `get_structural_issues`, `get_structural_element`, `find_structural`), ongedaan maken en opnieuw doen wat er getoond wordt, en het model als IFC opslaan.
 
 - **Je ziet wat hij doet.** Opdrachten gaan langs dezelfde weg als jouw klikken, in het venster op je scherm. Metingen blijven in beeld.
 - **Het blijft op je computer.** Het venster luistert alleen op `127.0.0.1`, met een willekeurig token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` of `O3V_REMOTE=0` zet het uit.
@@ -242,7 +243,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **300 unittests** in `src/` (295 draaien; 5 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden), plus 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 195 voor de lezers, 20 voor de app, 17 voor meten, 8 voor de vensterschil, 7 voor de doorsnedes, 10 voor IFC-export, 7 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), en meer voor de 3D-weergave, kijkkubus, afstandsbediening, het model en de uit-elkaar-weergave.
+- **397 unittests** in `src/` (391 draaien; 6 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, één vraagt een GPU), plus 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 212 voor de lezers, 44 voor de app, 17 voor meten, 12 voor de vensterschil, 7 voor de doorsnedes, 11 voor IFC-export, 13 voor de afstandsbediening, 19 voor constructieve rekenmodellen, 8 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -255,8 +256,7 @@ Bron van de getallen: `cargo test --release` en `cargo test --release -p openaec
 
 - **Revit, Vertex BD en BTL openen alleen op de desktop.** De browserversie heeft die lezers niet. IFC opent in beide, maar grote IFC-bestanden zijn traag in de browser en heel grote passen niet in het geheugen ervan.
 - **IGES-bestanden openen niet.** STEP-bestanden wel; IGES wordt nog niet gelezen.
-- **Elementen zijn niet een voor een te verbergen.** Zichtbaarheid werkt per laag en per model.
-- **Nog geen ongedaan maken.** Metingen en de doorsnede wis je met de hand.
+- **Ongedaan maken geldt alleen voor zichtbaarheid.** Metingen en de doorsnede wis je met de hand.
 - **Op Android** is de app de browserversie (geïnstalleerd vanuit Chrome, of de APK daaromheen), met dezelfde grenzen; zie [Android](#android).
 - **De browserversie blokkeert tijdens het laden** van een groot model (nog geen worker-threads) en onthoudt je instellingen niet tussen bezoeken.
 - **Vijf iconen zijn tijdelijk.** De OpenAEC-iconenset heeft nog geen iconen voor volledig, draadmodel, randen, perspectief en orthografisch; de viewer gebruikt de dichtstbijzijnde.
@@ -291,7 +291,7 @@ open-3d-viewer [BESTAND] [--theme light|dark|blueprint|high-contrast-dark|high-c
 open-3d-viewer [BESTAND] --screenshot UIT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAAM] [--explode X,Y,Z]
 open-3d-viewer BESTAND --save-as UIT.ifc
-open-3d-viewer --bench BESTAND [--frames 300]
+open-3d-viewer --bench BESTAND [--frames 300] [--throughput]
 ```
 
 Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.11`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.

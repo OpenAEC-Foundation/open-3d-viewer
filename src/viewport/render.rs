@@ -99,13 +99,12 @@ struct Uniforms {
 pub struct ScenePrimitive {
     pub model: Option<Arc<Model>>,
     pub visible: Vec<bool>,
-    /// Highlighted index ranges: (layer, first index, index count).
-    pub selection: Vec<(usize, u32, u32)>,
     pub camera: Camera,
     pub settings: RenderSettings,
     /// The units of the exploded view (`crate::explode`), uploaded with the model.
     pub explode: Option<Arc<ExplodeIndex>>,
-    /// The offset (world) of every unit; written when it is another vector.
+    /// The state of every unit (`crate::units`): its offset (world) in the exploded view and
+    /// its flags (hidden, selected); written when it is another vector.
     pub offsets: Arc<Vec<[f32; 4]>>,
 }
 
@@ -162,7 +161,6 @@ pub struct ScenePipeline {
     format: wgpu::TextureFormat,
     srgb: bool,
     lit: wgpu::RenderPipeline,
-    highlight: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
     stencil_clear: wgpu::RenderPipeline,
     face_count: wgpu::RenderPipeline,
@@ -314,15 +312,6 @@ impl ScenePipeline {
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 },
             false,
-        );
-        // The selection: the same triangles again (equal depth passes), tinted.
-        let highlight = make_pipeline(
-            "o3v.highlight",
-            wgpu::PrimitiveTopology::TriangleList,
-            "fs_highlight",
-            None,
-            wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 },
-            true,
         );
         // Cut fill: stencil clear, surface count per box face, the face where the count is odd.
         let stencil = |compare, pass_op| {
@@ -499,7 +488,6 @@ impl ScenePipeline {
             format,
             srgb: format.is_srgb(),
             lit,
-            highlight,
             glass,
             stencil_clear,
             face_count,
@@ -863,18 +851,6 @@ impl ScenePipeline {
                     }
                 }
             }
-            if !primitive.selection.is_empty() {
-                pass.set_pipeline(&self.highlight);
-                pass.set_bind_group(0, &self.model_group, &[]);
-                for &(i, first, count) in &primitive.selection {
-                    let Some(layer) = self.layers.get(i) else { continue };
-                    if visible(i) && count > 0 && first + count <= layer.index_count {
-                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
-                        pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(first..first + count, 0, 0..1);
-                    }
-                }
-            }
             if primitive.settings.caps && mode != RenderMode::Wireframe {
                 pass.set_bind_group(0, &self.model_group, &[]);
                 pass.set_stencil_reference(0);
@@ -991,8 +967,9 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
 /// that leaves room for two million units.
 const OFFSETS_WIDTH: usize = 1024;
 
-/// The offsets of the exploded view for `units` units (at least one), zero: a float texture
-/// rather than a storage buffer, so the scene also draws through WebGL2.
+/// The state of `units` units (at least one), zero: the offset of the exploded view and the
+/// flags of `crate::units`. A float texture rather than a storage buffer, so the scene also
+/// draws through WebGL2.
 fn offsets_texture(device: &wgpu::Device, units: usize) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("o3v.explode.offsets"),
@@ -1006,7 +983,8 @@ fn offsets_texture(device: &wgpu::Device, units: usize) -> wgpu::Texture {
     })
 }
 
-/// Writes `offsets` into the texture from unit 0, the last row padded with zeros.
+/// Writes the unit state (`crate::units::unit_state`) into the texture from unit 0, the last
+/// row padded with zeros.
 fn write_offsets(queue: &wgpu::Queue, texture: &wgpu::Texture, offsets: &[[f32; 4]]) {
     let rows = offsets.len().div_ceil(OFFSETS_WIDTH);
     let mut data = offsets.to_vec();

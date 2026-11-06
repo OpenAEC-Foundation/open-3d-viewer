@@ -10,6 +10,7 @@
 //! dragging pans, as a right drag does with the mouse.
 //! The camera lives in the application state; the widget reports navigation as messages.
 
+pub mod box_select;
 pub mod camera;
 pub mod render;
 
@@ -43,8 +44,12 @@ pub enum Navigate {
     /// The viewport moved or changed size (logical pixels, origin in the window), for
     /// fit-to-view and to cut the viewport out of window screenshots.
     Resized { x: f32, y: f32, width: f32, height: f32 },
-    /// Left click at (x, y) in the viewport (logical pixels).
-    Pick { x: f32, y: f32, width: f32, height: f32 },
+    /// Left click at (x, y) in the viewport (logical pixels); `add`: with Ctrl, to add to the
+    /// selection.
+    Pick { x: f32, y: f32, width: f32, height: f32, add: bool },
+    /// Ctrl + left drag: the box from (x0, y0) to the cursor (x1, y1) in a viewport of width ×
+    /// height; `done` when the button is released.
+    Box { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, height: f32, done: bool },
     /// The cursor rests at (x, y) in the viewport (only while `hover` is on).
     Hover { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor left the viewport.
@@ -58,7 +63,6 @@ pub struct Viewport3D<'a> {
     pub model: Option<&'a Arc<Model>>,
     pub visible: &'a [bool],
     /// Highlighted index ranges: (layer, first index, index count).
-    pub selection: &'a [(usize, u32, u32)],
     pub camera: Camera,
     pub settings: RenderSettings,
     /// The exploded view: the units of the model and the offset (world) of each.
@@ -74,6 +78,8 @@ pub struct State {
     /// Where the left button went down, for click detection.
     press: Option<Point>,
     shift: bool,
+    /// Ctrl (Cmd on macOS) is held: a click adds to the selection.
+    command: bool,
     bounds: Rectangle,
     /// Where the cursor moved to since the last frame, reported on the next frame.
     hover: Option<Point>,
@@ -100,6 +106,8 @@ enum Gesture {
 enum Drag {
     Orbit,
     Pan,
+    /// Ctrl + left: a selection box from the point the button went down.
+    Box,
 }
 
 impl<Message> shader::Program<Message> for Viewport3D<'_>
@@ -145,11 +153,13 @@ where
             }
             Event::Keyboard(iced::keyboard::Event::ModifiersChanged(m)) => {
                 state.shift = m.shift();
+                state.command = m.command();
                 None
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let position = cursor.position_in(bounds)?;
                 let drag = match button {
+                    mouse::Button::Left if state.command => Drag::Box,
                     mouse::Button::Left if state.shift => Drag::Pan,
                     mouse::Button::Left => Drag::Orbit,
                     mouse::Button::Middle if state.shift => Drag::Orbit,
@@ -157,7 +167,7 @@ where
                     _ => return None,
                 };
                 state.drag = Some((drag, position));
-                state.press = (*button == mouse::Button::Left && drag == Drag::Orbit).then_some(position);
+                state.press = (*button == mouse::Button::Left && matches!(drag, Drag::Orbit | Drag::Box)).then_some(position);
                 // a click keeps the highlight it takes; a drag does not
                 state.hover = None;
                 Some(shader::Action::capture())
@@ -165,10 +175,14 @@ where
             Event::Mouse(mouse::Event::ButtonReleased(_)) => {
                 let drag = state.drag.take();
                 let press = state.press.take();
-                if let (Some((Drag::Orbit, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
+                if let (Some((Drag::Orbit | Drag::Box, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
-                        return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height });
+                        return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command });
                     }
+                }
+                if let (Some((Drag::Box, from)), Some(at)) = (drag, cursor.position()) {
+                    let (x1, y1) = (at.x - bounds.x, at.y - bounds.y);
+                    return publish(Navigate::Box { x0: from.x, y0: from.y, x1, y1, width: bounds.width, height: bounds.height, done: true });
                 }
                 if drag.is_some() && self.hover {
                     // after orbiting or panning, what is under the cursor changed
@@ -202,11 +216,15 @@ where
                     }
                     state.press = None;
                 }
+                if drag == Drag::Box {
+                    // the box keeps where it started
+                    return publish(Navigate::Box { x0: last.x, y0: last.y, x1: position.x, y1: position.y, width: bounds.width, height: bounds.height, done: false });
+                }
                 let (dx, dy) = (position.x - last.x, position.y - last.y);
                 state.drag = Some((drag, position));
                 match drag {
                     Drag::Orbit => publish(Navigate::Orbit { dx, dy }),
-                    Drag::Pan => publish(Navigate::Pan { dx, dy, height: bounds.height }),
+                    Drag::Pan | Drag::Box => publish(Navigate::Pan { dx, dy, height: bounds.height }),
                 }
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -236,7 +254,6 @@ where
         ScenePrimitive {
             model: self.model.cloned(),
             visible: self.visible.to_vec(),
-            selection: self.selection.to_vec(),
             camera: self.camera,
             settings: self.settings,
             explode: self.explode.cloned(),
@@ -248,6 +265,7 @@ where
         match state.drag {
             Some((Drag::Orbit, _)) => mouse::Interaction::Grabbing,
             Some((Drag::Pan, _)) => mouse::Interaction::Move,
+            Some((Drag::Box, _)) => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) && self.hover => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
@@ -335,7 +353,7 @@ fn touch<Message: From<Navigate>>(state: &mut State, event: touch::Event, bounds
             match gesture {
                 // a short tap picks, as a click; a long press without moving does nothing
                 Some(Gesture::Press { at, since }) if lifted && held(since) < LONG_PRESS && at.distance(local(position)) < TAP_SLOP => {
-                    publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height })
+                    publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command })
                 }
                 _ => Some(shader::Action::capture()),
             }

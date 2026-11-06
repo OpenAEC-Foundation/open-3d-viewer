@@ -1443,8 +1443,24 @@ impl App {
         let shown_elements: HashSet<u64> =
             model.layers.iter().enumerate().filter(|(l, _)| self.visible.get(*l).copied().unwrap_or(true)).flat_map(|(_, layer)| layer.elements.iter().map(|e| e.0)).collect();
         let view_proj = self.camera.view_proj(width.max(1.0) / height.max(1.0)) * self.model_matrix();
+        // what the section box or plane cuts away wholly is not boxed either
+        let (section, plane, mm) = (self.active_section(), self.plane, self.model_matrix());
+        let cut_away = |u: usize| {
+            let (b, o) = (index.unit_bounds(u), self.units.get(u).map_or(Vec3::ZERO, |s| Vec3::new(s[0], s[1], s[2])));
+            let corners = [0, 1, 2, 3, 4, 5, 6, 7].map(|i| {
+                let pick = |a: usize| if i >> a & 1 == 0 { b.min[a] } else { b.max[a] };
+                mm.transform_point3(Vec3::new(pick(0), pick(1), pick(2))) + o
+            });
+            let mut world = Bounds::empty();
+            corners.iter().for_each(|c| world.extend(c.to_array()));
+            let outside_box = section.is_some_and(|s| {
+                let local = s.local_bounds(&world);
+                (0..3).any(|a| local.max[a] < s.min[a] || local.min[a] > s.max[a])
+            });
+            outside_box || plane.is_some_and(|p| corners.iter().all(|&c| p.cuts(c)))
+        };
         let hidden = |u: usize| {
-            let off = self.units.get(u).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0);
+            let off = self.units.get(u).is_some_and(|s| s[3] as u8 & UNIT_HIDDEN != 0) || cut_away(u);
             off || match index.owner(u) {
                 Some(UnitOwner::Element(id)) => !shown_elements.contains(&id),
                 Some(UnitOwner::LayerRest(l)) => !self.visible.get(l).copied().unwrap_or(true) || !model.layers[l].elements.is_empty(),
@@ -3343,6 +3359,22 @@ mod tests {
         let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
         assert_ne!(app.units[unit][0], 0.0, "still moved apart");
         assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn box_select_skips_what_the_section_cuts_away() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        // a section box around the first square only
+        app.section = Some(SectionBox::around(&Bounds { min: [-0.5, -0.5, -1.0], max: [1.5, 1.5, 1.0] }));
+        app.section_on = true;
+        let (w, h) = app.viewport_size;
+        let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
+        let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
     }
 
     #[test]

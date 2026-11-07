@@ -54,9 +54,6 @@ impl App {
     /// the section box from just under its level up to its cut.
     pub(super) fn open_plan(&mut self, path: &str) {
         self.active_doc_sheet = None;
-        if self.separate_views {
-            return self.open_plan_apart(path);
-        }
         if self.open_plans.iter().any(|o| o.path == path) {
             self.active_sheet = None;
             self.active_schedule = None;
@@ -134,7 +131,7 @@ impl App {
             }
             b
         };
-        if !self.separate_views && self.active_plan.as_deref() == Some(path) {
+        if self.active_plan.as_deref() == Some(path) {
             self.section = Some(b);
             self.section_on = true;
         } else if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == path) {
@@ -143,182 +140,9 @@ impl App {
         }
     }
 
-    /// A floor plan in the views window: its tab opens the first time, set up with its own camera
-    /// and section box, apart from the 3D view's.
-    fn open_plan_apart(&mut self, path: &str) {
-        if !self.open_plans.iter().any(|o| o.path == path) {
-            let Some(view) = self.saved_view_of(path) else { return };
-            let slot = ViewSlot { camera: self.camera, section: None, section_on: false };
-            self.open_plans.push(OpenPlan { path: path.to_string(), slot });
-            // framed in the plan window's viewport (the 3D view's until it has its own size)
-            if self.plan_viewport.0 .0 <= 1.0 {
-                self.plan_viewport = (self.viewport_size, (0.0, 0.0));
-            }
-            let _ = self.with_plan(path, |app| {
-                app.flip_up = false;
-                app.show_view(&view);
-                Task::none()
-            });
-            self.fit_plan_section(path);
-        }
-        self.active_plan = Some(path.to_string());
-    }
-
-    /// Runs `f` with the camera, section box and viewport of the floor plan at `path` standing in
-    /// for the 3D view's, and keeps what it changed with the plan (views window).
-    pub(super) fn with_plan(&mut self, path: &str, f: impl FnOnce(&mut App) -> Task<Message>) -> Task<Message> {
-        let Some(k) = self.open_plans.iter().position(|o| o.path == path) else { return Task::none() };
-        let slot = self.open_plans[k].slot;
-        let model = (self.camera, self.section, self.section_on, self.anim.take(), self.viewport_size, self.viewport_origin);
-        self.camera = slot.camera;
-        self.section = slot.section;
-        self.section_on = slot.section_on;
-        (self.viewport_size, self.viewport_origin) = self.plan_viewport;
-        self.plan_navigation = true;
-        let task = f(self);
-        self.plan_navigation = false;
-        // a plan does not animate: it goes where it was turning to
-        if let Some((_, to, _)) = self.anim.take() {
-            self.camera = to;
-        }
-        self.plan_viewport = (self.viewport_size, self.viewport_origin);
-        if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == path) {
-            open.slot = ViewSlot { camera: self.camera, section: self.section, section_on: self.section_on };
-        }
-        (self.camera, self.section, self.section_on, self.anim, self.viewport_size, self.viewport_origin) = model;
-        task
-    }
-
-    /// The pointer in the floor plan window's viewport: it pans, zooms and picks in the plan shown
-    /// there; the selection is the project's, so the 3D view shows it too.
-    pub(super) fn plan_navigate(&mut self, n: crate::viewport::Navigate) -> Task<Message> {
-        use crate::viewport::Navigate;
-        if matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Context { .. }) {
-            return Task::none();
-        }
-        let Some(path) = self.active_plan.clone() else { return Task::none() };
-        self.with_plan(&path, |app| app.handle(Message::Navigate(n)))
-    }
-
-    /// The floor plan shown in the views window as a viewport: the model with the plan's camera
-    /// and section box; the pointer there is the plan's ([`App::plan_navigate`]).
-    pub fn plan_viewport(&self, p: Palette) -> Option<Element<'_, Message>> {
-        let path = self.active_plan.as_ref()?;
-        let slot = self.open_plans.iter().find(|o| o.path == *path)?.slot;
-        let settings = crate::viewport::render::RenderSettings {
-            mode: self.mode,
-            grid: false,
-            background: crate::theme::srgb3(p.viewport),
-            grid_minor: crate::theme::srgb4(p.grid_minor),
-            grid_major: crate::theme::srgb4(p.grid_major),
-            model_matrix: glam::Mat4::IDENTITY,
-            section: slot.section.filter(|_| slot.section_on),
-            plane: None,
-            caps: self.section_fill,
-            grids: false,
-            bounds: self.world_bounds(),
-        };
-        let scene = iced::widget::shader(crate::viewport::Viewport3D {
-            model: self.model.as_ref(),
-            visible: &self.visible,
-            camera: slot.camera,
-            settings,
-            explode: self.explode_index.as_ref(),
-            offsets: &self.units,
-            hover: false,
-            crosshair: false,
-            structural_selected: &self.structural.selected_marks,
-            structural_hovered: &self.structural.hovered_marks,
-            structural_shown: self.structural.shown_marks.as_ref(),
-        })
-        .width(Fill)
-        .height(Fill);
-        let scene: Element<'_, Message> = scene.into();
-        Some(scene.map(|m| match m {
-            Message::Navigate(n) => Message::PlanNavigate(n),
-            other => other,
-        }))
-    }
-
-    /// The views window: the floor plans and sheets of the document, apart from the 3D view.
-    pub fn view_tabs(&self) -> Vec<DocTab> {
-        let plans = (0..self.open_plans.len()).map(DocTab::Plan);
-        let own = (0..self.open_doc_sheets.len()).map(DocTab::DocSheet);
-        plans.chain(own).collect()
-    }
-
-    /// The tab the views window shows: a sheet, else a floor plan.
-    pub fn active_view_tab(&self) -> Option<usize> {
-        let tabs = self.view_tabs();
-        let own = self.active_doc_sheet.as_ref().and_then(|p| self.open_doc_sheets.iter().position(|s| s == p)).map(DocTab::DocSheet);
-        let plan = self.active_plan.as_ref().and_then(|p| self.open_plans.iter().position(|o| o.path == *p)).map(DocTab::Plan);
-        own.or(plan).and_then(|want| tabs.iter().position(|t| *t == want))
-    }
-
-    /// The views window is wanted: a floor plan or sheet is open.
-    pub fn wants_views_window(&self) -> bool {
-        self.separate_views && !self.view_tabs().is_empty()
-    }
-
-    /// The views window was closed: its tabs close (the plans and sheets stay in the document).
-    pub fn views_window_closed(&mut self) {
-        self.open_plans.clear();
-        self.open_doc_sheets.clear();
-        self.active_plan = None;
-        self.active_doc_sheet = None;
-    }
-
-    /// What the views window shows under its tabs.
-    pub fn views_window_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        if let Some(sheet) = self.doc_sheet_workspace(p, l) {
-            return sheet;
-        }
-        if let Some(plan) = self.plan_viewport(p) {
-            return plan;
-        }
-        container(text(l.text("Open een plattegrond of blad in Weergaven.", "Open a floor plan or sheet in Views.")).size(13).color(p.text_muted))
-            .center(Fill)
-            .into()
-    }
-
-    pub(super) fn select_view_tab(&mut self, i: usize) {
-        match self.view_tabs().get(i).copied() {
-            Some(DocTab::Plan(k)) => {
-                self.active_doc_sheet = None;
-                self.active_plan = Some(self.open_plans[k].path.clone());
-            }
-            Some(DocTab::DocSheet(k)) => {
-                let path = self.open_doc_sheets[k].clone();
-                self.open_doc_sheet(&path);
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn close_view_tab(&mut self, i: usize) {
-        match self.view_tabs().get(i).copied() {
-            Some(DocTab::Plan(k)) => {
-                let path = self.open_plans[k].path.clone();
-                self.close_plan(&path);
-            }
-            Some(DocTab::DocSheet(k)) => {
-                let path = self.open_doc_sheets[k].clone();
-                self.close_doc_sheet(&path);
-            }
-            _ => {}
-        }
-    }
-
     /// Closes a floor plan's tab; when it showed, the plan before it (or the 3D view) shows.
     pub(super) fn close_plan(&mut self, path: &str) {
         let Some(k) = self.open_plans.iter().position(|o| o.path == path) else { return };
-        if self.separate_views {
-            if self.active_plan.as_deref() == Some(path) {
-                self.active_plan = k.checked_sub(1).or((self.open_plans.len() > 1).then_some(1)).map(|i| self.open_plans[i].path.clone());
-            }
-            self.open_plans.remove(k);
-            return;
-        }
         if self.active_plan.as_deref() == Some(path) {
             let next = k.checked_sub(1).or((self.open_plans.len() > 1).then_some(1)).map(|i| self.open_plans[i].path.clone());
             self.load_view(next);
@@ -335,8 +159,7 @@ impl App {
     /// Lets the viewport show the 3D view (`None`) or a floor plan's tab: the camera and section
     /// box of the tab shown so far stay with it, those of the other come back.
     pub(super) fn load_view(&mut self, target: Option<String>) {
-        // floor plans in their own window keep their own camera all along
-        if self.active_plan == target || self.separate_views {
+        if self.active_plan == target {
             return;
         }
         let slot = self.view_slot();
@@ -363,12 +186,6 @@ impl App {
 
     /// The document tabs, in order: the 3D view, the open floor plans, schedules and sheets.
     pub fn doc_tabs(&self) -> Vec<DocTab> {
-        if self.separate_views {
-            // floor plans and the document's sheets are in the views window
-            let schedules = self.open_schedules.iter().copied().filter(|&i| i < self.schedules.len()).map(DocTab::Schedule);
-            let sheets = self.open_sheets.iter().copied().filter(|&i| i < self.sheets().len()).map(DocTab::Sheet);
-            return std::iter::once(DocTab::Model).chain(schedules).chain(sheets).collect();
-        }
         let plans = (0..self.open_plans.len()).map(DocTab::Plan);
         let schedules = self.open_schedules.iter().copied().filter(|&i| i < self.schedules.len()).map(DocTab::Schedule);
         let sheets = self.open_sheets.iter().copied().filter(|&i| i < self.sheets().len()).map(DocTab::Sheet);
@@ -381,8 +198,8 @@ impl App {
     pub fn active_doc_tab(&self) -> usize {
         let tabs = self.doc_tabs();
         let at = |want: DocTab| tabs.iter().position(|t| *t == want);
-        let plan = self.active_plan.as_ref().filter(|_| !self.separate_views).and_then(|p| self.open_plans.iter().position(|o| o.path == *p));
-        let own = self.active_doc_sheet.as_ref().filter(|_| !self.separate_views).and_then(|p| self.open_doc_sheets.iter().position(|s| s == p));
+        let plan = self.active_plan.as_ref().and_then(|p| self.open_plans.iter().position(|o| o.path == *p));
+        let own = self.active_doc_sheet.as_ref().and_then(|p| self.open_doc_sheets.iter().position(|s| s == p));
         own.and_then(|k| at(DocTab::DocSheet(k)))
             .or_else(|| self.active_sheet.and_then(|s| at(DocTab::Sheet(s))))
             .or_else(|| plan.and_then(|k| at(DocTab::Plan(k))))
@@ -405,9 +222,7 @@ impl App {
         match self.doc_tabs().get(i).copied() {
             Some(DocTab::Model) => {
                 self.active_sheet = None;
-                if !self.separate_views {
-                    self.active_doc_sheet = None;
-                }
+                self.active_doc_sheet = None;
                 self.load_view(None);
                 self.show_schedule(None)
             }
@@ -649,49 +464,6 @@ mod tests {
         assert_eq!(app.document.plans().len(), 1);
         let _ = app.update(Message::CloseTab(0));
         assert_eq!(app.doc_tabs(), [DocTab::Model], "the 3D view stays");
-    }
-
-    #[test]
-    fn in_a_window_of_their_own_floor_plans_keep_their_camera_beside_the_3d_view() {
-        let mut app = App::default();
-        app.separate_views = true;
-        app.set_model(tower());
-        app.anim = None;
-        let model_camera = app.camera;
-        let level = Arc::<str>::from(app.document.levels()[1].path.as_str());
-        let _ = app.update(Message::NewPlan(level));
-        // the 3D view is as it was; the plan is in the views window, from above, cut at 4.2 m
-        assert_eq!((app.camera, app.section_on), (model_camera, false));
-        assert_eq!(app.doc_tabs(), [DocTab::Model]);
-        assert_eq!((app.view_tabs(), app.active_view_tab()), (vec![DocTab::Plan(0)], Some(0)));
-        assert!(app.wants_views_window());
-        let slot = app.open_plans[0].slot;
-        assert!(slot.camera.ortho && slot.section_on);
-        assert!((slot.camera.pitch - ViewPreset::Top.orientation().1).abs() < 1e-3);
-        assert!((slot.section.unwrap().max.z - 4.2).abs() < 1e-5);
-        // a drag in the plan moves the plan only; one in the 3D view still turns the model
-        let _ = app.update(Message::PlanNavigate(crate::viewport::Navigate::Orbit { dx: 40.0, dy: 10.0 }));
-        let moved = app.open_plans[0].slot.camera;
-        assert_ne!(moved.target, slot.camera.target);
-        assert_eq!((moved.yaw, moved.pitch), (slot.camera.yaw, slot.camera.pitch));
-        assert_eq!(app.camera, model_camera);
-        let _ = app.update(Message::Navigate(crate::viewport::Navigate::Orbit { dx: 40.0, dy: 10.0 }));
-        assert_ne!(app.camera.yaw, model_camera.yaw);
-        // the window draws the plan; a sheet opens in it beside the plan
-        let p = app.theme.palette();
-        drop(iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(900.0, 600.0), app.views_window_body(p, Language::English)));
-        let _ = app.update(Message::NewSheet("Sheet"));
-        assert_eq!(app.view_tabs(), [DocTab::Plan(0), DocTab::DocSheet(0)]);
-        assert_eq!(app.active_view_tab(), Some(1));
-        assert_eq!(app.doc_tabs(), [DocTab::Model], "the main window keeps the 3D view");
-        let _ = app.update(Message::SelectViewTab(0));
-        assert_eq!((app.active_view_tab(), app.active_doc_sheet.as_deref()), (Some(0), None));
-        let _ = app.update(Message::CloseViewTab(0));
-        assert_eq!(app.view_tabs(), [DocTab::DocSheet(0)]);
-        // the window closed: its tabs close, the plan and sheet stay in the document
-        app.views_window_closed();
-        assert!(app.view_tabs().is_empty() && !app.wants_views_window());
-        assert_eq!((app.document.plans().len(), app.document.sheets().len()), (1, 1));
     }
 
     #[test]

@@ -52,10 +52,8 @@ impl App {
         if !self.open_doc_sheets.iter().any(|s| s == path) {
             self.open_doc_sheets.push(path.to_string());
         }
-        if !self.separate_views {
-            self.active_sheet = None;
-            self.active_schedule = None;
-        }
+        self.active_sheet = None;
+        self.active_schedule = None;
         if self.active_doc_sheet.as_deref() != Some(path) {
             self.pick_on_sheet(None);
         }

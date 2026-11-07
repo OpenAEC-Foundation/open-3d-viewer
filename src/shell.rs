@@ -284,13 +284,6 @@ pub enum Msg {
     Minimize,
     Maximize,
     CloseWindow,
-    /// A window asks to close: the main window closes the app, the views window itself.
-    CloseRequested(iced::window::Id),
-    /// A window's width (logical pixels): the main window's is the layout's.
-    WindowResized(iced::window::Id, f32),
-    /// The tabs of the views window: show or close tab `i`.
-    ViewTab(usize),
-    CloseViewTab(usize),
     Update,
     /// Opens the desktop app's download page (from [`Dialog::DesktopOnly`]).
     DownloadDesktop,
@@ -325,10 +318,6 @@ pub struct Studio {
     ribbon_folded: bool,
     /// A dev build started by `scripts/dev.ps1`: the open projects kept for its next start.
     dev: Option<DevSession>,
-    /// The main window, once opened (the desktop opens it itself; `None`: the only window).
-    main_window: Option<iced::window::Id>,
-    /// The views window (desktop): the floor plans and sheets of the project shown, in tabs.
-    views_window: Option<iced::window::Id>,
 }
 
 /// The open projects of a dev build, kept for its next start: `scripts/dev.ps1` restarts the viewer
@@ -385,8 +374,6 @@ impl Studio {
             compact_panel: None,
             ribbon_folded: false,
             dev: None,
-            main_window: None,
-            views_window: None,
         }
     }
 
@@ -742,42 +729,9 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
-        // the desktop shows floor plans and sheets in a window of their own
-        self.app.separate_views = cfg!(not(target_arch = "wasm32"));
         let task = self.handle(message);
         self.keep_dev_session();
-        Task::batch([task, self.sync_views_window()])
-    }
-
-    /// Opens the views window when the project shown has a floor plan or sheet open, and closes
-    /// it when it has none.
-    fn sync_views_window(&mut self) -> Task<Msg> {
-        self.app.separate_views = cfg!(not(target_arch = "wasm32"));
-        match (self.app.wants_views_window(), self.views_window) {
-            (true, None) => {
-                let (id, open) = iced::window::open(iced::window::Settings {
-                    size: iced::Size::new(1100.0, 760.0),
-                    min_size: Some(iced::Size::new(480.0, 360.0)),
-                    exit_on_close_request: false,
-                    ..Default::default()
-                });
-                self.views_window = Some(id);
-                open.discard()
-            }
-            (false, Some(id)) => {
-                self.views_window = None;
-                iced::window::close(id)
-            }
-            _ => Task::none(),
-        }
-    }
-
-    /// `f` on the main window (the newest when it is not known: the only one).
-    fn on_main_window(&self, f: impl Fn(iced::window::Id) -> Task<Msg> + Send + 'static) -> Task<Msg> {
-        match self.main_window {
-            Some(id) => f(id),
-            None => iced::window::latest().and_then(f),
-        }
+        task
     }
 
     fn handle(&mut self, message: Msg) -> Task<Msg> {
@@ -958,28 +912,15 @@ impl Studio {
                     self.last_title_press = None;
                     return self.update(Msg::Maximize);
                 }
-                return self.on_main_window(iced::window::drag);
+                return iced::window::latest().and_then(iced::window::drag);
             }
-            Msg::Minimize => return self.on_main_window(|id| iced::window::minimize(id, true)),
+            Msg::Minimize => return iced::window::latest().and_then(|id| iced::window::minimize(id, true)),
             Msg::Maximize => {
                 self.maximized = !self.maximized;
-                return self.on_main_window(iced::window::toggle_maximize);
+                return iced::window::latest().and_then(iced::window::toggle_maximize);
             }
             // the viewer changes no files, so closing needs no questions
             Msg::CloseWindow => return iced::exit(),
-            Msg::CloseRequested(id) if Some(id) == self.views_window => {
-                self.views_window = None;
-                self.app.views_window_closed();
-                return iced::window::close(id);
-            }
-            Msg::CloseRequested(_) => return iced::exit(),
-            Msg::WindowResized(id, width) => {
-                if Some(id) != self.views_window {
-                    self.width = width;
-                }
-            }
-            Msg::ViewTab(i) => return self.update(Msg::App(Message::SelectViewTab(i))),
-            Msg::CloseViewTab(i) => return self.update(Msg::App(Message::CloseViewTab(i))),
             Msg::Update => {
                 if let Some(available) = &self.update {
                     if let Err(e) = upd::open_installer(available) {
@@ -1017,8 +958,8 @@ impl Studio {
         } else {
             Subscription::none()
         };
-        let resized = iced::event::listen_with(|event, _, window| match event {
-            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::WindowResized(window, size.width)),
+        let resized = iced::event::listen_with(|event, _, _| match event {
+            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Resized(size.width)),
             _ => None,
         });
         Subscription::batch([
@@ -1028,40 +969,8 @@ impl Studio {
             drag,
             openaec_ui::keyboard::presses().map(Msg::Key),
             openaec_ui::keyboard::navigation().map(Msg::Navigate),
-            iced::window::close_requests().map(Msg::CloseRequested),
+            iced::window::close_requests().map(|_| Msg::CloseWindow),
         ])
-    }
-
-    /// The view of a window: the views window's, else the main window's.
-    pub fn view_window(&self, window: iced::window::Id) -> Element<'_, Msg> {
-        if Some(window) == self.views_window {
-            self.views_view()
-        } else {
-            self.view()
-        }
-    }
-
-    /// The title of a window.
-    pub fn title_window(&self, window: iced::window::Id) -> String {
-        if Some(window) == self.views_window {
-            format!("{} · {}", self.l().text("Weergaven", "Views"), self.title())
-        } else {
-            self.title()
-        }
-    }
-
-    /// The views window: the open floor plans and sheets in tabs, the one picked under them.
-    fn views_view(&self) -> Element<'_, Msg> {
-        let look = self.look();
-        let l = self.l();
-        let p = palette(look);
-        let app = &self.app;
-        let tabs: Vec<DocumentTab<'_>> = app.view_tabs().iter().map(|&t| DocumentTab::new(app.tab_title(t), false)).collect();
-        let bar = w::document_tabs(look, &tabs, app.active_view_tab().unwrap_or(0), small("window.close"), Msg::ViewTab, Msg::CloseViewTab, Msg::ViewTab);
-        let body = app.views_window_body(p, l).map(Msg::App);
-        container(column![bar, body].width(Length::Fill).height(Length::Fill))
-            .style(move |_| container::Style { background: Some(look.color.workspace.into()), ..Default::default() })
-            .into()
     }
 
     pub fn title(&self) -> String {
@@ -1509,53 +1418,27 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool)
     #[cfg(not(target_arch = "wasm32"))]
     let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(APP_ID, VERSION) }, ..studio };
     let initial = std::sync::Mutex::new(Some(studio));
-    let main = iced::window::Settings {
-        size: iced::Size::new(1280.0, 800.0),
-        min_size: Some(iced::Size::new(960.0, 600.0)),
-        decorations: false,
-        exit_on_close_request: false,
-        icon,
-        ..Default::default()
-    };
-    // the desktop: a daemon that opens the main window itself, so floor plans and sheets can
-    // have a window of their own beside it
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let main = std::sync::Mutex::new(Some(main));
-        let builder = iced::daemon(
-            move || {
-                let mut studio = initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once");
-                let settings = main.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
-                let (id, open) = iced::window::open(settings);
-                studio.main_window = Some(id);
-                (studio, open.discard())
-            },
-            Studio::update,
-            Studio::view_window,
-        )
-        .title(Studio::title_window)
+    let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
+        .title(Studio::title)
         .subscription(Studio::subscription)
-        .theme(|s: &Studio, _| s.prefs.theme().iced())
-        .scale_factor(|s: &Studio, _| s.prefs.scale() as f32)
+        .theme(|s: &Studio| s.prefs.theme().iced())
+        .scale_factor(|s: &Studio| s.prefs.scale() as f32)
         .font(crate::INTER_REGULAR)
         .font(crate::INTER_SEMIBOLD)
         .antialiasing(antialiasing)
         .default_font(fonts::BODY);
-        fonts::FILES.iter().fold(builder, |builder, file| builder.font(*file)).run()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
-            .title(Studio::title)
-            .subscription(Studio::subscription)
-            .theme(|s: &Studio| s.prefs.theme().iced())
-            .scale_factor(|s: &Studio| s.prefs.scale() as f32)
-            .font(crate::INTER_REGULAR)
-            .font(crate::INTER_SEMIBOLD)
-            .antialiasing(antialiasing)
-            .default_font(fonts::BODY);
-        fonts::FILES.iter().fold(builder, |builder, file| builder.font(*file)).window(main).run()
-    }
+    fonts::FILES
+        .iter()
+        .fold(builder, |builder, file| builder.font(*file))
+        .window(iced::window::Settings {
+            size: iced::Size::new(1280.0, 800.0),
+            min_size: Some(iced::Size::new(960.0, 600.0)),
+            decorations: false,
+            exit_on_close_request: false,
+            icon,
+            ..Default::default()
+        })
+        .run()
 }
 
 #[cfg(test)]
@@ -1609,6 +1492,20 @@ mod tests {
             ..Default::default()
         };
         std::sync::Arc::new(crate::model::Model::new(PathBuf::from(name), "Revit", vec![layer]))
+    }
+
+    /// Sheets and views open as document tabs of the application's own window, beside the 3D
+    /// view's, on the desktop as in the browser.
+    #[test]
+    fn sheets_and_views_are_tabs_of_the_main_window() {
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(Msg::App(Message::Loaded(Ok(triangle("a.rvt")))));
+        let _ = studio.update(Msg::App(Message::NewSheet("Sheet")));
+        assert_eq!(studio.app.doc_tabs(), [DocTab::Model, DocTab::DocSheet(0)]);
+        assert_eq!(studio.app.active_doc_tab(), 1);
+        let names = accessibility(&studio).summary();
+        assert!(names.iter().any(|n| n.contains("A01 Sheet")), "{names:?}");
     }
 
     #[test]

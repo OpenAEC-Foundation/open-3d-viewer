@@ -36,9 +36,7 @@ impl App {
         self.active_sheet = i;
         if i.is_some() {
             self.active_schedule = None;
-            if !self.separate_views {
-                self.active_doc_sheet = None;
-            }
+            self.active_doc_sheet = None;
         }
         Task::none()
     }

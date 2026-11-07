@@ -157,10 +157,6 @@ struct GpuLayer {
     transparent: bool,
 }
 
-/// Render targets kept at once: the main window, a floor plan window, and one spare for a
-/// resize in between.
-const MAX_TARGETS: usize = 3;
-
 struct Targets {
     size: (u32, u32),
     msaa: wgpu::TextureView,
@@ -194,10 +190,7 @@ pub struct ScenePipeline {
     offsets: wgpu::Texture,
     offsets_len: usize,
     offsets_written: Option<Arc<Vec<[f32; 4]>>>,
-    /// The render targets per viewport size, the one in use first: one per window that shows the
-    /// model (the 3D view and a floor plan in its own window), so neither reallocates when the
-    /// other draws.
-    targets: Vec<Targets>,
+    targets: Option<Targets>,
     model_id: u64,
     model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
@@ -528,7 +521,7 @@ impl ScenePipeline {
             offsets,
             offsets_len: 1,
             offsets_written: None,
-            targets: Vec::new(),
+            targets: None,
             model_id: 0,
             model: None,
             layers: Vec::new(),
@@ -542,9 +535,7 @@ impl ScenePipeline {
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, size: (u32, u32)) {
-        if let Some(k) = self.targets.iter().position(|t| t.size == size) {
-            let used = self.targets.remove(k);
-            self.targets.insert(0, used);
+        if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
         let texture = |label, format, samples, usage| {
@@ -577,8 +568,7 @@ impl ScenePipeline {
                 wgpu::BindGroupEntry { binding: 1, resource: self.blit_uniforms.as_entire_binding() },
             ],
         });
-        self.targets.insert(0, Targets { size, msaa, resolve, depth, blit_group });
-        self.targets.truncate(MAX_TARGETS);
+        self.targets = Some(Targets { size, msaa, resolve, depth, blit_group });
     }
 
     /// Makes room for the offsets of `units` units of the exploded view (all zero) and binds it.
@@ -859,7 +849,7 @@ impl ScenePipeline {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let Some(targets) = self.targets.first() else { return };
+        let Some(targets) = &self.targets else { return };
         let bg = primitive.settings.background;
         let clear = if self.srgb {
             wgpu::Color { r: to_linear(bg[0]), g: to_linear(bg[1]), b: to_linear(bg[2]), a: 1.0 }

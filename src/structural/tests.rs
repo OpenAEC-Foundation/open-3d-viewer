@@ -319,6 +319,33 @@ fn box_selection_finds_nodes_and_members() {
 }
 
 #[test]
+fn mcp_hides_and_isolates_structural_objects() {
+    use crate::units::UNIT_HIDDEN;
+    let model = loaders::load(&fixture("portal_frame.samjson")).unwrap();
+    let (member, n1) = (el(&model, sam_id(IdKind::Member, 1)), el(&model, N1));
+    let (section, load) = (el(&model, model.structural[0].doc.sections[0].id), el(&model, model.structural[0].doc.actions[0].id));
+    let mut app = app_with(model);
+    let hidden = |app: &App, id: u64| {
+        let unit = app.explode_index.as_ref().unwrap().structural_unit(id).expect("a unit") as usize;
+        app.units[unit][3] as u8 & UNIT_HIDDEN != 0
+    };
+    let answer = run(&mut app, "hide_elements", json!({ "ids": [n1, member] })).unwrap();
+    assert_eq!(answer["hidden_count"], json!(2));
+    assert!(hidden(&app, n1) && hidden(&app, member));
+    run(&mut app, "show_all_elements", json!({})).unwrap();
+    assert!(!hidden(&app, n1));
+    // isolating a node hides the other three nodes and the three members
+    let answer = run(&mut app, "isolate_elements", json!({ "ids": [n1] })).unwrap();
+    assert_eq!(answer["hidden_count"], json!(6));
+    assert!(!hidden(&app, n1) && hidden(&app, member));
+    // a section or a load has no unit of its own: nothing to hide, and the error says why
+    for id in [section, load] {
+        let refused = run(&mut app, "hide_elements", json!({ "ids": [id] })).unwrap_err();
+        assert!(refused.contains("only nodes, members and surfaces"), "{refused}");
+    }
+}
+
+#[test]
 fn mcp_tools_answer_on_structural_objects() {
     let model = loaders::load(&fixture("portal_frame.samjson")).unwrap();
     let (member, n1, n4) = (el(&model, sam_id(IdKind::Member, 1)), el(&model, N1), el(&model, N1 + 3));

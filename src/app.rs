@@ -167,6 +167,8 @@ pub struct App {
     pub history: History<ViewState>,
     /// The selection box while it is dragged: from, to (viewport pixels).
     pub box_select: Option<(Vec2, Vec2)>,
+    /// The right-click menu, open at this viewport point (logical pixels).
+    pub context_menu: Option<Vec2>,
     pub explode_bounds: Option<Bounds>,
     /// The measure tools and their results.
     pub measure: MeasureState,
@@ -183,7 +185,23 @@ pub struct App {
     pub(crate) structural: structural::StructuralView,
 }
 
+/// Width of the right-click menu (logical pixels), and about its height, to keep it inside the
+/// viewport.
+const MENU_WIDTH: f32 = 230.0;
+const MENU_HEIGHT: f32 = 200.0;
+
 type HoverScene = (Option<SectionBox>, Option<SectionPlane>, Vec<bool>, Arc<UnitKeySet>);
+
+/// The items of the right-click menu in the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuItem {
+    Hide,
+    Isolate,
+    ShowAll,
+    SelectLayer,
+    ClearSelection,
+    Undo,
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -291,6 +309,10 @@ pub enum Message {
     IsolateSelection,
     /// Show every element that Hide or Isolate hid.
     ShowAllElements,
+    /// An item of the right-click menu; the menu closes.
+    ContextMenu(MenuItem),
+    /// A click beside the right-click menu: it closes.
+    CloseContextMenu,
     /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
     Escape,
     /// A finger (`true`) or a mouse button (`false`) went down.
@@ -390,6 +412,7 @@ impl Default for App {
             hidden: Arc::default(),
             history: History::new(),
             box_select: None,
+            context_menu: None,
             explode_bounds: None,
             measure: MeasureState::default(),
             hover_request: None,
@@ -806,6 +829,7 @@ impl App {
     }
 
     fn set_scene(&mut self, model: Arc<Model>) {
+        self.context_menu = None;
         self.visible = model.layers.iter().map(|l| !l.hidden).collect();
         self.status = Status::Loaded(format!(
             "Loaded {} in {:.2} s",
@@ -1083,7 +1107,11 @@ impl App {
                 }
             }
             Message::LayerFilter(f) => self.layer_filter = f,
-            Message::Navigate(n) => match n {
+            Message::Navigate(n) => {
+                if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
+                    self.context_menu = None;
+                }
+                match n {
                 Navigate::Orbit { dx, dy } => {
                     self.anim = None;
                     self.measure.hover = None;
@@ -1106,6 +1134,7 @@ impl App {
                     self.viewport_size = (width, height);
                 }
                 Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
+                Navigate::Context { x, y, width, height } => self.context_click(x, y, width, height),
                 Navigate::Box { x0, y0, x1, y1, width, height, done } => {
                     let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
                     self.box_select = (!done).then_some(rect);
@@ -1132,7 +1161,26 @@ impl App {
                     let ndc = (2.0 * x / width.max(1.0) - 1.0, 1.0 - 2.0 * y / height.max(1.0));
                     self.camera.zoom_at(steps, ndc, width / height.max(1.0));
                 }
-            },
+                }
+            }
+            Message::ContextMenu(item) => {
+                self.context_menu = None;
+                let message = match item {
+                    MenuItem::Hide => Message::HideSelection,
+                    MenuItem::Isolate => Message::IsolateSelection,
+                    MenuItem::ShowAll => Message::ShowAllElements,
+                    MenuItem::SelectLayer => Message::SelectLayerOfSelection,
+                    MenuItem::Undo => Message::Undo,
+                    MenuItem::ClearSelection => {
+                        self.sel.clear();
+                        self.selection_changed();
+                        self.set_structural_selection(Vec::new());
+                        return Task::none();
+                    }
+                };
+                return self.update(message);
+            }
+            Message::CloseContextMenu => self.context_menu = None,
             Message::ApplyView(i) => self.apply_view(i),
             Message::ToggleGrids => self.show_grids = !self.show_grids,
             Message::ToggleExplorer(i) => {
@@ -1339,6 +1387,9 @@ impl App {
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape => {
+                if self.context_menu.take().is_some() {
+                    return Task::none();
+                }
                 if !self.measure.escape() {
                     self.sel.clear();
                     self.selection_changed();
@@ -1399,6 +1450,40 @@ impl App {
     /// whole layer when the format has no elements); empty space clears the selection. While
     /// placing the section plane, puts it on the face under the cursor instead; while measuring,
     /// hands the click to the measure tool, with what is highlighted under the cursor.
+    /// A right click (or a long press) at (x, y): what lies there is selected, unless it already
+    /// is; empty space keeps the selection. The menu opens there.
+    fn context_click(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        let Some(model) = self.model.clone() else { return };
+        if self.plane_picking {
+            return;
+        }
+        let (width, height) = (width.max(1.0), height.max(1.0));
+        let (origin, dir, hit) = self.cast(&model, x, y, width, height);
+        let mm = self.model_matrix();
+        let triangle = hit.and_then(|(l, t, s)| face_at(&model.layers[l], t, origin - s, dir).map(|(p, _)| mm.transform_point3(p + s)));
+        if let Some(h) = self.pick_structural(x, y, width, height, triangle) {
+            if !self.structural.selected.contains(&h.element) {
+                self.click_structural(h.element, false);
+            }
+        } else if let Some(item) = hit.map(|(l, t, _)| pickable_at(&model, l, t)) {
+            if !self.sel.contains(item) {
+                self.click(Some(item), false);
+            }
+        }
+        self.context_menu = Some(Vec2::new(x, y));
+    }
+
+    /// Something is selected: elements or layers, or structural objects picked by a click.
+    pub(crate) fn has_selection(&self) -> bool {
+        !self.sel.is_empty() || !self.structural.selected.is_empty()
+    }
+
+    /// The selection as unit keys, the structural objects picked by a click included.
+    fn selection_keys(&self) -> impl Iterator<Item = UnitKey> + '_ {
+        let structural = self.structural.selected.iter().map(|&id| Pickable::Element(id));
+        self.sel.items().iter().copied().chain(structural).map(|i| self.item_key(i))
+    }
+
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
@@ -1634,20 +1719,21 @@ impl App {
 
     /// Hide: the selection joins the hidden elements and empties.
     fn hide_selection(&mut self) {
-        if self.sel.is_empty() {
+        if !self.has_selection() {
             return;
         }
         let mut hidden = (*self.hidden).clone();
-        hidden.extend(self.sel.items().iter().map(|&i| self.item_key(i)));
+        hidden.extend(self.selection_keys());
         self.hidden = Arc::new(hidden);
         self.sel.clear();
         self.selection_changed();
+        self.set_structural_selection(Vec::new());
     }
 
     /// Isolate: every unit of the shown models is hidden but the selected ones.
     fn isolate_selection(&mut self) {
-        let Some(index) = self.explode_index.clone().filter(|_| !self.sel.is_empty()) else { return };
-        let keep: UnitKeySet = self.sel.items().iter().map(|&i| self.item_key(i)).collect();
+        let Some(index) = self.explode_index.clone().filter(|_| self.has_selection()) else { return };
+        let keep: UnitKeySet = self.selection_keys().collect();
         let hidden = (1..index.len()).filter_map(|u| index.owner(u)).map(|o| self.unit_key(o)).filter(|k| !keep.contains(k)).collect();
         self.hidden = Arc::new(hidden);
         self.update_units();
@@ -2478,13 +2564,13 @@ impl App {
         // the gestures for whatever pressed last: fingers on a phone or tablet, else the mouse
         let hint = if self.fingers {
             l.text(
-                "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken en slepen: pannen",
-                "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press and drag: pan",
+                "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken: menu, en slepen: pannen",
+                "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press: menu, then drag: pan",
             )
         } else {
             l.text(
-                "Klik: selecteren · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend",
-                "Click: select · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit",
+                "Klik: selecteren · Rechtsklik: menu · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend",
+                "Click: select · Right click: menu · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit",
             )
         };
         let hint = container(
@@ -2578,6 +2664,7 @@ impl App {
             .height(Fill)
         });
         let boxed = self.box_select.map(|(from, to)| canvas(crate::viewport::box_select::BoxOverlay { from, to }).width(Fill).height(Fill));
+        let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
         stack![scene, hint]
             .push(grids)
             .push(section)
@@ -2587,10 +2674,48 @@ impl App {
             .push(boxed)
             .push(picking)
             .push(cube)
+            .push(menu)
             .push(overlay)
             .width(Fill)
             .height(Fill)
             .into()
+    }
+
+    /// The right-click menu at viewport point `at`, kept inside the viewport; a click beside it
+    /// closes it.
+    fn context_menu_view(&self, p: Palette, l: Language, at: Vec2) -> Element<'_, Message> {
+        use openaec_ui::design::command::{Shortcut, ShortcutKey};
+        let key = |c: char| Shortcut { key: ShortcutKey::Char(c), ctrl: false, shift: false, alt: false }.label();
+        let selected = self.has_selection();
+        let item = |label: &'static str, keys: &'static str, item: MenuItem, on: bool| -> Element<'static, Message> {
+            let color = if on { p.text } else { p.text_muted };
+            button(row![text(label).size(12).color(color).width(Fill), text(keys).size(11).color(p.text_muted)].spacing(24))
+                .width(Fill)
+                .padding([5, 10])
+                .style(move |_, s| p.row_button(s))
+                .on_press_maybe(on.then_some(Message::ContextMenu(item)))
+                .into()
+        };
+        let items = column![
+            item(l.text("Verbergen in aanzicht", "Hide in view"), key('h'), MenuItem::Hide, selected),
+            item(l.text("Isoleren", "Isolate"), key('i'), MenuItem::Isolate, selected),
+            item(l.text("Alles tonen", "Show all"), Shortcut::ctrl_shift('h').label(), MenuItem::ShowAll, !self.hidden.is_empty()),
+            rule::horizontal(1),
+            item(l.text("Laag selecteren", "Select layer"), "", MenuItem::SelectLayer, !self.sel.is_empty()),
+            item(l.text("Selectie opheffen", "Clear selection"), "Esc", MenuItem::ClearSelection, selected),
+            rule::horizontal(1),
+            item(l.text("Ongedaan maken", "Undo"), Shortcut::ctrl('z').label(), MenuItem::Undo, self.history.can_undo()),
+        ]
+        .width(MENU_WIDTH);
+        let menu = container(items).padding(4).style(move |_| container::Style { background: Some(Background::Color(p.surface)), ..p.overlay() });
+        // at the cursor, moved in where it would stick out of the viewport
+        let (w, h) = self.viewport_size;
+        let x = at.x.min(w - MENU_WIDTH - 12.0).max(0.0);
+        let y = at.y.min(h - MENU_HEIGHT).max(0.0);
+        let beside = iced::widget::mouse_area(Space::new().width(Fill).height(Fill))
+            .on_press(Message::CloseContextMenu)
+            .on_right_press(Message::CloseContextMenu);
+        stack![beside, container(menu).padding(Padding { top: y, left: x, ..Padding::ZERO })].width(Fill).height(Fill).into()
     }
 
     fn welcome(&self, p: Palette) -> Element<'_, Message> {
@@ -3182,6 +3307,22 @@ mod tests {
     }
 
     #[test]
+    fn the_right_click_menu_sends_its_items() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.click(Some(Pickable::Element(10)), false);
+        app.context_menu = Some(Vec2::new(300.0, 200.0));
+        let mut ui = simulator(&app);
+        ui.click("Hide in view").expect("the menu is shown");
+        ui.click("Clear selection").expect("its items");
+        let messages: Vec<Message> = ui.into_messages().collect();
+        assert!(
+            matches!(messages[..], [Message::ContextMenu(MenuItem::Hide), Message::ContextMenu(MenuItem::ClearSelection)]),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
     fn ribbon_buttons_send_messages() {
         let mut app = App::default();
         app.set_model(two_squares());
@@ -3557,6 +3698,54 @@ mod tests {
         let unit = app.explode_index.as_ref().and_then(|i| i.element_unit(20)).unwrap();
         assert_ne!(app.units[unit][0], 0.0, "still moved apart");
         assert_eq!(app.units[unit][3] as u8 & UNIT_HIDDEN, UNIT_HIDDEN);
+    }
+
+    #[test]
+    fn a_right_click_selects_what_lies_there_and_its_menu_hides_it() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let (x, y) = screen_point(&app, Vec3::new(0.5, 0.5, 0.0));
+        let _ = app.update(Message::Navigate(Navigate::Context { x, y, width: w, height: h }));
+        assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
+        assert_eq!(app.context_menu, Some(Vec2::new(x, y)));
+        let _ = app.update(Message::ContextMenu(MenuItem::Hide));
+        assert!(app.context_menu.is_none(), "choosing closes the menu");
+        assert_eq!(app.hidden.len(), 1);
+        assert!(app.sel.is_empty());
+        let _ = app.update(Message::Undo);
+        assert!(app.hidden.is_empty(), "undo brings it back");
+    }
+
+    #[test]
+    fn a_right_click_keeps_the_selection_it_lies_in() {
+        let mut app = App::default();
+        app.set_model(two_squares());
+        app.camera.set_preset(ViewPreset::Top);
+        app.fit();
+        let (w, h) = app.viewport_size;
+        let ((x1, y1), (x2, y2)) = (screen_point(&app, Vec3::new(0.5, 0.5, 0.0)), screen_point(&app, Vec3::new(2.5, 0.5, 0.0)));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: x1, y: y1, width: w, height: h, add: false }));
+        let _ = app.update(Message::Navigate(Navigate::Pick { x: x2, y: y2, width: w, height: h, add: true }));
+        let both = [Pickable::Element(10), Pickable::Element(20)];
+        let _ = app.update(Message::Navigate(Navigate::Context { x: x2, y: y2, width: w, height: h }));
+        assert_eq!(app.sel.items(), &both, "a right click in the selection keeps it");
+        // Esc closes the menu first, and keeps the selection
+        let _ = app.update(Message::Escape);
+        assert!(app.context_menu.is_none());
+        assert_eq!(app.sel.items(), &both);
+        // empty space keeps the selection too; moving the camera closes the menu
+        let _ = app.update(Message::Navigate(Navigate::Context { x: 2.0, y: 2.0, width: w, height: h }));
+        assert_eq!(app.sel.items(), &both);
+        assert!(app.context_menu.is_some());
+        let _ = app.update(Message::Navigate(Navigate::Orbit { dx: 5.0, dy: 0.0 }));
+        assert!(app.context_menu.is_none());
+        // isolating from the menu hides nothing of the selection
+        let _ = app.update(Message::Navigate(Navigate::Context { x: x1, y: y1, width: w, height: h }));
+        let _ = app.update(Message::ContextMenu(MenuItem::Isolate));
+        assert!(app.hidden.is_empty() && app.context_menu.is_none());
     }
 
     #[test]

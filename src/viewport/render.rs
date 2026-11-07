@@ -114,7 +114,13 @@ pub struct ScenePrimitive {
     pub structural_hovered: Arc<Marks>,
     /// The structural instances of the source models shown (`None`: all are).
     pub structural_shown: Option<Arc<Marks>>,
+    /// The datum lines (grid lines, levels) where the view shown draws them, as world segments;
+    /// `None`: the model's grids where they are.
+    pub datum: Option<Arc<Vec<DatumSegment>>>,
 }
+
+/// A datum line (a grid line or a level) as drawn: its two ends (world).
+pub type DatumSegment = [[f32; 3]; 2];
 
 impl shader::Primitive for ScenePrimitive {
     type Pipeline = ScenePipeline;
@@ -195,8 +201,10 @@ pub struct ScenePipeline {
     model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
     grid: Option<(wgpu::Buffer, u32, [i64; 6])>,
-    /// The model's grid lines (datum grids), dash-dot, built with the model.
+    /// The datum lines (grid lines, levels) of the view shown, dash-dot, and what they were
+    /// built from.
     datum: Option<(wgpu::Buffer, u32)>,
+    datum_source: Vec<DatumSegment>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
     rect: (u32, u32, u32, u32),
     /// Member axes and node glyphs (`super::structural`), made with the first model that has
@@ -527,6 +535,7 @@ impl ScenePipeline {
             layers: Vec::new(),
             grid: None,
             datum: None,
+            datum_source: Vec::new(),
             rect: (0, 0, 1, 1),
             structural: None,
             gpu_structural: None,
@@ -589,7 +598,6 @@ impl ScenePipeline {
         self.model_id = id;
         self.model = model.cloned();
         self.layers.clear();
-        self.datum = None;
         self.gpu_structural = None;
         self.structural_marked = Default::default();
         self.resize_offsets(device, explode.map_or(1, ExplodeIndex::len));
@@ -601,15 +609,6 @@ impl ScenePipeline {
             if self.gpu_structural.is_some() && self.structural.is_none() {
                 self.structural = Some(StructuralPipelines::new(device, self.format, &self.uniform_layout));
             }
-        }
-        let datum = datum_lines(&model.project.grids);
-        if !datum.is_empty() {
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("o3v.datum"),
-                contents: bytemuck::cast_slice(&datum),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            self.datum = Some((buffer, datum.len() as u32));
         }
         for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -708,6 +707,28 @@ impl ScenePipeline {
         }
     }
 
+    /// The datum lines of the view shown (else the model's grids), built again when they move.
+    fn upload_datum(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
+        let segments: Vec<DatumSegment> = match (&primitive.datum, &primitive.model) {
+            (Some(datum), _) => datum.to_vec(),
+            (None, Some(model)) => model.project.grids.iter().map(|g| [g.a, g.b]).collect(),
+            (None, None) => Vec::new(),
+        };
+        if segments == self.datum_source && (self.datum.is_some() || segments.is_empty()) {
+            return;
+        }
+        let vertices = datum_lines(&segments);
+        self.datum = (!vertices.is_empty()).then(|| {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("o3v.datum"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            (buffer, vertices.len() as u32)
+        });
+        self.datum_source = segments;
+    }
+
     fn ensure_grid(&mut self, device: &wgpu::Device, bounds: &Bounds, settings: &RenderSettings) {
         let (center, extent, spacing, z) = grid_layout(bounds);
         let colour_key = |c: [f32; 4]| c.iter().fold(0i64, |k, v| k * 1000 + (v * 999.0) as i64);
@@ -774,6 +795,7 @@ impl ScenePipeline {
         queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&[x as f32, y as f32, 0.0, 0.0]));
 
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
+        self.upload_datum(device, primitive);
         self.gather_structural_marks(device, primitive);
         if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
             let n = primitive.offsets.len().min(self.offsets_len);
@@ -1068,15 +1090,15 @@ fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms
     })
 }
 
-/// Grid lines as a dash-dot line list (Revit's grid line pattern: long dash, gap, dot, gap) in
-/// a neutral grey that reads on light and dark backgrounds.
-fn datum_lines(grids: &[crate::model::GridLine]) -> Vec<Vertex> {
+/// Grid lines and levels as a dash-dot line list (Revit's grid line pattern: long dash, gap, dot,
+/// gap) in a neutral grey that reads on light and dark backgrounds.
+fn datum_lines(segments: &[DatumSegment]) -> Vec<Vertex> {
     const PATTERN: [(f32, bool); 4] = [(1.6, true), (0.3, false), (0.3, true), (0.3, false)];
     let color = [120, 122, 132, 230];
     let vertex = |p: Vec3| Vertex { position: p.to_array(), normal: [0.0, 0.0, 1.0], color, unit: 0 };
     let mut out = Vec::new();
-    for g in grids {
-        let (a, b) = (Vec3::from_array(g.a), Vec3::from_array(g.b));
+    for [a, b] in segments {
+        let (a, b) = (Vec3::from_array(*a), Vec3::from_array(*b));
         let len = (b - a).length();
         if len < 1e-3 {
             continue;

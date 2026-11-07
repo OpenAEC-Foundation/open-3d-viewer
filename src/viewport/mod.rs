@@ -83,6 +83,8 @@ pub struct Viewport3D<'a> {
     pub structural_hovered: &'a Arc<crate::structural::display::Marks>,
     /// The structural instances of the source models shown (`None`: all are).
     pub structural_shown: Option<&'a Arc<crate::structural::display::Marks>>,
+    /// The datum lines where the view shown draws them (`None`: the model's grids).
+    pub datum: Option<Arc<Vec<render::DatumSegment>>>,
 }
 
 #[derive(Default)]
@@ -286,6 +288,7 @@ where
             structural_selected: self.structural_selected.clone(),
             structural_hovered: self.structural_hovered.clone(),
             structural_shown: self.structural_shown.cloned(),
+            datum: self.datum.clone(),
         }
     }
 
@@ -445,6 +448,7 @@ mod tests {
             structural_selected: &marks,
             structural_hovered: &marks,
             structural_shown: None,
+            datum: None,
         };
         shader::Program::<Navigate>::update(&view, state, &Event::Mouse(event), bounds(), mouse::Cursor::Available(at))?.into_inner().0
     }

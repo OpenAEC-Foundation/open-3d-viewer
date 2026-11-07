@@ -2865,6 +2865,9 @@ impl App {
             grids: self.grids_shown(),
             bounds: self.world_bounds(),
         };
+        // the grid lines and levels where the view shown draws them
+        let datums = self.datums();
+        let segments = Arc::new(datums.iter().map(|d| [d.line.a, d.line.b]).collect::<Vec<_>>());
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),
             visible: &self.visible,
@@ -2877,6 +2880,7 @@ impl App {
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
             structural_shown: self.structural.shown_marks.as_ref(),
+            datum: Some(segments),
         })
             .width(Fill)
             .height(Fill);
@@ -2966,13 +2970,9 @@ impl App {
             .align_top(Fill)
             .center_x(Fill)
         });
-        let grids = self
-            .model
-            .as_ref()
-            .filter(|m| self.grids_shown() && overlay.is_none() && !m.project.grids.is_empty())
-            .map(|m| {
+        let grids = (overlay.is_none() && !datums.is_empty()).then(|| {
                 canvas(crate::annotations::GridOverlay {
-                    grids: &m.project.grids,
+                    datums,
                     view_proj: self.camera.view_proj(self.aspect()),
                     fill: p.surface,
                     ink: p.text_secondary,

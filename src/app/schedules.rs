@@ -73,9 +73,10 @@ impl App {
 
     /// Shows a schedule's tab, from its top (`None`: the 3D view alone).
     pub(super) fn show_schedule(&mut self, i: Option<usize>) -> Task<Message> {
-        // a schedule's tab replaces a shown sheet
+        // a schedule's tab replaces a shown sheet, under the 3D view
         if i.is_some() {
             self.active_sheet = None;
+            self.load_view(None);
         }
         if self.active_schedule == i {
             return Task::none();

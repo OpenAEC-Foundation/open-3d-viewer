@@ -4,7 +4,7 @@
 //! properties with splitters, status bar, settings with themes and own shortcuts, and one command
 //! list for buttons, menus and shortcuts. The viewer (`App`) fills the workspace and the panels.
 
-use crate::app::{App, Message, Status};
+use crate::app::{App, DocTab, Message, Status};
 use crate::b2::{large, small};
 use crate::measure::Tool;
 use crate::theme::{Palette, ThemeKind};
@@ -678,25 +678,9 @@ impl Studio {
                 }
             }
             // document tabs: the 3D view, the open schedules, then the open sheets
-            Msg::SelectTab(i) => {
-                let schedules = self.app.open_schedules.len();
-                if let Some(&sheet) = i.checked_sub(1 + schedules).and_then(|k| self.app.open_sheets.get(k)) {
-                    return self.update(Msg::App(Message::ShowSheet(Some(sheet))));
-                }
-                let schedule = i.checked_sub(1).and_then(|i| self.app.open_schedules.get(i).copied());
-                self.app.active_sheet = None;
-                return self.update(Msg::App(Message::ShowSchedule(schedule)));
-            }
-            Msg::CloseTab(i) => {
-                // the 3D view (tab 0) stays open
-                let schedules = self.app.open_schedules.len();
-                if let Some(&sheet) = i.checked_sub(1 + schedules).and_then(|k| self.app.open_sheets.get(k)) {
-                    return self.update(Msg::App(Message::CloseSheet(sheet)));
-                }
-                if let Some(&schedule) = i.checked_sub(1).and_then(|i| self.app.open_schedules.get(i)) {
-                    return self.update(Msg::App(Message::CloseSchedule(schedule)));
-                }
-            }
+            Msg::SelectTab(i) => return self.update(Msg::App(Message::SelectTab(i))),
+            // the 3D view (tab 0) stays open
+            Msg::CloseTab(i) => return self.update(Msg::App(Message::CloseTab(i))),
             Msg::Key(press) if self.shortcuts.recording() => return self.update(Msg::Shortcuts(sc::Message::Key(press))),
             Msg::Key(press) => {
                 use iced::keyboard::{key::Named, Key};
@@ -1019,21 +1003,17 @@ impl Studio {
         } else {
             app.workspace_view(p, l).map(Msg::App)
         };
-        // document tabs once a schedule or sheet is open: the model (the 3D view, pinned), the
-        // schedules and the sheets
+        // document tabs once a view, schedule or sheet is open: the model (the 3D view, pinned),
+        // the floor plans, the schedules and the sheets
         let model_name = app.model.as_ref().and_then(|m| m.path.file_name()).and_then(|n| n.to_str()).unwrap_or("3D");
         let mut middle = column![].width(Length::Fill);
-        let all_sheets = app.model.as_ref().map_or(&[][..], |m| &m.project.sheets[..]);
-        if app.model.is_some() && (!app.open_schedules.is_empty() || !app.open_sheets.is_empty()) {
-            let schedules = app.open_schedules.iter().filter_map(|&i| app.schedules.get(i)).map(|s| DocumentTab::new(&s.name, false));
-            let sheets = app.open_sheets.iter().filter_map(|&i| all_sheets.get(i)).map(|s| DocumentTab::new(&s.title, false));
-            let tabs: Vec<DocumentTab<'_>> = std::iter::once(DocumentTab::pinned(model_name)).chain(schedules).chain(sheets).collect();
-            let active = match (app.active_sheet, app.active_schedule) {
-                (Some(s), _) => app.open_sheets.iter().position(|&o| o == s).map_or(0, |i| i + 1 + app.open_schedules.len()),
-                (None, Some(s)) => app.open_schedules.iter().position(|&o| o == s).map_or(0, |i| i + 1),
-                _ => 0,
-            };
-            middle = middle.push(w::document_tabs(look, &tabs, active, small("window.close"), Msg::SelectTab, Msg::CloseTab, Msg::SelectTab));
+        let doc_tabs = app.doc_tabs();
+        if app.model.is_some() && doc_tabs.len() > 1 {
+            let tabs: Vec<DocumentTab<'_>> = doc_tabs
+                .iter()
+                .map(|&t| if t == DocTab::Model { DocumentTab::pinned(model_name) } else { DocumentTab::new(app.tab_title(t), false) })
+                .collect();
+            middle = middle.push(w::document_tabs(look, &tabs, app.active_doc_tab(), small("window.close"), Msg::SelectTab, Msg::CloseTab, Msg::SelectTab));
         }
         let middle = middle.push(workspace);
         if self.compact() {

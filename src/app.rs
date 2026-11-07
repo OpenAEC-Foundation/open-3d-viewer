@@ -8,6 +8,7 @@ mod sheets;
 mod structural;
 
 pub use levels::{ExplorerTab, LevelForm};
+pub use views::{DocTab, OpenPlan, ViewSlot};
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
@@ -139,8 +140,12 @@ pub struct App {
     pub document: Document,
     /// The form of a new level, while it is open.
     pub level_form: Option<LevelForm>,
-    /// The floor plan of the document last shown (its path).
+    /// The floor plan whose tab shows (its path); `None`: the 3D view.
     pub active_plan: Option<String>,
+    /// Floor plans open in a document tab, in tab order, each with its own camera and section.
+    pub open_plans: Vec<views::OpenPlan>,
+    /// The 3D view's camera and section box while a floor plan's tab shows.
+    model_view: Option<views::ViewSlot>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -248,9 +253,13 @@ pub enum Message {
     RemoveLevel(Arc<str>),
     /// Make a floor plan of a level (its path) and show it.
     NewPlan(Arc<str>),
-    /// Show a floor plan (its path).
+    /// Show a floor plan (its path) in its tab.
     OpenPlan(Arc<str>),
     RemovePlan(Arc<str>),
+    /// Show a document tab ([`App::doc_tabs`]).
+    SelectTab(usize),
+    /// Close a document tab; the 3D view's stays.
+    CloseTab(usize),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
     /// Show a sheet's tab (`None`: not a sheet).
@@ -403,6 +412,8 @@ impl Default for App {
             document: Document::default(),
             level_form: None,
             active_plan: None,
+            open_plans: Vec::new(),
+            model_view: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -694,9 +705,10 @@ impl App {
     /// box.
     pub fn apply_view(&mut self, i: usize) {
         let Some(view) = self.model.as_ref().and_then(|m| m.views.get(i).cloned()) else { return };
+        // a saved view of the model shows in the 3D view's tab
+        self.load_view(None);
         if self.show_view(&view) {
             self.active_view = Some(i);
-            self.active_plan = None;
         }
     }
 
@@ -834,6 +846,8 @@ impl App {
         self.plane_picking = false;
         self.active_view = None;
         self.active_plan = None;
+        self.open_plans.clear();
+        self.model_view = None;
         self.open_schedules.clear();
         self.active_schedule = None;
         self.schedules.clear();
@@ -1104,6 +1118,12 @@ impl App {
             }
             Message::LayerFilter(f) => self.layer_filter = f,
             Message::Navigate(n) => match n {
+                // a floor plan is not turned: dragging moves it
+                Navigate::Orbit { dx, dy } if self.active_plan.is_some() => {
+                    self.anim = None;
+                    self.measure.hover = None;
+                    self.camera.pan(dx, dy, self.viewport_size.1)
+                }
                 Navigate::Orbit { dx, dy } => {
                     self.anim = None;
                     self.measure.hover = None;
@@ -1180,11 +1200,11 @@ impl App {
             Message::NewPlan(level) => self.new_plan(&level),
             Message::OpenPlan(plan) => self.open_plan(&plan),
             Message::RemovePlan(plan) => {
+                self.close_plan(&plan);
                 self.document.remove_plan(&plan);
-                if self.active_plan.as_deref() == Some(&*plan) {
-                    self.active_plan = None;
-                }
             }
+            Message::SelectTab(i) => return self.select_tab(i),
+            Message::CloseTab(i) => return self.close_tab(i),
             Message::OpenSheet(i) => return self.open_sheet(i),
             Message::ShowSheet(i) => return self.show_sheet(i),
             Message::CloseSheet(i) => return self.close_sheet(i),

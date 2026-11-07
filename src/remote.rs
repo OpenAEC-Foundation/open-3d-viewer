@@ -1074,10 +1074,7 @@ impl App {
         let model = self.require_model()?;
         if let Some(Value::Array(list)) = a.get("ids") {
             let ids: Vec<u64> = list.iter().filter_map(id_of).collect();
-            let drawn: std::collections::HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
-            if let Some(&id) = ids.iter().find(|id| !drawn.contains(id)) {
-                return Err(not_drawn(&model, id, "hiding"));
-            }
+            hideable(&model, self.explode_index.as_deref(), &ids)?;
             self.sel.clear();
             self.sel.extend(ids.into_iter().map(Pickable::Element));
             self.selection_changed();
@@ -1571,6 +1568,26 @@ impl App {
 enum Listed {
     Layer(usize),
     Structural(usize),
+}
+
+/// Whether every one of `ids` can be hidden: an element with triangles, or a structural node,
+/// member or surface (a unit of its own in `index`, which Hide and Isolate reach through the
+/// units texture). Else why not.
+fn hideable(model: &Model, index: Option<&crate::explode::ExplodeIndex>, ids: &[u64]) -> Result<(), String> {
+    let drawn: std::collections::HashSet<u64> = model.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+    for &id in ids.iter().filter(|id| !drawn.contains(id)) {
+        if index.is_some_and(|index| index.structural_unit(id).is_some()) {
+            continue;
+        }
+        return Err(match model.structural_item(id) {
+            Some(item) => format!(
+                "{id} is a structural {}: only nodes, members and surfaces can be hidden; get_element and get_structural_element take its id",
+                crate::structural::kind_name(item.kind())
+            ),
+            None => format!("no element {id}"),
+        });
+    }
+    Ok(())
 }
 
 /// Why an element without triangles cannot be measured: a structural object is drawn from its

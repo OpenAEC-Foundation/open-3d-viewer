@@ -6,7 +6,7 @@
 
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, Sheet, PAPERS, SCALES};
-use crate::drawing::{cut_at, Cut};
+use crate::drawing::{plan_at, Cut};
 use crate::theme::Palette;
 use iced::alignment;
 use iced::keyboard;
@@ -148,8 +148,8 @@ impl App {
         let plans: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).filter(|p| !self.cuts.contains_key(p)).collect();
         for plan in plans {
             let Some(view) = self.document.plan(&plan) else { continue };
-            let Some((_, high)) = self.document.plan_range(view) else { continue };
-            self.cuts.insert(plan, Arc::new(cut_at(&model, &self.visible, high as f32)));
+            let Some((low, high)) = self.document.plan_range(view) else { continue };
+            self.cuts.insert(plan, Arc::new(plan_at(&model, &self.visible, low as f32, high as f32)));
         }
     }
 
@@ -504,8 +504,16 @@ impl canvas::Program<Message> for PaperDrawing {
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
             }
             let placed = self.placed.get(i).cloned().unwrap_or_default();
-            match placed.cut.filter(|c| !c.segments.is_empty()) {
+            match placed.cut.filter(|c| !c.segments.is_empty() || !c.below.is_empty()) {
                 Some(cut) => {
+                    // what is seen below the cut, thin and grey, then the cut itself
+                    let below = Path::new(|b| {
+                        for [a, z] in &cut.below {
+                            b.move_to(fit.point(self.to_paper(i, [a[0] as f64, a[1] as f64])));
+                            b.line_to(fit.point(self.to_paper(i, [z[0] as f64, z[1] as f64])));
+                        }
+                    });
+                    frame.stroke(&below, Stroke::default().with_color(Color { a: 0.55, ..ink }).with_width(0.6));
                     let lines = Path::new(|b| {
                         for [a, z] in &cut.segments {
                             b.move_to(fit.point(self.to_paper(i, [a[0] as f64, a[1] as f64])));

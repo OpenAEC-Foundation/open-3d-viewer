@@ -2559,13 +2559,7 @@ impl App {
                 }
                 content = content.push(rule::horizontal(1));
             }
-            if !pd.levels.is_empty() {
-                content = content.push(section(l.text("Niveaus", "Levels")));
-                for (name, z) in pd.levels.iter().rev() {
-                    content = content.push(prop(name, format!("{z:+.3} m")));
-                }
-                content = content.push(rule::horizontal(1));
-            }
+            // the levels are not listed here: they have their own tab in the explorer
             if !pd.phases.is_empty() {
                 content = content
                     .push(section(l.text("Fasen", "Phases")))

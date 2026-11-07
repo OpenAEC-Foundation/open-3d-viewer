@@ -221,6 +221,18 @@ mod tests {
         }
     }
 
+    /// The levels have their own tab: the properties pane does not list them as well.
+    #[test]
+    fn the_properties_pane_leaves_the_levels_to_their_tab() {
+        let mut app = App::default();
+        app.set_model(model(&[("00 ground floor", 0.0), ("01 first floor", 3.0)]));
+        assert_eq!(app.explorer_tab, ExplorerTab::Model);
+        let mut ui = simulator(&app);
+        for hidden in ["01 first floor", "+3.000 m", "LEVELS"] {
+            assert!(ui.find(hidden).is_err(), "{hidden}");
+        }
+    }
+
     #[test]
     fn adds_a_level_with_the_form() {
         let mut app = App::default();

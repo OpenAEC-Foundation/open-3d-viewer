@@ -377,7 +377,7 @@ impl App {
                 }
                 // give the window a few frames to show the last changes, then capture it
                 return Task::perform(async { std::thread::sleep(std::time::Duration::from_millis(200)) }, |_| ())
-                    .then(|_| window::latest().and_then(window::screenshot))
+                    .then(|_| window::oldest().and_then(window::screenshot))
                     .map(Message::RemoteShot);
             }
             _ => {}

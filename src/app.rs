@@ -158,6 +158,13 @@ pub struct App {
     pub sheet_pick: Option<paper::SheetPick>,
     /// The cut height being typed for a floor plan: its path and the text.
     pub cut_edit: Option<(String, String)>,
+    /// Floor plans and the document's sheets show in a window of their own (the desktop shell),
+    /// each plan with its own camera, instead of in tabs that take turns with the 3D view.
+    pub separate_views: bool,
+    /// A floor plan's camera stands in for the 3D view's ([`App::with_plan`]).
+    plan_navigation: bool,
+    /// The size and origin of the floor plan window's viewport (logical pixels).
+    plan_viewport: ((f32, f32), (f32, f32)),
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -314,6 +321,11 @@ pub enum Message {
     SelectTab(usize),
     /// Close a document tab; the 3D view's stays.
     CloseTab(usize),
+    /// Show or close a tab of the views window ([`App::view_tabs`]).
+    SelectViewTab(usize),
+    CloseViewTab(usize),
+    /// The pointer in the floor plan window's viewport.
+    PlanNavigate(Navigate),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
     /// Show a sheet's tab (`None`: not a sheet).
@@ -478,6 +490,9 @@ impl Default for App {
             dimension_tool: false,
             sheet_pick: None,
             cut_edit: None,
+            separate_views: false,
+            plan_navigation: false,
+            plan_viewport: ((1.0, 1.0), (0.0, 0.0)),
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -1125,7 +1140,7 @@ impl App {
                 };
             }
             Message::TakeShot => {
-                return window::latest().and_then(window::screenshot).map(Message::Shot);
+                return window::oldest().and_then(window::screenshot).map(Message::Shot);
             }
             Message::Shot(shot) => {
                 if let Some(path) = self.window_shot.take() {
@@ -1223,7 +1238,7 @@ impl App {
                 }
                 match n {
                 // a floor plan is not turned: dragging moves it
-                Navigate::Orbit { dx, dy } if self.active_plan.is_some() => {
+                Navigate::Orbit { dx, dy } if self.plan_navigation || (!self.separate_views && self.active_plan.is_some()) => {
                     self.anim = None;
                     self.measure.hover = None;
                     self.camera.pan(dx, dy, self.viewport_size.1)
@@ -1360,6 +1375,9 @@ impl App {
                 self.document.add_dimension(&plan, from, to);
             }
             Message::SelectTab(i) => return self.select_tab(i),
+            Message::SelectViewTab(i) => self.select_view_tab(i),
+            Message::CloseViewTab(i) => self.close_view_tab(i),
+            Message::PlanNavigate(n) => return self.plan_navigate(n),
             Message::CloseTab(i) => return self.close_tab(i),
             Message::OpenSheet(i) => return self.open_sheet(i),
             Message::ShowSheet(i) => return self.show_sheet(i),

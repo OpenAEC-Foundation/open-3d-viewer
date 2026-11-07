@@ -502,11 +502,11 @@ impl Studio {
             Command::new("object.hide", l.text("Verbergen", "Hide"), go(Message::HideSelection))
                 .icon(small("object.hide"), large("object.hide"))
                 .shortcut(key('h'))
-                .enabled(!app.sel.is_empty()),
+                .enabled(app.has_selection()),
             Command::new("object.isolate", l.text("Isoleren", "Isolate"), go(Message::IsolateSelection))
                 .icon(small("object.show"), large("object.show"))
                 .shortcut(key('i'))
-                .enabled(!app.sel.is_empty()),
+                .enabled(app.has_selection()),
             Command::new("object.show-all", l.text("Alles tonen", "Show all"), go(Message::ShowAllElements))
                 .icon(small("object.show"), large("object.show"))
                 .shortcut(Shortcut::ctrl_shift('h'))

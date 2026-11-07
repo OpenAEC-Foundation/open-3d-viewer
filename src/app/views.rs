@@ -299,7 +299,7 @@ impl App {
                     .color(if active { p.accent } else { p.text })
                     .wrapping(Wrapping::WordOrGlyph)
                     .width(Fill);
-                let open = button(name)
+                let open = button(draggable(name, &plan.path))
                     .padding([3, 6])
                     .width(Fill)
                     .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
@@ -318,7 +318,7 @@ impl App {
         for section in document.sections() {
             let active = self.active_plan.as_deref() == Some(section.path.as_str());
             let name = text(section.name.clone()).size(12).color(if active { p.accent } else { p.text }).wrapping(Wrapping::WordOrGlyph).width(Fill);
-            let open = button(name)
+            let open = button(draggable(name, &section.path))
                 .padding([3, 6])
                 .width(Fill)
                 .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
@@ -366,6 +366,13 @@ impl App {
         }
         scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
     }
+}
+
+/// The name of a view in the list, which a press takes (to drag onto the sheet shown) and a
+/// release on it opens; the press does not reach the row's button, so the click is the release.
+fn draggable<'a>(name: iced::widget::Text<'a>, path: &str) -> Element<'a, Message> {
+    let path: Arc<str> = Arc::from(path);
+    iced::widget::mouse_area(name).on_press(Message::GrabView(path.clone())).on_release(Message::ReleaseView(path)).into()
 }
 
 #[cfg(test)]
@@ -464,6 +471,28 @@ mod tests {
         assert_eq!(app.document.plans().len(), 1);
         let _ = app.update(Message::CloseTab(0));
         assert_eq!(app.doc_tabs(), [DocTab::Model], "the 3D view stays");
+    }
+
+    /// A press on a view in the list takes it (to drag onto a sheet); let go on it, it opens.
+    #[test]
+    fn a_view_in_the_list_is_taken_by_a_press_and_opens_with_a_click() {
+        let mut app = App::default();
+        app.set_model(tower());
+        let level = Arc::<str>::from(app.document.levels()[1].path.as_str());
+        let _ = app.update(Message::NewPlan(level));
+        let plan = Arc::<str>::from(app.document.plans()[0].path.as_str());
+        let _ = app.update(Message::SelectTab(0));
+        click(&mut app, "Views");
+        let mut ui = simulator(&app);
+        ui.click("01 first").expect("the plan in the list");
+        let messages: Vec<Message> = ui.into_messages().collect();
+        assert!(matches!(messages.first(), Some(Message::GrabView(v)) if *v == plan), "{messages:?}");
+        assert!(messages.iter().any(|m| matches!(m, Message::ReleaseView(v) if *v == plan)), "{messages:?}");
+        for m in messages {
+            let _ = app.update(m);
+        }
+        assert_eq!(app.active_plan.as_deref(), Some(&*plan));
+        assert_eq!(app.dragging_view, None);
     }
 
     #[test]

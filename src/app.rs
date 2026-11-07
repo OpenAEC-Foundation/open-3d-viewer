@@ -160,6 +160,8 @@ pub struct App {
     pub sheet_pick: Option<paper::SheetPick>,
     /// The cut height being typed for a floor plan: its path and the text.
     pub cut_edit: Option<(String, String)>,
+    /// The view taken from the Views list while the mouse button is down, to drop on a sheet.
+    pub dragging_view: Option<Arc<str>>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -303,6 +305,14 @@ pub enum Message {
     CropPlan(Arc<str>, Option<([f64; 2], [f64; 2])>),
     /// Pick a placed view or a dimension on the sheet shown (`None`: nothing).
     PickOnSheet(Option<paper::SheetPick>),
+    /// Pressed on a view in the Views list: it can be dragged onto the sheet shown.
+    GrabView(Arc<str>),
+    /// Let go over a view in the Views list: it opens (a click), unless another was carried.
+    ReleaseView(Arc<str>),
+    /// A view let go over the sheet shown, at a paper point: placed there, its middle on it.
+    DropOnSheet(Arc<str>, [f64; 2]),
+    /// The mouse button went up: the view carried, if any, is let go.
+    LetGoView,
     /// Remove what is picked on the sheet shown.
     RemovePicked,
     /// Set the scale of a placed view: sheet, index, 1 : scale.
@@ -491,6 +501,7 @@ impl Default for App {
             section_tool: false,
             sheet_pick: None,
             cut_edit: None,
+            dragging_view: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -1359,6 +1370,15 @@ impl App {
                 self.pick_on_sheet(None);
             }
             Message::PickOnSheet(pick) => self.pick_on_sheet(pick),
+            Message::GrabView(view) => self.grab_view(view),
+            Message::ReleaseView(view) => {
+                let carried = self.dragging_view.take();
+                if carried.is_none_or(|c| c == view) {
+                    self.open_plan(&view);
+                }
+            }
+            Message::DropOnSheet(view, at) => self.drop_on_sheet(&view, at),
+            Message::LetGoView => self.dragging_view = None,
             Message::CropPlan(plan, crop) => {
                 if self.document.set_crop(&plan, crop) {
                     self.fit_plan_section(&plan);
@@ -1644,7 +1664,16 @@ impl App {
         // files from the page: `?file=URL` and drag and drop
         #[cfg(target_arch = "wasm32")]
         let remote = Subscription::batch([remote, crate::web::subscription()]);
-        Subscription::batch([events, ticks, remote])
+        // a view carried from the Views list is let go wherever the button goes up
+        let letting_go = if self.dragging_view.is_some() {
+            event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => Some(Message::LetGoView),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([events, ticks, remote, letting_go])
     }
 
     pub fn view(&self) -> Element<'_, Message> {

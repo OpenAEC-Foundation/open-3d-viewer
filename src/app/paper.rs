@@ -129,22 +129,50 @@ impl App {
         }
     }
 
+    /// Takes a view from the Views list: while a sheet shows, it is cut now, so the sheet can
+    /// show its frame under the pointer.
+    pub(super) fn grab_view(&mut self, view: Arc<str>) {
+        if self.active_doc_sheet.is_some() {
+            self.cut_view(&view);
+        }
+        self.dragging_view = Some(view);
+    }
+
+    /// Places a view let go over the sheet shown with its middle at `at` (paper), and picks it.
+    pub(super) fn drop_on_sheet(&mut self, view: &str, at: [f64; 2]) {
+        self.dragging_view = None;
+        let Some(sheet) = self.active_doc_sheet.clone() else { return };
+        let Some(i) = self.document.place_plan(&sheet, view) else { return };
+        self.document.move_placed(&sheet, i, at);
+        self.cut_placed_plans(&sheet);
+        self.pick_on_sheet(Some(SheetPick::View(i)));
+    }
+
     /// Cuts the floor plans on a sheet that are not cut yet: at their cut height, through the
     /// layers shown now.
     fn cut_placed_plans(&mut self, sheet: &str) {
-        let Some(model) = self.model.clone() else { return };
         let Some(sheet) = self.document.sheet(sheet) else { return };
-        let plans: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).filter(|p| !self.cuts.contains_key(p)).collect();
+        let plans: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).collect();
         for plan in plans {
-            if let Some(s) = self.document.section(&plan) {
-                let cut = section_at(&model, &self.visible, s.from, s.to, s.depth);
-                self.cuts.insert(plan, Arc::new(cut));
-                continue;
-            }
-            let Some(view) = self.document.plan(&plan) else { continue };
-            let Some((low, high)) = self.document.plan_range(view) else { continue };
-            self.cuts.insert(plan, Arc::new(plan_at(&model, &self.visible, low as f32, high as f32)));
+            self.cut_view(&plan);
         }
+    }
+
+    /// Cuts a view when it is not cut yet: a floor plan at its cut height, a section or
+    /// elevation along its line, through the layers shown now.
+    fn cut_view(&mut self, path: &str) {
+        let Some(model) = self.model.clone() else { return };
+        if self.cuts.contains_key(path) {
+            return;
+        }
+        let cut = if let Some(s) = self.document.section(path) {
+            section_at(&model, &self.visible, s.from, s.to, s.depth)
+        } else {
+            let Some(view) = self.document.plan(path) else { return };
+            let Some((low, high)) = self.document.plan_range(view) else { return };
+            plan_at(&model, &self.visible, low as f32, high as f32)
+        };
+        self.cuts.insert(path.to_string(), Arc::new(cut));
     }
 
     /// Makes the four elevations of the model: 2 m outside it, each looking at it across its
@@ -198,6 +226,10 @@ impl App {
             })
             .collect();
         let sections = self.document.sections().iter().map(|s| (s.name.clone(), s.from, s.to)).collect();
+        let carrying = self.dragging_view.as_ref().and_then(|v| {
+            let name = self.document.view_name(v)?.to_string();
+            Some((v.clone(), name, self.cuts.get(&**v).and_then(|c| c.extent)))
+        });
         Some(PaperDrawing {
             sheet: sheet.clone(),
             placed,
@@ -209,6 +241,7 @@ impl App {
             word: l.text("Doorsnede", "Section"),
             pick: self.sheet_pick,
             empty: l.text("niets gesneden", "nothing cut").to_string(),
+            carrying,
         })
     }
 
@@ -352,6 +385,8 @@ struct PaperDrawing {
     /// What is picked.
     pick: Option<SheetPick>,
     empty: String,
+    /// The view dragged from the Views list: its path, name and the extent of its drawing.
+    carrying: Option<(Arc<str>, String, Option<([f32; 2], [f32; 2])>)>,
 }
 
 /// Paper metres to canvas pixels: the paper centred, y up.
@@ -512,6 +547,8 @@ struct PaperState {
     aim: Option<(usize, [f64; 2])>,
     /// A crop handle being dragged: the view and the side.
     crop: Option<(usize, Side)>,
+    /// Where the view carried from the Views list is over the paper (canvas pixels).
+    carry: Option<Point>,
 }
 
 impl canvas::Program<Message> for PaperDrawing {
@@ -523,7 +560,20 @@ impl canvas::Program<Message> for PaperDrawing {
             state.first = None;
             state.aim = None;
         }
+        // a view carried from the Views list: drawn under the pointer, placed where let go
+        if self.carrying.is_none() {
+            state.carry = None;
+        }
         match event {
+            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) if self.carrying.is_some() => {
+                state.carry = cursor.position_in(bounds);
+                Some(canvas::Action::request_redraw())
+            }
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if self.carrying.is_some() => {
+                let view = self.carrying.as_ref()?.0.clone();
+                let at = fit.paper(cursor.position_in(bounds)?);
+                Some(canvas::Action::publish(Message::DropOnSheet(view, at)).and_capture())
+            }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let at = cursor.position_in(bounds).map(|p| fit.paper(p));
                 if let (Some((i, side)), Some(at)) = (state.crop, at) {
@@ -716,6 +766,21 @@ impl canvas::Program<Message> for PaperDrawing {
             }
         }
 
+        // the view carried from the Views list: its frame at 1:100 under the pointer
+        if let (Some((_, name, extent)), Some(c)) = (&self.carrying, state.carry) {
+            let half = match extent {
+                Some((lo, hi)) => [(hi[0] - lo[0]) as f64 / 2.0 / crate::document::SHEET_SCALE + FRAME, (hi[1] - lo[1]) as f64 / 2.0 / crate::document::SHEET_SCALE + FRAME],
+                None => [0.02, 0.015],
+            };
+            let at = fit.paper(c);
+            let (corner, size) = rect([at[0] - half[0], at[1] - half[1]], [at[0] + half[0], at[1] + half[1]]);
+            frame.fill_rectangle(corner, size, Color { a: 0.08, ..p.accent });
+            let mut dashed = Stroke::default().with_color(p.accent).with_width(1.5);
+            dashed.line_dash = canvas::LineDash { segments: &[6.0, 4.0], offset: 0 };
+            frame.stroke(&Path::rectangle(corner, size), dashed);
+            label(&mut frame, name.clone(), Point::new(corner.x, corner.y + size.height + 16.0), 12.0, p.accent, alignment::Horizontal::Left);
+        }
+
         // the dimension or section being made: from the first point to where the pointer snaps
         if self.busy() {
             if let Some((i, q)) = state.aim {
@@ -744,6 +809,9 @@ impl canvas::Program<Message> for PaperDrawing {
             Some(Side::Left | Side::Right) => return mouse::Interaction::ResizingHorizontally,
             Some(Side::Bottom | Side::Top) => return mouse::Interaction::ResizingVertically,
             None => {}
+        }
+        if self.carrying.is_some() && cursor.is_over(bounds) {
+            return mouse::Interaction::Grabbing;
         }
         match (self.busy(), state.drag, state.hover) {
             (true, _, _) => mouse::Interaction::Crosshair,
@@ -1004,6 +1072,48 @@ mod tests {
         assert_eq!(north.axes().1, [0.0, -1.0], "the north elevation looks south");
         let _ = app.update(Message::RemoveSection(Arc::from(north.path.clone().as_str())));
         assert_eq!(app.document.sections().len(), 4);
+    }
+
+    #[test]
+    fn a_view_dragged_from_the_views_list_is_placed_on_the_sheet_where_it_is_let_go() {
+        let (mut app, plan) = app_with_plan();
+        let _ = app.update(Message::NewSheet("Sheet"));
+        let sheet = Arc::<str>::from(app.document.sheets()[0].path.as_str());
+        // pressed on the plan in the Views list: the sheet carries it, its frame at 1:100
+        let _ = app.update(Message::GrabView(plan.clone()));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let carried = drawing.carrying.as_ref().expect("carried");
+        assert_eq!((&*carried.0, carried.1.as_str()), (&*plan, "00"));
+        assert_eq!(carried.2, Some(([0.0, 0.0], [8.0, 5.0])), "cut while it is carried");
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        let mut state = PaperState::default();
+        let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::ORIGIN });
+        let _ = canvas::Program::update(&drawing, &mut state, &moved, bounds(), mouse::Cursor::Available(fit.point([0.1, 0.08])));
+        assert!(state.carry.is_some(), "drawn under the pointer");
+        let release = iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+        let action = canvas::Program::update(&drawing, &mut state, &release, bounds(), mouse::Cursor::Available(fit.point([0.1, 0.08]))).expect("a drop");
+        let message = action.into_inner().0.expect("a message");
+        assert!(matches!(&message, Message::DropOnSheet(v, at) if *v == plan && (at[0] - 0.1).abs() < 1e-6 && (at[1] - 0.08).abs() < 1e-6), "{message:?}");
+        // the release also lets go of the view, before or after the drop
+        let _ = app.update(Message::LetGoView);
+        let _ = app.update(message);
+        let placed = &app.document.sheet(&sheet).unwrap().views;
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].plan, *plan);
+        assert!((placed[0].at[0] - 0.1).abs() < 1e-6 && (placed[0].at[1] - 0.08).abs() < 1e-6);
+        assert_eq!(app.sheet_pick, Some(SheetPick::View(0)), "picked, to scale or crop it");
+        assert_eq!(app.dragging_view, None);
+        // let go elsewhere: nothing more is placed
+        let _ = app.update(Message::GrabView(plan.clone()));
+        let _ = app.update(Message::LetGoView);
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        assert!(drawing.carrying.is_none());
+        let action = canvas::Program::update(&drawing, &mut PaperState::default(), &release, bounds(), mouse::Cursor::Available(fit.point([0.3, 0.2])));
+        assert!(!matches!(action.and_then(|a| a.into_inner().0), Some(Message::DropOnSheet(..))));
+        // pressed and let go on the plan in the list (a click): it opens, nothing is carried
+        let _ = app.update(Message::GrabView(plan.clone()));
+        let _ = app.update(Message::ReleaseView(plan.clone()));
+        assert_eq!((app.active_plan.as_deref(), app.dragging_view.as_ref()), (Some(&*plan), None));
     }
 
     #[test]

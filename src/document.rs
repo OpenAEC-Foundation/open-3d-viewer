@@ -189,6 +189,98 @@ impl Document {
         self.levels = levels;
         self.sort();
         self.drop_orphan_plans();
+        self.adopt_ifcx(&model.project.drawings);
+    }
+
+    /// The floor plans, sections, elevations and sheets as IfcX nodes in the `o3v::` namespace,
+    /// under one root node; a plan names its level, so it finds it again in the file's storeys.
+    pub fn ifcx_drawing_nodes(&self) -> Vec<Value> {
+        let rect = |c: Option<([f64; 2], [f64; 2])>| c.map_or(Value::Null, |(lo, hi)| json!([lo, hi]));
+        let dims = |d: &[Dimension]| d.iter().map(|d| json!([d.from, d.to])).collect::<Vec<_>>();
+        let mut nodes = Vec::new();
+        let mut children = serde_json::Map::new();
+        for (i, p) in self.plans.iter().enumerate() {
+            let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
+            children.insert(format!("plan {}", i + 1), p.path.clone().into());
+            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": {
+                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions),
+            }}}));
+        }
+        for (i, s) in self.sections.iter().enumerate() {
+            children.insert(format!("section {}", i + 1), s.path.clone().into());
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": {
+                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions),
+            }}}));
+        }
+        for (i, s) in self.sheets.iter().enumerate() {
+            children.insert(format!("sheet {}", i + 1), s.path.clone().into());
+            let views: Vec<Value> = s.views.iter().map(|v| json!({"view": v.plan, "at": v.at, "scale": v.scale})).collect();
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "paper": s.paper, "views": views}}}));
+        }
+        if !nodes.is_empty() {
+            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1}}}));
+        }
+        nodes
+    }
+
+    /// Takes over the drawings an IFCX file holds (its `o3v::` nodes), except those it has
+    /// already; a floor plan finds its level by name.
+    pub fn adopt_ifcx(&mut self, nodes: &[(String, Value)]) {
+        let pair = |v: &Value| -> Option<[f64; 2]> { Some([v.get(0)?.as_f64()?, v.get(1)?.as_f64()?]) };
+        let rect = |v: Option<&Value>| -> Option<([f64; 2], [f64; 2])> {
+            let v = v?;
+            Some((pair(v.get(0)?)?, pair(v.get(1)?)?))
+        };
+        let dims = |v: Option<&Value>| -> Vec<Dimension> {
+            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)? })).collect()
+        };
+        let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+        let number = |v: &Value, key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
+        let known = |doc: &Document, path: &str| doc.plan(path).is_some() || doc.section(path).is_some() || doc.sheet(path).is_some();
+        for (path, attributes) in nodes {
+            if known(self, path) {
+                continue;
+            }
+            if let Some(p) = attributes.get("o3v::view::plan") {
+                let Some(level) = self.levels.iter().find(|l| same_name(&l.name, &text(p, "level"))).map(|l| l.path.clone()) else { continue };
+                self.plans.push(PlanView {
+                    path: path.clone(),
+                    name: text(p, "name"),
+                    level,
+                    cut: number(p, "cut", PLAN_CUT),
+                    depth: number(p, "depth", PLAN_DEPTH),
+                    dimensions: dims(p.get("dimensions")),
+                    crop: rect(p.get("crop")),
+                });
+            } else if let Some(s) = attributes.get("o3v::view::section") {
+                let (Some(from), Some(to)) = (s.get("from").and_then(pair), s.get("to").and_then(pair)) else { continue };
+                self.sections.push(SectionView {
+                    path: path.clone(),
+                    name: text(s, "name"),
+                    from,
+                    to,
+                    depth: number(s, "depth", 100.0),
+                    dimensions: dims(s.get("dimensions")),
+                    crop: rect(s.get("crop")),
+                });
+            }
+        }
+        // sheets last: their views are known by then
+        for (path, attributes) in nodes {
+            let Some(s) = attributes.get("o3v::sheet") else { continue };
+            if known(self, path) {
+                continue;
+            }
+            let views = s.get("views").and_then(Value::as_array).into_iter().flatten().filter_map(|v| {
+                let view = v.get("view")?.as_str()?.to_string();
+                (self.plan(&view).is_some() || self.section(&view).is_some()).then_some(())?;
+                Some(PlacedView { plan: view, at: pair(v.get("at")?)?, scale: number(v, "scale", SHEET_SCALE) })
+            });
+            let views: Vec<PlacedView> = views.collect();
+            let (number, name) = (text(s, "number"), text(s, "name"));
+            let paper = s.get("paper").and_then(pair).unwrap_or(A3_LANDSCAPE);
+            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, paper, views });
+        }
     }
 
     /// Adds a level and gives its index in [`Self::levels`].
@@ -523,7 +615,7 @@ fn micrometres(z: f64) -> f64 {
 }
 
 /// A UUID (version 8, RFC 9562) derived from `seed`: the same seed gives the same path.
-fn uuid(seed: &str) -> String {
+pub(crate) fn uuid(seed: &str) -> String {
     let fnv = |offset: u64| seed.bytes().fold(offset, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3));
     let (hi, lo) = (fnv(0xcbf2_9ce4_8422_2325), fnv(0x84222325_cbf29ce4));
     let hi = (hi & !0xf000) | 0x8000; // version 8

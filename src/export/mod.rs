@@ -4,6 +4,7 @@
 //! To add a format: implement [`Writer`] in a new module and add it to [`registry`].
 
 mod ifc;
+mod ifcx;
 
 use crate::document::Document;
 use crate::model::Model;
@@ -28,7 +29,7 @@ pub trait Writer: Send + Sync {
 
 /// All available writers, in the order of the save dialog's filters.
 pub fn registry() -> Vec<Box<dyn Writer>> {
-    vec![Box::new(ifc::IfcWriter)]
+    vec![Box::new(ifc::IfcWriter), Box::new(ifcx::IfcxWriter)]
 }
 
 /// The writer for the extension of `file_name`.

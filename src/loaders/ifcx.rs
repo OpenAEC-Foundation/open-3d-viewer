@@ -624,7 +624,21 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     let mut levels = scene.levels;
     levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     levels.dedup();
-    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, levels, ..ProjectData::default() } })
+    // the drawings this viewer wrote (`o3v::` attributes), in file order, the later file winning
+    let mut drawings: Vec<(String, Value)> = Vec::new();
+    for node in files.iter().flat_map(|r| &r.file.data) {
+        let own: serde_json::Map<String, Value> =
+            node.attributes.iter().flatten().filter(|(k, _)| k.starts_with("o3v::")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if own.is_empty() {
+            continue;
+        }
+        match drawings.iter_mut().find(|(p, _)| *p == node.path) {
+            Some((_, attributes)) => attributes.as_object_mut().into_iter().for_each(|a| a.extend(own.clone())),
+            None => drawings.push((node.path.clone(), Value::Object(own))),
+        }
+    }
+    let project = ProjectData { info, levels, drawings, ..ProjectData::default() };
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
 
 #[cfg(test)]

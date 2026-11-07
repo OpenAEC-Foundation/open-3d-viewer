@@ -201,6 +201,9 @@ pub struct ProjectData {
     pub phases: Vec<String>,
     pub grids: Vec<GridLine>,
     pub rooms: Vec<Room>,
+    /// The drawings of an IFCX file this viewer wrote: floor plans, sections and sheets as its
+    /// `o3v::` nodes (path, attributes), in file order; the project document takes them over.
+    pub drawings: Vec<(String, serde_json::Value)>,
     /// Schedules: computed after the model shows, as they take seconds on a large project.
     pub schedules: Later<Vec<Schedule>>,
 }
@@ -496,6 +499,7 @@ impl Model {
                 g
             }));
             project.rooms.extend(model.project.rooms.iter().cloned());
+            project.drawings.extend(model.project.drawings.iter().cloned());
         }
         project.levels.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
         project.levels.dedup();

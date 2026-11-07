@@ -63,6 +63,11 @@ impl Dimension {
 
 /// A3 landscape, the paper of a new sheet (metres).
 pub const A3_LANDSCAPE: [f64; 2] = [0.420, 0.297];
+/// The ISO papers a sheet can have, landscape: name, width and height (metres).
+pub const PAPERS: [(&str, [f64; 2]); 5] =
+    [("A4", [0.297, 0.210]), ("A3", A3_LANDSCAPE), ("A2", [0.594, 0.420]), ("A1", [0.841, 0.594]), ("A0", [1.189, 0.841])];
+/// The scales a placed view can have (1 : this).
+pub const SCALES: [f64; 6] = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
 /// The scale a view gets when it is placed on a sheet (1 : this).
 pub const SHEET_SCALE: f64 = 100.0;
 
@@ -290,6 +295,39 @@ impl Document {
             return false;
         }
         view.at = [at[0].clamp(0.0, paper[0]), at[1].clamp(0.0, paper[1])];
+        true
+    }
+
+    /// Sets the scale of a placed view (1 : `scale`).
+    pub fn set_scale(&mut self, sheet: &str, index: usize, scale: f64) -> bool {
+        if !(scale.is_finite() && scale > 0.0) {
+            return false;
+        }
+        let Some(view) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.views.get_mut(index)) else { return false };
+        view.scale = scale;
+        true
+    }
+
+    /// Gives a sheet another paper; its views stay on it.
+    pub fn set_paper(&mut self, sheet: &str, paper: [f64; 2]) -> bool {
+        if !(paper.iter().all(|v| v.is_finite() && *v > 0.0)) {
+            return false;
+        }
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == sheet) else { return false };
+        sheet.paper = paper;
+        for view in &mut sheet.views {
+            view.at = [view.at[0].min(paper[0]), view.at[1].min(paper[1])];
+        }
+        true
+    }
+
+    /// Sets how far a floor plan cuts above its level (metres, above its view depth).
+    pub fn set_cut(&mut self, plan: &str, cut: f64) -> bool {
+        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
+        if !(cut.is_finite() && cut > -plan.depth) {
+            return false;
+        }
+        plan.cut = cut;
         true
     }
 
@@ -547,6 +585,31 @@ mod tests {
         assert!(document.remove_sheet(&second));
         assert_eq!(document.add_sheet("Again").len(), 36);
         assert_eq!(document.sheets()[1].number, "A02");
+    }
+
+    #[test]
+    fn scale_paper_and_cut_can_change() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let sheet = document.add_sheet("Plans");
+        document.place_plan(&sheet, &plan).unwrap();
+        assert!(document.set_scale(&sheet, 0, 50.0));
+        assert!(!document.set_scale(&sheet, 0, 0.0));
+        assert!(!document.set_scale(&sheet, 3, 50.0));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].scale, 50.0);
+        // a smaller paper keeps the view on it
+        assert!(document.set_paper(&sheet, PAPERS[0].1));
+        let s = document.sheet(&sheet).unwrap();
+        assert_eq!((s.paper, s.views[0].at), ([0.297, 0.210], [0.21, 0.1485]));
+        assert!(document.set_paper(&sheet, [0.1, 0.1]));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].at, [0.1, 0.1]);
+        assert!(!document.set_paper(&sheet, [0.0, 0.1]));
+        // the cut, not below the view depth
+        assert!(document.set_cut(&plan, 2.0));
+        assert_eq!(document.plan_range(document.plan(&plan).unwrap()), Some((-PLAN_DEPTH, 2.0)));
+        assert!(!document.set_cut(&plan, -0.5));
+        assert!(!document.set_cut(&plan, f64::NAN));
     }
 
     #[test]

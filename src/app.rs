@@ -154,6 +154,10 @@ pub struct App {
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
+    /// What is picked on the sheet shown: a placed view or a dimension.
+    pub sheet_pick: Option<paper::SheetPick>,
+    /// The cut height being typed for a floor plan: its path and the text.
+    pub cut_edit: Option<(String, String)>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -293,6 +297,17 @@ pub enum Message {
     MoveOnSheet(Arc<str>, usize, [f64; 2]),
     /// Switch the dimension tool of the sheets on or off.
     DimensionTool(bool),
+    /// Pick a placed view or a dimension on the sheet shown (`None`: nothing).
+    PickOnSheet(Option<paper::SheetPick>),
+    /// Remove what is picked on the sheet shown.
+    RemovePicked,
+    /// Set the scale of a placed view: sheet, index, 1 : scale.
+    SetScale(Arc<str>, usize, f64),
+    /// Give a sheet another paper (width, height in metres).
+    SetPaper(Arc<str>, [f64; 2]),
+    /// The cut height being typed, and its use.
+    CutText(String),
+    ApplyCut,
     /// Add a dimension to a floor plan: plan, from, to (model x, y).
     AddDimension(Arc<str>, [f64; 2], [f64; 2]),
     /// Show a document tab ([`App::doc_tabs`]).
@@ -461,6 +476,8 @@ impl Default for App {
             active_doc_sheet: None,
             cuts: Default::default(),
             dimension_tool: false,
+            sheet_pick: None,
+            cut_edit: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -929,6 +946,8 @@ impl App {
         self.open_doc_sheets.clear();
         self.active_doc_sheet = None;
         self.cuts.clear();
+        self.sheet_pick = None;
+        self.cut_edit = None;
         self.open_schedules.clear();
         self.active_schedule = None;
         self.schedules.clear();
@@ -1319,7 +1338,24 @@ impl App {
             Message::MoveOnSheet(sheet, i, at) => {
                 self.document.move_placed(&sheet, i, at);
             }
-            Message::DimensionTool(on) => self.dimension_tool = on,
+            Message::DimensionTool(on) => {
+                self.dimension_tool = on;
+                self.pick_on_sheet(None);
+            }
+            Message::PickOnSheet(pick) => self.pick_on_sheet(pick),
+            Message::RemovePicked => self.remove_picked(),
+            Message::SetScale(sheet, i, scale) => {
+                self.document.set_scale(&sheet, i, scale);
+            }
+            Message::SetPaper(sheet, paper) => {
+                self.document.set_paper(&sheet, paper);
+            }
+            Message::CutText(text) => {
+                if let Some((_, t)) = &mut self.cut_edit {
+                    *t = text;
+                }
+            }
+            Message::ApplyCut => self.apply_cut(),
             Message::AddDimension(plan, from, to) => {
                 self.document.add_dimension(&plan, from, to);
             }

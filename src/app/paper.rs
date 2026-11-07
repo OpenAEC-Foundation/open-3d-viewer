@@ -5,7 +5,7 @@
 //! dimension to that plan, shown wherever it is placed.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::{Dimension, Sheet};
+use crate::document::{parse_elevation, Dimension, Sheet, PAPERS, SCALES};
 use crate::drawing::{cut_at, Cut};
 use crate::theme::Palette;
 use iced::alignment;
@@ -25,6 +25,17 @@ const FRAME: f64 = 0.005;
 const DIMENSION_OFFSET: f64 = 0.006;
 /// How close the pointer must come to the end of a line to snap to it (logical pixels).
 const SNAP: f32 = 8.0;
+/// How close a click must come to a dimension line to pick it (logical pixels).
+const PICK: f32 = 5.0;
+
+/// What can be picked on a sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SheetPick {
+    /// A placed view (its index on the sheet).
+    View(usize),
+    /// A dimension: the placed view it shows on, its index in the floor plan.
+    Dimension(usize, usize),
+}
 
 impl App {
     /// Makes a sheet and shows it in its tab.
@@ -43,8 +54,72 @@ impl App {
         }
         self.active_sheet = None;
         self.active_schedule = None;
+        if self.active_doc_sheet.as_deref() != Some(path) {
+            self.pick_on_sheet(None);
+        }
         self.active_doc_sheet = Some(path.to_string());
         self.cut_placed_plans(path);
+    }
+
+    /// The floor plan of placed view `index` on the sheet shown.
+    fn placed_plan(&self, index: usize) -> Option<String> {
+        let sheet = self.document.sheet(self.active_doc_sheet.as_deref()?)?;
+        Some(sheet.views.get(index)?.plan.clone())
+    }
+
+    /// Picks a placed view or a dimension on the sheet shown; a view's cut height can then be
+    /// typed.
+    pub(super) fn pick_on_sheet(&mut self, pick: Option<SheetPick>) {
+        self.sheet_pick = pick;
+        self.cut_edit = match pick {
+            Some(SheetPick::View(i)) => self.placed_plan(i).and_then(|plan| {
+                let cut = self.document.plan(&plan)?.cut;
+                Some((plan, format!("{cut:.3}")))
+            }),
+            _ => None,
+        };
+    }
+
+    /// Removes what is picked: a view from the sheet, or a dimension from its floor plan.
+    pub(super) fn remove_picked(&mut self) {
+        let Some(sheet) = self.active_doc_sheet.clone() else { return };
+        match self.sheet_pick {
+            Some(SheetPick::View(i)) => {
+                self.document.remove_placed(&sheet, i);
+            }
+            Some(SheetPick::Dimension(i, k)) => {
+                if let Some(plan) = self.placed_plan(i) {
+                    self.document.remove_dimension(&plan, k);
+                }
+            }
+            None => return,
+        }
+        self.pick_on_sheet(None);
+    }
+
+    /// Uses the typed cut height for its floor plan: its drawing is cut again, and its tab's
+    /// section box follows.
+    pub(super) fn apply_cut(&mut self) {
+        let Some((plan, text)) = self.cut_edit.clone() else { return };
+        let Some(cut) = parse_elevation(&text) else { return };
+        if !self.document.set_cut(&plan, cut) {
+            return;
+        }
+        self.cuts.remove(&plan);
+        if let Some(sheet) = self.active_doc_sheet.clone() {
+            self.cut_placed_plans(&sheet);
+        }
+        let Some(high) = self.document.plan(&plan).and_then(|v| self.document.plan_range(v)).map(|r| r.1 as f32) else { return };
+        if self.active_plan.as_deref() == Some(plan.as_str()) {
+            if let Some(s) = &mut self.section {
+                s.max.z = high;
+            }
+        } else if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == plan) {
+            if let Some(s) = &mut open.slot.section {
+                s.max.z = high;
+            }
+        }
+        self.cut_edit = Some((plan, format!("{cut:.3}")));
     }
 
     /// Closes a sheet's tab; when it showed, the sheet before it (or the view under it) shows.
@@ -76,35 +151,10 @@ impl App {
         }
     }
 
-    /// The workspace of a sheet's tab: the bar to place floor plans and to dimension, then the
-    /// sheet.
-    pub(super) fn doc_sheet_workspace(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
+    /// The sheet shown, as its canvas draws it.
+    fn paper_drawing(&self, p: Palette, l: Language) -> Option<PaperDrawing> {
         let path = self.active_doc_sheet.as_ref()?;
         let sheet = self.document.sheet(path)?;
-        let key: Arc<str> = Arc::from(path.as_str());
-        let tool = self.dimension_tool;
-        let measure = button(text(l.text("Maatvoering", "Dimension")).size(12))
-            .padding([3, 10])
-            .style(move |_, s| p.ribbon_button(tool, s))
-            .on_press(Message::DimensionTool(!tool));
-        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(text("|").size(12).color(p.text_muted));
-        if tool {
-            let hint = l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.");
-            bar = bar.push(text(hint).size(12).color(p.text_secondary));
-        } else {
-            bar = bar.push(text(l.text("Plaats op dit blad:", "Place on this sheet:")).size(12).color(p.text_secondary));
-            if self.document.plans().is_empty() {
-                bar = bar.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
-            }
-            for plan in self.document.plans() {
-                bar = bar.push(
-                    button(text(plan.name.clone()).size(12))
-                        .padding([3, 10])
-                        .style(move |_, s| p.ribbon_button(false, s))
-                        .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(plan.path.as_str()))),
-                );
-            }
-        }
         let placed = sheet
             .views
             .iter()
@@ -118,7 +168,72 @@ impl App {
                 }
             })
             .collect();
-        let drawing = PaperDrawing { sheet: sheet.clone(), placed, palette: p, key, tool, empty: l.text("niets gesneden", "nothing cut").to_string() };
+        Some(PaperDrawing {
+            sheet: sheet.clone(),
+            placed,
+            palette: p,
+            key: Arc::from(path.as_str()),
+            tool: self.dimension_tool,
+            pick: self.sheet_pick,
+            empty: l.text("niets gesneden", "nothing cut").to_string(),
+        })
+    }
+
+    /// The workspace of a sheet's tab: the bar to place floor plans and to dimension, then the
+    /// sheet.
+    pub(super) fn doc_sheet_workspace(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
+        let path = self.active_doc_sheet.as_ref()?;
+        let sheet = self.document.sheet(path)?;
+        let key: Arc<str> = Arc::from(path.as_str());
+        let tool = self.dimension_tool;
+        let measure = button(text(l.text("Maatvoering", "Dimension")).size(12))
+            .padding([3, 10])
+            .style(move |_, s| p.ribbon_button(tool, s))
+            .on_press(Message::DimensionTool(!tool));
+        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(text("|").size(12).color(p.text_muted));
+        let small = |label: String, active: bool, message: Message| {
+            button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(message)
+        };
+        let picked_view = match self.sheet_pick {
+            Some(SheetPick::View(i)) => sheet.views.get(i).map(|v| (i, v)),
+            _ => None,
+        };
+        if tool {
+            let hint = l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.");
+            bar = bar.push(text(hint).size(12).color(p.text_secondary));
+        } else if let Some((i, view)) = picked_view {
+            bar = bar.push(text(l.text("Schaal", "Scale")).size(12).color(p.text_secondary));
+            for scale in SCALES {
+                bar = bar.push(small(format!("1:{scale}"), view.scale == scale, Message::SetScale(key.clone(), i, scale)));
+            }
+            if let Some((_, typed)) = &self.cut_edit {
+                bar = bar.push(text(l.text("Snijhoogte (m)", "Cut height (m)")).size(12).color(p.text_secondary)).push(
+                    iced::widget::text_input("1.200", typed).on_input(Message::CutText).on_submit(Message::ApplyCut).size(12).padding([3, 6]).width(64),
+                );
+            }
+            bar = bar.push(small(l.text("Van blad halen", "Take off sheet").to_string(), false, Message::RemovePicked));
+        } else if let Some(SheetPick::Dimension(..)) = self.sheet_pick {
+            bar = bar.push(small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked));
+        } else {
+            bar = bar.push(text(l.text("Papier", "Paper")).size(12).color(p.text_secondary));
+            for (name, size) in PAPERS {
+                bar = bar.push(small(name.to_string(), sheet.paper == size, Message::SetPaper(key.clone(), size)));
+            }
+            bar = bar.push(text("|").size(12).color(p.text_muted));
+            bar = bar.push(text(l.text("Plaats op dit blad:", "Place on this sheet:")).size(12).color(p.text_secondary));
+            if self.document.plans().is_empty() {
+                bar = bar.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
+            }
+            for plan in self.document.plans() {
+                bar = bar.push(
+                    button(text(plan.name.clone()).size(12))
+                        .padding([3, 10])
+                        .style(move |_, s| p.ribbon_button(false, s))
+                        .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(plan.path.as_str()))),
+                );
+            }
+        }
+        let drawing = self.paper_drawing(p, l)?;
         Some(
             column![
                 container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()),
@@ -149,6 +264,8 @@ struct PaperDrawing {
     key: Arc<str>,
     /// The dimension tool is on: clicks measure instead of dragging.
     tool: bool,
+    /// What is picked.
+    pick: Option<SheetPick>,
     empty: String,
 }
 
@@ -219,6 +336,32 @@ impl PaperDrawing {
             .map_or_else(|| self.to_model(i, at), |(q, _)| q)
     }
 
+    /// The paper ends of the dimension line of dimension `k` on placed view `i`.
+    fn dimension_line(&self, i: usize, k: usize) -> Option<([f64; 2], [f64; 2])> {
+        let d = self.placed.get(i)?.dimensions.get(k)?;
+        let (from, to) = (self.to_paper(i, d.from), self.to_paper(i, d.to));
+        let run = (to[0] - from[0]).hypot(to[1] - from[1]);
+        (run > 0.0).then(|| {
+            let n = [-(to[1] - from[1]) / run * DIMENSION_OFFSET, (to[0] - from[0]) / run * DIMENSION_OFFSET];
+            ([from[0] + n[0], from[1] + n[1]], [to[0] + n[0], to[1] + n[1]])
+        })
+    }
+
+    /// The dimension whose line passes within [`PICK`] pixels of `pointer`.
+    fn dimension_at(&self, fit: &Fit, pointer: Point) -> Option<(usize, usize)> {
+        let near = |a: Point, b: Point| {
+            let (ab, ap) = (b - a, pointer - a);
+            let t = ((ap.x * ab.x + ap.y * ab.y) / (ab.x * ab.x + ab.y * ab.y).max(1e-6)).clamp(0.0, 1.0);
+            (a + ab * t).distance(pointer)
+        };
+        (0..self.placed.len()).rev().find_map(|i| {
+            (0..self.placed[i].dimensions.len()).find_map(|k| {
+                let (a, b) = self.dimension_line(i, k)?;
+                (near(fit.point(a), fit.point(b)) <= PICK).then_some((i, k))
+            })
+        })
+    }
+
     /// The placed view under a paper point, the topmost (last placed) first.
     fn view_at(&self, at: [f64; 2]) -> Option<usize> {
         (0..self.sheet.views.len()).rev().find(|&i| {
@@ -284,10 +427,21 @@ impl canvas::Program<Message> for PaperDrawing {
                         }
                     };
                 }
-                let i = self.view_at(at)?;
+                // a dimension, else a view (which a drag then moves), else nothing
+                if let Some((i, k)) = self.dimension_at(&fit, fit.point(at)) {
+                    return Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::Dimension(i, k)))).and_capture());
+                }
+                let Some(i) = self.view_at(at) else {
+                    return self.pick.is_some().then(|| canvas::Action::publish(Message::PickOnSheet(None)));
+                };
                 let middle = self.sheet.views[i].at;
                 state.drag = Some((i, [middle[0] - at[0], middle[1] - at[1]]));
-                Some(canvas::Action::request_redraw().and_capture())
+                Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::View(i)))).and_capture())
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Delete | keyboard::key::Named::Backspace), .. })
+                if self.pick.is_some() && !self.tool =>
+            {
+                Some(canvas::Action::publish(Message::RemovePicked).and_capture())
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => state.drag.take().map(|_| canvas::Action::request_redraw()),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
@@ -341,7 +495,8 @@ impl canvas::Program<Message> for PaperDrawing {
         for (i, view) in self.sheet.views.iter().enumerate() {
             let (lo, hi, _) = self.frame(i);
             let (at, size) = rect(lo, hi);
-            let hot = state.hover == Some(i) || state.drag.is_some_and(|(d, _)| d == i);
+            let picked = self.pick == Some(SheetPick::View(i));
+            let hot = state.hover == Some(i) || state.drag.is_some_and(|(d, _)| d == i) || picked;
             if hot && !self.tool {
                 frame.fill_rectangle(at, size, Color { a: 0.06, ..p.accent });
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
@@ -362,8 +517,9 @@ impl canvas::Program<Message> for PaperDrawing {
                     label(&mut frame, self.empty.clone(), Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0), 11.0, p.text_muted, alignment::Horizontal::Center);
                 }
             }
-            for d in &placed.dimensions {
-                draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), ink);
+            for (k, d) in placed.dimensions.iter().enumerate() {
+                let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
+                draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color);
             }
             let under = Point::new(at.x, at.y + size.height + 16.0);
             label(&mut frame, placed.name, under, 12.0, if hot && !self.tool { p.accent } else { ink }, alignment::Horizontal::Left);
@@ -499,9 +655,64 @@ mod tests {
         let _ = app.update(Message::NewSheet("Sheet"));
         let sheet = Arc::<str>::from(app.document.sheets()[0].path.as_str());
         let _ = app.update(Message::PlaceOnSheet(sheet.clone(), plan.clone()));
-        let placed = vec![Placed { name: String::new(), plan: plan.clone(), cut: app.cuts.get(&*plan).cloned(), dimensions: Vec::new() }];
-        let drawing = PaperDrawing { sheet: app.document.sheet(&sheet).unwrap().clone(), placed, palette: app.theme.palette(), key: sheet.clone(), tool, empty: String::new() };
+        app.dimension_tool = tool;
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
         (app, sheet, plan, drawing)
+    }
+
+    #[test]
+    fn a_picked_view_is_scaled_cut_again_and_taken_off() {
+        let (mut app, sheet, plan, drawing) = sheet_with_plan(false);
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        let mut state = PaperState::default();
+        let message = press_at(&drawing, &mut state, fit.point([0.21, 0.1485])).expect("a pick");
+        assert!(matches!(message, Message::PickOnSheet(Some(SheetPick::View(0)))), "{message:?}");
+        let _ = app.update(message);
+        assert_eq!(app.cut_edit, Some((plan.to_string(), "1.200".to_string())));
+        let _ = app.update(Message::SetScale(sheet.clone(), 0, 50.0));
+        assert_eq!(app.document.sheet(&sheet).unwrap().views[0].scale, 50.0);
+        // the cut height: the plan is cut again, and the floor plan's section box follows
+        let _ = app.update(Message::CutText("2,5".into()));
+        let _ = app.update(Message::ApplyCut);
+        assert_eq!(app.document.plan(&plan).unwrap().cut, 2.5);
+        assert!(app.cuts.contains_key(&*plan));
+        assert_eq!(app.active_plan.as_deref(), Some(&*plan));
+        assert!((app.section.unwrap().max.z - 2.5).abs() < 1e-6);
+        // the paper
+        let _ = app.update(Message::PickOnSheet(None));
+        let _ = app.update(Message::SetPaper(sheet.clone(), PAPERS[3].1));
+        assert_eq!(app.document.sheet(&sheet).unwrap().paper, [0.841, 0.594]);
+        // taken off with Delete
+        let _ = app.update(Message::PickOnSheet(Some(SheetPick::View(0))));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let delete = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::Delete),
+            modified_key: keyboard::Key::Named(keyboard::key::Named::Delete),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat: false,
+        });
+        let action = canvas::Program::update(&drawing, &mut PaperState::default(), &delete, bounds(), mouse::Cursor::Unavailable).expect("delete");
+        let _ = app.update(action.into_inner().0.expect("a message"));
+        assert!(app.document.sheet(&sheet).unwrap().views.is_empty());
+        assert_eq!(app.sheet_pick, None);
+    }
+
+    #[test]
+    fn a_click_on_a_dimension_picks_it_for_removal() {
+        let (mut app, _, plan, _) = sheet_with_plan(false);
+        let _ = app.update(Message::AddDimension(plan.clone(), [0.0, 0.0], [8.0, 0.0]));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        let (a, b) = drawing.dimension_line(0, 0).expect("a dimension line");
+        let on_line = fit.point([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]) + Vector::new(0.0, 2.0);
+        let message = press_at(&drawing, &mut PaperState::default(), on_line).expect("a pick");
+        assert!(matches!(message, Message::PickOnSheet(Some(SheetPick::Dimension(0, 0)))), "{message:?}");
+        let _ = app.update(message);
+        let _ = app.update(Message::RemovePicked);
+        assert!(app.document.plan(&plan).unwrap().dimensions.is_empty());
     }
 
     /// The canvas at 2 pixels per paper millimetre.
@@ -550,10 +761,11 @@ mod tests {
         assert_eq!(middle, [4.0, 2.5]);
         assert_eq!(drawing.view_at([0.21, 0.1485]), Some(0));
         assert_eq!(drawing.view_at([0.03, 0.03]), None);
-        // press on the view, move 20 mm right: it follows the pointer
+        // press on the view (which picks it), move 20 mm right: it follows the pointer
         let fit = Fit::of(drawing.sheet.paper, bounds().size());
         let mut state = PaperState::default();
-        assert!(press_at(&drawing, &mut state, fit.point([0.20, 0.15])).is_none());
+        let picked = press_at(&drawing, &mut state, fit.point([0.20, 0.15]));
+        assert!(matches!(picked, Some(Message::PickOnSheet(Some(SheetPick::View(0))))), "{picked:?}");
         let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::ORIGIN });
         let action = canvas::Program::update(&drawing, &mut state, &moved, bounds(), mouse::Cursor::Available(fit.point([0.22, 0.15]))).expect("a move");
         let Some(Message::MoveOnSheet(_, 0, at)) = action.into_inner().0 else { panic!("no move") };

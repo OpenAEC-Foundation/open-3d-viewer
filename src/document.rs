@@ -44,6 +44,9 @@ pub struct PlanView {
     pub depth: f64,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
+    /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
+    /// all of it.
+    pub crop: Option<([f64; 2], [f64; 2])>,
 }
 
 /// A dimension on a floor plan: the distance between two points of the plan (x, y in the
@@ -211,7 +214,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), crop: None });
         Some(path)
     }
 
@@ -328,6 +331,19 @@ impl Document {
             return false;
         }
         plan.cut = cut;
+        true
+    }
+
+    /// Crops a floor plan to a rectangle in plan (lower left, upper right; at least 10 cm each
+    /// way), or shows all of it again (`None`).
+    pub fn set_crop(&mut self, plan: &str, crop: Option<([f64; 2], [f64; 2])>) -> bool {
+        if let Some((lo, hi)) = crop {
+            if !(lo.iter().chain(&hi).all(|v| v.is_finite()) && hi[0] - lo[0] >= 0.1 && hi[1] - lo[1] >= 0.1) {
+                return false;
+            }
+        }
+        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
+        plan.crop = crop;
         true
     }
 
@@ -610,6 +626,19 @@ mod tests {
         assert_eq!(document.plan_range(document.plan(&plan).unwrap()), Some((-PLAN_DEPTH, 2.0)));
         assert!(!document.set_cut(&plan, -0.5));
         assert!(!document.set_cut(&plan, f64::NAN));
+    }
+
+    #[test]
+    fn a_floor_plan_is_cropped_to_a_rectangle() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        assert!(document.set_crop(&plan, Some(([0.0, 0.0], [4.0, 3.0]))));
+        assert_eq!(document.plan(&plan).unwrap().crop, Some(([0.0, 0.0], [4.0, 3.0])));
+        assert!(!document.set_crop(&plan, Some(([0.0, 0.0], [0.05, 3.0]))), "under 10 cm");
+        assert!(!document.set_crop(&plan, Some(([2.0, 0.0], [1.0, 3.0]))), "inside out");
+        assert!(document.set_crop(&plan, None));
+        assert_eq!(document.plan(&plan).unwrap().crop, None);
     }
 
     #[test]

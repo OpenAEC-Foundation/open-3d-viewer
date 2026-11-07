@@ -304,6 +304,8 @@ pub enum Message {
     MoveOnSheet(Arc<str>, usize, [f64; 2]),
     /// Switch the dimension tool of the sheets on or off.
     DimensionTool(bool),
+    /// Crop a floor plan (its path) to a rectangle in plan, or show all of it (`None`).
+    CropPlan(Arc<str>, Option<([f64; 2], [f64; 2])>),
     /// Pick a placed view or a dimension on the sheet shown (`None`: nothing).
     PickOnSheet(Option<paper::SheetPick>),
     /// Remove what is picked on the sheet shown.
@@ -1358,6 +1360,11 @@ impl App {
                 self.pick_on_sheet(None);
             }
             Message::PickOnSheet(pick) => self.pick_on_sheet(pick),
+            Message::CropPlan(plan, crop) => {
+                if self.document.set_crop(&plan, crop) {
+                    self.fit_plan_section(&plan);
+                }
+            }
             Message::RemovePicked => self.remove_picked(),
             Message::SetScale(sheet, i, scale) => {
                 self.document.set_scale(&sheet, i, scale);

@@ -79,6 +79,29 @@ impl App {
         self.open_plans.push(OpenPlan { path: path.to_string(), slot });
         self.load_view(Some(path.to_string()));
         self.show_view(&view);
+        self.fit_plan_section(path);
+    }
+
+    /// The section box of a floor plan's open tab: its range in height, its crop in plan (all
+    /// of the model without one).
+    pub(super) fn fit_plan_section(&mut self, path: &str) {
+        let Some(plan) = self.document.plan(path) else { return };
+        let Some((low, high)) = self.document.plan_range(plan) else { return };
+        let crop = plan.crop;
+        let Some(world) = self.world_bounds() else { return };
+        let mut b = SectionBox::around(&world);
+        b.min.z = low as f32;
+        b.max.z = (high as f32).max(low as f32 + 0.01);
+        if let Some((lo, hi)) = crop {
+            (b.min.x, b.min.y, b.max.x, b.max.y) = (lo[0] as f32, lo[1] as f32, hi[0] as f32, hi[1] as f32);
+        }
+        if !self.separate_views && self.active_plan.as_deref() == Some(path) {
+            self.section = Some(b);
+            self.section_on = true;
+        } else if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == path) {
+            open.slot.section = Some(b);
+            open.slot.section_on = true;
+        }
     }
 
     /// A floor plan in the views window: its tab opens the first time, set up with its own camera
@@ -106,6 +129,7 @@ impl App {
                 app.show_view(&view);
                 Task::none()
             });
+            self.fit_plan_section(path);
         }
         self.active_plan = Some(path.to_string());
     }

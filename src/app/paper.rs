@@ -111,16 +111,7 @@ impl App {
         if let Some(sheet) = self.active_doc_sheet.clone() {
             self.cut_placed_plans(&sheet);
         }
-        let Some(high) = self.document.plan(&plan).and_then(|v| self.document.plan_range(v)).map(|r| r.1 as f32) else { return };
-        if self.active_plan.as_deref() == Some(plan.as_str()) {
-            if let Some(s) = &mut self.section {
-                s.max.z = high;
-            }
-        } else if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == plan) {
-            if let Some(s) = &mut open.slot.section {
-                s.max.z = high;
-            }
-        }
+        self.fit_plan_section(&plan);
         self.cut_edit = Some((plan, format!("{cut:.3}")));
     }
 
@@ -167,6 +158,7 @@ impl App {
                     plan: Arc::from(v.plan.as_str()),
                     cut: self.cuts.get(&v.plan).cloned(),
                     dimensions: plan.map_or(Vec::new(), |p| p.dimensions.clone()),
+                    crop: plan.and_then(|p| p.crop),
                 }
             })
             .collect();
@@ -213,6 +205,12 @@ impl App {
                     iced::widget::text_input("1.200", typed).on_input(Message::CutText).on_submit(Message::ApplyCut).size(12).padding([3, 6]).width(64),
                 );
             }
+            let cropped = self.document.plan(&view.plan).filter(|p| p.crop.is_some());
+            if cropped.is_some() {
+                bar = bar.push(small(l.text("Bijsnijden opheffen", "Show all").to_string(), false, Message::CropPlan(Arc::from(view.plan.as_str()), None)));
+            } else {
+                bar = bar.push(text(l.text("sleep een rand om bij te snijden", "drag a side to crop")).size(12).color(p.text_muted));
+            }
             bar = bar.push(small(l.text("Van blad halen", "Take off sheet").to_string(), false, Message::RemovePicked));
         } else if let Some(SheetPick::Dimension(..)) = self.sheet_pick {
             bar = bar.push(small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked));
@@ -254,9 +252,38 @@ struct Placed {
     plan: Arc<str>,
     cut: Option<Arc<Cut>>,
     dimensions: Vec<Dimension>,
+    crop: Option<([f64; 2], [f64; 2])>,
 }
 
-/// A sheet of the document on a canvas.
+/// A side of a crop: left, right, bottom, top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+    Bottom,
+    Top,
+}
+
+/// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky).
+fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-d[0], a[0] - lo[0]), (d[0], hi[0] - a[0]), (-d[1], a[1] - lo[1]), (d[1], hi[1] - a[1])] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+        }
+    }
+    (t0 <= t1).then(|| ([a[0] + t0 * d[0], a[1] + t0 * d[1]], [a[0] + t1 * d[0], a[1] + t1 * d[1]]))
+}
 struct PaperDrawing {
     sheet: Sheet,
     /// Per placed view, in the order of the sheet's views.
@@ -301,29 +328,69 @@ impl PaperDrawing {
     /// the model.
     fn frame(&self, i: usize) -> ([f64; 2], [f64; 2], [f64; 2]) {
         let view = &self.sheet.views[i];
+        let middle = self.middle(i);
+        // a crop is the frame itself; the whole cut gets a margin
+        if let Some((lo, hi)) = self.placed.get(i).and_then(|p| p.crop) {
+            return (self.to_paper(i, lo), self.to_paper(i, hi), middle);
+        }
         let extent = self.placed.get(i).and_then(|p| p.cut.as_ref()?.extent);
-        let (half, middle) = match extent {
-            Some((lo, hi)) => {
-                let half = [(hi[0] - lo[0]) as f64 / 2.0 / view.scale + FRAME, (hi[1] - lo[1]) as f64 / 2.0 / view.scale + FRAME];
-                (half, [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0])
-            }
-            None => ([0.02, 0.015], [0.0, 0.0]),
+        let half = match extent {
+            Some((lo, hi)) => [(hi[0] - lo[0]) as f64 / 2.0 / view.scale + FRAME, (hi[1] - lo[1]) as f64 / 2.0 / view.scale + FRAME],
+            None => [0.02, 0.015],
         };
         ([view.at[0] - half[0], view.at[1] - half[1]], [view.at[0] + half[0], view.at[1] + half[1]], middle)
+    }
+
+    /// The model point that placed view `i`'s position on the paper stands for: the middle of
+    /// its whole cut, so cropping never moves what is drawn.
+    fn middle(&self, i: usize) -> [f64; 2] {
+        match self.placed.get(i).and_then(|p| p.cut.as_ref()?.extent) {
+            Some((lo, hi)) => [(lo[0] + hi[0]) as f64 / 2.0, (lo[1] + hi[1]) as f64 / 2.0],
+            None => [0.0, 0.0],
+        }
     }
 
     /// A model point (x, y) of placed view `i` on the paper.
     fn to_paper(&self, i: usize, q: [f64; 2]) -> [f64; 2] {
         let view = &self.sheet.views[i];
-        let (_, _, middle) = self.frame(i);
+        let middle = self.middle(i);
         [view.at[0] + (q[0] - middle[0]) / view.scale, view.at[1] + (q[1] - middle[1]) / view.scale]
     }
 
     /// A paper point in the model of placed view `i`.
     fn to_model(&self, i: usize, at: [f64; 2]) -> [f64; 2] {
         let view = &self.sheet.views[i];
-        let (_, _, middle) = self.frame(i);
+        let middle = self.middle(i);
         [middle[0] + (at[0] - view.at[0]) * view.scale, middle[1] + (at[1] - view.at[1]) * view.scale]
+    }
+
+    /// The crop handles of placed view `i`: the middles of its frame's sides (paper).
+    fn handles(&self, i: usize) -> [(Side, [f64; 2]); 4] {
+        let (lo, hi, _) = self.frame(i);
+        let (mx, my) = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+        [(Side::Left, [lo[0], my]), (Side::Right, [hi[0], my]), (Side::Bottom, [mx, lo[1]]), (Side::Top, [mx, hi[1]])]
+    }
+
+    /// The crop handle of the picked view under `pointer` (within [`SNAP`] pixels).
+    fn handle_at(&self, fit: &Fit, pointer: Point) -> Option<(usize, Side)> {
+        let Some(SheetPick::View(i)) = self.pick else { return None };
+        (i < self.sheet.views.len()).then_some(())?;
+        self.handles(i).into_iter().find(|(_, at)| fit.point(*at).distance(pointer) <= SNAP).map(|(side, _)| (i, side))
+    }
+
+    /// The crop of placed view `i` with `side` moved to the paper point `at` (model, at least
+    /// 10 cm each way).
+    fn crop_to(&self, i: usize, side: Side, at: [f64; 2]) -> ([f64; 2], [f64; 2]) {
+        let (lo, hi, _) = self.frame(i);
+        let (mut lo, mut hi) = (self.to_model(i, lo), self.to_model(i, hi));
+        let q = self.to_model(i, at);
+        match side {
+            Side::Left => lo[0] = q[0].min(hi[0] - 0.1),
+            Side::Right => hi[0] = q[0].max(lo[0] + 0.1),
+            Side::Bottom => lo[1] = q[1].min(hi[1] - 0.1),
+            Side::Top => hi[1] = q[1].max(lo[1] + 0.1),
+        }
+        (lo, hi)
     }
 
     /// The model point a click at `at` (paper) on view `i` means: the nearest end of a cut line
@@ -382,6 +449,8 @@ struct PaperState {
     drag: Option<(usize, [f64; 2])>,
     first: Option<(usize, [f64; 2])>,
     aim: Option<(usize, [f64; 2])>,
+    /// A crop handle being dragged: the view and the side.
+    crop: Option<(usize, Side)>,
 }
 
 impl canvas::Program<Message> for PaperDrawing {
@@ -396,6 +465,10 @@ impl canvas::Program<Message> for PaperDrawing {
         match event {
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let at = cursor.position_in(bounds).map(|p| fit.paper(p));
+                if let (Some((i, side)), Some(at)) = (state.crop, at) {
+                    let plan = self.placed.get(i)?.plan.clone();
+                    return Some(canvas::Action::publish(Message::CropPlan(plan, Some(self.crop_to(i, side, at)))).and_capture());
+                }
                 if let (Some((i, grip)), Some(at)) = (state.drag, at) {
                     let to = [at[0] + grip[0], at[1] + grip[1]];
                     return Some(canvas::Action::publish(Message::MoveOnSheet(self.key.clone(), i, to)).and_capture());
@@ -429,7 +502,12 @@ impl canvas::Program<Message> for PaperDrawing {
                         }
                     };
                 }
-                // a dimension, else a view (which a drag then moves), else nothing
+                // a crop handle of the picked view, a dimension, else a view (which a drag then
+                // moves), else nothing
+                if let Some(handle) = self.handle_at(&fit, fit.point(at)) {
+                    state.crop = Some(handle);
+                    return Some(canvas::Action::request_redraw().and_capture());
+                }
                 if let Some((i, k)) = self.dimension_at(&fit, fit.point(at)) {
                     return Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::Dimension(i, k)))).and_capture());
                 }
@@ -445,7 +523,10 @@ impl canvas::Program<Message> for PaperDrawing {
             {
                 Some(canvas::Action::publish(Message::RemovePicked).and_capture())
             }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => state.drag.take().map(|_| canvas::Action::request_redraw()),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                let crop = state.crop.take();
+                state.drag.take().or(crop.map(|(i, _)| (i, [0.0; 2]))).map(|_| canvas::Action::request_redraw())
+            }
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
                 if state.first.take().is_some() {
                     return Some(canvas::Action::request_redraw().and_capture());
@@ -507,20 +588,32 @@ impl canvas::Program<Message> for PaperDrawing {
             match placed.cut.filter(|c| !c.segments.is_empty() || !c.below.is_empty()) {
                 Some(cut) => {
                     // what is seen below the cut, thin and grey, then the cut itself
+                    // within the crop, when there is one
+                    let crop = placed.crop;
+                    let piece = |a: &[f32; 2], z: &[f32; 2]| {
+                        let (a, z) = ([a[0] as f64, a[1] as f64], [z[0] as f64, z[1] as f64]);
+                        match crop {
+                            Some((lo, hi)) => clip(a, z, lo, hi),
+                            None => Some((a, z)),
+                        }
+                    };
                     let below = Path::new(|b| {
-                        for [a, z] in &cut.below {
-                            b.move_to(fit.point(self.to_paper(i, [a[0] as f64, a[1] as f64])));
-                            b.line_to(fit.point(self.to_paper(i, [z[0] as f64, z[1] as f64])));
+                        for (a, z) in cut.below.iter().filter_map(|[a, z]| piece(a, z)) {
+                            b.move_to(fit.point(self.to_paper(i, a)));
+                            b.line_to(fit.point(self.to_paper(i, z)));
                         }
                     });
                     frame.stroke(&below, Stroke::default().with_color(Color { a: 0.55, ..ink }).with_width(0.6));
                     let lines = Path::new(|b| {
-                        for [a, z] in &cut.segments {
-                            b.move_to(fit.point(self.to_paper(i, [a[0] as f64, a[1] as f64])));
-                            b.line_to(fit.point(self.to_paper(i, [z[0] as f64, z[1] as f64])));
+                        for (a, z) in cut.segments.iter().filter_map(|[a, z]| piece(a, z)) {
+                            b.move_to(fit.point(self.to_paper(i, a)));
+                            b.line_to(fit.point(self.to_paper(i, z)));
                         }
                     });
                     frame.stroke(&lines, Stroke::default().with_color(ink).with_width(1.2));
+                    if crop.is_some() {
+                        frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(0.8));
+                    }
                 }
                 None => {
                     frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
@@ -534,6 +627,17 @@ impl canvas::Program<Message> for PaperDrawing {
             let under = Point::new(at.x, at.y + size.height + 16.0);
             label(&mut frame, placed.name, under, 12.0, if hot && !self.tool { p.accent } else { ink }, alignment::Horizontal::Left);
             label(&mut frame, format!("1:{}", view.scale.round()), Point::new(at.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left);
+        }
+
+        // the crop handles of the picked view
+        if let Some(SheetPick::View(i)) = self.pick.filter(|_| !self.tool) {
+            if i < self.sheet.views.len() {
+                for (_, at) in self.handles(i) {
+                    let c = fit.point(at);
+                    frame.fill_rectangle(Point::new(c.x - 4.0, c.y - 4.0), Size::new(8.0, 8.0), paper);
+                    frame.stroke(&Path::rectangle(Point::new(c.x - 4.0, c.y - 4.0), Size::new(8.0, 8.0)), Stroke::default().with_color(p.accent).with_width(1.5));
+                }
+            }
         }
 
         // the dimension being made: from the first point to where the pointer snaps
@@ -553,7 +657,14 @@ impl canvas::Program<Message> for PaperDrawing {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(&self, state: &PaperState, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
+    fn mouse_interaction(&self, state: &PaperState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
+        let fit = Fit::of(self.sheet.paper, bounds.size());
+        let handle = state.crop.map(|(_, side)| side).or_else(|| cursor.position_in(bounds).and_then(|p| self.handle_at(&fit, p)).map(|(_, side)| side));
+        match handle.filter(|_| !self.tool) {
+            Some(Side::Left | Side::Right) => return mouse::Interaction::ResizingHorizontally,
+            Some(Side::Bottom | Side::Top) => return mouse::Interaction::ResizingVertically,
+            None => {}
+        }
         match (self.tool, state.drag, state.hover) {
             (true, _, _) => mouse::Interaction::Crosshair,
             (false, Some(_), _) => mouse::Interaction::Grabbing,
@@ -708,6 +819,41 @@ mod tests {
         let _ = app.update(action.into_inner().0.expect("a message"));
         assert!(app.document.sheet(&sheet).unwrap().views.is_empty());
         assert_eq!(app.sheet_pick, None);
+    }
+
+    #[test]
+    fn dragging_a_side_of_a_picked_view_crops_its_floor_plan() {
+        let (mut app, _, plan, _) = sheet_with_plan(false);
+        let _ = app.update(Message::PickOnSheet(Some(SheetPick::View(0))));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        // the right handle, dragged to x = 5 m of the 8 m room
+        let (side, at) = drawing.handles(0)[1];
+        assert_eq!(side, Side::Right);
+        let mut state = PaperState::default();
+        assert!(press_at(&drawing, &mut state, fit.point(at)).is_none());
+        assert_eq!(state.crop, Some((0, Side::Right)));
+        let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::ORIGIN });
+        let to = fit.point(drawing.to_paper(0, [5.0, 2.5]));
+        let action = canvas::Program::update(&drawing, &mut state, &moved, bounds(), mouse::Cursor::Available(to)).expect("a crop");
+        let message = action.into_inner().0.expect("a message");
+        let Message::CropPlan(_, Some((lo, hi))) = &message else { panic!("{message:?}") };
+        assert!((hi[0] - 5.0).abs() < 0.01 && hi[0] > lo[0], "{lo:?} {hi:?}");
+        let _ = app.update(message);
+        let crop = app.document.plan(&plan).unwrap().crop.expect("cropped");
+        assert!((crop.1[0] - 5.0).abs() < 0.01);
+        // what is drawn stays where it was; the frame is the crop
+        let cropped = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        assert_eq!(cropped.to_paper(0, [0.0, 0.0]), drawing.to_paper(0, [0.0, 0.0]));
+        let (lo, hi, _) = cropped.frame(0);
+        assert!((hi[0] - cropped.to_paper(0, [5.0, 0.0])[0]).abs() < 1e-6 && lo[0] < hi[0]);
+        // the floor plan's tab shows the crop too
+        assert!((app.section.unwrap().max.x - 5.0).abs() < 0.01);
+        assert_eq!(clip([0.0, 0.0], [10.0, 0.0], [1.0, -1.0], [5.0, 1.0]), Some(([1.0, 0.0], [5.0, 0.0])));
+        assert_eq!(clip([0.0, 2.0], [10.0, 2.0], [1.0, -1.0], [5.0, 1.0]), None);
+        // shown whole again
+        let _ = app.update(Message::CropPlan(plan.clone(), None));
+        assert_eq!(app.document.plan(&plan).unwrap().crop, None);
     }
 
     #[test]

@@ -42,6 +42,23 @@ pub struct PlanView {
     pub cut: f64,
     /// How far it looks below the level (metres).
     pub depth: f64,
+    /// Its dimensions, shown wherever it is placed.
+    pub dimensions: Vec<Dimension>,
+}
+
+/// A dimension on a floor plan: the distance between two points of the plan (x, y in the
+/// model's frame, metres).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dimension {
+    pub from: [f64; 2],
+    pub to: [f64; 2],
+}
+
+impl Dimension {
+    /// Its length (metres).
+    pub fn length(&self) -> f64 {
+        (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1])
+    }
 }
 
 /// A3 landscape, the paper of a new sheet (metres).
@@ -189,7 +206,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new() });
         Some(path)
     }
 
@@ -199,6 +216,28 @@ impl Document {
         self.plans.retain(|p| p.path != path);
         self.drop_orphan_plans();
         self.plans.len() < before
+    }
+
+    /// Adds a dimension between two points to a floor plan; two points less than a millimetre
+    /// apart, or not finite, measure nothing.
+    pub fn add_dimension(&mut self, plan: &str, from: [f64; 2], to: [f64; 2]) -> bool {
+        let dimension = Dimension { from, to };
+        if !(from.iter().chain(&to).all(|v| v.is_finite()) && dimension.length() >= 0.001) {
+            return false;
+        }
+        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
+        plan.dimensions.push(dimension);
+        true
+    }
+
+    /// Removes a dimension of a floor plan.
+    pub fn remove_dimension(&mut self, plan: &str, index: usize) -> bool {
+        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
+        if index >= plan.dimensions.len() {
+            return false;
+        }
+        plan.dimensions.remove(index);
+        true
     }
 
     /// The sheets, in the order they were made.
@@ -508,6 +547,23 @@ mod tests {
         assert!(document.remove_sheet(&second));
         assert_eq!(document.add_sheet("Again").len(), 36);
         assert_eq!(document.sheets()[1].number, "A02");
+    }
+
+    #[test]
+    fn floor_plans_keep_their_dimensions() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        assert!(document.add_dimension(&plan, [0.0, 0.0], [3.6, 0.0]));
+        assert!(document.add_dimension(&plan, [0.0, 0.0], [3.0, 4.0]));
+        assert!(!document.add_dimension(&plan, [1.0, 1.0], [1.0, 1.0005]), "less than a millimetre");
+        assert!(!document.add_dimension(&plan, [0.0, f64::NAN], [1.0, 1.0]));
+        assert!(!document.add_dimension("no plan", [0.0, 0.0], [1.0, 0.0]));
+        let lengths: Vec<f64> = document.plan(&plan).unwrap().dimensions.iter().map(Dimension::length).collect();
+        assert_eq!(lengths, [3.6, 5.0]);
+        assert!(document.remove_dimension(&plan, 0));
+        assert!(!document.remove_dimension(&plan, 5));
+        assert_eq!(document.plan(&plan).unwrap().dimensions.len(), 1);
     }
 
     #[test]

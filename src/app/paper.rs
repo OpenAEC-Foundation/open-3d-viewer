@@ -1,16 +1,19 @@
 //! The sheets of the project document: their document tabs, the bar to place floor plans on a
 //! sheet, and the sheet drawn on a canvas: the paper with its frame and title, and each placed
-//! floor plan as the lines of its cut at its scale, which a drag moves over the paper.
+//! floor plan as the lines of its cut at its scale, which a drag moves over the paper. With the
+//! dimension tool, two clicks on a floor plan (snapping to the ends of its lines) add a
+//! dimension to that plan, shown wherever it is placed.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::Sheet;
+use crate::document::{Dimension, Sheet};
 use crate::drawing::{cut_at, Cut};
 use crate::theme::Palette;
 use iced::alignment;
+use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::{button, canvas as canvas_widget, column, container, row, text, Row};
-use iced::{Center, Color, Element, Fill, Point, Rectangle, Size};
+use iced::{Center, Color, Element, Fill, Point, Rectangle, Size, Vector};
 use openaec_ui::Language;
 use std::sync::Arc;
 
@@ -18,6 +21,10 @@ use std::sync::Arc;
 const MARGIN: f32 = 24.0;
 /// Space between a placed view's lines and its frame (paper metres).
 const FRAME: f64 = 0.005;
+/// How far a dimension line stands off the points it measures (paper metres).
+const DIMENSION_OFFSET: f64 = 0.006;
+/// How close the pointer must come to the end of a line to snap to it (logical pixels).
+const SNAP: f32 = 8.0;
 
 impl App {
     /// Makes a sheet and shows it in its tab.
@@ -69,32 +76,49 @@ impl App {
         }
     }
 
-    /// The workspace of a sheet's tab: the bar to place floor plans, then the sheet.
+    /// The workspace of a sheet's tab: the bar to place floor plans and to dimension, then the
+    /// sheet.
     pub(super) fn doc_sheet_workspace(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let path = self.active_doc_sheet.as_ref()?;
         let sheet = self.document.sheet(path)?;
         let key: Arc<str> = Arc::from(path.as_str());
-        let mut bar = Row::new().spacing(6).align_y(Center).push(text(l.text("Plaats op dit blad:", "Place on this sheet:")).size(12).color(p.text_secondary));
-        if self.document.plans().is_empty() {
-            bar = bar.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
-        }
-        for plan in self.document.plans() {
-            bar = bar.push(
-                button(text(plan.name.clone()).size(12))
-                    .padding([3, 10])
-                    .style(move |_, s| p.ribbon_button(false, s))
-                    .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(plan.path.as_str()))),
-            );
+        let tool = self.dimension_tool;
+        let measure = button(text(l.text("Maatvoering", "Dimension")).size(12))
+            .padding([3, 10])
+            .style(move |_, s| p.ribbon_button(tool, s))
+            .on_press(Message::DimensionTool(!tool));
+        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(text("|").size(12).color(p.text_muted));
+        if tool {
+            let hint = l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.");
+            bar = bar.push(text(hint).size(12).color(p.text_secondary));
+        } else {
+            bar = bar.push(text(l.text("Plaats op dit blad:", "Place on this sheet:")).size(12).color(p.text_secondary));
+            if self.document.plans().is_empty() {
+                bar = bar.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
+            }
+            for plan in self.document.plans() {
+                bar = bar.push(
+                    button(text(plan.name.clone()).size(12))
+                        .padding([3, 10])
+                        .style(move |_, s| p.ribbon_button(false, s))
+                        .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(plan.path.as_str()))),
+                );
+            }
         }
         let placed = sheet
             .views
             .iter()
             .map(|v| {
-                let name = self.document.plan(&v.plan).map_or(String::new(), |p| p.name.clone());
-                (name, self.cuts.get(&v.plan).cloned())
+                let plan = self.document.plan(&v.plan);
+                Placed {
+                    name: plan.map_or(String::new(), |p| p.name.clone()),
+                    plan: Arc::from(v.plan.as_str()),
+                    cut: self.cuts.get(&v.plan).cloned(),
+                    dimensions: plan.map_or(Vec::new(), |p| p.dimensions.clone()),
+                }
             })
             .collect();
-        let drawing = PaperDrawing { sheet: sheet.clone(), placed, palette: p, key, empty: l.text("niets gesneden", "nothing cut").to_string() };
+        let drawing = PaperDrawing { sheet: sheet.clone(), placed, palette: p, key, tool, empty: l.text("niets gesneden", "nothing cut").to_string() };
         Some(
             column![
                 container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()),
@@ -105,14 +129,26 @@ impl App {
     }
 }
 
+/// A floor plan on the sheet as the canvas draws it.
+#[derive(Debug, Clone, Default)]
+struct Placed {
+    name: String,
+    /// The floor plan's path.
+    plan: Arc<str>,
+    cut: Option<Arc<Cut>>,
+    dimensions: Vec<Dimension>,
+}
+
 /// A sheet of the document on a canvas.
 struct PaperDrawing {
     sheet: Sheet,
-    /// Per placed view: the floor plan's name and its cut.
-    placed: Vec<(String, Option<Arc<Cut>>)>,
+    /// Per placed view, in the order of the sheet's views.
+    placed: Vec<Placed>,
     palette: Palette,
     /// The sheet's path, for the messages.
     key: Arc<str>,
+    /// The dimension tool is on: clicks measure instead of dragging.
+    tool: bool,
     empty: String,
 }
 
@@ -146,7 +182,7 @@ impl PaperDrawing {
     /// the model.
     fn frame(&self, i: usize) -> ([f64; 2], [f64; 2], [f64; 2]) {
         let view = &self.sheet.views[i];
-        let extent = self.placed.get(i).and_then(|(_, c)| c.as_ref()?.extent);
+        let extent = self.placed.get(i).and_then(|p| p.cut.as_ref()?.extent);
         let (half, middle) = match extent {
             Some((lo, hi)) => {
                 let half = [(hi[0] - lo[0]) as f64 / 2.0 / view.scale + FRAME, (hi[1] - lo[1]) as f64 / 2.0 / view.scale + FRAME];
@@ -155,6 +191,32 @@ impl PaperDrawing {
             None => ([0.02, 0.015], [0.0, 0.0]),
         };
         ([view.at[0] - half[0], view.at[1] - half[1]], [view.at[0] + half[0], view.at[1] + half[1]], middle)
+    }
+
+    /// A model point (x, y) of placed view `i` on the paper.
+    fn to_paper(&self, i: usize, q: [f64; 2]) -> [f64; 2] {
+        let view = &self.sheet.views[i];
+        let (_, _, middle) = self.frame(i);
+        [view.at[0] + (q[0] - middle[0]) / view.scale, view.at[1] + (q[1] - middle[1]) / view.scale]
+    }
+
+    /// A paper point in the model of placed view `i`.
+    fn to_model(&self, i: usize, at: [f64; 2]) -> [f64; 2] {
+        let view = &self.sheet.views[i];
+        let (_, _, middle) = self.frame(i);
+        [middle[0] + (at[0] - view.at[0]) * view.scale, middle[1] + (at[1] - view.at[1]) * view.scale]
+    }
+
+    /// The model point a click at `at` (paper) on view `i` means: the nearest end of a cut line
+    /// within [`SNAP`] pixels, else the point itself.
+    fn snap(&self, i: usize, at: [f64; 2], fit: &Fit) -> [f64; 2] {
+        let pointer = fit.point(at);
+        let ends = self.placed.get(i).and_then(|p| p.cut.as_ref()).into_iter().flat_map(|c| c.segments.iter().flatten());
+        ends.map(|q| [q[0] as f64, q[1] as f64])
+            .map(|q| (q, fit.point(self.to_paper(i, q)).distance(pointer)))
+            .filter(|(_, d)| *d <= SNAP)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or_else(|| self.to_model(i, at), |(q, _)| q)
     }
 
     /// The placed view under a paper point, the topmost (last placed) first.
@@ -166,12 +228,15 @@ impl PaperDrawing {
     }
 }
 
-/// The hovered view and the one being dragged, with where it was taken (its middle less the
-/// pointer, paper metres).
+/// The hovered view, the one being dragged with where it was taken (its middle less the
+/// pointer, paper metres), and for the dimension tool the first point (view, model point) and
+/// the point the pointer snaps to now.
 #[derive(Default)]
 struct PaperState {
     hover: Option<usize>,
     drag: Option<(usize, [f64; 2])>,
+    first: Option<(usize, [f64; 2])>,
+    aim: Option<(usize, [f64; 2])>,
 }
 
 impl canvas::Program<Message> for PaperDrawing {
@@ -179,6 +244,10 @@ impl canvas::Program<Message> for PaperDrawing {
 
     fn update(&self, state: &mut PaperState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
         let fit = Fit::of(self.sheet.paper, bounds.size());
+        if !self.tool {
+            state.first = None;
+            state.aim = None;
+        }
         match event {
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let at = cursor.position_in(bounds).map(|p| fit.paper(p));
@@ -187,6 +256,13 @@ impl canvas::Program<Message> for PaperDrawing {
                     return Some(canvas::Action::publish(Message::MoveOnSheet(self.key.clone(), i, to)).and_capture());
                 }
                 let hover = at.and_then(|a| self.view_at(a));
+                if self.tool {
+                    // on the view of the first point, else on the view under the pointer
+                    let view = state.first.map(|(i, _)| i).or(hover);
+                    state.aim = view.zip(at).map(|(i, a)| (i, self.snap(i, a, &fit)));
+                    state.hover = hover;
+                    return Some(canvas::Action::request_redraw());
+                }
                 (hover != state.hover).then(|| {
                     state.hover = hover;
                     canvas::Action::request_redraw()
@@ -194,13 +270,31 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let at = fit.paper(cursor.position_in(bounds)?);
+                if self.tool {
+                    let i = state.first.map(|(i, _)| i).or_else(|| self.view_at(at))?;
+                    let point = self.snap(i, at, &fit);
+                    return match state.first.take() {
+                        None => {
+                            state.first = Some((i, point));
+                            Some(canvas::Action::request_redraw().and_capture())
+                        }
+                        Some((_, from)) => {
+                            let plan = self.placed.get(i)?.plan.clone();
+                            Some(canvas::Action::publish(Message::AddDimension(plan, from, point)).and_capture())
+                        }
+                    };
+                }
                 let i = self.view_at(at)?;
                 let middle = self.sheet.views[i].at;
                 state.drag = Some((i, [middle[0] - at[0], middle[1] - at[1]]));
                 Some(canvas::Action::request_redraw().and_capture())
             }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                state.drag.take().map(|_| canvas::Action::request_redraw())
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => state.drag.take().map(|_| canvas::Action::request_redraw()),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
+                if state.first.take().is_some() {
+                    return Some(canvas::Action::request_redraw().and_capture());
+                }
+                self.tool.then(|| canvas::Action::publish(Message::DimensionTool(false)).and_capture())
             }
             _ => None,
         }
@@ -242,25 +336,23 @@ impl canvas::Program<Message> for PaperDrawing {
         let corner = Point::new(inner.x + inner_size.width - 8.0, inner.y + inner_size.height - 8.0);
         label(&mut frame, format!("{}  {}", self.sheet.number, self.sheet.name), corner, 14.0, ink, alignment::Horizontal::Right);
 
-        // the placed floor plans: their cut lines, a frame when hovered or dragged, the title under it
+        // the placed floor plans: their cut lines and dimensions, a frame when hovered or
+        // dragged, the title under it
         for (i, view) in self.sheet.views.iter().enumerate() {
-            let (lo, hi, middle) = self.frame(i);
+            let (lo, hi, _) = self.frame(i);
             let (at, size) = rect(lo, hi);
             let hot = state.hover == Some(i) || state.drag.is_some_and(|(d, _)| d == i);
-            if hot {
+            if hot && !self.tool {
                 frame.fill_rectangle(at, size, Color { a: 0.06, ..p.accent });
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
             }
-            let (name, cut) = self.placed.get(i).cloned().unwrap_or_default();
-            match cut.filter(|c| !c.segments.is_empty()) {
+            let placed = self.placed.get(i).cloned().unwrap_or_default();
+            match placed.cut.filter(|c| !c.segments.is_empty()) {
                 Some(cut) => {
-                    let on_paper = |q: [f32; 2]| {
-                        fit.point([view.at[0] + (q[0] as f64 - middle[0]) / view.scale, view.at[1] + (q[1] as f64 - middle[1]) / view.scale])
-                    };
                     let lines = Path::new(|b| {
                         for [a, z] in &cut.segments {
-                            b.move_to(on_paper(*a));
-                            b.line_to(on_paper(*z));
+                            b.move_to(fit.point(self.to_paper(i, [a[0] as f64, a[1] as f64])));
+                            b.line_to(fit.point(self.to_paper(i, [z[0] as f64, z[1] as f64])));
                         }
                     });
                     frame.stroke(&lines, Stroke::default().with_color(ink).with_width(1.2));
@@ -270,20 +362,81 @@ impl canvas::Program<Message> for PaperDrawing {
                     label(&mut frame, self.empty.clone(), Point::new(at.x + size.width / 2.0, at.y + size.height / 2.0), 11.0, p.text_muted, alignment::Horizontal::Center);
                 }
             }
+            for d in &placed.dimensions {
+                draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), ink);
+            }
             let under = Point::new(at.x, at.y + size.height + 16.0);
-            label(&mut frame, name, under, 12.0, if hot { p.accent } else { ink }, alignment::Horizontal::Left);
+            label(&mut frame, placed.name, under, 12.0, if hot && !self.tool { p.accent } else { ink }, alignment::Horizontal::Left);
             label(&mut frame, format!("1:{}", view.scale.round()), Point::new(at.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left);
+        }
+
+        // the dimension being made: from the first point to where the pointer snaps
+        if self.tool {
+            if let Some((i, q)) = state.aim {
+                let c = fit.point(self.to_paper(i, q));
+                frame.stroke(&Path::circle(c, 4.0), Stroke::default().with_color(p.accent).with_width(1.5));
+                if let Some((j, from)) = state.first.filter(|(j, _)| *j == i) {
+                    let length = Dimension { from, to: q }.length();
+                    draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
+                }
+            }
+            if let Some((i, from)) = state.first {
+                frame.fill(&Path::circle(fit.point(self.to_paper(i, from)), 3.0), p.accent);
+            }
         }
         vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(&self, state: &PaperState, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
-        match (state.drag, state.hover) {
-            (Some(_), _) => mouse::Interaction::Grabbing,
-            (None, Some(_)) => mouse::Interaction::Grab,
+        match (self.tool, state.drag, state.hover) {
+            (true, _, _) => mouse::Interaction::Crosshair,
+            (false, Some(_), _) => mouse::Interaction::Grabbing,
+            (false, None, Some(_)) => mouse::Interaction::Grab,
             _ => mouse::Interaction::default(),
         }
     }
+}
+
+/// A dimension between two paper points: the dimension line [`DIMENSION_OFFSET`] to the left of
+/// from → to, extension lines from the points to just past it, a slash at each end, and the
+/// length in millimetres over the middle.
+fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color) {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    let run = dx.hypot(dy);
+    if run <= 0.0 {
+        return;
+    }
+    let (ux, uy) = (dx / run, dy / run);
+    let (nx, ny) = (-uy, ux);
+    let off = |q: [f64; 2], d: f64| [q[0] + nx * d, q[1] + ny * d];
+    let (a, b) = (off(from, DIMENSION_OFFSET), off(to, DIMENSION_OFFSET));
+    let tick = 0.0012;
+    let slash = |q: [f64; 2]| ([q[0] - (ux + nx) * tick, q[1] - (uy + ny) * tick], [q[0] + (ux + nx) * tick, q[1] + (uy + ny) * tick]);
+    let lines = Path::new(|path| {
+        for (q, end) in [(from, a), (to, b)] {
+            path.move_to(fit.point(off(q, 0.0015)));
+            path.line_to(fit.point(off(end, 0.0015)));
+        }
+        path.move_to(fit.point(a));
+        path.line_to(fit.point(b));
+        for q in [a, b] {
+            let (s, e) = slash(q);
+            path.move_to(fit.point(s));
+            path.line_to(fit.point(e));
+        }
+    });
+    frame.stroke(&lines, Stroke::default().with_color(color).with_width(0.9));
+    let middle = fit.point(off([(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], DIMENSION_OFFSET + 0.0015));
+    frame.fill_text(canvas::Text {
+        content: format!("{}", (length * 1000.0).round()),
+        position: middle + Vector::new(0.0, 0.0),
+        align_x: alignment::Horizontal::Center.into(),
+        align_y: alignment::Vertical::Center,
+        size: iced::Pixels(10.0),
+        color,
+        font: openaec_ui::fonts::MEDIUM,
+        ..canvas::Text::default()
+    });
 }
 
 /// The sheets of the document in the explorer's Views tab: each opens in its tab; New sheet.
@@ -340,6 +493,28 @@ mod tests {
         (app, plan)
     }
 
+    /// The app with a sheet holding the plan, and the sheet's canvas program.
+    fn sheet_with_plan(tool: bool) -> (App, Arc<str>, Arc<str>, PaperDrawing) {
+        let (mut app, plan) = app_with_plan();
+        let _ = app.update(Message::NewSheet("Sheet"));
+        let sheet = Arc::<str>::from(app.document.sheets()[0].path.as_str());
+        let _ = app.update(Message::PlaceOnSheet(sheet.clone(), plan.clone()));
+        let placed = vec![Placed { name: String::new(), plan: plan.clone(), cut: app.cuts.get(&*plan).cloned(), dimensions: Vec::new() }];
+        let drawing = PaperDrawing { sheet: app.document.sheet(&sheet).unwrap().clone(), placed, palette: app.theme.palette(), key: sheet.clone(), tool, empty: String::new() };
+        (app, sheet, plan, drawing)
+    }
+
+    /// The canvas at 2 pixels per paper millimetre.
+    fn bounds() -> Rectangle {
+        Rectangle::new(Point::ORIGIN, Size::new(420.0 * 2.0 + 2.0 * MARGIN, 297.0 * 2.0 + 2.0 * MARGIN))
+    }
+
+    fn press_at(drawing: &PaperDrawing, state: &mut PaperState, at: Point) -> Option<Message> {
+        let press = iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let action = canvas::Program::update(drawing, state, &press, bounds(), mouse::Cursor::Available(at))?;
+        action.into_inner().0
+    }
+
     #[test]
     fn a_new_sheet_opens_in_its_tab_and_takes_a_floor_plan_as_its_cut() {
         let (mut app, plan) = app_with_plan();
@@ -368,17 +543,7 @@ mod tests {
 
     #[test]
     fn a_drag_on_a_placed_view_moves_it() {
-        let (mut app, plan) = app_with_plan();
-        let _ = app.update(Message::NewSheet("Sheet"));
-        let sheet = Arc::<str>::from(app.document.sheets()[0].path.as_str());
-        let _ = app.update(Message::PlaceOnSheet(sheet.clone(), plan.clone()));
-        let drawing = PaperDrawing {
-            sheet: app.document.sheet(&sheet).unwrap().clone(),
-            placed: vec![(String::new(), app.cuts.get(&*plan).cloned())],
-            palette: app.theme.palette(),
-            key: sheet.clone(),
-            empty: String::new(),
-        };
+        let (_, _, _, drawing) = sheet_with_plan(false);
         // the frame: the 8 x 5 m room at 1:100, with 5 mm around it, in the middle of A3
         let (lo, hi, middle) = drawing.frame(0);
         assert!((hi[0] - lo[0] - 0.09).abs() < 1e-9 && (hi[1] - lo[1] - 0.06).abs() < 1e-9, "{lo:?} {hi:?}");
@@ -386,17 +551,48 @@ mod tests {
         assert_eq!(drawing.view_at([0.21, 0.1485]), Some(0));
         assert_eq!(drawing.view_at([0.03, 0.03]), None);
         // press on the view, move 20 mm right: it follows the pointer
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(420.0 * 2.0 + 2.0 * MARGIN, 297.0 * 2.0 + 2.0 * MARGIN));
-        let fit = Fit::of(drawing.sheet.paper, bounds.size());
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
         let mut state = PaperState::default();
-        let press = iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
-        let at = fit.point([0.20, 0.15]);
-        assert!(canvas::Program::update(&drawing, &mut state, &press, bounds, mouse::Cursor::Available(at)).is_some());
+        assert!(press_at(&drawing, &mut state, fit.point([0.20, 0.15])).is_none());
         let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::ORIGIN });
-        let to = fit.point([0.22, 0.15]);
-        let action = canvas::Program::update(&drawing, &mut state, &moved, bounds, mouse::Cursor::Available(to)).expect("a move");
-        let (message, _, _) = action.into_inner();
-        let Some(Message::MoveOnSheet(_, 0, at)) = message else { panic!("{message:?}") };
+        let action = canvas::Program::update(&drawing, &mut state, &moved, bounds(), mouse::Cursor::Available(fit.point([0.22, 0.15]))).expect("a move");
+        let Some(Message::MoveOnSheet(_, 0, at)) = action.into_inner().0 else { panic!("no move") };
         assert!((at[0] - 0.23).abs() < 1e-6 && (at[1] - 0.1485).abs() < 1e-6, "{at:?}");
+    }
+
+    #[test]
+    fn two_clicks_with_the_dimension_tool_measure_between_snapped_corners() {
+        let (mut app, sheet, plan, drawing) = sheet_with_plan(true);
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        // a few pixels off the room's lower left and lower right corners: they snap
+        let corner = |q: [f64; 2]| fit.point(drawing.to_paper(0, q)) + Vector::new(3.0, -2.0);
+        let mut state = PaperState::default();
+        assert!(press_at(&drawing, &mut state, corner([0.0, 0.0])).is_none());
+        assert_eq!(state.first, Some((0, [0.0, 0.0])));
+        let message = press_at(&drawing, &mut state, corner([8.0, 0.0])).expect("a dimension");
+        assert!(matches!(&message, Message::AddDimension(p, [0.0, 0.0], [8.0, 0.0]) if *p == plan), "{message:?}");
+        let _ = app.update(message);
+        let dimensions = &app.document.plan(&plan).unwrap().dimensions;
+        assert_eq!(dimensions.len(), 1);
+        assert_eq!(dimensions[0].length(), 8.0);
+        // Escape drops a first point, then switches the tool off
+        let mut state = PaperState::default();
+        let _ = press_at(&drawing, &mut state, corner([0.0, 0.0]));
+        let escape = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            modified_key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat: false,
+        });
+        let _ = canvas::Program::update(&drawing, &mut state, &escape, bounds(), mouse::Cursor::Unavailable);
+        assert_eq!(state.first, None);
+        let action = canvas::Program::update(&drawing, &mut state, &escape, bounds(), mouse::Cursor::Unavailable).expect("off");
+        assert!(matches!(action.into_inner().0, Some(Message::DimensionTool(false))));
+        let _ = app.update(Message::DimensionTool(true));
+        assert!(app.dimension_tool);
+        let _ = sheet;
     }
 }

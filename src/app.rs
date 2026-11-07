@@ -152,6 +152,8 @@ pub struct App {
     pub active_doc_sheet: Option<String>,
     /// The cut of every floor plan placed on a sheet, by the plan's path.
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
+    /// The dimension tool of the sheets is on.
+    pub dimension_tool: bool,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -289,6 +291,10 @@ pub enum Message {
     PlaceOnSheet(Arc<str>, Arc<str>),
     /// Move a placed view: sheet, its index on the sheet, its new middle (paper metres).
     MoveOnSheet(Arc<str>, usize, [f64; 2]),
+    /// Switch the dimension tool of the sheets on or off.
+    DimensionTool(bool),
+    /// Add a dimension to a floor plan: plan, from, to (model x, y).
+    AddDimension(Arc<str>, [f64; 2], [f64; 2]),
     /// Show a document tab ([`App::doc_tabs`]).
     SelectTab(usize),
     /// Close a document tab; the 3D view's stays.
@@ -454,6 +460,7 @@ impl Default for App {
             open_doc_sheets: Vec::new(),
             active_doc_sheet: None,
             cuts: Default::default(),
+            dimension_tool: false,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -1311,6 +1318,10 @@ impl App {
             Message::PlaceOnSheet(sheet, plan) => self.place_on_sheet(&sheet, &plan),
             Message::MoveOnSheet(sheet, i, at) => {
                 self.document.move_placed(&sheet, i, at);
+            }
+            Message::DimensionTool(on) => self.dimension_tool = on,
+            Message::AddDimension(plan, from, to) => {
+                self.document.add_dimension(&plan, from, to);
             }
             Message::SelectTab(i) => return self.select_tab(i),
             Message::CloseTab(i) => return self.close_tab(i),

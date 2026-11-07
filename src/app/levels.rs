@@ -19,6 +19,8 @@ pub enum ExplorerTab {
     #[default]
     Model,
     Levels,
+    /// Floor plans (and further views) of the document.
+    Views,
 }
 
 /// The form of a new level, as typed.
@@ -66,10 +68,16 @@ impl App {
                 .style(move |_, s| p.ribbon_button(active, s))
                 .on_press(Message::ExplorerTab(t))
         };
-        let tabs = row![tab(l.text("Model", "Model"), ExplorerTab::Model), tab(l.text("Niveaus", "Levels"), ExplorerTab::Levels)].spacing(2);
+        let tabs = row![
+            tab(l.text("Model", "Model"), ExplorerTab::Model),
+            tab(l.text("Niveaus", "Levels"), ExplorerTab::Levels),
+            tab(l.text("Weergaven", "Views"), ExplorerTab::Views),
+        ]
+        .spacing(2);
         let body = match self.explorer_tab {
             ExplorerTab::Model => self.layers_body(p, l),
             ExplorerTab::Levels => self.levels_body(p, l),
+            ExplorerTab::Views => self.views_body(p, l),
         };
         column![tabs, rule::horizontal(1), body].spacing(6).into()
     }

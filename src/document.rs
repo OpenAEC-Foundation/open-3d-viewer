@@ -1,6 +1,7 @@
 //! The project document in IfcX (IFC5) form, kept beside the loaded model: what the app
 //! recognises in a model and what the user adds, in the shape of IfcX nodes, so that it can be
-//! written as `.ifcx` (the native format to come). Levels for now; floor plans and sheets follow.
+//! written as `.ifcx` (the native format to come): levels and the floor plans made on them; sheets
+//! follow.
 //!
 //! Headless: no GUI or GPU, so the MCP server and a later BIM kernel crate can use it as it is.
 
@@ -24,6 +25,25 @@ pub struct Level {
     pub added: bool,
 }
 
+/// How far a floor plan cuts above its level (metres), as is usual for floor plans.
+pub const PLAN_CUT: f64 = 1.2;
+/// How far a floor plan looks below its level (metres), so the floor it stands on shows.
+pub const PLAN_DEPTH: f64 = 0.3;
+
+/// A floor plan: the model seen from above, cut at [`PlanView::cut`] above its level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanView {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub name: String,
+    /// The path of its level.
+    pub level: String,
+    /// The cut above the level (metres).
+    pub cut: f64,
+    /// How far it looks below the level (metres).
+    pub depth: f64,
+}
+
 /// Why a level was not added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LevelError {
@@ -39,7 +59,9 @@ pub enum LevelError {
 pub struct Document {
     /// Low to high; equal elevations by name.
     levels: Vec<Level>,
-    /// Levels added so far, for the paths of new ones.
+    /// Floor plans, in the order they were made.
+    plans: Vec<PlanView>,
+    /// Levels and views made so far, for the paths of new ones.
     added: u64,
 }
 
@@ -78,6 +100,7 @@ impl Document {
         }
         self.levels = levels;
         self.sort();
+        self.drop_orphan_plans();
     }
 
     /// Adds a level and gives its index in [`Self::levels`].
@@ -103,7 +126,58 @@ impl Document {
     pub fn remove_level(&mut self, path: &str) -> bool {
         let before = self.levels.len();
         self.levels.retain(|l| !(l.added && l.path == path));
+        self.drop_orphan_plans();
         self.levels.len() < before
+    }
+
+    /// The level at `path`.
+    pub fn level(&self, path: &str) -> Option<&Level> {
+        self.levels.iter().find(|l| l.path == path)
+    }
+
+    /// The floor plans, in the order they were made.
+    pub fn plans(&self) -> &[PlanView] {
+        &self.plans
+    }
+
+    /// The floor plan at `path`.
+    pub fn plan(&self, path: &str) -> Option<&PlanView> {
+        self.plans.iter().find(|p| p.path == path)
+    }
+
+    /// Makes a floor plan of the level at `path`, named after the level (with a number when the
+    /// level has one already), and gives its path.
+    pub fn add_plan(&mut self, level: &str) -> Option<String> {
+        let base = self.level(level)?.name.clone();
+        let mut name = base.clone();
+        let mut n = 1;
+        while self.plans.iter().any(|p| same_name(&p.name, &name)) {
+            n += 1;
+            name = format!("{base} ({n})");
+        }
+        self.added += 1;
+        let path = uuid(&format!("plan/{}/{level}", self.added));
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH });
+        Some(path)
+    }
+
+    /// Removes the floor plan at `path`.
+    pub fn remove_plan(&mut self, path: &str) -> bool {
+        let before = self.plans.len();
+        self.plans.retain(|p| p.path != path);
+        self.plans.len() < before
+    }
+
+    /// The heights a floor plan shows, from low to high (metres, the model's frame).
+    pub fn plan_range(&self, plan: &PlanView) -> Option<(f64, f64)> {
+        let z = self.level(&plan.level)?.elevation;
+        Some((z - plan.depth, z + plan.cut))
+    }
+
+    /// A floor plan goes with its level.
+    fn drop_orphan_plans(&mut self) {
+        let levels = &self.levels;
+        self.plans.retain(|p| levels.iter().any(|l| l.path == p.level));
     }
 
     /// The levels added in the app, low to high.
@@ -270,6 +344,41 @@ mod tests {
         assert_eq!(parse_elevation(""), None);
         assert_eq!(parse_elevation("three"), None);
         assert_eq!(parse_elevation("inf"), None);
+    }
+
+    #[test]
+    fn makes_floor_plans_of_levels_named_after_them() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let first = document.levels()[1].path.clone();
+        let plan = document.add_plan(&first).expect("a plan");
+        let again = document.add_plan(&first).expect("a second plan");
+        assert_ne!(plan, again);
+        let names: Vec<&str> = document.plans().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["01", "01 (2)"]);
+        let view = document.plan(&plan).unwrap();
+        assert_eq!((view.level.as_str(), view.cut, view.depth), (first.as_str(), PLAN_CUT, PLAN_DEPTH));
+        // from just below the floor up to the cut
+        assert_eq!(document.plan_range(view), Some((3.0 - PLAN_DEPTH, 3.0 + PLAN_CUT)));
+        assert_eq!(document.add_plan("no such level"), None);
+        assert!(document.remove_plan(&again));
+        assert_eq!(document.plans().len(), 1);
+    }
+
+    #[test]
+    fn a_floor_plan_goes_with_its_level() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        document.add_level("Roof", 6.0).unwrap();
+        let ground = document.levels()[0].path.clone();
+        let roof = document.levels()[1].path.clone();
+        document.add_plan(&ground).unwrap();
+        document.add_plan(&roof).unwrap();
+        document.remove_level(&roof);
+        assert_eq!(document.plans().iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["00"]);
+        // the model read again keeps the plan of a level it still has, not of one it lost
+        document.recognise(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        assert_eq!(document.plans().len(), 1);
+        document.recognise(&model_with(&[("01", 3.0)]));
+        assert!(document.plans().is_empty());
     }
 
     #[test]

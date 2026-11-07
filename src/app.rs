@@ -3,6 +3,7 @@
 
 mod levels;
 mod schedules;
+mod views;
 mod sheets;
 mod structural;
 
@@ -138,6 +139,8 @@ pub struct App {
     pub document: Document,
     /// The form of a new level, while it is open.
     pub level_form: Option<LevelForm>,
+    /// The floor plan of the document last shown (its path).
+    pub active_plan: Option<String>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -243,6 +246,11 @@ pub enum Message {
     CancelLevel,
     /// Remove an added level (its IfcX path).
     RemoveLevel(Arc<str>),
+    /// Make a floor plan of a level (its path) and show it.
+    NewPlan(Arc<str>),
+    /// Show a floor plan (its path).
+    OpenPlan(Arc<str>),
+    RemovePlan(Arc<str>),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
     /// Show a sheet's tab (`None`: not a sheet).
@@ -394,6 +402,7 @@ impl Default for App {
             explorer_tab: ExplorerTab::Model,
             document: Document::default(),
             level_form: None,
+            active_plan: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -684,8 +693,16 @@ impl App {
     /// a section's crop, a plan's range from the view depth up to the cut plane) as the section
     /// box.
     pub fn apply_view(&mut self, i: usize) {
-        let Some(model) = self.model.clone() else { return };
-        let Some(view) = model.views.get(i).cloned() else { return };
+        let Some(view) = self.model.as_ref().and_then(|m| m.views.get(i).cloned()) else { return };
+        if self.show_view(&view) {
+            self.active_view = Some(i);
+            self.active_plan = None;
+        }
+    }
+
+    /// Shows a view: its section box or plan range and its camera, animated; false without a
+    /// model to show.
+    fn show_view(&mut self, view: &crate::model::SavedView) -> bool {
         // views are in the file's coordinates, of the model at rest
         if self.flip_up {
             self.flip_up = false;
@@ -695,8 +712,7 @@ impl App {
             self.explode_on = false;
             self.update_explode();
         }
-        let Some(world) = self.world_bounds() else { return };
-        self.active_view = Some(i);
+        let Some(world) = self.world_bounds() else { return false };
         let clip = match (view.plan, view.clip) {
             (Some(plan), _) => {
                 let mut b = SectionBox::around(&world);
@@ -746,6 +762,7 @@ impl App {
             }
         }
         self.anim = Some((self.camera, to, Instant::now()));
+        true
     }
 
     /// Turns the camera to (yaw, pitch) and frames the model, animated.
@@ -816,6 +833,7 @@ impl App {
         self.plane = None;
         self.plane_picking = false;
         self.active_view = None;
+        self.active_plan = None;
         self.open_schedules.clear();
         self.active_schedule = None;
         self.schedules.clear();
@@ -1158,6 +1176,14 @@ impl App {
             Message::CancelLevel => self.level_form = None,
             Message::RemoveLevel(path) => {
                 self.document.remove_level(&path);
+            }
+            Message::NewPlan(level) => self.new_plan(&level),
+            Message::OpenPlan(plan) => self.open_plan(&plan),
+            Message::RemovePlan(plan) => {
+                self.document.remove_plan(&plan);
+                if self.active_plan.as_deref() == Some(&*plan) {
+                    self.active_plan = None;
+                }
             }
             Message::OpenSheet(i) => return self.open_sheet(i),
             Message::ShowSheet(i) => return self.show_sheet(i),

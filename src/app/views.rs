@@ -36,8 +36,10 @@ pub enum DocTab {
     Plan(usize),
     /// Index in `App::schedules`.
     Schedule(usize),
-    /// Index in the model's sheets.
+    /// Index in the model's sheets (read from the file).
     Sheet(usize),
+    /// Index in `App::open_doc_sheets`: a sheet of the document.
+    DocSheet(usize),
 }
 
 impl App {
@@ -51,6 +53,7 @@ impl App {
     /// Shows a floor plan in its tab, opening the tab the first time: from above, orthographic,
     /// the section box from just under its level up to its cut.
     pub(super) fn open_plan(&mut self, path: &str) {
+        self.active_doc_sheet = None;
         if self.open_plans.iter().any(|o| o.path == path) {
             self.active_sheet = None;
             self.active_schedule = None;
@@ -124,7 +127,8 @@ impl App {
         let plans = (0..self.open_plans.len()).map(DocTab::Plan);
         let schedules = self.open_schedules.iter().copied().filter(|&i| i < self.schedules.len()).map(DocTab::Schedule);
         let sheets = self.open_sheets.iter().copied().filter(|&i| i < self.sheets().len()).map(DocTab::Sheet);
-        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).collect()
+        let own = (0..self.open_doc_sheets.len()).map(DocTab::DocSheet);
+        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(own).collect()
     }
 
     /// The tab that shows: a sheet, else a floor plan, else a schedule (under the 3D view), else
@@ -133,8 +137,9 @@ impl App {
         let tabs = self.doc_tabs();
         let at = |want: DocTab| tabs.iter().position(|t| *t == want);
         let plan = self.active_plan.as_ref().and_then(|p| self.open_plans.iter().position(|o| o.path == *p));
-        self.active_sheet
-            .and_then(|s| at(DocTab::Sheet(s)))
+        let own = self.active_doc_sheet.as_ref().and_then(|p| self.open_doc_sheets.iter().position(|s| s == p));
+        own.and_then(|k| at(DocTab::DocSheet(k)))
+            .or_else(|| self.active_sheet.and_then(|s| at(DocTab::Sheet(s))))
             .or_else(|| plan.and_then(|k| at(DocTab::Plan(k))))
             .or_else(|| self.active_schedule.and_then(|s| at(DocTab::Schedule(s))))
             .unwrap_or(0)
@@ -147,6 +152,7 @@ impl App {
             DocTab::Plan(k) => self.open_plans.get(k).and_then(|o| self.document.plan(&o.path)).map_or("", |p| p.name.as_str()),
             DocTab::Schedule(i) => self.schedules.get(i).map_or("", |s| s.name.as_str()),
             DocTab::Sheet(i) => self.sheets().get(i).map_or("", |s| s.title.as_str()),
+            DocTab::DocSheet(k) => self.open_doc_sheets.get(k).and_then(|p| self.document.sheet(p)).map_or("", |s| s.title.as_str()),
         }
     }
 
@@ -154,6 +160,7 @@ impl App {
         match self.doc_tabs().get(i).copied() {
             Some(DocTab::Model) => {
                 self.active_sheet = None;
+                self.active_doc_sheet = None;
                 self.load_view(None);
                 self.show_schedule(None)
             }
@@ -164,6 +171,11 @@ impl App {
             }
             Some(DocTab::Schedule(s)) => self.show_schedule(Some(s)),
             Some(DocTab::Sheet(s)) => self.show_sheet(Some(s)),
+            Some(DocTab::DocSheet(k)) => {
+                let path = self.open_doc_sheets[k].clone();
+                self.open_doc_sheet(&path);
+                Task::none()
+            }
             None => Task::none(),
         }
     }
@@ -177,6 +189,11 @@ impl App {
             }
             Some(DocTab::Schedule(s)) => self.close_schedule(s),
             Some(DocTab::Sheet(s)) => self.close_sheet(s),
+            Some(DocTab::DocSheet(k)) => {
+                let path = self.open_doc_sheets[k].clone();
+                self.close_doc_sheet(&path);
+                Task::none()
+            }
             Some(DocTab::Model) | None => Task::none(),
         }
     }
@@ -233,6 +250,10 @@ impl App {
                 body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
             }
         }
+
+        // the sheets, then a new one
+        body = body.push(subheader(l.text("Bladen", "Sheets")));
+        body = super::paper::sheets_list(self, p, l, body);
 
         // a floor plan of every level
         body = body.push(subheader(l.text("Plattegrond maken van", "Make a floor plan of")));

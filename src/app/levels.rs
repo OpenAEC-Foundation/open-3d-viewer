@@ -37,6 +37,7 @@ impl App {
     pub(super) fn new_document(&mut self) {
         self.document = Document::default();
         self.level_form = None;
+        self.cuts.clear();
     }
 
     /// Opens the form of a new level, filled with the next free name (`word` and a number) and

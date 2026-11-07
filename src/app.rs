@@ -2,6 +2,7 @@
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
 mod levels;
+mod paper;
 mod schedules;
 mod views;
 mod sheets;
@@ -146,6 +147,11 @@ pub struct App {
     pub open_plans: Vec<views::OpenPlan>,
     /// The 3D view's camera and section box while a floor plan's tab shows.
     model_view: Option<views::ViewSlot>,
+    /// Sheets of the document open in a document tab (paths), and the one shown.
+    pub open_doc_sheets: Vec<String>,
+    pub active_doc_sheet: Option<String>,
+    /// The cut of every floor plan placed on a sheet, by the plan's path.
+    pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -256,6 +262,15 @@ pub enum Message {
     /// Show a floor plan (its path) in its tab.
     OpenPlan(Arc<str>),
     RemovePlan(Arc<str>),
+    /// Make a sheet of the document, named this, and show it.
+    NewSheet(&'static str),
+    /// Show a sheet of the document (its path) in its tab.
+    OpenDocSheet(Arc<str>),
+    RemoveSheet(Arc<str>),
+    /// Place a floor plan on a sheet: sheet, plan.
+    PlaceOnSheet(Arc<str>, Arc<str>),
+    /// Move a placed view: sheet, its index on the sheet, its new middle (paper metres).
+    MoveOnSheet(Arc<str>, usize, [f64; 2]),
     /// Show a document tab ([`App::doc_tabs`]).
     SelectTab(usize),
     /// Close a document tab; the 3D view's stays.
@@ -414,6 +429,9 @@ impl Default for App {
             active_plan: None,
             open_plans: Vec::new(),
             model_view: None,
+            open_doc_sheets: Vec::new(),
+            active_doc_sheet: None,
+            cuts: Default::default(),
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -848,6 +866,9 @@ impl App {
         self.active_plan = None;
         self.open_plans.clear();
         self.model_view = None;
+        self.open_doc_sheets.clear();
+        self.active_doc_sheet = None;
+        self.cuts.clear();
         self.open_schedules.clear();
         self.active_schedule = None;
         self.schedules.clear();
@@ -1202,6 +1223,17 @@ impl App {
             Message::RemovePlan(plan) => {
                 self.close_plan(&plan);
                 self.document.remove_plan(&plan);
+                self.cuts.remove(&*plan);
+            }
+            Message::NewSheet(name) => self.new_sheet(name),
+            Message::OpenDocSheet(sheet) => self.open_doc_sheet(&sheet),
+            Message::RemoveSheet(sheet) => {
+                self.close_doc_sheet(&sheet);
+                self.document.remove_sheet(&sheet);
+            }
+            Message::PlaceOnSheet(sheet, plan) => self.place_on_sheet(&sheet, &plan),
+            Message::MoveOnSheet(sheet, i, at) => {
+                self.document.move_placed(&sheet, i, at);
             }
             Message::SelectTab(i) => return self.select_tab(i),
             Message::CloseTab(i) => return self.close_tab(i),

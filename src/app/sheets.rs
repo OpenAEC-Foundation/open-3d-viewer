@@ -36,6 +36,7 @@ impl App {
         self.active_sheet = i;
         if i.is_some() {
             self.active_schedule = None;
+            self.active_doc_sheet = None;
         }
         Task::none()
     }

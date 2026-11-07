@@ -44,6 +44,36 @@ pub struct PlanView {
     pub depth: f64,
 }
 
+/// A3 landscape, the paper of a new sheet (metres).
+pub const A3_LANDSCAPE: [f64; 2] = [0.420, 0.297];
+/// The scale a view gets when it is placed on a sheet (1 : this).
+pub const SHEET_SCALE: f64 = 100.0;
+
+/// A sheet: paper with views placed on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sheet {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub number: String,
+    pub name: String,
+    /// Number and name, as a tab shows them.
+    pub title: String,
+    /// Width and height (metres).
+    pub paper: [f64; 2],
+    pub views: Vec<PlacedView>,
+}
+
+/// A view on a sheet.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedView {
+    /// The path of the floor plan.
+    pub plan: String,
+    /// Where its middle is on the paper (metres from the lower left corner).
+    pub at: [f64; 2],
+    /// 1 : `scale`.
+    pub scale: f64,
+}
+
 /// Why a level was not added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LevelError {
@@ -61,6 +91,8 @@ pub struct Document {
     levels: Vec<Level>,
     /// Floor plans, in the order they were made.
     plans: Vec<PlanView>,
+    /// Sheets, in the order they were made.
+    sheets: Vec<Sheet>,
     /// Levels and views made so far, for the paths of new ones.
     added: u64,
 }
@@ -161,11 +193,75 @@ impl Document {
         Some(path)
     }
 
-    /// Removes the floor plan at `path`.
+    /// Removes the floor plan at `path`, and it from the sheets.
     pub fn remove_plan(&mut self, path: &str) -> bool {
         let before = self.plans.len();
         self.plans.retain(|p| p.path != path);
+        self.drop_orphan_plans();
         self.plans.len() < before
+    }
+
+    /// The sheets, in the order they were made.
+    pub fn sheets(&self) -> &[Sheet] {
+        &self.sheets
+    }
+
+    /// The sheet at `path`.
+    pub fn sheet(&self, path: &str) -> Option<&Sheet> {
+        self.sheets.iter().find(|s| s.path == path)
+    }
+
+    /// Makes an empty A3 sheet numbered after the last (`A01`, `A02`, ..) and named `name`, and
+    /// gives its path.
+    pub fn add_sheet(&mut self, name: &str) -> String {
+        let mut n = self.sheets.len() + 1;
+        while self.sheets.iter().any(|s| s.number == format!("A{n:02}")) {
+            n += 1;
+        }
+        self.added += 1;
+        let path = uuid(&format!("sheet/{}/{n}", self.added));
+        let number = format!("A{n:02}");
+        let title = format!("{number} {name}");
+        self.sheets.push(Sheet { path: path.clone(), number, name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
+        path
+    }
+
+    /// Removes the sheet at `path`.
+    pub fn remove_sheet(&mut self, path: &str) -> bool {
+        let before = self.sheets.len();
+        self.sheets.retain(|s| s.path != path);
+        self.sheets.len() < before
+    }
+
+    /// Places a floor plan in the middle of a sheet at 1:100 and gives its index on the sheet.
+    pub fn place_plan(&mut self, sheet: &str, plan: &str) -> Option<usize> {
+        self.plan(plan)?;
+        let sheet = self.sheets.iter_mut().find(|s| s.path == sheet)?;
+        let at = [sheet.paper[0] / 2.0, sheet.paper[1] / 2.0];
+        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale: SHEET_SCALE });
+        Some(sheet.views.len() - 1)
+    }
+
+    /// Moves a placed view so that its middle is at `at`, kept on the paper.
+    pub fn move_placed(&mut self, sheet: &str, index: usize, at: [f64; 2]) -> bool {
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == sheet) else { return false };
+        let paper = sheet.paper;
+        let Some(view) = sheet.views.get_mut(index) else { return false };
+        if !(at[0].is_finite() && at[1].is_finite()) {
+            return false;
+        }
+        view.at = [at[0].clamp(0.0, paper[0]), at[1].clamp(0.0, paper[1])];
+        true
+    }
+
+    /// Takes a view off a sheet.
+    pub fn remove_placed(&mut self, sheet: &str, index: usize) -> bool {
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == sheet) else { return false };
+        if index >= sheet.views.len() {
+            return false;
+        }
+        sheet.views.remove(index);
+        true
     }
 
     /// The heights a floor plan shows, from low to high (metres, the model's frame).
@@ -174,10 +270,14 @@ impl Document {
         Some((z - plan.depth, z + plan.cut))
     }
 
-    /// A floor plan goes with its level.
+    /// A floor plan goes with its level, and a placed view with its floor plan.
     fn drop_orphan_plans(&mut self) {
         let levels = &self.levels;
         self.plans.retain(|p| levels.iter().any(|l| l.path == p.level));
+        let plans = &self.plans;
+        for sheet in &mut self.sheets {
+            sheet.views.retain(|v| plans.iter().any(|p| p.path == v.plan));
+        }
     }
 
     /// The levels added in the app, low to high.
@@ -379,6 +479,35 @@ mod tests {
         assert_eq!(document.plans().len(), 1);
         document.recognise(&model_with(&[("01", 3.0)]));
         assert!(document.plans().is_empty());
+    }
+
+    #[test]
+    fn sheets_hold_floor_plans_that_move_on_the_paper() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let sheet = document.add_sheet("Floor plans");
+        let second = document.add_sheet("Details");
+        let numbers: Vec<&str> = document.sheets().iter().map(|s| s.number.as_str()).collect();
+        assert_eq!(numbers, ["A01", "A02"]);
+        assert_eq!(document.sheet(&sheet).unwrap().paper, A3_LANDSCAPE);
+        let ground = document.levels()[0].path.clone();
+        let plan = document.add_plan(&ground).unwrap();
+        assert_eq!(document.place_plan(&sheet, &plan), Some(0));
+        assert_eq!(document.place_plan(&sheet, "no plan"), None);
+        assert_eq!(document.place_plan("no sheet", &plan), None);
+        let placed = &document.sheet(&sheet).unwrap().views[0];
+        assert_eq!((placed.at, placed.scale), ([0.21, 0.1485], SHEET_SCALE));
+        // moved, and kept on the paper
+        assert!(document.move_placed(&sheet, 0, [0.1, 0.08]));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].at, [0.1, 0.08]);
+        assert!(document.move_placed(&sheet, 0, [-1.0, 9.0]));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].at, [0.0, 0.297]);
+        assert!(!document.move_placed(&sheet, 1, [0.1, 0.1]));
+        // a removed plan leaves its sheets
+        document.remove_plan(&plan);
+        assert!(document.sheet(&sheet).unwrap().views.is_empty());
+        assert!(document.remove_sheet(&second));
+        assert_eq!(document.add_sheet("Again").len(), 36);
+        assert_eq!(document.sheets()[1].number, "A02");
     }
 
     #[test]

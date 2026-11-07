@@ -17,6 +17,7 @@ mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
 pub mod document;
+pub mod drawing;
 mod explode;
 pub mod export;
 mod history;

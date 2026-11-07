@@ -76,6 +76,7 @@ impl App {
         // a schedule's tab replaces a shown sheet, under the 3D view
         if i.is_some() {
             self.active_sheet = None;
+            self.active_doc_sheet = None;
             self.load_view(None);
         }
         if self.active_schedule == i {
@@ -143,6 +144,9 @@ impl App {
     /// The workspace: the shown sheet, or the viewport with the table of the shown schedule
     /// under it.
     pub fn workspace_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        if let Some(sheet) = self.doc_sheet_workspace(p, l) {
+            return sheet;
+        }
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i)) {
             return self.sheet_view_element(p, l, sheet);
         }

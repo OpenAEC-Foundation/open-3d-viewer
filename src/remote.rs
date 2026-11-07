@@ -491,10 +491,10 @@ impl App {
         task
     }
 
-    /// Where `save_file` writes: `path` (in the work folder), else next to the open file as IFC.
+    /// Where `save_file` writes: `path` (in the work folder), else next to the open file as IFCX.
     /// Only formats the viewer writes, and an existing file only with `overwrite`. The default is
-    /// never the open file itself: the viewer's IFC is a re-export (triangles, the properties it
-    /// shows), so an open `a.ifc` is saved as `a-viewer.ifc` beside it.
+    /// never the open file itself: the viewer's IFCX is a re-export (triangles, the properties it
+    /// shows), so an open `a.ifcx` is saved as `a-viewer.ifcx` beside it.
     pub(crate) fn save_target(&self, a: &Value) -> Result<PathBuf, String> {
         let model = self.require_model()?;
         if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -517,7 +517,7 @@ impl App {
             path.set_extension(default_ext);
         }
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        crate::export::writer_for(&name).map_err(|e| format!("{e}: the viewer saves models as IFC (.ifc)"))?;
+        crate::export::writer_for(&name).map_err(|e| format!("{e}: the viewer saves models as IFCX (.ifcx) or IFC (.ifc)"))?;
         if path.parent().is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir()) {
             return Err(format!("the folder of {} does not exist", path.display()));
         }
@@ -1811,23 +1811,27 @@ mod tests {
     #[test]
     fn saves_only_what_the_viewer_writes() {
         let app = app();
-        // next to the open file, as IFC
-        assert_eq!(app.save_target(&json!({})), Ok(PathBuf::from("test.ifc")));
+        // next to the open file, as IFCX
+        assert_eq!(app.save_target(&json!({})), Ok(PathBuf::from("test.ifcx")));
         let dir = std::env::temp_dir().join(format!("o3v-save-target-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
-        assert_eq!(app.save_target(&json!({ "path": at("out") })), Ok(dir.join("out.ifc")));
+        assert_eq!(app.save_target(&json!({ "path": at("out") })), Ok(dir.join("out.ifcx")));
         assert!(app.save_target(&json!({ "path": at("out.glb") })).unwrap_err().contains("glb"));
         assert!(app.save_target(&json!({ "path": at("missing/out.ifc") })).is_err());
         // an existing file only with overwrite
         std::fs::write(dir.join("old.ifc"), b"x").unwrap();
         assert!(app.save_target(&json!({ "path": at("old.ifc") })).unwrap_err().contains("overwrite"));
         assert_eq!(app.save_target(&json!({ "path": at("old.ifc"), "overwrite": true })), Ok(dir.join("old.ifc")));
-        // an open IFC is not the default target: the viewer's IFC goes beside it
+        // an open IFC gets its IFCX beside it; an open IFCX is not the default target: the
+        // viewer's IFCX goes beside it
         let mut ifc = App::default();
         ifc.set_model(Arc::new(Model::new(dir.join("a.IFC"), "IFC", vec![])));
-        assert_eq!(ifc.save_target(&json!({})), Ok(dir.join("a-viewer.ifc")));
+        assert_eq!(ifc.save_target(&json!({})), Ok(dir.join("a.ifcx")));
         assert_eq!(ifc.save_target(&json!({ "path": at("a.IFC"), "overwrite": true })), Ok(dir.join("a.IFC")));
+        let mut ifcx = App::default();
+        ifcx.set_model(Arc::new(Model::new(dir.join("b.IFCX"), "IFCX", vec![])));
+        assert_eq!(ifcx.save_target(&json!({})), Ok(dir.join("b-viewer.ifcx")));
         let _ = std::fs::remove_dir_all(&dir);
         // nothing open, nothing to save
         assert!(App::default().save_target(&json!({})).is_err());

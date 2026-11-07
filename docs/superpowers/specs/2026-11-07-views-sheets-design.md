@@ -23,10 +23,10 @@ After levels, the project owner wants to make drawings in the viewer: views of t
 - A view on a sheet is a line drawing of the cut, not a picture of the 3D view: the renderer holds one set of uniforms, so it draws one view at a time, and a line drawing is what a sheet needs and what dimensions snap to.
 - In the browser, floor plans and view tabs share one viewport whose camera and section box are swapped per tab; on the desktop the views window draws them in a second viewport.
 - Hidden lines are removed for sections and elevations, not yet for the lines below a floor plan's cut.
-- IFC stays the default of Save as; IFCX is the second choice until the project owner makes it the default.
+- IFCX is the default of Save as (the project owner's call); IFC is the second choice.
 - Default cut 1.2 m, view depth 0.3 m below the level, scale 1:100, A3 landscape, dimension text in whole millimetres, horizontal.
 - The cut is computed from the layers shown when the plan is first placed; hiding a layer later does not change it yet.
 
 ## Not yet
 
-3D views on sheets, drawing properties (filters per category, hatching of cut faces, line weights), section depth and view range typed in, georeferencing in the IFCX file, and IFCX as the default save format.
+3D views on sheets, drawing properties (filters per category, hatching of cut faces, line weights), section depth and view range typed in, georeferencing in the IFCX file.

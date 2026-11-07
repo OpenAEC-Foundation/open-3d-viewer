@@ -27,9 +27,10 @@ pub trait Writer: Send + Sync {
     fn write(&self, model: &Model, document: &Document, file_name: &str, out: &mut dyn io::Write) -> io::Result<()>;
 }
 
-/// All available writers, in the order of the save dialog's filters.
+/// All available writers, in the order of the save dialog's filters; the first is the default,
+/// IFCX, the viewer's own project file (model, levels and drawings).
 pub fn registry() -> Vec<Box<dyn Writer>> {
-    vec![Box::new(ifc::IfcWriter), Box::new(ifcx::IfcxWriter)]
+    vec![Box::new(ifcx::IfcxWriter), Box::new(ifc::IfcWriter)]
 }
 
 /// The writer for the extension of `file_name`.
@@ -123,6 +124,13 @@ mod tests {
 
     fn repo_file(rel: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+    }
+
+    /// Save as offers IFCX first, the viewer's own project file; IFC stays a choice.
+    #[test]
+    fn ifcx_is_the_default_save_format() {
+        let formats: Vec<&str> = super::registry().iter().map(|w| w.extensions()[0]).collect();
+        assert_eq!(formats, ["ifcx", "ifc"]);
     }
 
     /// Every test model of the repository (all formats the viewer opens) saves as IFC.

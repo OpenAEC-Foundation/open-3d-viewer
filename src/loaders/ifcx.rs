@@ -292,6 +292,15 @@ fn class(node: &Composed) -> Option<String> {
     class.get("code").unwrap_or(class).as_str().map(str::to_string)
 }
 
+/// A storey as a level: its `Name` (else its name as a child) and its `Elevation` (else the Z of
+/// its placement).
+fn storey(node: &Composed, name: &str, world: DMat4) -> (String, f32) {
+    let own_name = node.attribute("bsi::ifc::prop::Name").map(text).filter(|n| !n.trim().is_empty());
+    let elevation = node.attribute("bsi::ifc::prop::Elevation").and_then(|v| v.as_f64().or_else(|| v.as_str()?.trim().parse().ok()));
+    let z = elevation.filter(|z: &f64| z.is_finite()).unwrap_or(world.w_axis.z);
+    (own_name.unwrap_or_else(|| name.to_string()), z as f32)
+}
+
 /// A value for the properties panel.
 fn text(value: &Value) -> String {
     match value {
@@ -394,6 +403,8 @@ struct Scene {
     written: HashSet<(String, u64)>,
     next_id: u64,
     elements: usize,
+    /// The storeys (`IfcBuildingStorey`): name and elevation.
+    levels: Vec<(String, f32)>,
 }
 
 impl Scene {
@@ -407,6 +418,9 @@ impl Scene {
         let own;
         let element = match class(node) {
             Some(class) => {
+                if class.eq_ignore_ascii_case(crate::document::STOREY_CLASS) {
+                    self.levels.push(storey(node, name, world));
+                }
                 self.next_id += 1;
                 self.elements += 1;
                 own = Element { id: self.next_id, props: properties(node, name, &class, tree), class };
@@ -569,7 +583,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         return Err("IFCX: every node is held by another (a cycle); nothing to draw".into());
     }
     let mut composer = Composer { flat: &flat, deep, memo: HashMap::new(), busy: HashSet::new() };
-    let mut scene = Scene { layers: BTreeMap::new(), clouds: BTreeMap::new(), written: HashSet::new(), next_id: 0, elements: 0 };
+    let mut scene = Scene { layers: BTreeMap::new(), clouds: BTreeMap::new(), written: HashSet::new(), next_id: 0, elements: 0, levels: Vec::new() };
     for root in roots {
         let node = composer.compose(root);
         scene.walk(&node, root, root, DMat4::IDENTITY, None, None, 0);
@@ -607,7 +621,10 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     if layers.is_empty() {
         return Err("IFCX: no meshes found".into());
     }
-    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+    let mut levels = scene.levels;
+    levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    levels.dedup();
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, levels, ..ProjectData::default() } })
 }
 
 #[cfg(test)]
@@ -757,5 +774,54 @@ mod tests {
     fn rejects_other_json() {
         let error = IfcxLoader.load(&bytes("x.ifcx", "{\"type\": \"FeatureCollection\"}")).unwrap_err();
         assert!(error.contains("not an IFCX file"), "{error}");
+    }
+
+    /// A building 1 m up with three storeys: one with an `Elevation` (which wins over its
+    /// placement), one placed only (its composed Z counts, the building's metre included), and
+    /// one named by its child name; a slab gives the file a mesh.
+    const STOREYS: &str = r#"{
+  "header": {"id": "test/storeys.ifcx", "ifcxVersion": "ifcx_alpha", "dataVersion": "1.0.0", "author": "test@example.org", "timestamp": "2026-11-07"},
+  "imports": [], "schemas": {},
+  "data": [
+    {"path": "b1", "children": {"Ground": "g", "First": "f", "Roof": "r"}, "attributes": {"bsi::ifc::class": {"code": "IfcBuilding"},
+      "usd::xformop": {"transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,1,1]]}}},
+    {"path": "g", "children": {"Slab": "slab"}, "attributes": {"bsi::ifc::class": {"code": "IfcBuildingStorey"}, "bsi::ifc::prop::Name": "00 Ground floor",
+      "bsi::ifc::prop::Elevation": 0.0, "usd::xformop": {"transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,5,1]]}}},
+    {"path": "f", "attributes": {"bsi::ifc::class": {"code": "IfcBuildingStorey"}, "bsi::ifc::prop::Name": "01 First floor",
+      "usd::xformop": {"transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,3,1]]}}},
+    {"path": "r", "attributes": {"bsi::ifc::class": {"code": "IfcBuildingStorey"}, "bsi::ifc::prop::Elevation": "7.5"}},
+    {"path": "slab", "attributes": {"bsi::ifc::class": {"code": "IfcSlab"},
+      "usd::usdgeom::mesh": {"points": [[0,0,0],[4,0,0],[4,4,0]], "faceVertexIndices": [0,1,2]}}}
+  ]
+}"#;
+
+    #[test]
+    fn reads_building_storeys_as_levels() {
+        let model = crate::loaders::load_with(&bytes("storeys.ifcx", STOREYS), &Progress::default()).expect("IFCX");
+        let levels: Vec<(&str, f32)> = model.project.levels.iter().map(|(n, z)| (n.as_str(), *z)).collect();
+        assert_eq!(levels, [("00 Ground floor", 0.0), ("01 First floor", 4.0), ("Roof", 7.5)]);
+    }
+
+    #[test]
+    fn the_documents_ifcx_levels_read_back_as_the_same_levels() {
+        let mut model = crate::model::Model::new("house.rvt".into(), "Revit", Vec::new());
+        model.project.levels = vec![("00".into(), 0.0), ("01".into(), 3.0)];
+        let mut document = crate::document::Document::from_model(&model);
+        document.add_level("Roof", 6.25).unwrap();
+        // the levels under a building, with a slab for a mesh
+        let mut data = document.ifcx_nodes();
+        let children: serde_json::Map<String, Value> =
+            document.levels().iter().map(|l| (l.name.clone(), Value::from(l.path.clone()))).collect();
+        data.push(serde_json::json!({"path": "b1", "children": children, "attributes": {"bsi::ifc::class": {"code": "IfcBuilding"}}}));
+        data.push(serde_json::json!({"path": "slab", "attributes": {"bsi::ifc::class": {"code": "IfcSlab"},
+            "usd::usdgeom::mesh": {"points": [[0,0,0],[4,0,0],[4,4,0]], "faceVertexIndices": [0,1,2]}}}));
+        let file = serde_json::json!({
+            "header": {"id": "test/document.ifcx", "ifcxVersion": "ifcx_alpha", "dataVersion": "1.0.0", "author": "test@example.org", "timestamp": "2026-11-07"},
+            "imports": [], "schemas": {}, "data": data,
+        });
+        let loaded = crate::loaders::load_with(&bytes("document.ifcx", &file.to_string()), &Progress::default()).expect("IFCX");
+        let again = crate::document::Document::from_model(&loaded);
+        let read: Vec<(&str, f64)> = again.levels().iter().map(|l| (l.name.as_str(), l.elevation)).collect();
+        assert_eq!(read, [("00", 0.0), ("01", 3.0), ("Roof", 6.25)]);
     }
 }

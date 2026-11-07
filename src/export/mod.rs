@@ -5,6 +5,7 @@
 
 mod ifc;
 
+use crate::document::Document;
 use crate::model::Model;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,8 +21,9 @@ pub trait Writer: Send + Sync {
     fn mime(&self) -> &'static str {
         "application/octet-stream"
     }
-    /// Writes the model as the file `file_name` to `out`.
-    fn write(&self, model: &Model, file_name: &str, out: &mut dyn io::Write) -> io::Result<()>;
+    /// Writes the model, with what the document adds to it (levels), as the file `file_name` to
+    /// `out`.
+    fn write(&self, model: &Model, document: &Document, file_name: &str, out: &mut dyn io::Write) -> io::Result<()>;
 }
 
 /// All available writers, in the order of the save dialog's filters.
@@ -43,10 +45,10 @@ pub fn writer_for(file_name: &str) -> Result<Box<dyn Writer>, String> {
 
 /// Saves a model with the writer matching the extension of `path`, through [`write_file`]: a failed
 /// save leaves no half file behind, and an existing file is only replaced when `replace`.
-pub fn save(model: &Model, path: &Path, replace: bool) -> Result<(), String> {
+pub fn save(model: &Model, document: &Document, path: &Path, replace: bool) -> Result<(), String> {
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let writer = writer_for(&file_name)?;
-    write_file(path, replace, |out| writer.write(model, &file_name, out)).map_err(|e| format!("Cannot save {file_name}: {e}"))
+    write_file(path, replace, |out| writer.write(model, document, &file_name, out)).map_err(|e| format!("Cannot save {file_name}: {e}"))
 }
 
 /// The temporary files of the writes under way, so a stop (SIGTERM) can wait for them or clean up.
@@ -107,9 +109,9 @@ fn put_in_place(part: &Path, path: &Path, replace: bool) -> io::Result<()> {
 }
 
 /// The model as the file `file_name`, in memory (the web app hands it to the browser).
-pub fn to_bytes(model: &Model, file_name: &str) -> Result<Vec<u8>, String> {
+pub fn to_bytes(model: &Model, document: &Document, file_name: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    writer_for(file_name)?.write(model, file_name, &mut out).map_err(|e| format!("Cannot save {file_name}: {e}"))?;
+    writer_for(file_name)?.write(model, document, file_name, &mut out).map_err(|e| format!("Cannot save {file_name}: {e}"))?;
     Ok(out)
 }
 
@@ -136,7 +138,7 @@ mod tests {
                 continue;
             }
             let out = dir.join(path.file_stem().unwrap()).with_extension("ifc");
-            super::save(&model, &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            super::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.starts_with("ISO-10303-21;") && text.trim_end().ends_with("END-ISO-10303-21;"));
             assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());

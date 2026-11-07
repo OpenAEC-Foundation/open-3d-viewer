@@ -3131,6 +3131,7 @@ dependencies = [
  "iced",
  "iced_test",
  "iced_tiny_skia",
+ "ifc-lite-core",
  "ifc-lite-processing",
  "js-sys",
  "las",

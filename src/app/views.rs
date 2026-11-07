@@ -63,16 +63,7 @@ impl App {
             self.load_view(Some(path.to_string()));
             return;
         }
-        let Some(plan) = self.document.plan(path) else { return };
-        let Some((low, high)) = self.document.plan_range(plan) else { return };
-        let view = SavedView {
-            name: plan.name.clone(),
-            kind: ViewKind::Plan,
-            camera: None,
-            clip: None,
-            plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: false }),
-            level: self.document.level(&plan.level).map(|l| l.name.clone()),
-        };
+        let Some(view) = self.saved_view_of(path) else { return };
         self.active_sheet = None;
         self.active_schedule = None;
         let slot = self.view_slot();
@@ -82,19 +73,67 @@ impl App {
         self.fit_plan_section(path);
     }
 
-    /// The section box of a floor plan's open tab: its range in height, its crop in plan (all
-    /// of the model without one).
-    pub(super) fn fit_plan_section(&mut self, path: &str) {
-        let Some(plan) = self.document.plan(path) else { return };
-        let Some((low, high)) = self.document.plan_range(plan) else { return };
-        let crop = plan.crop;
-        let Some(world) = self.world_bounds() else { return };
-        let mut b = SectionBox::around(&world);
-        b.min.z = low as f32;
-        b.max.z = (high as f32).max(low as f32 + 0.01);
-        if let Some((lo, hi)) = crop {
-            (b.min.x, b.min.y, b.max.x, b.max.y) = (lo[0] as f32, lo[1] as f32, hi[0] as f32, hi[1] as f32);
+    /// A view of the document as the viewport shows it: a floor plan from above in its range, a
+    /// section or elevation level, looking to the left of its line, in its box.
+    fn saved_view_of(&self, path: &str) -> Option<SavedView> {
+        if let Some(plan) = self.document.plan(path) {
+            let (low, high) = self.document.plan_range(plan)?;
+            return Some(SavedView {
+                name: plan.name.clone(),
+                kind: ViewKind::Plan,
+                camera: None,
+                clip: None,
+                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: false }),
+                level: self.document.level(&plan.level).map(|l| l.name.clone()),
+            });
         }
+        let section = self.document.section(path)?;
+        let world = self.world_bounds()?;
+        let (_, n) = section.axes();
+        let middle = [(section.from[0] + section.to[0]) / 2.0, (section.from[1] + section.to[1]) / 2.0];
+        let camera = crate::model::ViewCamera {
+            eye: [(middle[0] - n[0]) as f32, (middle[1] - n[1]) as f32, (world.min[2] + world.max[2]) / 2.0],
+            forward: [n[0] as f32, n[1] as f32, 0.0],
+            perspective: false,
+            fov_y: None,
+        };
+        Some(SavedView { name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
+    }
+
+    /// The box a section or elevation shows: beyond its line up to its depth, within its crop
+    /// (u along the line, v up), else the model's height.
+    fn section_box(&self, path: &str) -> Option<SectionBox> {
+        let section = self.document.section(path)?;
+        let world = self.world_bounds()?;
+        let (d, n) = section.axes();
+        let (u, v) = match section.crop {
+            Some((lo, hi)) => ([lo[0] as f32, hi[0] as f32], [lo[1] as f32, hi[1] as f32]),
+            None => ([-1.0e5, 1.0e5], [world.min[2] - 0.01, world.max[2] + 0.01]),
+        };
+        let origin = glam::Vec3::new(section.from[0] as f32, section.from[1] as f32, 0.0);
+        let basis = [glam::Vec3::new(d[0] as f32, d[1] as f32, 0.0), glam::Vec3::new(n[0] as f32, n[1] as f32, 0.0), glam::Vec3::Z];
+        SectionBox::from_frame(origin, basis, glam::Vec3::new(u[0], 0.0, v[0]), glam::Vec3::new(u[1], section.depth as f32, v[1]))
+    }
+
+    /// The section box of a view's open tab: a floor plan's range in height and crop in plan
+    /// (all of the model without one), a section's box.
+    pub(super) fn fit_plan_section(&mut self, path: &str) {
+        let b = if self.document.section(path).is_some() {
+            let Some(b) = self.section_box(path) else { return };
+            b
+        } else {
+            let Some(plan) = self.document.plan(path) else { return };
+            let Some((low, high)) = self.document.plan_range(plan) else { return };
+            let crop = plan.crop;
+            let Some(world) = self.world_bounds() else { return };
+            let mut b = SectionBox::around(&world);
+            b.min.z = low as f32;
+            b.max.z = (high as f32).max(low as f32 + 0.01);
+            if let Some((lo, hi)) = crop {
+                (b.min.x, b.min.y, b.max.x, b.max.y) = (lo[0] as f32, lo[1] as f32, hi[0] as f32, hi[1] as f32);
+            }
+            b
+        };
         if !self.separate_views && self.active_plan.as_deref() == Some(path) {
             self.section = Some(b);
             self.section_on = true;
@@ -108,16 +147,7 @@ impl App {
     /// and section box, apart from the 3D view's.
     fn open_plan_apart(&mut self, path: &str) {
         if !self.open_plans.iter().any(|o| o.path == path) {
-            let Some(plan) = self.document.plan(path) else { return };
-            let Some((low, high)) = self.document.plan_range(plan) else { return };
-            let view = SavedView {
-                name: plan.name.clone(),
-                kind: ViewKind::Plan,
-                camera: None,
-                clip: None,
-                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: false }),
-                level: self.document.level(&plan.level).map(|l| l.name.clone()),
-            };
+            let Some(view) = self.saved_view_of(path) else { return };
             let slot = ViewSlot { camera: self.camera, section: None, section_on: false };
             self.open_plans.push(OpenPlan { path: path.to_string(), slot });
             // framed in the plan window's viewport (the 3D view's until it has its own size)
@@ -364,7 +394,7 @@ impl App {
     pub fn tab_title(&self, tab: DocTab) -> &str {
         match tab {
             DocTab::Model => "3D",
-            DocTab::Plan(k) => self.open_plans.get(k).and_then(|o| self.document.plan(&o.path)).map_or("", |p| p.name.as_str()),
+            DocTab::Plan(k) => self.open_plans.get(k).and_then(|o| self.document.view_name(&o.path)).unwrap_or(""),
             DocTab::Schedule(i) => self.schedules.get(i).map_or("", |s| s.name.as_str()),
             DocTab::Sheet(i) => self.sheets().get(i).map_or("", |s| s.title.as_str()),
             DocTab::DocSheet(k) => self.open_doc_sheets.get(k).and_then(|p| self.document.sheet(p)).map_or("", |s| s.title.as_str()),
@@ -467,6 +497,35 @@ impl App {
                 body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
             }
         }
+
+        // sections and elevations; the four elevations at once
+        body = body.push(subheader(l.text("Doorsneden en aanzichten", "Sections and elevations")));
+        for section in document.sections() {
+            let active = self.active_plan.as_deref() == Some(section.path.as_str());
+            let name = text(section.name.clone()).size(12).color(if active { p.accent } else { p.text }).wrapping(Wrapping::WordOrGlyph).width(Fill);
+            let open = button(name)
+                .padding([3, 6])
+                .width(Fill)
+                .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
+                .on_press(Message::OpenPlan(Arc::from(section.path.as_str())));
+            let close = svg(svg::Handle::from_memory(openaec_ui::icons::Icon::Close.bytes()))
+                .width(12)
+                .height(12)
+                .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
+            let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSection(Arc::from(section.path.as_str())));
+            body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+        }
+        let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
+        let names = [l.text("Aanzicht noord", "North elevation"), l.text("Aanzicht oost", "East elevation"), l.text("Aanzicht zuid", "South elevation"), l.text("Aanzicht west", "West elevation")];
+        body = body.push(
+            button(row![plus, text(l.text("Vier aanzichten maken", "Make four elevations")).size(12).color(p.text)].spacing(6).align_y(Center))
+                .padding([4, 8])
+                .width(Fill)
+                .style(move |_, s| p.row_button(s))
+                .on_press(Message::MakeElevations(names)),
+        );
+        let hint = l.text("Een doorsnede teken je op een blad: Doorsnede, dan twee punten op een plattegrond.", "Draw a section on a sheet: Section, then two points on a floor plan.");
+        body = body.push(container(text(hint).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]));
 
         // the sheets, then a new one
         body = body.push(subheader(l.text("Bladen", "Sheets")));

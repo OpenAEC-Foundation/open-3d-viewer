@@ -154,6 +154,8 @@ pub struct App {
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
+    /// The section tool of the sheets is on: two clicks on a floor plan draw a section.
+    pub section_tool: bool,
     /// What is picked on the sheet shown: a placed view or a dimension.
     pub sheet_pick: Option<paper::SheetPick>,
     /// The cut height being typed for a floor plan: its path and the text.
@@ -323,6 +325,14 @@ pub enum Message {
     SelectTab(usize),
     /// Close a document tab; the 3D view's stays.
     CloseTab(usize),
+    /// Remove a section or elevation (its path).
+    RemoveSection(Arc<str>),
+    /// Make the four elevations of the model, named so (north, east, south, west).
+    MakeElevations([&'static str; 4]),
+    /// Make a section along a line drawn on a floor plan (plan x, y), named after this word.
+    NewSection([f64; 2], [f64; 2], &'static str),
+    /// Switch the section tool of the sheets on or off.
+    SectionTool(bool),
     /// Show or close a tab of the views window ([`App::view_tabs`]).
     SelectViewTab(usize),
     CloseViewTab(usize),
@@ -490,6 +500,7 @@ impl Default for App {
             active_doc_sheet: None,
             cuts: Default::default(),
             dimension_tool: false,
+            section_tool: false,
             sheet_pick: None,
             cut_edit: None,
             separate_views: false,
@@ -1357,6 +1368,9 @@ impl App {
             }
             Message::DimensionTool(on) => {
                 self.dimension_tool = on;
+                if on {
+                    self.section_tool = false;
+                }
                 self.pick_on_sheet(None);
             }
             Message::PickOnSheet(pick) => self.pick_on_sheet(pick),
@@ -1383,6 +1397,23 @@ impl App {
             }
             Message::SelectTab(i) => return self.select_tab(i),
             Message::SelectViewTab(i) => self.select_view_tab(i),
+            Message::RemoveSection(path) => {
+                self.close_plan(&path);
+                self.document.remove_section(&path);
+                self.cuts.remove(&*path);
+            }
+            Message::MakeElevations(names) => self.make_elevations(names),
+            Message::NewSection(from, to, word) => {
+                self.section_tool = false;
+                self.new_section(from, to, word);
+            }
+            Message::SectionTool(on) => {
+                self.section_tool = on;
+                if on {
+                    self.dimension_tool = false;
+                }
+                self.pick_on_sheet(None);
+            }
             Message::CloseViewTab(i) => self.close_view_tab(i),
             Message::PlanNavigate(n) => return self.plan_navigate(n),
             Message::CloseTab(i) => return self.close_tab(i),

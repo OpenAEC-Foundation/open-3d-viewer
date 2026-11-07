@@ -6,7 +6,7 @@
 
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, Sheet, PAPERS, SCALES};
-use crate::drawing::{plan_at, Cut};
+use crate::drawing::{plan_at, section_at, Cut};
 use crate::theme::Palette;
 use iced::alignment;
 use iced::keyboard;
@@ -138,9 +138,45 @@ impl App {
         let Some(sheet) = self.document.sheet(sheet) else { return };
         let plans: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).filter(|p| !self.cuts.contains_key(p)).collect();
         for plan in plans {
+            if let Some(s) = self.document.section(&plan) {
+                let cut = section_at(&model, &self.visible, s.from, s.to, s.depth);
+                self.cuts.insert(plan, Arc::new(cut));
+                continue;
+            }
             let Some(view) = self.document.plan(&plan) else { continue };
             let Some((low, high)) = self.document.plan_range(view) else { continue };
             self.cuts.insert(plan, Arc::new(plan_at(&model, &self.visible, low as f32, high as f32)));
+        }
+    }
+
+    /// Makes the four elevations of the model: 2 m outside it, each looking at it across its
+    /// whole depth, and opens the first.
+    pub(super) fn make_elevations(&mut self, names: [&str; 4]) {
+        let Some(b) = self.world_bounds() else { return };
+        let ([x0, y0, _], [x1, y1, _]) = (b.min.map(f64::from), b.max.map(f64::from));
+        let m = 2.0;
+        let depth = (x1 - x0).max(y1 - y0) + 2.0 * m;
+        // from the north looking south, from the east looking west, ..: the line runs so that
+        // its left is the model
+        let lines = [([x1, y1 + m], [x0, y1 + m]), ([x1 + m, y0], [x1 + m, y1]), ([x0, y0 - m], [x1, y0 - m]), ([x0 - m, y1], [x0 - m, y0])];
+        let mut first = None;
+        for (name, (from, to)) in names.iter().zip(lines) {
+            if let Some(path) = self.document.add_section(name, from, to, depth) {
+                first.get_or_insert(path);
+            }
+        }
+        if let Some(path) = first {
+            self.open_plan(&path);
+        }
+    }
+
+    /// Makes a section along a line drawn on a floor plan, looking to its left as far as the
+    /// model reaches, and opens it.
+    pub(super) fn new_section(&mut self, from: [f64; 2], to: [f64; 2], word: &str) {
+        let depth = self.world_bounds().map_or(100.0, |b| f64::from((b.max[0] - b.min[0]).hypot(b.max[1] - b.min[1]))).max(1.0);
+        let name = self.document.next_section_name(word);
+        if let Some(path) = self.document.add_section(&name, from, to, depth) {
+            self.open_plan(&path);
         }
     }
 
@@ -152,22 +188,27 @@ impl App {
             .views
             .iter()
             .map(|v| {
-                let plan = self.document.plan(&v.plan);
+                let marks = self.document.view_marks(&v.plan);
                 Placed {
-                    name: plan.map_or(String::new(), |p| p.name.clone()),
+                    name: self.document.view_name(&v.plan).unwrap_or_default().to_string(),
                     plan: Arc::from(v.plan.as_str()),
                     cut: self.cuts.get(&v.plan).cloned(),
-                    dimensions: plan.map_or(Vec::new(), |p| p.dimensions.clone()),
-                    crop: plan.and_then(|p| p.crop),
+                    dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
+                    crop: marks.and_then(|(_, c)| c),
+                    is_plan: self.document.plan(&v.plan).is_some(),
                 }
             })
             .collect();
+        let sections = self.document.sections().iter().map(|s| (s.name.clone(), s.from, s.to)).collect();
         Some(PaperDrawing {
             sheet: sheet.clone(),
             placed,
             palette: p,
             key: Arc::from(path.as_str()),
             tool: self.dimension_tool,
+            section_tool: self.section_tool,
+            sections,
+            word: l.text("Doorsnede", "Section"),
             pick: self.sheet_pick,
             empty: l.text("niets gesneden", "nothing cut").to_string(),
         })
@@ -184,7 +225,12 @@ impl App {
             .padding([3, 10])
             .style(move |_, s| p.ribbon_button(tool, s))
             .on_press(Message::DimensionTool(!tool));
-        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(text("|").size(12).color(p.text_muted));
+        let cutting = self.section_tool;
+        let section = button(text(l.text("Doorsnede", "Section")).size(12))
+            .padding([3, 10])
+            .style(move |_, s| p.ribbon_button(cutting, s))
+            .on_press(Message::SectionTool(!cutting));
+        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(section).push(text("|").size(12).color(p.text_muted));
         let small = |label: String, active: bool, message: Message| {
             button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(message)
         };
@@ -194,6 +240,9 @@ impl App {
         };
         if tool {
             let hint = l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.");
+            bar = bar.push(text(hint).size(12).color(p.text_secondary));
+        } else if cutting {
+            let hint = l.text("Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.", "Click where the section starts and ends on a floor plan; it looks to the left.");
             bar = bar.push(text(hint).size(12).color(p.text_secondary));
         } else if let Some((i, view)) = picked_view {
             bar = bar.push(text(l.text("Schaal", "Scale")).size(12).color(p.text_secondary));
@@ -224,12 +273,13 @@ impl App {
             if self.document.plans().is_empty() {
                 bar = bar.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
             }
-            for plan in self.document.plans() {
+            let views = self.document.plans().iter().map(|v| (&v.name, &v.path)).chain(self.document.sections().iter().map(|s| (&s.name, &s.path)));
+            for (name, path) in views {
                 bar = bar.push(
-                    button(text(plan.name.clone()).size(12))
+                    button(text(name.clone()).size(12))
                         .padding([3, 10])
                         .style(move |_, s| p.ribbon_button(false, s))
-                        .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(plan.path.as_str()))),
+                        .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(path.as_str()))),
                 );
             }
         }
@@ -253,6 +303,8 @@ struct Placed {
     cut: Option<Arc<Cut>>,
     dimensions: Vec<Dimension>,
     crop: Option<([f64; 2], [f64; 2])>,
+    /// A floor plan (sections are drawn on these), not a section or elevation.
+    is_plan: bool,
 }
 
 /// A side of a crop: left, right, bottom, top.
@@ -293,6 +345,12 @@ struct PaperDrawing {
     key: Arc<str>,
     /// The dimension tool is on: clicks measure instead of dragging.
     tool: bool,
+    /// The section tool is on: two clicks on a floor plan draw a section.
+    section_tool: bool,
+    /// The sections, drawn on the floor plans: name, line (plan).
+    sections: Vec<(String, [f64; 2], [f64; 2])>,
+    /// What a new section is called before its letter.
+    word: &'static str,
     /// What is picked.
     pick: Option<SheetPick>,
     empty: String,
@@ -431,6 +489,11 @@ impl PaperDrawing {
         })
     }
 
+    /// A tool that takes clicks is on (dimension or section).
+    fn busy(&self) -> bool {
+        self.tool || self.section_tool
+    }
+
     /// The placed view under a paper point, the topmost (last placed) first.
     fn view_at(&self, at: [f64; 2]) -> Option<usize> {
         (0..self.sheet.views.len()).rev().find(|&i| {
@@ -458,7 +521,7 @@ impl canvas::Program<Message> for PaperDrawing {
 
     fn update(&self, state: &mut PaperState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
         let fit = Fit::of(self.sheet.paper, bounds.size());
-        if !self.tool {
+        if !self.busy() {
             state.first = None;
             state.aim = None;
         }
@@ -474,7 +537,7 @@ impl canvas::Program<Message> for PaperDrawing {
                     return Some(canvas::Action::publish(Message::MoveOnSheet(self.key.clone(), i, to)).and_capture());
                 }
                 let hover = at.and_then(|a| self.view_at(a));
-                if self.tool {
+                if self.busy() {
                     // on the view of the first point, else on the view under the pointer
                     let view = state.first.map(|(i, _)| i).or(hover);
                     state.aim = view.zip(at).map(|(i, a)| (i, self.snap(i, a, &fit)));
@@ -488,14 +551,19 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let at = fit.paper(cursor.position_in(bounds)?);
-                if self.tool {
+                if self.busy() {
                     let i = state.first.map(|(i, _)| i).or_else(|| self.view_at(at))?;
+                    // a section is drawn on a floor plan
+                    if self.section_tool && !self.placed.get(i)?.is_plan {
+                        return None;
+                    }
                     let point = self.snap(i, at, &fit);
                     return match state.first.take() {
                         None => {
                             state.first = Some((i, point));
                             Some(canvas::Action::request_redraw().and_capture())
                         }
+                        Some((_, from)) if self.section_tool => Some(canvas::Action::publish(Message::NewSection(from, point, self.word)).and_capture()),
                         Some((_, from)) => {
                             let plan = self.placed.get(i)?.plan.clone();
                             Some(canvas::Action::publish(Message::AddDimension(plan, from, point)).and_capture())
@@ -519,7 +587,7 @@ impl canvas::Program<Message> for PaperDrawing {
                 Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::View(i)))).and_capture())
             }
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Delete | keyboard::key::Named::Backspace), .. })
-                if self.pick.is_some() && !self.tool =>
+                if self.pick.is_some() && !self.busy() =>
             {
                 Some(canvas::Action::publish(Message::RemovePicked).and_capture())
             }
@@ -530,6 +598,9 @@ impl canvas::Program<Message> for PaperDrawing {
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
                 if state.first.take().is_some() {
                     return Some(canvas::Action::request_redraw().and_capture());
+                }
+                if self.section_tool {
+                    return Some(canvas::Action::publish(Message::SectionTool(false)).and_capture());
                 }
                 self.tool.then(|| canvas::Action::publish(Message::DimensionTool(false)).and_capture())
             }
@@ -580,7 +651,7 @@ impl canvas::Program<Message> for PaperDrawing {
             let (at, size) = rect(lo, hi);
             let picked = self.pick == Some(SheetPick::View(i));
             let hot = state.hover == Some(i) || state.drag.is_some_and(|(d, _)| d == i) || picked;
-            if hot && !self.tool {
+            if hot && !self.busy() {
                 frame.fill_rectangle(at, size, Color { a: 0.06, ..p.accent });
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
             }
@@ -624,13 +695,20 @@ impl canvas::Program<Message> for PaperDrawing {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
                 draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color);
             }
+            // the sections drawn on this floor plan
+            if placed.is_plan {
+                for (name, from, to) in &self.sections {
+                    let letter = name.rsplit(' ').next().unwrap_or(name).to_string();
+                    draw_section_mark(&mut frame, &fit, self.to_paper(i, *from), self.to_paper(i, *to), letter, ink);
+                }
+            }
             let under = Point::new(at.x, at.y + size.height + 16.0);
-            label(&mut frame, placed.name, under, 12.0, if hot && !self.tool { p.accent } else { ink }, alignment::Horizontal::Left);
+            label(&mut frame, placed.name, under, 12.0, if hot && !self.busy() { p.accent } else { ink }, alignment::Horizontal::Left);
             label(&mut frame, format!("1:{}", view.scale.round()), Point::new(at.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left);
         }
 
         // the crop handles of the picked view
-        if let Some(SheetPick::View(i)) = self.pick.filter(|_| !self.tool) {
+        if let Some(SheetPick::View(i)) = self.pick.filter(|_| !self.busy()) {
             if i < self.sheet.views.len() {
                 for (_, at) in self.handles(i) {
                     let c = fit.point(at);
@@ -640,14 +718,18 @@ impl canvas::Program<Message> for PaperDrawing {
             }
         }
 
-        // the dimension being made: from the first point to where the pointer snaps
-        if self.tool {
+        // the dimension or section being made: from the first point to where the pointer snaps
+        if self.busy() {
             if let Some((i, q)) = state.aim {
                 let c = fit.point(self.to_paper(i, q));
                 frame.stroke(&Path::circle(c, 4.0), Stroke::default().with_color(p.accent).with_width(1.5));
                 if let Some((j, from)) = state.first.filter(|(j, _)| *j == i) {
-                    let length = Dimension { from, to: q }.length();
-                    draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
+                    if self.section_tool {
+                        draw_section_mark(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), String::new(), p.accent);
+                    } else {
+                        let length = Dimension { from, to: q }.length();
+                        draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
+                    }
                 }
             }
             if let Some((i, from)) = state.first {
@@ -660,16 +742,48 @@ impl canvas::Program<Message> for PaperDrawing {
     fn mouse_interaction(&self, state: &PaperState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
         let fit = Fit::of(self.sheet.paper, bounds.size());
         let handle = state.crop.map(|(_, side)| side).or_else(|| cursor.position_in(bounds).and_then(|p| self.handle_at(&fit, p)).map(|(_, side)| side));
-        match handle.filter(|_| !self.tool) {
+        match handle.filter(|_| !self.busy()) {
             Some(Side::Left | Side::Right) => return mouse::Interaction::ResizingHorizontally,
             Some(Side::Bottom | Side::Top) => return mouse::Interaction::ResizingVertically,
             None => {}
         }
-        match (self.tool, state.drag, state.hover) {
+        match (self.busy(), state.drag, state.hover) {
             (true, _, _) => mouse::Interaction::Crosshair,
             (false, Some(_), _) => mouse::Interaction::Grabbing,
             (false, None, Some(_)) => mouse::Interaction::Grab,
             _ => mouse::Interaction::default(),
+        }
+    }
+}
+
+/// A section's line on a floor plan between two paper points: dash-dot, with its letter at both
+/// ends and an arrow at each end towards where it looks (its left).
+fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], letter: String, color: Color) {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    let run = dx.hypot(dy);
+    if run <= 0.0 {
+        return;
+    }
+    let n = [-dy / run, dx / run];
+    let mut line = Stroke::default().with_color(color).with_width(1.0);
+    line.line_dash = canvas::LineDash { segments: &[10.0, 3.0, 2.0, 3.0], offset: 0 };
+    frame.stroke(&Path::line(fit.point(from), fit.point(to)), line);
+    let arrow = 0.005;
+    for end in [from, to] {
+        let tip = [end[0] + n[0] * arrow, end[1] + n[1] * arrow];
+        frame.stroke(&Path::line(fit.point(end), fit.point(tip)), Stroke::default().with_color(color).with_width(1.6));
+        if !letter.is_empty() {
+            let at = fit.point([end[0] + n[0] * arrow * 1.8, end[1] + n[1] * arrow * 1.8]);
+            frame.fill_text(canvas::Text {
+                content: letter.clone(),
+                position: at,
+                align_x: alignment::Horizontal::Center.into(),
+                align_y: alignment::Vertical::Center,
+                size: iced::Pixels(11.0),
+                color,
+                font: openaec_ui::fonts::MEDIUM,
+                ..canvas::Text::default()
+            });
         }
     }
 }
@@ -854,6 +968,44 @@ mod tests {
         // shown whole again
         let _ = app.update(Message::CropPlan(plan.clone(), None));
         assert_eq!(app.document.plan(&plan).unwrap().crop, None);
+    }
+
+    #[test]
+    fn two_clicks_with_the_section_tool_draw_a_section_that_opens_and_can_be_placed() {
+        let (mut app, sheet, _, _) = sheet_with_plan(false);
+        let _ = app.update(Message::SectionTool(true));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        let mut state = PaperState::default();
+        // across the room at y = 2.5, from west to east: it looks north
+        assert!(press_at(&drawing, &mut state, fit.point(drawing.to_paper(0, [1.0, 2.5]))).is_none());
+        let message = press_at(&drawing, &mut state, fit.point(drawing.to_paper(0, [7.0, 2.5]))).expect("a section");
+        assert!(matches!(message, Message::NewSection(..)), "{message:?}");
+        let _ = app.update(message);
+        assert!(!app.section_tool);
+        let section = app.document.sections()[0].clone();
+        assert_eq!(section.name, "Section A");
+        assert!((section.from[0] - 1.0).abs() < 1e-6 && (section.to[0] - 7.0).abs() < 1e-6);
+        // it opens like a floor plan, level, in its box
+        assert_eq!(app.active_plan.as_deref(), Some(section.path.as_str()));
+        assert!(app.section_on);
+        // placed on the sheet: a cut through both long walls at u = 0 and 6 m
+        let _ = app.update(Message::PlaceOnSheet(sheet.clone(), Arc::from(section.path.as_str())));
+        let cut = app.cuts.get(&section.path).expect("drawn");
+        let (lo, hi) = cut.extent.expect("something cut");
+        assert!((lo[0] + 1.0).abs() < 1e-4 && (hi[0] - 7.0).abs() < 1e-4 && (hi[1] - 3.0).abs() < 1e-4, "{lo:?} {hi:?}");
+        // and the floor plan on the sheet shows where it is
+        let _ = app.update(Message::OpenDocSheet(sheet.clone()));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        assert_eq!(drawing.sections.len(), 1);
+        // the four elevations at once
+        let _ = app.update(Message::MakeElevations(["North", "East", "South", "West"]));
+        let names: Vec<&str> = app.document.sections().iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Section A", "North", "East", "South", "West"]);
+        let north = &app.document.sections()[1];
+        assert_eq!(north.axes().1, [0.0, -1.0], "the north elevation looks south");
+        let _ = app.update(Message::RemoveSection(Arc::from(north.path.clone().as_str())));
+        assert_eq!(app.document.sections().len(), 4);
     }
 
     #[test]

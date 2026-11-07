@@ -1043,7 +1043,7 @@ impl Studio {
                 Some(Side::Left) => {
                     let hide = l.text("Verkenner verbergen", "Hide explorer");
                     let actions = vec![w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft))];
-                    w::panel(look, l.text("Verkenner", "Explorer"), width, actions, Self::pane(app.layers_body(p, l)))
+                    w::panel(look, l.text("Verkenner", "Explorer"), width, actions, Self::pane(app.explorer_body(p, l)))
                 }
                 Some(Side::Right) => {
                     let hide = l.text("Eigenschappen verbergen", "Hide properties");
@@ -1059,7 +1059,7 @@ impl Studio {
             let hide = l.text("Verkenner verbergen", "Hide explorer");
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft)), hide, Some(self.command("view.left").shortcut_label().unwrap_or("")))];
             body = body
-                .push(w::panel(look, l.text("Verkenner", "Explorer"), self.prefs.left_width, actions, Self::pane(app.layers_body(p, l))))
+                .push(w::panel(look, l.text("Verkenner", "Explorer"), self.prefs.left_width, actions, Self::pane(app.explorer_body(p, l))))
                 .push(ch::splitter(look, dragging(Side::Left), Msg::SplitterPress(Side::Left)));
         }
         body = body.push(middle);

@@ -1,12 +1,16 @@
 //! Application state, messages and the main window layout:
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
+mod levels;
 mod schedules;
 mod sheets;
 mod structural;
 
+pub use levels::{ExplorerTab, LevelForm};
+
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
+use crate::document::Document;
 use crate::explode::{ExplodeIndex, ExplodeMode, UnitOwner};
 use crate::export;
 use crate::icons;
@@ -128,6 +132,12 @@ pub struct App {
     pub show_grids: bool,
     /// Explorer groups opened: views, rooms, layers, schedules, sheets.
     pub explorer_open: [bool; 5],
+    /// The explorer's tab shown.
+    pub explorer_tab: ExplorerTab,
+    /// The project document (IfcX): the levels of the model and those added.
+    pub document: Document,
+    /// The form of a new level, while it is open.
+    pub level_form: Option<LevelForm>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -222,6 +232,17 @@ pub enum Message {
     ToggleGrids,
     /// Open or close an explorer group (0 views, 1 rooms, 2 layers, 3 schedules, 4 sheets).
     ToggleExplorer(usize),
+    /// Show a tab of the explorer.
+    ExplorerTab(ExplorerTab),
+    /// Open the form of a new level, named after this word ("Level") and a number.
+    NewLevel(&'static str),
+    LevelName(String),
+    LevelElevation(String),
+    /// Add the level of the form.
+    AddLevel,
+    CancelLevel,
+    /// Remove an added level (its IfcX path).
+    RemoveLevel(Arc<str>),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
     /// Show a sheet's tab (`None`: not a sheet).
@@ -370,6 +391,9 @@ impl Default for App {
             active_view: None,
             show_grids: true,
             explorer_open: [false, false, true, false, false],
+            explorer_tab: ExplorerTab::Model,
+            document: Document::default(),
+            level_form: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -509,15 +533,16 @@ fn save_dialog_task(model: &Model) -> Task<Message> {
     Task::done(Message::SavePicked(Some(PathBuf::from(save_name(model)))))
 }
 
-/// Saves the model on a worker thread; an existing file is only replaced when `replace`.
+/// Saves the model with the document on a worker thread; an existing file is only replaced when
+/// `replace`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn save_task(model: Arc<Model>, path: PathBuf, replace: bool) -> Task<Message> {
+pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: bool) -> Task<Message> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
                 let start = Instant::now();
-                let _ = tx.send(export::save(&model, &path, replace).map(|()| (path, start.elapsed().as_secs_f32())));
+                let _ = tx.send(export::save(&model, &document, &path, replace).map(|()| (path, start.elapsed().as_secs_f32())));
             });
             rx.await.unwrap_or_else(|_| Err("save thread stopped".to_string()))
         },
@@ -527,13 +552,13 @@ pub fn save_task(model: Arc<Model>, path: PathBuf, replace: bool) -> Task<Messag
 
 /// Saves the model in the browser: written in memory and handed over as a download.
 #[cfg(target_arch = "wasm32")]
-pub fn save_task(model: Arc<Model>, path: PathBuf, _replace: bool) -> Task<Message> {
+pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace: bool) -> Task<Message> {
     Task::perform(
         async move {
             crate::web::next_frame().await;
             let start = Instant::now();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let bytes = export::to_bytes(&model, &name)?;
+            let bytes = export::to_bytes(&model, &document, &name)?;
             crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
             Ok((path, start.elapsed().as_secs_f32()))
         },
@@ -566,7 +591,7 @@ impl App {
         }
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.status = Status::Saving { file, since: Instant::now() };
-        save_task(model, path, replace)
+        save_task(model, self.document.clone(), path, replace)
     }
 
     pub(crate) fn model_matrix(&self) -> Mat4 {
@@ -736,6 +761,7 @@ impl App {
     pub fn set_model(&mut self, model: Arc<Model>) {
         self.hidden = Arc::default();
         self.history.clear();
+        self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
         self.set_scene(model);
     }
@@ -783,6 +809,7 @@ impl App {
             model.file_name(),
             model.load_time.as_secs_f32()
         ));
+        self.document.recognise(&model);
         self.model = Some(model);
         self.section = None;
         self.section_on = false;
@@ -842,7 +869,11 @@ impl App {
     /// Puts a model in the place of the last one (an IFCX stack with a file added).
     fn replace_last_model(&mut self, model: Arc<Model>) {
         if self.models.len() <= 1 {
-            self.set_model(model);
+            // the same project: the levels added stay
+            let document = std::mem::take(&mut self.document);
+            self.set_model(model.clone());
+            self.document = document;
+            self.document.recognise(&model);
         } else {
             self.models.pop();
             self.add_model(model);
@@ -1110,6 +1141,23 @@ impl App {
                 if let Some(open) = self.explorer_open.get_mut(i) {
                     *open = !*open;
                 }
+            }
+            Message::ExplorerTab(tab) => self.explorer_tab = tab,
+            Message::NewLevel(word) => self.new_level(word),
+            Message::LevelName(name) => {
+                if let Some(form) = &mut self.level_form {
+                    form.name = name;
+                }
+            }
+            Message::LevelElevation(elevation) => {
+                if let Some(form) = &mut self.level_form {
+                    form.elevation = elevation;
+                }
+            }
+            Message::AddLevel => self.add_level(),
+            Message::CancelLevel => self.level_form = None,
+            Message::RemoveLevel(path) => {
+                self.document.remove_level(&path);
             }
             Message::OpenSheet(i) => return self.open_sheet(i),
             Message::ShowSheet(i) => return self.show_sheet(i),
@@ -1851,7 +1899,7 @@ impl App {
 
     fn layers_panel(&self, p: Palette) -> Element<'_, Message> {
         let header = panel_header(p, "Layers", self.model.as_ref().map(|m| m.layers.len().to_string()));
-        panel(p, header, self.layers_body(p, standalone_language()), 220)
+        panel(p, header, self.explorer_body(p, standalone_language()), 220)
     }
 
     /// The explorer pane, organised as Revit's project browser: one search field, then

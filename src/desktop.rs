@@ -165,7 +165,7 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let file = args.file.as_ref().ok_or("--save-as needs a FILE to convert")?;
     let model = loaders::load(file)?;
     let start = web_time::Instant::now();
-    export::save(&model, out, true)?;
+    export::save(&model, &crate::document::Document::from_model(&model), out, true)?;
     println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }

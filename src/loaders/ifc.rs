@@ -155,7 +155,15 @@ impl Loader for IfcLoader {
             // A file of only spaces or openings is still a useful model; do not open a blank scene.
             for layer in layers.values_mut() { layer.hidden = false; }
         }
+        // the storeys, in the frame of the meshes: above the building's placement, less the anchor
+        let scale = result.metadata.length_unit_scale.unwrap_or(1.0);
+        let building_z = result.building_transform.as_ref().and_then(|m| m.get(14)).copied().unwrap_or(0.0);
+        let mut levels: Vec<(String, f32)> =
+            storeys(header, scale).into_iter().map(|(name, z)| (name, (building_z + z - anchor[2]) as f32)).collect();
+        levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        levels.dedup();
         let project = ProjectData {
+            levels,
             info: vec![
                 ("IFC schema".into(), result.metadata.schema_version),
                 ("IFC world origin (metres)".into(), format!("{}, {}, {}", anchor[0], anchor[1], anchor[2])),
@@ -187,6 +195,38 @@ fn unzip_ifc(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// The building storeys in file order: name (else long name) and elevation in metres above the
+/// building (`Elevation`, else the Z of the storey's own placement, which is relative to the
+/// building as `Elevation` is).
+fn storeys(content: &[u8], scale: f64) -> Vec<(String, f64)> {
+    use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner};
+    let mut scanner = EntityScanner::new(content);
+    let mut decoder = EntityDecoder::new(content);
+    let mut out = Vec::new();
+    while let Some((id, keyword, start, end)) = scanner.next_entity() {
+        if !keyword.eq_ignore_ascii_case("IFCBUILDINGSTOREY") {
+            continue;
+        }
+        let Ok(storey) = decoder.decode_at(start, end) else { continue };
+        let text = |i: usize| storey.get_string(i).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty());
+        let name = text(2).or_else(|| text(7)).unwrap_or_else(|| format!("Storey #{id}"));
+        let z = storey.get_float(9).or_else(|| placement_z(&mut decoder, storey.get_ref(5)?));
+        if let Some(z) = z.map(|z| z * scale).filter(|z| z.is_finite()) {
+            out.push((name, z));
+        }
+    }
+    out
+}
+
+/// The Z of a local placement's own offset (`IfcLocalPlacement` → `IfcAxis2Placement3D` →
+/// `IfcCartesianPoint`), in file units.
+fn placement_z(decoder: &mut ifc_lite_core::EntityDecoder, placement: u32) -> Option<f64> {
+    let placement = decoder.decode_by_id(placement).ok()?;
+    let axes = decoder.decode_by_id(placement.get_ref(1)?).ok()?;
+    let point = decoder.decode_by_id(axes.get_ref(0)?).ok()?;
+    point.get_list(0)?.get(2)?.as_float()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,7 +238,7 @@ mod tests {
         let indices = vec![0,2,1, 0,3,2, 4,5,6, 4,6,7, 0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7];
         let layer = Layer { name: "Box".into(), color: [0.8, 0.2, 0.1], positions, indices, ..Layer::default() };
         let model = Model::new("box.skp".into(), "SketchUp", vec![layer]);
-        crate::export::to_bytes(&model, "box.ifc").unwrap()
+        crate::export::to_bytes(&model, &crate::document::Document::from_model(&model), "box.ifc").unwrap()
     }
 
     #[test]
@@ -362,5 +402,102 @@ END-ISO-10303-21;"#;
         }
         let props = model.props.get(&18).expect("pickable IFC wall");
         assert!(props.contains("Extruded wall") && props.contains("IfcWall"), "{props}");
+    }
+
+    /// A building placed 10 m up its site with two storeys: the ground floor without an
+    /// `Elevation` (so its placement's 0 counts) and the first floor at 3 with a wall standing on
+    /// it, 3 high. Lengths are given in `unit` (`$` metres, `.MILLI.` millimetres) times `scale`.
+    fn storeys_ifc(unit: &str, scale: f64) -> Vec<u8> {
+        let l = |v: f64| format!("{:.1}", v * scale);
+        format!(
+            r#"ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('ViewDefinition [ReferenceView]'),'2;1');
+FILE_NAME('storeys.ifc','2026-11-07T00:00:00',('OpenAEC'),('OpenAEC'),'test','test','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+#1=IFCCARTESIANPOINT((0.,0.,0.));
+#2=IFCDIRECTION((0.,0.,1.));
+#3=IFCDIRECTION((1.,0.,0.));
+#4=IFCAXIS2PLACEMENT3D(#1,#2,#3);
+#5=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-5,#4,$);
+#6=IFCSIUNIT(*,.LENGTHUNIT.,{unit},.METRE.);
+#7=IFCUNITASSIGNMENT((#6));
+#8=IFCPROJECT('0YvctVUKr0kugbFTf53O9L',$,'Storeys',$,$,$,$,(#5),#7);
+#30=IFCLOCALPLACEMENT($,#4);
+#31=IFCSITE('2YvctVUKr0kugbFTf53O9L',$,'Site',$,$,#30,$,$,.ELEMENT.,$,$,$,$,$);
+#32=IFCCARTESIANPOINT((0.,0.,{building}));
+#33=IFCAXIS2PLACEMENT3D(#32,$,$);
+#34=IFCLOCALPLACEMENT(#30,#33);
+#35=IFCBUILDING('3YvctVUKr0kugbFTf53O9L',$,'Building',$,$,#34,$,$,.ELEMENT.,$,$,$);
+#36=IFCLOCALPLACEMENT(#34,#4);
+#37=IFCBUILDINGSTOREY('4YvctVUKr0kugbFTf53O9L',$,'00 Begane grond',$,$,#36,$,$,.ELEMENT.,$);
+#38=IFCCARTESIANPOINT((0.,0.,{first}));
+#39=IFCAXIS2PLACEMENT3D(#38,$,$);
+#40=IFCLOCALPLACEMENT(#34,#39);
+#41=IFCBUILDINGSTOREY('5YvctVUKr0kugbFTf53O9L',$,'01 Eerste verdieping \X2\00E9\X0\',$,$,#40,$,$,.ELEMENT.,{first});
+#42=IFCRELAGGREGATES('6YvctVUKr0kugbFTf53O9L',$,$,$,#8,(#31));
+#43=IFCRELAGGREGATES('7YvctVUKr0kugbFTf53O9L',$,$,$,#31,(#35));
+#44=IFCRELAGGREGATES('8YvctVUKr0kugbFTf53O9L',$,$,$,#35,(#41,#37));
+#9=IFCLOCALPLACEMENT(#40,#4);
+#10=IFCCARTESIANPOINT((0.,0.));
+#11=IFCAXIS2PLACEMENT2D(#10,$);
+#12=IFCRECTANGLEPROFILEDEF(.AREA.,'Wall',#11,{length},{thickness});
+#13=IFCEXTRUDEDAREASOLID(#12,#4,#2,{height});
+#14=IFCSHAPEREPRESENTATION(#5,'Body','SweptSolid',(#13));
+#15=IFCPRODUCTDEFINITIONSHAPE($,$,(#14));
+#16=IFCWALL('1YvctVUKr0kugbFTf53O9L',$,'Wall',$,$,#9,#15,$,.NOTDEFINED.);
+#45=IFCRELCONTAINEDINSPATIALSTRUCTURE('9YvctVUKr0kugbFTf53O9L',$,$,$,(#16),#41);
+ENDSEC;
+END-ISO-10303-21;"#,
+            building = l(10.0),
+            first = l(3.0),
+            length = l(4.0),
+            thickness = l(0.2),
+            height = l(3.0),
+        )
+        .into_bytes()
+    }
+
+    fn load_bytes(name: &str, data: Vec<u8>) -> crate::model::Model {
+        let source = Source::Bytes { name: name.into(), data: Arc::new(data) };
+        crate::loaders::load_with(&source, &Progress::default()).expect("IFC import")
+    }
+
+    fn assert_levels(model: &crate::model::Model, expected: &[(&str, f32)]) {
+        let got = &model.project.levels;
+        assert_eq!(got.len(), expected.len(), "{got:?}");
+        for ((name, z), (want_name, want_z)) in got.iter().zip(expected) {
+            assert_eq!(name, want_name, "{got:?}");
+            assert!((z - want_z).abs() < 0.001, "{got:?}");
+        }
+    }
+
+    #[test]
+    fn reads_building_storeys_as_levels_in_the_frame_of_the_meshes() {
+        let model = load_bytes("storeys.ifc", storeys_ifc("$", 1.0));
+        // the building's 10 m counts; the wall stands on the first floor
+        assert_levels(&model, &[("00 Begane grond", 10.0), ("01 Eerste verdieping é", 13.0)]);
+        assert!((model.bounds.min[2] - 13.0).abs() < 0.001, "{:?}", model.bounds);
+    }
+
+    #[test]
+    fn reads_storey_elevations_in_millimetre_files_as_metres() {
+        let model = load_bytes("storeys-mm.ifc", storeys_ifc(".MILLI.", 1000.0));
+        assert_levels(&model, &[("00 Begane grond", 10.0), ("01 Eerste verdieping é", 13.0)]);
+    }
+
+    #[test]
+    fn levels_saved_as_ifc_read_back_as_the_same_levels() {
+        let positions = vec![0.,0.,3., 2.,0.,3., 2.,3.,3., 0.,3.,3., 0.,0.,6., 2.,0.,6., 2.,3.,6., 0.,3.,6.];
+        let indices = vec![0,2,1, 0,3,2, 4,5,6, 4,6,7, 0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7];
+        let layer = Layer { name: "Box".into(), positions, indices, ..Layer::default() };
+        let mut model = Model::new("levels.skp".into(), "SketchUp", vec![layer]);
+        model.project.levels = vec![("Level 0".into(), 0.0), ("Level 1".into(), 3.0), ("Roof".into(), 6.5)];
+        let document = crate::document::Document::from_model(&model);
+        let bytes = crate::export::to_bytes(&model, &document, "levels.ifc").unwrap();
+        let model = load_bytes("levels.ifc", bytes);
+        assert_levels(&model, &[("Level 0", 0.0), ("Level 1", 3.0), ("Roof", 6.5)]);
     }
 }

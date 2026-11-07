@@ -1,6 +1,7 @@
 //! Application state, messages and the main window layout:
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
+mod grids;
 mod levels;
 mod marks;
 mod paper;
@@ -134,6 +135,8 @@ pub struct App {
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
     pub show_grids: bool,
+    /// The grid line picked with a click (index into the model's grids), shown in the properties.
+    pub picked_grid: Option<usize>,
     /// Explorer groups opened: views, rooms, layers, schedules, sheets.
     pub explorer_open: [bool; 5],
     /// The explorer's tab shown.
@@ -512,6 +515,7 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
+            picked_grid: None,
             explorer_open: [false, false, true, false, false],
             explorer_tab: ExplorerTab::Model,
             document: Document::default(),
@@ -1011,6 +1015,7 @@ impl App {
         self.sel.clear();
         self.selected = None;
         self.selection.clear();
+        self.picked_grid = None;
         self.structural.reset();
         self.measure.reset();
         self.measurements.clear();
@@ -1351,7 +1356,12 @@ impl App {
             }
             Message::CloseContextMenu => self.context_menu = None,
             Message::ApplyView(i) => self.apply_view(i),
-            Message::ToggleGrids => self.show_grids = !self.show_grids,
+            Message::ToggleGrids => {
+                self.show_grids = !self.show_grids;
+                if !self.show_grids {
+                    self.picked_grid = None;
+                }
+            }
             Message::ToggleExplorer(i) => {
                 if let Some(open) = self.explorer_open.get_mut(i) {
                     *open = !*open;
@@ -1832,10 +1842,14 @@ impl App {
             }
             return;
         }
-        // a structural node or member, unless a triangle lies clearly in front of it; Ctrl adds or
-        // removes it, keeping the rest of the selection
+        // a grid line, unless a triangle lies clearly in front of it (its bubbles always); then a
+        // structural node or member, the same; Ctrl adds or removes it, keeping the rest of the
+        // selection
         let mm = self.model_matrix();
         let triangle = hit.and_then(|(l, t, s)| face_at(&model.layers[l], t, origin - s, dir).map(|(p, _)| mm.transform_point3(p + s)));
+        if let Some(g) = self.grid_under(x, y, width, height, triangle) {
+            return self.pick_grid(Some(g));
+        }
         if let Some(h) = self.pick_structural(x, y, width, height, triangle) {
             self.click_structural(h.element, add);
             return;
@@ -1863,6 +1877,8 @@ impl App {
     /// After `sel` changed: the shown element (the first picked), the index ranges and the flags
     /// of the units.
     pub(crate) fn selection_changed(&mut self) {
+        // a grid is picked alone
+        self.picked_grid = None;
         let model = self.model.clone();
         self.selected = model.as_deref().and_then(|m| match self.sel.primary()? {
             Pickable::Element(id) => Some((m.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == id))?, Some(id))),
@@ -2544,7 +2560,7 @@ impl App {
 
         // project data while nothing is selected
         let pd = &model.project;
-        if self.selected.is_none() && self.structural.selected.is_empty() {
+        if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() {
             if !pd.info.is_empty() {
                 content = content.push(section(l.text("Project", "Project")));
                 for (k, v) in &pd.info {
@@ -2603,6 +2619,11 @@ impl App {
                 content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
             }
             content = content.push(rule::horizontal(1));
+        }
+
+        // the picked grid line
+        if let Some(grid) = self.grid_properties(p, l) {
+            content = content.push(section(l.text("Stramien", "Grid"))).push(grid).push(rule::horizontal(1));
         }
 
         // structural objects: properties built from the document
@@ -2841,7 +2862,7 @@ impl App {
             section: self.active_section(),
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
-            grids: self.show_grids && !self.flip_up,
+            grids: self.grids_shown(),
             bounds: self.world_bounds(),
         };
         let scene = shader(Viewport3D {
@@ -2948,13 +2969,15 @@ impl App {
         let grids = self
             .model
             .as_ref()
-            .filter(|m| self.show_grids && !self.flip_up && overlay.is_none() && !m.project.grids.is_empty())
+            .filter(|m| self.grids_shown() && overlay.is_none() && !m.project.grids.is_empty())
             .map(|m| {
                 canvas(crate::annotations::GridOverlay {
                     grids: &m.project.grids,
                     view_proj: self.camera.view_proj(self.aspect()),
                     fill: p.surface,
                     ink: p.text_secondary,
+                    picked: self.picked_grid,
+                    accent: p.accent,
                 })
                 .width(Fill)
                 .height(Fill)

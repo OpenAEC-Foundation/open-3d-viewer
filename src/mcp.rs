@@ -189,7 +189,7 @@ pub fn tools() -> Vec<Value> {
             json!({}), &[], false),
         tool("redo", "Redo what undo took back.",
             json!({}), &[], false),
-        tool("pick", "What is under a pixel of the last viewport screenshot: the 3D point, face normal, layer, element and its properties. With select: true it also selects it, as a click.",
+        tool("pick", "What is under a pixel of the last viewport screenshot: the 3D point, face normal, layer, element and its properties, or a grid line (its name and ends). With select: true it also selects it, as a click.",
             json!({
                 "x": { "type": "number" }, "y": { "type": "number" },
                 "select": { "type": "boolean" }

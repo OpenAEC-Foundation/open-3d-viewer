@@ -700,6 +700,10 @@ impl App {
     /// selected.
     fn selection_json(&self) -> Value {
         let Some(model) = &self.model else { return Value::Null };
+        // a picked grid line, picked alone
+        if let Some(grid) = self.picked_grid.and_then(|g| model.project.grids.get(g)) {
+            return grid_json(grid);
+        }
         let structural: Vec<Value> = self.structural.selected.iter().map(|&id| crate::structural::id_json(id)).collect();
         let Some((layer, element)) = self.selected else {
             let Some(&first) = self.structural.selected.first() else { return Value::Null };
@@ -1215,6 +1219,18 @@ impl App {
         let (vx, vy) = self.to_viewport(x, y);
         let hit = self.hit_at(vx, vy);
         let (w, h) = self.viewport_size;
+        // a grid line drawn there (its bubble, or within 5 px of its line where it is seen), as a
+        // click takes it first (unless it measures or places a plane)
+        let clicks = self.measure.tool.is_none() && !self.plane_picking;
+        let grid = self.grid_under(vx, vy, w, h, hit.as_ref().map(|h| h.point)).filter(|_| clicks);
+        if let (Some(g), Some(model)) = (grid, self.model.clone()) {
+            if flag(a, "select").unwrap_or(false) {
+                self.pick_grid(Some(g));
+            }
+            let mut out = grid_json(&model.project.grids[g]);
+            out["hit"] = json!(true);
+            return Ok(out);
+        }
         let structural = self.pick_structural(vx, vy, w, h, hit.as_ref().map(|h| h.point));
         if flag(a, "select").unwrap_or(false) {
             match &structural {
@@ -1735,6 +1751,11 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// A grid line: its name and the ends of its line (world, metres).
+fn grid_json(grid: &crate::model::GridLine) -> Value {
+    json!({ "grid": grid.name, "start": jv(Vec3::from_array(grid.a)), "end": jv(Vec3::from_array(grid.b)) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1956,6 +1977,29 @@ mod tests {
         assert_eq!(hit["element"], json!(7));
         assert_eq!(hit["normal"], json!([1.0, 0.0, 0.0]));
         assert!((hit["point"][0].as_f64().unwrap() - 2.0).abs() < 1e-3, "{hit}");
+    }
+
+    /// `pick` names a grid line under the pixel, as a click takes it before what lies behind it,
+    /// and with select picks it; the state shows it then.
+    #[test]
+    fn pick_names_a_grid_line_and_selects_it() {
+        let mut model = Model::new(PathBuf::from("grids.rvt"), "Revit", Vec::new());
+        model.project.grids = vec![crate::model::GridLine { name: "A".into(), a: [-5.0, 0.0, 0.0], b: [5.0, 0.0, 0.0] }];
+        let mut app = App::default();
+        app.set_model(Arc::new(model));
+        app.viewport_size = (800.0, 600.0);
+        app.camera.set_preset(ViewPreset::Top);
+        app.camera.target = Vec3::ZERO;
+        app.camera.distance = 20.0;
+        let hit = run(&mut app, "pick", json!({ "x": 400, "y": 302 })).unwrap();
+        assert_eq!(hit["grid"], json!("A"), "{hit}");
+        assert_eq!((hit["start"].clone(), hit["end"].clone()), (json!([-5.0, 0.0, 0.0]), json!([5.0, 0.0, 0.0])));
+        assert_eq!(app.picked_grid, None);
+        run(&mut app, "pick", json!({ "x": 400, "y": 302, "select": true })).unwrap();
+        assert_eq!(app.picked_grid, Some(0));
+        let state = run(&mut app, "get_state", json!({})).unwrap();
+        assert_eq!(state["selection"]["grid"], json!("A"), "{state}");
+        assert!(run(&mut app, "pick", json!({ "x": 400, "y": 380 })).unwrap()["grid"].is_null());
     }
 
     #[test]

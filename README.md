@@ -71,7 +71,7 @@ What works and what does not on Android:
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
 - **Opens what you get sent.** Revit, Vertex BD (`.vxz`) and BTL timber machine files on the desktop; IFC (also zipped), SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), STEP (AP203, AP214, AP242), IFC5 (IFCX, alpha), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino (version 4 to 8), COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL and PLY, structural analysis models in sam-json (`.samjson`), and LAS, LAZ, E57, PTS, PTX, PCD and ASCII XYZ point clouds, on the desktop and in the browser.
-- **Several models at once.** **Open** replaces the model, **Add** puts another file next to it (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
+- **Several models at once.** **Open** puts a file in a tab of its own beside the open model (several files dropped at once load side by side, each in its tab), **Add** puts another file in the same view (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
 - **Measure and cut.** Distances, angles, areas and polygons, a section box and a section plane with filled cuts, and an exploded view.

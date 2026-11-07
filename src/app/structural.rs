@@ -566,6 +566,31 @@ mod tests {
         assert_eq!(app.structural.hovered, None, "measuring");
     }
 
+    /// Hide and Isolate (the ribbon, H and I, the right-click menu) take a node picked by a click
+    /// too, though it is selected apart from `App::sel`.
+    #[test]
+    fn hide_and_isolate_take_a_clicked_node() {
+        let mut app = portal();
+        let display = app.model.as_ref().unwrap().structural_display.clone().unwrap();
+        let (w, h) = app.viewport_size;
+        let g = 0;
+        let node = display.items[display.glyph_item[g] as usize].element;
+        let unit = app.explode_index.as_ref().unwrap().structural_unit(node).unwrap() as usize;
+        let hidden = |app: &App| app.units[unit][3] as u8 & crate::units::UNIT_HIDDEN != 0;
+        let (x, y) = screen(&app, display.glyphs[g].pos);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        assert_eq!(app.structural.selected, vec![node]);
+        let _ = app.update(Message::HideSelection);
+        assert!(hidden(&app));
+        assert!(app.structural.selected.is_empty(), "what is hidden is not selected");
+        let _ = app.update(Message::ShowAllElements);
+        let _ = app.update(Message::Navigate(Navigate::Pick { x, y, width: w, height: h, add: false }));
+        let _ = app.update(Message::IsolateSelection);
+        assert!(!hidden(&app));
+        // the other three nodes and the three members
+        assert_eq!(app.hidden.len(), 6);
+    }
+
     /// Hiding a node through the selection (as box select and Hide do) leaves it undrawn and
     /// unpicked; showing all brings it back.
     #[test]

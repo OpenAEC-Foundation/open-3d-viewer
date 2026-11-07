@@ -219,6 +219,10 @@ fn run_app(args: Args) -> iced::Result {
     if let Some(dir) = dir {
         studio = studio.with_settings_in(dir);
     }
+    // a dev build of scripts/dev.ps1: the files open before its restart open again
+    if let Some(session) = std::env::var_os("O3V_DEV_SESSION").filter(|s| !s.is_empty()) {
+        studio = studio.with_dev_session(PathBuf::from(session), std::env::var("O3V_DEV_LABEL").ok().filter(|l| !l.is_empty()));
+    }
     studio.set_look(args.theme.or_else(managed::theme), args.language.or_else(managed::language));
     shell::run(studio, window_icon(), true)
 }

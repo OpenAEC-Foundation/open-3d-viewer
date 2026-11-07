@@ -1,13 +1,14 @@
 //! The 3D viewport: an iced `shader` widget program plus mouse navigation.
 //!
 //! As Revit: middle drag pans, Shift + middle drag orbits, the wheel zooms towards the cursor.
-//! Also left drag orbits, Shift + left or right drag pans, and a left click (press and release on
-//! the same spot) picks. While measuring, the cursor position is reported once per frame as it
+//! Also left drag orbits, Shift + left or right drag pans, a left click (press and release on
+//! the same spot) picks, and a right click opens the menu of what is selected. While measuring, the cursor position is reported once per frame as it
 //! moves, so the app can highlight what a click would pick.
 //!
 //! On a touch screen (phones and tablets, through the web app): one finger orbits, two fingers
 //! pinch to zoom and move together to pan, a tap picks, and a long press (half a second) before
-//! dragging pans, as a right drag does with the mouse.
+//! dragging pans, as a right drag does with the mouse; a long press without dragging opens the
+//! menu, as a right click does.
 //! The camera lives in the application state; the widget reports navigation as messages.
 
 pub mod box_select;
@@ -51,6 +52,9 @@ pub enum Navigate {
     /// Ctrl + left drag: the box from (x0, y0) to the cursor (x1, y1) in a viewport of width ×
     /// height; `done` when the button is released.
     Box { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, height: f32, done: bool },
+    /// Right click (or a long press) at (x, y) in a viewport of width × height: the menu of the
+    /// selection.
+    Context { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor rests at (x, y) in the viewport (only while `hover` is on).
     Hover { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor left the viewport.
@@ -86,6 +90,8 @@ pub struct State {
     drag: Option<(Drag, Point)>,
     /// Where the left button went down, for click detection.
     press: Option<Point>,
+    /// Where the right button went down, while it has not dragged: a right click.
+    right_press: Option<Point>,
     shift: bool,
     /// Ctrl (Cmd on macOS) is held: a click adds to the selection.
     command: bool,
@@ -177,6 +183,7 @@ where
                 };
                 state.drag = Some((drag, position));
                 state.press = (*button == mouse::Button::Left && matches!(drag, Drag::Orbit | Drag::Box)).then_some(position);
+                state.right_press = (*button == mouse::Button::Right).then_some(position);
                 // a click keeps the highlight it takes; a drag does not
                 state.hover = None;
                 Some(shader::Action::capture())
@@ -184,6 +191,11 @@ where
             Event::Mouse(mouse::Event::ButtonReleased(_)) => {
                 let drag = state.drag.take();
                 let press = state.press.take();
+                if let (Some(start), Some(at)) = (state.right_press.take(), cursor.position_in(bounds)) {
+                    if start.distance(at) < 4.0 {
+                        return publish(Navigate::Context { x: at.x, y: at.y, width: bounds.width, height: bounds.height });
+                    }
+                }
                 if let (Some((Drag::Orbit | Drag::Box, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
                         return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command });
@@ -218,6 +230,10 @@ where
                 // Track outside the bounds too while dragging
                 let position = cursor.position()?;
                 let position = Point::new(position.x - bounds.x, position.y - bounds.y);
+                // a right click that moves is a pan
+                if state.right_press.is_some_and(|start| start.distance(position) >= 4.0) {
+                    state.right_press = None;
+                }
                 // a click jitters a pixel or two: orbit only once the cursor really moves
                 if let Some(start) = state.press {
                     if start.distance(position) < 4.0 {
@@ -363,9 +379,14 @@ fn touch<Message: From<Navigate>>(state: &mut State, event: touch::Event, bounds
             let gesture = state.gesture.take();
             let lifted = matches!(event, touch::Event::FingerLifted { .. });
             match gesture {
-                // a short tap picks, as a click; a long press without moving does nothing
-                Some(Gesture::Press { at, since }) if lifted && held(since) < LONG_PRESS && at.distance(local(position)) < TAP_SLOP => {
-                    publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command })
+                // a short tap picks, as a click; a long press without moving opens the menu, as a
+                // right click
+                Some(Gesture::Press { at, since }) if lifted && at.distance(local(position)) < TAP_SLOP => {
+                    if held(since) < LONG_PRESS {
+                        publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command })
+                    } else {
+                        publish(Navigate::Context { x: at.x, y: at.y, width: bounds.width, height: bounds.height })
+                    }
                 }
                 _ => Some(shader::Action::capture()),
             }
@@ -393,6 +414,67 @@ mod tests {
     }
     fn lifted(id: u64, x: f32, y: f32) -> touch::Event {
         touch::Event::FingerLifted { id: touch::Finger(id), position: Point::new(x, y) }
+    }
+
+    /// A mouse event at window point `at`, through the viewport program.
+    fn mouse_event(state: &mut State, event: mouse::Event, at: Point) -> Option<Navigate> {
+        let offsets = Arc::default();
+        let marks = Arc::default();
+        let settings = RenderSettings {
+            mode: render::RenderMode::Solid,
+            grid: false,
+            background: [1.0; 3],
+            grid_minor: [0.0; 4],
+            grid_major: [0.0; 4],
+            model_matrix: glam::Mat4::IDENTITY,
+            section: None,
+            plane: None,
+            caps: false,
+            grids: false,
+            bounds: None,
+        };
+        let view = Viewport3D {
+            model: None,
+            visible: &[],
+            camera: Camera::default(),
+            settings,
+            explode: None,
+            offsets: &offsets,
+            hover: false,
+            crosshair: false,
+            structural_selected: &marks,
+            structural_hovered: &marks,
+            structural_shown: None,
+        };
+        shader::Program::<Navigate>::update(&view, state, &Event::Mouse(event), bounds(), mouse::Cursor::Available(at))?.into_inner().0
+    }
+
+    #[test]
+    fn a_right_click_opens_the_menu_and_a_right_drag_pans() {
+        let mut state = State::default();
+        let (down, up) = (mouse::Event::ButtonPressed(mouse::Button::Right), mouse::Event::ButtonReleased(mouse::Button::Right));
+        assert!(mouse_event(&mut state, down, Point::new(200.0, 150.0)).is_none());
+        // it opens where the button comes up
+        let menu = mouse_event(&mut state, up, Point::new(201.0, 150.0));
+        assert!(matches!(menu, Some(Navigate::Context { x, y, .. }) if x == 101.0 && y == 100.0), "{menu:?}");
+        // a drag pans and opens nothing
+        mouse_event(&mut state, down, Point::new(200.0, 150.0));
+        let moved = mouse::Event::CursorMoved { position: Point::new(230.0, 150.0) };
+        assert!(matches!(mouse_event(&mut state, moved, Point::new(230.0, 150.0)), Some(Navigate::Pan { dx, .. }) if dx == 30.0));
+        assert!(!matches!(mouse_event(&mut state, up, Point::new(230.0, 150.0)), Some(Navigate::Context { .. })));
+        // a left click still picks
+        mouse_event(&mut state, mouse::Event::ButtonPressed(mouse::Button::Left), Point::new(200.0, 150.0));
+        let pick = mouse_event(&mut state, mouse::Event::ButtonReleased(mouse::Button::Left), Point::new(200.0, 150.0));
+        assert!(matches!(pick, Some(Navigate::Pick { .. })), "{pick:?}");
+    }
+
+    #[test]
+    fn a_long_press_opens_the_menu() {
+        let mut state = State::default();
+        let t = Instant::now();
+        send(&mut state, press(1, 200.0, 150.0), t);
+        let menu = send(&mut state, lifted(1, 202.0, 151.0), t + LONG_PRESS + Duration::from_millis(50));
+        assert!(matches!(menu, Some(Navigate::Context { x, y, .. }) if x == 100.0 && y == 100.0), "{menu:?}");
     }
 
     #[test]

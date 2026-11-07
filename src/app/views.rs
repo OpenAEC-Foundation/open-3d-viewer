@@ -182,6 +182,7 @@ impl App {
         }
         self.anim = None;
         self.active_plan = target;
+        self.mark_pick = None;
     }
 
     /// The document tabs, in order: the 3D view, the open floor plans, schedules and sheets.

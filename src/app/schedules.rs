@@ -151,6 +151,11 @@ impl App {
             return self.sheet_view_element(p, l, sheet);
         }
         let viewport = self.viewport_view(p, l);
+        // a view's tab: its tools over it
+        let viewport = match self.view_bar(p, l) {
+            Some(bar) => column![bar, viewport].into(),
+            None => viewport,
+        };
         let Some((i, s)) = self.active_schedule.and_then(|i| Some((i, self.schedules.get(i)?))) else {
 
             return viewport;

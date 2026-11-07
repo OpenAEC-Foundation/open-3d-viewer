@@ -13,7 +13,7 @@ use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::{button, canvas as canvas_widget, column, container, row, text, Row};
-use iced::{Center, Color, Element, Fill, Point, Rectangle, Size, Vector};
+use iced::{Center, Color, Element, Fill, Point, Rectangle, Size};
 use openaec_ui::Language;
 use std::sync::Arc;
 
@@ -35,6 +35,8 @@ pub enum SheetPick {
     View(usize),
     /// A dimension: the placed view it shows on, its index in the floor plan.
     Dimension(usize, usize),
+    /// A text: the placed view it shows on, its index in the view.
+    Note(usize, usize),
 }
 
 impl App {
@@ -62,7 +64,7 @@ impl App {
     }
 
     /// The floor plan of placed view `index` on the sheet shown.
-    fn placed_plan(&self, index: usize) -> Option<String> {
+    pub(super) fn placed_plan(&self, index: usize) -> Option<String> {
         let sheet = self.document.sheet(self.active_doc_sheet.as_deref()?)?;
         Some(sheet.views.get(index)?.plan.clone())
     }
@@ -78,6 +80,11 @@ impl App {
             }),
             _ => None,
         };
+        if let Some(SheetPick::Note(i, k)) = pick {
+            if let Some(note) = self.placed_plan(i).and_then(|v| self.document.view_notes(&v)?.get(k).cloned()) {
+                self.note_text = note.text;
+            }
+        }
     }
 
     /// Removes what is picked: a view from the sheet, or a dimension from its floor plan.
@@ -90,6 +97,11 @@ impl App {
             Some(SheetPick::Dimension(i, k)) => {
                 if let Some(plan) = self.placed_plan(i) {
                     self.document.remove_dimension(&plan, k);
+                }
+            }
+            Some(SheetPick::Note(i, k)) => {
+                if let Some(view) = self.placed_plan(i) {
+                    self.document.remove_note(&view, k);
                 }
             }
             None => return,
@@ -160,7 +172,7 @@ impl App {
 
     /// Cuts a view when it is not cut yet: a floor plan at its cut height, a section or
     /// elevation along its line, through the layers shown now.
-    fn cut_view(&mut self, path: &str) {
+    pub(super) fn cut_view(&mut self, path: &str) {
         let Some(model) = self.model.clone() else { return };
         if self.cuts.contains_key(path) {
             return;
@@ -220,6 +232,7 @@ impl App {
                     plan: Arc::from(v.plan.as_str()),
                     cut: self.cuts.get(&v.plan).cloned(),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
+                    notes: self.document.view_notes(&v.plan).map_or(Vec::new(), <[_]>::to_vec),
                     crop: marks.and_then(|(_, c)| c),
                     is_plan: self.document.plan(&v.plan).is_some(),
                 }
@@ -242,6 +255,7 @@ impl App {
             pick: self.sheet_pick,
             empty: l.text("niets gesneden", "nothing cut").to_string(),
             carrying,
+            noting: self.note_tool.then(|| self.note_to_place(l)),
         })
     }
 
@@ -261,7 +275,13 @@ impl App {
             .padding([3, 10])
             .style(move |_, s| p.ribbon_button(cutting, s))
             .on_press(Message::SectionTool(!cutting));
-        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(section).push(text("|").size(12).color(p.text_muted));
+        let noting = self.note_tool;
+        let note = button(text(l.text("Tekst", "Text")).size(12))
+            .padding([3, 10])
+            .style(move |_, s| p.ribbon_button(noting, s))
+            .on_press(Message::NoteTool(!noting));
+        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(note).push(section).push(text("|").size(12).color(p.text_muted));
+        let wording = || iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
         let small = |label: String, active: bool, message: Message| {
             button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(message)
         };
@@ -272,6 +292,8 @@ impl App {
         if tool {
             let hint = l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.");
             bar = bar.push(text(hint).size(12).color(p.text_secondary));
+        } else if noting {
+            bar = bar.push(wording()).push(text(l.text("Klik op een weergave waar de tekst komt.", "Click on a view where the text goes.")).size(12).color(p.text_secondary));
         } else if cutting {
             let hint = l.text("Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.", "Click where the section starts and ends on a floor plan; it looks to the left.");
             bar = bar.push(text(hint).size(12).color(p.text_secondary));
@@ -292,6 +314,8 @@ impl App {
                 bar = bar.push(text(l.text("sleep een rand om bij te snijden", "drag a side to crop")).size(12).color(p.text_muted));
             }
             bar = bar.push(small(l.text("Van blad halen", "Take off sheet").to_string(), false, Message::RemovePicked));
+        } else if let Some(SheetPick::Note(..)) = self.sheet_pick {
+            bar = bar.push(wording()).push(small(l.text("Tekst verwijderen", "Remove text").to_string(), false, Message::RemovePicked));
         } else if let Some(SheetPick::Dimension(..)) = self.sheet_pick {
             bar = bar.push(small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked));
         } else {
@@ -333,6 +357,7 @@ struct Placed {
     plan: Arc<str>,
     cut: Option<Arc<Cut>>,
     dimensions: Vec<Dimension>,
+    notes: Vec<crate::document::Note>,
     crop: Option<([f64; 2], [f64; 2])>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
@@ -387,6 +412,8 @@ struct PaperDrawing {
     empty: String,
     /// The view dragged from the Views list: its path, name and the extent of its drawing.
     carrying: Option<(Arc<str>, String, Option<([f32; 2], [f32; 2])>)>,
+    /// The text tool is on, with the text a click places.
+    noting: Option<String>,
 }
 
 /// Paper metres to canvas pixels: the paper centred, y up.
@@ -522,9 +549,30 @@ impl PaperDrawing {
         })
     }
 
-    /// A tool that takes clicks is on (dimension or section).
+    /// A tool that takes clicks is on (dimension, section or text).
     fn busy(&self) -> bool {
-        self.tool || self.section_tool
+        self.tool || self.section_tool || self.noting.is_some()
+    }
+
+    /// The size of a text on the paper (logical pixels): 3.5 mm, readable at least.
+    fn note_size(fit: &Fit) -> f32 {
+        ((0.0035 * fit.scale) as f32).max(9.0)
+    }
+
+    /// Where text `k` of placed view `i` is on the canvas.
+    fn note_box(&self, fit: &Fit, i: usize, k: usize) -> Option<Rectangle> {
+        let note = self.placed.get(i)?.notes.get(k)?;
+        let size = Self::note_size(fit);
+        let at = fit.point(self.to_paper(i, note.at));
+        let width = note.text.chars().count() as f32 * size * 0.56;
+        Some(Rectangle::new(Point::new(at.x, at.y - size * 1.2), Size::new(width, size * 1.2)))
+    }
+
+    /// The text under `pointer`, the topmost view first.
+    fn note_at(&self, fit: &Fit, pointer: Point) -> Option<(usize, usize)> {
+        (0..self.placed.len())
+            .rev()
+            .find_map(|i| (0..self.placed[i].notes.len()).rev().find(|&k| self.note_box(fit, i, k).is_some_and(|b| b.expand(PICK).contains(pointer))).map(|k| (i, k)))
     }
 
     /// The placed view under a paper point, the topmost (last placed) first.
@@ -599,6 +647,11 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let at = fit.paper(cursor.position_in(bounds)?);
+                if let Some(wording) = &self.noting {
+                    let i = self.view_at(at)?;
+                    let view = self.placed.get(i)?.plan.clone();
+                    return Some(canvas::Action::publish(Message::AddNote(view, self.to_model(i, at), wording.clone())).and_capture());
+                }
                 if self.busy() {
                     let i = state.first.map(|(i, _)| i).or_else(|| self.view_at(at))?;
                     // a section is drawn on a floor plan
@@ -624,6 +677,9 @@ impl canvas::Program<Message> for PaperDrawing {
                     state.crop = Some(handle);
                     return Some(canvas::Action::request_redraw().and_capture());
                 }
+                if let Some((i, k)) = self.note_at(&fit, fit.point(at)) {
+                    return Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::Note(i, k)))).and_capture());
+                }
                 if let Some((i, k)) = self.dimension_at(&fit, fit.point(at)) {
                     return Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::Dimension(i, k)))).and_capture());
                 }
@@ -633,11 +689,6 @@ impl canvas::Program<Message> for PaperDrawing {
                 let middle = self.sheet.views[i].at;
                 state.drag = Some((i, [middle[0] - at[0], middle[1] - at[1]]));
                 Some(canvas::Action::publish(Message::PickOnSheet(Some(SheetPick::View(i)))).and_capture())
-            }
-            iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Delete | keyboard::key::Named::Backspace), .. })
-                if self.pick.is_some() && !self.busy() =>
-            {
-                Some(canvas::Action::publish(Message::RemovePicked).and_capture())
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 let crop = state.crop.take();
@@ -649,6 +700,9 @@ impl canvas::Program<Message> for PaperDrawing {
                 }
                 if self.section_tool {
                     return Some(canvas::Action::publish(Message::SectionTool(false)).and_capture());
+                }
+                if self.noting.is_some() {
+                    return Some(canvas::Action::publish(Message::NoteTool(false)).and_capture());
                 }
                 self.tool.then(|| canvas::Action::publish(Message::DimensionTool(false)).and_capture())
             }
@@ -742,6 +796,13 @@ impl canvas::Program<Message> for PaperDrawing {
             for (k, d) in placed.dimensions.iter().enumerate() {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
                 draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color);
+            }
+            for (k, note) in placed.notes.iter().enumerate() {
+                let picked = self.pick == Some(SheetPick::Note(i, k));
+                super::marks::draw_note(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink });
+                if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
+                    frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
+                }
             }
             // the sections drawn on this floor plan
             if placed.is_plan {
@@ -858,42 +919,9 @@ fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2],
 /// from → to, extension lines from the points to just past it, a slash at each end, and the
 /// length in millimetres over the middle.
 fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color) {
-    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-    let run = dx.hypot(dy);
-    if run <= 0.0 {
-        return;
-    }
-    let (ux, uy) = (dx / run, dy / run);
-    let (nx, ny) = (-uy, ux);
-    let off = |q: [f64; 2], d: f64| [q[0] + nx * d, q[1] + ny * d];
-    let (a, b) = (off(from, DIMENSION_OFFSET), off(to, DIMENSION_OFFSET));
-    let tick = 0.0012;
-    let slash = |q: [f64; 2]| ([q[0] - (ux + nx) * tick, q[1] - (uy + ny) * tick], [q[0] + (ux + nx) * tick, q[1] + (uy + ny) * tick]);
-    let lines = Path::new(|path| {
-        for (q, end) in [(from, a), (to, b)] {
-            path.move_to(fit.point(off(q, 0.0015)));
-            path.line_to(fit.point(off(end, 0.0015)));
-        }
-        path.move_to(fit.point(a));
-        path.line_to(fit.point(b));
-        for q in [a, b] {
-            let (s, e) = slash(q);
-            path.move_to(fit.point(s));
-            path.line_to(fit.point(e));
-        }
-    });
-    frame.stroke(&lines, Stroke::default().with_color(color).with_width(0.9));
-    let middle = fit.point(off([(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], DIMENSION_OFFSET + 0.0015));
-    frame.fill_text(canvas::Text {
-        content: format!("{}", (length * 1000.0).round()),
-        position: middle + Vector::new(0.0, 0.0),
-        align_x: alignment::Horizontal::Center.into(),
-        align_y: alignment::Vertical::Center,
-        size: iced::Pixels(10.0),
-        color,
-        font: openaec_ui::fonts::MEDIUM,
-        ..canvas::Text::default()
-    });
+    let px = |m: f64| (m * fit.scale) as f32;
+    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), tick: px(0.0012), gap: px(0.0015), size: 10.0 };
+    super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, look);
 }
 
 /// The sheets of the document in the explorer's Views tab: each opens in its tab; New sheet.
@@ -928,6 +956,7 @@ pub(super) fn sheets_list<'a>(app: &'a App, p: Palette, l: Language, mut body: i
 mod tests {
     use super::*;
     use crate::app::DocTab;
+    use iced::Vector;
     use crate::model::{Layer, Model};
     use std::path::PathBuf;
 
@@ -995,8 +1024,8 @@ mod tests {
             text: None,
             repeat: false,
         });
-        let action = canvas::Program::update(&drawing, &mut PaperState::default(), &delete, bounds(), mouse::Cursor::Unavailable).expect("delete");
-        let _ = app.update(action.into_inner().0.expect("a message"));
+        assert!(canvas::Program::update(&drawing, &mut PaperState::default(), &delete, bounds(), mouse::Cursor::Unavailable).is_none(), "the app takes Delete");
+        let _ = app.update(Message::DeletePicked);
         assert!(app.document.sheet(&sheet).unwrap().views.is_empty());
         assert_eq!(app.sheet_pick, None);
     }
@@ -1114,6 +1143,33 @@ mod tests {
         let _ = app.update(Message::GrabView(plan.clone()));
         let _ = app.update(Message::ReleaseView(plan.clone()));
         assert_eq!((app.active_plan.as_deref(), app.dragging_view.as_ref()), (Some(&*plan), None));
+    }
+
+    #[test]
+    fn the_text_tool_puts_a_text_on_a_placed_view_which_a_click_picks() {
+        let (mut app, _, plan, _) = sheet_with_plan(false);
+        let _ = app.update(Message::NoteTool(true));
+        let _ = app.update(Message::NoteText("Living".into()));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let fit = Fit::of(drawing.sheet.paper, bounds().size());
+        let placed = press_at(&drawing, &mut PaperState::default(), fit.point(drawing.to_paper(0, [3.0, 2.0]))).expect("a text");
+        let Message::AddNote(v, at, wording) = &placed else { panic!("{placed:?}") };
+        assert!(*v == plan && (at[0] - 3.0).abs() < 1e-3 && (at[1] - 2.0).abs() < 1e-3 && wording == "Living", "{placed:?}");
+        let _ = app.update(placed);
+        // the view's own: its tab has it too
+        assert_eq!(app.document.view_notes(&plan).unwrap().len(), 1);
+        let _ = app.update(Message::NoteTool(false));
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        assert_eq!(drawing.placed[0].notes.len(), 1);
+        let on_it = fit.point(drawing.to_paper(0, [3.0, 2.0])) + Vector::new(4.0, -3.0);
+        let pick = press_at(&drawing, &mut PaperState::default(), on_it).expect("a pick");
+        assert!(matches!(pick, Message::PickOnSheet(Some(SheetPick::Note(0, 0)))), "{pick:?}");
+        let _ = app.update(pick);
+        assert_eq!(app.note_text, "Living");
+        let _ = app.update(Message::NoteText("Living room".into()));
+        assert_eq!(app.document.view_notes(&plan).unwrap()[0].text, "Living room");
+        let _ = app.update(Message::DeletePicked);
+        assert!(app.document.view_notes(&plan).unwrap().is_empty());
     }
 
     #[test]

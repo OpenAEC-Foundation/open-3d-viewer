@@ -44,6 +44,8 @@ pub struct PlanView {
     pub depth: f64,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
+    /// Its texts, shown wherever it is placed.
+    pub notes: Vec<Note>,
     /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
     /// all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
@@ -64,6 +66,8 @@ pub struct SectionView {
     pub depth: f64,
     /// Its dimensions, in its drawing's (u, v).
     pub dimensions: Vec<Dimension>,
+    /// Its texts, in its drawing's (u, v).
+    pub notes: Vec<Note>,
     /// What it shows, in its drawing's (u, v); `None`: all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
 }
@@ -91,6 +95,14 @@ impl Dimension {
     pub fn length(&self) -> f64 {
         (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1])
     }
+}
+
+/// A text on a drawing, standing on a point of it (its lower left; a floor plan's x, y, a
+/// section's u, v; metres).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    pub at: [f64; 2],
+    pub text: String,
 }
 
 /// A3 landscape, the paper of a new sheet (metres).
@@ -197,19 +209,20 @@ impl Document {
     pub fn ifcx_drawing_nodes(&self) -> Vec<Value> {
         let rect = |c: Option<([f64; 2], [f64; 2])>| c.map_or(Value::Null, |(lo, hi)| json!([lo, hi]));
         let dims = |d: &[Dimension]| d.iter().map(|d| json!([d.from, d.to])).collect::<Vec<_>>();
+        let notes = |n: &[Note]| n.iter().map(|n| json!({"at": n.at, "text": n.text})).collect::<Vec<_>>();
         let mut nodes = Vec::new();
         let mut children = serde_json::Map::new();
         for (i, p) in self.plans.iter().enumerate() {
             let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": {
-                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions),
+                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes),
             }}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": {
-                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions),
+                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes),
             }}}));
         }
         for (i, s) in self.sheets.iter().enumerate() {
@@ -234,6 +247,10 @@ impl Document {
         let dims = |v: Option<&Value>| -> Vec<Dimension> {
             v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)? })).collect()
         };
+        let notes = |v: Option<&Value>| -> Vec<Note> {
+            let all = v.and_then(Value::as_array).into_iter().flatten();
+            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string() })).filter(|n| !n.text.trim().is_empty()).collect()
+        };
         let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
         let number = |v: &Value, key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
         let known = |doc: &Document, path: &str| doc.plan(path).is_some() || doc.section(path).is_some() || doc.sheet(path).is_some();
@@ -250,6 +267,7 @@ impl Document {
                     cut: number(p, "cut", PLAN_CUT),
                     depth: number(p, "depth", PLAN_DEPTH),
                     dimensions: dims(p.get("dimensions")),
+                    notes: notes(p.get("notes")),
                     crop: rect(p.get("crop")),
                 });
             } else if let Some(s) = attributes.get("o3v::view::section") {
@@ -261,6 +279,7 @@ impl Document {
                     to,
                     depth: number(s, "depth", 100.0),
                     dimensions: dims(s.get("dimensions")),
+                    notes: notes(s.get("notes")),
                     crop: rect(s.get("crop")),
                 });
             }
@@ -337,7 +356,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), crop: None });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None });
         Some(path)
     }
 
@@ -368,7 +387,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), crop: None });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None });
         Some(path)
     }
 
@@ -426,6 +445,63 @@ impl Document {
             return false;
         }
         dimensions.remove(index);
+        true
+    }
+
+    /// The texts of a view.
+    pub fn view_notes(&self, path: &str) -> Option<&[Note]> {
+        if let Some(p) = self.plan(path) {
+            return Some(&p.notes);
+        }
+        self.section(path).map(|s| &s.notes[..])
+    }
+
+    fn notes_mut(&mut self, path: &str) -> Option<&mut Vec<Note>> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some(&mut p.notes);
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| &mut s.notes)
+    }
+
+    /// Adds a text to a view's drawing at a point of it; a text of only spaces, or a point that
+    /// is not finite, adds nothing.
+    pub fn add_note(&mut self, view: &str, at: [f64; 2], text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || !at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(notes) = self.notes_mut(view) else { return false };
+        notes.push(Note { at, text: text.to_string() });
+        true
+    }
+
+    /// Moves a view's text to another point of its drawing.
+    pub fn move_note(&mut self, view: &str, index: usize, at: [f64; 2]) -> bool {
+        if !at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
+        note.at = at;
+        true
+    }
+
+    /// Gives a view's text another wording; it keeps one.
+    pub fn set_note_text(&mut self, view: &str, index: usize, text: &str) -> bool {
+        if text.trim().is_empty() {
+            return false;
+        }
+        let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
+        note.text = text.to_string();
+        true
+    }
+
+    /// Removes a view's text.
+    pub fn remove_note(&mut self, view: &str, index: usize) -> bool {
+        let Some(notes) = self.notes_mut(view) else { return false };
+        if index >= notes.len() {
+            return false;
+        }
+        notes.remove(index);
         true
     }
 
@@ -859,6 +935,35 @@ mod tests {
         assert!(document.remove_dimension(&plan, 0));
         assert!(!document.remove_dimension(&plan, 5));
         assert_eq!(document.plan(&plan).unwrap().dimensions.len(), 1);
+    }
+
+    #[test]
+    fn views_keep_their_notes_and_save_them_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert!(document.add_note(&plan, [1.0, 2.0], "Kitchen"));
+        assert!(document.add_note(&plan, [4.0, 2.0], "Hall"));
+        assert!(document.add_note(&section, [0.5, 3.0], "Roof +3.000"));
+        assert!(!document.add_note(&plan, [1.0, 1.0], "  "), "no text");
+        assert!(!document.add_note(&plan, [f64::NAN, 1.0], "x"));
+        assert!(!document.add_note("no view", [1.0, 1.0], "x"));
+        assert!(document.move_note(&plan, 1, [5.0, 2.5]));
+        assert!(document.set_note_text(&plan, 1, "Hall 2"));
+        assert!(!document.set_note_text(&plan, 1, ""), "a note keeps a text");
+        assert!(!document.move_note(&plan, 7, [0.0, 0.0]));
+        let notes = document.view_notes(&plan).unwrap();
+        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into() }, Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
+        assert!(document.remove_note(&plan, 0));
+        assert!(!document.remove_note(&plan, 3));
+        // saved with the drawings and taken over again
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
+        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into() }]);
     }
 
     #[test]

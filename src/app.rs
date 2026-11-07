@@ -2,6 +2,7 @@
 //! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
 
 mod levels;
+mod marks;
 mod paper;
 mod schedules;
 mod views;
@@ -162,6 +163,12 @@ pub struct App {
     pub cut_edit: Option<(String, String)>,
     /// The view taken from the Views list while the mouse button is down, to drop on a sheet.
     pub dragging_view: Option<Arc<str>>,
+    /// The text tool is on: a click on a view (its tab, or placed on a sheet) puts a text there.
+    pub note_tool: bool,
+    /// The wording of the next text placed, or of the picked text.
+    pub note_text: String,
+    /// What is picked on the view shown in its tab: a dimension or a text.
+    pub mark_pick: Option<marks::MarkPick>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -313,6 +320,20 @@ pub enum Message {
     DropOnSheet(Arc<str>, [f64; 2]),
     /// The mouse button went up: the view carried, if any, is let go.
     LetGoView,
+    /// Switch the text tool on or off.
+    NoteTool(bool),
+    /// The wording typed for the next text, or for the picked one.
+    NoteText(String),
+    /// Put a text on a view: the view, the point of its drawing, the wording.
+    AddNote(Arc<str>, [f64; 2], String),
+    /// Move a view's text (its index) to a point of its drawing.
+    MoveNote(Arc<str>, usize, [f64; 2]),
+    /// Pick a dimension or text on the view shown in its tab (`None`: nothing).
+    PickMark(Option<marks::MarkPick>),
+    /// Remove what is picked on the view shown in its tab.
+    RemoveMark,
+    /// Delete was pressed (not in a text field): remove what is picked, on a sheet or a view.
+    DeletePicked,
     /// Remove what is picked on the sheet shown.
     RemovePicked,
     /// Set the scale of a placed view: sheet, index, 1 : scale.
@@ -502,6 +523,9 @@ impl Default for App {
             sheet_pick: None,
             cut_edit: None,
             dragging_view: None,
+            note_tool: false,
+            note_text: String::new(),
+            mark_pick: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
@@ -972,6 +996,7 @@ impl App {
         self.cuts.clear();
         self.sheet_pick = None;
         self.cut_edit = None;
+        self.mark_pick = None;
         self.open_schedules.clear();
         self.active_schedule = None;
         self.schedules.clear();
@@ -1366,8 +1391,44 @@ impl App {
                 self.dimension_tool = on;
                 if on {
                     self.section_tool = false;
+                    self.note_tool = false;
+                    // the view in its tab is cut, to snap to its lines
+                    if let Some(view) = self.shown_view().map(str::to_string) {
+                        self.cut_view(&view);
+                    }
                 }
                 self.pick_on_sheet(None);
+                self.mark_pick = None;
+            }
+            Message::NoteTool(on) => {
+                self.note_tool = on;
+                if on {
+                    self.section_tool = false;
+                    self.dimension_tool = false;
+                    if self.mark_pick.is_some() || self.sheet_pick.is_some() {
+                        self.note_text.clear();
+                    }
+                }
+                self.pick_on_sheet(None);
+                self.mark_pick = None;
+            }
+            Message::NoteText(wording) => self.note_text_changed(wording),
+            Message::AddNote(view, at, wording) => {
+                self.document.add_note(&view, at, &wording);
+            }
+            Message::MoveNote(view, k, at) => {
+                self.document.move_note(&view, k, at);
+            }
+            Message::PickMark(pick) => self.pick_mark(pick),
+            Message::RemoveMark => self.remove_mark(),
+            Message::DeletePicked => {
+                if self.active_doc_sheet.is_some() {
+                    if self.sheet_pick.is_some() {
+                        self.remove_picked();
+                    }
+                } else if self.mark_pick.is_some() {
+                    self.remove_mark();
+                }
             }
             Message::PickOnSheet(pick) => self.pick_on_sheet(pick),
             Message::GrabView(view) => self.grab_view(view),
@@ -1415,6 +1476,7 @@ impl App {
                 self.section_tool = on;
                 if on {
                     self.dimension_tool = false;
+                    self.note_tool = false;
                 }
                 self.pick_on_sheet(None);
             }
@@ -1655,6 +1717,8 @@ impl App {
                 match key.as_ref() {
                     Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
                     Key::Named(Named::Enter) => Some(Message::MeasureFinish),
+                    // what is picked on a sheet or a view; not while a text field takes the key
+                    Key::Named(Named::Delete | Named::Backspace) => Some(Message::DeletePicked),
                     _ => None,
                 }
             }
@@ -2786,7 +2850,7 @@ impl App {
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
             hover: (self.measure.tool.is_some() || self.structural_hover_on()) && !self.plane_picking,
-            crosshair: self.measure.tool.is_some() && !self.plane_picking,
+            crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
             structural_shown: self.structural.shown_marks.as_ref(),
@@ -2904,6 +2968,8 @@ impl App {
             .height(Fill)
         });
         let boxed = self.box_select.map(|(from, to)| canvas(crate::viewport::box_select::BoxOverlay { from, to }).width(Fill).height(Fill));
+        // the dimensions and texts of the view shown in its tab
+        let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
         stack![scene, hint]
             .push(grids)
@@ -2911,6 +2977,7 @@ impl App {
             .push(plane)
             .push(measures)
             .push(measurements)
+            .push(marks)
             .push(boxed)
             .push(picking)
             .push(cube)

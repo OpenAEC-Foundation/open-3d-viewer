@@ -602,6 +602,11 @@ impl Studio {
         self.tabs.remove(i);
     }
 
+    /// Whether the project tabs show: with more than one project, or one with a model (or loading).
+    fn shows_project_tabs(&self) -> bool {
+        self.tabs.len() > 1 || self.app.busy()
+    }
+
     /// The title of a project tab: its file, the file it loads, or a new project.
     fn project_title(app: &App, l: Language) -> &str {
         match (&app.status, &app.model) {
@@ -1101,8 +1106,8 @@ impl Studio {
         // schedules and the sheets
         let model_name = app.model.as_ref().and_then(|m| m.path.file_name()).and_then(|n| n.to_str()).unwrap_or("3D");
         let mut middle = column![].width(Length::Fill);
-        // the open projects, once there is more than one
-        if self.tabs.len() > 1 {
+        // the open projects, as soon as one holds a model: its tab says which file this is
+        if self.shows_project_tabs() {
             let tabs: Vec<DocumentTab<'_>> = self
                 .tabs
                 .iter()
@@ -1409,6 +1414,19 @@ mod tests {
         studio.prefs.language = Language::English;
         let names = accessibility(&studio).summary();
         assert!(["a.rvt", "b.ifc", "c.skp"].iter().all(|f| names.iter().any(|n| n.contains(f))), "{names:?}");
+    }
+
+    #[test]
+    fn one_open_model_has_its_tab_already() {
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        assert!(!studio.shows_project_tabs(), "no tab over the start page");
+        let _ = studio.update(Msg::App(Message::Open(PathBuf::from("a.rvt"))));
+        assert!(studio.shows_project_tabs(), "a tab while the file loads");
+        let a = studio.project;
+        let _ = studio.update(Msg::Project(a, Message::Loaded(Ok(triangle("a.rvt")))));
+        let names = accessibility(&studio).summary();
+        assert!(names.iter().any(|n| n.contains("a.rvt")), "{names:?}");
     }
 
     #[test]

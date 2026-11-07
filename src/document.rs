@@ -49,8 +49,37 @@ pub struct PlanView {
     pub crop: Option<([f64; 2], [f64; 2])>,
 }
 
-/// A dimension on a floor plan: the distance between two points of the plan (x, y in the
-/// model's frame, metres).
+/// A section or an elevation: the model seen level, looking to the left of the line `from` →
+/// `to` (plan, metres), cut along that line and seen as far as `depth` beyond it. An elevation
+/// stands outside the model, so it cuts nothing. Its drawing has `u` along the line (from
+/// `from`) and `v` up (the model's height).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionView {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub name: String,
+    pub from: [f64; 2],
+    pub to: [f64; 2],
+    /// How far it looks beyond its line (metres).
+    pub depth: f64,
+    /// Its dimensions, in its drawing's (u, v).
+    pub dimensions: Vec<Dimension>,
+    /// What it shows, in its drawing's (u, v); `None`: all of it.
+    pub crop: Option<([f64; 2], [f64; 2])>,
+}
+
+impl SectionView {
+    /// Along the line (unit, plan) and the way it looks (unit, plan: to the left of the line).
+    pub fn axes(&self) -> ([f64; 2], [f64; 2]) {
+        let (dx, dy) = (self.to[0] - self.from[0], self.to[1] - self.from[1]);
+        let run = dx.hypot(dy).max(1e-9);
+        let along = [dx / run, dy / run];
+        (along, [-along[1], along[0]])
+    }
+}
+
+/// A dimension on a drawing: the distance between two of its points (a floor plan's x, y in the
+/// model's frame, a section's u, v; metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Dimension {
     pub from: [f64; 2],
@@ -116,6 +145,8 @@ pub struct Document {
     levels: Vec<Level>,
     /// Floor plans, in the order they were made.
     plans: Vec<PlanView>,
+    /// Sections and elevations, in the order they were made.
+    sections: Vec<SectionView>,
     /// Sheets, in the order they were made.
     sheets: Vec<Sheet>,
     /// Levels and views made so far, for the paths of new ones.
@@ -226,25 +257,83 @@ impl Document {
         self.plans.len() < before
     }
 
-    /// Adds a dimension between two points to a floor plan; two points less than a millimetre
-    /// apart, or not finite, measure nothing.
-    pub fn add_dimension(&mut self, plan: &str, from: [f64; 2], to: [f64; 2]) -> bool {
+    /// The sections and elevations, in the order they were made.
+    pub fn sections(&self) -> &[SectionView] {
+        &self.sections
+    }
+
+    /// The section or elevation at `path`.
+    pub fn section(&self, path: &str) -> Option<&SectionView> {
+        self.sections.iter().find(|s| s.path == path)
+    }
+
+    /// Makes a section or elevation along `from` → `to` (at least 10 cm long), looking `depth`
+    /// beyond it, and gives its path.
+    pub fn add_section(&mut self, name: &str, from: [f64; 2], to: [f64; 2], depth: f64) -> Option<String> {
+        let finite = from.iter().chain(&to).chain([&depth]).all(|v| v.is_finite());
+        if !finite || (to[0] - from[0]).hypot(to[1] - from[1]) < 0.1 || depth <= 0.0 {
+            return None;
+        }
+        self.added += 1;
+        let path = uuid(&format!("section/{}/{name}", self.added));
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), crop: None });
+        Some(path)
+    }
+
+    /// The next free section name: `<word> A`, `<word> B`, ..
+    pub fn next_section_name(&self, word: &str) -> String {
+        let taken = |name: &str| self.sections.iter().any(|s| same_name(&s.name, name));
+        (b'A'..=b'Z').map(|c| format!("{word} {}", c as char)).find(|n| !taken(n)).unwrap_or_else(|| format!("{word} {}", self.sections.len() + 1))
+    }
+
+    /// Removes a section or elevation, and it from the sheets.
+    pub fn remove_section(&mut self, path: &str) -> bool {
+        let before = self.sections.len();
+        self.sections.retain(|s| s.path != path);
+        self.drop_orphan_plans();
+        self.sections.len() < before
+    }
+
+    /// The name of a view (floor plan, section or elevation).
+    pub fn view_name(&self, path: &str) -> Option<&str> {
+        self.plan(path).map(|p| p.name.as_str()).or_else(|| self.section(path).map(|s| s.name.as_str()))
+    }
+
+    /// The dimensions and the crop of a view (floor plan, section or elevation).
+    pub fn view_marks(&self, path: &str) -> Option<(&[Dimension], Option<([f64; 2], [f64; 2])>)> {
+        if let Some(p) = self.plan(path) {
+            return Some((&p.dimensions, p.crop));
+        }
+        self.section(path).map(|s| (&s.dimensions[..], s.crop))
+    }
+
+    /// The dimensions and crop of a view, to change.
+    fn marks_mut(&mut self, path: &str) -> Option<(&mut Vec<Dimension>, &mut Option<([f64; 2], [f64; 2])>)> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some((&mut p.dimensions, &mut p.crop));
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| (&mut s.dimensions, &mut s.crop))
+    }
+
+    /// Adds a dimension between two points to a view's drawing; two points less than a
+    /// millimetre apart, or not finite, measure nothing.
+    pub fn add_dimension(&mut self, view: &str, from: [f64; 2], to: [f64; 2]) -> bool {
         let dimension = Dimension { from, to };
         if !(from.iter().chain(&to).all(|v| v.is_finite()) && dimension.length() >= 0.001) {
             return false;
         }
-        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
-        plan.dimensions.push(dimension);
+        let Some((dimensions, _)) = self.marks_mut(view) else { return false };
+        dimensions.push(dimension);
         true
     }
 
-    /// Removes a dimension of a floor plan.
-    pub fn remove_dimension(&mut self, plan: &str, index: usize) -> bool {
-        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
-        if index >= plan.dimensions.len() {
+    /// Removes a dimension of a view.
+    pub fn remove_dimension(&mut self, view: &str, index: usize) -> bool {
+        let Some((dimensions, _)) = self.marks_mut(view) else { return false };
+        if index >= dimensions.len() {
             return false;
         }
-        plan.dimensions.remove(index);
+        dimensions.remove(index);
         true
     }
 
@@ -280,9 +369,10 @@ impl Document {
         self.sheets.len() < before
     }
 
-    /// Places a floor plan in the middle of a sheet at 1:100 and gives its index on the sheet.
+    /// Places a view (a floor plan, section or elevation) in the middle of a sheet at 1:100 and
+    /// gives its index on the sheet.
     pub fn place_plan(&mut self, sheet: &str, plan: &str) -> Option<usize> {
-        self.plan(plan)?;
+        self.view_name(plan)?;
         let sheet = self.sheets.iter_mut().find(|s| s.path == sheet)?;
         let at = [sheet.paper[0] / 2.0, sheet.paper[1] / 2.0];
         sheet.views.push(PlacedView { plan: plan.to_string(), at, scale: SHEET_SCALE });
@@ -342,8 +432,8 @@ impl Document {
                 return false;
             }
         }
-        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
-        plan.crop = crop;
+        let Some((_, own)) = self.marks_mut(plan) else { return false };
+        *own = crop;
         true
     }
 
@@ -367,9 +457,9 @@ impl Document {
     fn drop_orphan_plans(&mut self) {
         let levels = &self.levels;
         self.plans.retain(|p| levels.iter().any(|l| l.path == p.level));
-        let plans = &self.plans;
+        let (plans, sections) = (&self.plans, &self.sections);
         for sheet in &mut self.sheets {
-            sheet.views.retain(|v| plans.iter().any(|p| p.path == v.plan));
+            sheet.views.retain(|v| plans.iter().any(|p| p.path == v.plan) || sections.iter().any(|s| s.path == v.plan));
         }
     }
 
@@ -639,6 +729,27 @@ mod tests {
         assert!(!document.set_crop(&plan, Some(([2.0, 0.0], [1.0, 3.0]))), "inside out");
         assert!(document.set_crop(&plan, None));
         assert_eq!(document.plan(&plan).unwrap().crop, None);
+    }
+
+    #[test]
+    fn sections_look_left_of_their_line_and_take_dimensions() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        assert_eq!(document.next_section_name("Section"), "Section A");
+        let a = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert_eq!(document.next_section_name("Section"), "Section B");
+        assert_eq!(document.add_section("Too short", [0.0, 0.0], [0.05, 0.0], 20.0), None);
+        let s = document.section(&a).unwrap();
+        assert_eq!(s.axes(), ([1.0, 0.0], [-0.0, 1.0]));
+        assert_eq!(document.view_name(&a), Some("Section A"));
+        assert!(document.add_dimension(&a, [0.0, 0.0], [0.0, 3.0]));
+        assert!(document.set_crop(&a, Some(([0.0, -0.5], [8.0, 4.0]))));
+        let (dimensions, crop) = document.view_marks(&a).unwrap();
+        assert_eq!((dimensions.len(), crop), (1, Some(([0.0, -0.5], [8.0, 4.0]))));
+        // on a sheet, then gone with its section
+        let sheet = document.add_sheet("Sections");
+        assert_eq!(document.place_plan(&sheet, &a), Some(0));
+        assert!(document.remove_section(&a));
+        assert!(document.sheet(&sheet).unwrap().views.is_empty());
     }
 
     #[test]

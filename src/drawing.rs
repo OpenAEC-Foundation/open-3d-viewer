@@ -35,38 +35,54 @@ pub fn plan_at(model: &Model, shown: &[bool], low: f32, high: f32) -> Cut {
 /// The outlines and creases of the triangles between `low` and `high`, clipped to that range and
 /// seen from above; an edge seen end on (a vertical one) gives nothing.
 pub fn edges_between(model: &Model, shown: &[bool], low: f32, high: f32) -> Vec<Segment> {
+    feature_edges(model, shown, |p| p, low, high).into_iter().filter_map(flat).collect()
+}
+
+/// An edge seen along its third coordinate: nothing when it is seen end on.
+fn flat([a, b]: [[f32; 3]; 2]) -> Option<Segment> {
+    ((b[0] - a[0]).hypot(b[1] - a[1]) > 1e-4).then_some([[a[0], a[1]], [b[0], b[1]]])
+}
+
+/// The corners of a triangle of a shown layer, for each triangle.
+fn triangles<'a>(model: &'a Model, shown: &'a [bool]) -> impl Iterator<Item = [[f32; 3]; 3]> + 'a {
+    model.layers.iter().enumerate().filter(|(i, l)| !l.points && shown.get(*i).copied().unwrap_or(true)).flat_map(|(_, layer)| {
+        let p = &layer.positions;
+        layer.indices.chunks_exact(3).filter_map(move |t| {
+            let corner = |k: u32| p.get(k as usize * 3..k as usize * 3 + 3).map(|v| [v[0], v[1], v[2]]);
+            Some([corner(t[0])?, corner(t[1])?, corner(t[2])?])
+        })
+    })
+}
+
+/// The outlines and creases of the triangles of the shown layers in the frame `map` gives
+/// (its third coordinate the depth), clipped to `low` ≤ depth ≤ `high`.
+fn feature_edges(model: &Model, shown: &[bool], map: impl Fn([f32; 3]) -> [f32; 3], low: f32, high: f32) -> Vec<[[f32; 3]; 2]> {
     // edges by their ends rounded to 0.1 mm, so faces that do not share vertices still meet
     let key = |p: [f32; 3]| p.map(|v| (v * 1e4).round() as i64);
     let crease = CREASE_DEGREES.to_radians().cos();
     // per edge: its ends, the normal of its first face, how many faces, a crease seen
     let mut edges: HashMap<([i64; 3], [i64; 3]), ([f32; 3], [f32; 3], [f32; 3], u32, bool)> = HashMap::new();
-    for (i, layer) in model.layers.iter().enumerate() {
-        if layer.points || !shown.get(i).copied().unwrap_or(true) {
+    for t in triangles(model, shown) {
+        let c = t.map(&map);
+        let (lo, hi) = (c[0][2].min(c[1][2]).min(c[2][2]), c[0][2].max(c[1][2]).max(c[2][2]));
+        if hi < low || lo > high {
             continue;
         }
-        let p = &layer.positions;
-        for t in layer.indices.chunks_exact(3) {
-            let Some(c) = t.iter().map(|&k| p.get(k as usize * 3..k as usize * 3 + 3).map(|v| [v[0], v[1], v[2]])).collect::<Option<Vec<_>>>() else { continue };
-            let (lo, hi) = (c[0][2].min(c[1][2]).min(c[2][2]), c[0][2].max(c[1][2]).max(c[2][2]));
-            if hi < low || lo > high {
-                continue;
-            }
-            let (u, v) = (sub(c[1], c[0]), sub(c[2], c[0]));
-            let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-            if len <= 1e-12 {
-                continue;
-            }
-            let n = n.map(|x| x / len);
-            for k in 0..3 {
-                let (a, b) = (c[k], c[(k + 1) % 3]);
-                let (ka, kb) = (key(a), key(b));
-                let id = if ka <= kb { (ka, kb) } else { (kb, ka) };
-                let entry = edges.entry(id).or_insert((a, b, n, 0, false));
-                entry.3 += 1;
-                if entry.3 > 1 && entry.2[0] * n[0] + entry.2[1] * n[1] + entry.2[2] * n[2] < crease {
-                    entry.4 = true;
-                }
+        let (u, v) = (sub(c[1], c[0]), sub(c[2], c[0]));
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len <= 1e-12 {
+            continue;
+        }
+        let n = n.map(|x| x / len);
+        for k in 0..3 {
+            let (a, b) = (c[k], c[(k + 1) % 3]);
+            let (ka, kb) = (key(a), key(b));
+            let id = if ka <= kb { (ka, kb) } else { (kb, ka) };
+            let entry = edges.entry(id).or_insert((a, b, n, 0, false));
+            entry.3 += 1;
+            if entry.3 > 1 && entry.2[0] * n[0] + entry.2[1] * n[1] + entry.2[2] * n[2] < crease {
+                entry.4 = true;
             }
         }
     }
@@ -88,13 +104,142 @@ pub fn edges_between(model: &Model, shown: &[bool], low: f32, high: f32) -> Vec<
         if t0 >= t1 {
             continue;
         }
-        let at = |t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-        let (p, q) = (at(t0), at(t1));
-        if (q[0] - p[0]).hypot(q[1] - p[1]) > 1e-4 {
-            out.push([p, q]);
+        let at = |t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])];
+        out.push([at(t0), at(t1)]);
+    }
+    out
+}
+
+/// A section's or elevation's drawing, in (u along the line `from` → `to`, v up): the cut where
+/// the upright plane through the line meets the shown layers, and the edges seen beyond it up to
+/// `depth`, left out where something nearer covers them.
+pub fn section_at(model: &Model, shown: &[bool], from: [f64; 2], to: [f64; 2], depth: f64) -> Cut {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    let run = dx.hypot(dy).max(1e-9);
+    let (d, n) = ([dx / run, dy / run], [-dy / run, dx / run]);
+    let map = move |p: [f32; 3]| {
+        let (x, y) = (p[0] as f64 - from[0], p[1] as f64 - from[1]);
+        [(x * d[0] + y * d[1]) as f32, p[2], (x * n[0] + y * n[1]) as f32]
+    };
+    let mut segments = Vec::new();
+    let mut beyond = Vec::new();
+    for t in triangles(model, shown) {
+        let c = t.map(map);
+        if let Some(segment) = cross(c, 0.0) {
+            segments.push(segment);
+        }
+        let (near, far) = (c[0][2].min(c[1][2]).min(c[2][2]), c[0][2].max(c[1][2]).max(c[2][2]));
+        if far > 0.0 && near < depth as f32 {
+            beyond.push(c);
+        }
+    }
+    let edges = feature_edges(model, shown, map, 0.0, depth as f32);
+    let below = visible(&beyond, &edges);
+    let extent = extent(segments.iter().chain(&below));
+    Cut { segments, below, extent }
+}
+
+/// How many pixels the longer side of a section's depth image has.
+const DEPTH_PIXELS: f32 = 2048.0;
+
+/// The parts of `edges` (u, v, depth) that no triangle of `faces` covers: the faces are drawn
+/// into a depth image of their part beyond depth 0, and every edge is walked through it.
+fn visible(faces: &[[[f32; 3]; 3]], edges: &[[[f32; 3]; 2]]) -> Vec<Segment> {
+    let corners = faces.iter().flatten().chain(edges.iter().flatten());
+    let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+    for c in corners {
+        lo = [lo[0].min(c[0]), lo[1].min(c[1])];
+        hi = [hi[0].max(c[0]), hi[1].max(c[1])];
+    }
+    if !(lo[0] <= hi[0] && lo[1] <= hi[1]) {
+        return Vec::new();
+    }
+    let pixel = ((hi[0] - lo[0]).max(hi[1] - lo[1]) / DEPTH_PIXELS).max(1e-4);
+    let (w, h) = (((hi[0] - lo[0]) / pixel) as usize + 2, ((hi[1] - lo[1]) / pixel) as usize + 2);
+    let mut depth = vec![f32::INFINITY; w * h];
+    for face in faces {
+        let polygon = in_front(face);
+        for k in 1..polygon.len().saturating_sub(1) {
+            draw_depth(&mut depth, (w, h), lo, pixel, [polygon[0], polygon[k], polygon[k + 1]]);
+        }
+    }
+    // an edge lies on its own faces: it shows unless something is clearly nearer
+    let slack = 0.02 + 4.0 * pixel;
+    let at = |p: [f32; 3]| {
+        let (x, y) = (((p[0] - lo[0]) / pixel) as usize, ((p[1] - lo[1]) / pixel) as usize);
+        depth[y.min(h - 1) * w + x.min(w - 1)]
+    };
+    let mut out = Vec::new();
+    for &[a, b] in edges {
+        let steps = (((b[0] - a[0]).hypot(b[1] - a[1]) / pixel * 1.5).ceil() as usize).max(1);
+        let point = |k: usize| {
+            let t = k as f32 / steps as f32;
+            [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])]
+        };
+        let mut start: Option<[f32; 3]> = None;
+        let mut last = a;
+        for k in 0..=steps {
+            let p = point(k);
+            let seen = p[2] <= at(p) + slack;
+            match (seen, start) {
+                (true, None) => start = Some(p),
+                (false, Some(s)) => {
+                    out.extend(flat([s, last]));
+                    start = None;
+                }
+                _ => {}
+            }
+            last = p;
+        }
+        if let Some(s) = start {
+            out.extend(flat([s, b]));
         }
     }
     out
+}
+
+/// The part of a triangle at depth 0 or more (a polygon of 0, 3 or 4 corners).
+fn in_front(t: &[[f32; 3]; 3]) -> Vec<[f32; 3]> {
+    let mut out = Vec::with_capacity(4);
+    for k in 0..3 {
+        let (a, b) = (t[k], t[(k + 1) % 3]);
+        if a[2] >= 0.0 {
+            out.push(a);
+        }
+        if (a[2] >= 0.0) != (b[2] >= 0.0) {
+            let s = a[2] / (a[2] - b[2]);
+            out.push([a[0] + s * (b[0] - a[0]), a[1] + s * (b[1] - a[1]), 0.0]);
+        }
+    }
+    out
+}
+
+/// Draws a triangle (u, v, depth) into the depth image, keeping the nearest depth per pixel.
+fn draw_depth(depth: &mut [f32], (w, h): (usize, usize), lo: [f32; 2], pixel: f32, t: [[f32; 3]; 3]) {
+    let px = t.map(|c| [(c[0] - lo[0]) / pixel, (c[1] - lo[1]) / pixel, c[2]]);
+    let area = (px[1][0] - px[0][0]) * (px[2][1] - px[0][1]) - (px[2][0] - px[0][0]) * (px[1][1] - px[0][1]);
+    if area.abs() < 1e-9 {
+        return;
+    }
+    let x0 = px.iter().map(|c| c[0]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
+    let x1 = (px.iter().map(|c| c[0]).fold(f32::NEG_INFINITY, f32::max).ceil() as usize).min(w - 1);
+    let y0 = px.iter().map(|c| c[1]).fold(f32::INFINITY, f32::min).floor().max(0.0) as usize;
+    let y1 = (px.iter().map(|c| c[1]).fold(f32::NEG_INFINITY, f32::max).ceil() as usize).min(h - 1);
+    let edge = |a: [f32; 3], b: [f32; 3], x: f32, y: f32| (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let (w0, w1, w2) = (edge(px[1], px[2], cx, cy) / area, edge(px[2], px[0], cx, cy) / area, edge(px[0], px[1], cx, cy) / area);
+            if w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4 {
+                continue;
+            }
+            let z = w0 * px[0][2] + w1 * px[1][2] + w2 * px[2][2];
+            let cell = &mut depth[y * w + x];
+            if z < *cell {
+                *cell = z;
+            }
+        }
+    }
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -217,6 +362,53 @@ mod tests {
         assert_eq!(plan.extent, Some(([0.0, 0.0], [6.0, 2.0])));
         // above the table's top, the range shows nothing of it
         assert!(edges_between(&model, &[], 1.0, 1.2).iter().all(|[a, b]| a[0] < 5.0 && b[0] < 5.0));
+    }
+
+    /// A box from `lo` to `hi`, its own vertices per face.
+    fn block(name: &str, lo: [f32; 3], hi: [f32; 3]) -> Layer {
+        let ([x0, y0, z0], [x1, y1, z1]) = (lo, hi);
+        let quads = [
+            [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+            [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+            [[x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
+            [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+        ];
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        for q in quads {
+            let base = (positions.len() / 3) as u32;
+            positions.extend(q.iter().flatten().copied());
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+        Layer { name: name.into(), positions, indices, ..Layer::default() }
+    }
+
+    #[test]
+    fn a_section_cuts_along_its_line_and_hides_what_is_behind() {
+        let layers = vec![
+            block("Wall", [0.0, 0.0, 0.0], [4.0, 2.0, 3.0]),
+            block("Behind", [1.0, 3.0, 1.0], [2.0, 3.5, 2.0]),
+            block("Beside", [6.0, 0.0, 0.0], [7.0, 1.0, 1.0]),
+        ];
+        let model = Model::new(PathBuf::from("site.obj"), "OBJ", layers);
+        // through the wall, looking north (+y): cut along y = 1, u = x + 1
+        let section = section_at(&model, &[], [-1.0, 1.0], [9.0, 1.0], 20.0);
+        let (lo, hi) = section.extent.unwrap();
+        assert!(section.segments.iter().flatten().all(|p| (1.0..=8.0).contains(&p[0]) && (0.0..=3.0).contains(&p[1])));
+        assert_eq!((lo, hi), ([1.0, 0.0], [8.0, 3.0]));
+        // an elevation from the south: nothing cut; the box behind the wall hidden, the one
+        // beside it seen
+        let elevation = section_at(&model, &[], [-1.0, -1.0], [9.0, -1.0], 20.0);
+        assert!(elevation.segments.is_empty());
+        let hidden = |[a, b]: &&Segment| [a, b].iter().all(|p| (1.9..=3.1).contains(&p[0]) && (0.9..=2.1).contains(&p[1]));
+        let behind: Vec<&Segment> = elevation.below.iter().filter(hidden).collect();
+        assert!(behind.is_empty(), "{behind:?}");
+        assert!(elevation.below.iter().any(|[a, b]| a[0] >= 7.0 && b[0] >= 7.0));
+        // the wall's face, seen whole
+        let wall: f32 = elevation.below.iter().filter(|[a, b]| a[0] <= 5.0 && b[0] <= 5.0).map(|[a, b]| (b[0] - a[0]).hypot(b[1] - a[1])).sum();
+        assert!(wall >= 14.0 - 0.2, "{wall}");
     }
 
     #[test]

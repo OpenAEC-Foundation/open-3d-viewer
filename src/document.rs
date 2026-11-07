@@ -438,6 +438,14 @@ impl Document {
         true
     }
 
+    /// Puts a view's dimension on the other side of what it measures: its line stands to the
+    /// left of from → to, so the two swap.
+    pub fn flip_dimension(&mut self, view: &str, index: usize) -> bool {
+        let Some(d) = self.marks_mut(view).and_then(|(d, _)| d.get_mut(index)) else { return false };
+        std::mem::swap(&mut d.from, &mut d.to);
+        true
+    }
+
     /// Removes a dimension of a view.
     pub fn remove_dimension(&mut self, view: &str, index: usize) -> bool {
         let Some((dimensions, _)) = self.marks_mut(view) else { return false };
@@ -932,6 +940,9 @@ mod tests {
         assert!(!document.add_dimension("no plan", [0.0, 0.0], [1.0, 0.0]));
         let lengths: Vec<f64> = document.plan(&plan).unwrap().dimensions.iter().map(Dimension::length).collect();
         assert_eq!(lengths, [3.6, 5.0]);
+        assert!(document.flip_dimension(&plan, 1));
+        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0] });
+        assert!(!document.flip_dimension(&plan, 9));
         assert!(document.remove_dimension(&plan, 0));
         assert!(!document.remove_dimension(&plan, 5));
         assert_eq!(document.plan(&plan).unwrap().dimensions.len(), 1);

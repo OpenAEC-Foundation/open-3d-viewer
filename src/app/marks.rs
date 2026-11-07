@@ -10,7 +10,7 @@ use crate::document::{Dimension, Note};
 use crate::drawing::Cut;
 use crate::measure::hover::Screen;
 use crate::theme::Palette;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::{button, container, text, text_input, Row};
 use iced::{alignment, keyboard, mouse, Center, Color, Element, Fill, Point, Rectangle, Size};
@@ -97,7 +97,7 @@ impl App {
         Some(ViewMarks {
             view: Arc::from(view),
             frame,
-            view_proj: self.camera.view_proj(self.aspect()),
+            camera: self.camera,
             dimensions: dimensions.to_vec(),
             notes: self.document.view_notes(view)?.to_vec(),
             cut: self.cuts.get(view).cloned(),
@@ -110,7 +110,7 @@ impl App {
 
     /// The bar over a view's tab: its tools, then what goes with the tool on or what is picked.
     pub(super) fn view_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
-        self.shown_view()?;
+        let view = self.shown_view()?;
         let (measuring, noting) = (self.dimension_tool, self.note_tool);
         let tool = |label: &'static str, on: bool, message: Message| {
             button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(message)
@@ -121,6 +121,7 @@ impl App {
             .align_y(Center)
             .push(tool(l.text("Maatvoering", "Dimension"), measuring, Message::DimensionTool(!measuring)))
             .push(tool(l.text("Tekst", "Text"), noting, Message::NoteTool(!noting)))
+            .push(tool(l.text("Standaard maatvoering", "Standard dimensions"), false, Message::StandardDimensions(Arc::from(view))))
             .push(text("|").size(12).color(p.text_muted));
         let wording = || text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
         let remove = |label: &'static str| tool(label, false, Message::RemoveMark);
@@ -131,7 +132,9 @@ impl App {
         } else {
             match self.mark_pick {
                 Some(MarkPick::Note(_)) => bar.push(wording()).push(remove(l.text("Tekst verwijderen", "Remove text"))),
-                Some(MarkPick::Dimension(_)) => bar.push(remove(l.text("Maat verwijderen", "Remove dimension"))),
+                Some(MarkPick::Dimension(_)) => bar
+                    .push(tool(l.text("Andere kant", "Other side"), false, Message::FlipDimension))
+                    .push(remove(l.text("Maat verwijderen", "Remove dimension"))),
                 None => bar.push(hint(l.text(
                     "Maten en teksten horen bij deze weergave: ze staan ook op elk blad waar hij op staat.",
                     "Dimensions and texts belong to this view: they show on every sheet it is placed on too.",
@@ -165,6 +168,99 @@ impl App {
         }
     }
 
+    /// Gives a view its standard dimensions, outside its drawing: a floor plan its overall width
+    /// below and depth on the left, a section or elevation its overall width below and height on
+    /// the left. Where grids (a plan) or grids and levels (a section) divide a side, a chain
+    /// between them goes on first and the overall dimension 1 m further out. A dimension the view
+    /// has already is not made twice. Gives how many were added.
+    pub(super) fn standard_dimensions(&mut self, view: &str) -> usize {
+        self.cut_view(view);
+        let Some((lo, hi)) = self.cuts.get(view).and_then(|c| c.extent) else { return 0 };
+        let (lo, hi) = ([lo[0] as f64, lo[1] as f64], [hi[0] as f64, hi[1] as f64]);
+        let grids = self.model.as_ref().map_or(&[][..], |m| &m.project.grids[..]);
+        // where grids (and levels) divide the drawing along u and along v
+        let (along_u, along_v): (Vec<f64>, Vec<f64>) = if self.document.plan(view).is_some() {
+            let mut xs = Vec::new();
+            let mut ys = Vec::new();
+            for g in grids {
+                let (dx, dy) = ((g.b[0] - g.a[0]) as f64, (g.b[1] - g.a[1]) as f64);
+                let run = dx.hypot(dy);
+                if run < 1e-6 {
+                    continue;
+                }
+                if dx.abs() / run < 0.02 {
+                    xs.push((g.a[0] + g.b[0]) as f64 / 2.0);
+                } else if dy.abs() / run < 0.02 {
+                    ys.push((g.a[1] + g.b[1]) as f64 / 2.0);
+                }
+            }
+            (xs, ys)
+        } else if let Some(s) = self.document.section(view) {
+            let (along, _) = s.axes();
+            let us = grids.iter().filter_map(|g| {
+                // where the grid crosses the section's line, as u along it
+                let (p, r) = ([g.a[0] as f64, g.a[1] as f64], [(g.b[0] - g.a[0]) as f64, (g.b[1] - g.a[1]) as f64]);
+                let cross = along[0] * r[1] - along[1] * r[0];
+                if cross.abs() < 1e-9 {
+                    return None;
+                }
+                let w = [p[0] - s.from[0], p[1] - s.from[1]];
+                let t = (w[0] * along[1] - w[1] * along[0]) / cross;
+                (-1e-6..=1.0 + 1e-6).contains(&t).then(|| (w[0] + t * r[0]) * along[0] + (w[1] + t * r[1]) * along[1])
+            });
+            (us.collect(), self.document.levels().iter().map(|l| l.elevation).collect())
+        } else {
+            return 0;
+        };
+        // the divisions within a side (with its ends); none when they are only its ends
+        let chain = |mut at: Vec<f64>, from: f64, to: f64| -> Vec<f64> {
+            at.retain(|v| (from - 0.5..=to + 0.5).contains(v));
+            at.extend([from, to]);
+            at.sort_by(f64::total_cmp);
+            at.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+            if at.len() <= 2 { Vec::new() } else { at }
+        };
+        let (below, left) = (chain(along_u, lo[0], hi[0]), chain(along_v, lo[1], hi[1]));
+        let mut made = Vec::new();
+        // below: right to left, so the line stands under what it measures
+        for pair in below.windows(2) {
+            made.push(Dimension { from: [pair[1], lo[1]], to: [pair[0], lo[1]] });
+        }
+        let out = if below.is_empty() { 0.0 } else { 1.0 };
+        made.push(Dimension { from: [hi[0], lo[1] - out], to: [lo[0], lo[1] - out] });
+        // on the left: upwards, so the line stands left of what it measures
+        for pair in left.windows(2) {
+            made.push(Dimension { from: [lo[0], pair[0]], to: [lo[0], pair[1]] });
+        }
+        let out = if left.is_empty() { 0.0 } else { 1.0 };
+        made.push(Dimension { from: [lo[0] - out, lo[1]], to: [lo[0] - out, hi[1]] });
+        let same = |a: &Dimension, b: &Dimension| {
+            let close = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 0.001 && (p[1] - q[1]).abs() < 0.001;
+            (close(a.from, b.from) && close(a.to, b.to)) || (close(a.from, b.to) && close(a.to, b.from))
+        };
+        let mut added = 0;
+        for d in made {
+            let has = self.document.view_marks(view).is_some_and(|(own, _)| own.iter().any(|o| same(o, &d)));
+            if !has && self.document.add_dimension(view, d.from, d.to) {
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// Puts the picked dimension on the other side of what it measures (on the view shown, or on
+    /// the sheet shown).
+    pub(super) fn flip_dimension(&mut self) {
+        let picked = match (self.shown_view(), self.mark_pick, self.sheet_pick) {
+            (Some(view), Some(MarkPick::Dimension(k)), _) => Some((view.to_string(), k)),
+            (None, _, Some(super::paper::SheetPick::Dimension(i, k))) => self.placed_plan(i).map(|v| (v, k)),
+            _ => None,
+        };
+        if let Some((view, k)) = picked {
+            self.document.flip_dimension(&view, k);
+        }
+    }
+
     /// The wording typed: the picked text takes it (on the view shown, or on the sheet shown),
     /// else the next text placed does.
     pub(super) fn note_text_changed(&mut self, wording: String) {
@@ -184,8 +280,9 @@ impl App {
 pub(super) struct ViewMarks {
     view: Arc<str>,
     frame: DrawingFrame,
-    /// The model to clip space of the tab's camera.
-    view_proj: Mat4,
+    /// The tab's camera (its aspect is the layer's own, so it is right also before the
+    /// viewport reported its size).
+    camera: crate::viewport::camera::Camera,
     dimensions: Vec<Dimension>,
     notes: Vec<Note>,
     /// The view's lines, to snap to.
@@ -211,7 +308,7 @@ pub(super) struct MarksState {
 
 impl ViewMarks {
     fn screen(&self, bounds: Rectangle) -> Screen {
-        Screen { view_proj: self.view_proj, size: (bounds.width, bounds.height) }
+        Screen { view_proj: self.camera.view_proj(bounds.width / bounds.height.max(1.0)), size: (bounds.width, bounds.height) }
     }
 
     /// A drawing point on screen.
@@ -441,9 +538,13 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
         }
     });
     frame.stroke(&lines, Stroke::default().with_color(color).with_width(0.9));
+    // the length beside the line, clear of it whichever way the line runs
+    let content = format!("{}", (length * 1000.0).round());
+    let (w, h) = (content.chars().count() as f32 * look.size * 0.6, look.size);
+    let clear = nx.abs() * w / 2.0 + ny.abs() * h / 2.0 + 2.0;
     frame.fill_text(canvas::Text {
-        content: format!("{}", (length * 1000.0).round()),
-        position: off(Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), look.offset + look.gap),
+        content,
+        position: off(Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), look.offset + clear),
         align_x: alignment::Horizontal::Center.into(),
         align_y: alignment::Vertical::Center,
         size: iced::Pixels(look.size),
@@ -476,11 +577,17 @@ mod tests {
     /// A room of 8 x 5 m with walls 3 m high, levels at 0 and 3, its floor plan shown in its tab
     /// in a viewport of 800 x 600, the camera where it went.
     fn plan_shown() -> (App, Arc<str>) {
+        plan_shown_with(Vec::new())
+    }
+
+    /// The same, the model with these grids.
+    fn plan_shown_with(grids: Vec<crate::model::GridLine>) -> (App, Arc<str>) {
         let positions = vec![0.,0.,0., 8.,0.,0., 8.,5.,0., 0.,5.,0., 0.,0.,3., 8.,0.,3., 8.,5.,3., 0.,5.,3.];
         let indices = vec![0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7];
         let layer = Layer { name: "Walls".into(), positions, indices, ..Layer::default() };
         let mut model = Model::new(PathBuf::from("room.rvt"), "Revit", vec![layer]);
         model.project.levels = vec![("00".into(), 0.0), ("01".into(), 3.0)];
+        model.project.grids = grids;
         let mut app = App::default();
         app.viewport_size = (800.0, 600.0);
         app.set_model(Arc::new(model));
@@ -514,6 +621,37 @@ mod tests {
 
     fn message(action: Option<canvas::Action<Message>>) -> Option<Message> {
         action.and_then(|a| a.into_inner().0)
+    }
+
+    #[test]
+    fn standard_dimensions_give_a_view_its_overall_size_and_its_grids() {
+        let (mut app, plan) = plan_shown();
+        let lengths = |app: &App, view: &str| -> Vec<f64> {
+            app.document.view_marks(view).unwrap().0.iter().map(|d| (d.length() * 1000.0).round()).collect()
+        };
+        let _ = app.update(Message::StandardDimensions(plan.clone()));
+        assert_eq!(lengths(&app, &plan), [8000.0, 5000.0]);
+        // below the room and left of it
+        let d = app.document.plan(&plan).unwrap().dimensions.clone();
+        assert_eq!((d[0].from, d[0].to), ([8.0, 0.0], [0.0, 0.0]), "right to left: its line under the room");
+        assert_eq!((d[1].from, d[1].to), ([0.0, 0.0], [0.0, 5.0]), "upwards: its line left of the room");
+        let _ = app.update(Message::StandardDimensions(plan.clone()));
+        assert_eq!(lengths(&app, &plan).len(), 2, "nothing twice");
+        // with grids at x = 0, 3, 8 and y = 0, 5: a chain below, the overall 1 m further out
+        let grid = |name: &str, a: [f32; 2], b: [f32; 2]| crate::model::GridLine { name: name.into(), a: [a[0], a[1], 0.0], b: [b[0], b[1], 0.0] };
+        let grids = vec![grid("1", [0.0, -1.0], [0.0, 6.0]), grid("2", [3.0, -1.0], [3.0, 6.0]), grid("3", [8.0, -1.0], [8.0, 6.0]), grid("A", [-1.0, 0.0], [9.0, 0.0]), grid("B", [-1.0, 5.0], [9.0, 5.0])];
+        let (mut app, plan2) = plan_shown_with(grids);
+        let _ = app.update(Message::StandardDimensions(plan2.clone()));
+        assert_eq!(lengths(&app, &plan2), [3000.0, 5000.0, 8000.0, 5000.0]);
+        let d = &app.document.plan(&plan2).unwrap().dimensions;
+        assert_eq!(d[2].from[1], -1.0, "the overall width 1 m below the chain");
+        assert_eq!(d[3].from[0], 0.0, "on the left only the overall: the grids are its ends");
+        // a section across the room: its width, and its height between the levels
+        let section = app.document.add_section("Section A", [-1.0, 2.5], [9.0, 2.5], 20.0).unwrap();
+        let _ = app.update(Message::StandardDimensions(Arc::from(section.as_str())));
+        let made = lengths(&app, &section);
+        assert!(made.contains(&3000.0), "{made:?}");
+        assert!(made.contains(&3000.0) && made.iter().any(|&l| l >= 8000.0), "{made:?}");
     }
 
     #[test]

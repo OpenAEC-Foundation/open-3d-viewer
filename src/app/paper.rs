@@ -313,11 +313,14 @@ impl App {
             } else {
                 bar = bar.push(text(l.text("sleep een rand om bij te snijden", "drag a side to crop")).size(12).color(p.text_muted));
             }
+            bar = bar.push(small(l.text("Standaard maatvoering", "Standard dimensions").to_string(), false, Message::StandardDimensions(Arc::from(view.plan.as_str()))));
             bar = bar.push(small(l.text("Van blad halen", "Take off sheet").to_string(), false, Message::RemovePicked));
         } else if let Some(SheetPick::Note(..)) = self.sheet_pick {
             bar = bar.push(wording()).push(small(l.text("Tekst verwijderen", "Remove text").to_string(), false, Message::RemovePicked));
         } else if let Some(SheetPick::Dimension(..)) = self.sheet_pick {
-            bar = bar.push(small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked));
+            bar = bar
+                .push(small(l.text("Andere kant", "Other side").to_string(), false, Message::FlipDimension))
+                .push(small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked));
         } else {
             bar = bar.push(text(l.text("Papier", "Paper")).size(12).color(p.text_secondary));
             for (name, size) in PAPERS {

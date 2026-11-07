@@ -332,6 +332,10 @@ pub enum Message {
     PickMark(Option<marks::MarkPick>),
     /// Remove what is picked on the view shown in its tab.
     RemoveMark,
+    /// Put the picked dimension on the other side of what it measures.
+    FlipDimension,
+    /// Give a view (its path) its standard dimensions.
+    StandardDimensions(Arc<str>),
     /// Delete was pressed (not in a text field): remove what is picked, on a sheet or a view.
     DeletePicked,
     /// Remove what is picked on the sheet shown.
@@ -1421,6 +1425,10 @@ impl App {
             }
             Message::PickMark(pick) => self.pick_mark(pick),
             Message::RemoveMark => self.remove_mark(),
+            Message::FlipDimension => self.flip_dimension(),
+            Message::StandardDimensions(view) => {
+                self.standard_dimensions(&view);
+            }
             Message::DeletePicked => {
                 if self.active_doc_sheet.is_some() {
                     if self.sheet_pick.is_some() {
@@ -2890,7 +2898,8 @@ impl App {
                 .width(Fill)
                 .height(Fill)
         });
-        let section = self.active_section().filter(|_| overlay.is_none()).map(|section| {
+        // a view's tab keeps its box without the handles: its crop is set on the sheet
+        let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none()).map(|section| {
             canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {

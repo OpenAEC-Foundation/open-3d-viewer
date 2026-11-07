@@ -86,6 +86,8 @@ cadmpeg-tessellate = "0.6.8"
 ifc-lite-processing = "=25.0.1"
 # its entity scanner and decoder (MPL-2.0, already built for the above): the building storeys
 ifc-lite-core = "=25.0.1"
+# its placement chains (MPL-2.0, already built for the above): where the grids are
+ifc-lite-geometry = "=25.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)

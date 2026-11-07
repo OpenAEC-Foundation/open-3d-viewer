@@ -756,6 +756,35 @@ impl App {
     }
 
     /// Installs a freshly loaded model (also used by the headless screenshot path).
+    /// A new, empty project for another tab, with this one's window settings, ribbon tab,
+    /// explorer groups and measuring units.
+    pub fn new_project(&self) -> App {
+        let mut app = App::default();
+        app.take_window_settings(self);
+        app.tab = self.tab;
+        app.show_layers = self.show_layers;
+        app.show_properties = self.show_properties;
+        app.explorer_open = self.explorer_open;
+        app.measure.units = self.measure.units.clone();
+        app
+    }
+
+    /// What belongs to the window, not to a project, from the project shown before: the theme,
+    /// the viewport's size and place, touch input and the remote control.
+    pub fn take_window_settings(&mut self, from: &App) {
+        self.theme = from.theme;
+        self.viewport_size = from.viewport_size;
+        self.viewport_origin = from.viewport_origin;
+        self.fingers = from.fingers;
+        self.remote.enabled = from.remote.enabled;
+    }
+
+    /// Whether this project has a model or is loading one: a new file then opens in a tab of its
+    /// own.
+    pub fn busy(&self) -> bool {
+        self.model.is_some() || matches!(self.status, Status::Loading { .. })
+    }
+
     pub fn set_model(&mut self, model: Arc<Model>) {
         self.hidden = Arc::default();
         self.history.clear();

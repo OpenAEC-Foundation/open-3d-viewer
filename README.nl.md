@@ -71,7 +71,7 @@ Wat wel en niet werkt op Android:
 
 - **Vrij en open.** LGPL-3.0. Geen licentiekosten, geen account, geen upload.
 - **Opent wat je toegestuurd krijgt.** Revit, Vertex BD (`.vxz`) en BTL-machinebestanden voor houtbouw op de desktop; IFC (ook gezipt), SketchUp (versie 3 en later), Tekla Structures, Allplan, Archicad (wanden met hun ramen en deuren, vloeren, kolommen, liggers, daken, bibliotheekobjecten als blok, terreinmeshes, zones, morphs, trappen en leuningen), DWG/DXF, MicroStation DGN (V7 en V8), STEP (AP203, AP214, AP242), IFC5 (IFCX, alfa), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino (versie 4 t/m 8), COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL en PLY, constructieve rekenmodellen in sam-json (`.samjson`), en puntenwolken in LAS, LAZ, E57, PTS, PTX, PCD en ASCII-XYZ, op de desktop en in de browser.
-- **Meerdere modellen tegelijk.** **Openen** vervangt het model, **Toevoegen** zet er een ander bestand naast (een IFCX-bestand legt zich juist over een geopend IFCX-model), en elk model heeft een eigen zichtbaarheidsknop.
+- **Meerdere modellen tegelijk.** **Openen** zet een bestand in een eigen tabblad naast het open model (meerdere bestanden tegelijk erin slepen laadt ze naast elkaar, elk in een tabblad), **Toevoegen** zet een ander bestand in dezelfde weergave (een IFCX-bestand legt zich juist over een geopend IFCX-model), en elk model heeft een eigen zichtbaarheidsknop.
 - **Slaat op als IFC.** Elk model dat de viewer opent, kan als IFC 4 worden opgeslagen, met verdiepingen, klassen, eigenschappen en materialen.
 - **Dezelfde app in de browser en op de desktop.** Eén codebasis; de browserversie hoef je niet te installeren.
 - **Meten en doorsnijden.** Afstanden, hoeken, oppervlakten en polygonen, een doorsnedekader en een doorsnedevlak met gevulde snedes, en een uit-elkaar-weergave.
@@ -243,7 +243,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **420 unittests** in `src/` (413 draaien; 7 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, twee vragen een GPU), plus 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 212 voor de lezers, 51 voor de app, 17 voor meten, 12 voor de vensterschil, 7 voor de doorsnedes, 11 voor IFC-export, 13 voor de afstandsbediening, 28 voor constructieve rekenmodellen, 8 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
+- **430 unittests** in `src/` (423 draaien; 7 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, twee vragen een GPU), plus 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 212 voor de lezers, 55 voor de app, 17 voor meten, 16 voor de vensterschil, 7 voor de doorsnedes, 11 voor IFC-export, 13 voor de afstandsbediening, 28 voor constructieve rekenmodellen, 8 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -283,6 +283,8 @@ cargo run --release -- test-models/test-kavel.skp
 ```
 
 Vereist Rust 1.96 of later (met de MSVC-toolchain op Windows) en leestoegang tot de privé-formaatrepositories van OpenAEC hierboven; zet `CARGO_NET_GIT_FETCH_WITH_CLI=true` zodat Cargo je Git-inloggegevens gebruikt. De browserversie vraagt ook `rustup target add wasm32-unknown-unknown` en `cargo install --locked trunk`; daarna serveert `trunk serve --release` hem op `http://127.0.0.1:8080`. De scripts in `scripts/` vragen Python 3.
+
+Voor werk aan de interface houdt `powershell -File scripts/dev.ps1 [-Model BESTAND]` (Windows) een debug-build open die na elke wijziging in de broncode opnieuw bouwt en herstart, meestal binnen 10–20 s. Hij opent de bestanden die open waren opnieuw, elk in zijn tabblad, en de titel noemt de branch. Een mislukte build laat de laatste viewer open, met de fouten in `target/dev/build.log`; `scripts/dev.ps1 -Stop` stopt hem.
 
 De opdrachtregel:
 

@@ -71,7 +71,7 @@ What works and what does not on Android:
 
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
 - **Opens what you get sent.** Revit, Vertex BD (`.vxz`) and BTL timber machine files on the desktop; IFC (also zipped), SketchUp (version 3 and later), Tekla Structures, Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), STEP (AP203, AP214, AP242), IFC5 (IFCX, alpha), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino (version 4 to 8), COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL and PLY, structural analysis models in sam-json (`.samjson`), and LAS, LAZ, E57, PTS, PTX, PCD and ASCII XYZ point clouds, on the desktop and in the browser.
-- **Several models at once.** **Open** replaces the model, **Add** puts another file next to it (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
+- **Several models at once.** **Open** puts a file in a tab of its own beside the open model (several files dropped at once load side by side, each in its tab), **Add** puts another file in the same view (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
 - **Saves as IFC.** Any model the viewer opens can be saved as IFC 4, with storeys, classes, properties and materials.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
 - **Measure and cut.** Distances, angles, areas and polygons, a section box and a section plane with filled cuts, and an exploded view.
@@ -241,7 +241,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **420 unit tests** in `src/` (413 run; 7 are left out by default: two need local samples, three write sample or image files, two need a GPU), plus 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 212 for the loaders, 51 for the app, 17 for measuring, 12 for the window shell, 7 for the section tools, 11 for IFC export, 13 for remote control, 28 for structural analysis models, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), and more for the 3D view, view cube, selection, undo, model and exploded view.
+- **430 unit tests** in `src/` (423 run; 7 are left out by default: two need local samples, three write sample or image files, two need a GPU), plus 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 212 for the loaders, 55 for the app, 17 for measuring, 16 for the window shell, 7 for the section tools, 11 for IFC export, 13 for remote control, 28 for structural analysis models, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), and more for the 3D view, view cube, selection, undo, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -281,6 +281,8 @@ cargo run --release -- test-models/test-kavel.skp
 ```
 
 Requires Rust 1.96 or later (with the MSVC toolchain on Windows) and read access to the private OpenAEC format repositories above; set `CARGO_NET_GIT_FETCH_WITH_CLI=true` so Cargo uses your Git credentials. The browser version also needs `rustup target add wasm32-unknown-unknown` and `cargo install --locked trunk`; then `trunk serve --release` serves it on `http://127.0.0.1:8080`. The scripts in `scripts/` need Python 3.
+
+For work on the interface, `powershell -File scripts/dev.ps1 [-Model FILE]` (Windows) keeps a debug build open that rebuilds and restarts after every change to the source, usually within 10–20 s. It reopens the files that were open, each in its tab, and the title names the branch. A failed build leaves the last viewer open, with the errors in `target/dev/build.log`; `scripts/dev.ps1 -Stop` stops it.
 
 The command line:
 

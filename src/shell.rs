@@ -316,6 +316,38 @@ pub struct Studio {
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
+    /// A dev build started by `scripts/dev.ps1`: the open projects kept for its next start.
+    dev: Option<DevSession>,
+}
+
+/// The open projects of a dev build, kept for its next start: `scripts/dev.ps1` restarts the viewer
+/// after every change to its source, and the new build opens the same files, each in its tab, and
+/// shows the same tab. The file (`O3V_DEV_SESSION`) holds a line `tab N`, then a file per tab.
+pub struct DevSession {
+    path: PathBuf,
+    /// What the file holds now.
+    written: String,
+    /// The files still to open at the start, each in a tab of its own, and the tab to show then.
+    to_open: Vec<PathBuf>,
+    tab: Option<usize>,
+    /// The file each project opened.
+    opened: Vec<(u64, PathBuf)>,
+    /// What the window title adds, such as the branch (`O3V_DEV_LABEL`).
+    label: Option<String>,
+}
+
+impl DevSession {
+    /// The files and the tab shown in a session file.
+    fn parse(text: &str) -> (Vec<PathBuf>, usize) {
+        let (mut files, mut tab) = (Vec::new(), 0);
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            match line.strip_prefix("tab ") {
+                Some(n) => tab = n.parse().unwrap_or(0),
+                None => files.push(PathBuf::from(line)),
+            }
+        }
+        (files, tab)
+    }
 }
 
 impl Studio {
@@ -341,6 +373,64 @@ impl Studio {
             width: 1280.0,
             compact_panel: None,
             ribbon_folded: false,
+            dev: None,
+        }
+    }
+
+    /// A dev build: keeps its open projects in `path` and, without a file of its own to open,
+    /// opens the ones kept there by the build before.
+    pub fn with_dev_session(mut self, path: PathBuf, label: Option<String>) -> Self {
+        let mut dev = DevSession { path, written: String::new(), to_open: Vec::new(), tab: None, opened: Vec::new(), label };
+        if self.app.pending_open.is_none() {
+            if let Ok(text) = std::fs::read_to_string(&dev.path) {
+                let (mut files, tab) = DevSession::parse(&text);
+                files.retain(|f| f.exists());
+                if !files.is_empty() {
+                    self.app.pending_open = Some(files.remove(0));
+                    dev.to_open = files;
+                    dev.tab = Some(tab);
+                    dev.written = text;
+                }
+            }
+        }
+        self.dev = Some(dev);
+        self
+    }
+
+    /// Project `id`: the one shown or a parked one.
+    fn project_app(&self, id: u64) -> &App {
+        if id == self.project {
+            return &self.app;
+        }
+        self.parked.iter().find(|(p, _)| *p == id).map_or(&self.app, |(_, a)| a)
+    }
+
+    /// Writes the open projects of a dev build to its session file when they changed, once the
+    /// files of the start are all open.
+    fn keep_dev_session(&mut self) {
+        let Some(dev) = &self.dev else { return };
+        if !dev.to_open.is_empty() || self.app.pending_open.is_some() {
+            return;
+        }
+        let open: Vec<(u64, &PathBuf)> = self
+            .tabs
+            .iter()
+            .filter(|&&id| self.project_app(id).busy())
+            .filter_map(|&id| dev.opened.iter().find(|(p, _)| *p == id).map(|(_, f)| (id, f)))
+            .collect();
+        let tab = open.iter().position(|(id, _)| *id == self.project).unwrap_or(0);
+        let mut text = format!("tab {tab}\n");
+        for (_, f) in &open {
+            text += &format!("{}\n", std::path::absolute(f).unwrap_or_else(|_| f.to_path_buf()).display());
+        }
+        if text != dev.written {
+            let path = dev.path.clone();
+            if let Err(e) = std::fs::write(&path, &text) {
+                eprintln!("dev session {}: {e}", path.display());
+            }
+            if let Some(dev) = &mut self.dev {
+                dev.written = text;
+            }
         }
     }
 
@@ -602,6 +692,24 @@ impl Studio {
         self.tabs.remove(i);
     }
 
+    /// A dev build: notes the file project `id` opens, and whether that was the last file of the
+    /// start (its tab is shown then).
+    fn dev_opens(&mut self, id: u64, message: &Message) -> bool {
+        let Some(dev) = &mut self.dev else { return false };
+        let file = match message {
+            Message::Open(path) | Message::Picked(Some(crate::loaders::Source::File(path))) => path,
+            _ => return false,
+        };
+        dev.opened.retain(|(p, _)| *p != id);
+        dev.opened.push((id, file.clone()));
+        if dev.to_open.first() == Some(file) {
+            dev.to_open.remove(0);
+            return dev.to_open.is_empty();
+        }
+        // the first file of the start, when it is the only one
+        dev.to_open.is_empty() && dev.tab.is_some()
+    }
+
     /// Whether the project tabs show: with more than one project, or one with a model (or loading).
     fn shows_project_tabs(&self) -> bool {
         self.tabs.len() > 1 || self.app.busy()
@@ -621,6 +729,12 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
+        let task = self.handle(message);
+        self.keep_dev_session();
+        task
+    }
+
+    fn handle(&mut self, message: Msg) -> Task<Msg> {
         match message {
             Msg::App(message) => {
                 let opened = match &message {
@@ -646,7 +760,13 @@ impl Studio {
                 }
                 // what the project's tasks return goes back to it, even when another is shown
                 let id = self.project;
+                let started = self.dev_opens(id, &message);
                 let task = self.app.update(message).map(move |m| Msg::Project(id, m));
+                if started {
+                    if let Some(&shown) = self.dev.as_mut().and_then(|d| d.tab.take()).and_then(|t| self.tabs.get(t)) {
+                        self.show_project(shown);
+                    }
+                }
                 if let Some(format) = desktop_only {
                     return Task::batch([task, self.update(Msg::Dialog(Some(Dialog::DesktopOnly(format))))]);
                 }
@@ -838,9 +958,12 @@ impl Studio {
 
     pub fn subscription(&self) -> Subscription<Msg> {
         // the command-line file, once: a subscription that yields Open and ends with it
-        let open = match &self.app.pending_open {
-            Some(path) => Subscription::run_with(path.clone(), |p: &PathBuf| iced::futures::stream::once(std::future::ready(Message::Open(p.clone())))),
-            None => Subscription::none(),
+        // a dev build's other files of the start, one after the other once the first loads
+        let next = self.dev.as_ref().and_then(|d| d.to_open.first());
+        let open = match (&self.app.pending_open, next) {
+            (Some(path), _) => Subscription::run_with(path.clone(), |p: &PathBuf| iced::futures::stream::once(std::future::ready(Message::Open(p.clone())))),
+            (None, Some(path)) => Subscription::run_with((path.clone(), "dev"), |(p, _): &(PathBuf, &str)| iced::futures::stream::once(std::future::ready(Message::Open(p.clone())))),
+            (None, None) => Subscription::none(),
         };
         let drag = if self.drag.is_some() {
             iced::event::listen_with(|event, _, _| match event {
@@ -867,9 +990,13 @@ impl Studio {
     }
 
     pub fn title(&self) -> String {
-        match &self.app.model {
+        let title = match &self.app.model {
             Some(m) => format!("{} · {NAME}", m.file_name()),
             None => NAME.into(),
+        };
+        match self.dev.as_ref().and_then(|d| d.label.as_deref()) {
+            Some(label) => format!("{title} · {label}"),
+            None => title,
         }
     }
 
@@ -1427,6 +1554,38 @@ mod tests {
         let _ = studio.update(Msg::Project(a, Message::Loaded(Ok(triangle("a.rvt")))));
         let names = accessibility(&studio).summary();
         assert!(names.iter().any(|n| n.contains("a.rvt")), "{names:?}");
+    }
+
+    #[test]
+    fn a_dev_build_opens_the_projects_the_build_before_had_open() {
+        let dir = std::env::temp_dir().join(format!("o3v-dev-session-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b, session) = (dir.join("a.rvt"), dir.join("b.ifc"), dir.join("session.txt"));
+        for f in [&a, &b] {
+            std::fs::write(f, b"").unwrap();
+        }
+        let _ = std::fs::remove_file(&session);
+        let kept = || std::fs::read_to_string(&session).unwrap();
+        // the build before: two files in tabs, the first one shown
+        let mut before = Studio::new(App::default()).with_dev_session(session.clone(), None);
+        let _ = before.update(Msg::App(Message::Open(a.clone())));
+        let _ = before.update(Msg::App(Message::Open(b.clone())));
+        assert_eq!(kept(), format!("tab 1\n{}\n{}\n", a.display(), b.display()));
+        let _ = before.update(Msg::SelectProject(0));
+        assert_eq!(kept(), format!("tab 0\n{}\n{}\n", a.display(), b.display()));
+        // the next build opens them again, in that order, and shows the same tab
+        let mut after = Studio::new(App::default()).with_dev_session(session.clone(), Some("dev".into()));
+        assert_eq!(after.app.pending_open.as_ref(), Some(&a));
+        let _ = after.update(Msg::App(Message::Open(a.clone())));
+        assert_eq!(after.dev.as_ref().map(|d| d.to_open.clone()), Some(vec![b.clone()]));
+        let _ = after.update(Msg::App(Message::Open(b.clone())));
+        assert_eq!(after.tabs.len(), 2);
+        assert_eq!(after.project, after.tabs[0], "the tab shown before");
+        assert!(after.title().ends_with(" · dev"), "{}", after.title());
+        // a closed tab leaves the session
+        let _ = after.update(Msg::CloseProject(0));
+        assert_eq!(kept(), format!("tab 0\n{}\n", b.display()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

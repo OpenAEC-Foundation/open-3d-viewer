@@ -284,6 +284,8 @@ cargo run --release -- test-models/test-kavel.skp
 
 Vereist Rust 1.96 of later (met de MSVC-toolchain op Windows) en leestoegang tot de privé-formaatrepositories van OpenAEC hierboven; zet `CARGO_NET_GIT_FETCH_WITH_CLI=true` zodat Cargo je Git-inloggegevens gebruikt. De browserversie vraagt ook `rustup target add wasm32-unknown-unknown` en `cargo install --locked trunk`; daarna serveert `trunk serve --release` hem op `http://127.0.0.1:8080`. De scripts in `scripts/` vragen Python 3.
 
+Voor werk aan de interface houdt `powershell -File scripts/dev.ps1 [-Model BESTAND]` (Windows) een debug-build open die na elke wijziging in de broncode opnieuw bouwt en herstart, meestal binnen 10–20 s. Hij opent de bestanden die open waren opnieuw, elk in zijn tabblad, en de titel noemt de branch. Een mislukte build laat de laatste viewer open, met de fouten in `target/dev/build.log`; `scripts/dev.ps1 -Stop` stopt hem.
+
 De opdrachtregel:
 
 ```

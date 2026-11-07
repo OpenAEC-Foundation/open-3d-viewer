@@ -282,6 +282,8 @@ cargo run --release -- test-models/test-kavel.skp
 
 Requires Rust 1.96 or later (with the MSVC toolchain on Windows) and read access to the private OpenAEC format repositories above; set `CARGO_NET_GIT_FETCH_WITH_CLI=true` so Cargo uses your Git credentials. The browser version also needs `rustup target add wasm32-unknown-unknown` and `cargo install --locked trunk`; then `trunk serve --release` serves it on `http://127.0.0.1:8080`. The scripts in `scripts/` need Python 3.
 
+For work on the interface, `powershell -File scripts/dev.ps1 [-Model FILE]` (Windows) keeps a debug build open that rebuilds and restarts after every change to the source, usually within 10–20 s. It reopens the files that were open, each in its tab, and the title names the branch. A failed build leaves the last viewer open, with the errors in `target/dev/build.log`; `scripts/dev.ps1 -Stop` stops it.
+
 The command line:
 
 ```

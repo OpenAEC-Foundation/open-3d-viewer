@@ -17,8 +17,14 @@ $outputRoot = Join-Path $projectRoot 'target/dev'
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 $stopFile = Join-Path $outputRoot 'stop'
 if ($Stop) { Set-Content -LiteralPath $stopFile -Value 'stop'; return }
+# one watcher per checkout; a second one leaves the first (and its stop request) alone
+try {
+    $watchLock = [IO.File]::Open((Join-Path $outputRoot 'watch.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+} catch {
+    Write-Host 'Another dev watcher runs in this checkout; stop it with scripts/dev.ps1 -Stop (it stops after its build).'
+    exit 1
+}
 if (Test-Path -LiteralPath $stopFile) { Remove-Item -LiteralPath $stopFile }
-$watchLock = [IO.File]::Open((Join-Path $outputRoot 'watch.lock'), 'OpenOrCreate', 'ReadWrite', 'Read')
 $viewerProcess = $null
 $statusFile = Join-Path $outputRoot 'status.json'
 $buildLog = Join-Path $outputRoot 'build.log'
@@ -64,6 +70,11 @@ try {
         $targetFolder = 'x86_64-pc-windows-gnu'
     } else {
         $cargo = (Get-Command cargo -ErrorAction Stop).Source
+        # the MSVC toolchain, as the README asks, also where GNU is the default: GNU links a debug
+        # build of the viewer many times slower
+        if (!$env:RUSTUP_TOOLCHAIN -and ((& rustup toolchain list 2>$null) -match '^stable-x86_64-pc-windows-msvc')) {
+            $env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-msvc'
+        }
     }
     if ($Jobs -gt 0) { $env:CARGO_BUILD_JOBS = [string]$Jobs }
     $builtExe = Join-Path (Join-Path (Join-Path $projectRoot 'target') $targetFolder) 'debug/open-3d-viewer.exe'

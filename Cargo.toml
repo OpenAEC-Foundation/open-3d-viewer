@@ -133,6 +133,11 @@ lto = "thin"
 opt-level = 3
 strip = true
 
+# Quick rebuilds while working on the app (scripts/dev.ps1): debug info without types and
+# variables; with full debug info a change took a minute to compile and link, with this 10 s.
+[profile.dev]
+debug = "limited"
+
 # Mesh import is slow in debug builds; optimise dependencies even in dev.
 [profile.dev.package."*"]
 opt-level = 2

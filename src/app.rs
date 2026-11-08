@@ -1,7 +1,9 @@
 //! Application state, messages and the main window layout:
-//! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
+//! ribbon on top, explorer left, 3D viewport centre, properties and layers right, status bar
+//! bottom.
 
 mod grids;
+mod layers;
 mod levels;
 mod marks;
 mod paper;
@@ -10,6 +12,7 @@ mod views;
 mod sheets;
 mod structural;
 
+pub use layers::SideTab;
 pub use levels::{ExplorerTab, LevelForm};
 pub use views::{DocTab, OpenPlan, ViewSlot};
 
@@ -100,7 +103,17 @@ pub struct App {
     pub tab: RibbonTab,
     pub show_layers: bool,
     pub show_properties: bool,
+    /// What the explorer's search field holds.
     pub layer_filter: String,
+    /// The tab of the right pane shown.
+    pub side_tab: SideTab,
+    /// What the Layers tab's search field holds.
+    pub layers_query: String,
+    /// The 3D view's layer switches while another view shows: every layer's, and per model its
+    /// own.
+    parked_layers: Option<(Vec<bool>, Vec<Vec<bool>>)>,
+    /// The undo histories of the views not shown, by view path (the 3D view: "").
+    parked_histories: std::collections::HashMap<String, History<ViewState>>,
     pub status: Status,
     pub viewport_size: (f32, f32),
     /// The last press was a finger's, not the mouse's: the hint shows the touch gestures.
@@ -277,6 +290,10 @@ pub enum Message {
     /// Show or hide every layer of a group.
     LayerGroup(String, bool),
     LayerFilter(String),
+    /// Show a tab of the right pane.
+    SideTab(SideTab),
+    /// What the Layers tab's search field holds.
+    LayersQuery(String),
     Navigate(Navigate),
     Cube(CubeEvent),
     /// Show a view saved in the file.
@@ -497,6 +514,10 @@ impl Default for App {
             show_layers: true,
             show_properties: true,
             layer_filter: String::new(),
+            side_tab: SideTab::default(),
+            layers_query: String::new(),
+            parked_layers: None,
+            parked_histories: Default::default(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
             fingers: false,
@@ -940,6 +961,8 @@ impl App {
     pub fn set_model(&mut self, model: Arc<Model>) {
         self.hidden = Arc::default();
         self.history.clear();
+        self.parked_layers = None;
+        self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
         self.set_scene(model);
@@ -982,6 +1005,9 @@ impl App {
     }
 
     fn set_scene(&mut self, model: Arc<Model>) {
+        // the views' tabs close: the 3D view's layers and undo come back first
+        self.load_view(None);
+        self.parked_histories.clear();
         self.context_menu = None;
         self.visible = model.layers.iter().map(|l| !l.hidden).collect();
         self.status = Status::Loaded(format!(
@@ -1072,9 +1098,13 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let before = changes_visibility(&message).then(|| self.view_state());
+        let shown = before.is_some() || matches!(message, Message::Undo | Message::Redo);
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);
+        }
+        if shown {
+            self.keep_view_layers();
         }
         self.refresh_hover();
         // the structural hover goes when the camera moves (it no longer lies under the cursor) and
@@ -1237,7 +1267,7 @@ impl App {
             Message::Fit => self.fit(),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
             Message::TogglePropertiesPanel => self.show_properties = !self.show_properties,
-            Message::Layer(i, v) => self.set_layer_visible(i, v),
+            Message::Layer(i, v) => self.switch_layers(&[i], v),
             Message::ModelVisible(i, shown) => {
                 if let Some(entry) = self.models.get_mut(i) {
                     entry.visible = shown;
@@ -1245,17 +1275,15 @@ impl App {
                     self.selection_changed();
                     self.set_structural_selection(Vec::new());
                     self.restore_model_visibility();
+                    self.cut_all_again();
                 }
             }
             Message::AllLayers(v) => {
-                let filter = self.layer_filter.to_lowercase();
-                if let Some(m) = &self.model {
-                    let layers: Vec<_> = m.layers.iter().enumerate().filter(|(_, layer)| filter.is_empty() || layer.name.to_lowercase().contains(&filter)).map(|(i, _)| i).collect();
-                    for layer in layers { self.set_layer_visible(layer, v); }
-                }
-                // unfiltered, it shows or hides the structural objects too (a model of only those
-                // has no layers: its entry follows)
-                if filter.is_empty() {
+                let layers = self.layers_found();
+                self.switch_layers(&layers, v);
+                // unfiltered in the viewport, it shows or hides the structural objects too (a
+                // model of only those has no layers: its entry follows)
+                if self.layers_query.trim().is_empty() && !matches!(self.layers_of(), Some(layers::LayersOf::Placed(_))) {
                     self.structural.all_hidden = !v;
                     for entry in self.models.iter_mut().filter(|e| e.layers.is_empty()) {
                         entry.visible = v;
@@ -1271,10 +1299,12 @@ impl App {
             Message::LayerGroup(group, v) => {
                 if let Some(m) = &self.model {
                     let layers: Vec<usize> = (0..m.layers.len()).filter(|&i| layer_group(&m.layers[i].name).0 == Some(group.as_str())).collect();
-                    for layer in layers { self.set_layer_visible(layer, v); }
+                    self.switch_layers(&layers, v);
                 }
             }
             Message::LayerFilter(f) => self.layer_filter = f,
+            Message::SideTab(tab) => self.side_tab = tab,
+            Message::LayersQuery(q) => self.layers_query = q,
             Message::Navigate(n) => {
                 if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
                     self.context_menu = None;
@@ -2293,13 +2323,14 @@ impl App {
     // ---- panels ---------------------------------------------------------------------------
 
     fn layers_panel(&self, p: Palette) -> Element<'_, Message> {
-        let header = panel_header(p, "Layers", self.model.as_ref().map(|m| m.layers.len().to_string()));
+        let header = panel_header(p, "Explorer", None);
         panel(p, header, self.explorer_body(p, standalone_language()), 220)
     }
 
-    /// The explorer pane, organised as Revit's project browser: one search field, then
-    /// collapsible groups (views by kind, rooms by level, layers) with their counts.
-    pub fn layers_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
+    /// The explorer's Model tab, organised as Revit's project browser: one search field, the
+    /// models, then collapsible groups (views by kind, schedules, sheets, rooms by level) with
+    /// their counts. The layers are in the right pane, per view.
+    pub fn model_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(model) = &self.model else {
             return text(l.text("Geen model geopend", "No model loaded")).size(12).color(p.text_muted).into();
         };
@@ -2414,103 +2445,6 @@ impl App {
             }
         }
 
-        // layers (categories)
-        let mut order: Vec<usize> = (0..model.layers.len()).filter(|&i| hit(&model.layers[i].name)).collect();
-        order.sort_by(|&a, &b| model.layers[a].name.to_lowercase().cmp(&model.layers[b].name.to_lowercase()));
-        let open = self.explorer_open[2] || searching;
-        body = body.push(group_header(p, l.text("Lagen", "Layers"), None, order.len(), open, Message::ToggleExplorer(2)));
-        if open {
-            let small = |label: &'static str, msg: Message| {
-                button(text(label).size(11)).padding([2, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(msg)
-            };
-            body = body.push(indent(
-                row![
-                    small(l.text("Alles tonen", "Show all"), Message::AllLayers(true)),
-                    small(l.text("Alles verbergen", "Hide all"), Message::AllLayers(false)),
-                ]
-                .spacing(4)
-                .padding([4, 0])
-                .into(),
-            ));
-            let eye_icon = move |visible: bool, partly: bool| {
-                svg(icons::handle(if visible || partly { icons::EYE } else { icons::EYE_OFF }))
-                    .width(14)
-                    .height(14)
-                    .style(move |_, _| svg::Style { color: Some(if visible { p.text_secondary } else { p.text_muted }) })
-            };
-            let layer_row = |i: usize, label: String| -> Element<'static, Message> {
-                let layer = &model.layers[i];
-                let visible = self.visible.get(i).copied().unwrap_or(true);
-                let [r, g, b] = layer.color;
-                let swatch = container(Space::new().width(10).height(10)).style(move |_| Palette::swatch(iced::Color::from_rgb(r, g, b)));
-                button(
-                    row![
-                        eye_icon(visible, false),
-                        swatch,
-                        text(label)
-                            .size(12)
-                            .color(if visible { p.text } else { p.text_muted })
-                            .wrapping(Wrapping::WordOrGlyph)
-                            .width(Fill),
-                        text(format_count(if layer.points { layer.point_count() } else { layer.triangle_count() })).size(10).color(p.text_muted),
-                    ]
-                    .spacing(6)
-                    .align_y(Center),
-                )
-                .padding([3, 6])
-                .width(Fill)
-                .style(move |_, s| p.row_button(s))
-                .on_press(Message::Layer(i, !visible))
-                .into()
-            };
-            // Layers named "Group › Layer" (a BTL panel and its member types) sit under their
-            // group, which shows or hides them together; the others follow on their own.
-            let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
-            for &i in &order {
-                if let (Some(group), _) = layer_group(&model.layers[i].name) {
-                    match groups.iter_mut().find(|(g, _)| *g == group) {
-                        Some((_, members)) => members.push(i),
-                        None => groups.push((group, vec![i])),
-                    }
-                }
-            }
-            for (group, members) in &groups {
-                let shown = members.iter().filter(|&&i| self.visible.get(i).copied().unwrap_or(true)).count();
-                let (all, some) = (shown == members.len(), shown > 0);
-                let open = searching || self.open_layer_groups.contains(*group);
-                use openaec_ui::icons::Icon;
-                let arrow = svg(svg::Handle::from_memory(if open { Icon::DisclosureExpanded } else { Icon::DisclosureCollapsed }.bytes()))
-                    .width(12)
-                    .height(12)
-                    .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
-                let triangles: usize = members.iter().map(|&i| model.layers[i].triangle_count()).sum();
-                let eye = button(eye_icon(some, some && !all)).padding([3, 4]).style(move |_, s| p.row_button(s)).on_press(Message::LayerGroup(group.to_string(), !all));
-                let title = button(
-                    row![
-                        arrow,
-                        text(group.to_string()).size(12).font(FONT_BOLD).color(if some { p.text } else { p.text_muted }).wrapping(Wrapping::WordOrGlyph).width(Fill),
-                        text(format_count(triangles)).size(10).color(p.text_muted),
-                    ]
-                    .spacing(6)
-                    .align_y(Center),
-                )
-                .padding([3, 6])
-                .width(Fill)
-                .style(move |_, s| p.row_button(s))
-                .on_press(Message::ToggleLayerGroup(group.to_string()));
-                body = body.push(indent(row![eye, title].spacing(0).align_y(Center).into()));
-                if open {
-                    for &i in members {
-                        let label = layer_group(&model.layers[i].name).1.to_string();
-                        body = body.push(indent(indent(layer_row(i, label))));
-                    }
-                }
-            }
-            for &i in order.iter().filter(|&&i| layer_group(&model.layers[i].name).0.is_none()) {
-                body = body.push(indent(layer_row(i, model.layers[i].name.clone())));
-            }
-        }
-
         let search = text_input(l.text("Zoeken in verkenner…", "Search explorer…"), &self.layer_filter)
             .on_input(Message::LayerFilter)
             .size(12)
@@ -2528,10 +2462,10 @@ impl App {
         panel(p, header, self.properties_body(p, standalone_language()), 290)
     }
 
-    /// The properties pane: project data (nothing selected) or the selection, the section box,
-    /// then file, geometry and bounds. Labels and values share the width 2 : 3 and wrap, so long
-    /// words never run into each other.
-    pub fn properties_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
+    /// The right pane's Properties tab: the view shown and project data (nothing selected) or the
+    /// selection, the section box, then file, geometry and bounds. Labels and values share the
+    /// width 2 : 3 and wrap, so long words never run into each other.
+    fn properties_tab(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(model) = &self.model else {
             return text(l.text("Open een model om de eigenschappen te zien", "Open a model to see its properties"))
                 .size(12)
@@ -2561,6 +2495,9 @@ impl App {
         // project data while nothing is selected
         let pd = &model.project;
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() {
+            if let Some(view) = self.view_properties(p, l) {
+                content = content.push(section(l.text("Weergave", "View"))).push(view).push(rule::horizontal(1));
+            }
             if !pd.info.is_empty() {
                 content = content.push(section(l.text("Project", "Project")));
                 for (k, v) in &pd.info {

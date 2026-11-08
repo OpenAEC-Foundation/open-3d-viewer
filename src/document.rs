@@ -25,6 +25,10 @@ pub struct Level {
     pub added: bool,
 }
 
+/// The layers a view shows otherwise than the model has them, by layer name: on (`true`) or off.
+/// Empty: the view shows the layers as the model does.
+pub type LayerSwitches = std::collections::BTreeMap<String, bool>;
+
 /// How far a floor plan cuts above its level (metres), as is usual for floor plans.
 pub const PLAN_CUT: f64 = 1.2;
 /// How far a floor plan looks below its level (metres), so the floor it stands on shows.
@@ -49,6 +53,8 @@ pub struct PlanView {
     /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
     /// all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
+    /// Its own layers: those it shows otherwise than the model.
+    pub layers: LayerSwitches,
 }
 
 /// A section or an elevation: the model seen level, looking to the left of the line `from` →
@@ -70,6 +76,8 @@ pub struct SectionView {
     pub notes: Vec<Note>,
     /// What it shows, in its drawing's (u, v); `None`: all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
+    /// Its own layers: those it shows otherwise than the model.
+    pub layers: LayerSwitches,
 }
 
 impl SectionView {
@@ -216,13 +224,13 @@ impl Document {
             let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": {
-                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes),
+                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "layers": p.layers,
             }}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": {
-                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes),
+                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
             }}}));
         }
         for (i, s) in self.sheets.iter().enumerate() {
@@ -251,6 +259,10 @@ impl Document {
             let all = v.and_then(Value::as_array).into_iter().flatten();
             all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string() })).filter(|n| !n.text.trim().is_empty()).collect()
         };
+        let layers = |v: Option<&Value>| -> LayerSwitches {
+            let all = v.and_then(Value::as_object).into_iter().flatten();
+            all.filter_map(|(name, on)| Some((name.clone(), on.as_bool()?))).collect()
+        };
         let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
         let number = |v: &Value, key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
         let known = |doc: &Document, path: &str| doc.plan(path).is_some() || doc.section(path).is_some() || doc.sheet(path).is_some();
@@ -269,6 +281,7 @@ impl Document {
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     crop: rect(p.get("crop")),
+                    layers: layers(p.get("layers")),
                 });
             } else if let Some(s) = attributes.get("o3v::view::section") {
                 let (Some(from), Some(to)) = (s.get("from").and_then(pair), s.get("to").and_then(pair)) else { continue };
@@ -281,6 +294,7 @@ impl Document {
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
                     crop: rect(s.get("crop")),
+                    layers: layers(s.get("layers")),
                 });
             }
         }
@@ -356,7 +370,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new() });
         Some(path)
     }
 
@@ -387,7 +401,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new() });
         Some(path)
     }
 
@@ -453,6 +467,30 @@ impl Document {
             return false;
         }
         dimensions.remove(index);
+        true
+    }
+
+    /// A view's own layers (a floor plan's, a section's or an elevation's).
+    pub fn view_layers(&self, path: &str) -> Option<&LayerSwitches> {
+        match self.plan(path) {
+            Some(p) => Some(&p.layers),
+            None => self.section(path).map(|s| &s.layers),
+        }
+    }
+
+    /// Gives a view its own layers; false when there is no such view or nothing changes.
+    pub fn set_view_layers(&mut self, path: &str, layers: LayerSwitches) -> bool {
+        let own = match self.plans.iter_mut().find(|p| p.path == path) {
+            Some(p) => &mut p.layers,
+            None => match self.sections.iter_mut().find(|s| s.path == path) {
+                Some(s) => &mut s.layers,
+                None => return false,
+            },
+        };
+        if *own == layers {
+            return false;
+        }
+        *own = layers;
         true
     }
 
@@ -975,6 +1013,26 @@ mod tests {
         again.adopt_ifcx(&nodes);
         assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
         assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into() }]);
+    }
+
+    #[test]
+    fn a_views_own_layers_are_saved_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert!(document.view_layers(&plan).unwrap().is_empty(), "a new view shows the layers as the model does");
+        let switches = LayerSwitches::from([("IfcSpace".to_string(), true), ("IfcFurniture".to_string(), false)]);
+        assert!(document.set_view_layers(&plan, switches.clone()));
+        assert!(!document.set_view_layers(&plan, switches.clone()), "nothing changed");
+        assert!(document.set_view_layers(&section, LayerSwitches::from([("IfcRoof".to_string(), false)])));
+        assert!(!document.set_view_layers("no view", switches.clone()));
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.view_layers(&plan), Some(&switches));
+        assert_eq!(again.view_layers(&section), Some(&LayerSwitches::from([("IfcRoof".to_string(), false)])));
     }
 
     #[test]

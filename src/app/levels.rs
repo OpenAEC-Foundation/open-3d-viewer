@@ -76,7 +76,7 @@ impl App {
         ]
         .spacing(2);
         let body = match self.explorer_tab {
-            ExplorerTab::Model => self.layers_body(p, l),
+            ExplorerTab::Model => self.model_body(p, l),
             ExplorerTab::Levels => self.levels_body(p, l),
             ExplorerTab::Views => self.views_body(p, l),
         };

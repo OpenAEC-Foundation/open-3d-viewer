@@ -160,8 +160,8 @@ impl App {
         self.pick_on_sheet(Some(SheetPick::View(i)));
     }
 
-    /// Cuts the floor plans on a sheet that are not cut yet: at their cut height, through the
-    /// layers shown now.
+    /// Cuts the views on a sheet that are not cut yet: a floor plan at its cut height, through
+    /// its own layers.
     fn cut_placed_plans(&mut self, sheet: &str) {
         let Some(sheet) = self.document.sheet(sheet) else { return };
         let plans: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).collect();
@@ -171,18 +171,19 @@ impl App {
     }
 
     /// Cuts a view when it is not cut yet: a floor plan at its cut height, a section or
-    /// elevation along its line, through the layers shown now.
+    /// elevation along its line, through its own layers.
     pub(super) fn cut_view(&mut self, path: &str) {
         let Some(model) = self.model.clone() else { return };
         if self.cuts.contains_key(path) {
             return;
         }
+        let shown = self.view_visibility(path);
         let cut = if let Some(s) = self.document.section(path) {
-            section_at(&model, &self.visible, s.from, s.to, s.depth)
+            section_at(&model, &shown, s.from, s.to, s.depth)
         } else {
             let Some(view) = self.document.plan(path) else { return };
             let Some((low, high)) = self.document.plan_range(view) else { return };
-            plan_at(&model, &self.visible, low as f32, high as f32)
+            plan_at(&model, &shown, low as f32, high as f32)
         };
         self.cuts.insert(path.to_string(), Arc::new(cut));
     }

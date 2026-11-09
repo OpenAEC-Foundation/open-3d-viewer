@@ -393,6 +393,8 @@ pub enum Message {
     ToggleUnderlay(usize),
     /// Take an underlay (its index) away.
     RemoveUnderlay(usize),
+    /// Lay a PDF underlay (its index) at the next scale.
+    UnderlayScale(usize),
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -1559,6 +1561,7 @@ impl App {
             Message::UnderlayRead(level, name, read) => self.underlay_read(&level, &name, read),
             Message::ToggleUnderlay(i) => self.toggle_underlay(i),
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
+            Message::UnderlayScale(i) => self.next_underlay_scale(i),
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;

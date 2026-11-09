@@ -169,9 +169,27 @@ library as its types.
 - Reading takes these nodes from any IFCX file and ignores the rest, so a project file read as a
   library gives its types. Numbers are written so that a type read back equals the one written.
 
-### How it fits the kernel and the Model tab (to agree with the kernel's owner)
+### How it fits the kernel and the Model tab
 
-The kernel (`crates/bim-core`) and the Model tab belong to the tile-modeller work. The proposal:
+The kernel (`crates/bim-core`) and the Model tab belong to the tile-modeller work. Its owner
+agreed to points 2 and 3 below as a small kernel change, built on its stack, with the IfcX round
+trip kept, the material per part next to the class, and the thickness of a layered element read
+only. What was built:
+
+- `PlanarDef.build_up: Option<BuildUpDef>`: the type's id and its layers (`LayerDef`: material key,
+  thickness, `cavity`), copied from the library, so an element is whole without the library and
+  its IFCX definition keeps them. `with_build_up` sets the thickness to the layers'.
+- `planar_parts` gives one solid per layer that is not a cavity, each with its material; openings
+  go through every layer. A wall's exterior is on its right. `Part.material` carries the material
+  key. A build-up of cavities only is refused (`Refusal::NoLayers`).
+- `ProfileDef::Catalogue { designation, shape }`, its outline from the library's shape within the
+  kernel's chord tolerance; `ProfileDef::steel("HEA 200")`.
+- In the app, a layered element shows each layer in its material's colour, its Type and Layers as
+  properties, and its thickness read only. The Library tab's **Assign to selection** gives the
+  selected walls (or slabs, for a floor, roof or ceiling type) the picked build-up. The Wall and
+  Slab tools still place elements without a type.
+
+The original proposal:
 
 1. `bim-core` depends on `bim-library`. Its `Model` holds the project's `Library`.
 2. `PlanarDef` gets an optional type id. With a type, the thickness is the type's, and
@@ -204,12 +222,12 @@ Open BIM Studio's design proposes a suspended ceiling first, then a timber-frame
 Small PRs, each with tests, each visible where it can be:
 
 1. **This note and the crate with materials and layered build-ups**, their IFCX form and the
-   starter library.
+   starter library (#118).
 2. **Profiles and linear types**: the steel table, the starter linear types, outlines and
-   properties.
+   properties (#121).
 3. **A Library tab in the app** (no kernel change): materials with their colour and hatch, build-ups
    drawn as a section through their layers, profiles drawn as their outline; open and save a
-   library file. This is what the dev viewer shows first.
+   library file. This is what the dev viewer shows first (#129).
 4. **Kernel and Model tab**, once agreed (see above): layered walls and slabs, catalogue profiles,
    the type chooser.
 5. **Building systems**, after brainstorming.

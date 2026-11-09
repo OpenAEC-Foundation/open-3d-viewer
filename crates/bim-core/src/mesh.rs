@@ -72,6 +72,35 @@ impl Mesh {
     }
 }
 
+/// The triangles of a planar face given by its rings (outer first, then holes), whose plane faces
+/// `normal`; each wound counter-clockwise seen along `-normal`.
+pub(crate) fn triangles(rings: &[Vec<DVec3>], normal: DVec3) -> Result<Vec<[DVec3; 3]>, Refusal> {
+    let normal = normal.try_normalize().ok_or(Refusal::NotTriangulated)?;
+    let u = normal.any_orthonormal_vector();
+    let v = normal.cross(u);
+    let mut flat = Vec::new();
+    let mut holes = Vec::new();
+    for (r, ring) in rings.iter().enumerate() {
+        if r > 0 {
+            holes.push(flat.len() / 2);
+        }
+        for p in ring {
+            flat.extend([p.dot(u), p.dot(v)]);
+        }
+    }
+    let corners: Vec<DVec3> = rings.iter().flatten().copied().collect();
+    let indices = earcutr::earcut(&flat, &holes, 2).map_err(|_| Refusal::NotTriangulated)?;
+    Ok(indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| {
+            let (a, b, c) = (corners[t[0]], corners[t[1]], corners[t[2]]);
+            if (b - a).cross(c - a).dot(normal) < 0.0 { [a, c, b] } else { [a, b, c] }
+        })
+        .collect())
+}
+
 /// The normal of a planar polygon by Newell's method (its length is twice the area).
 fn newell(ring: &[DVec3]) -> DVec3 {
     let n = ring.len();

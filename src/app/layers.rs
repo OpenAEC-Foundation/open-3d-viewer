@@ -356,7 +356,7 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::app::paper::SheetPick;
     use crate::app::Message;
@@ -367,7 +367,7 @@ mod tests {
 
     /// A room of 8 x 5 m with walls 3 m high (layer 0, "Walls") and a cupboard in it (layer 1,
     /// "Furniture", a box 2 m high), levels 00 at 0 and 01 at 3.
-    fn room() -> Arc<Model> {
+    pub(in crate::app) fn room() -> Arc<Model> {
         let positions = vec![0.,0.,0., 8.,0.,0., 8.,5.,0., 0.,5.,0., 0.,0.,3., 8.,0.,3., 8.,5.,3., 0.,5.,3.];
         let indices = vec![0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7];
         let walls = Layer { name: "Walls".into(), positions, indices, elements: vec![(10, 0, 24)], ..Layer::default() };
@@ -383,7 +383,7 @@ mod tests {
     const FURNITURE: usize = 1;
 
     /// The app with the room and the floor plan of level 00 open in its tab.
-    fn app_with_plan() -> (App, Arc<str>) {
+    pub(in crate::app) fn app_with_plan() -> (App, Arc<str>) {
         let mut app = App::default();
         app.set_model(room());
         let level = Arc::<str>::from(app.document.levels()[0].path.as_str());
@@ -393,7 +393,7 @@ mod tests {
         (app, plan)
     }
 
-    fn shows(app: &App, wording: &str) -> bool {
+    pub(in crate::app) fn shows(app: &App, wording: &str) -> bool {
         let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view());
         ui.find(wording).is_ok()
     }

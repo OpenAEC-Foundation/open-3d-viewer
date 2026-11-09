@@ -638,6 +638,55 @@ impl Document {
         true
     }
 
+    /// Renames a view (floor plan, section or elevation): not empty, and not another view's name;
+    /// false when it is not renamed.
+    pub fn set_view_name(&mut self, path: &str, name: &str) -> bool {
+        let name = name.trim();
+        let mut others = self.plans.iter().map(|p| (&p.path, &p.name)).chain(self.sections.iter().map(|s| (&s.path, &s.name)));
+        if name.is_empty() || others.any(|(p, n)| p != path && same_name(n, name)) {
+            return false;
+        }
+        let own = match self.plans.iter_mut().find(|p| p.path == path) {
+            Some(p) => &mut p.name,
+            None => match self.sections.iter_mut().find(|s| s.path == path) {
+                Some(s) => &mut s.name,
+                None => return false,
+            },
+        };
+        if own == name {
+            return false;
+        }
+        *own = name.to_string();
+        true
+    }
+
+    /// Sets how far a view looks: a floor plan below its level (at least 0, and its cut stays
+    /// above that), a section or elevation beyond its line (more than 0); false when it does not
+    /// change.
+    pub fn set_view_depth(&mut self, path: &str, depth: f64) -> bool {
+        if !depth.is_finite() {
+            return false;
+        }
+        let own = if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            if depth < 0.0 || p.cut <= -depth {
+                return false;
+            }
+            &mut p.depth
+        } else if let Some(s) = self.sections.iter_mut().find(|s| s.path == path) {
+            if depth <= 0.0 {
+                return false;
+            }
+            &mut s.depth
+        } else {
+            return false;
+        };
+        if *own == depth {
+            return false;
+        }
+        *own = depth;
+        true
+    }
+
     /// Crops a floor plan to a rectangle in plan (lower left, upper right; at least 10 cm each
     /// way), or shows all of it again (`None`).
     pub fn set_crop(&mut self, plan: &str, crop: Option<([f64; 2], [f64; 2])>) -> bool {
@@ -1033,6 +1082,37 @@ mod tests {
         again.adopt_ifcx(&nodes);
         assert_eq!(again.view_layers(&plan), Some(&switches));
         assert_eq!(again.view_layers(&section), Some(&LayerSwitches::from([("IfcRoof".to_string(), false)])));
+    }
+
+    #[test]
+    fn a_view_is_renamed_and_looks_as_far_as_is_typed() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert!(document.set_view_name(&plan, " Ground floor "));
+        assert_eq!(document.view_name(&plan), Some("Ground floor"));
+        assert!(!document.set_view_name(&plan, "Ground floor"), "nothing changes");
+        assert!(!document.set_view_name(&plan, "  "));
+        assert!(!document.set_view_name(&section, "ground FLOOR"), "another view's name");
+        assert!(document.set_view_name(&section, "Section 1"));
+        assert_eq!(document.view_name(&section), Some("Section 1"));
+        assert!(!document.set_view_name("no view", "X"));
+        // a floor plan looks down to its level at least, and its cut stays above that
+        assert!(document.set_view_depth(&plan, 0.0));
+        assert!(!document.set_view_depth(&plan, 0.0), "nothing changes");
+        assert!(!document.set_view_depth(&plan, -0.1));
+        assert!(!document.set_view_depth(&plan, f64::NAN));
+        assert!(!document.set_cut(&plan, -0.5));
+        assert!(document.set_view_depth(&plan, 1.0));
+        assert!(document.set_cut(&plan, -0.5));
+        assert!(!document.set_view_depth(&plan, 0.4), "the cut would be under it");
+        assert_eq!(document.plan(&plan).unwrap().depth, 1.0);
+        // a section looks beyond its line
+        assert!(!document.set_view_depth(&section, 0.0));
+        assert!(document.set_view_depth(&section, 5.0));
+        assert_eq!(document.section(&section).unwrap().depth, 5.0);
+        assert!(!document.set_view_depth("no view", 1.0));
     }
 
     #[test]

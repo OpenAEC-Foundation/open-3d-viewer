@@ -3456,6 +3456,7 @@ dependencies = [
  "ply-reader",
  "png 0.18.1",
  "quicklz",
+ "resvg",
  "rfd",
  "roxmltree 0.20.0",
  "rvt-export",

@@ -122,6 +122,7 @@ impl App {
             .push(tool(l.text("Maatvoering", "Dimension"), measuring, Message::DimensionTool(!measuring)))
             .push(tool(l.text("Tekst", "Text"), noting, Message::NoteTool(!noting)))
             .push(tool(l.text("Standaard maatvoering", "Standard dimensions"), false, Message::StandardDimensions(Arc::from(view))))
+            .push(self.export_control(p, l))
             .push(text("|").size(12).color(p.text_muted));
         let wording = || text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
         let remove = |label: &'static str| tool(label, false, Message::RemoveMark);

@@ -2,9 +2,16 @@
 //! [`save`] picks the writer by extension.
 //!
 //! To add a format: implement [`Writer`] in a new module and add it to [`registry`].
+//!
+//! The drawings of views and sheets ([`crate::drawing2d`]) are exported apart from the model:
+//! [`cad`] (DWG, DXF, IFCCAD), [`pdf`] and [`svg`] (SVG, PNG).
 
+pub mod cad;
+pub mod drawing;
 mod ifc;
 mod ifcx;
+pub mod pdf;
+pub mod svg;
 
 use crate::document::Document;
 use crate::model::Model;

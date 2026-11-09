@@ -18,6 +18,7 @@ mod bench;
 pub mod desktop;
 pub mod document;
 pub mod drawing;
+pub mod drawing2d;
 mod explode;
 pub mod export;
 mod history;

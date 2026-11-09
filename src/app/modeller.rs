@@ -134,6 +134,10 @@ pub struct Modeller {
     pub shown: Option<u64>,
     /// Why the last step was refused.
     pub refusal: Option<Refusal>,
+    /// Edit mode (Tab) on an element.
+    pub edit: Option<super::edit::Edit>,
+    /// A value being typed in the Definition section: the element, the field, the text.
+    pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
 }
 
 impl App {
@@ -220,7 +224,7 @@ impl App {
     }
 
     /// Where a scene point shows in the viewport (logical pixels), if in front of the camera.
-    fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
+    pub(super) fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
         let c = (self.camera.view_proj(width / height) * self.model_matrix()).project_point3(p.as_vec3());
         ((0.0..=1.0).contains(&c.z)).then(|| ((c.x + 1.0) / 2.0 * width, (1.0 - c.y) / 2.0 * height))
     }
@@ -228,9 +232,14 @@ impl App {
     /// The points of the modelled elements a click snaps to (scene coordinates): ends, corners
     /// and placements.
     fn snap_points(&self) -> Vec<DVec3> {
+        self.snap_points_except(ElementId(0))
+    }
+
+    /// The points a click snaps to, of every modelled element but `except` (ids start at 1).
+    pub(super) fn snap_points_except(&self, except: ElementId) -> Vec<DVec3> {
         let grid = self.modeller.model.grid;
         let mut points = Vec::new();
-        for e in self.modeller.model.iter() {
+        for e in self.modeller.model.iter().filter(|e| e.id != except) {
             match e.shape_in_project(&grid) {
                 Shape::Point(p) => points.push(p.at),
                 Shape::Linear(l) => points.extend([l.start, l.end]),
@@ -356,12 +365,21 @@ impl App {
         self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() == bim_core::BaseKind::Linear)).count()
     }
 
+    /// How many modelled elements with a body (not connections) are selected.
+    pub(crate) fn selected_bodies(&self) -> usize {
+        self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() != bim_core::BaseKind::Connection)).count()
+    }
+
     /// Joins the two linear elements selected: the first is the primary.
     pub(super) fn connect_selected(&mut self, kind: ConnectionKind, name: &str) {
-        let picked = self.selected_modelled();
-        let linear: Vec<ElementId> = picked.into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() == bim_core::BaseKind::Linear)).collect();
-        let [primary, secondary] = linear[..] else {
-            self.modeller.refusal = Some(Refusal::NotLinear);
+        // a join takes two linear elements; a cut any two with a body, the first cutting the second
+        let fits = |e: &Element| match kind {
+            ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
+            ConnectionKind::Butt | ConnectionKind::Mitre => e.base() == bim_core::BaseKind::Linear,
+        };
+        let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
+        let [primary, secondary] = picked[..] else {
+            self.modeller.refusal = Some(if kind == ConnectionKind::Cut { Refusal::NoBody } else { Refusal::NotLinear });
             return;
         };
         let level = self.modeller.model.get(primary).and_then(|e| e.level.clone());
@@ -379,6 +397,9 @@ impl App {
         }
         for id in picked {
             self.modeller.model.remove(id);
+        }
+        if self.modeller.edit.as_ref().is_some_and(|e| self.modeller.model.get(e.element).is_none()) {
+            self.modeller.edit = None;
         }
         self.show_modelled();
         true
@@ -462,7 +483,7 @@ impl App {
         let door = Opening { along: 1.0, sill: 0.0, width: 1.0, height: 2.3 };
         let window = Opening { along: 3.5, sill: 0.9, width: 2.4, height: 1.5 };
         add(self, "Wall", wall(p(0.0, 0.0), p(10.0, 0.0), vec![door, window]));
-        add(self, "Wall", wall(p(10.0, 0.0), p(10.0, 6.0), Vec::new()));
+        let side = add(self, "Wall", wall(p(10.0, 0.0), p(10.0, 6.0), Vec::new()));
         add(self, "Wall", wall(p(0.0, 6.0), p(0.0, 0.0), Vec::new()));
         add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL }));
         // a pergola beside it: columns, a beam stopping at a column, two beams in a mitre
@@ -476,17 +497,12 @@ impl App {
         add(self, "Connection", Shape::Connection(ConnectionDef { kind: ConnectionKind::Mitre, primary: b1, secondary: b2 }));
         add(self, "Connection", Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: c1, secondary: b3 }));
         add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT }));
+        // a beam through the side wall, cutting its way
+        let through = add(self, "Beam", beam(p(8.5, 3.0), p(13.0, 3.0)));
+        add(self, "Cut-out", Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: through, secondary: side }));
         let _ = self.update(super::Message::Fit);
     }
 
-    /// Selects modelled element `id`.
-    pub(crate) fn select_modelled(&mut self, id: ElementId) {
-        let Some(scene) = self.model.clone() else { return };
-        let entry = if self.models.len() == 1 { 0 } else { self.models.iter().position(|e| Some(e.model.id) == self.modeller.shown).unwrap_or(0) as u32 };
-        if let Some(shown) = scene.element_with_key(crate::model::ElementKey { model: entry, source: id.0 }) {
-            self.click(Some(Pickable::Element(shown)), false);
-        }
-    }
 }
 
 /// The colour of a layer of modelled elements, by IFC class (sRGB).
@@ -591,6 +607,7 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             let kind = match c.kind {
                 ConnectionKind::Butt => "Butt",
                 ConnectionKind::Mitre => "Mitre",
+                ConnectionKind::Cut => "Cut",
             };
             put("Kind", kind.into());
             put("Primary", c.primary.0.to_string());
@@ -742,6 +759,29 @@ mod tests {
         back.set_model_tool(Some((ModelTool::Wall, "Wall")));
         let id = back.add_element("Wall", None, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(0.0, 10.0), end: DVec2::new(4.0, 10.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() })).unwrap();
         assert!(id.0 > written.iter().map(|e| e.id.0).max().unwrap());
+    }
+
+    #[test]
+    fn the_first_selected_element_cuts_the_second() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 6.0, 0.0);
+        app.set_model_tool(Some((ModelTool::Beam, "Beam")));
+        click(&mut app, 3.0, -2.0);
+        click(&mut app, 3.0, 2.0);
+        app.set_model_tool(None);
+        let (wall, beam) = (ElementId(1), ElementId(2));
+        let before = app.modeller.model.evaluate(wall).unwrap()[0].solid.volume();
+        app.select_modelled(beam);
+        let scene = app.model.clone().unwrap();
+        let shown = scene.element_with_key(crate::model::ElementKey { model: 0, source: wall.0 }).unwrap();
+        app.sel.toggle(Pickable::Element(shown));
+        assert_eq!(app.selected_bodies(), 2);
+        app.connect_selected(ConnectionKind::Cut, "Cut-out");
+        assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
+        let after = app.modeller.model.evaluate(wall).unwrap()[0].solid.volume();
+        assert!((before - after - 0.2 * 0.4 * 0.2).abs() < 1e-9, "the beam's section through the wall: {before} - {after}");
     }
 
     #[test]

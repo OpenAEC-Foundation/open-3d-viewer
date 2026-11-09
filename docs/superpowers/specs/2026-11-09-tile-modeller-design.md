@@ -122,3 +122,77 @@ The author made these calls, not the project owner. They are open to correction:
 Undo of modelling steps; handles and typed parameters; snapping beyond element end points; types
 and layer sets; openings by a tool; curved geometry and general booleans; paging the document by
 tile (R-14 spike).
+
+## Second slice: booleans (2026-11-09)
+
+The project owner chose booleans as the next kernel step, before wall corners and curved geometry.
+
+- `bim-core::boolean`: union, difference and intersection of closed planar solids.
+  - The faces are cut into convex polygons and sorted in binary space partitioning trees, the
+    classic polygon CSG.
+  - Every side decision is an exact `orient3d` against three input points that span the plane. A
+    polygon split off another keeps its parent's plane, so no decision depends on a constructed
+    point.
+  - Crossing points are constructed in f64 and rounded once.
+- **Putting the result back together.** Points within the linear tolerance (1e-6 m) are welded.
+  A point on another polygon's edge splits that edge, so no T-junctions remain. The result must
+  pass the closed-solid check. Otherwise the boolean is refused (`BooleanFailed`), and a result
+  that would be empty is refused as `Empty`.
+- **The cut connection** (`ConnectionKind::Cut`). The primary element cuts its body out of the
+  secondary one, for example a beam through a wall or a duct through a slab.
+  - It works for any two elements with a body.
+  - A cutter cuts with its body before cuts (with its joints), so cuts never depend on each other:
+    two elements may cut each other.
+  - A cut that does not reach its target is refused (`NotTouching`).
+  - A part of a system that a cut takes wholly goes.
+- In the app, **Cut** in the Connection group: select the cutting element first, then the one
+  it cuts.
+- Calls made: the BSP method rather than a mesh arrangement (simpler, and exact where it
+  decides). The result faces are convex polygons, not merged back into the original faces.
+  Cutters stay visible; an invisible opening body is a follow-up.
+
+## Third slice: edit mode (2026-11-09)
+
+The project owner asked for an edit mode like Revit's and Blender's, with Tab, taking ideas
+from Open BIM Studio (its edit mode, grips and boundary sketch).
+
+- **Opening it.** Tab on one selected modelled element opens its edit mode; Tab leaves it. Without
+  such a selection, Tab moves the focus as before.
+- **Points.** The mode shows the points of the element's definition: a member's ends, a wall's or
+  curtain wall's axis ends, a slab's corners, an object's place. They are drawn over the view
+  with the lines between them.
+- **Moving.** Drag a point to move it, and the other picked points with it. Click picks a point
+  and Ctrl adds one.
+  - G grabs the picked points: they follow the cursor and a click puts them down.
+  - X, Y and Z hold the move to an axis. Up or down, a planar element or a system moves whole,
+    since it has one height.
+  - A picks every point, and Delete removes a slab's picked corners (three stay).
+  - Esc drops a move under way, else leaves.
+- **Snapping.** A move snaps to the points of the other modelled elements and is rounded to
+  10 mm.
+- **The kernel.** The change is evaluated when the move is put down; a refusal leaves the element
+  as it was and shows why.
+- **Calls made:**
+  - Dragging is done in an overlay over the viewport (as the section box's handles are), so a
+    drag on a point does not orbit the camera.
+  - During a move the overlay shows the points and lines, not the evaluated solid; the solid
+    follows when the move is put down.
+  - G, X, Y, Z and A are edit mode's keys while it is open, and the grid shortcut G waits until
+    it closes.
+- **Next:** typed parameters (thickness, height, profile, openings) in the properties pane, a
+  live solid during a move, and a sketch mode for outlines with arcs.
+
+## Fourth slice: the definition typed in (2026-11-09)
+
+- The right pane gets a Definition section for one selected modelled element. It holds the
+  element's name and the values of its definition, each typed in:
+  - a wall's height, thickness and base;
+  - a slab's thickness and top;
+  - a member's rectangular profile or diameter, and its roll;
+  - an object's size, base and turn;
+  - a curtain wall's height, base, spacing, member size and panel thickness.
+- A wall's openings are listed with their distance from the start, sill, width and height.
+  **Add door** and **Add window** put one in the middle of the wall; **Remove** takes one out.
+- A value is used as soon as it is valid and the kernel can make the element with it. Until then
+  the field keeps what was typed and the banner says why. Enter shows the value in use again, as
+  the View section does.

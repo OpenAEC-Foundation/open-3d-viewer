@@ -8,6 +8,7 @@
 use crate::element::{linear_axes, linear_solid, planar_solid, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
 use crate::solid::{Plane, Solid};
 use crate::tile::{TileGrid, TileKey};
+use crate::boolean::{boolean, BooleanOp};
 use crate::Refusal;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,27 @@ impl Model {
     }
 
     fn evaluate_element(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
+        if let Shape::Connection(c) = &element.shape {
+            self.check_connection(c)?;
+            return Ok(Vec::new());
+        }
+        let mut parts = self.body(element)?;
+        // the cuts made in it, in id order; a cut that cannot be made leaves it as it is
+        for e in self.elements.values() {
+            if let Shape::Connection(c) = &e.shape {
+                if c.kind == ConnectionKind::Cut && c.secondary == element.id {
+                    if let Ok(cut) = self.cut(&parts, element, c.primary) {
+                        parts = cut;
+                    }
+                }
+            }
+        }
+        Ok(parts)
+    }
+
+    /// An element's solids before any cut is made in it (with the ends its joints give it). A
+    /// cutter cuts with this body, so cuts never depend on each other.
+    fn body(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
         let class = element.class();
         let part = |solid: Solid| Part { class, tile: element.tile, solid };
         match &element.shape {
@@ -128,9 +150,54 @@ impl Model {
                 let (start, end) = self.end_planes(element.id, element.tile);
                 Ok(vec![part(linear_solid(l, start, end)?)])
             }
-            Shape::Connection(c) => {
-                self.join(c)?;
-                Ok(Vec::new())
+            Shape::Connection(_) => Err(Refusal::NoBody),
+        }
+    }
+
+    /// `parts` of `target` with the body of element `cutter` taken out. A part the cutter takes
+    /// wholly goes; when nothing is left, or the cutter does not reach the target, it is refused.
+    fn cut(&self, parts: &[Part], target: &Element, cutter: ElementId) -> Result<Vec<Part>, Refusal> {
+        let tool = self.elements.get(&cutter).ok_or(Refusal::Missing)?;
+        let offset = self.grid.offset(tool.tile, target.tile);
+        let tools: Vec<Solid> = self.body(tool)?.iter().map(|p| p.solid.translated(offset)).collect();
+        let overlaps = |a: &Solid, b: &Solid| {
+            let ((alo, ahi), (blo, bhi)) = (a.bounds(), b.bounds());
+            alo.cmplt(bhi).all() && blo.cmplt(ahi).all()
+        };
+        if !tools.iter().any(|t| parts.iter().any(|p| overlaps(t, &p.solid))) {
+            return Err(Refusal::NotTouching);
+        }
+        let mut out = Vec::with_capacity(parts.len());
+        for part in parts {
+            let mut solid = Some(part.solid.clone());
+            for t in tools.iter().filter(|t| overlaps(t, &part.solid)) {
+                solid = match solid.map(|s| boolean(&s, t, BooleanOp::Difference)) {
+                    Some(Ok(rest)) => Some(rest),
+                    Some(Err(Refusal::Empty)) | None => None,
+                    Some(Err(other)) => return Err(other),
+                };
+            }
+            if let Some(solid) = solid {
+                out.push(Part { solid, ..part.clone() });
+            }
+        }
+        if out.is_empty() {
+            return Err(Refusal::Empty);
+        }
+        Ok(out)
+    }
+
+    /// Whether a connection can be made.
+    fn check_connection(&self, c: &ConnectionDef) -> Result<(), Refusal> {
+        if c.primary == c.secondary {
+            return Err(Refusal::SameMember);
+        }
+        match c.kind {
+            ConnectionKind::Butt | ConnectionKind::Mitre => self.join(c).map(|_| ()),
+            ConnectionKind::Cut => {
+                let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
+                let parts = self.body(target)?;
+                self.cut(&parts, target, c.primary).map(|_| ())
             }
         }
     }
@@ -174,8 +241,12 @@ impl Model {
         if c.primary == c.secondary {
             return Err(Refusal::SameMember);
         }
+        if c.kind == ConnectionKind::Cut {
+            return Ok(Vec::new());
+        }
         let (p, s) = (self.member(c.primary)?, self.member(c.secondary)?);
         match c.kind {
+            ConnectionKind::Cut => Ok(Vec::new()),
             ConnectionKind::Butt => {
                 let (end, plane) = butt(&p, &s)?;
                 Ok(vec![(c.secondary, end, plane)])
@@ -414,6 +485,68 @@ mod tests {
             }
         }
         assert_eq!(m.tiles().len(), 1);
+    }
+
+    fn wall_along_x() -> Shape {
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() })
+    }
+
+    #[test]
+    fn a_beam_through_a_wall_cuts_its_way_through() {
+        let mut m = Model::new(TileGrid::default());
+        let wall = add(&mut m, wall_along_x());
+        let b = add(&mut m, beam(DVec3::new(3.0, -2.0, 2.5), DVec3::new(3.0, 2.0, 2.5)));
+        let before = m.evaluate(wall).unwrap()[0].solid.volume();
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: b, secondary: wall }));
+        let after = m.evaluate(wall).unwrap()[0].solid.volume();
+        assert!((before - after - 0.2 * 0.4 * 0.2).abs() < 1e-9, "{before} - {after}");
+        assert!((m.evaluate(b).unwrap()[0].solid.volume() - 4.0 * 0.08).abs() < 1e-9, "the cutter keeps its body");
+        // removing the beam removes the cut, and the wall is whole again
+        m.remove(b);
+        assert!((m.evaluate(wall).unwrap()[0].solid.volume() - before).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cuts_that_cannot_be_made_are_refused() {
+        let mut m = Model::new(TileGrid::default());
+        let wall = add(&mut m, wall_along_x());
+        let far = add(&mut m, beam(DVec3::new(3.0, 5.0, 2.5), DVec3::new(3.0, 9.0, 2.5)));
+        let block = add(&mut m, Shape::Point(PointDef { at: DVec3::new(3.0, 0.0, -1.0), rotation: 0.0, size: DVec3::new(8.0, 2.0, 6.0) }));
+        let grid = m.grid;
+        let try_cut = |m: &mut Model, primary, secondary| m.add(Element::in_project(&grid, "c", None, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary, secondary })));
+        assert_eq!(try_cut(&mut m, far, wall), Err(Refusal::NotTouching));
+        assert_eq!(try_cut(&mut m, block, wall), Err(Refusal::Empty), "it would take the whole wall");
+        assert_eq!(try_cut(&mut m, wall, wall), Err(Refusal::SameMember));
+        let joint = try_cut(&mut m, block, far).map(|_| ()).err();
+        assert_eq!(joint, Some(Refusal::NotTouching));
+    }
+
+    #[test]
+    fn two_elements_cutting_each_other_do_not_go_round_in_circles() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, wall_along_x());
+        let b = add(&mut m, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(3.0, -2.0), end: DVec2::new(3.0, 2.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() }));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: a, secondary: b }));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: b, secondary: a }));
+        // each is cut by the other's whole body: the crossing goes from both
+        let (va, vb) = (m.evaluate(a).unwrap()[0].solid.volume(), m.evaluate(b).unwrap()[0].solid.volume());
+        assert!((va - (6.0 - 0.2) * 0.2 * 3.0).abs() < 1e-9 && (vb - (4.0 - 0.2) * 0.2 * 3.0).abs() < 1e-9, "{va} {vb}");
+    }
+
+    #[test]
+    fn a_curtain_wall_cut_by_a_beam_loses_the_parts_it_takes() {
+        let mut m = Model::new(TileGrid::default());
+        let s = add(
+            &mut m,
+            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02 }),
+        );
+        let parts = m.evaluate(s).unwrap().len();
+        let b = add(&mut m, beam(DVec3::new(0.75, -1.0, 2.0), DVec3::new(0.75, 1.0, 2.0)));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: b, secondary: s }));
+        let cut = m.evaluate(s).unwrap();
+        assert_eq!(cut.len(), parts, "the beam cuts a hole in one panel, no part goes");
+        let glass: f64 = cut.iter().filter(|p| p.class == "IfcPlate").map(|p| p.solid.volume()).sum();
+        assert!((glass - (4.0 * 1.45 * 1.45 * 0.02 - 0.2 * 0.4 * 0.02)).abs() < 1e-9, "{glass}");
     }
 
     #[test]

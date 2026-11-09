@@ -128,9 +128,13 @@ pub enum ConnectionKind {
     Butt,
     /// Both members are cut by the plane that halves the angle between them.
     Mitre,
+    /// The primary element cuts its body out of the secondary one (a beam through a wall, a duct
+    /// through a slab). Any two elements with a body; the secondary keeps what is left.
+    Cut,
 }
 
-/// A connection between two linear elements.
+/// A connection between two elements: two linear ones joined (butt, mitre), or any two with a
+/// body where one cuts the other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionDef {
     pub kind: ConnectionKind,

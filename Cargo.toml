@@ -99,9 +99,9 @@ ifc-lite-geometry = "=25.0.1"
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "c54abcb63f797f2b83395b9cbc5d05b10b850442" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "c54abcb63f797f2b83395b9cbc5d05b10b850442", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "c54abcb63f797f2b83395b9cbc5d05b10b850442" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
 log = "0.4"

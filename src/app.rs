@@ -4,9 +4,11 @@
 
 mod export_drawing;
 mod grids;
+mod ifc;
 mod layers;
 mod levels;
 mod marks;
+pub mod modeller;
 mod paper;
 mod schedules;
 mod view_props;
@@ -14,6 +16,7 @@ mod views;
 mod sheets;
 mod structural;
 
+pub use ifc::{IfcTab, IfcView};
 pub use layers::SideTab;
 pub use view_props::ViewField;
 pub use levels::{ExplorerTab, LevelForm};
@@ -203,6 +206,8 @@ pub struct App {
     pub active_schedule: Option<usize>,
     /// The table of the shown schedule: scrolled offset and height (logical pixels).
     pub schedule_scroll: (f32, f32),
+    /// The IFC tab: how the model's IFCX file is built up.
+    pub ifc: IfcTab,
     /// The schedules of the model, once computed (they follow the model), and whether they are
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
@@ -248,6 +253,8 @@ pub struct App {
     pick_index: Option<PickIndex>,
     /// The selection and hover of structural nodes and members.
     pub(crate) structural: structural::StructuralView,
+    /// The modelled elements and the tool placing them.
+    pub modeller: modeller::Modeller,
 }
 
 /// Width of the right-click menu (logical pixels), and about its height, to keep it inside the
@@ -331,6 +338,10 @@ pub enum Message {
     RemovePlan(Arc<str>),
     /// Make a sheet of the document, named this, and show it.
     NewSheet(&'static str),
+    /// Lay the views of a sheet (its path) out: one scale, in rows, centred.
+    ArrangeSheet(Arc<str>),
+    /// Put the views on no sheet on new sheets, named for floor plans and for sections.
+    FillSheets([&'static str; 2]),
     /// Show a sheet of the document (its path) in its tab.
     OpenDocSheet(Arc<str>),
     RemoveSheet(Arc<str>),
@@ -417,6 +428,20 @@ pub enum Message {
     ScheduleScroll(scrollable::Viewport),
     /// The schedules of a model (by id), computed.
     Schedules(u64, Vec<crate::model::Schedule>),
+    /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
+    OpenIfc,
+    CloseIfc,
+    IfcView(IfcView),
+    IfcScroll(IfcView, scrollable::Viewport),
+    /// Pick a node of the IFC tab (its index): its elements are selected.
+    IfcPick(u32),
+    /// Open or close a row of the IFC tab's tree (its key).
+    IfcToggle(String),
+    /// The relation the IFC tab's Relations view shows (all: `None`).
+    IfcRelation(Option<crate::ifcx_structure::Relation>),
+    /// Search the IFC tab; jump to the next (or the previous) line found in its text.
+    IfcQuery(String),
+    IfcNext(bool),
     ToggleSection,
     ResetSection,
     SectionToSelection,
@@ -473,8 +498,15 @@ pub enum Message {
     ContextMenu(MenuItem),
     /// A click beside the right-click menu: it closes.
     CloseContextMenu,
-    /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
+    /// Esc: stop placing the section plane, else stop modelling or measuring, else clear the
+    /// selection.
     Escape,
+    /// Start an empty model to model in, its first level named so.
+    NewModel(&'static str),
+    /// Switch a modelling tool on (what it places named so), or off (`None`).
+    ModelTool(Option<(modeller::ModelTool, &'static str)>),
+    /// Join the two linear elements selected (the first is the primary), the joint named so.
+    Connect(bim_core::ConnectionKind, &'static str),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -517,6 +549,7 @@ const ANIM_SECONDS: f32 = 0.45;
 
 impl Default for App {
     fn default() -> Self {
+        crate::i18n::install();
         Self {
             theme: ThemeKind::Light,
             model: None,
@@ -582,6 +615,7 @@ impl Default for App {
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
+            ifc: IfcTab::default(),
             schedules: Vec::new(),
             schedules_pending: false,
             measurements: Vec::new(),
@@ -604,6 +638,7 @@ impl Default for App {
             hover_scene: None,
             pick_index: None,
             structural: Default::default(),
+            modeller: Default::default(),
         }
     }
 }
@@ -806,7 +841,8 @@ impl App {
     /// by the exploded view.
     pub(crate) fn world_bounds(&self) -> Option<Bounds> {
         let model = self.model.as_ref()?;
-        self.explode_bounds.or_else(|| Some(transform_bounds(&model.bounds, &self.model_matrix())))
+        // an empty model (one to model in) has no bounds yet
+        self.explode_bounds.or_else(|| model.bounds.is_valid().then(|| transform_bounds(&model.bounds, &self.model_matrix())))
     }
 
     /// The offset (world) of vertex `i` of layer `l` in the exploded view.
@@ -986,7 +1022,9 @@ impl App {
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
-        self.set_scene(model);
+        self.modeller = modeller::Modeller::default();
+        self.set_scene(model.clone());
+        self.adopt_elements(&model);
     }
 
     pub fn add_model(&mut self, model: Arc<Model>) {
@@ -1055,6 +1093,7 @@ impl App {
         self.mark_pick = None;
         self.open_schedules.clear();
         self.active_schedule = None;
+        self.close_ifc();
         self.schedules.clear();
         self.schedules_pending = false;
         self.open_sheets.clear();
@@ -1134,6 +1173,8 @@ impl App {
         if self.structural.note_camera(self.camera) || self.measure.tool.is_some() || self.plane_picking {
             self.set_structural_hover(None);
         }
+        // the IFC tab follows the element selected in the model
+        let task = if self.ifc.shown { Task::batch([task, self.ifc_follow()]) } else { task };
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
             None => task,
@@ -1214,6 +1255,9 @@ impl App {
             Message::Remote(call) => return self.remote(call),
             Message::RemoteShot(shot) => self.remote_shot(shot),
             Message::ClearMeasurements => self.measurements.clear(),
+            Message::NewModel(level) => self.new_model(level),
+            Message::ModelTool(tool) => self.set_model_tool(tool),
+            Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -1446,6 +1490,8 @@ impl App {
                 self.cuts.remove(&*plan);
             }
             Message::NewSheet(name) => self.new_sheet(name),
+            Message::ArrangeSheet(sheet) => self.arrange_sheet(&sheet),
+            Message::FillSheets(names) => self.fill_sheets(names),
             Message::OpenDocSheet(sheet) => self.open_doc_sheet(&sheet),
             Message::RemoveSheet(sheet) => {
                 self.close_doc_sheet(&sheet);
@@ -1509,7 +1555,9 @@ impl App {
                 };
             }
             Message::DeletePicked => {
-                if self.active_doc_sheet.is_some() {
+                if self.delete_modelled() {
+                    // modelled elements selected: they go
+                } else if self.active_doc_sheet.is_some() {
                     if self.sheet_pick.is_some() {
                         self.remove_picked();
                     }
@@ -1577,6 +1625,15 @@ impl App {
             Message::CloseSchedule(i) => return self.close_schedule(i),
             Message::ScheduleRow(s, r) => self.select_row(s, r),
             Message::ScheduleScroll(v) => return self.scrolled(v),
+            Message::OpenIfc => return self.open_ifc(),
+            Message::CloseIfc => self.close_ifc(),
+            Message::IfcView(view) => return self.ifc_show_view(view),
+            Message::IfcScroll(view, v) => return self.ifc_scrolled(view, v),
+            Message::IfcPick(node) => self.ifc_pick(node),
+            Message::IfcToggle(key) => self.ifc_toggle(key),
+            Message::IfcRelation(relation) => return self.ifc_relation(relation),
+            Message::IfcQuery(query) => return self.ifc_query(query),
+            Message::IfcNext(forward) => return self.ifc_next(forward),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;
@@ -1766,6 +1823,11 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
+                if !self.escape_model_tool() {
+                    self.modeller.refusal = None;
+                }
+            }
             Message::Escape => {
                 if self.context_menu.take().is_some() {
                     return Task::none();
@@ -1878,6 +1940,9 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        if self.modeller.tool.is_some() {
+            return self.model_click(x, y, width, height);
+        }
         if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
             let screen = self.screen(width, height);
             let holds = self.hover_scene_holds() && self.measure.hover.as_ref().is_some_and(|h| h.holds_for(&screen, Vec2::new(x, y)));
@@ -2568,6 +2633,8 @@ impl App {
                 content = content.push(container(text(count).size(12).color(p.text_secondary)).padding([2, 8]));
             }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
+            // a modelled element's definition is kept for the file, not shown
+            props.retain(|(k, _)| k != crate::export::ifcx::DEFINITION);
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
                 if let Some(id) = element {
@@ -2780,7 +2847,12 @@ impl App {
             if count > 1 {
                 body = body.push(prop_row(
                     p,
-                    format!("{} {} ({count})", l.text("Totaal", "Total"), category.label(l).to_lowercase()),
+                    {
+                        // German keeps its nouns capitalised
+                        let name = category.label(l);
+                        let name = if l == Language::German { name.to_string() } else { name.to_lowercase() };
+                        format!("{} ({count})", l.text("Totaal {category}", "Total {category}").replace("{category}", &name))
+                    },
                     units.format(l, category, total),
                 ));
             }
@@ -2902,6 +2974,14 @@ impl App {
         });
         let banner = if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
+        } else if let Some((tool, _)) = self.modeller.tool {
+            let hint = tool.hint(l, self.modeller.points.len());
+            Some(match self.modeller.refusal {
+                Some(refusal) => format!("{}: {} · {}", tool.label(l), l.translate(refusal.reason()), hint),
+                None => format!("{}: {}", tool.label(l), hint),
+            })
+        } else if let Some(refusal) = self.modeller.refusal {
+            Some(l.translate(refusal.reason()).to_string())
         } else {
             self.measure.tool.map(|tool| {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
@@ -3551,12 +3631,10 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
     .into()
 }
 
-/// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
+/// The language of the stand-alone layout (`--screenshot`): English, or the language of
+/// `O3V_LANG` (`nl`, `de`, `fr`).
 pub(crate) fn standalone_language() -> Language {
-    match std::env::var("O3V_LANG").as_deref() {
-        Ok("nl") => Language::Dutch,
-        _ => Language::English,
-    }
+    std::env::var("O3V_LANG").ok().and_then(|code| Language::from_code(&code)).unwrap_or(Language::English)
 }
 
 /// A side panel of the stand-alone layout, as wide as the shell's pane (explorer 220, properties

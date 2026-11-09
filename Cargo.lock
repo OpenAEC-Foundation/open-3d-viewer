@@ -271,6 +271,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "bim-core"
+version = "0.1.0"
+dependencies = [
+ "earcutr",
+ "glam 0.30.10",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bim-structural"
 version = "0.1.0"
 dependencies = [
@@ -1554,6 +1565,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
 dependencies = [
  "bytemuck",
+ "serde_core",
 ]
 
 [[package]]
@@ -3428,6 +3440,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "open-3d-viewer"
 version = "2026.45.12"
 dependencies = [
+ "bim-core",
  "bim-structural",
  "bytemuck",
  "cadmpeg-codec-step",

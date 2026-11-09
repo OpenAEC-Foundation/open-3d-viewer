@@ -5,8 +5,9 @@
 //! dimension to that plan, shown wherever it is placed.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::{parse_elevation, Dimension, Sheet, PAPERS, SCALES};
+use crate::document::{parse_elevation, Dimension, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
 use crate::drawing::{plan_at, section_at, Cut};
+use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
 use iced::keyboard;
@@ -56,6 +57,7 @@ impl App {
         }
         self.active_sheet = None;
         self.active_schedule = None;
+        self.ifc.shown = false;
         if self.active_doc_sheet.as_deref() != Some(path) {
             self.pick_on_sheet(None);
         }
@@ -186,6 +188,92 @@ impl App {
             plan_at(&model, &shown, low as f32, high as f32)
         };
         self.cuts.insert(path.to_string(), Arc::new(cut));
+    }
+
+    /// The drawings of views as the sheet layout takes them (`crate::sheet_layout`): the crop, or
+    /// else the whole cut, with the points its dimensions measure, around the middle of the
+    /// whole cut (the point a placed view's place stands for). Views not cut yet are cut first.
+    fn layout_items(&mut self, views: &[String]) -> Vec<Item> {
+        for view in views {
+            self.cut_view(view);
+        }
+        views
+            .iter()
+            .map(|view| {
+                let extent = self.cuts.get(view).and_then(|c| c.extent).map(|(lo, hi)| (lo.map(f64::from), hi.map(f64::from)));
+                let middle = extent.map_or([0.0, 0.0], |(lo, hi)| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]);
+                let marks = self.document.view_marks(view);
+                let (mut lo, mut hi) = match (marks.and_then(|(_, crop)| crop), extent) {
+                    (Some(crop), _) => crop,
+                    (None, Some(extent)) => extent,
+                    (None, None) => ([middle[0] - 2.0, middle[1] - 1.5], [middle[0] + 2.0, middle[1] + 1.5]),
+                };
+                for d in marks.map_or(&[][..], |(d, _)| d) {
+                    for p in [d.from, d.to] {
+                        lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                        hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+                    }
+                }
+                Item { lo: [lo[0] - middle[0], lo[1] - middle[1]], hi: [hi[0] - middle[0], hi[1] - middle[1]] }
+            })
+            .collect()
+    }
+
+    /// Lays the views of a sheet out: one scale for all, the largest drawing at which they fit,
+    /// in rows, centred on the paper.
+    pub(super) fn arrange_sheet(&mut self, path: &str) {
+        let Some(sheet) = self.document.sheet(path) else { return };
+        let paper = sheet.paper;
+        let views: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).collect();
+        if views.is_empty() {
+            return;
+        }
+        let items = self.layout_items(&views);
+        let (scale, places) = sheet_layout::arrange(&items, sheet_layout::area(paper), &SCALES);
+        for (i, at) in places.into_iter().enumerate() {
+            self.document.set_scale(path, i, scale);
+            self.document.move_placed(path, i, at);
+        }
+    }
+
+    /// The views on no sheet yet: the floor plans from the lowest level up, then the sections
+    /// and elevations as they were made.
+    pub(super) fn unplaced_views(&self) -> (Vec<String>, Vec<String>) {
+        let placed: std::collections::HashSet<&str> = self.document.sheets().iter().flat_map(|s| s.views.iter().map(|v| v.plan.as_str())).collect();
+        let mut plans: Vec<&crate::document::PlanView> = self.document.plans().iter().filter(|p| !placed.contains(p.path.as_str())).collect();
+        let elevation = |p: &crate::document::PlanView| self.document.level(&p.level).map_or(f64::INFINITY, |l| l.elevation);
+        plans.sort_by(|a, b| elevation(a).total_cmp(&elevation(b)).then_with(|| a.name.cmp(&b.name)));
+        let plans = plans.into_iter().map(|p| p.path.clone()).collect();
+        let sections = self.document.sections().iter().map(|s| s.path.clone()).filter(|s| !placed.contains(s.as_str())).collect();
+        (plans, sections)
+    }
+
+    /// Puts the views that are on no sheet on new A3 sheets, the floor plans on sheets named
+    /// `names[0]`, the sections and elevations on sheets named `names[1]`: per kind one scale,
+    /// as many on a sheet as fit; the first new sheet shows.
+    pub(super) fn fill_sheets(&mut self, names: [&str; 2]) {
+        let (plans, sections) = self.unplaced_views();
+        let mut first = None;
+        for (name, views) in [(names[0], plans), (names[1], sections)] {
+            if views.is_empty() {
+                continue;
+            }
+            let items = self.layout_items(&views);
+            let (scale, sheets) = sheet_layout::fill(&items, sheet_layout::area(A3_LANDSCAPE), &SCALES);
+            for group in sheets {
+                let sheet = self.document.add_sheet(name);
+                first.get_or_insert_with(|| sheet.clone());
+                for (k, at) in group {
+                    if let Some(i) = self.document.place_plan(&sheet, &views[k]) {
+                        self.document.set_scale(&sheet, i, scale);
+                        self.document.move_placed(&sheet, i, at);
+                    }
+                }
+            }
+        }
+        if let Some(sheet) = first {
+            self.open_doc_sheet(&sheet);
+        }
     }
 
     /// Makes the four elevations of the model: 2 m outside it, each looking at it across its
@@ -333,6 +421,10 @@ impl App {
             bar = bar.push(text(l.text("Papier", "Paper")).size(12).color(p.text_secondary));
             for (name, size) in PAPERS {
                 bar = bar.push(small(name.to_string(), sheet.paper == size, Message::SetPaper(key.clone(), size)));
+            }
+            if !sheet.views.is_empty() {
+                bar = bar.push(text("|").size(12).color(p.text_muted));
+                bar = bar.push(small(l.text("Indelen", "Arrange").to_string(), false, Message::ArrangeSheet(key.clone())));
             }
             bar = bar.push(text("|").size(12).color(p.text_muted));
             bar = bar.push(text(l.text("Plaats op dit blad:", "Place on this sheet:")).size(12).color(p.text_secondary));
@@ -953,14 +1045,29 @@ pub(super) fn sheets_list<'a>(app: &'a App, p: Palette, l: Language, mut body: i
         let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSheet(Arc::from(sheet.path.as_str())));
         body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(iced::Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
     }
-    let plus = iced::widget::svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| iced::widget::svg::Style { color: Some(p.accent) });
-    body.push(
-        button(row![plus, text(l.text("Nieuw blad", "New sheet")).size(12).color(p.text).font(FONT_BOLD)].spacing(6).align_y(Center))
+    let plus = || iced::widget::svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| iced::widget::svg::Style { color: Some(p.accent) });
+    body = body.push(
+        button(row![plus(), text(l.text("Nieuw blad", "New sheet")).size(12).color(p.text).font(FONT_BOLD)].spacing(6).align_y(Center))
             .padding([4, 8])
             .width(Fill)
             .style(move |_, s| p.row_button(s))
             .on_press(Message::NewSheet(l.text("Blad", "Sheet"))),
-    )
+    );
+    // the views on no sheet yet, on new sheets
+    let (plans, sections) = app.unplaced_views();
+    let loose = plans.len() + sections.len();
+    if loose > 0 {
+        let label = text(l.text("Losse weergaven op bladen zetten", "Put loose views on sheets")).size(12).color(p.text).width(Fill);
+        let names = [l.text("Plattegronden", "Floor plans"), l.text("Doorsneden en aanzichten", "Sections and elevations")];
+        body = body.push(
+            button(row![plus(), label, text(loose.to_string()).size(11).color(p.text_muted)].spacing(6).align_y(Center))
+                .padding([4, 8])
+                .width(Fill)
+                .style(move |_, s| p.row_button(s))
+                .on_press(Message::FillSheets(names)),
+        );
+    }
+    body
 }
 
 #[cfg(test)]
@@ -1233,6 +1340,54 @@ mod tests {
         let _ = app.update(Message::CloseTab(2));
         assert_eq!(app.doc_tabs(), [DocTab::Model, DocTab::Plan(0)]);
         assert_eq!(app.document.sheets().len(), 1, "the sheet stays in the document");
+    }
+
+    #[test]
+    fn arranging_a_sheet_gives_its_views_one_scale_side_by_side_on_the_paper() {
+        let (mut app, sheet, plan, _) = sheet_with_plan(false);
+        let level = Arc::<str>::from(app.document.levels()[1].path.as_str());
+        let _ = app.update(Message::NewPlan(level));
+        let second = Arc::<str>::from(app.document.plans()[1].path.as_str());
+        let _ = app.update(Message::OpenDocSheet(sheet.clone()));
+        let _ = app.update(Message::PlaceOnSheet(sheet.clone(), second.clone()));
+        let _ = app.update(Message::SetScale(sheet.clone(), 0, 200.0));
+        // both in the middle, on top of each other; arranged they stand side by side at 1:50
+        let _ = app.update(Message::ArrangeSheet(sheet.clone()));
+        let views = app.document.sheet(&sheet).unwrap().views.clone();
+        assert_eq!(views.iter().map(|v| (v.plan.as_str(), v.scale)).collect::<Vec<_>>(), [(&*plan, 50.0), (&*second, 50.0)]);
+        assert!((views[0].at[1] - views[1].at[1]).abs() < 1e-9 && views[0].at[0] < views[1].at[0], "{views:?}");
+        // their frames do not overlap and stay inside the paper's frame
+        let drawing = app.paper_drawing(app.theme.palette(), Language::English).unwrap();
+        let ((lo0, hi0, _), (lo1, hi1, _)) = (drawing.frame(0), drawing.frame(1));
+        assert!(hi0[0] < lo1[0], "{hi0:?} {lo1:?}");
+        assert!(lo0[0] >= 0.02 && hi1[0] <= 0.41 && lo0[1] >= 0.01 && hi0[1] <= 0.287, "{lo0:?} {hi1:?}");
+        // the bar offers it while nothing is picked
+        let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1600.0, 900.0), app.view());
+        assert!(ui.find("Arrange").is_ok());
+    }
+
+    #[test]
+    fn the_views_on_no_sheet_fill_new_sheets() {
+        let (mut app, sheet, _, _) = sheet_with_plan(false);
+        let level = Arc::<str>::from(app.document.levels()[1].path.as_str());
+        let _ = app.update(Message::NewPlan(level));
+        let _ = app.update(Message::MakeElevations(["N", "E", "S", "W"]));
+        // the second floor plan and the four elevations are on no sheet yet
+        let _ = app.update(Message::FillSheets(["Floor plans", "Sections and elevations"]));
+        let sheets = app.document.sheets();
+        assert_eq!(sheets[0].path, *sheet);
+        assert_eq!(sheets[1].name, "Floor plans");
+        assert_eq!(sheets[1].views.len(), 1);
+        assert!(sheets[2..].iter().all(|s| s.name == "Sections and elevations"));
+        assert_eq!(sheets[2..].iter().map(|s| s.views.len()).sum::<usize>(), 4);
+        // every view is on a sheet now, at one scale per kind; the first new sheet shows
+        let placed: std::collections::HashSet<&str> = sheets.iter().flat_map(|s| s.views.iter().map(|v| v.plan.as_str())).collect();
+        assert!(app.document.plans().iter().map(|p| p.path.as_str()).chain(app.document.sections().iter().map(|s| s.path.as_str())).all(|v| placed.contains(v)));
+        assert_eq!(app.active_doc_sheet.as_deref(), Some(sheets[1].path.as_str()));
+        // nothing left: no new sheet
+        let count = app.document.sheets().len();
+        let _ = app.update(Message::FillSheets(["Floor plans", "Sections and elevations"]));
+        assert_eq!(app.document.sheets().len(), count);
     }
 
     #[test]

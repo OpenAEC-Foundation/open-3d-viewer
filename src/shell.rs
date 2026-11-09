@@ -103,8 +103,11 @@ const fn named<T>(value: T, label: &'static str) -> Named<T> {
     Named { value, label }
 }
 
-/// The settings per language: Dutch, English.
-const THEMES: [[Named<ThemeId>; 5]; 2] = [
+/// The number of interface languages ([`Language::ALL`]).
+const LANGUAGES: usize = Language::ALL.len();
+
+/// The settings per language, in the order of [`Language::ALL`]: Dutch, English, German, French.
+const THEMES: [[Named<ThemeId>; 5]; LANGUAGES] = [
     [
         named(ThemeId::Light, "Licht"),
         named(ThemeId::Dark, "Donker"),
@@ -119,19 +122,37 @@ const THEMES: [[Named<ThemeId>; 5]; 2] = [
         named(ThemeId::HighContrastDark, "High contrast dark"),
         named(ThemeId::HighContrastLight, "High contrast light"),
     ],
+    [
+        named(ThemeId::Light, "Hell"),
+        named(ThemeId::Dark, "Dunkel"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Hoher Kontrast dunkel"),
+        named(ThemeId::HighContrastLight, "Hoher Kontrast hell"),
+    ],
+    [
+        named(ThemeId::Light, "Clair"),
+        named(ThemeId::Dark, "Sombre"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Contraste élevé sombre"),
+        named(ThemeId::HighContrastLight, "Contraste élevé clair"),
+    ],
 ];
-const WORKSPACES: [[Named<WorkspaceSetting>; 3]; 2] = [
+const WORKSPACES: [[Named<WorkspaceSetting>; 3]; LANGUAGES] = [
     [named(WorkspaceSetting::Theme, "Volgt thema"), named(WorkspaceSetting::Light, "Altijd licht"), named(WorkspaceSetting::Dark, "Altijd donker")],
     [named(WorkspaceSetting::Theme, "Follows the theme"), named(WorkspaceSetting::Light, "Always light"), named(WorkspaceSetting::Dark, "Always dark")],
+    [named(WorkspaceSetting::Theme, "Folgt dem Thema"), named(WorkspaceSetting::Light, "Immer hell"), named(WorkspaceSetting::Dark, "Immer dunkel")],
+    [named(WorkspaceSetting::Theme, "Suit le thème"), named(WorkspaceSetting::Light, "Toujours clair"), named(WorkspaceSetting::Dark, "Toujours sombre")],
 ];
-const STATUSBARS: [[Named<StatusbarSetting>; 2]; 2] = [
+const STATUSBARS: [[Named<StatusbarSetting>; 2]; LANGUAGES] = [
     [named(StatusbarSetting::Theme, "Volgt thema"), named(StatusbarSetting::Dark, "Altijd donker")],
     [named(StatusbarSetting::Theme, "Follows the theme"), named(StatusbarSetting::Dark, "Always dark")],
+    [named(StatusbarSetting::Theme, "Folgt dem Thema"), named(StatusbarSetting::Dark, "Immer dunkel")],
+    [named(StatusbarSetting::Theme, "Suit le thème"), named(StatusbarSetting::Dark, "Toujours sombre")],
 ];
 
 /// The options of a setting in `language`, and the one that is chosen.
-fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; 2], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
-    let list = &lists[usize::from(language == Language::English)];
+fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; LANGUAGES], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
+    let list = &lists[language.index()];
     (list, list.iter().find(|n| n.value == chosen).copied())
 }
 
@@ -316,6 +337,8 @@ pub struct Studio {
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
+    /// The ribbon's tab shown: 0 Home, 1 Model.
+    ribbon_tab: usize,
     /// A dev build started by `scripts/dev.ps1`: the open projects kept for its next start.
     dev: Option<DevSession>,
 }
@@ -373,6 +396,7 @@ impl Studio {
             width: 1280.0,
             compact_panel: None,
             ribbon_folded: false,
+            ribbon_tab: 0,
             dev: None,
         }
     }
@@ -627,6 +651,10 @@ impl Studio {
             Command::new("section.reset", l.text("Herstellen", "Reset"), go(Message::ResetSection))
                 .icon(small("section.reset-box"), large("section.reset-box"))
                 .enabled(app.section_on || app.plane.is_some()),
+            Command::new("view.ifc", l.text("IFC-structuur", "IFC structure"), go(Message::OpenIfc))
+                .icon(small("panel.model-tree"), large("panel.model-tree"))
+                .toggle(app.ifc.shown)
+                .enabled(loaded),
             Command::new("view.explode", l.text("Uit elkaar", "Explode"), go(Message::ToggleExplode))
                 .icon(small("transform.explode"), large("transform.explode"))
                 .toggle(app.explode_on)
@@ -638,7 +666,21 @@ impl Studio {
                 .icon(small("edit.clear-all"), large("edit.clear-all"))
                 .enabled(!app.measure.results.is_empty()),
             Command::new("app.settings", l.text("Instellingen…", "Settings…"), Msg::Dialog(Some(Dialog::Settings))).icon(small("ui.settings"), large("ui.settings")).shortcut(Shortcut::ctrl(',')).dialog(),
+            Command::new("model.new", l.text("Nieuw model", "New model"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("object.add"), large("object.add")),
+            Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
+                .icon(small("grid.end-couple"), large("grid.end-couple"))
+                .enabled(app.selected_linear() == 2),
+            Command::new("model.mitre", l.text("Verstek", "Mitre"), go(Message::Connect(bim_core::ConnectionKind::Mitre, l.text("Verbinding", "Connection"))))
+                .icon(small("draw.l-shape"), large("draw.l-shape"))
+                .enabled(app.selected_linear() == 2),
+            Command::new("model.delete", l.text("Verwijderen", "Delete"), go(Message::DeletePicked))
+                .icon(small("edit.delete"), large("edit.delete"))
+                .enabled(!app.selected_modelled().is_empty()),
         ];
+        for tool in crate::app::modeller::ModelTool::ALL {
+            let on = app.modeller.tool.is_some_and(|t| t.0 == tool);
+            list.push(Command::new(tool.id(), tool.label(l), go(Message::ModelTool(Some((tool, tool.label(l)))))).icon(small(tool.icon()), large(tool.icon())).mode(on).enabled(loaded));
+        }
         for tool in Tool::ALL {
             let (id, icon) = match tool {
                 Tool::Distance => ("measure.distance", "measure.distance"),
@@ -755,7 +797,7 @@ impl Studio {
                 };
                 // another file beside a model (or one loading) opens in a tab of its own, and
                 // loads at the same time
-                if matches!(message, Message::Open(_) | Message::Picked(Some(_))) && self.app.busy() {
+                if matches!(message, Message::Open(_) | Message::Picked(Some(_)) | Message::NewModel(_)) && self.app.busy() {
                     self.new_project();
                 }
                 // what the project's tasks return goes back to it, even when another is shown
@@ -785,10 +827,12 @@ impl Studio {
                 }
             }
             Msg::CloseProject(i) => self.close_project(i),
-            // one ribbon tab: choosing it closes Bestand; in the compact layout it also folds the
-            // ribbon away and back
-            Msg::RibbonTab(_) => {
-                self.ribbon_folded = self.compact() && !self.backstage && !self.ribbon_folded;
+            // choosing a ribbon tab closes Bestand; in the compact layout choosing the tab shown
+            // folds the ribbon away and back
+            Msg::RibbonTab(tab) => {
+                let same = tab == self.ribbon_tab;
+                self.ribbon_folded = self.compact() && !self.backstage && same && !self.ribbon_folded;
+                self.ribbon_tab = tab;
                 self.backstage = false;
             }
             Msg::Backstage(open) => self.backstage = open,
@@ -994,7 +1038,11 @@ impl Studio {
             Status::Error(e) => match crate::loaders::desktop_only_error(e) {
                 // a format only the desktop app opens: the short message in the chosen language
                 // (the download link is in the dialog that opens with it)
-                Some(format) => format!("{}: {}", l.text("Fout", "Error"), crate::loaders::desktop_only_message(format, l == Language::Dutch)),
+                Some(format) => format!(
+                    "{}: {}",
+                    l.text("Fout", "Error"),
+                    l.text("{format} vereist de desktop-app", "{format} needs the desktop app").replace("{format}", format)
+                ),
                 None => format!("{}: {e}", l.text("Fout", "Error")),
             },
         }
@@ -1004,7 +1052,7 @@ impl Studio {
         let look = self.look();
         let l = self.l();
         let c = look.color;
-        let tabs = [l.text("Start", "Home")];
+        let tabs = [l.text("Start", "Home"), l.text("Modelleren", "Model")];
         let mut left = vec![self.status_text()];
         let selected = self.app.selection.len() + self.app.structural.selected.len();
         if selected > 0 {
@@ -1017,7 +1065,7 @@ impl Studio {
         let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
-            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { 0 }, Msg::RibbonTab),
+            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { self.ribbon_tab }, Msg::RibbonTab),
             // Bestand takes the place of the ribbon and the documents until it closes
             if self.backstage { self.backstage_view(look) } else { column![ribbon, self.document_area(look)].into() },
             status,
@@ -1106,16 +1154,31 @@ impl Studio {
             measure.push(smalls(more_tools));
         }
         measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
-        let groups = vec![
+        let groups = if self.ribbon_tab == 1 {
+            // the five base elements: planar (wall, slab), linear (column, beam), system, point;
+            // connection joins two selected linear elements
+            vec![
+                w::ribbon_group(look, l.text("Model", "Model"), vec![large("model.new"), smalls(&["file.save-as"])]),
+                w::ribbon_group(look, l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
+                w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
+                w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
+                w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
+                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre"])]),
+                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.delete")]),
+            ]
+        } else {
+            vec![
             w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
             w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
             w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
+            w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
             w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
             w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
             w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
             w::ribbon_group(look, l.text("Meten", "Measure"), measure),
             w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
-        ];
+            ]
+        };
         if self.compact() {
             // narrower than the ribbon: it scrolls sideways (a finger drags it)
             use iced::widget::scrollable::{Direction, Scrollbar};
@@ -1342,14 +1405,11 @@ impl Studio {
 
 /// What the desktop-only dialog says about a `format` file.
 fn desktop_only_text(l: Language, format: &str) -> String {
-    match l {
-        Language::Dutch => format!(
-            "{format}-bestanden openen alleen in de desktop-app; de browserversie kan ze niet lezen. De desktop-app is gratis, voor Windows, macOS en Linux: Downloaden opent de releasepagina op GitHub."
-        ),
-        Language::English => format!(
-            "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub."
-        ),
-    }
+    l.text(
+        "{format}-bestanden openen alleen in de desktop-app; de browserversie kan ze niet lezen. De desktop-app is gratis, voor Windows, macOS en Linux: Downloaden opent de releasepagina op GitHub.",
+        "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub.",
+    )
+    .replace("{format}", format)
 }
 
 /// Opens `url` in the browser: a new tab on the web, the default browser on the desktop.
@@ -1371,12 +1431,12 @@ fn open_url(url: &str) -> Result<(), String> {
 /// (as the file dialog), and how many more it opens. Built once per language: the registry is
 /// fixed before the app starts.
 fn formats_hint(l: Language) -> &'static str {
-    static HINTS: std::sync::OnceLock<[String; 2]> = std::sync::OnceLock::new();
+    static HINTS: std::sync::OnceLock<[String; LANGUAGES]> = std::sync::OnceLock::new();
     let hints = HINTS.get_or_init(|| {
         let (featured, others) = crate::loaders::featured_formats();
-        [Language::Dutch, Language::English].map(|l| hint_text(l, &featured, others))
+        Language::ALL.map(|l| hint_text(l, &featured, others))
     });
-    &hints[usize::from(l == Language::English)]
+    &hints[l.index()]
 }
 
 /// The start screen's hint in language `l`: the `featured` format names, then how many `others`.
@@ -1386,10 +1446,7 @@ fn hint_text(l: Language, featured: &[&str], others: usize) -> String {
     match others {
         0 => {}
         1 => items.push(l.text("een ander formaat", "one other format").into()),
-        n => items.push(match l {
-            Language::Dutch => format!("een van {n} andere formaten"),
-            Language::English => format!("one of {n} other formats"),
-        }),
+        n => items.push(l.text("een van {n} andere formaten", "one of {n} other formats").replace("{n}", &n.to_string())),
     }
     let list = match items.split_last() {
         None => String::new(),
@@ -1657,8 +1714,26 @@ mod tests {
     }
 
     #[test]
-    fn every_setting_has_a_name_in_both_languages() {
-        for i in 0..2 {
+    #[ignore = "writes PNG files"]
+    fn export_modeller_renders() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        for l in Language::ALL {
+            let mut app = App::default();
+            app.add_demo_building();
+            // the wall with the door and the window, selected
+            app.select_modelled(bim_core::ElementId(2));
+            let mut studio = Studio::new(app);
+            studio.prefs.language = l;
+            studio.ribbon_tab = 1;
+            let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Wall, "Wall")))));
+            studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("modeller-{}.png", l.code()))).expect("snapshot");
+        }
+    }
+
+    #[test]
+    fn every_setting_has_a_name_in_every_language() {
+        for i in 0..LANGUAGES {
             assert_eq!(THEMES[i].map(|n| n.value), ThemeId::ALL);
             assert_eq!(WORKSPACES[i].map(|n| n.value), WorkspaceSetting::ALL);
             assert_eq!(STATUSBARS[i].map(|n| n.value), StatusbarSetting::ALL);

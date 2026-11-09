@@ -8,6 +8,9 @@
 //! - A build-up is a node of class `IfcWallType`, `IfcSlabType` or `IfcCoveringType` with its
 //!   predefined type, its English name and `openaec::buildup` (its id, role and layers, each a
 //!   material key and a thickness in metres). IFCX has no layer-set schema yet.
+//! - A linear type is a node of its role's type class (`IfcColumnType`, `IfcBeamType`, ...) with
+//!   its predefined type, its English name and `openaec::lineartype` (its id, role, material key,
+//!   profile and steel designation).
 //!
 //! Paths are UUIDs derived from the key or id, so a library written twice has the same paths.
 //! Reading takes these nodes from any IFCX file and leaves the rest.
@@ -15,6 +18,7 @@
 use crate::buildup::BuildUp;
 use crate::library::Library;
 use crate::material::{HatchKind, Material, Names};
+use crate::profile::LinearType;
 use crate::{uuid, Lang, LibraryError};
 use serde_json::{json, Map, Value};
 
@@ -22,6 +26,8 @@ use serde_json::{json, Map, Value};
 pub const MATERIAL: &str = "openaec::material";
 /// The attribute of a type node with its build-up.
 pub const BUILDUP: &str = "openaec::buildup";
+/// The attribute of a type node with its linear type.
+pub const LINEAR_TYPE: &str = "openaec::lineartype";
 
 /// The path of the node of material `key`.
 pub fn material_path(key: &str) -> String {
@@ -31,6 +37,11 @@ pub fn material_path(key: &str) -> String {
 /// The path of the node of build-up `id`.
 pub fn buildup_path(id: &str) -> String {
     uuid(&format!("openaec-library/buildup/{id}"))
+}
+
+/// The path of the node of linear type `id`.
+pub fn linear_type_path(id: &str) -> String {
+    uuid(&format!("openaec-library/lineartype/{id}"))
 }
 
 /// The node of a material.
@@ -46,7 +57,7 @@ pub fn material_node(material: &Material) -> Value {
     })
 }
 
-/// The nodes of a library: its materials, then its build-ups as types.
+/// The nodes of a library: its materials, then its build-ups and its linear types as types.
 pub fn nodes(library: &Library) -> Vec<Value> {
     let mut nodes: Vec<Value> = library.materials.iter().map(material_node).collect();
     for b in &library.buildups {
@@ -58,6 +69,19 @@ pub fn nodes(library: &Library) -> Vec<Value> {
                 "bsi::ifc::prop::Name": name,
                 "bsi::ifc::prop::PredefinedType": b.role.predefined_type(),
                 BUILDUP: b,
+            }
+        }));
+    }
+    for t in &library.linear_types {
+        let name = library.linear_name(&t.id, Lang::En).unwrap_or_default();
+        let (_, class, predefined) = t.role.ifc();
+        nodes.push(json!({
+            "path": linear_type_path(&t.id),
+            "attributes": {
+                "bsi::ifc::class": {"code": class},
+                "bsi::ifc::prop::Name": name,
+                "bsi::ifc::prop::PredefinedType": predefined,
+                LINEAR_TYPE: t,
             }
         }));
     }
@@ -76,9 +100,9 @@ pub fn file(library: &Library, id: &str, author: &str, timestamp: &str) -> Value
 }
 
 /// The library in an IFCX file: its material nodes (also those without the library's own data,
-/// named by their code) and its build-ups. The attributes of nodes with the same path are
+/// named by their code), its build-ups and its linear types. The attributes of nodes with the same path are
 /// composed, a later one winning, as IFCX layers them. Refused when the file has no data, or a
-/// build-up does not check against the file's materials.
+/// type does not check against the file's materials.
 pub fn read(file: &Value) -> Result<Library, LibraryError> {
     let data = file.get("data").and_then(Value::as_array).ok_or_else(|| LibraryError::Unreadable("no data".into()))?;
     // the attributes per path, in the order the paths first appear
@@ -102,6 +126,7 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
     }
     let mut library = Library::default();
     let mut buildups: Vec<BuildUp> = Vec::new();
+    let mut linear_types: Vec<LinearType> = Vec::new();
     for path in order {
         let attributes = &composed[path];
         if let Some(own) = attributes.get(MATERIAL) {
@@ -120,9 +145,15 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
         if let Some(own) = attributes.get(BUILDUP) {
             buildups.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
         }
+        if let Some(own) = attributes.get(LINEAR_TYPE) {
+            linear_types.push(serde_json::from_value(own.clone()).map_err(|e| LibraryError::Unreadable(format!("type {path}: {e}")))?);
+        }
     }
     for b in buildups {
         library.add_buildup(b)?;
+    }
+    for t in linear_types {
+        library.add_linear_type(t)?;
     }
     Ok(library)
 }
@@ -131,6 +162,7 @@ pub fn read(file: &Value) -> Result<Library, LibraryError> {
 mod tests {
     use super::*;
     use crate::buildup::{Layer, Role};
+    use crate::profile::LinearRole;
 
     fn reread(library: &Library) -> Library {
         let text = serde_json::to_string(&file(library, "test.ifcx", "test", "2026-11-09T00:00:00Z")).unwrap();
@@ -142,6 +174,10 @@ mod tests {
         let mut library = Library::starter();
         // a thickness that is no round number of millimetres
         library.add_buildup(BuildUp::new("wall.odd", Role::Wall, vec![Layer::new("timber", 0.1 / 3.0)])).unwrap();
+        // steel profiles with tapered flanges and corner radii
+        for (id, role, designation) in [("beam.ipn-200", LinearRole::Beam, "IPN 200"), ("column.shs", LinearRole::Column, "SHS 100x100x5"), ("member.l", LinearRole::Member, "L 100x50x8")] {
+            library.add_linear_type(LinearType::steel(id, role, designation).unwrap()).unwrap();
+        }
         assert_eq!(reread(&library), library);
     }
 
@@ -157,7 +193,11 @@ mod tests {
         assert_eq!(roof["attributes"]["bsi::ifc::prop::PredefinedType"], "ROOF");
         assert_eq!(roof["attributes"]["bsi::ifc::prop::Name"], "PIR insulation-concrete 320");
         assert_eq!(roof["attributes"][BUILDUP]["layers"][0]["material"], "insulation-pir");
-        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len());
+        let pipe = nodes.iter().find(|n| n["path"] == linear_type_path("pipe.generic-110")).unwrap();
+        assert_eq!(pipe["attributes"]["bsi::ifc::class"]["code"], "IfcPipeSegmentType");
+        assert_eq!(pipe["attributes"]["bsi::ifc::prop::Name"], "Generic round 110");
+        assert_eq!(pipe["attributes"][LINEAR_TYPE]["profile"]["kind"], "circle");
+        assert_eq!(nodes.len(), library.materials.len() + library.buildups.len() + library.linear_types.len());
         // paths are stable
         assert_eq!(nodes, self::nodes(&Library::starter()));
     }

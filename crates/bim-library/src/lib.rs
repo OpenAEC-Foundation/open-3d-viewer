@@ -1,5 +1,6 @@
 //! The libraries of the BIM modeller of Open 3D Viewer Studio: the materials things are made of,
-//! and the layered build-ups of walls, floors, roofs and ceilings (planar types).
+//! the layered build-ups of walls, floors, roofs and ceilings (planar types), and the profiles
+//! and linear types of columns, beams and other members.
 //!
 //! Headless: no GUI, no kernel. The kernel (`bim-core`), the app, the MCP server and other OpenAEC
 //! tools can all use it.
@@ -21,10 +22,12 @@ pub mod buildup;
 pub mod ifcx;
 pub mod library;
 pub mod material;
+pub mod profile;
 
 pub use buildup::{BuildUp, Layer, Role};
 pub use library::Library;
 pub use material::{DrawingStandard, HatchKind, HatchPattern, Material, Names};
+pub use profile::{LinearRole, LinearType, ProfileShape, Series, SteelProfile};
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +67,8 @@ pub enum LibraryError {
     NoKey,
     /// A file could not be read as a library.
     Unreadable(String),
+    /// A profile's dimensions do not make a profile; the text says which.
+    BadProfile(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -75,6 +80,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::Duplicate(key) => write!(f, "\"{key}\" is already in the library."),
             LibraryError::NoKey => f.write_str("A key cannot be empty."),
             LibraryError::Unreadable(why) => write!(f, "Not a library: {why}"),
+            LibraryError::BadProfile(why) => write!(f, "Not a profile: {why}"),
         }
     }
 }

@@ -3,6 +3,7 @@
 
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
+use crate::profile::{self, LinearRole, LinearType};
 use crate::{Lang, LibraryError};
 use serde::{Deserialize, Serialize};
 
@@ -10,19 +11,50 @@ use serde::{Deserialize, Serialize};
 /// (metres): 0.01 mm.
 pub const SAME_THICKNESS: f64 = 1e-5;
 
-/// Materials and build-ups, in the order they were added.
+/// Materials, build-ups and linear types, in the order they were added.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Library {
     #[serde(default)]
     pub materials: Vec<Material>,
     #[serde(default)]
     pub buildups: Vec<BuildUp>,
+    #[serde(default)]
+    pub linear_types: Vec<LinearType>,
+}
+
+/// Names made unique: " (2)", " (3)" after a name given before, in order.
+fn numbered(names: impl Iterator<Item = String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    names
+        .map(|name| {
+            let same = seen.iter().filter(|n| **n == name).count();
+            seen.push(name.clone());
+            if same == 0 {
+                name
+            } else {
+                format!("{name} ({})", same + 1)
+            }
+        })
+        .collect()
+}
+
+/// `id`, or the first of `id-2`, `id-3`, ... that `taken` says is free.
+fn free_id(id: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut fresh = id.to_string();
+    let mut n = 1;
+    while taken(&fresh) {
+        n += 1;
+        fresh = format!("{id}-{n}");
+    }
+    fresh
 }
 
 impl Library {
-    /// The library a new project starts with: Open BIM Studio's starter materials and planar types.
+    /// The library a new project starts with: Open BIM Studio's starter materials, planar types
+    /// and linear types. The steel profiles are a catalogue ([`profile::steel_profiles`]) a
+    /// project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -63,23 +95,51 @@ impl Library {
     /// The name of build-up `id` in `lang`: its rule name, with " (2)", " (3)" when build-ups of
     /// its role before it have the same rule name.
     pub fn name(&self, id: &str, lang: Lang) -> Option<String> {
-        let target = self.buildup(id)?;
-        let name = target.rule_name(&self.materials, lang);
-        let same = self.buildups_of(target.role).take_while(|b| b.id != id).filter(|b| b.rule_name(&self.materials, lang) == name).count();
-        Some(if same == 0 { name } else { format!("{name} ({})", same + 1) })
+        let role = self.buildup(id)?.role;
+        self.names(role, lang).into_iter().find(|(i, _)| *i == id).map(|(_, name)| name)
     }
 
     /// The build-ups of `role` with their names in `lang`, in library order.
     pub fn names(&self, role: Role, lang: Lang) -> Vec<(&str, String)> {
-        let mut seen: Vec<String> = Vec::new();
-        self.buildups_of(role)
-            .map(|b| {
-                let name = b.rule_name(&self.materials, lang);
-                let same = seen.iter().filter(|n| **n == name).count();
-                seen.push(name.clone());
-                (b.id.as_str(), if same == 0 { name } else { format!("{name} ({})", same + 1) })
-            })
-            .collect()
+        let names = numbered(self.buildups_of(role).map(|b| b.rule_name(&self.materials, lang)));
+        self.buildups_of(role).map(|b| b.id.as_str()).zip(names).collect()
+    }
+
+    pub fn linear_type(&self, id: &str) -> Option<&LinearType> {
+        self.linear_types.iter().find(|t| t.id == id)
+    }
+
+    /// The linear types of `role`, in library order.
+    pub fn linear_types_of(&self, role: LinearRole) -> impl Iterator<Item = &LinearType> {
+        self.linear_types.iter().filter(move |t| t.role == role)
+    }
+
+    /// Adds a linear type under an id of its own, once it checks against the library's materials.
+    pub fn add_linear_type(&mut self, linear: LinearType) -> Result<(), LibraryError> {
+        linear.check(&self.materials)?;
+        if self.linear_type(&linear.id).is_some() {
+            return Err(LibraryError::Duplicate(linear.id));
+        }
+        self.linear_types.push(linear);
+        Ok(())
+    }
+
+    /// The name of linear type `id` in `lang`, made unique within its role as a build-up's.
+    pub fn linear_name(&self, id: &str, lang: Lang) -> Option<String> {
+        let role = self.linear_type(id)?.role;
+        self.linear_names(role, lang).into_iter().find(|(i, _)| *i == id).map(|(_, name)| name)
+    }
+
+    /// The linear types of `role` with their names in `lang`, in library order.
+    pub fn linear_names(&self, role: LinearRole, lang: Lang) -> Vec<(&str, String)> {
+        let names = numbered(self.linear_types_of(role).map(|t| t.rule_name(&self.materials, lang)));
+        self.linear_types_of(role).map(|t| t.id.as_str()).zip(names).collect()
+    }
+
+    /// The linear type this library already has with the role, material, profile and designation
+    /// of `linear` (the profile within 0.01 mm).
+    pub fn matching_linear(&self, linear: &LinearType) -> Option<&LinearType> {
+        self.linear_types_of(linear.role).find(|t| t.material == linear.material && t.designation == linear.designation && t.profile.same(&linear.profile))
     }
 
     /// The build-up this library already has with the role and the layers of `buildup`: the same
@@ -94,9 +154,10 @@ impl Library {
     }
 
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
-    /// materials by key, build-ups by role and layers ([`Library::matching`]). Nothing this
-    /// library has is changed. A build-up whose id is taken gets a new one; one that does not
-    /// check is left out. Returns how many materials and build-ups were added.
+    /// materials by key, build-ups by role and layers ([`Library::matching`]), linear types by
+    /// role, material and profile ([`Library::matching_linear`]). Nothing this library has is
+    /// changed. A type whose id is taken gets a new one; one that does not check is left out.
+    /// Returns how many materials and types were added.
     pub fn merge(&mut self, other: &Library) -> usize {
         let mut added = 0;
         for m in &other.materials {
@@ -109,12 +170,18 @@ impl Library {
                 continue;
             }
             let mut fresh = b.clone();
-            let mut n = 1;
-            while self.buildup(&fresh.id).is_some() {
-                n += 1;
-                fresh.id = format!("{}-{n}", b.id);
-            }
+            fresh.id = free_id(&b.id, |id| self.buildup(id).is_some());
             if self.add_buildup(fresh).is_ok() {
+                added += 1;
+            }
+        }
+        for t in &other.linear_types {
+            if self.matching_linear(t).is_some() {
+                continue;
+            }
+            let mut fresh = t.clone();
+            fresh.id = free_id(&t.id, |id| self.linear_type(id).is_some());
+            if self.add_linear_type(fresh).is_ok() {
                 added += 1;
             }
         }
@@ -131,9 +198,12 @@ mod tests {
     #[test]
     fn the_starter_library_checks() {
         let lib = Library::starter();
-        let mut fresh = Library { materials: lib.materials.clone(), buildups: Vec::new() };
+        let mut fresh = Library { materials: lib.materials.clone(), ..Library::default() };
         for b in &lib.buildups {
             fresh.add_buildup(b.clone()).unwrap_or_else(|e| panic!("{}: {e}", b.id));
+        }
+        for t in &lib.linear_types {
+            fresh.add_linear_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }
         assert_eq!(fresh, lib);
         assert_eq!(lib.name("roof.flat-concrete-pir", Lang::Nl).unwrap(), "Isolatie PIR-beton 320");
@@ -190,9 +260,28 @@ mod tests {
     }
 
     #[test]
+    fn linear_types_merge_by_role_material_and_profile() {
+        let mut project = Library::starter();
+        let mut other = Library::starter();
+        other.linear_types.push(LinearType::steel("column.hea-200", LinearRole::Column, "HEA 200").unwrap());
+        other.linear_types.push(LinearType::steel("beam.hea-200", LinearRole::Beam, "HEA 200").unwrap());
+        // the project's 300x300 concrete column, under another id
+        let mut copy = project.linear_types[0].clone();
+        copy.id = "column.copy".into();
+        other.linear_types.push(copy);
+        assert_eq!(project.merge(&other), 2, "the HEA 200 as a column and as a beam");
+        assert_eq!(project.linear_name("column.hea-200", Lang::Nl).unwrap(), "HEA 200");
+        assert!(project.linear_type("column.copy").is_none());
+        // a second 200x200 steel column of another id gets a number in the list
+        project.add_linear_type(LinearType::new("column.steel-200x200-b", LinearRole::Column, "steel", crate::ProfileShape::Rectangle { width: 0.2, depth: 0.2 })).unwrap();
+        assert_eq!(project.linear_name("column.steel-200x200-b", Lang::Nl).unwrap(), "Staal 200x200 (2)");
+        assert_eq!(project.linear_names(LinearRole::Pipe, Lang::En), vec![("pipe.generic-110", "Generic round 110".to_string())]);
+    }
+
+    #[test]
     fn a_build_up_of_an_unknown_material_is_left_out_of_a_merge() {
         let mut project = Library::starter();
-        let other = Library { materials: Vec::new(), buildups: vec![BuildUp::new("wall.x", Role::Wall, vec![Layer::new("unknown", 0.1)])] };
+        let other = Library { buildups: vec![BuildUp::new("wall.x", Role::Wall, vec![Layer::new("unknown", 0.1)])], ..Library::default() };
         assert_eq!(project.merge(&other), 0);
     }
 }

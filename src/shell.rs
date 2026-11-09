@@ -676,6 +676,10 @@ impl Studio {
             Command::new("model.mitre", l.text("Verstek", "Mitre"), go(Message::Connect(bim_core::ConnectionKind::Mitre, l.text("Verbinding", "Connection"))))
                 .icon(small("draw.l-shape"), large("draw.l-shape"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.edit", l.text("Bewerken", "Edit"), go(Message::EditMode))
+                .icon(small("object.edit"), large("object.edit"))
+                .toggle(app.modeller.edit.is_some())
+                .enabled(app.wants_tab()),
             Command::new("model.delete", l.text("Verwijderen", "Delete"), go(Message::DeletePicked))
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
@@ -944,11 +948,24 @@ impl Studio {
                     }
                     return self.update(Msg::App(Message::Escape));
                 }
+                // in edit mode G, X, Y, Z and A are its own keys
+                if self.dialog.is_none() && self.app.modeller.edit.is_some() && !press.modifiers.control() && !press.modifiers.alt() {
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c)) {
+                            return self.update(Msg::App(Message::EditKey(c)));
+                        }
+                    }
+                }
                 if self.dialog.is_none() {
                     if let Some(message) = cm::find(&self.commands(), &press.key, press.modifiers) {
                         return self.update(message);
                     }
                 }
+            }
+            // Tab on a selected modelled element opens its edit mode, as in Blender; else it moves
+            // the focus
+            Msg::Navigate(openaec_ui::keyboard::Navigation::Next) if self.dialog.is_none() && !self.backstage && self.app.wants_tab() => {
+                return self.update(Msg::App(Message::EditMode));
             }
             Msg::Navigate(step) => return openaec_ui::keyboard::navigate(step),
             Msg::TitlePress => {
@@ -1167,7 +1184,7 @@ impl Studio {
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
-                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.delete")]),
+                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
             ]
         } else {
             vec![
@@ -1732,6 +1749,44 @@ mod tests {
             let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Wall, "Wall")))));
             studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("modeller-{}.png", l.code()))).expect("snapshot");
         }
+        // edit mode (Tab) on the slab, its far corner picked
+        let mut app = App::default();
+        app.add_demo_building();
+        app.select_modelled(bim_core::ElementId(1));
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.ribbon_tab = 1;
+        let _ = studio.update(Msg::App(Message::EditMode));
+        let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(2))));
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-edit-nl.png")).expect("snapshot");
+    }
+
+    /// The Library tab with a build-up and a steel profile picked, in every language:
+    /// `cargo test --lib export_library_renders -- --ignored`.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_library_renders() {
+        use crate::app::library::{Group, LibraryMessage, Pick};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let shots: [(&str, Group, Pick); 2] = [
+            ("wall", Group::BuildUps(bim_library::Role::Wall), Pick::BuildUp("wall.timber-frame-outer".into())),
+            ("steel", Group::Series(bim_library::Series::Hea), Pick::Steel("HEA 200".into())),
+        ];
+        for l in Language::ALL {
+            for (name, group, pick) in shots.clone() {
+                let mut app = App::default();
+                app.explorer_tab = crate::app::ExplorerTab::Library;
+                if matches!(group, Group::Series(_)) {
+                    let _ = app.update(Message::Library(LibraryMessage::Toggle(Group::Steel)));
+                }
+                let _ = app.update(Message::Library(LibraryMessage::Toggle(group)));
+                let _ = app.update(Message::Library(LibraryMessage::Pick(pick)));
+                let mut studio = Studio::new(app);
+                studio.prefs.language = l;
+                studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-{name}-{}.png", l.code()))).expect("snapshot");
+            }
+        }
     }
 
     #[test]
@@ -1782,6 +1837,30 @@ mod tests {
         let left = studio.prefs.left;
         let _ = studio.update(Msg::Key(KeyPress { key: Key::Character("1".into()), modifiers: Modifiers::CTRL }));
         assert_eq!(studio.prefs.left, !left);
+    }
+
+    #[test]
+    fn tab_on_a_modelled_element_opens_edit_mode_and_its_keys_are_its_own() {
+        use iced::keyboard::{Key, Modifiers};
+        use openaec_ui::keyboard::Navigation;
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        // nothing selected: Tab moves the focus, edit mode stays shut
+        let _ = studio.update(Msg::Navigate(Navigation::Next));
+        assert!(studio.app.modeller.edit.is_none());
+        studio.app.select_modelled(bim_core::ElementId(2));
+        let _ = studio.update(Msg::Navigate(Navigation::Next));
+        assert!(studio.app.modeller.edit.is_some(), "Tab opens edit mode");
+        // G is edit mode's, not the grid's
+        let grid = studio.app.grid;
+        let _ = studio.update(Msg::Key(KeyPress { key: Key::Character("a".into()), modifiers: Modifiers::empty() }));
+        let _ = studio.update(Msg::Key(KeyPress { key: Key::Character("g".into()), modifiers: Modifiers::empty() }));
+        assert_eq!(studio.app.grid, grid);
+        assert!(studio.app.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some()), "G grabbed the points A picked");
+        let _ = studio.update(Msg::Key(KeyPress { key: Key::Named(iced::keyboard::key::Named::Escape), modifiers: Modifiers::empty() }));
+        let _ = studio.update(Msg::Navigate(Navigation::Next));
+        assert!(studio.app.modeller.edit.is_none(), "Tab leaves");
     }
 
     #[test]

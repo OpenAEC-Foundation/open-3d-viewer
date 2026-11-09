@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library"]
 
 [lib]
 name = "open_3d_viewer"
@@ -41,6 +41,8 @@ glam = { version = "0.30", features = ["bytemuck"] }
 bim-structural = { path = "crates/bim-structural" }
 # The BIM kernel: f64 geometry in tile frames and the five base elements; headless, in this workspace
 bim-core = { path = "crates/bim-core" }
+# The modeller's libraries: materials, layered build-ups, profiles and linear types; headless, in this workspace
+bim-library = { path = "crates/bim-library" }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
 serde = { version = "1", features = ["derive"] }

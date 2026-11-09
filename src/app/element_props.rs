@@ -81,7 +81,7 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { height, .. }, .. }), F::Height) => Some(*height),
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { base, .. }, .. }), F::Base) => Some(*base),
         (Shape::Planar(PlanarDef { form: PlanarForm::Slab { top, .. }, .. }), F::Base) => Some(*top),
-        (Shape::Planar(p), F::Thickness) => Some(p.thickness),
+        (Shape::Planar(p), F::Thickness) => Some(p.total_thickness()),
         (Shape::Planar(p), F::Along(i)) => opening(&p.openings, i).map(|o| o.along),
         (Shape::Planar(p), F::Sill(i)) => opening(&p.openings, i).map(|o| o.sill),
         (Shape::Planar(p), F::OpeningWidth(i)) => opening(&p.openings, i).map(|o| o.width),
@@ -124,7 +124,8 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { height, .. }, .. }), F::Height) => set(height),
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { base, .. }, .. }), F::Base) => set(base),
         (Shape::Planar(PlanarDef { form: PlanarForm::Slab { top, .. }, .. }), F::Base) => set(top),
-        (Shape::Planar(p), F::Thickness) => set(&mut p.thickness),
+        // a layered element is as thick as its type's layers
+        (Shape::Planar(p), F::Thickness) if p.build_up.is_none() => set(&mut p.thickness),
         (Shape::Planar(p), F::Along(i)) => set(&mut p.openings.get_mut(i)?.along),
         (Shape::Planar(p), F::Sill(i)) => set(&mut p.openings.get_mut(i)?.sill),
         (Shape::Planar(p), F::OpeningWidth(i)) => set(&mut p.openings.get_mut(i)?.width),
@@ -247,8 +248,19 @@ impl App {
             (F::SpacingAlong, l.text("Raster langs (m)", "Spacing along (m)")),
             (F::SpacingUp, l.text("Raster omhoog (m)", "Spacing up (m)")),
         ];
+        let layered = match &shape {
+            Shape::Planar(PlanarDef { build_up: Some(b), .. }) => Some(b),
+            _ => None,
+        };
+        if let Some(b) = layered {
+            let name = self.library.name(&b.id, crate::app::library::lang(l)).unwrap_or_else(|| b.id.clone());
+            rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
+        }
         for (f, label) in fields.into_iter().filter(|(f, _)| has(*f)) {
-            rows = rows.push(field(label, f));
+            rows = match (f, layered) {
+                (F::Thickness, Some(_)) => rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))),
+                _ => rows.push(field(label, f)),
+            };
         }
         if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) = &shape {
             for i in 0..openings.len() {
@@ -308,7 +320,7 @@ mod tests {
         let mut app = App::default();
         app.new_model("Level 0");
         app.set_model_tool(Some((ModelTool::Wall, "Wall")));
-        app.add_element("Wall", None, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() }))
+        app.add_element("Wall", None, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None }))
             .unwrap();
         app.set_model_tool(None);
         app.select_modelled(ElementId(1));

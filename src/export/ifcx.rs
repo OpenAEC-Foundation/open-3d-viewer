@@ -180,7 +180,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
 }
 
 /// Now, as `YYYY-MM-DDTHH:MM:SSZ`.
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     let seconds = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (days, rest) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
     // days since 1970-01-01 to a civil date (H. Hinnant's algorithm)

@@ -5,3 +5,8 @@ rustflags = ["-C", "link-arg=-zstack-size=8388608"]
 # Honor Git credential helpers and read-only CI deploy keys for private libraries.
 [net]
 git-fetch-with-cli = true
+
+# Test threads: 8 MiB stacks. Tests that lay out the whole interface in a debug build come near
+# the default 2 MiB, and overflow it now and then (an access violation on Windows).
+[env]
+RUST_MIN_STACK = "8388608"

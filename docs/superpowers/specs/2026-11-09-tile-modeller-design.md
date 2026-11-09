@@ -122,3 +122,31 @@ The author made these calls, not the project owner. They are open to correction:
 Undo of modelling steps; handles and typed parameters; snapping beyond element end points; types
 and layer sets; openings by a tool; curved geometry and general booleans; paging the document by
 tile (R-14 spike).
+
+## Second slice: booleans (2026-11-09)
+
+The project owner chose booleans as the next kernel step, before wall corners and curved geometry.
+
+- `bim-core::boolean`: union, difference and intersection of closed planar solids.
+  - The faces are cut into convex polygons and sorted in binary space partitioning trees, the
+    classic polygon CSG.
+  - Every side decision is an exact `orient3d` against three input points that span the plane. A
+    polygon split off another keeps its parent's plane, so no decision depends on a constructed
+    point.
+  - Crossing points are constructed in f64 and rounded once.
+- **Putting the result back together.** Points within the linear tolerance (1e-6 m) are welded.
+  A point on another polygon's edge splits that edge, so no T-junctions remain. The result must
+  pass the closed-solid check. Otherwise the boolean is refused (`BooleanFailed`), and a result
+  that would be empty is refused as `Empty`.
+- **The cut connection** (`ConnectionKind::Cut`). The primary element cuts its body out of the
+  secondary one, for example a beam through a wall or a duct through a slab.
+  - It works for any two elements with a body.
+  - A cutter cuts with its body before cuts (with its joints), so cuts never depend on each other:
+    two elements may cut each other.
+  - A cut that does not reach its target is refused (`NotTouching`).
+  - A part of a system that a cut takes wholly goes.
+- In the app, **Cut** in the Connection group: select the cutting element first, then the one
+  it cuts.
+- Calls made: the BSP method rather than a mesh arrangement (simpler, and exact where it
+  decides). The result faces are convex polygons, not merged back into the original faces.
+  Cutters stay visible; an invisible opening body is a follow-up.

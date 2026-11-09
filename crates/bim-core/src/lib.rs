@@ -15,6 +15,7 @@
 //! - Geometry is derived from element definitions ([`element`]). Solids and meshes are never the
 //!   source of truth and never change the definitions.
 
+pub mod boolean;
 pub mod element;
 pub mod mesh;
 pub mod model;
@@ -23,6 +24,7 @@ pub mod profile;
 pub mod solid;
 pub mod tile;
 
+pub use boolean::{boolean, BooleanOp};
 pub use element::{BaseKind, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Opening, PlanarDef, PointDef, Shape, SystemDef};
 pub use mesh::Mesh;
 pub use model::{Model, Part};
@@ -70,6 +72,12 @@ pub enum Refusal {
     NotTouching,
     /// The tile size is not a whole number of metres between 1 m and 100 km.
     BadTileSize,
+    /// A boolean would leave nothing.
+    Empty,
+    /// A boolean's result could not be put back together as a closed solid.
+    BooleanFailed,
+    /// An element without a body (a connection) cannot cut or be cut.
+    NoBody,
 }
 
 impl Refusal {
@@ -94,6 +102,9 @@ impl Refusal {
             Refusal::Parallel => "Parallel members cannot be joined.",
             Refusal::NotTouching => "The members do not meet.",
             Refusal::BadTileSize => "The tile size must be whole metres, from 1 m to 100 km.",
+            Refusal::Empty => "Nothing would be left.",
+            Refusal::BooleanFailed => "The cut could not be made exactly.",
+            Refusal::NoBody => "A connection has no body to cut with.",
         }
     }
 }

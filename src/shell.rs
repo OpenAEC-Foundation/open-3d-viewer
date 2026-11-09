@@ -670,6 +670,9 @@ impl Studio {
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.cut", l.text("Uitsparen", "Cut"), go(Message::Connect(bim_core::ConnectionKind::Cut, l.text("Uitsparing", "Cut-out"))))
+                .icon(small("edit.cut"), large("edit.cut"))
+                .enabled(app.selected_bodies() == 2),
             Command::new("model.mitre", l.text("Verstek", "Mitre"), go(Message::Connect(bim_core::ConnectionKind::Mitre, l.text("Verbinding", "Connection"))))
                 .icon(small("draw.l-shape"), large("draw.l-shape"))
                 .enabled(app.selected_linear() == 2),
@@ -1163,7 +1166,7 @@ impl Studio {
                 w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
-                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre"])]),
+                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
                 w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.delete")]),
             ]
         } else {

@@ -48,7 +48,7 @@ icons! {
     "object.show", "object.hide", "project.folder", "data.table",
     // the modeller
     "object.add", "draw.coordinate", "pile.columns", "draw.line", "construction.types", "draw.filled-area",
-    "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete",
+    "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut",
 }
 
 /// The SVG text of an icon, unpacked once. Panics for an id that is not in the list, like

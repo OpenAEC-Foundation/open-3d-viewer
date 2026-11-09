@@ -48,7 +48,10 @@ impl App {
     pub(super) fn export_drawing(&mut self, format: DrawingFormat) -> Task<Message> {
         match self.drawing_to_export() {
             Some(drawing) => export_task(drawing, format, self.document_folder()),
-            None => Task::none(),
+            None => {
+                self.status = super::Status::Error("Nothing to export in this tab".to_string());
+                Task::none()
+            }
         }
     }
 
@@ -61,6 +64,14 @@ impl App {
     }
 }
 
+/// The format of the file `path`: that of its extension when it is one of the formats (typed in
+/// the dialog), else the one `chosen` with the button. The browser has no dialog.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn format_for(path: &std::path::Path, chosen: DrawingFormat) -> DrawingFormat {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    DrawingFormat::ALL.into_iter().find(|f| f.extension() == ext).unwrap_or(chosen)
+}
+
 /// Asks where the drawing goes, then writes it there on a worker thread.
 #[cfg(not(target_arch = "wasm32"))]
 fn export_task(drawing: Drawing2d, format: DrawingFormat, folder: Option<PathBuf>) -> Task<Message> {
@@ -71,6 +82,7 @@ fn export_task(drawing: Drawing2d, format: DrawingFormat, folder: Option<PathBuf
     Task::perform(
         async move {
             let path = dialog.save_file().await?.path().to_path_buf();
+            let format = format_for(&path, format);
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
                 let start = Instant::now();
@@ -167,6 +179,17 @@ mod tests {
     fn nothing_to_export_without_a_view_or_sheet_shown() {
         let mut app = App::default();
         assert!(app.drawing_to_export().is_none());
+        // and the status says so
+        let _ = app.update(Message::ExportDrawing(DrawingFormat::Pdf));
+        assert!(matches!(&app.status, super::super::Status::Error(e) if e.contains("export")), "{:?}", std::mem::discriminant(&app.status));
+    }
+
+    #[test]
+    fn the_typed_extension_picks_the_writer() {
+        assert_eq!(format_for(std::path::Path::new("plan.pdf"), DrawingFormat::Dwg), DrawingFormat::Pdf);
+        assert_eq!(format_for(std::path::Path::new("plan.IFCX"), DrawingFormat::Dwg), DrawingFormat::Ifccad);
+        assert_eq!(format_for(std::path::Path::new("plan"), DrawingFormat::Dxf), DrawingFormat::Dxf);
+        assert_eq!(format_for(std::path::Path::new("plan.txt"), DrawingFormat::Svg), DrawingFormat::Svg);
     }
 }
 

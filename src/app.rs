@@ -9,12 +9,14 @@ mod levels;
 mod marks;
 mod paper;
 mod schedules;
+mod view_props;
 mod views;
 mod sheets;
 mod structural;
 
 pub use ifc::{IfcTab, IfcView};
 pub use layers::SideTab;
+pub use view_props::ViewField;
 pub use levels::{ExplorerTab, LevelForm};
 pub use views::{DocTab, OpenPlan, ViewSlot};
 
@@ -111,6 +113,9 @@ pub struct App {
     pub side_tab: SideTab,
     /// What the Layers tab's search field holds.
     pub layers_query: String,
+    /// What is being typed in a field of the right pane's View section: the view's path, the
+    /// field and the text.
+    pub view_typing: Option<(String, ViewField, String)>,
     /// The 3D view's layer switches while another view shows: every layer's, and per model its
     /// own.
     parked_layers: Option<(Vec<bool>, Vec<Vec<bool>>)>,
@@ -298,6 +303,10 @@ pub enum Message {
     SideTab(SideTab),
     /// What the Layers tab's search field holds.
     LayersQuery(String),
+    /// Typed in a field of the right pane's View section.
+    ViewField(ViewField, String),
+    /// Enter in a field of the View section: it shows the value in use again.
+    ViewFieldDone,
     Navigate(Navigate),
     Cube(CubeEvent),
     /// Show a view saved in the file.
@@ -531,6 +540,7 @@ impl Default for App {
             layer_filter: String::new(),
             side_tab: SideTab::default(),
             layers_query: String::new(),
+            view_typing: None,
             parked_layers: None,
             parked_histories: Default::default(),
             status: Status::Ready,
@@ -1046,6 +1056,7 @@ impl App {
         self.cuts.clear();
         self.sheet_pick = None;
         self.cut_edit = None;
+        self.view_typing = None;
         self.mark_pick = None;
         self.open_schedules.clear();
         self.active_schedule = None;
@@ -1324,6 +1335,8 @@ impl App {
             Message::LayerFilter(f) => self.layer_filter = f,
             Message::SideTab(tab) => self.side_tab = tab,
             Message::LayersQuery(q) => self.layers_query = q,
+            Message::ViewField(field, typed) => self.type_view_field(field, typed),
+            Message::ViewFieldDone => self.view_typing = None,
             Message::Navigate(n) => {
                 if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
                     self.context_menu = None;

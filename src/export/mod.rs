@@ -4,7 +4,7 @@
 //! To add a format: implement [`Writer`] in a new module and add it to [`registry`].
 
 mod ifc;
-mod ifcx;
+pub(crate) mod ifcx;
 
 use crate::document::Document;
 use crate::model::Model;

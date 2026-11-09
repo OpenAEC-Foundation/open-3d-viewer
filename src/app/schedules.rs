@@ -77,6 +77,7 @@ impl App {
         if i.is_some() {
             self.active_sheet = None;
             self.active_doc_sheet = None;
+            self.ifc.shown = false;
             self.load_view(None);
         }
         if self.active_schedule == i {
@@ -156,8 +157,10 @@ impl App {
             Some(bar) => column![bar, viewport].into(),
             None => viewport,
         };
+        if self.ifc.shown && self.ifc.structure.is_some() {
+            return column![container(viewport).height(FillPortion(1)), rule::horizontal(1), container(self.ifc_panel(p, l)).height(FillPortion(1)).style(move |_| p.panel())].into();
+        }
         let Some((i, s)) = self.active_schedule.and_then(|i| Some((i, self.schedules.get(i)?))) else {
-
             return viewport;
         };
         column![

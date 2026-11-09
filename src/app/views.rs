@@ -40,6 +40,8 @@ pub enum DocTab {
     Sheet(usize),
     /// Index in `App::open_doc_sheets`: a sheet of the document.
     DocSheet(usize),
+    /// How the model's IFCX file is built up.
+    Ifc,
 }
 
 impl App {
@@ -57,12 +59,14 @@ impl App {
         if self.open_plans.iter().any(|o| o.path == path) {
             self.active_sheet = None;
             self.active_schedule = None;
+            self.ifc.shown = false;
             self.load_view(Some(path.to_string()));
             return;
         }
         let Some(view) = self.saved_view_of(path) else { return };
         self.active_sheet = None;
         self.active_schedule = None;
+        self.ifc.shown = false;
         let slot = self.view_slot();
         self.open_plans.push(OpenPlan { path: path.to_string(), slot });
         self.load_view(Some(path.to_string()));
@@ -228,7 +232,8 @@ impl App {
         let schedules = self.open_schedules.iter().copied().filter(|&i| i < self.schedules.len()).map(DocTab::Schedule);
         let sheets = self.open_sheets.iter().copied().filter(|&i| i < self.sheets().len()).map(DocTab::Sheet);
         let own = (0..self.open_doc_sheets.len()).map(DocTab::DocSheet);
-        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(own).collect()
+        let ifc = self.ifc.open.then_some(DocTab::Ifc);
+        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(own).chain(ifc).collect()
     }
 
     /// The tab that shows: a sheet, else a floor plan, else a schedule (under the 3D view), else
@@ -242,6 +247,7 @@ impl App {
             .or_else(|| self.active_sheet.and_then(|s| at(DocTab::Sheet(s))))
             .or_else(|| plan.and_then(|k| at(DocTab::Plan(k))))
             .or_else(|| self.active_schedule.and_then(|s| at(DocTab::Schedule(s))))
+            .or_else(|| self.ifc.shown.then(|| at(DocTab::Ifc)).flatten())
             .unwrap_or(0)
     }
 
@@ -253,6 +259,7 @@ impl App {
             DocTab::Schedule(i) => self.schedules.get(i).map_or("", |s| s.name.as_str()),
             DocTab::Sheet(i) => self.sheets().get(i).map_or("", |s| s.title.as_str()),
             DocTab::DocSheet(k) => self.open_doc_sheets.get(k).and_then(|p| self.document.sheet(p)).map_or("", |s| s.title.as_str()),
+            DocTab::Ifc => "IFC",
         }
     }
 
@@ -261,6 +268,7 @@ impl App {
             Some(DocTab::Model) => {
                 self.active_sheet = None;
                 self.active_doc_sheet = None;
+                self.ifc.shown = false;
                 self.load_view(None);
                 self.show_schedule(None)
             }
@@ -274,6 +282,10 @@ impl App {
             Some(DocTab::DocSheet(k)) => {
                 let path = self.open_doc_sheets[k].clone();
                 self.open_doc_sheet(&path);
+                Task::none()
+            }
+            Some(DocTab::Ifc) => {
+                self.show_ifc();
                 Task::none()
             }
             None => Task::none(),
@@ -292,6 +304,10 @@ impl App {
             Some(DocTab::DocSheet(k)) => {
                 let path = self.open_doc_sheets[k].clone();
                 self.close_doc_sheet(&path);
+                Task::none()
+            }
+            Some(DocTab::Ifc) => {
+                self.close_ifc();
                 Task::none()
             }
             Some(DocTab::Model) | None => Task::none(),

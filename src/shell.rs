@@ -627,6 +627,10 @@ impl Studio {
             Command::new("section.reset", l.text("Herstellen", "Reset"), go(Message::ResetSection))
                 .icon(small("section.reset-box"), large("section.reset-box"))
                 .enabled(app.section_on || app.plane.is_some()),
+            Command::new("view.ifc", l.text("IFC-structuur", "IFC structure"), go(Message::OpenIfc))
+                .icon(small("panel.model-tree"), large("panel.model-tree"))
+                .toggle(app.ifc.shown)
+                .enabled(loaded),
             Command::new("view.explode", l.text("Uit elkaar", "Explode"), go(Message::ToggleExplode))
                 .icon(small("transform.explode"), large("transform.explode"))
                 .toggle(app.explode_on)
@@ -1110,6 +1114,7 @@ impl Studio {
             w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
             w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
             w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
+            w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
             w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
             w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
             w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),

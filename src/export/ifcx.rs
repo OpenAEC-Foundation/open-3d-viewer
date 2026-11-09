@@ -36,6 +36,12 @@ impl Writer for IfcxWriter {
 /// Property keys that are written as their own attributes, not as properties.
 const OWN_KEYS: [&str; 6] = ["Name", "name", "IfcType", "Class", "Path", "Id"];
 
+/// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
+/// file named `file_name`.
+pub fn element_path(file_name: &str, layer: usize, id: u64) -> String {
+    uuid(&format!("{file_name}/element/{layer}/{id}"))
+}
+
 /// Writes the model and its document as an IFCX file named `file_name`.
 pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl Write) -> io::Result<()> {
     let stem = Path::new(file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -121,7 +127,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
                 attributes.insert("bsi::ifc::presentation::opacity".into(), json!(rgba[3]));
             }
             attributes.insert("usd::usdgeom::mesh".into(), json!({"points": points, "faceVertexIndices": faces}));
-            let path = uuid(&format!("{file_name}/element/{li}/{id}"));
+            let path = element_path(file_name, li, id);
             data.push(json!({"path": path, "attributes": attributes}));
             let label = if id == u64::MAX { name } else { format!("{name} #{id}") };
             match storey {

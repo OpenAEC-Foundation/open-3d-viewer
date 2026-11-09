@@ -24,6 +24,7 @@ mod history;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu;
 mod icons;
+pub mod ifcx_structure;
 pub mod loaders;
 #[cfg(not(target_arch = "wasm32"))]
 mod managed;

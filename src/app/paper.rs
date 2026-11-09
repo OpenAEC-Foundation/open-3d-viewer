@@ -56,6 +56,7 @@ impl App {
         }
         self.active_sheet = None;
         self.active_schedule = None;
+        self.ifc.shown = false;
         if self.active_doc_sheet.as_deref() != Some(path) {
             self.pick_on_sheet(None);
         }

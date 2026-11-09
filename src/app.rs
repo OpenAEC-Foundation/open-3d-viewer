@@ -3,6 +3,7 @@
 //! bottom.
 
 mod grids;
+mod ifc;
 mod layers;
 mod levels;
 mod marks;
@@ -12,6 +13,7 @@ mod views;
 mod sheets;
 mod structural;
 
+pub use ifc::{IfcTab, IfcView};
 pub use layers::SideTab;
 pub use levels::{ExplorerTab, LevelForm};
 pub use views::{DocTab, OpenPlan, ViewSlot};
@@ -195,6 +197,8 @@ pub struct App {
     pub active_schedule: Option<usize>,
     /// The table of the shown schedule: scrolled offset and height (logical pixels).
     pub schedule_scroll: (f32, f32),
+    /// The IFC tab: how the model's IFCX file is built up.
+    pub ifc: IfcTab,
     /// The schedules of the model, once computed (they follow the model), and whether they are
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
@@ -398,6 +402,17 @@ pub enum Message {
     ScheduleScroll(scrollable::Viewport),
     /// The schedules of a model (by id), computed.
     Schedules(u64, Vec<crate::model::Schedule>),
+    /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
+    OpenIfc,
+    CloseIfc,
+    IfcView(IfcView),
+    IfcScroll(IfcView, scrollable::Viewport),
+    /// Pick a node of the IFC tab (its index): its elements are selected.
+    IfcPick(u32),
+    /// Open or close a row of the IFC tab's tree (its key).
+    IfcToggle(String),
+    /// The relation the IFC tab's Relations view shows (all: `None`).
+    IfcRelation(Option<crate::ifcx_structure::Relation>),
     ToggleSection,
     ResetSection,
     SectionToSelection,
@@ -561,6 +576,7 @@ impl Default for App {
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
+            ifc: IfcTab::default(),
             schedules: Vec::new(),
             schedules_pending: false,
             measurements: Vec::new(),
@@ -1033,6 +1049,7 @@ impl App {
         self.mark_pick = None;
         self.open_schedules.clear();
         self.active_schedule = None;
+        self.close_ifc();
         self.schedules.clear();
         self.schedules_pending = false;
         self.open_sheets.clear();
@@ -1112,6 +1129,8 @@ impl App {
         if self.structural.note_camera(self.camera) || self.measure.tool.is_some() || self.plane_picking {
             self.set_structural_hover(None);
         }
+        // the IFC tab follows the element selected in the model
+        let task = if self.ifc.shown { Task::batch([task, self.ifc_follow()]) } else { task };
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
             None => task,
@@ -1538,6 +1557,13 @@ impl App {
             Message::CloseSchedule(i) => return self.close_schedule(i),
             Message::ScheduleRow(s, r) => self.select_row(s, r),
             Message::ScheduleScroll(v) => return self.scrolled(v),
+            Message::OpenIfc => return self.open_ifc(),
+            Message::CloseIfc => self.close_ifc(),
+            Message::IfcView(view) => return self.ifc_show_view(view),
+            Message::IfcScroll(view, v) => return self.ifc_scrolled(view, v),
+            Message::IfcPick(node) => self.ifc_pick(node),
+            Message::IfcToggle(key) => self.ifc_toggle(key),
+            Message::IfcRelation(relation) => return self.ifc_relation(relation),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;

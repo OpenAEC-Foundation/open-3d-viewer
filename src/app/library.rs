@@ -239,11 +239,12 @@ impl App {
                 if !open(group) {
                     continue;
                 }
+                let deeper = |e: Element<'static, Message>| container(e).padding(Padding { left: 12.0, ..Padding::ZERO });
                 for s in of {
                     let pick = Pick::Steel(s.designation.clone());
-                    body = body.push(item(name(s.designation.clone()).into(), pick.clone()));
+                    body = body.push(container(item(name(s.designation.clone()).into(), pick.clone())).padding(Padding { left: 12.0, ..Padding::ZERO }));
                     if view.picked.as_ref() == Some(&pick) {
-                        body = body.push(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(s.series.standard()))));
+                        body = body.push(deeper(detail(profile_detail(p, &s.shape, lib.material("steel"), Some(s.series.standard())))));
                     }
                 }
             }

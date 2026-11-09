@@ -137,6 +137,21 @@ pub struct Modeller {
 }
 
 impl App {
+    /// Takes over the elements an IFCX file this viewer wrote defines (`model` was just loaded),
+    /// and shows them; a definition that cannot be read is left out.
+    pub(super) fn adopt_elements(&mut self, model: &Model) {
+        if model.project.elements.is_empty() {
+            return;
+        }
+        for definition in &model.project.elements {
+            if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
+                self.modeller.model.insert(element);
+            }
+        }
+        self.show_modelled();
+        self.fit();
+    }
+
     /// An empty model to model in, with a first level at 0 named `level`; the model shown before
     /// (if any) goes.
     pub(super) fn new_model(&mut self, level: &str) {
@@ -372,7 +387,8 @@ impl App {
     /// Shows the modelled elements again after a change: their viewer model takes the place of
     /// the one shown before, and the scene is put together again without moving the camera.
     pub(super) fn show_modelled(&mut self) {
-        let built = Arc::new(viewer_model(&self.modeller.model));
+        let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
+        let built = Arc::new(viewer_model(&self.modeller.model, &levels));
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {
             if let Some(m) = self.model.clone().filter(|m| Some(m.id) != before) {
@@ -489,7 +505,8 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// The viewer model of modelled elements: one layer per IFC class, every element's parts as its
 /// triangles (each part in the colour of its own class: a curtain wall's members and panels), its
 /// definition as its properties. A refused element shows nothing.
-pub fn viewer_model(model: &bim_core::Model) -> Model {
+/// `levels` names the levels by path.
+pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)]) -> Model {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
     for element in model.iter() {
@@ -523,13 +540,14 @@ pub fn viewer_model(model: &bim_core::Model) -> Model {
         }
         let count = layer.indices.len() as u32 - first;
         layer.elements.push((element.id.0, first, count));
-        layer.props.push((element.id.0, properties(model, element, &parts)));
+        let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
+        layer.props.push((element.id.0, properties(model, element, &parts, level)));
     }
     Model::new(PathBuf::from("model.ifcx"), "IFCX", layers)
 }
 
 /// An element's properties as a flat JSON object.
-fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part]) -> String {
+fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], level: Option<&str>) -> String {
     let grid = model.grid;
     let m = |v: f64| format!("{v:.3} m");
     let mut props = serde_json::Map::new();
@@ -541,6 +559,14 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part]) ->
     put("Base element", e.base().name().into());
     put("Tile", format!("{}, {}", e.tile.x, e.tile.y));
     put("id", e.id.0.to_string());
+    if let Some(level) = level {
+        put("level", level.into());
+    }
+    // the definitions an IFCX file keeps and gives back: the element's, and those of the
+    // connections it is the primary member of (a connection has no body, so no node of its own)
+    let joints = model.iter().filter(|c| matches!(&c.shape, Shape::Connection(j) if j.primary == e.id));
+    let definitions: Vec<&Element> = std::iter::once(e).chain(joints).collect();
+    put(crate::export::ifcx::DEFINITION, serde_json::to_string(&definitions).unwrap_or_default());
     match e.shape_in_project(&grid) {
         Shape::Point(p) => {
             put("Size", format!("{} × {} × {}", m(p.size.x), m(p.size.y), m(p.size.z)));
@@ -690,6 +716,32 @@ mod tests {
         app.sel.set(Some(Pickable::Element(shown)));
         assert!(app.delete_modelled());
         assert_eq!(app.modeller.model.len(), 1);
+    }
+
+    #[test]
+    fn an_ifcx_file_keeps_the_definitions_and_gives_editable_elements_back() {
+        let mut app = App::default();
+        app.add_demo_building();
+        let written: Vec<Element> = app.modeller.model.iter().cloned().collect();
+        let scene = app.model.clone().unwrap();
+        let bytes = crate::export::to_bytes(&scene, &app.document, "house.ifcx").expect("IFCX");
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("openaec::element") && text.contains("IfcCurtainWall") && text.contains("IfcWall"));
+        assert!(!text.contains(crate::export::ifcx::DEFINITION), "the definition is an attribute, not a property");
+        let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: Arc::new(bytes) };
+        let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        let mut back = App::default();
+        back.set_model(Arc::new(loaded));
+        let read: Vec<Element> = back.modeller.model.iter().cloned().collect();
+        assert_eq!(read, written, "every definition comes back exactly");
+        // shown once: from the definitions, not also as the file's meshes
+        let shown = back.model.as_ref().unwrap();
+        let walls = shown.layers.iter().filter(|l| l.name.ends_with("IfcWall")).map(|l| l.elements.len()).sum::<usize>();
+        assert_eq!(walls, 3);
+        // and editable: a new wall gets the next id
+        back.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        let id = back.add_element("Wall", None, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(0.0, 10.0), end: DVec2::new(4.0, 10.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() })).unwrap();
+        assert!(id.0 > written.iter().map(|e| e.id.0).max().unwrap());
     }
 
     #[test]

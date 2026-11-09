@@ -204,6 +204,9 @@ pub struct ProjectData {
     /// The drawings of an IFCX file this viewer wrote: floor plans, sections and sheets as its
     /// `o3v::` nodes (path, attributes), in file order; the project document takes them over.
     pub drawings: Vec<(String, serde_json::Value)>,
+    /// The definitions of elements this viewer modelled, as an IFCX file it wrote holds them
+    /// (`openaec::element`); the modeller takes them over.
+    pub elements: Vec<serde_json::Value>,
     /// Schedules: computed after the model shows, as they take seconds on a large project.
     pub schedules: Later<Vec<Schedule>>,
 }

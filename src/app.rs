@@ -1004,7 +1004,9 @@ impl App {
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
-        self.set_scene(model);
+        self.modeller = modeller::Modeller::default();
+        self.set_scene(model.clone());
+        self.adopt_elements(&model);
     }
 
     pub fn add_model(&mut self, model: Arc<Model>) {
@@ -2594,6 +2596,8 @@ impl App {
                 content = content.push(container(text(count).size(12).color(p.text_secondary)).padding([2, 8]));
             }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
+            // a modelled element's definition is kept for the file, not shown
+            props.retain(|(k, _)| k != crate::export::ifcx::DEFINITION);
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
                 if let Some(id) = element {

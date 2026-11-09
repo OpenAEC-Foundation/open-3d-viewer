@@ -105,6 +105,14 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Doorsnedekader en doorsnedevlak** snijden het model open, met gevulde snedes. Het kader kan zich aanpassen aan de selectie.
 - **Uit elkaar** trekt het model per verdieping of per element uit elkaar, met een percentage per as.
 
+## Modelleren (bèta)
+
+Het tabblad **Modelleren** start een BIM-modeller in dezelfde app. Elk element is opgebouwd uit vijf basiselementen: **vlak** (wand, vloer), **lijnvormig** (kolom, balk), **systeem** (vliesgevel), **puntvormig** (object) en **verbinding** (stomp of verstek tussen twee geselecteerde balken of kolommen).
+
+- **Nieuw model** opent een leeg model met een eerste niveau. Een tool plaatst zijn element met één of twee klikken op het werkvlak: het niveau van de getoonde plattegrond, anders het niveau het dichtst bij 0. Klikken springen naar de uiteinden van elementen, worden recht als ze bijna in lijn liggen, en wanden en balken gaan verder vanaf het laatste eind. **Esc** stopt, **Delete** verwijdert, met de verbindingen.
+- **De kernel** (`crates/bim-core`) bewaart elk element als definitie in een tegelframe: f64-coördinaten vanaf een tegeloorsprong op hele meters, zodat een model ver van zijn oorsprong zijn precisie houdt. Beslissingen over kanten en kruisingen gebruiken exacte predicaten, en een constructie die niet kan wordt geweigerd met de reden, getoond in de weergave, nooit verkeerd getekend. Wanden met deuren en ramen worden direct opgebouwd, zonder booleans.
+- **Opgeslagen als IFCX** houdt elk element zijn definitie (`openaec::element`) naast zijn mesh, en het bestand openen geeft bewerkbare elementen terug.
+
 ## Revit
 
 De desktopapp opent Revit-bestanden (`.rvt`, `.rfa`) via de Revit-bibliotheek [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll) van OpenAEC. Hij toont de niveaus, stramienen, ruimtes, opgeslagen aanzichten en staten van het bestand. Een staat opent in een eigen tabblad als tabel onder de 3D-weergave, en een rij selecteert de bijbehorende elementen. Revit bewaart van een staat alleen de definitie, dus de viewer rekent de rijen uit de elementen uit; cellen die hij nog niet kan bepalen, tonen `?`.
@@ -136,7 +144,7 @@ De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC Sup
 |-----------|--------------|
 | `OPENAEC_BEHEERD=1` | Beheerde modus: geen updatemelding (de SuperCloud ververst het image), en de viewer draait in de werkmap. De viewer downloadt zelf nooit updates. |
 | `OPENAEC_MAP` | De werkmap (`/openaec` in de SuperCloud): de dialogen voor openen en opslaan beginnen daar, en de MCP-tools nemen paden relatief daaraan. In beheerde modus, en altijd met de MCP-server over HTTP, komen ze niet bij bestanden daarbuiten (ook niet via koppelingen, of via bestanden waar een glTF of OBJ in de werkmap naar verwijst); zonder werkmap komen ze bij geen enkel bestand. |
-| `OPENAEC_TAAL` | De taal van de gebruiker: `nl` of `en` (andere talen krijgen Engels). `--language` gaat voor. |
+| `OPENAEC_TAAL` | De taal van de gebruiker: `nl`, `en`, `de` of `fr` (andere talen krijgen Engels). `--language` gaat voor. |
 | `OPENAEC_THEMA` | Het thema: `light`, `dark`, `blueprint`, `high-contrast-dark` of `high-contrast-light`. `--theme` gaat voor. |
 | `OPENAEC_OPEN` | Een bestand om bij de start te openen als de opdrachtregel er geen noemt. |
 | `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` | De MCP-server over HTTP voor de assistent van de SuperCloud, zie [MCP](#mcp). |
@@ -144,7 +152,7 @@ De Linux-release draait ook in **OpenAEC Linux**, de omgeving van de OpenAEC Sup
 | `O3V_REMOTE=0` | Geen bedieningspoort voor de MCP-server (en geen MCP over HTTP). `O3V_REMOTE_PORT` legt de poort vast (anders een vrije). |
 | `WGPU_BACKEND` | `vulkan` of `gl` om de grafische backend te kiezen; standaard de eerste die werkt. |
 
-Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` en `--language en|nl`.
+Een bestand om te openen gaat op de opdrachtregel, net als `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` en `--language en|nl|de|fr`.
 
 **Netwerk:** de viewer maakt geen uitgaande verbindingen en heeft geen telemetrie. Hij luistert op `127.0.0.1` voor zijn eigen MCP-server (zie [MCP](#mcp)) en, alleen met `OPENAEC_MCP_POORT` en `OPENAEC_MCP_GEHEIM`, op die poort voor de assistent van de SuperCloud. De bestandsdialogen gaan via de XDG desktop portal, of via `zenity` als die er niet is.
 
@@ -246,7 +254,7 @@ Nieuwe formaten: implementeer `loaders::Loader` en voeg hem toe aan `loaders::re
 
 ## Testen en betrouwbaarheid
 
-- **515 unittests** in `src/` (508 draaien; 7 staan standaard uit: twee vragen lokale voorbeelden, drie schrijven voorbeeld- of beeldbestanden, twee vragen een GPU), plus 56 voor de vensterbibliotheek in `vendor/openaec-ui`, draaien bij elke pull request en voor elke release: 218 voor de lezers, 96 voor de app, 8 voor het uit elkaar halen van een IFCX-bestand voor het tabblad IFC, 17 voor meten, 17 voor de vensterschil, 7 voor de doorsnedes, 15 voor IFC- en IFCX-export, 14 voor de afstandsbediening, 28 voor constructieve rekenmodellen, 8 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), 18 voor het projectdocument (niveaus, plattegronden, doorsneden, bladen, maten, teksten, de eigen lagen van weergaven in IfcX-vorm en hun getypte namen en diepten), 4 voor de tekeningen van plattegronden en doorsneden, en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
+- **529 unittests** in `src/` (521 draaien; 8 staan standaard uit: twee vragen lokale voorbeelden, vier schrijven voorbeeld- of beeldbestanden, twee vragen een GPU), plus 58 voor de vensterbibliotheek in `vendor/openaec-ui` en 44 voor de BIM-kernel in `crates/bim-core` (tegelframes, exacte predicaten, profielen, solids, de vijf basiselementen en hun verbindingen, op 500 km), draaien bij elke pull request en voor elke release: 8 voor de modeller, 5 voor de interfacetalen (elke interfacetekst heeft een Duitse en een Franse vertaling), 218 voor de lezers, 96 voor de app, 8 voor het uit elkaar halen van een IFCX-bestand voor het tabblad IFC, 17 voor meten, 17 voor de vensterschil, 7 voor de doorsnedes, 15 voor IFC- en IFCX-export, 14 voor de afstandsbediening, 28 voor constructieve rekenmodellen, 8 voor de MCP-tools en hun HTTP-aanspreekpunt (ook in `open-3d-viewer-mcp`), 18 voor het projectdocument (niveaus, plattegronden, doorsneden, bladen, maten, teksten, de eigen lagen van weergaven in IfcX-vorm en hun getypte namen en diepten), 4 voor de tekeningen van plattegronden en doorsneden, en meer voor de 3D-weergave, kijkkubus, selectie, ongedaan maken, het model en de uit-elkaar-weergave.
 - **De vensterschil wordt getest zonder scherm.** Eén test legt elke weergave op en faalt als een bedieningselement geen naam heeft voor een schermlezer; andere controleren dat geen twee opdrachten dezelfde sneltoets hebben en dat elke opdracht in het lint en de titelbalk bestaat.
 - **Gegenereerde bestanden worden gecontroleerd.** `python scripts/build_readme_images.py --check` faalt als een beeld ontbreekt, ongebruikt is of groter is dan 150 kB; `python scripts/b2_icons.py --check` faalt als een icoon afwijkt van de OpenAEC Blueprint-release die in `assets/b2/blueprint.sha256` staat, zonder kopie van de Blueprint.
 - **IFC-export** is gecontroleerd met IfcOpenShell 0.8 (schema en where-regels, ruimtelijke indeling, unieke GlobalIds, geometrie) op Revit-voorbeelden van 456 en 6773 elementen, 11 SketchUp-testmodellen, OBJ, STL en glTF.
@@ -292,7 +300,7 @@ Voor werk aan de interface houdt `powershell -File scripts/dev.ps1 [-Model BESTA
 De opdrachtregel:
 
 ```
-open-3d-viewer [BESTAND] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light] [--language en|nl]
+open-3d-viewer [BESTAND] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light] [--language en|nl|de|fr]
 open-3d-viewer [BESTAND] --screenshot UIT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAAM] [--explode X,Y,Z]
 open-3d-viewer BESTAND --save-as UIT.ifc

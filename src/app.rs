@@ -7,6 +7,7 @@ mod ifc;
 mod layers;
 mod levels;
 mod marks;
+pub mod modeller;
 mod paper;
 mod schedules;
 mod view_props;
@@ -249,6 +250,8 @@ pub struct App {
     pick_index: Option<PickIndex>,
     /// The selection and hover of structural nodes and members.
     pub(crate) structural: structural::StructuralView,
+    /// The modelled elements and the tool placing them.
+    pub modeller: modeller::Modeller,
 }
 
 /// Width of the right-click menu (logical pixels), and about its height, to keep it inside the
@@ -481,8 +484,15 @@ pub enum Message {
     ContextMenu(MenuItem),
     /// A click beside the right-click menu: it closes.
     CloseContextMenu,
-    /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
+    /// Esc: stop placing the section plane, else stop modelling or measuring, else clear the
+    /// selection.
     Escape,
+    /// Start an empty model to model in, its first level named so.
+    NewModel(&'static str),
+    /// Switch a modelling tool on (what it places named so), or off (`None`).
+    ModelTool(Option<(modeller::ModelTool, &'static str)>),
+    /// Join the two linear elements selected (the first is the primary), the joint named so.
+    Connect(bim_core::ConnectionKind, &'static str),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -525,6 +535,7 @@ const ANIM_SECONDS: f32 = 0.45;
 
 impl Default for App {
     fn default() -> Self {
+        crate::i18n::install();
         Self {
             theme: ThemeKind::Light,
             model: None,
@@ -612,6 +623,7 @@ impl Default for App {
             hover_scene: None,
             pick_index: None,
             structural: Default::default(),
+            modeller: Default::default(),
         }
     }
 }
@@ -814,7 +826,8 @@ impl App {
     /// by the exploded view.
     pub(crate) fn world_bounds(&self) -> Option<Bounds> {
         let model = self.model.as_ref()?;
-        self.explode_bounds.or_else(|| Some(transform_bounds(&model.bounds, &self.model_matrix())))
+        // an empty model (one to model in) has no bounds yet
+        self.explode_bounds.or_else(|| model.bounds.is_valid().then(|| transform_bounds(&model.bounds, &self.model_matrix())))
     }
 
     /// The offset (world) of vertex `i` of layer `l` in the exploded view.
@@ -994,7 +1007,9 @@ impl App {
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
-        self.set_scene(model);
+        self.modeller = modeller::Modeller::default();
+        self.set_scene(model.clone());
+        self.adopt_elements(&model);
     }
 
     pub fn add_model(&mut self, model: Arc<Model>) {
@@ -1225,6 +1240,9 @@ impl App {
             Message::Remote(call) => return self.remote(call),
             Message::RemoteShot(shot) => self.remote_shot(shot),
             Message::ClearMeasurements => self.measurements.clear(),
+            Message::NewModel(level) => self.new_model(level),
+            Message::ModelTool(tool) => self.set_model_tool(tool),
+            Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -1505,7 +1523,9 @@ impl App {
                 self.standard_dimensions(&view);
             }
             Message::DeletePicked => {
-                if self.active_doc_sheet.is_some() {
+                if self.delete_modelled() {
+                    // modelled elements selected: they go
+                } else if self.active_doc_sheet.is_some() {
                     if self.sheet_pick.is_some() {
                         self.remove_picked();
                     }
@@ -1771,6 +1791,11 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
+                if !self.escape_model_tool() {
+                    self.modeller.refusal = None;
+                }
+            }
             Message::Escape => {
                 if self.context_menu.take().is_some() {
                     return Task::none();
@@ -1883,6 +1908,9 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        if self.modeller.tool.is_some() {
+            return self.model_click(x, y, width, height);
+        }
         if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
             let screen = self.screen(width, height);
             let holds = self.hover_scene_holds() && self.measure.hover.as_ref().is_some_and(|h| h.holds_for(&screen, Vec2::new(x, y)));
@@ -2573,6 +2601,8 @@ impl App {
                 content = content.push(container(text(count).size(12).color(p.text_secondary)).padding([2, 8]));
             }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
+            // a modelled element's definition is kept for the file, not shown
+            props.retain(|(k, _)| k != crate::export::ifcx::DEFINITION);
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
                 if let Some(id) = element {
@@ -2785,7 +2815,12 @@ impl App {
             if count > 1 {
                 body = body.push(prop_row(
                     p,
-                    format!("{} {} ({count})", l.text("Totaal", "Total"), category.label(l).to_lowercase()),
+                    {
+                        // German keeps its nouns capitalised
+                        let name = category.label(l);
+                        let name = if l == Language::German { name.to_string() } else { name.to_lowercase() };
+                        format!("{} ({count})", l.text("Totaal {category}", "Total {category}").replace("{category}", &name))
+                    },
                     units.format(l, category, total),
                 ));
             }
@@ -2907,6 +2942,14 @@ impl App {
         });
         let banner = if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
+        } else if let Some((tool, _)) = self.modeller.tool {
+            let hint = tool.hint(l, self.modeller.points.len());
+            Some(match self.modeller.refusal {
+                Some(refusal) => format!("{}: {} · {}", tool.label(l), l.translate(refusal.reason()), hint),
+                None => format!("{}: {}", tool.label(l), hint),
+            })
+        } else if let Some(refusal) = self.modeller.refusal {
+            Some(l.translate(refusal.reason()).to_string())
         } else {
             self.measure.tool.map(|tool| {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
@@ -3556,12 +3599,10 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
     .into()
 }
 
-/// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
+/// The language of the stand-alone layout (`--screenshot`): English, or the language of
+/// `O3V_LANG` (`nl`, `de`, `fr`).
 pub(crate) fn standalone_language() -> Language {
-    match std::env::var("O3V_LANG").as_deref() {
-        Ok("nl") => Language::Dutch,
-        _ => Language::English,
-    }
+    std::env::var("O3V_LANG").ok().and_then(|code| Language::from_code(&code)).unwrap_or(Language::English)
 }
 
 /// A side panel of the stand-alone layout, as wide as the shell's pane (explorer 220, properties

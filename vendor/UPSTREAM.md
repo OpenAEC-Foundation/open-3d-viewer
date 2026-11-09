@@ -8,7 +8,11 @@ The viewer's scene model and clipping code live in the app itself.
 (28 October 2026, crate version 2026.44.1, iced 0.14). The Style Repo is the source of truth;
 Open Pointcloud Studio carries a snapshot the same way. Local changes, for the web build (wasm32):
 `thread-pool` only off the web (`Cargo.toml`), and no minimize / maximize / close in the title bar
-in the browser (`src/shell.rs`). To update, copy the
+in the browser (`src/shell.rs`); and German and French in `Language` (`src/locale.rs`): `text(nl,
+en)` looks those up by the English text in a catalogue the app installs with `install_catalogue`,
+falling back to English (the viewer's catalogues are `locales/*.json`, read by `src/i18n.rs`).
+The Style Repo should take the same change, so other OpenAEC tools get the languages too. To
+update, copy the
 crate again from the Style Repo and run its `scripts/check_portable_ui.py` there first.
 Licenses: see `openaec-ui/LICENSE.md` and `openaec-ui/NOTICE.md`.
 

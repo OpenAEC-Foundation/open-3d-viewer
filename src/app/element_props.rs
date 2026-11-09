@@ -11,7 +11,7 @@ use super::{prop_row, App, Message};
 use crate::document::parse_elevation;
 use crate::theme::Palette;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, ElementId, Opening, PlanarDef, ProfileDef, Shape};
+use bim_core::{Element, Opening, PlanarDef, ProfileDef, Shape};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, row, text, text_input};
 use iced::{Center, Element as Widget, Length};
@@ -308,7 +308,7 @@ fn field_row(p: Palette, label: &str, value: String, field: ElementField) -> Wid
 mod tests {
     use super::*;
     use crate::app::modeller::ModelTool;
-    use bim_core::{LinearDef, PointDef, Refusal};
+    use bim_core::{ElementId, LinearDef, PointDef, Refusal};
     use glam::{DVec2, DVec3};
 
     fn type_in(app: &mut App, field: ElementField, typed: &str) {

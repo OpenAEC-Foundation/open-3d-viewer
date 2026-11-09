@@ -134,6 +134,8 @@ pub struct Modeller {
     pub shown: Option<u64>,
     /// Why the last step was refused.
     pub refusal: Option<Refusal>,
+    /// Edit mode (Tab) on an element.
+    pub edit: Option<super::edit::Edit>,
 }
 
 impl App {
@@ -220,7 +222,7 @@ impl App {
     }
 
     /// Where a scene point shows in the viewport (logical pixels), if in front of the camera.
-    fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
+    pub(super) fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
         let c = (self.camera.view_proj(width / height) * self.model_matrix()).project_point3(p.as_vec3());
         ((0.0..=1.0).contains(&c.z)).then(|| ((c.x + 1.0) / 2.0 * width, (1.0 - c.y) / 2.0 * height))
     }
@@ -228,9 +230,14 @@ impl App {
     /// The points of the modelled elements a click snaps to (scene coordinates): ends, corners
     /// and placements.
     fn snap_points(&self) -> Vec<DVec3> {
+        self.snap_points_except(ElementId(0))
+    }
+
+    /// The points a click snaps to, of every modelled element but `except` (ids start at 1).
+    pub(super) fn snap_points_except(&self, except: ElementId) -> Vec<DVec3> {
         let grid = self.modeller.model.grid;
         let mut points = Vec::new();
-        for e in self.modeller.model.iter() {
+        for e in self.modeller.model.iter().filter(|e| e.id != except) {
             match e.shape_in_project(&grid) {
                 Shape::Point(p) => points.push(p.at),
                 Shape::Linear(l) => points.extend([l.start, l.end]),
@@ -389,6 +396,9 @@ impl App {
         for id in picked {
             self.modeller.model.remove(id);
         }
+        if self.modeller.edit.as_ref().is_some_and(|e| self.modeller.model.get(e.element).is_none()) {
+            self.modeller.edit = None;
+        }
         self.show_modelled();
         true
     }
@@ -491,14 +501,6 @@ impl App {
         let _ = self.update(super::Message::Fit);
     }
 
-    /// Selects modelled element `id`.
-    pub(crate) fn select_modelled(&mut self, id: ElementId) {
-        let Some(scene) = self.model.clone() else { return };
-        let entry = if self.models.len() == 1 { 0 } else { self.models.iter().position(|e| Some(e.model.id) == self.modeller.shown).unwrap_or(0) as u32 };
-        if let Some(shown) = scene.element_with_key(crate::model::ElementKey { model: entry, source: id.0 }) {
-            self.click(Some(Pickable::Element(shown)), false);
-        }
-    }
 }
 
 /// The colour of a layer of modelled elements, by IFC class (sRGB).

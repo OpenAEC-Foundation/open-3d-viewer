@@ -150,3 +150,34 @@ The project owner chose booleans as the next kernel step, before wall corners an
 - Calls made: the BSP method rather than a mesh arrangement (simpler, and exact where it
   decides). The result faces are convex polygons, not merged back into the original faces.
   Cutters stay visible; an invisible opening body is a follow-up.
+
+## Third slice: edit mode (2026-11-09)
+
+The project owner asked for an edit mode like Revit's and Blender's, with Tab, taking ideas
+from Open BIM Studio (its edit mode, grips and boundary sketch).
+
+- **Opening it.** Tab on one selected modelled element opens its edit mode; Tab leaves it. Without
+  such a selection, Tab moves the focus as before.
+- **Points.** The mode shows the points of the element's definition: a member's ends, a wall's or
+  curtain wall's axis ends, a slab's corners, an object's place. They are drawn over the view
+  with the lines between them.
+- **Moving.** Drag a point to move it, and the other picked points with it. Click picks a point
+  and Ctrl adds one.
+  - G grabs the picked points: they follow the cursor and a click puts them down.
+  - X, Y and Z hold the move to an axis. Up or down, a planar element or a system moves whole,
+    since it has one height.
+  - A picks every point, and Delete removes a slab's picked corners (three stay).
+  - Esc drops a move under way, else leaves.
+- **Snapping.** A move snaps to the points of the other modelled elements and is rounded to
+  10 mm.
+- **The kernel.** The change is evaluated when the move is put down; a refusal leaves the element
+  as it was and shows why.
+- **Calls made:**
+  - Dragging is done in an overlay over the viewport (as the section box's handles are), so a
+    drag on a point does not orbit the camera.
+  - During a move the overlay shows the points and lines, not the evaluated solid; the solid
+    follows when the move is put down.
+  - G, X, Y, Z and A are edit mode's keys while it is open, and the grid shortcut G waits until
+    it closes.
+- **Next:** typed parameters (thickness, height, profile, openings) in the properties pane, a
+  live solid during a move, and a sketch mode for outlines with arcs.

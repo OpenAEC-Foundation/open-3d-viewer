@@ -53,7 +53,9 @@ goes out as IFCCAD as well.
 
 ## Builder's calls
 
-- The CAD loader keeps its own `acadrust` until `opencaddocument`'s codec can replace it without
-  changing what it reads.
+- The CAD loader reads through `opencaddocument`'s `acadrust` (the same repository at a newer
+  revision, with its parallel reading on the desktop) rather than its own older copy, so the
+  viewer builds one DWG codec. Its tests read the same as before; a DWG that reads differently
+  goes back to a separately pinned `acadrust` for the loader.
 - Text height on a view: 2.5 mm on paper at the view's scale.
 - Layer names: `O3V-Cut`, `O3V-Beyond`, `O3V-Dimensions`, `O3V-Text`, `O3V-Frame`.

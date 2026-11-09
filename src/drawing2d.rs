@@ -325,7 +325,8 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
     d.rectangle(Pen::Beyond, [0.0, 0.0], [w, h]);
     d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
     let title = 0.004;
-    d.text([w - 0.013, h - 0.013 - title], title, format!("{}  {}", sheet.number, sheet.name), Align::Right);
+    // at the lower right, just above the border, as the sheet's tab shows it
+    d.text([w - 0.013, 0.013], title, format!("{}  {}", sheet.number, sheet.name), Align::Right);
     for v in &sheet.views {
         let c = cut(&v.plan);
         let (dimensions, notes, crop) = marks(doc, &v.plan);
@@ -475,6 +476,8 @@ mod tests {
         assert!(d.lines.iter().any(|l| l.pen == Pen::Frame && near(l.a, [0.02, 0.01]) && near(l.b, [0.41, 0.01])), "{:?}", d.lines);
         let title = d.texts.iter().find(|t| t.text == "A01  Plattegronden").unwrap();
         assert_eq!(title.align, Align::Right);
+        // at the lower right, just above the border, as the sheet's tab shows it
+        assert!(title.at[0] > 0.40 && title.at[1] > 0.01 && title.at[1] < 0.02, "{title:?}");
         assert_eq!(d.page(), ([0.0, 0.0], A3_LANDSCAPE));
     }
 

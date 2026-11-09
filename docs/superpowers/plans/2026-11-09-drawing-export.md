@@ -23,7 +23,7 @@ and PNG from that SVG through resvg. An Export button in the view and sheet bars
 - Text 2.5 mm high on paper; a dimension line 6 mm (paper) to the left of from → to, its text the
   length in whole millimetres. A view's scale: that of the first sheet it is placed on, else 1:100.
 - Sheet geometry exactly as `src/app/paper.rs` draws it: `FRAME` 0.005, inner border
-  `[0.02, 0.01]`–`[w - 0.01, h - 0.01]`, title `number  name` at the inner border's upper right,
+  `[0.02, 0.01]`–`[w - 0.01, h - 0.01]`, title `number  name` at the inner border's lower right,
   a view's middle = middle of its cut's extent, crop clips lines.
 - No names of other drawing programs in code, comments or docs.
 

@@ -9,6 +9,9 @@ use std::sync::Arc;
 
 /// The longest side a PNG gets (pixels): an A0 sheet at 300 dpi would be 14 000.
 pub const MAX_PIXELS: u32 = 10_000;
+/// The most pixels a PNG gets: 160 MB to draw in; an A0 sheet at 200 dpi would take 248 MB (in
+/// the browser on the page's own thread). Above it the resolution goes down.
+pub const MAX_AREA: f64 = 40_000_000.0;
 /// Capitals' height per em of the font (Inter).
 const CAPITALS: f64 = 0.72;
 
@@ -73,7 +76,8 @@ pub fn svg(d: &Drawing2d) -> String {
     s
 }
 
-/// The drawing as a PNG image of its page at `dpi`, its longer side at most [`MAX_PIXELS`].
+/// The drawing as a PNG image of its page at `dpi`, its longer side at most [`MAX_PIXELS`] and
+/// its pixels at most [`MAX_AREA`].
 pub fn png(d: &Drawing2d, dpi: f64) -> Result<Vec<u8>, String> {
     let mut fonts = usvg::fontdb::Database::new();
     for bytes in openaec_ui::fonts::FILES {
@@ -86,6 +90,10 @@ pub fn png(d: &Drawing2d, dpi: f64) -> Result<Vec<u8>, String> {
     let longest = w.max(h) * per_mm;
     if longest > MAX_PIXELS as f64 {
         per_mm *= MAX_PIXELS as f64 / longest;
+    }
+    let area = w * h * per_mm * per_mm;
+    if area > MAX_AREA {
+        per_mm *= (MAX_AREA / area).sqrt();
     }
     let (pw, ph) = (((w * per_mm).round() as u32).max(1), ((h * per_mm).round() as u32).max(1));
     let mut pixmap = tiny_skia::Pixmap::new(pw, ph).ok_or("The image is too large")?;
@@ -152,7 +160,15 @@ mod tests {
     #[test]
     fn a0_png_is_capped() {
         let (w, h, _) = decode(&png(&sheet(PAPERS[4].1), 300.0).unwrap());
-        assert_eq!(w, MAX_PIXELS);
-        assert!(h < MAX_PIXELS && h > 7000, "{h}");
+        assert!(w <= MAX_PIXELS && h < w, "{w} x {h}");
+    }
+
+    #[test]
+    fn a_large_png_keeps_within_its_pixel_budget() {
+        // A0 at 200 dpi would be 9362 x 6623 pixels, 248 MB to draw in
+        let (w, h, _) = decode(&png(&sheet(PAPERS[4].1), 200.0).unwrap());
+        assert!(u64::from(w) * u64::from(h) <= 40_000_000, "{w} x {h}");
+        // the paper's proportions kept
+        assert!(((w as f64 / h as f64) - 1.189 / 0.841).abs() < 0.01, "{w} x {h}");
     }
 }

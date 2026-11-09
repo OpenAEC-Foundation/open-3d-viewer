@@ -369,7 +369,14 @@ impl App {
             .padding([3, 10])
             .style(move |_, s| p.ribbon_button(noting, s))
             .on_press(Message::NoteTool(!noting));
-        let mut bar = Row::new().spacing(6).align_y(Center).push(measure).push(note).push(section).push(text("|").size(12).color(p.text_muted));
+        let mut bar = Row::new()
+            .spacing(6)
+            .align_y(Center)
+            .push(measure)
+            .push(note)
+            .push(section)
+            .push(self.export_control(p, l))
+            .push(text("|").size(12).color(p.text_muted));
         let wording = || iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
         let small = |label: String, active: bool, message: Message| {
             button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(message)

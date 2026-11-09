@@ -2,6 +2,7 @@
 //! ribbon on top, explorer left, 3D viewport centre, properties and layers right, status bar
 //! bottom.
 
+mod export_drawing;
 mod grids;
 mod ifc;
 mod layers;
@@ -177,6 +178,8 @@ pub struct App {
     pub active_doc_sheet: Option<String>,
     /// The cut of every floor plan placed on a sheet, by the plan's path.
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
+    /// The bar's Export button is open: the formats to export the drawing shown in follow it.
+    pub export_menu: bool,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
     /// The section tool of the sheets is on: two clicks on a floor plan draw a section.
@@ -376,6 +379,13 @@ pub enum Message {
     FlipDimension,
     /// Give a view (its path) its standard dimensions.
     StandardDimensions(Arc<str>),
+    /// Open or close the bar's Export button.
+    ExportMenu(bool),
+    /// Export the drawing of the view or sheet shown in this format.
+    ExportDrawing(crate::export::drawing::DrawingFormat),
+    /// The drawing was exported (where, in how many seconds), or not; `None`: the dialog was
+    /// cancelled.
+    Exported(Option<Result<(PathBuf, f32), String>>),
     /// Delete was pressed (not in a text field): remove what is picked, on a sheet or a view.
     DeletePicked,
     /// Remove what is picked on the sheet shown.
@@ -590,6 +600,7 @@ impl Default for App {
             open_doc_sheets: Vec::new(),
             active_doc_sheet: None,
             cuts: Default::default(),
+            export_menu: false,
             dimension_tool: false,
             section_tool: false,
             sheet_pick: None,
@@ -1527,6 +1538,21 @@ impl App {
             Message::FlipDimension => self.flip_dimension(),
             Message::StandardDimensions(view) => {
                 self.standard_dimensions(&view);
+            }
+            Message::ExportMenu(open) => self.export_menu = open,
+            Message::ExportDrawing(format) => {
+                self.export_menu = false;
+                return self.export_drawing(format);
+            }
+            Message::Exported(None) => {}
+            Message::Exported(Some(result)) => {
+                self.status = match result {
+                    Ok((path, secs)) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        Status::Loaded(format!("Exported {file} in {secs:.2} s"))
+                    }
+                    Err(e) => Status::Error(e),
+                };
             }
             Message::DeletePicked => {
                 if self.delete_modelled() {

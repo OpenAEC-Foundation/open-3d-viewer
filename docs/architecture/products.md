@@ -1,7 +1,7 @@
 # Three products from one code base
 
-**Status:** proposal of 2026-11-09, built in small steps. The switch is in the app; per module the
-owner decides where it belongs (the questions at the end).
+**Status:** proposal of 2026-11-09, built in small steps. The switch is in the app, and each
+product builds on its own; per module the owner decides where it belongs (the questions at the end).
 
 ## Intent
 
@@ -61,10 +61,15 @@ Cargo features say which products a build holds; binaries say which product a bu
 - Cargo unifies features within one invocation, so a slim product build is a build of its own:
   `cargo build --release --no-default-features --features modeller --bin open-bim-modeller`. The
   draft validator branch learned the same: one invocation per product.
+- A build without any product feature stops with a compile error that says so.
 - Each product has its name (window title, About) and its id in the installer catalogue, so an
-  update notice only offers that product. The Studio keeps the viewer's id `open-3d-viewer`, so
-  installed copies keep updating. Preferences stay shared: one family, one user.
-- CI checks every build (`cargo check` per feature set) besides the tests of the default build.
+  update notice only offers that product. The Studio keeps the viewer's name and id
+  (`open-3d-viewer`), so installed copies keep updating. Preferences stay shared: one family, one
+  user. Remote control (MCP) goes to the program started last, as with two viewers today.
+- CI checks the product binaries and each feature on its own (`cargo check` for wasm32, which
+  checks only the app crate again), besides the tests of the default build.
+- Releases build and ship the Studio and the MCP server only; packaging the product binaries waits
+  for question 4.
 
 ## What each product shows
 
@@ -117,5 +122,5 @@ but not yet working, and a panel that says what comes.
   project, so every project tab shows in the product chosen.
 - The Viewer loses the Model tab; modelling is the Modeller's.
 - Product names on the switch are names, the same in every language.
-- Code moves behind features module by module, starting with `bim-core` and the modeller; this
-  first step leaves the code where it is.
+- Code moves behind features module by module, starting with `bim-core` and the modeller; the
+  features so far decide which products a build offers, and leave the code where it is.

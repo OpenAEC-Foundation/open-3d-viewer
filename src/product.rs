@@ -80,9 +80,75 @@ impl Product {
         }
     }
 
+    /// Its name on its own: the window title and About of a build of this product alone.
+    pub fn name(self) -> &'static str {
+        match self {
+            Product::Viewer => "Open 3D Viewer Studio",
+            Product::Modeller => "Open BIM Modeller",
+            Product::Collaborator => "Open BIM Collaborator",
+        }
+    }
+
+    /// Its id in the installer's catalogue, for the update notice of a build of it alone.
+    pub fn app_id(self) -> &'static str {
+        match self {
+            Product::Viewer => "open-3d-viewer",
+            Product::Modeller => "open-bim-modeller",
+            Product::Collaborator => "open-bim-collaborator",
+        }
+    }
+
+    /// Whether this build holds it: its Cargo feature.
+    pub fn built(self) -> bool {
+        match self {
+            Product::Viewer => cfg!(feature = "viewer"),
+            Product::Modeller => cfg!(feature = "modeller"),
+            Product::Collaborator => cfg!(feature = "collaborator"),
+        }
+    }
+
     /// Its place in [`Product::ALL`].
     pub fn index(self) -> usize {
         Product::ALL.iter().position(|&p| p == self).unwrap_or(0)
+    }
+}
+
+#[cfg(not(any(feature = "viewer", feature = "modeller", feature = "collaborator")))]
+compile_error!("a build needs at least one product: the feature viewer, modeller or collaborator");
+
+/// What a build is: the Studio, with every product it holds and the switch between them, or one
+/// product alone (`open-bim-modeller`, `open-bim-collaborator`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Edition {
+    #[default]
+    Studio,
+    Only(Product),
+}
+
+impl Edition {
+    /// The products it offers, in the order of the switch.
+    pub fn products(self) -> Vec<Product> {
+        match self {
+            Edition::Studio => Product::ALL.into_iter().filter(|p| p.built()).collect(),
+            Edition::Only(p) => vec![p],
+        }
+    }
+
+    /// Its name: the window title and About.
+    pub fn name(self) -> &'static str {
+        match self {
+            Edition::Studio => Product::Viewer.name(),
+            Edition::Only(p) => p.name(),
+        }
+    }
+
+    /// Its id in the installer's catalogue: the Studio keeps the viewer's, so installed copies keep
+    /// updating.
+    pub fn app_id(self) -> &'static str {
+        match self {
+            Edition::Studio => Product::Viewer.app_id(),
+            Edition::Only(p) => p.app_id(),
+        }
     }
 }
 
@@ -204,6 +270,29 @@ mod tests {
         }
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
+    }
+
+    #[test]
+    fn every_product_alone_has_its_own_name_and_installer_id() {
+        let mut names: Vec<&str> = Product::ALL.iter().map(|p| p.name()).collect();
+        let mut ids: Vec<&str> = Product::ALL.iter().map(|p| p.app_id()).collect();
+        names.sort();
+        names.dedup();
+        ids.sort();
+        ids.dedup();
+        assert_eq!((names.len(), ids.len()), (3, 3));
+        // the Studio is what was released as the viewer: same name, same installer id
+        assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open 3D Viewer Studio", "open-3d-viewer"));
+        assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);
+    }
+
+    #[test]
+    fn the_studio_offers_the_products_of_the_build() {
+        let products = Edition::Studio.products();
+        assert!(!products.is_empty());
+        for p in Product::ALL {
+            assert_eq!(products.contains(&p), p.built(), "{p:?}");
+        }
     }
 
     #[test]

@@ -16,12 +16,17 @@ use wasm_bindgen_futures::JsFuture;
 
 /// Starts the app in the page.
 pub fn main() {
+    main_as(crate::product::Edition::Studio)
+}
+
+/// Starts `edition` in the page: the Studio or one product alone.
+pub fn main_as(edition: crate::product::Edition) {
     console_error_panic_hook::set_once();
-    wasm_bindgen_futures::spawn_local(async {
+    wasm_bindgen_futures::spawn_local(async move {
         // the overlay is smoothed with WebGPU only: on WebGL2 (most phones) iced's multisampled
         // overlay pass keeps stale pixels, so a view cube stays behind after the layout moves
         let antialiasing = webgpu().await.unwrap_or(false);
-        let mut studio = shell::Studio::new(App::default());
+        let mut studio = shell::Studio::new(App::default()).with_edition(edition);
         // `?product=modeller` starts in that product
         if let Some(product) = url_param("product").and_then(|p| crate::product::Product::parse(&p)) {
             studio.set_product(product);

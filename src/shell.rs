@@ -7,7 +7,7 @@
 use crate::app::{App, DocTab, Message, Status};
 use crate::b2::{large, small};
 use crate::measure::Tool;
-use crate::product::{Product, RibbonPage, PLANNED};
+use crate::product::{Edition, Product, RibbonPage, PLANNED};
 use crate::theme::{Palette, ThemeKind};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
@@ -28,10 +28,6 @@ use web_time::{Duration, Instant};
 
 /// Version: OpenAEC calendar versioning (year.ISO week.patch).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-const NAME: &str = "Open 3D Viewer Studio";
-/// The id of this app in the installer's catalogue, for the update notice (desktop only).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-const APP_ID: &str = "open-3d-viewer";
 const PANEL_MIN: f32 = 190.0;
 const PANEL_MAX: f32 = 520.0;
 const RECENT: usize = 8;
@@ -343,7 +339,9 @@ pub struct Studio {
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
-    /// The products this build offers, in the order of the switch; the switch shows with two or more.
+    /// What this build is (its name, its installer id), and the products it offers, in the order of
+    /// the switch; the switch shows with two or more.
+    edition: Edition,
     products: Vec<Product>,
     /// The ribbon's tab shown, of the product's [`Product::pages`].
     ribbon_tab: usize,
@@ -404,7 +402,8 @@ impl Studio {
             width: 1280.0,
             compact_panel: None,
             ribbon_folded: false,
-            products: Product::ALL.to_vec(),
+            edition: Edition::Studio,
+            products: Edition::Studio.products(),
             ribbon_tab: 0,
             dev: None,
         }
@@ -518,6 +517,13 @@ impl Studio {
     fn ribbon_page(&self) -> RibbonPage {
         let pages = self.product().pages();
         pages[self.ribbon_tab.min(pages.len() - 1)]
+    }
+
+    /// A build of `edition`: the Studio, or one product alone.
+    pub fn with_edition(mut self, edition: Edition) -> Self {
+        self.edition = edition;
+        self.products = edition.products();
+        self
     }
 
     /// Reads the preferences and own shortcuts in `dir`, and keeps them there.
@@ -1078,8 +1084,8 @@ impl Studio {
 
     pub fn title(&self) -> String {
         let title = match &self.app.model {
-            Some(m) => format!("{} · {NAME}", m.file_name()),
-            None => NAME.into(),
+            Some(m) => format!("{} · {}", m.file_name(), self.edition.name()),
+            None => self.edition.name().into(),
         };
         match self.dev.as_ref().and_then(|d| d.label.as_deref()) {
             Some(label) => format!("{title} · {label}"),
@@ -1122,7 +1128,7 @@ impl Studio {
         let folded = compact && self.ribbon_folded;
         let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
         // a phone has no room for the version, and the web app has no remote control
-        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{} {VERSION}", self.edition.name())]), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
             w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { self.ribbon_tab.min(tabs.len() - 1) }, Msg::RibbonTab),
@@ -1355,7 +1361,7 @@ impl Studio {
         };
         let about = t::info_card(
             look,
-            NAME,
+            self.edition.name(),
             vec![
                 (l.text("Versie", "Version"), VERSION.to_string()),
                 (l.text("Licentie", "License"), "LGPL-3.0".to_string()),
@@ -1622,7 +1628,7 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool)
     fonts::install_fallback();
     // the installer reports updates; the app only shows them, and not in managed mode
     #[cfg(not(target_arch = "wasm32"))]
-    let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(APP_ID, VERSION) }, ..studio };
+    let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(studio.edition.app_id(), VERSION) }, ..studio };
     let initial = std::sync::Mutex::new(Some(studio));
     let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
         .title(Studio::title)
@@ -1930,7 +1936,7 @@ mod tests {
     #[test]
     fn every_control_has_a_name_in_every_view() {
         let mut studio = Studio::new(App::default());
-        studio.update = Some(Available { app: APP_ID.into(), current: VERSION.into(), latest: "2099.1.0".into(), page_url: None, installer: None });
+        studio.update = Some(Available { app: studio.edition.app_id().into(), current: VERSION.into(), latest: "2099.1.0".into(), page_url: None, installer: None });
         for (backstage, dialog, page) in [(false, None, SettingsPage::General), (true, None, SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::Shortcuts), (false, Some(Dialog::DesktopOnly("Revit")), SettingsPage::General)] {
             studio.backstage = backstage;
             studio.dialog = dialog;
@@ -2027,6 +2033,10 @@ mod tests {
         let names = accessibility(&studio).summary();
         assert!(!names.iter().any(|n| n == "Tab: Viewer" || n == "Tab: BIM Collaborator"), "{names:?}");
         assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
+        // a product binary: its own name in the title and About
+        let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
+        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, "Open BIM Collaborator".to_string()));
+        assert_eq!(Studio::new(App::default()).title(), "Open 3D Viewer Studio");
     }
 
     #[test]

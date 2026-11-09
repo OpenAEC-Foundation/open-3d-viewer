@@ -145,6 +145,11 @@ check, and the areas of a few sections are tested against their published values
 Steel profiles are named by designation ("IPE 200", "L 100x50x8", "SHS 100x100x5", "CHS 114.3x5");
 other linear types by rule: material, then width × depth, or "rond" and the diameter.
 
+The steel table is a catalogue, not 323 starter types: a project takes a type from it when it is
+used (`LinearType::steel`), as a column or a beam. The starter library has Open BIM Studio's ten
+starter linear types: concrete, steel and timber columns and beams, an aluminium mullion, a timber
+skirting and a pipe. Linear types are imported by role, material, profile and designation.
+
 ### The IFCX form
 
 As in Open BIM Studio, a library is an IFCX file holding only types, and a project file holds its

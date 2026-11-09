@@ -285,6 +285,8 @@ dependencies = [
 name = "bim-library"
 version = "0.1.0"
 dependencies = [
+ "bim-structural",
+ "glam 0.30.10",
  "serde",
  "serde_json",
 ]

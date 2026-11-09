@@ -109,7 +109,9 @@ impl App {
         }
         let own = self.document.view_layers(&path).map_or(0, |o| o.len());
         let own = if own == 0 { l.text("zoals het model", "as the model").to_string() } else { own.to_string() };
-        Some(rows.push(row(l.text("Eigen lagen", "Own layers"), own)).into())
+        let hidden = self.document.view_hidden(&path).map_or(0, |h| h.len());
+        let hidden = if hidden == 0 { l.text("geen", "none").to_string() } else { super::format_count(hidden) };
+        Some(rows.push(row(l.text("Eigen lagen", "Own layers"), own)).push(row(l.text("Verborgen elementen", "Hidden elements"), hidden)).into())
     }
 }
 

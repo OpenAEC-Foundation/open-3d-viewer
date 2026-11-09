@@ -121,6 +121,8 @@ pub struct App {
     /// The 3D view's layer switches while another view shows: every layer's, and per model its
     /// own.
     parked_layers: Option<(Vec<bool>, Vec<Vec<bool>>)>,
+    /// The elements hidden in the 3D view while another view shows.
+    parked_hidden: Option<Arc<UnitKeySet>>,
     /// The undo histories of the views not shown, by view path (the 3D view: "").
     parked_histories: std::collections::HashMap<String, History<ViewState>>,
     pub status: Status,
@@ -570,6 +572,7 @@ impl Default for App {
             layers_query: String::new(),
             view_typing: None,
             parked_layers: None,
+            parked_hidden: None,
             parked_histories: Default::default(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
@@ -1019,6 +1022,7 @@ impl App {
         self.hidden = Arc::default();
         self.history.clear();
         self.parked_layers = None;
+        self.parked_hidden = None;
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];

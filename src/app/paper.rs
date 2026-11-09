@@ -6,7 +6,7 @@
 
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
-use crate::drawing::{plan_at, section_at, Cut};
+use crate::drawing::{plan_at, section_at, Cut, Shown};
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -179,13 +179,18 @@ impl App {
         if self.cuts.contains_key(path) {
             return;
         }
-        let shown = self.view_visibility(path);
+        let layers = self.view_visibility(path);
+        // the elements hidden in the view, by the unit of a triangle's first vertex
+        let units = self.document.view_hidden(path).map(|h| self.hidden_units(h)).unwrap_or_default();
+        let index = self.explode_index.clone().filter(|_| !units.is_empty());
+        let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
+        let shown = Shown { layers: &layers, hidden: &hidden };
         let cut = if let Some(s) = self.document.section(path) {
-            section_at(&model, &shown, s.from, s.to, s.depth)
+            section_at(&model, shown, s.from, s.to, s.depth)
         } else {
             let Some(view) = self.document.plan(path) else { return };
             let Some((low, high)) = self.document.plan_range(view) else { return };
-            plan_at(&model, &shown, low as f32, high as f32)
+            plan_at(&model, shown, low as f32, high as f32)
         };
         self.cuts.insert(path.to_string(), Arc::new(cut));
     }

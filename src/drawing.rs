@@ -23,9 +23,40 @@ pub struct Cut {
 /// Two faces meeting at a sharper angle than this (degrees) make a visible edge.
 const CREASE_DEGREES: f32 = 20.0;
 
+/// What of the model a drawing takes: the layers that are on (all of them where the list ends)
+/// and, on those, the triangles that are not hidden (by their layer and first vertex: the
+/// elements hidden in the view).
+#[derive(Clone, Copy)]
+pub struct Shown<'a> {
+    pub layers: &'a [bool],
+    pub hidden: &'a dyn Fn(usize, u32) -> bool,
+}
+
+/// Hides no triangle.
+fn none_hidden(_: usize, _: u32) -> bool {
+    false
+}
+
+impl<'a> Shown<'a> {
+    /// The layers that are on, with no element hidden.
+    pub fn layers(layers: &'a [bool]) -> Self {
+        Shown { layers, hidden: &none_hidden }
+    }
+
+    /// Every layer, with no element hidden.
+    pub fn all() -> Self {
+        Self::layers(&[])
+    }
+
+    /// Whether layer `i` is on.
+    fn on(&self, i: usize) -> bool {
+        self.layers.get(i).copied().unwrap_or(true)
+    }
+}
+
 /// A floor plan's drawing: the cut at `high` and the edges seen from above between `low` and
-/// `high`, of the layers that are `shown`.
-pub fn plan_at(model: &Model, shown: &[bool], low: f32, high: f32) -> Cut {
+/// `high`, of what is `shown`.
+pub fn plan_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, high);
     cut.below = edges_between(model, shown, low, high);
     cut.extent = extent(cut.segments.iter().chain(&cut.below));
@@ -34,7 +65,7 @@ pub fn plan_at(model: &Model, shown: &[bool], low: f32, high: f32) -> Cut {
 
 /// The outlines and creases of the triangles between `low` and `high`, clipped to that range and
 /// seen from above; an edge seen end on (a vertical one) gives nothing.
-pub fn edges_between(model: &Model, shown: &[bool], low: f32, high: f32) -> Vec<Segment> {
+pub fn edges_between(model: &Model, shown: Shown, low: f32, high: f32) -> Vec<Segment> {
     feature_edges(model, shown, |p| p, low, high).into_iter().filter_map(flat).collect()
 }
 
@@ -43,20 +74,20 @@ fn flat([a, b]: [[f32; 3]; 2]) -> Option<Segment> {
     ((b[0] - a[0]).hypot(b[1] - a[1]) > 1e-4).then_some([[a[0], a[1]], [b[0], b[1]]])
 }
 
-/// The corners of a triangle of a shown layer, for each triangle.
-fn triangles<'a>(model: &'a Model, shown: &'a [bool]) -> impl Iterator<Item = [[f32; 3]; 3]> + 'a {
-    model.layers.iter().enumerate().filter(|(i, l)| !l.points && shown.get(*i).copied().unwrap_or(true)).flat_map(|(_, layer)| {
+/// The corners of each triangle that is shown.
+fn triangles<'a>(model: &'a Model, shown: Shown<'a>) -> impl Iterator<Item = [[f32; 3]; 3]> + 'a {
+    model.layers.iter().enumerate().filter(move |(i, l)| !l.points && shown.on(*i)).flat_map(move |(i, layer)| {
         let p = &layer.positions;
-        layer.indices.chunks_exact(3).filter_map(move |t| {
+        layer.indices.chunks_exact(3).filter(move |t| !(shown.hidden)(i, t[0])).filter_map(move |t| {
             let corner = |k: u32| p.get(k as usize * 3..k as usize * 3 + 3).map(|v| [v[0], v[1], v[2]]);
             Some([corner(t[0])?, corner(t[1])?, corner(t[2])?])
         })
     })
 }
 
-/// The outlines and creases of the triangles of the shown layers in the frame `map` gives
-/// (its third coordinate the depth), clipped to `low` ≤ depth ≤ `high`.
-fn feature_edges(model: &Model, shown: &[bool], map: impl Fn([f32; 3]) -> [f32; 3], low: f32, high: f32) -> Vec<[[f32; 3]; 2]> {
+/// The outlines and creases of the triangles shown in the frame `map` gives (its third
+/// coordinate the depth), clipped to `low` ≤ depth ≤ `high`.
+fn feature_edges(model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3], low: f32, high: f32) -> Vec<[[f32; 3]; 2]> {
     // edges by their ends rounded to 0.1 mm, so faces that do not share vertices still meet
     let key = |p: [f32; 3]| p.map(|v| (v * 1e4).round() as i64);
     let crease = CREASE_DEGREES.to_radians().cos();
@@ -111,9 +142,9 @@ fn feature_edges(model: &Model, shown: &[bool], map: impl Fn([f32; 3]) -> [f32; 
 }
 
 /// A section's or elevation's drawing, in (u along the line `from` → `to`, v up): the cut where
-/// the upright plane through the line meets the shown layers, and the edges seen beyond it up to
+/// the upright plane through the line meets what is shown, and the edges seen beyond it up to
 /// `depth`, left out where something nearer covers them.
-pub fn section_at(model: &Model, shown: &[bool], from: [f64; 2], to: [f64; 2], depth: f64) -> Cut {
+pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], depth: f64) -> Cut {
     let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
     let run = dx.hypot(dy).max(1e-9);
     let (d, n) = ([dx / run, dy / run], [-dy / run, dx / run]);
@@ -256,12 +287,11 @@ fn extent<'a>(segments: impl Iterator<Item = &'a Segment>) -> Option<([f32; 2], 
     })
 }
 
-/// Cuts the layers that are `shown` (all of them when `shown` is shorter) at height `z`. Point
-/// layers are left out.
-pub fn cut_at(model: &Model, shown: &[bool], z: f32) -> Cut {
+/// Cuts what is `shown` at height `z`. Point layers are left out.
+pub fn cut_at(model: &Model, shown: Shown, z: f32) -> Cut {
     let mut segments = Vec::new();
     for (i, layer) in model.layers.iter().enumerate() {
-        if layer.points || !shown.get(i).copied().unwrap_or(true) {
+        if layer.points || !shown.on(i) {
             continue;
         }
         let p = &layer.positions;
@@ -270,7 +300,7 @@ pub fn cut_at(model: &Model, shown: &[bool], z: f32) -> Cut {
             [p[k], p[k + 1], p[k + 2]]
         };
         for t in layer.indices.chunks_exact(3) {
-            if t.iter().any(|&k| (k as usize * 3 + 2) >= p.len()) {
+            if t.iter().any(|&k| (k as usize * 3 + 2) >= p.len()) || (shown.hidden)(i, t[0]) {
                 continue;
             }
             let corners = [vertex(t[0]), vertex(t[1]), vertex(t[2])];
@@ -319,7 +349,7 @@ mod tests {
     #[test]
     fn a_box_cut_through_its_middle_is_its_outline() {
         let model = Model::new(PathBuf::from("box.obj"), "OBJ", vec![box_layer("Box")]);
-        let cut = cut_at(&model, &[], 1.2);
+        let cut = cut_at(&model, Shown::all(), 1.2);
         // the four sides, two triangles each
         assert_eq!(cut.segments.len(), 8);
         assert_eq!(cut.extent, Some(([0.0, 0.0], [4.0, 2.0])));
@@ -351,7 +381,7 @@ mod tests {
     #[test]
     fn a_plan_shows_the_edges_below_its_cut() {
         let model = Model::new(PathBuf::from("room.obj"), "OBJ", vec![box_layer("Wall"), table()]);
-        let plan = plan_at(&model, &[], -0.3, 1.2);
+        let plan = plan_at(&model, Shown::all(), -0.3, 1.2);
         // the wall is cut; the table under the cut shows its outline (top and bottom edges seen
         // from above), not the diagonals of its faces, not its vertical edges
         assert_eq!(plan.segments.len(), 8);
@@ -361,7 +391,7 @@ mod tests {
         assert!((length - 8.0).abs() < 1e-4, "{length}");
         assert_eq!(plan.extent, Some(([0.0, 0.0], [6.0, 2.0])));
         // above the table's top, the range shows nothing of it
-        assert!(edges_between(&model, &[], 1.0, 1.2).iter().all(|[a, b]| a[0] < 5.0 && b[0] < 5.0));
+        assert!(edges_between(&model, Shown::all(), 1.0, 1.2).iter().all(|[a, b]| a[0] < 5.0 && b[0] < 5.0));
     }
 
     /// A box from `lo` to `hi`, its own vertices per face.
@@ -394,13 +424,13 @@ mod tests {
         ];
         let model = Model::new(PathBuf::from("site.obj"), "OBJ", layers);
         // through the wall, looking north (+y): cut along y = 1, u = x + 1
-        let section = section_at(&model, &[], [-1.0, 1.0], [9.0, 1.0], 20.0);
+        let section = section_at(&model, Shown::all(), [-1.0, 1.0], [9.0, 1.0], 20.0);
         let (lo, hi) = section.extent.unwrap();
         assert!(section.segments.iter().flatten().all(|p| (1.0..=8.0).contains(&p[0]) && (0.0..=3.0).contains(&p[1])));
         assert_eq!((lo, hi), ([1.0, 0.0], [8.0, 3.0]));
         // an elevation from the south: nothing cut; the box behind the wall hidden, the one
         // beside it seen
-        let elevation = section_at(&model, &[], [-1.0, -1.0], [9.0, -1.0], 20.0);
+        let elevation = section_at(&model, Shown::all(), [-1.0, -1.0], [9.0, -1.0], 20.0);
         assert!(elevation.segments.is_empty());
         let hidden = |[a, b]: &&Segment| [a, b].iter().all(|p| (1.9..=3.1).contains(&p[0]) && (0.9..=2.1).contains(&p[1]));
         let behind: Vec<&Segment> = elevation.below.iter().filter(hidden).collect();
@@ -416,10 +446,29 @@ mod tests {
         let mut points = box_layer("Cloud");
         points.points = true;
         let model = Model::new(PathBuf::from("box.obj"), "OBJ", vec![box_layer("Box"), points]);
-        assert_eq!(cut_at(&model, &[], 5.0), Cut::default());
-        assert_eq!(cut_at(&model, &[], -1.0), Cut::default());
-        assert_eq!(cut_at(&model, &[false, true], 1.0), Cut::default(), "hidden, and a point layer");
+        assert_eq!(cut_at(&model, Shown::all(), 5.0), Cut::default());
+        assert_eq!(cut_at(&model, Shown::all(), -1.0), Cut::default());
+        assert_eq!(cut_at(&model, Shown::layers(&[false, true]), 1.0), Cut::default(), "hidden, and a point layer");
         // at the top: the top face lies in the plane and gives nothing; its edges, once each
-        assert_eq!(cut_at(&model, &[true], 3.0).segments.len(), 4);
+        assert_eq!(cut_at(&model, Shown::layers(&[true]), 3.0).segments.len(), 4);
+    }
+
+    #[test]
+    fn the_triangles_of_an_element_hidden_in_the_view_are_left_out() {
+        // a wall and, on the same layer, a table: its triangles from vertex 24 on
+        let (wall, table) = (block("Room", [0.0, 0.0, 0.0], [4.0, 0.2, 3.0]), block("Table", [1.0, 1.0, 0.0], [2.0, 2.0, 0.8]));
+        let mut room = wall.clone();
+        room.indices.extend(table.indices.iter().map(|i| i + 24));
+        room.positions.extend(&table.positions);
+        let model = Model::new(PathBuf::from("room.obj"), "OBJ", vec![room]);
+        let table_hidden = |_: usize, v: u32| v >= 24;
+        let shown = Shown { layers: &[], hidden: &table_hidden };
+        let all = plan_at(&model, Shown::all(), 0.0, 0.5);
+        let without = plan_at(&model, shown, 0.0, 0.5);
+        assert!(without.segments.len() < all.segments.len());
+        assert!(without.segments.iter().chain(&without.below).all(|[a, b]| a[1] <= 0.2 + 1e-4 && b[1] <= 0.2 + 1e-4), "only the wall");
+        // a section through the table alone
+        assert!(!section_at(&model, Shown::all(), [0.0, 1.5], [4.0, 1.5], 5.0).segments.is_empty());
+        assert!(section_at(&model, shown, [0.0, 1.5], [4.0, 1.5], 5.0).segments.is_empty());
     }
 }

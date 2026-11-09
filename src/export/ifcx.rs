@@ -8,6 +8,7 @@
 use super::Writer;
 use crate::document::{uuid, Document};
 use crate::model::Model;
+use crate::units::{UnitKey, UnitKeySet};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -161,7 +162,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     }
     data.push(json!({"path": building, "children": building_children, "attributes": {"bsi::ifc::class": {"code": "IfcBuilding"}, "bsi::ifc::prop::Name": "Building"}}));
     data.push(json!({"path": project, "children": {"Building": building}, "attributes": {"bsi::ifc::class": {"code": "IfcProject"}, "bsi::ifc::prop::Name": stem}}));
-    data.extend(document.ifcx_drawing_nodes());
+    data.extend(document.ifcx_drawing_nodes_with(&|set| hidden_paths(model, file_name, set)));
 
     let file = json!({
         "header": {
@@ -177,6 +178,73 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     });
     serde_json::to_writer(&mut *out, &file).map_err(io::Error::other)?;
     Ok(())
+}
+
+/// The element nodes written for a model's units: (unit, node path), a unit once per layer it
+/// is drawn on. A layer without elements is one node, the rest of that layer; the rest of a
+/// layer of a combined model is not named, its layers not being told apart by model here.
+fn element_nodes(model: &Model, file_name: &str) -> Vec<(UnitKey, String)> {
+    let one_file = model.origins.len() <= 1;
+    let mut nodes = Vec::new();
+    for (li, layer) in model.layers.iter().enumerate().filter(|(_, l)| !l.points) {
+        if layer.elements.is_empty() {
+            if one_file {
+                nodes.push((UnitKey::LayerRest { model: 0, layer: li as u32 }, element_path(file_name, li, u64::MAX)));
+            }
+            continue;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for &(id, _, _) in layer.elements.iter().filter(|e| seen.insert(e.0)) {
+            nodes.push((UnitKey::Element(model.element_key(id)), element_path(file_name, li, id)));
+        }
+    }
+    nodes
+}
+
+/// The attribute a view's node gets for the elements it hides: the paths of their nodes in the
+/// file named `file_name` (`hidden`), or, when it hides most of them (Isolate), the paths of
+/// those it shows (`shown`).
+fn hidden_paths(model: &Model, file_name: &str, hidden: &UnitKeySet) -> Option<(&'static str, Value)> {
+    let nodes = element_nodes(model, file_name);
+    let (off, on): (Vec<_>, Vec<_>) = nodes.into_iter().partition(|(key, _)| hidden.contains(key));
+    if off.is_empty() {
+        return None;
+    }
+    let paths = |nodes: Vec<(UnitKey, String)>| Value::from(nodes.into_iter().map(|(_, path)| Value::from(path)).collect::<Vec<_>>());
+    Some(if off.len() > on.len() { ("shown", paths(on)) } else { ("hidden", paths(off)) })
+}
+
+/// The elements a view of an IFCX file hides, from its node's attribute (`hidden` or `shown`,
+/// see [`hidden_paths`]): the elements of `model`, read from that file, whose nodes are named.
+pub fn hidden_in(model: &Model, view: &Value) -> UnitKeySet {
+    let (list, shown) = match (view.get("hidden"), view.get("shown")) {
+        (Some(list), _) => (list, false),
+        (None, Some(list)) => (list, true),
+        (None, None) => return UnitKeySet::default(),
+    };
+    let named: std::collections::HashSet<&str> = list.as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    // the reader keeps the path of an element's node as its `Id`
+    let mut units = Vec::new();
+    for (li, layer) in model.layers.iter().enumerate().filter(|(_, l)| !l.points) {
+        if layer.elements.is_empty() {
+            units.push((UnitKey::LayerRest { model: 0, layer: li as u32 }, None));
+        }
+        for &(id, _, _) in &layer.elements {
+            units.push((UnitKey::Element(model.element_key(id)), Some(id)));
+        }
+    }
+    let path_of = |id: u64| -> Option<String> {
+        let props: Value = serde_json::from_str(model.props.get(&id)?).ok()?;
+        Some(props.get("Id")?.as_str()?.to_string())
+    };
+    units
+        .into_iter()
+        .filter(|(_, id)| {
+            let named = id.and_then(path_of).is_some_and(|p| named.contains(p.as_str()));
+            named != shown
+        })
+        .map(|(key, _)| key)
+        .collect()
 }
 
 /// Now, as `YYYY-MM-DDTHH:MM:SSZ`.
@@ -275,6 +343,41 @@ mod tests {
         let sh = again.sheet(&sheet).expect("the sheet");
         assert_eq!((sh.title.as_str(), sh.views.len(), sh.views[1].at), ("A01 Plans", 2, [0.3, 0.2]));
         assert!(timestamp().ends_with('Z') && timestamp().len() == 20);
+    }
+
+    #[test]
+    fn the_elements_a_view_hides_come_back_from_ifcx() {
+        let model = house();
+        let mut document = Document::from_model(&model);
+        let ground = document.levels()[0].path.clone();
+        let (plan, section) = (document.add_plan(&ground).unwrap(), document.add_section("A", [-1.0, 2.5], [9.0, 2.5], 20.0).unwrap());
+        let ground_walls = UnitKey::Element(model.element_key(10));
+        let first_walls = UnitKey::Element(model.element_key(20));
+        // the plan hides the ground walls; the section isolates them (it hides the rest)
+        document.set_view_hidden(&plan, Arc::new(UnitKeySet::from_iter([ground_walls])));
+        let mut bytes = Vec::new();
+        write(&model, &document, "house.ifcx", &mut bytes).unwrap();
+        let file: Value = serde_json::from_slice(&bytes).unwrap();
+        let view = |path: &str| file["data"].as_array().unwrap().iter().find(|n| n["path"] == path).unwrap()["attributes"].clone();
+        assert_eq!(view(&plan)["o3v::view::plan"]["hidden"], json!([element_path("house.ifcx", 0, 10)]), "the node of the element in this file");
+        assert!(view(&section)["o3v::view::section"].get("hidden").is_none());
+        let back = reopen(bytes);
+        let named = |name: &str| {
+            let id = *back.props.iter().find(|(_, p)| p.contains(&format!("\"Name\":\"{name}\""))).unwrap().0;
+            UnitKey::Element(back.element_key(id))
+        };
+        let again = Document::from_model(&back);
+        assert_eq!(again.view_hidden(&plan).unwrap().iter().collect::<Vec<_>>(), [&named("Ground walls")]);
+        assert!(again.view_hidden(&section).unwrap().is_empty());
+        // hiding most of them (here all), the file names those shown
+        document.set_view_hidden(&section, Arc::new(UnitKeySet::from_iter([first_walls, ground_walls])));
+        let mut bytes = Vec::new();
+        write(&model, &document, "house.ifcx", &mut bytes).unwrap();
+        let file: Value = serde_json::from_slice(&bytes).unwrap();
+        let section_node = file["data"].as_array().unwrap().iter().find(|n| n["path"] == section.as_str()).unwrap()["attributes"]["o3v::view::section"].clone();
+        assert_eq!(section_node["shown"], json!([]));
+        let again = Document::from_model(&reopen(bytes));
+        assert_eq!(again.view_hidden(&section).unwrap().len(), 2, "every element hidden");
     }
 
     #[test]

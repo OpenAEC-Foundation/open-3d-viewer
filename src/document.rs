@@ -6,7 +6,9 @@
 //! Headless: no GUI or GPU, so the MCP server and a later BIM kernel crate can use it as it is.
 
 use crate::model::Model;
+use crate::units::UnitKeySet;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 /// The IfcX class of a level.
 pub const STOREY_CLASS: &str = "IfcBuildingStorey";
@@ -55,6 +57,8 @@ pub struct PlanView {
     pub crop: Option<([f64; 2], [f64; 2])>,
     /// Its own layers: those it shows otherwise than the model.
     pub layers: LayerSwitches,
+    /// The elements hidden in it with Hide or Isolate.
+    pub hidden: Arc<UnitKeySet>,
 }
 
 /// A section or an elevation: the model seen level, looking to the left of the line `from` →
@@ -78,6 +82,8 @@ pub struct SectionView {
     pub crop: Option<([f64; 2], [f64; 2])>,
     /// Its own layers: those it shows otherwise than the model.
     pub layers: LayerSwitches,
+    /// The elements hidden in it with Hide or Isolate.
+    pub hidden: Arc<UnitKeySet>,
 }
 
 impl SectionView {
@@ -209,12 +215,25 @@ impl Document {
         self.levels = levels;
         self.sort();
         self.drop_orphan_plans();
-        self.adopt_ifcx(&model.project.drawings);
+        self.adopt_ifcx_with(&model.project.drawings, &|view| crate::export::ifcx::hidden_in(model, view));
     }
 
     /// The floor plans, sections, elevations and sheets as IfcX nodes in the `o3v::` namespace,
     /// under one root node; a plan names its level, so it finds it again in the file's storeys.
+    /// The elements a view hides are left out (see [`Self::ifcx_drawing_nodes_with`]).
     pub fn ifcx_drawing_nodes(&self) -> Vec<Value> {
+        self.ifcx_drawing_nodes_with(&|_| None)
+    }
+
+    /// [`Self::ifcx_drawing_nodes`], with what `hidden` makes of the elements each view hides: an
+    /// attribute of its node (a key and its value), or nothing.
+    pub fn ifcx_drawing_nodes_with(&self, hidden: &dyn Fn(&UnitKeySet) -> Option<(&'static str, Value)>) -> Vec<Value> {
+        let with_hidden = |mut view: Value, set: &UnitKeySet| {
+            if let Some((key, value)) = (!set.is_empty()).then(|| hidden(set)).flatten() {
+                view[key] = value;
+            }
+            view
+        };
         let rect = |c: Option<([f64; 2], [f64; 2])>| c.map_or(Value::Null, |(lo, hi)| json!([lo, hi]));
         let dims = |d: &[Dimension]| d.iter().map(|d| json!([d.from, d.to])).collect::<Vec<_>>();
         let notes = |n: &[Note]| n.iter().map(|n| json!({"at": n.at, "text": n.text})).collect::<Vec<_>>();
@@ -223,15 +242,17 @@ impl Document {
         for (i, p) in self.plans.iter().enumerate() {
             let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
-            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": {
+            let view = json!({
                 "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "layers": p.layers,
-            }}}));
+            });
+            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(view, &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
-            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": {
+            let view = json!({
                 "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
-            }}}));
+            });
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
         }
         for (i, s) in self.sheets.iter().enumerate() {
             children.insert(format!("sheet {}", i + 1), s.path.clone().into());
@@ -245,8 +266,15 @@ impl Document {
     }
 
     /// Takes over the drawings an IFCX file holds (its `o3v::` nodes), except those it has
-    /// already; a floor plan finds its level by name.
+    /// already; a floor plan finds its level by name. The elements a view hides are not taken
+    /// (see [`Self::adopt_ifcx_with`]).
     pub fn adopt_ifcx(&mut self, nodes: &[(String, Value)]) {
+        self.adopt_ifcx_with(nodes, &|_| UnitKeySet::default());
+    }
+
+    /// [`Self::adopt_ifcx`], with `hidden` giving the elements a view hides from its attribute.
+    pub fn adopt_ifcx_with(&mut self, nodes: &[(String, Value)], hidden: &dyn Fn(&Value) -> UnitKeySet) {
+        let hidden = |v: &Value| Arc::new(hidden(v));
         let pair = |v: &Value| -> Option<[f64; 2]> { Some([v.get(0)?.as_f64()?, v.get(1)?.as_f64()?]) };
         let rect = |v: Option<&Value>| -> Option<([f64; 2], [f64; 2])> {
             let v = v?;
@@ -282,6 +310,7 @@ impl Document {
                     notes: notes(p.get("notes")),
                     crop: rect(p.get("crop")),
                     layers: layers(p.get("layers")),
+                    hidden: hidden(p),
                 });
             } else if let Some(s) = attributes.get("o3v::view::section") {
                 let (Some(from), Some(to)) = (s.get("from").and_then(pair), s.get("to").and_then(pair)) else { continue };
@@ -295,6 +324,7 @@ impl Document {
                     notes: notes(s.get("notes")),
                     crop: rect(s.get("crop")),
                     layers: layers(s.get("layers")),
+                    hidden: hidden(s),
                 });
             }
         }
@@ -370,7 +400,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -401,7 +431,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -491,6 +521,30 @@ impl Document {
             return false;
         }
         *own = layers;
+        true
+    }
+
+    /// The elements a view hides (a floor plan's, a section's or an elevation's).
+    pub fn view_hidden(&self, path: &str) -> Option<&Arc<UnitKeySet>> {
+        match self.plan(path) {
+            Some(p) => Some(&p.hidden),
+            None => self.section(path).map(|s| &s.hidden),
+        }
+    }
+
+    /// Gives a view the elements it hides; false when there is no such view or nothing changes.
+    pub fn set_view_hidden(&mut self, path: &str, hidden: Arc<UnitKeySet>) -> bool {
+        let own = match self.plans.iter_mut().find(|p| p.path == path) {
+            Some(p) => &mut p.hidden,
+            None => match self.sections.iter_mut().find(|s| s.path == path) {
+                Some(s) => &mut s.hidden,
+                None => return false,
+            },
+        };
+        if *own == hidden {
+            return false;
+        }
+        *own = hidden;
         true
     }
 

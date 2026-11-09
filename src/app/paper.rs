@@ -117,11 +117,11 @@ impl App {
         if !self.document.set_cut(&plan, cut) {
             return;
         }
-        self.cuts.remove(&plan);
-        if let Some(sheet) = self.active_doc_sheet.clone() {
-            self.cut_placed_plans(&sheet);
+        self.view_changed(&plan);
+        // the right pane shows the cut height in use
+        if self.view_typing.as_ref().is_some_and(|(p, f, _)| *p == plan && *f == super::ViewField::Cut) {
+            self.view_typing = None;
         }
-        self.fit_plan_section(&plan);
         self.cut_edit = Some((plan, format!("{cut:.3}")));
     }
 

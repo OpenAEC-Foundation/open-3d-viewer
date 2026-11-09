@@ -70,41 +70,6 @@ impl App {
         self.fit_plan_section(path);
     }
 
-    /// The properties of the view whose layers the right pane shows (the view in the viewport, or
-    /// the view picked on a sheet): its name and kind, a floor plan's level, cut and view depth, a
-    /// section's length and depth, and how many layers it shows otherwise than the model.
-    pub(super) fn view_properties(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
-        let of = self.layers_of()?;
-        let path = match &of {
-            super::layers::LayersOf::Viewport => self.active_plan.clone(),
-            super::layers::LayersOf::Placed(path) => Some(path.clone()),
-        };
-        let row = |k: &str, v: String| super::prop_row(p, k.to_string(), v);
-        let mut rows = column![row(l.text("Naam", "Name"), self.layers_view_name(&of, l))].spacing(5);
-        let own = path.as_deref().and_then(|v| self.document.view_layers(v)).map_or(0, |o| o.len());
-        if let Some(plan) = path.as_deref().and_then(|v| self.document.plan(v)) {
-            let level = self.document.level(&plan.level).map(|lv| lv.name.clone()).unwrap_or_default();
-            rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Plattegrond", "Floor plan").into()))
-                .push(row(l.text("Niveau", "Level"), level))
-                .push(row(l.text("Snijhoogte", "Cut height"), format!("{:+.3} m", plan.cut)))
-                .push(row(l.text("Kijkdiepte", "View depth"), format!("{:.3} m", plan.depth)));
-        } else if let Some(s) = path.as_deref().and_then(|v| self.document.section(v)) {
-            let length = (s.to[0] - s.from[0]).hypot(s.to[1] - s.from[1]);
-            rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Doorsnede of aanzicht", "Section or elevation").into()))
-                .push(row(l.text("Lengte", "Length"), format!("{length:.3} m")))
-                .push(row(l.text("Diepte", "Depth"), format!("{:.3} m", s.depth)));
-        } else {
-            rows = rows.push(row(l.text("Soort", "Kind"), l.text("3D-weergave", "3D view").into()));
-        }
-        if path.is_some() {
-            let own = if own == 0 { l.text("zoals het model", "as the model").to_string() } else { own.to_string() };
-            rows = rows.push(row(l.text("Eigen lagen", "Own layers"), own));
-        }
-        Some(rows.into())
-    }
-
     /// A view of the document as the viewport shows it: a floor plan from above in its range, a
     /// section or elevation level, looking to the left of its line, in its box.
     fn saved_view_of(&self, path: &str) -> Option<SavedView> {

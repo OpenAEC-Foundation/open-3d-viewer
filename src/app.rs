@@ -401,6 +401,8 @@ pub enum Message {
     RemoveUnderlay(usize),
     /// Show the views in the 3D view on their planes, or not.
     ToggleViewsIn3d,
+    /// Lay a PDF underlay (its index) at the next scale.
+    UnderlayScale(usize),
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -1572,6 +1574,7 @@ impl App {
             Message::ToggleUnderlay(i) => self.toggle_underlay(i),
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
             Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
+            Message::UnderlayScale(i) => self.next_underlay_scale(i),
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;

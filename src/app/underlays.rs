@@ -1,4 +1,4 @@
-//! Underlays on the levels: a DWG, DXF or IFCCAD drawing laid on a level from the Levels tab,
+//! Underlays on the levels: a DWG, DXF, IFCCAD or PDF drawing laid on a level from the Levels tab,
 //! listed under its level with a switch and a cross, and drawn as lines in the 3D view and in the
 //! floor plans at the level's height.
 
@@ -32,13 +32,17 @@ impl App {
             self.status = Status::Error(format!("{name}: no lines in its model space"));
             return;
         }
-        let model = self.world_bounds().map(|b| ([f64::from(b.min[0]), f64::from(b.min[1])], [f64::from(b.max[0]), f64::from(b.max[1])]));
-        let offset = crate::underlay::offset(&segments, model);
+        // a PDF's lines are in metres of paper: laid at 1:100 first
+        let pdf = crate::underlay::is_pdf(name);
+        let scale = if pdf { crate::underlay::PDF_SCALES[0] } else { 1.0 };
         let lines = segments.len();
-        self.underlays.push(Underlay { name: name.to_string(), level: level.to_string(), segments: Arc::new(segments), offset, shown: true });
+        let mut underlay = Underlay { name: name.to_string(), level: level.to_string(), segments: Arc::new(segments), offset: [0.0, 0.0], shown: true, scale };
+        underlay.offset = self.placed(&underlay);
         let left = if left_out > 0 { format!(", {left_out} left out") } else { String::new() };
-        let moved = if offset != [0.0, 0.0] { ", laid in the middle of the model" } else { "" };
-        self.status = Status::Loaded(format!("Underlay {name}: {lines} lines{left}{moved}"));
+        let moved = if underlay.offset != [0.0, 0.0] { ", laid in the middle of the model" } else { "" };
+        let at = if pdf { format!(", at 1:{scale}") } else { String::new() };
+        self.underlays.push(underlay);
+        self.status = Status::Loaded(format!("Underlay {name}: {lines} lines{at}{left}{moved}"));
         self.refresh_underlays();
     }
 
@@ -55,6 +59,25 @@ impl App {
     /// Makes the lines the 3D view draws again, after an underlay changed.
     pub(super) fn refresh_underlays(&mut self) {
         self.refresh_overlay();
+    }
+
+    /// Where an underlay's origin goes in the model at its scale (see [`crate::underlay::offset`]).
+    fn placed(&self, u: &Underlay) -> [f64; 2] {
+        let model = self.world_bounds().map(|b| ([f64::from(b.min[0]), f64::from(b.min[1])], [f64::from(b.max[0]), f64::from(b.max[1])]));
+        let scaled: Vec<Segment2> = u.segments.iter().map(|[a, b]| [[a[0] * u.scale, a[1] * u.scale], [b[0] * u.scale, b[1] * u.scale]]).collect();
+        crate::underlay::offset(&scaled, model)
+    }
+
+    /// Lays PDF underlay `i` at the next scale, and places it again.
+    pub(super) fn next_underlay_scale(&mut self, i: usize) {
+        let Some(u) = self.underlays.get(i) else { return };
+        let scales = crate::underlay::PDF_SCALES;
+        let k = scales.iter().position(|s| *s == u.scale).map_or(0, |k| (k + 1) % scales.len());
+        let mut u = u.clone();
+        u.scale = scales[k];
+        u.offset = self.placed(&u);
+        self.underlays[i] = u;
+        self.refresh_underlays();
     }
 
     /// Switches underlay `i` on or off.
@@ -91,7 +114,11 @@ impl App {
                 .height(11)
                 .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
             let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveUnderlay(i));
-            rows = rows.push(row![name, remove].spacing(4).align_y(Center));
+            // a PDF is laid at a scale: a click takes the next
+            let scale = crate::underlay::is_pdf(&u.name).then(|| {
+                button(text(format!("1:{}", u.scale)).size(10).color(p.text_secondary)).padding([2, 4]).style(move |_, s| p.row_button(s)).on_press(Message::UnderlayScale(i))
+            });
+            rows = rows.push(row![name].push(scale).push(remove).spacing(4).align_y(Center));
         }
         any.then(|| container(rows).padding(iced::Padding { top: 0.0, right: 8.0, bottom: 2.0, left: 20.0 }).width(Fill).into())
     }
@@ -101,7 +128,7 @@ impl App {
 /// dialog is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
 fn pick_and_read(level: Arc<str>, folder: Option<std::path::PathBuf>) -> Task<Message> {
-    let mut dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD", &["dwg", "dxf", "ifcx"]);
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD, PDF", &["dwg", "dxf", "ifcx", "pdf"]);
     if let Some(folder) = folder {
         dialog = dialog.set_directory(folder);
     }
@@ -126,7 +153,7 @@ fn pick_and_read(level: Arc<str>, folder: Option<std::path::PathBuf>) -> Task<Me
 /// In the browser: the browser's file picker, which hands over the bytes, read on the page.
 #[cfg(target_arch = "wasm32")]
 fn pick_and_read(level: Arc<str>, _folder: Option<std::path::PathBuf>) -> Task<Message> {
-    let dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD", &["dwg", "dxf", "ifcx"]);
+    let dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD, PDF", &["dwg", "dxf", "ifcx", "pdf"]);
     Task::perform(
         async move {
             let file = dialog.pick_file().await?;
@@ -196,6 +223,22 @@ mod tests {
         let _ = app.update(Message::UnderlayRead(upper, "plan.dwg".into(), Err("plan.dwg: not a drawing".into())));
         assert!(app.underlays.is_empty());
         assert!(matches!(&app.status, Status::Error(e) if e.contains("not a drawing")));
+    }
+
+    #[test]
+    fn a_pdf_is_laid_at_1_100_and_its_scale_changes() {
+        let (mut app, upper) = room();
+        let _ = app.update(Message::UnderlayRead(upper, "plan.pdf".into(), Ok((vec![[[0.0, 0.0], [0.08, 0.0]]], 0))));
+        assert!(matches!(&app.status, Status::Loaded(s) if s.contains("1:100")));
+        let length = |app: &App| {
+            let s = app.underlay_segments()[0];
+            (s[1][0] - s[0][0]).abs()
+        };
+        // 8 cm of paper: 8 m at 1:100, 16 m at 1:200
+        assert!((length(&app) - 8.0).abs() < 1e-4);
+        let _ = app.update(Message::UnderlayScale(0));
+        assert_eq!(app.underlays[0].scale, 200.0);
+        assert!((length(&app) - 16.0).abs() < 1e-4);
     }
 
     #[test]

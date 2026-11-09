@@ -49,7 +49,7 @@ rfd = "0.17"
 web-time = "1"
 # PNG for the window icon and window screenshots (MIT OR Apache-2.0)
 png = "0.18"
-# Drawings exported as PNG: their SVG rendered with the app's fonts (MPL-2.0; already built for iced's svg)
+# Drawings exported as PNG: their SVG rendered with the app's fonts (Apache-2.0 OR MIT; already built for iced's svg)
 resvg = { version = "0.45", default-features = false, features = ["text"] }
 # The gzip-compressed B2 icon masters in assets/b2, and the zlib-compressed arrays of FBX and Rhino
 # .3dm meshes (MIT OR Apache-2.0). Rhino .3dm needs no other dependency: src/loaders/rhino.rs is

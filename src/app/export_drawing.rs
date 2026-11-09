@@ -1,0 +1,172 @@
+//! Exporting the view or sheet shown as a drawing: the bar's Export button with its formats, the
+//! drawing made from what the tab shows (the cuts of its views made first), and the file saved
+//! where the dialog says (desktop) or downloaded (browser).
+
+use super::{App, Message};
+use crate::drawing2d::{sheet_drawing, view_drawing, Drawing2d};
+use crate::export::drawing::{file_name, write, DrawingFormat};
+use crate::theme::Palette;
+use iced::widget::{button, text, Row};
+use iced::{Center, Element, Task};
+use openaec_ui::Language;
+use std::path::PathBuf;
+use web_time::Instant;
+
+impl App {
+    /// The bar's Export button; open, the formats to export in follow it.
+    pub(super) fn export_control(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        let open = self.export_menu;
+        let export = button(text(l.text("Exporteren", "Export")).size(12))
+            .padding([3, 10])
+            .style(move |_, s| p.ribbon_button(open, s))
+            .on_press(Message::ExportMenu(!open));
+        let mut row = Row::new().spacing(4).align_y(Center).push(export);
+        if open {
+            for format in DrawingFormat::ALL {
+                row = row.push(button(text(format.name()).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::ExportDrawing(format)));
+            }
+        }
+        row.into()
+    }
+
+    /// The drawing of the sheet or view shown, its views cut first where they are not yet;
+    /// `None` when neither shows.
+    pub(super) fn drawing_to_export(&mut self) -> Option<Drawing2d> {
+        if let Some(sheet) = self.active_doc_sheet.clone() {
+            let views: Vec<String> = self.document.sheet(&sheet)?.views.iter().map(|v| v.plan.clone()).collect();
+            for view in &views {
+                self.cut_view(view);
+            }
+            return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned());
+        }
+        let view = self.shown_view()?.to_string();
+        self.cut_view(&view);
+        view_drawing(&self.document, &view, self.cuts.get(&view)?)
+    }
+
+    /// Exports the drawing of the sheet or view shown in `format`.
+    pub(super) fn export_drawing(&mut self, format: DrawingFormat) -> Task<Message> {
+        match self.drawing_to_export() {
+            Some(drawing) => export_task(drawing, format, self.document_folder()),
+            None => Task::none(),
+        }
+    }
+
+    /// Where the dialog starts: the model's folder, else the work folder.
+    fn document_folder(&self) -> Option<PathBuf> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return crate::managed::dialog_folder(self.model.as_ref().and_then(|m| m.path.parent().map(PathBuf::from)), crate::managed::work_folder());
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+}
+
+/// Asks where the drawing goes, then writes it there on a worker thread.
+#[cfg(not(target_arch = "wasm32"))]
+fn export_task(drawing: Drawing2d, format: DrawingFormat, folder: Option<PathBuf>) -> Task<Message> {
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Export").set_file_name(file_name(&drawing, format)).add_filter(format.name(), &[format.extension()]);
+    if let Some(folder) = folder {
+        dialog = dialog.set_directory(folder);
+    }
+    Task::perform(
+        async move {
+            let path = dialog.save_file().await?.path().to_path_buf();
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let start = Instant::now();
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                // the dialog asked before replacing a file
+                let written = write(&drawing, format).and_then(|bytes| {
+                    crate::export::write_file(&path, true, |out| out.write_all(&bytes)).map_err(|e| format!("Cannot export {name}: {e}"))
+                });
+                let _ = tx.send(written.map(|()| (path, start.elapsed().as_secs_f32())));
+            });
+            Some(rx.await.unwrap_or_else(|_| Err("export thread stopped".to_string())))
+        },
+        Message::Exported,
+    )
+}
+
+/// The browser has no save dialog: the drawing goes to the downloads.
+#[cfg(target_arch = "wasm32")]
+fn export_task(drawing: Drawing2d, format: DrawingFormat, _folder: Option<PathBuf>) -> Task<Message> {
+    Task::perform(
+        async move {
+            crate::web::next_frame().await;
+            let start = Instant::now();
+            let name = file_name(&drawing, format);
+            let done = write(&drawing, format).and_then(|bytes| crate::web::download(&name, &bytes, format.mime()));
+            Some(done.map(|()| (PathBuf::from(name), start.elapsed().as_secs_f32())))
+        },
+        Message::Exported,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawing2d::Pen;
+    use crate::model::{Layer, Model};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// A room of 8 x 5 m with walls 3 m high, levels at 0 and 3, its floor plan shown in its tab.
+    fn plan_shown() -> (App, String) {
+        let positions = vec![0.,0.,0., 8.,0.,0., 8.,5.,0., 0.,5.,0., 0.,0.,3., 8.,0.,3., 8.,5.,3., 0.,5.,3.];
+        let indices = vec![0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7];
+        let layer = Layer { name: "Walls".into(), positions, indices, ..Layer::default() };
+        let mut model = Model::new(PathBuf::from("room.rvt"), "Revit", vec![layer]);
+        model.project.levels = vec![("00".into(), 0.0), ("01".into(), 3.0)];
+        let mut app = App::default();
+        app.viewport_size = (800.0, 600.0);
+        app.set_model(Arc::new(model));
+        let level = Arc::<str>::from(app.document.levels()[0].path.as_str());
+        let _ = app.update(Message::NewPlan(level));
+        let plan = app.document.plans()[0].path.clone();
+        (app, plan)
+    }
+
+    fn cut_lines(d: &Drawing2d) -> usize {
+        d.lines.iter().filter(|l| l.pen == Pen::Cut).count()
+    }
+
+    #[test]
+    fn export_of_a_floor_plan_gives_its_cut_dimensions_and_texts() {
+        let (mut app, plan) = plan_shown();
+        assert!(app.document.add_dimension(&plan, [0.0, 0.0], [8.0, 0.0]));
+        app.document.add_note(&plan, [1.0, 1.0], "Kamer");
+        let d = app.drawing_to_export().expect("the plan's tab shows");
+        assert_eq!(d.name, app.document.view_name(&plan).unwrap());
+        assert!(cut_lines(&d) >= 4, "{:?}", d.lines);
+        assert_eq!((d.dimensions.len(), d.texts.len()), (1, 1));
+    }
+
+    #[test]
+    fn export_of_a_sheet_computes_the_cuts_of_its_views() {
+        let (mut app, plan) = plan_shown();
+        let sheet = app.document.add_sheet("Plattegronden");
+        app.document.place_plan(&sheet, &plan).unwrap();
+        let _ = app.update(Message::OpenDocSheet(Arc::from(sheet.as_str())));
+        app.cuts.clear();
+        let d = app.drawing_to_export().expect("the sheet's tab shows");
+        assert_eq!(d.paper, Some(crate::document::A3_LANDSCAPE));
+        assert!(app.cuts.contains_key(&plan), "cut for the export");
+        assert!(cut_lines(&d) >= 4, "{:?}", d.lines);
+    }
+
+    #[test]
+    fn the_export_menu_opens_and_a_format_closes_it() {
+        let (mut app, _) = plan_shown();
+        let _ = app.update(Message::ExportMenu(true));
+        assert!(app.export_menu);
+        let _ = app.update(Message::ExportDrawing(DrawingFormat::Dwg));
+        assert!(!app.export_menu);
+    }
+
+    #[test]
+    fn nothing_to_export_without_a_view_or_sheet_shown() {
+        let mut app = App::default();
+        assert!(app.drawing_to_export().is_none());
+    }
+}
+

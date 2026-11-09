@@ -7,6 +7,7 @@
 //! [`cad`] (DWG, DXF, IFCCAD), [`pdf`] and [`svg`] (SVG, PNG).
 
 pub mod cad;
+pub mod drawing;
 mod ifc;
 mod ifcx;
 pub mod pdf;

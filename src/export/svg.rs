@@ -1,5 +1,5 @@
-//! A 2D drawing as SVG, and as PNG through that SVG: rendered with resvg (MPL-2.0, already built
-//! for the app's icons) with the app's own fonts. Millimetres of paper, black on white, each pen
+//! A 2D drawing as SVG, and as PNG through that SVG: rendered with resvg (Apache-2.0 OR MIT, already
+//! built for the app's icons) with the app's own fonts. Millimetres of paper, black on white, each pen
 //! one path with its line weight.
 
 use crate::drawing2d::{Align, Drawing2d, Pen, Text2d};

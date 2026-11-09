@@ -104,9 +104,19 @@ What works and what does not on Android:
 - **Section box and section plane** cut the model open, with the cut faces filled. The box can fit the selection.
 - **Exploded view** pulls the model apart per storey or per element, by a percentage per axis.
 
+## Viewer, Modeller and BIM Collaborator
+
+One code base, one app, three products. The switch at the top right of the window moves between them; each has its own ribbon, panels and start screen over the same open project:
+
+- **Viewer**: open, look, measure and cut, as above.
+- **Modeller**: the **Model** tab with the base elements (below), and a **View** tab with the Viewer's display, camera, section and measure tools.
+- **BIM Collaborator** (an outline): the project's models together, with issues (BCF), checking against IDS, comments and sharing to come. Its ribbon already shows those commands, not working yet, and its panel says what each will hold.
+
+The window opens in the product used last; `--product viewer|modeller|collaborator` on the command line and `?product=modeller` in the browser pick one. Which modules each product uses, and how each builds: [`docs/architecture/products.md`](docs/architecture/products.md).
+
 ## Modelling (beta)
 
-The **Model** tab starts a BIM modeller in the same app. Every element is built from five base elements: **planar** (wall, slab), **linear** (column, beam), **system** (curtain wall), **point** (object) and **connection** (butt or mitre between two selected beams or columns).
+The **Modeller** is a BIM modeller in the same app. Every element is built from five base elements: **planar** (wall, slab), **linear** (column, beam), **system** (curtain wall), **point** (object) and **connection** (butt or mitre between two selected beams or columns).
 
 - **New model** opens an empty model with a first level. A tool places its element with one or two clicks on the work plane: the level of the floor plan shown, else the level nearest 0. Clicks snap to the ends of elements, straighten when nearly in line, and walls and beams continue from the last end. **Esc** stops, **Delete** removes, with the joints.
 - **The kernel** (`crates/bim-core`) keeps every element as a definition in a tile frame: f64 coordinates from a tile origin on whole metres, so a model far from its origin keeps its precision. Decisions about sides and crossings use exact predicates, and a construction that cannot be made is refused with its reason, shown in the view, never drawn wrong. Walls with doors and windows are built directly, without booleans.
@@ -170,6 +180,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 | [`.github/workflows/`](.github/workflows/) | `build.yml` tests every change, `release.yml` builds and signs a release, `live.yml` publishes the browser version, `android.yml` builds the Android APK |
 | [`scripts/`](scripts/) | The README images, the B2 icon copy and the product video, all made by script |
 | [`test-models/`](test-models/) | The models the tests open |
+| [`docs/architecture/`](docs/architecture/) | How one code base is three products: the Viewer, the Modeller and the BIM Collaborator |
 
 The readers for SketchUp, Tekla and PLY, and the Revit library, live in their own OpenAEC repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). This repository pins each to a fixed commit.
 
@@ -253,7 +264,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **560 unit tests** in `src/` (552 run; 8 are left out by default: two need local samples, four write sample or image files, two need a GPU), plus 58 for the window library in `vendor/openaec-ui` and 44 for the BIM kernel in `crates/bim-core` (tile frames, exact predicates, profiles, solids, the five base elements and their joints, 500 km out), run on every pull request and before every release: 8 for the modeller, 5 for the interface languages (every interface text has a German and a French translation), 218 for the loaders, 103 for the app, 4 for laying views out on sheets, 8 for taking an IFCX file apart for the IFC tab, 17 for measuring, 17 for the window shell, 7 for the section tools, 15 for IFC and IFCX export, 13 for drawing export (DWG, DXF, IFCCAD, PDF, PNG, SVG), 14 for remote control, 28 for structural analysis models, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), 18 for the project document (levels, floor plans, sections, sheets, dimensions, texts, the views' own layers in IfcX shape and their names and depths typed in), 11 for the drawings of floor plans, sections and sheets, and more for the 3D view, view cube, selection, undo, model and exploded view.
+- **569 unit tests** in `src/` (560 run; 9 are left out by default: two need local samples, five write sample or image files, two need a GPU), plus 58 for the window library in `vendor/openaec-ui` and 44 for the BIM kernel in `crates/bim-core` (tile frames, exact predicates, profiles, solids, the five base elements and their joints, 500 km out), run on every pull request and before every release: 4 for the three products and their ribbons, 8 for the modeller, 5 for the interface languages (every interface text has a German and a French translation), 218 for the loaders, 103 for the app, 4 for laying views out on sheets, 8 for taking an IFCX file apart for the IFC tab, 17 for measuring, 21 for the window shell (with the switch between the products), 7 for the section tools, 15 for IFC and IFCX export, 13 for drawing export (DWG, DXF, IFCCAD, PDF, PNG, SVG), 14 for remote control, 28 for structural analysis models, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), 18 for the project document (levels, floor plans, sections, sheets, dimensions, texts, the views' own layers in IfcX shape and their names and depths typed in), 11 for the drawings of floor plans, sections and sheets, and more for the 3D view, view cube, selection, undo, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.

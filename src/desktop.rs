@@ -2,10 +2,11 @@
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
-//!                  [--language en|nl] [--no-remote]
+//!                  [--language en|nl] [--product viewer|modeller|collaborator] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
+//!                  [--product ...]
 //!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
@@ -31,6 +32,8 @@ struct Args {
     file: Option<PathBuf>,
     theme: Option<ThemeId>,
     language: Option<Language>,
+    /// The product to show (the switch at the top right).
+    product: Option<crate::product::Product>,
     /// For `--screenshot`: the page over the workspace and a schedule or sheet (by number) to show
     /// (Revit).
     page: shell::Page,
@@ -71,6 +74,7 @@ fn parse_args() -> Result<Args, String> {
             "--language" => {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
+            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|collaborator")?),
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
@@ -220,6 +224,9 @@ fn run_app(args: Args) -> iced::Result {
         studio = studio.with_dev_session(PathBuf::from(session), std::env::var("O3V_DEV_LABEL").ok().filter(|l| !l.is_empty()));
     }
     studio.set_look(args.theme.or_else(managed::theme), args.language.or_else(managed::language));
+    if let Some(product) = args.product {
+        studio.set_product(product);
+    }
     shell::run(studio, window_icon(), true)
 }
 
@@ -299,6 +306,9 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let (w, h) = args.size.unwrap_or((1440.0, 900.0));
     let mut studio = shell::Studio::new(initial_state(args));
     studio.set_look(args.theme, args.language);
+    if let Some(product) = args.product {
+        studio.set_product(product);
+    }
     studio.show(args.page);
     for path in args.recent.iter().rev().chain(&args.file) {
         studio.remember(path.clone());

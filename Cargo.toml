@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library"]
 
 [lib]
 name = "open_3d_viewer"

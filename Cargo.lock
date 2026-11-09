@@ -282,6 +282,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bim-library"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bim-structural"
 version = "0.1.0"
 dependencies = [

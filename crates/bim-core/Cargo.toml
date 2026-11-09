@@ -1,0 +1,21 @@
+[package]
+name = "bim-core"
+version = "0.1.0"
+description = "Headless BIM kernel: f64 geometry in tile frames, exact predicates, planar solids and the five base elements (point, linear, planar, system, connection)"
+authors = ["Open 3D Viewer Studio Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+publish = false
+
+[dependencies]
+# f64 vectors (MIT OR Apache-2.0); serde for the element definitions
+glam = { version = "0.30", features = ["serde"] }
+# Shewchuk's adaptive exact predicates orient2d and orient3d (MIT OR Apache-2.0)
+robust = "1.2"
+# Ear clipping of faces with holes for display meshes (ISC)
+earcutr = "0.5"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: exact f64 parsing, so a definition read back equals the one written
+serde_json = { version = "1", features = ["float_roundtrip"] }

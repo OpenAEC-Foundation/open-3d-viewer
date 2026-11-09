@@ -34,8 +34,9 @@ impl App {
         let as_is = |(i, g): (usize, &GridLine)| Datum { line: g.clone(), kind: DatumKind::Grid(i) };
         let Some(view) = self.shown_view() else { return grids.map(as_is).collect() };
         if let Some(plan) = self.document.plan(view) {
-            let Some((_, cut)) = self.document.plan_range(plan) else { return Vec::new() };
-            let z = cut as f32 + IN_FRONT;
+            // in front of the cut as the plan looks: above it, or below it in a ceiling plan
+            let Some(cut) = self.document.cut_height(plan) else { return Vec::new() };
+            let z = cut as f32 + if plan.kind.looks_up() { -IN_FRONT } else { IN_FRONT };
             return grids.map(as_is).map(|mut d| {
                 (d.line.a[2], d.line.b[2]) = (z, z);
                 d

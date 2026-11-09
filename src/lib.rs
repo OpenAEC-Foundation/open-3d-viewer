@@ -19,6 +19,7 @@ pub mod desktop;
 pub mod document;
 pub mod drawing;
 pub mod drawing2d;
+pub mod element_class;
 mod explode;
 pub mod export;
 mod history;

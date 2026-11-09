@@ -41,7 +41,7 @@ pub fn svg(d: &Drawing2d) -> String {
     let (w, h) = page_mm(d);
     let at = |q: [f64; 2]| (num((q[0] - lo[0]) * k), num((hi[1] - q[1]) * k));
     let mut s = String::new();
-    let _ = write!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#, w = num(w), h = num(h));
+    let _ = write!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#, w = num(w), h = num(h));
     let _ = write!(s, r##"<rect width="{}" height="{}" fill="#fff"/>"##, num(w), num(h));
     for pen in Pen::ALL {
         let mut path = String::new();
@@ -155,6 +155,11 @@ mod tests {
         let dark = pixels.chunks(4).filter(|p| p[0] < 100).count();
         assert!(dark > 1000, "{dark} dark pixels");
         assert_eq!(&pixels[..4], &[255, 255, 255, 255], "white paper");
+    }
+
+    #[test]
+    fn svg_keeps_double_spaces() {
+        assert!(svg(&sheet(A3_LANDSCAPE)).contains("xml:space=\"preserve\""));
     }
 
     #[test]

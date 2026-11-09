@@ -7,9 +7,8 @@ use std::fmt::Write;
 
 /// Points per millimetre.
 const POINTS: f64 = 72.0 / 25.4;
-/// Helvetica's capitals per em, and about how wide a character is per em.
+/// Helvetica's capitals per em.
 const CAPITALS: f64 = 0.718;
-const CHARACTER: f64 = 0.55;
 
 /// A number with at most `decimals` decimals and no trailing zeros.
 fn num_to(v: f64, decimals: usize) -> String {
@@ -78,7 +77,7 @@ fn content(d: &Drawing2d) -> String {
     let labels: Vec<Text2d> = d.dimensions.iter().map(|dim| dim.label()).collect();
     for t in d.texts.iter().chain(&labels) {
         let size = t.height * k / CAPITALS;
-        let width = t.text.chars().count() as f64 * size * CHARACTER;
+        let width = width(&t.text, size);
         let shift = match t.align {
             Align::Left => 0.0,
             Align::Center => width / 2.0,
@@ -88,6 +87,49 @@ fn content(d: &Drawing2d) -> String {
         let y = (t.at[1] - lo[1]) * k;
         let _ = writeln!(s, "BT /F1 {} Tf {} {} Td {} Tj ET", num(size), num(x), num(y), literal(&t.text));
     }
+    s
+}
+
+/// Helvetica's widths of the printable ASCII characters (space to tilde), thousandths of an em.
+const HELVETICA: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // space to /
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // 0 to ?
+    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, // @ to O
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // P to _
+    333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, // ` to o
+    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, // p to ~
+];
+
+/// How wide `text` is in Helvetica at `size`: a letter with an accent as its letter, other
+/// characters as an average one.
+fn width(text: &str, size: f64) -> f64 {
+    let em: u32 = text
+        .chars()
+        .map(|c| {
+            let base = unaccented(c);
+            match base as u32 {
+                0x20..=0x7E => u32::from(HELVETICA[base as usize - 0x20]),
+                _ => 556,
+            }
+        })
+        .sum();
+    f64::from(em) / 1000.0 * size
+}
+
+/// The letter under an accent (the Latin-1 ones); other characters as they are.
+fn unaccented(c: char) -> char {
+    const FROM: &str = "ÀÁÂÃÄÅàáâãäåÈÉÊËèéêëÌÍÎÏìíîïÒÓÔÕÖòóôõöÙÚÛÜùúûüÝýÿÑñÇç";
+    const TO: &str = "AAAAAAaaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuYyyNnCc";
+    FROM.chars().position(|f| f == c).and_then(|i| TO.chars().nth(i)).unwrap_or(c)
+}
+
+/// A PDF text string of `text` in UTF-16BE, for the document's information (any language).
+fn utf16(text: &str) -> String {
+    let mut s = String::from("<FEFF");
+    for unit in text.encode_utf16() {
+        let _ = write!(s, "{unit:04X}");
+    }
+    s.push('>');
     s
 }
 
@@ -103,7 +145,7 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
         format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"),
         format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
-        format!("<< /Title {} /Producer (Open 3D Viewer Studio) >>", literal(&d.name)),
+        format!("<< /Title {} /Producer (Open 3D Viewer Studio) >>", utf16(&d.name)),
     ];
     let mut out = String::from("%PDF-1.4\n");
     let mut offsets = Vec::new();
@@ -163,6 +205,25 @@ mod tests {
         // brackets and backslashes escaped, the euro in WinAnsi
         assert!(s.contains("(\\(1\\) \\\\ 2 \\200) Tj"), "{s}");
         assert!(s.contains("/BaseFont /Helvetica") && s.contains("/WinAnsiEncoding"), "{s}");
+    }
+
+    #[test]
+    fn the_title_is_utf16_and_a_character_outside_winansi_a_question_mark() {
+        let mut d = sheet();
+        d.name = "A01 € Ω".into();
+        d.texts[0].text = "Ω".into();
+        let s = text(&pdf(&d));
+        // FEFF, then A01 € Ω in UTF-16BE
+        assert!(s.contains("/Title <FEFF004100300031002020AC002003A9>"), "{s}");
+        assert!(s.contains("(?) Tj"), "{s}");
+    }
+
+    #[test]
+    fn helvetica_widths_measure_text() {
+        // W 944, i 222, l 222 thousandths of an em
+        assert!((width("Wil", 10.0) - 13.88).abs() < 1e-9);
+        // accented letters as their letter, others as the average
+        assert!((width("ë", 10.0) - width("e", 10.0)).abs() < 1e-9);
     }
 
     #[test]

@@ -322,7 +322,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
     let sheet = doc.sheet(path)?;
     let [w, h] = sheet.paper;
     let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
-    d.rectangle(Pen::Beyond, [0.0, 0.0], [w, h]);
+    d.rectangle(Pen::Frame, [0.0, 0.0], [w, h]);
     d.rectangle(Pen::Frame, [0.02, 0.01], [w - 0.01, h - 0.01]);
     let title = 0.004;
     // at the lower right, just above the border, as the sheet's tab shows it
@@ -344,7 +344,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
         let drawn = c.as_ref().is_some_and(|c| !c.segments.is_empty() || !c.below.is_empty());
         d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, notes), &to, 1.0);
         if !drawn || crop.is_some() {
-            d.rectangle(Pen::Beyond, lo, hi);
+            d.rectangle(Pen::Frame, lo, hi);
         }
         if doc.plan(&v.plan).is_some() {
             for s in doc.sections() {
@@ -368,7 +368,7 @@ fn section_mark(d: &mut Drawing2d, from: [f64; 2], to: [f64; 2], letter: String)
         return;
     }
     let n = [-dy / run, dx / run];
-    d.line(Pen::Beyond, from, to);
+    d.line(Pen::Frame, from, to);
     for end in [from, to] {
         d.line(Pen::Frame, end, add(end, n, ARROW));
         let at = add(end, n, ARROW * 1.8);
@@ -493,6 +493,21 @@ mod tests {
         // a page of 10 x 10 cm on paper: 10 x 10 m at 1:100
         let (lo, hi) = d.page();
         assert!((hi[0] - lo[0] - 10.0).abs() < 1e-9 && (hi[1] - lo[1] - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_sheets_edges_frames_and_section_marks_are_on_the_frame_pen() {
+        let (mut doc, plan) = plan();
+        doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
+        let sheet = doc.add_sheet("Plattegronden");
+        doc.place_plan(&sheet, &plan).unwrap();
+        // the plan never cut: an empty frame
+        let d = sheet_drawing(&doc, &sheet, &|_| None).unwrap();
+        assert!(d.lines.iter().all(|l| l.pen == Pen::Frame), "{:?}", d.lines);
+        // cut: only what lies beyond is thin
+        let cut = Arc::new(room());
+        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone())).unwrap();
+        assert_eq!(count(&d, Pen::Beyond), 1, "{:?}", d.lines);
     }
 
     #[test]

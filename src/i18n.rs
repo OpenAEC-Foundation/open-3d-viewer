@@ -83,8 +83,7 @@ mod tests {
                     } else if path.extension().is_some_and(|e| e == "rs") {
                         // tests hold example calls, not interface texts
                         let source = std::fs::read_to_string(&path).unwrap();
-                        let shipped = source.split("#[cfg(test)]").next().unwrap_or_default();
-                        texts.extend(literal_calls(shipped));
+                        texts.extend(literal_calls(shipped(&source)));
                     }
                 }
             }
@@ -92,6 +91,19 @@ mod tests {
         texts.sort();
         texts.dedup();
         texts
+    }
+
+    /// `source` up to its test module (`#[cfg(test)] mod …`), whose calls are examples.
+    fn shipped(source: &str) -> &str {
+        let mut from = 0;
+        while let Some(at) = source[from..].find("#[cfg(test)]") {
+            let at = from + at;
+            if source[at + "#[cfg(test)]".len()..].trim_start().starts_with("mod ") {
+                return &source[..at];
+            }
+            from = at + 1;
+        }
+        source
     }
 
     /// The English argument of each `.text("…", "…")` and `.translate("…")` in `source`.
@@ -112,7 +124,10 @@ mod tests {
                         _ => break,
                     }
                 }
-                if strings.len() == english_at + 1 && cursor.trim_start().starts_with(')') {
+                // a trailing comma may close the arguments
+                let close = cursor.trim_start();
+                let close = close.strip_prefix(',').map_or(close, str::trim_start);
+                if strings.len() == english_at + 1 && close.starts_with(')') {
                     found.push(strings.pop().unwrap());
                 }
             }
@@ -160,8 +175,12 @@ mod tests {
     #[test]
     fn literal_calls_are_found() {
         let found = literal_calls(r#"l.text("Openen", "Open") l.text(nl, en) l.translate("Saved \"{n}\"") x.text("a",
-            "b\u{b2}")"#);
-        assert_eq!(found, vec!["Open", "b\u{b2}", "Saved \"{n}\""]);
+            "b\u{b2}") l.text(
+                "c",
+                "d",
+            )"#);
+        assert_eq!(found, vec!["Open", "b\u{b2}", "d", "Saved \"{n}\""]);
+        assert_eq!(shipped("a #[cfg(test)]\nfn b() {}\n#[cfg(test)]\nmod tests {}"), "a #[cfg(test)]\nfn b() {}\n");
     }
 
     #[test]

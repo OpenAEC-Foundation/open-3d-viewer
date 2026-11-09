@@ -103,6 +103,14 @@ What works and what does not on Android:
 - **Section box and section plane** cut the model open, with the cut faces filled. The box can fit the selection.
 - **Exploded view** pulls the model apart per storey or per element, by a percentage per axis.
 
+## Modelling (beta)
+
+The **Model** tab starts a BIM modeller in the same app. Every element is built from five base elements: **planar** (wall, slab), **linear** (column, beam), **system** (curtain wall), **point** (object) and **connection** (butt or mitre between two selected beams or columns).
+
+- **New model** opens an empty model with a first level. A tool places its element with one or two clicks on the work plane: the level of the floor plan shown, else the level nearest 0. Clicks snap to the ends of elements, straighten when nearly in line, and walls and beams continue from the last end. **Esc** stops, **Delete** removes, with the joints.
+- **The kernel** (`crates/bim-core`) keeps every element as a definition in a tile frame: f64 coordinates from a tile origin on whole metres, so a model far from its origin keeps its precision. Decisions about sides and crossings use exact predicates, and a construction that cannot be made is refused with its reason, shown in the view, never drawn wrong. Walls with doors and windows are built directly, without booleans.
+- **Saved as IFCX**, each element keeps its definition (`openaec::element`) next to its mesh, and opening the file gives editable elements back.
+
 ## Revit
 
 The desktop app opens Revit files (`.rvt`, `.rfa`) through the OpenAEC Revit library [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll). It shows the levels, grids, rooms, saved views and schedules of the file. A schedule opens in its own tab as a table under the 3D view, and a row selects its elements. Revit keeps only the definition of a schedule in the file, so the viewer computes the rows from the elements; cells it cannot work out yet show `?`.
@@ -134,7 +142,7 @@ The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC
 |----------|--------------|
 | `OPENAEC_BEHEERD=1` | Managed mode: no update notice (the SuperCloud refreshes the image), and the viewer runs in the work folder. The viewer never downloads updates itself. |
 | `OPENAEC_MAP` | The work folder (`/openaec` in the SuperCloud): the open and save dialogs start there, and the MCP tools take paths relative to it. In managed mode, and always with the MCP server over HTTP, they reach no file outside it (also not through links, or through files a glTF or OBJ in the work folder refers to); without a work folder they reach no file at all. |
-| `OPENAEC_TAAL` | The user's language: `nl` or `en` (other languages get English). `--language` wins. |
+| `OPENAEC_TAAL` | The user's language: `nl`, `en`, `de` or `fr` (other languages get English). `--language` wins. |
 | `OPENAEC_THEMA` | The theme: `light`, `dark`, `blueprint`, `high-contrast-dark` or `high-contrast-light`. `--theme` wins. |
 | `OPENAEC_OPEN` | A file to open at the start when the command line names none. |
 | `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` | The MCP server over HTTP for the SuperCloud's assistant, see [MCP](#mcp). |
@@ -142,7 +150,7 @@ The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC
 | `O3V_REMOTE=0` | No control port for the MCP server (and no MCP over HTTP). `O3V_REMOTE_PORT` fixes its port (otherwise a free one). |
 | `WGPU_BACKEND` | `vulkan` or `gl` to choose the graphics backend; by default the first that works. |
 
-A file to open goes on the command line, as do `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` and `--language en|nl`.
+A file to open goes on the command line, as do `--theme light|dark|blueprint|high-contrast-dark|high-contrast-light` and `--language en|nl|de|fr`.
 
 **Network:** the viewer makes no outgoing connections and has no telemetry. It listens on `127.0.0.1` for its own MCP server (see [MCP](#mcp)) and, only with `OPENAEC_MCP_POORT` and `OPENAEC_MCP_GEHEIM`, on that port for the SuperCloud's assistant. The file dialogs go through the XDG desktop portal, or `zenity` when there is none.
 
@@ -244,7 +252,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 
 ## Testing and reliability
 
-- **522 unit tests** in `src/` (515 run; 7 are left out by default: two need local samples, three write sample or image files, two need a GPU), plus 56 for the window library in `vendor/openaec-ui`, run on every pull request and before every release: 218 for the loaders, 99 for the app, 4 for laying views out on sheets, 8 for taking an IFCX file apart for the IFC tab, 17 for measuring, 17 for the window shell, 7 for the section tools, 15 for IFC and IFCX export, 14 for remote control, 28 for structural analysis models, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), 18 for the project document (levels, floor plans, sections, sheets, dimensions, texts, the views' own layers in IfcX shape and their names and depths typed in), 4 for the drawings of floor plans and sections, and more for the 3D view, view cube, selection, undo, model and exploded view.
+- **536 unit tests** in `src/` (528 run; 8 are left out by default: two need local samples, four write sample or image files, two need a GPU), plus 58 for the window library in `vendor/openaec-ui` and 44 for the BIM kernel in `crates/bim-core` (tile frames, exact predicates, profiles, solids, the five base elements and their joints, 500 km out), run on every pull request and before every release: 8 for the modeller, 5 for the interface languages (every interface text has a German and a French translation), 218 for the loaders, 99 for the app, 4 for laying views out on sheets, 8 for taking an IFCX file apart for the IFC tab, 17 for measuring, 17 for the window shell, 7 for the section tools, 15 for IFC and IFCX export, 14 for remote control, 28 for structural analysis models, 8 for the MCP tools and their HTTP endpoint (also run in `open-3d-viewer-mcp`), 18 for the project document (levels, floor plans, sections, sheets, dimensions, texts, the views' own layers in IfcX shape and their names and depths typed in), 4 for the drawings of floor plans and sections, and more for the 3D view, view cube, selection, undo, model and exploded view.
 - **The window shell is tested without a screen.** One test lays out every view and fails when a control has no name for a screen reader; others check that no two commands share a shortcut and that every command in the ribbon and the title bar exists.
 - **Generated files are checked.** `python scripts/build_readme_images.py --check` fails when an image is missing, unused or larger than 150 kB; `python scripts/b2_icons.py --check` fails when an icon differs from the OpenAEC Blueprint release named in `assets/b2/blueprint.sha256`, without a copy of the Blueprint.
 - **IFC export** is checked with IfcOpenShell 0.8 (schema and where rules, spatial containment, unique GlobalIds, geometry) on Revit samples of 456 and 6773 elements, 11 SketchUp test models, OBJ, STL and glTF.
@@ -290,7 +298,7 @@ For work on the interface, `powershell -File scripts/dev.ps1 [-Model FILE]` (Win
 The command line:
 
 ```
-open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light] [--language en|nl]
+open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light] [--language en|nl|de|fr]
 open-3d-viewer [FILE] --screenshot OUT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAME] [--explode X,Y,Z]
 open-3d-viewer FILE --save-as OUT.ifc

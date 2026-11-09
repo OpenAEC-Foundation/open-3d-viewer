@@ -392,8 +392,9 @@ pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, Stri
     model.load_time = start.elapsed();
     model.source_y_up = loader.source_y_up();
     // a file of only analysis objects (nodes and members, or only sections, materials or load
-    // cases, no triangles) opens too
-    if model.layers.is_empty() && model.structural_index.is_empty() {
+    // cases, no triangles) opens too, as does one of only modelled elements (their meshes are
+    // made again from their definitions)
+    if model.layers.is_empty() && model.structural_index.is_empty() && model.project.elements.is_empty() {
         return Err(format!("{}: no geometry found", model.file_name()));
     }
     Ok(model)

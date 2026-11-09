@@ -34,7 +34,12 @@ impl Writer for IfcxWriter {
 }
 
 /// Property keys that are written as their own attributes, not as properties.
-const OWN_KEYS: [&str; 6] = ["Name", "name", "IfcType", "Class", "Path", "Id"];
+const OWN_KEYS: [&str; 8] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION];
+
+/// The property of a modelled element that holds its definitions (a JSON array: the element's
+/// and its connections'); written as the node's `openaec::element` attribute, from which the
+/// reader gives the elements back.
+pub const DEFINITION: &str = "OpenAEC_definition";
 
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.
@@ -82,7 +87,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             let Some(indices) = layer.indices.get(first as usize..(first + count) as usize) else { continue };
             let props = if id == u64::MAX { Vec::new() } else { model.element_props(id) };
             let prop = |key: &str| props.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
-            let class = prop("IfcType").or(prop("Class")).filter(|c| c.starts_with("Ifc")).unwrap_or("IfcBuildingElementProxy").to_string();
+            let class = prop("IfcType").or(prop("Class")).or(prop("class")).filter(|c| c.starts_with("Ifc")).unwrap_or("IfcBuildingElementProxy").to_string();
             let name = prop("Name").or(prop("name")).map(str::to_string).unwrap_or_else(|| layer.name.clone());
             // its own vertices, numbered from 0, and its lowest point
             let mut number: HashMap<u32, u32> = HashMap::new();
@@ -121,6 +126,9 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             attributes.insert("bsi::ifc::prop::Name".into(), name.clone().into());
             for (key, value) in props.iter().filter(|(k, _)| !OWN_KEYS.contains(&k.as_str())) {
                 attributes.insert(format!("bsi::ifc::prop::{key}"), value.clone().into());
+            }
+            if let Some(definition) = prop(DEFINITION).and_then(|d| serde_json::from_str::<Value>(d).ok()) {
+                attributes.insert("openaec::element".into(), definition);
             }
             attributes.insert("bsi::ifc::presentation::diffuseColor".into(), json!([rgba[0], rgba[1], rgba[2]]));
             if rgba[3] < 0.999 {

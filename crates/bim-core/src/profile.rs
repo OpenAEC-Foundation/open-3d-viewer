@@ -183,7 +183,8 @@ fn clean(ring: Vec<DVec2>) -> Result<Vec<DVec2>, Refusal> {
     }
 }
 
-/// A profile as its definition is kept: by kind and sizes (metres), or as a polygon.
+/// A profile as its definition is kept: by kind and sizes (metres), as a polygon, or as a
+/// catalogue profile (a steel profile of the library) by its designation and its shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProfileDef {
@@ -191,6 +192,9 @@ pub enum ProfileDef {
     Circle { diameter: f64 },
     ISection { height: f64, width: f64, web: f64, flange: f64 },
     Polygon { outer: Vec<DVec2>, #[serde(default)] holes: Vec<Vec<DVec2>> },
+    /// "HEA 200": the designation it is named by and its parametric shape, kept with it so the
+    /// element is whole without the catalogue.
+    Catalogue { designation: String, shape: bim_library::ProfileShape },
 }
 
 impl ProfileDef {
@@ -201,7 +205,18 @@ impl ProfileDef {
             ProfileDef::Circle { diameter } => Profile::circle(*diameter),
             ProfileDef::ISection { height, width, web, flange } => Profile::i_section(*height, *width, *web, *flange),
             ProfileDef::Polygon { outer, holes } => Profile::new(outer.clone(), holes.clone()),
+            ProfileDef::Catalogue { shape, .. } => {
+                // the root fillets and round sections within the chord tolerance
+                let (outer, holes) = shape.rings(CHORD_TOLERANCE).map_err(|_| Refusal::NotPositive)?;
+                Profile::new(outer, holes)
+            }
         }
+    }
+
+    /// The steel profile of the library's table with `designation` ("HEA 200").
+    pub fn steel(designation: &str) -> Option<Self> {
+        let p = bim_library::profile::steel(designation)?;
+        Some(ProfileDef::Catalogue { designation: p.designation.clone(), shape: p.shape.clone() })
     }
 
     /// A short name, in millimetres: `200×300`, `Ø300`, `I300×150`, `polygon`.
@@ -212,6 +227,7 @@ impl ProfileDef {
             ProfileDef::Circle { diameter } => format!("Ø{}", mm(*diameter)),
             ProfileDef::ISection { height, width, .. } => format!("I{}×{}", mm(*height), mm(*width)),
             ProfileDef::Polygon { .. } => "polygon".into(),
+            ProfileDef::Catalogue { designation, .. } => designation.clone(),
         }
     }
 }
@@ -222,6 +238,28 @@ mod tests {
 
     fn v(x: f64, y: f64) -> DVec2 {
         DVec2::new(x, y)
+    }
+
+    #[test]
+    fn every_steel_profile_of_the_library_is_a_checked_profile() {
+        for p in bim_library::profile::steel_profiles() {
+            let def = ProfileDef::steel(&p.designation).unwrap();
+            assert_eq!(def.name(), p.designation);
+            let profile = def.profile().unwrap_or_else(|e| panic!("{}: {e}", p.designation));
+            let exact = p.shape.props().unwrap().area;
+            // round edges are chords within the chord tolerance, so a small tube has a little less
+            assert!((profile.area() - exact).abs() / exact < 0.01, "{}: {} vs {exact}", p.designation, profile.area());
+            assert_eq!(profile.holes().len(), usize::from(matches!(p.series, bim_library::Series::Shs | bim_library::Series::Rhs | bim_library::Series::Chs)));
+        }
+        assert!(ProfileDef::steel("HEA 210").is_none());
+    }
+
+    #[test]
+    fn a_catalogue_profile_round_trips_with_its_designation() {
+        let hea = ProfileDef::steel("HEA 200").unwrap();
+        let json = serde_json::to_string(&hea).unwrap();
+        assert!(json.starts_with("{\"kind\":\"catalogue\",\"designation\":\"HEA 200\""), "{json}");
+        assert_eq!(serde_json::from_str::<ProfileDef>(&json).unwrap(), hea);
     }
 
     #[test]

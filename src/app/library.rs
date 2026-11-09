@@ -1,12 +1,15 @@
 //! The explorer's Library tab: the project's library (`bim-library`) of materials, layered
 //! build-ups and linear types, and the steel table to take profiles from. A material shows its
-//! hatch, a build-up its layers as a section, a profile its outline. **Import…** adds the types a
-//! library file has and the project lacks; **Export…** saves the project's library as a file of
-//! types only.
+//! hatch, a build-up its layers as a section, a profile its outline. **Assign to selection** gives
+//! the selected modelled walls (or slabs, for a floor, roof or ceiling type) the picked build-up.
+//! **Import…** adds the types a library file has and the project lacks; **Export…** saves the
+//! project's library as a file of types only.
 
 use super::{App, Message, Status, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::profile::{self, LinearRole, Series};
+use bim_core::element::PlanarForm;
+use bim_core::{BuildUpDef, ElementId, Shape};
 use bim_library::{BuildUp, DrawingStandard, HatchKind, Lang, Library, Material, ProfileShape, Role};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
@@ -47,6 +50,8 @@ pub struct LibraryView {
 pub enum LibraryMessage {
     Toggle(Group),
     Pick(Pick),
+    /// Give the selected modelled elements this build-up (its id).
+    Assign(String),
     Import,
     /// The name and bytes of the library file picked.
     Imported(Option<(String, Vec<u8>)>),
@@ -108,6 +113,9 @@ impl App {
             LibraryMessage::Pick(pick) => {
                 self.library_view.picked = if self.library_view.picked.as_ref() == Some(&pick) { None } else { Some(pick) };
             }
+            LibraryMessage::Assign(id) => {
+                self.assign_build_up(&id);
+            }
             LibraryMessage::Import => return import_task(),
             LibraryMessage::Imported(None) => {}
             LibraryMessage::Imported(Some((name, bytes))) => self.status = self.import_library(&name, &bytes),
@@ -117,6 +125,41 @@ impl App {
             LibraryMessage::Exported(Some(Err(e))) => self.status = Status::Error(e),
         }
         Task::none()
+    }
+
+    /// The selected modelled elements a build-up of `role` fits: walls for a wall type, slabs for a
+    /// floor, roof or ceiling type.
+    pub(super) fn assignable(&self, role: Role) -> Vec<ElementId> {
+        let fits = |id: &ElementId| match self.modeller.model.get(*id).map(|e| &e.shape) {
+            Some(Shape::Planar(p)) => matches!(p.form, PlanarForm::Wall { .. }) == (role == Role::Wall),
+            _ => false,
+        };
+        self.selected_modelled().into_iter().filter(fits).collect()
+    }
+
+    /// Gives the selected elements build-up `id` of the library, each as far as the kernel can make
+    /// it (a refusal shows); the first stays selected. Returns how many took it.
+    pub(super) fn assign_build_up(&mut self, id: &str) -> usize {
+        let (Some(b), Some(def)) = (self.library.buildup(id), BuildUpDef::from_library(&self.library, id)) else { return 0 };
+        let targets = self.assignable(b.role);
+        let mut assigned = 0;
+        for target in &targets {
+            let Some(mut element) = self.modeller.model.get(*target).cloned() else { continue };
+            if let Shape::Planar(p) = &mut element.shape {
+                *p = p.clone().with_build_up(Some(def.clone()));
+            }
+            match self.modeller.model.replace(element) {
+                Ok(()) => assigned += 1,
+                Err(refusal) => self.modeller.refusal = Some(refusal),
+            }
+        }
+        if assigned > 0 {
+            self.show_modelled();
+            if let Some(first) = targets.first() {
+                self.select_modelled(*first);
+            }
+        }
+        assigned
     }
 
     /// Adds the types of the library file `name` that the project lacks.
@@ -201,6 +244,12 @@ impl App {
                 if view.picked.as_ref() == Some(&pick) {
                     if let Some(b) = lib.buildup(id) {
                         body = body.push(detail(buildup_detail(p, l, lib, b)));
+                        let fits = self.assignable(role).len();
+                        if fits > 0 {
+                            let label = format!("{} ({fits})", l.text("Toewijzen aan selectie", "Assign to selection"));
+                            let assign = button(text(label).size(12)).padding([4, 10]).style(move |_, s| p.primary_button(s)).on_press(send(LibraryMessage::Assign(id.to_string())));
+                            body = body.push(detail(assign.into()));
+                        }
                     }
                 }
             }
@@ -550,6 +599,37 @@ mod tests {
         assert!(matches!(&status, Status::Loaded(s) if s == "other.ifcx: 1 added to the library"), "{status:?}");
         assert!(app.library.linear_type("column.hea-200").is_some());
         assert!(matches!(app.import_library("x.ifcx", b"{}"), Status::Error(_)));
+    }
+
+    #[test]
+    fn a_selected_wall_takes_a_build_up_and_keeps_it_in_ifcx() {
+        use bim_core::{PlanarDef, Shape};
+        use glam::DVec2;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let wall = PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None };
+        let id = app.add_element("Wall", None, Shape::Planar(wall)).unwrap();
+        app.select_modelled(id);
+        assert_eq!(app.assignable(Role::Wall), vec![id]);
+        assert!(app.assignable(Role::Floor).is_empty(), "a floor type does not fit a wall");
+        assert_eq!(app.assign_build_up("wall.cavity-pir-360"), 1);
+        let Shape::Planar(p) = &app.modeller.model.get(id).unwrap().shape else { panic!() };
+        assert!((p.total_thickness() - 0.36).abs() < 1e-12 && p.build_up.as_ref().unwrap().id == "wall.cavity-pir-360");
+        assert_eq!(app.selected_modelled(), vec![id], "it stays selected");
+        // three solids (the cavity has none) in the colours of brick, PIR and sand-lime
+        let parts = app.modeller.model.evaluate(id).unwrap();
+        assert_eq!(parts.iter().map(|p| p.material.as_deref().unwrap()).collect::<Vec<_>>(), ["brick", "insulation-pir", "sand-lime"]);
+        let scene = super::super::modeller::viewer_model(&app.modeller.model, &[], &app.library);
+        let colours: std::collections::HashSet<[u8; 4]> = scene.layers[0].colors.as_ref().unwrap().iter().copied().collect();
+        assert!(colours.contains(&[205, 140, 115, 255]) && colours.contains(&[225, 220, 205, 255]), "{colours:?}");
+        let props = scene.element_props(id.0);
+        let prop = |k: &str| props.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(prop("Type").as_deref(), Some("Brickwork-air cavity-PIR insulation-sand-lime brick 360"));
+        assert_eq!(prop("Layers").as_deref(), Some("brickwork 100, air cavity 40, PIR insulation 100, sand-lime brick 120"));
+        // the definition, with its layers, goes into IFCX and comes back
+        let definition: serde_json::Value = serde_json::from_str(&prop(crate::export::ifcx::DEFINITION).unwrap()).unwrap();
+        let back: Vec<bim_core::Element> = serde_json::from_value(definition).unwrap();
+        assert_eq!(back[0].shape, app.modeller.model.get(id).unwrap().shape);
     }
 
     #[test]

@@ -25,7 +25,7 @@ pub mod solid;
 pub mod tile;
 
 pub use boolean::{boolean, BooleanOp};
-pub use element::{BaseKind, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Opening, PlanarDef, PointDef, Shape, SystemDef};
+pub use element::{BaseKind, BuildUpDef, ConnectionDef, ConnectionKind, Element, ElementId, LayerDef, LinearDef, Opening, PlanarDef, PointDef, Shape, SystemDef};
 pub use mesh::Mesh;
 pub use model::{Model, Part};
 pub use profile::{Profile, ProfileDef};
@@ -78,6 +78,8 @@ pub enum Refusal {
     BooleanFailed,
     /// An element without a body (a connection) cannot cut or be cut.
     NoBody,
+    /// A build-up has no layer that is not a cavity.
+    NoLayers,
 }
 
 impl Refusal {
@@ -105,6 +107,7 @@ impl Refusal {
             Refusal::Empty => "Nothing would be left.",
             Refusal::BooleanFailed => "The cut could not be made exactly.",
             Refusal::NoBody => "A connection has no body to cut with.",
+            Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
         }
     }
 }

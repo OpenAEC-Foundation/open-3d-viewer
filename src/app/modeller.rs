@@ -305,11 +305,12 @@ impl App {
                 form: PlanarForm::Wall { start: a.truncate(), end: b.truncate(), base: z, height: storey },
                 thickness: WALL_THICKNESS,
                 openings: Vec::new(),
+                build_up: None,
             }),
             ModelTool::Slab => {
                 let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
                 let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z }, thickness: SLAB_THICKNESS, openings: Vec::new() })
+                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z }, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None })
             }
             ModelTool::System => Shape::System(SystemDef {
                 start: a.truncate(),
@@ -409,7 +410,7 @@ impl App {
     /// the one shown before, and the scene is put together again without moving the camera.
     pub(super) fn show_modelled(&mut self) {
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let built = Arc::new(viewer_model(&self.modeller.model, &levels));
+        let built = Arc::new(viewer_model(&self.modeller.model, &levels, &self.library));
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {
             if let Some(m) = self.model.clone().filter(|m| Some(m.id) != before) {
@@ -478,8 +479,8 @@ impl App {
         let p = DVec2::new;
         let add = |app: &mut App, name: &str, shape: Shape| app.add_element(name, level.clone(), shape).expect("the demo evaluates");
         let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0 };
-        add(self, "Slab", Shape::Planar(PlanarDef { form: slab, thickness: SLAB_THICKNESS, openings: Vec::new() }));
-        let wall = |a: DVec2, b: DVec2, openings: Vec<Opening>| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: a, end: b, base: 0.0, height: 3.0 }, thickness: WALL_THICKNESS, openings });
+        add(self, "Slab", Shape::Planar(PlanarDef { form: slab, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None }));
+        let wall = |a: DVec2, b: DVec2, openings: Vec<Opening>| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: a, end: b, base: 0.0, height: 3.0 }, thickness: WALL_THICKNESS, openings, build_up: None });
         let door = Opening { along: 1.0, sill: 0.0, width: 1.0, height: 2.3 };
         let window = Opening { along: 3.5, sill: 0.9, width: 2.4, height: 1.5 };
         add(self, "Wall", wall(p(0.0, 0.0), p(10.0, 0.0), vec![door, window]));
@@ -522,7 +523,8 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// triangles (each part in the colour of its own class: a curtain wall's members and panels), its
 /// definition as its properties. A refused element shows nothing.
 /// `levels` names the levels by path.
-pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)]) -> Model {
+/// A part of a layered element has the colour of its layer's material in `library`.
+pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
     for element in model.iter() {
@@ -545,7 +547,8 @@ pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)]) -> Mod
             // tile-local f64 to the scene's f32, through the tile origin in f64
             let origin = grid.origin(part.tile);
             let base = (layer.positions.len() / 3) as u32;
-            let colour = class_colour(part.class).map(|c| (c * 255.0).round() as u8);
+            let material = part.material.as_deref().and_then(|key| library.material(key));
+            let colour = material.map_or_else(|| class_colour(part.class).map(|c| (c * 255.0).round() as u8), |m| m.colour);
             let colours = layer.colors.get_or_insert_with(Vec::new);
             colours.extend(std::iter::repeat_n([colour[0], colour[1], colour[2], 255], mesh.positions.len()));
             for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
@@ -557,13 +560,13 @@ pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)]) -> Mod
         let count = layer.indices.len() as u32 - first;
         layer.elements.push((element.id.0, first, count));
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
-        layer.props.push((element.id.0, properties(model, element, &parts, level)));
+        layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
     Model::new(PathBuf::from("model.ifcx"), "IFCX", layers)
 }
 
 /// An element's properties as a flat JSON object.
-fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], level: Option<&str>) -> String {
+fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], level: Option<&str>, library: &bim_library::Library) -> String {
     let grid = model.grid;
     let m = |v: f64| format!("{v:.3} m");
     let mut props = serde_json::Map::new();
@@ -592,7 +595,13 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Length", m((l.end - l.start).length()));
         }
         Shape::Planar(p) => {
-            put("Thickness", m(p.thickness));
+            put("Thickness", m(p.total_thickness()));
+            if let Some(b) = &p.build_up {
+                // property values are data, in English as an IFC file's
+                put("Type", library.name(&b.id, bim_library::Lang::En).unwrap_or_else(|| b.id.clone()));
+                let layer = |l: &bim_core::LayerDef| format!("{} {}", library.material(&l.material).map_or(l.material.as_str(), |m| m.name(bim_library::Lang::En)), bim_library::millimetres(l.thickness, bim_library::Lang::En));
+                put("Layers", b.layers.iter().map(layer).collect::<Vec<_>>().join(", "));
+            }
             if let PlanarForm::Wall { start, end, height, .. } = p.form {
                 put("Length", m((end - start).length()));
                 put("Height", m(height));
@@ -757,7 +766,7 @@ mod tests {
         assert_eq!(walls, 3);
         // and editable: a new wall gets the next id
         back.set_model_tool(Some((ModelTool::Wall, "Wall")));
-        let id = back.add_element("Wall", None, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(0.0, 10.0), end: DVec2::new(4.0, 10.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() })).unwrap();
+        let id = back.add_element("Wall", None, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(0.0, 10.0), end: DVec2::new(4.0, 10.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None })).unwrap();
         assert!(id.0 > written.iter().map(|e| e.id.0).max().unwrap());
     }
 

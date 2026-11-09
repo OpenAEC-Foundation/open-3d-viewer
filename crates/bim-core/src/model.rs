@@ -5,7 +5,7 @@
 //! connections that name it. A connection that cannot be made is refused by its own evaluation and
 //! leaves its members as they are.
 
-use crate::element::{linear_axes, linear_solid, planar_solid, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::element::{linear_axes, linear_solid, planar_parts, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
 use crate::solid::{Plane, Solid};
 use crate::tile::{TileGrid, TileKey};
 use crate::boolean::{boolean, BooleanOp};
@@ -24,6 +24,8 @@ pub struct Part {
     pub class: &'static str,
     pub tile: TileKey,
     pub solid: Solid,
+    /// What it is made of: the material key of its layer, for a planar element with a build-up.
+    pub material: Option<String>,
 }
 
 /// The elements of a project over its tile grid.
@@ -141,11 +143,11 @@ impl Model {
     /// cutter cuts with this body, so cuts never depend on each other.
     fn body(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
         let class = element.class();
-        let part = |solid: Solid| Part { class, tile: element.tile, solid };
+        let part = |solid: Solid| Part { class, tile: element.tile, solid, material: None };
         match &element.shape {
             Shape::Point(p) => Ok(vec![part(point_solid(p)?)]),
-            Shape::Planar(p) => Ok(vec![part(planar_solid(p)?)]),
-            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid }).collect()),
+            Shape::Planar(p) => Ok(planar_parts(p)?.into_iter().map(|(material, solid)| Part { material, ..part(solid) }).collect()),
+            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: None }).collect()),
             Shape::Linear(l) => {
                 let (start, end) = self.end_planes(element.id, element.tile);
                 Ok(vec![part(linear_solid(l, start, end)?)])
@@ -392,7 +394,7 @@ mod tests {
         let far = add(&mut m, beam(DVec3::new(10.0, 5.0, 0.0), DVec3::new(10.0, 8.0, 0.0)));
         let wall = add(
             &mut m,
-            Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::Y, base: 0.0, height: 1.0 }, thickness: 0.1, openings: Vec::new() }),
+            Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::Y, base: 0.0, height: 1.0 }, thickness: 0.1, openings: Vec::new(), build_up: None }),
         );
         let grid = m.grid;
         let try_join = |m: &mut Model, kind, primary, secondary| m.add(Element::in_project(&grid, "c", None, Shape::Connection(ConnectionDef { kind, primary, secondary })));
@@ -420,6 +422,7 @@ mod tests {
             form: PlanarForm::Wall { start: DVec2::new(0.123, 0.456) + o, end: DVec2::new(7.891, 3.21) + o, base: 0.0, height: 2.8 },
             thickness: 0.3,
             openings: Vec::new(),
+            build_up: None,
         })
     }
 
@@ -488,7 +491,7 @@ mod tests {
     }
 
     fn wall_along_x() -> Shape {
-        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() })
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None })
     }
 
     #[test]
@@ -525,7 +528,7 @@ mod tests {
     fn two_elements_cutting_each_other_do_not_go_round_in_circles() {
         let mut m = Model::new(TileGrid::default());
         let a = add(&mut m, wall_along_x());
-        let b = add(&mut m, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(3.0, -2.0), end: DVec2::new(3.0, 2.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new() }));
+        let b = add(&mut m, Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(3.0, -2.0), end: DVec2::new(3.0, 2.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None }));
         add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: a, secondary: b }));
         add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: b, secondary: a }));
         // each is cut by the other's whole body: the crossing goes from both

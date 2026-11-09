@@ -308,6 +308,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bim-library"
+version = "0.1.0"
+dependencies = [
+ "bim-structural",
+ "glam 0.30.10",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bim-structural"
 version = "0.1.0"
 dependencies = [
@@ -3579,6 +3589,7 @@ name = "open-3d-viewer"
 version = "2026.45.12"
 dependencies = [
  "bim-core",
+ "bim-library",
  "bim-structural",
  "bytemuck",
  "cadmpeg-codec-step",

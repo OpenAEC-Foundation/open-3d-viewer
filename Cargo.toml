@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural"]
+members = ["crates/bim-structural", "crates/bim-core"]
 
 [lib]
 name = "open_3d_viewer"
@@ -39,6 +39,8 @@ glam = { version = "0.30", features = ["bytemuck"] }
 # The structural analysis model (nodes, members, supports, sections, loads, results) and its
 # sam-json exchange format; headless, in this workspace
 bim-structural = { path = "crates/bim-structural" }
+# The BIM kernel: f64 geometry in tile frames and the five base elements; headless, in this workspace
+bim-core = { path = "crates/bim-core" }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
 serde = { version = "1", features = ["derive"] }
@@ -49,6 +51,8 @@ rfd = "0.17"
 web-time = "1"
 # PNG for the window icon and window screenshots (MIT OR Apache-2.0)
 png = "0.18"
+# Drawings exported as PNG: their SVG rendered with the app's fonts (Apache-2.0 OR MIT; already built for iced's svg)
+resvg = { version = "0.45", default-features = false, features = ["text"] }
 # The gzip-compressed B2 icon masters in assets/b2, and the zlib-compressed arrays of FBX and Rhino
 # .3dm meshes (MIT OR Apache-2.0). Rhino .3dm needs no other dependency: src/loaders/rhino.rs is
 # written from McNeel's openNURBS source (published for reading 3dm files); no openNURBS code is built.
@@ -60,7 +64,9 @@ stl_io = "0.11"
 # Polygon triangulation, LandXML surfaces and native CAD mesh import.
 earcutr = "0.5"
 roxmltree = "0.20"
-acadrust = { git = "https://github.com/hakanaktt/acadrust", rev = "299dc758f958b08accc35a10d98b83e228fafc89", default-features = false }
+# The shared OpenCAD drawing model (MPL-2.0): DWG and DXF through its acadrust codec (also the DWG/DXF
+# reader of src/loaders/cad.rs), IFCCAD (the open 2D drawing profile on IFCX) through ifccad (MPL-2.0).
+opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
 tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
@@ -86,14 +92,16 @@ cadmpeg-tessellate = "0.6.8"
 ifc-lite-processing = "=25.0.1"
 # its entity scanner and decoder (MPL-2.0, already built for the above): the building storeys
 ifc-lite-core = "=25.0.1"
+# its placement chains (MPL-2.0, already built for the above): where the grids are
+ifc-lite-geometry = "=25.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "54a2455745f8ac23b91d929ba64a45ca28a14306" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "c54abcb63f797f2b83395b9cbc5d05b10b850442" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "c54abcb63f797f2b83395b9cbc5d05b10b850442", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "c54abcb63f797f2b83395b9cbc5d05b10b850442" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
 log = "0.4"

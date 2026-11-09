@@ -82,9 +82,9 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 
 /// The tools, under their names without a prefix (the viewer's command names).
 pub fn tools() -> Vec<Value> {
-    let mut save = tool("save_file", "Save the open model as IFC (the format the viewer writes), as File > Save as does, and wait until it is written. Without a path it goes next to the open file, with the same name and .ifc; an open .ifc is not replaced but saved beside it as <name>-viewer.ifc, as the viewer's IFC is a re-export (triangles and the properties it shows). A file that exists is only replaced with overwrite: true. Returns the path written.",
+    let mut save = tool("save_file", "Save the open model as IFCX (IFC5, the viewer's project file with the model, its levels and drawings) or, with a .ifc path, as IFC 4, as File > Save as does, and wait until it is written. Without a path it goes next to the open file, with the same name and .ifcx; an open .ifcx is not replaced but saved beside it as <name>-viewer.ifcx, as the viewer's file is a re-export (triangles and the properties it shows). A file that exists is only replaced with overwrite: true. Returns the path written.",
         json!({
-            "path": { "type": "string", "description": "Where to save: absolute, or relative to the work folder (OPENAEC_MAP) when there is one. Default: next to the open file, as .ifc (<name>-viewer.ifc when the open file is an IFC)" },
+            "path": { "type": "string", "description": "Where to save: absolute, or relative to the work folder (OPENAEC_MAP) when there is one; the extension picks the format (.ifcx or .ifc). Default: next to the open file, as .ifcx (<name>-viewer.ifcx when the open file is an IFCX)" },
             "overwrite": { "type": "boolean", "description": "Replace the file when it exists (default false)" }
         }), &[], false);
     save["annotations"]["destructiveHint"] = json!(true);
@@ -189,7 +189,7 @@ pub fn tools() -> Vec<Value> {
             json!({}), &[], false),
         tool("redo", "Redo what undo took back.",
             json!({}), &[], false),
-        tool("pick", "What is under a pixel of the last viewport screenshot: the 3D point, face normal, layer, element and its properties. With select: true it also selects it, as a click.",
+        tool("pick", "What is under a pixel of the last viewport screenshot: the 3D point, face normal, layer, element and its properties, or a grid line (its name and ends). With select: true it also selects it, as a click.",
             json!({
                 "x": { "type": "number" }, "y": { "type": "number" },
                 "select": { "type": "boolean" }

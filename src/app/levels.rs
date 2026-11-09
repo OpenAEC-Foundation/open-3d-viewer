@@ -19,6 +19,8 @@ pub enum ExplorerTab {
     #[default]
     Model,
     Levels,
+    /// Floor plans (and further views) of the document.
+    Views,
 }
 
 /// The form of a new level, as typed.
@@ -35,6 +37,7 @@ impl App {
     pub(super) fn new_document(&mut self) {
         self.document = Document::default();
         self.level_form = None;
+        self.cuts.clear();
     }
 
     /// Opens the form of a new level, filled with the next free name (`word` and a number) and
@@ -66,10 +69,16 @@ impl App {
                 .style(move |_, s| p.ribbon_button(active, s))
                 .on_press(Message::ExplorerTab(t))
         };
-        let tabs = row![tab(l.text("Model", "Model"), ExplorerTab::Model), tab(l.text("Niveaus", "Levels"), ExplorerTab::Levels)].spacing(2);
+        let tabs = row![
+            tab(l.text("Model", "Model"), ExplorerTab::Model),
+            tab(l.text("Niveaus", "Levels"), ExplorerTab::Levels),
+            tab(l.text("Weergaven", "Views"), ExplorerTab::Views),
+        ]
+        .spacing(2);
         let body = match self.explorer_tab {
-            ExplorerTab::Model => self.layers_body(p, l),
+            ExplorerTab::Model => self.model_body(p, l),
             ExplorerTab::Levels => self.levels_body(p, l),
+            ExplorerTab::Views => self.views_body(p, l),
         };
         column![tabs, rule::horizontal(1), body].spacing(6).into()
     }
@@ -209,6 +218,18 @@ mod tests {
         let mut ui = simulator(&app);
         for shown in ["01 first floor", "+3.000 m", "00 ground floor", "+0.000 m", "Add level"] {
             assert!(ui.find(shown).is_ok(), "{shown}");
+        }
+    }
+
+    /// The levels have their own tab: the properties pane does not list them as well.
+    #[test]
+    fn the_properties_pane_leaves_the_levels_to_their_tab() {
+        let mut app = App::default();
+        app.set_model(model(&[("00 ground floor", 0.0), ("01 first floor", 3.0)]));
+        assert_eq!(app.explorer_tab, ExplorerTab::Model);
+        let mut ui = simulator(&app);
+        for hidden in ["01 first floor", "+3.000 m", "LEVELS"] {
+            assert!(ui.find(hidden).is_err(), "{hidden}");
         }
     }
 

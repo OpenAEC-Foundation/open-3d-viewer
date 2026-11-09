@@ -1,0 +1,430 @@
+//! The model: elements by id over a tile grid, and their evaluation to solids.
+//!
+//! Elements hold definitions; [`Model::evaluate`] derives their solids. A connection has no body:
+//! it changes the end planes of the linear elements it joins, so a member is evaluated with the
+//! connections that name it. A connection that cannot be made is refused by its own evaluation and
+//! leaves its members as they are.
+
+use crate::element::{linear_axes, linear_solid, planar_solid, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::solid::{Plane, Solid};
+use crate::tile::{TileGrid, TileKey};
+use crate::Refusal;
+use glam::{DVec2, DVec3};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// How far apart (metres) the ends of members may be and still be joined.
+pub const JOIN_TOLERANCE: f64 = 1e-3;
+
+/// A solid of an element, in the frame of the element's tile.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    /// The IFC class of the part (a curtain wall's members are `IfcMember`).
+    pub class: &'static str,
+    pub tile: TileKey,
+    pub solid: Solid,
+}
+
+/// The elements of a project over its tile grid.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Model {
+    pub grid: TileGrid,
+    elements: BTreeMap<ElementId, Element>,
+    next: u64,
+}
+
+/// Which end of a linear element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End {
+    Start,
+    End,
+}
+
+impl Model {
+    pub fn new(grid: TileGrid) -> Self {
+        Self { grid, elements: BTreeMap::new(), next: 1 }
+    }
+
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    pub fn get(&self, id: ElementId) -> Option<&Element> {
+        self.elements.get(&id)
+    }
+
+    /// The elements in id order.
+    pub fn iter(&self) -> impl Iterator<Item = &Element> {
+        self.elements.values()
+    }
+
+    /// Adds `element` under a new id, if it evaluates; a refusal leaves the model as it was.
+    pub fn add(&mut self, mut element: Element) -> Result<ElementId, Refusal> {
+        let id = ElementId(self.next.max(1));
+        element.id = id;
+        element.rehome(&self.grid);
+        self.evaluate_element(&element)?;
+        self.elements.insert(id, element);
+        self.next = id.0 + 1;
+        Ok(id)
+    }
+
+    /// Puts `element` back under its own id (reading a file): kept even when it does not evaluate,
+    /// so nothing is lost; its evaluation reports the refusal.
+    pub fn insert(&mut self, element: Element) {
+        self.next = self.next.max(element.id.0 + 1);
+        self.elements.insert(element.id, element);
+    }
+
+    /// Changes an element, if the change evaluates.
+    pub fn replace(&mut self, mut element: Element) -> Result<(), Refusal> {
+        if !self.elements.contains_key(&element.id) {
+            return Err(Refusal::Missing);
+        }
+        element.rehome(&self.grid);
+        self.evaluate_element(&element)?;
+        self.elements.insert(element.id, element);
+        Ok(())
+    }
+
+    /// Removes an element and the connections that join it; returns what was removed.
+    pub fn remove(&mut self, id: ElementId) -> Vec<Element> {
+        let Some(element) = self.elements.remove(&id) else { return Vec::new() };
+        let joined: Vec<ElementId> = self
+            .elements
+            .values()
+            .filter(|e| matches!(&e.shape, Shape::Connection(c) if c.primary == id || c.secondary == id))
+            .map(|e| e.id)
+            .collect();
+        std::iter::once(element).chain(joined.into_iter().filter_map(|j| self.elements.remove(&j))).collect()
+    }
+
+    /// The elements per tile.
+    pub fn tiles(&self) -> BTreeMap<TileKey, Vec<ElementId>> {
+        let mut tiles: BTreeMap<TileKey, Vec<ElementId>> = BTreeMap::new();
+        for e in self.elements.values() {
+            tiles.entry(e.tile).or_default().push(e.id);
+        }
+        tiles
+    }
+
+    /// The solids of element `id`, in its tile's frame.
+    pub fn evaluate(&self, id: ElementId) -> Result<Vec<Part>, Refusal> {
+        self.evaluate_element(self.elements.get(&id).ok_or(Refusal::Missing)?)
+    }
+
+    fn evaluate_element(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
+        let class = element.class();
+        let part = |solid: Solid| Part { class, tile: element.tile, solid };
+        match &element.shape {
+            Shape::Point(p) => Ok(vec![part(point_solid(p)?)]),
+            Shape::Planar(p) => Ok(vec![part(planar_solid(p)?)]),
+            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid }).collect()),
+            Shape::Linear(l) => {
+                let (start, end) = self.end_planes(element.id, element.tile);
+                Ok(vec![part(linear_solid(l, start, end)?)])
+            }
+            Shape::Connection(c) => {
+                self.join(c)?;
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// The end planes the connections joining member `id` give it (in its tile's frame), where
+    /// they can be made.
+    fn end_planes(&self, id: ElementId, tile: TileKey) -> (Option<Plane>, Option<Plane>) {
+        let (mut start, mut end) = (None, None);
+        for e in self.elements.values() {
+            let Shape::Connection(c) = &e.shape else { continue };
+            if c.primary != id && c.secondary != id {
+                continue;
+            }
+            let Ok(cuts) = self.join(c) else { continue };
+            for (member, which, plane) in cuts {
+                if member != id {
+                    continue;
+                }
+                let plane = Plane { point: self.grid.transfer(plane.point, TileKey::default(), tile), normal: plane.normal };
+                match which {
+                    End::Start => start = Some(plane),
+                    End::End => end = Some(plane),
+                }
+            }
+        }
+        (start, end)
+    }
+
+    /// A member of a connection: its definition in the frame of tile (0, 0), so both members
+    /// share one frame.
+    fn member(&self, id: ElementId) -> Result<LinearDef, Refusal> {
+        let e = self.elements.get(&id).ok_or(Refusal::Missing)?;
+        let Shape::Linear(l) = &e.shape else { return Err(Refusal::NotLinear) };
+        let offset = self.grid.origin(e.tile);
+        Ok(LinearDef { start: l.start + offset, end: l.end + offset, ..l.clone() })
+    }
+
+    /// The cuts a connection makes: per member, which end and the plane there (in the frame of
+    /// tile (0, 0)).
+    fn join(&self, c: &ConnectionDef) -> Result<Vec<(ElementId, End, Plane)>, Refusal> {
+        if c.primary == c.secondary {
+            return Err(Refusal::SameMember);
+        }
+        let (p, s) = (self.member(c.primary)?, self.member(c.secondary)?);
+        match c.kind {
+            ConnectionKind::Butt => {
+                let (end, plane) = butt(&p, &s)?;
+                Ok(vec![(c.secondary, end, plane)])
+            }
+            ConnectionKind::Mitre => {
+                let ((pe, se), plane) = mitre(&p, &s)?;
+                Ok(vec![(c.primary, pe, Plane { point: plane.point, normal: -plane.normal }), (c.secondary, se, plane)])
+            }
+        }
+    }
+}
+
+/// An end of a member and the direction from it into the member.
+fn end_of(l: &LinearDef, which: End) -> (DVec3, DVec3) {
+    match which {
+        End::Start => (l.start, (l.end - l.start).normalize_or_zero()),
+        End::End => (l.end, (l.start - l.end).normalize_or_zero()),
+    }
+}
+
+/// The distance from `q` to the segment `a`–`b`.
+fn to_segment(q: DVec3, a: DVec3, b: DVec3) -> f64 {
+    let ab = b - a;
+    let t = if ab.length_squared() > 0.0 { ((q - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+    (a + ab * t - q).length()
+}
+
+/// A butt joint: the secondary's end nearest the primary stops at the primary's face, the plane
+/// along the primary at the reach of its profile towards the secondary.
+fn butt(primary: &LinearDef, secondary: &LinearDef) -> Result<(End, Plane), Refusal> {
+    let (axes, length) = linear_axes(primary)?;
+    let profile = primary.profile.profile()?;
+    let (a, b) = (axes.origin, axes.origin + axes.z * length);
+    let which = if to_segment(secondary.start, a, b) <= to_segment(secondary.end, a, b) { End::Start } else { End::End };
+    let (q, into) = end_of(secondary, which);
+    // the direction from the primary's axis towards the secondary, square to the primary
+    let n = (into - axes.z * into.dot(axes.z)).try_normalize().ok_or(Refusal::Parallel)?;
+    if into.cross(axes.z).length() < 1e-6 {
+        return Err(Refusal::Parallel);
+    }
+    let reach = profile.support(DVec2::new(n.dot(axes.x), n.dot(axes.y)));
+    let radius = profile.outer().iter().map(|p| p.length()).fold(0.0, f64::max);
+    if to_segment(q, a - axes.z * radius, b + axes.z * radius) > radius + JOIN_TOLERANCE {
+        return Err(Refusal::NotTouching);
+    }
+    // the face: through the point of the axis nearest q, moved out by the reach
+    let foot = a + axes.z * (q - a).dot(axes.z);
+    Ok((which, Plane { point: foot + n * reach, normal: -n }))
+}
+
+/// A mitre: the nearest ends of the two members meet (within [`JOIN_TOLERANCE`]); both are cut by
+/// the plane through their meeting point that halves the angle between them. The plane's normal
+/// points out of the secondary.
+fn mitre(primary: &LinearDef, secondary: &LinearDef) -> Result<((End, End), Plane), Refusal> {
+    let ends = [End::Start, End::End];
+    let (pe, se) = ends
+        .iter()
+        .flat_map(|&p| ends.iter().map(move |&s| (p, s)))
+        .min_by(|&(p1, s1), &(p2, s2)| {
+            let d = |p, s| (end_of(primary, p).0 - end_of(secondary, s).0).length();
+            d(p1, s1).total_cmp(&d(p2, s2))
+        })
+        .unwrap();
+    let ((qp, into_p), (qs, into_s)) = (end_of(primary, pe), end_of(secondary, se));
+    if (qp - qs).length() > JOIN_TOLERANCE {
+        return Err(Refusal::NotTouching);
+    }
+    let n = (into_p - into_s).try_normalize().ok_or(Refusal::Parallel)?;
+    // n points into the primary and away from the secondary
+    Ok(((pe, se), Plane { point: (qp + qs) / 2.0, normal: n }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::element::{PlanarDef, PlanarForm, PointDef, SystemDef};
+    use crate::mesh::Mesh;
+    use crate::profile::ProfileDef;
+
+    fn beam(start: DVec3, end: DVec3) -> Shape {
+        Shape::Linear(LinearDef { start, end, profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 })
+    }
+
+    fn add(model: &mut Model, shape: Shape) -> ElementId {
+        let grid = model.grid;
+        model.add(Element::in_project(&grid, "e", None, shape)).unwrap()
+    }
+
+    #[test]
+    fn ids_are_never_reused() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, beam(DVec3::ZERO, DVec3::X));
+        m.remove(a);
+        let b = add(&mut m, beam(DVec3::ZERO, DVec3::X));
+        assert!(b > a);
+    }
+
+    #[test]
+    fn a_refused_element_is_not_added() {
+        let mut m = Model::new(TileGrid::default());
+        let grid = m.grid;
+        let bad = Element::in_project(&grid, "e", None, beam(DVec3::ONE, DVec3::ONE));
+        assert_eq!(m.add(bad), Err(Refusal::ZeroLength));
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn a_butt_stops_the_secondary_at_the_primary_face() {
+        let mut m = Model::new(TileGrid::default());
+        // a column at the origin, 400 wide along x (its profile's x is the project's x)
+        let column = add(
+            &mut m,
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }),
+        );
+        let b = add(&mut m, beam(DVec3::new(0.0, 0.0, 2.5), DVec3::new(5.0, 0.0, 2.5)));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: column, secondary: b }));
+        let (lo, hi) = m.evaluate(b).unwrap()[0].solid.bounds();
+        assert!((lo.x - 0.2).abs() < 1e-12 && (hi.x - 5.0).abs() < 1e-12, "{lo} {hi}");
+        let (lo, _) = m.evaluate(column).unwrap()[0].solid.bounds();
+        assert!((lo.x + 0.2).abs() < 1e-12, "the primary runs through");
+    }
+
+    #[test]
+    fn a_mitre_cuts_both_members_on_the_bisector() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, beam(DVec3::new(0.0, 0.0, 0.0), DVec3::new(4.0, 0.0, 0.0)));
+        let b = add(&mut m, beam(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0, 3.0, 0.0)));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Mitre, primary: a, secondary: b }));
+        let va = m.evaluate(a).unwrap()[0].solid.volume();
+        let vb = m.evaluate(b).unwrap()[0].solid.volume();
+        // a mitre on the bisector takes off as much on the inside as it adds on the outside
+        assert!((va - 4.0 * 0.2 * 0.4).abs() < 1e-12, "{va}");
+        assert!((vb - 3.0 * 0.2 * 0.4).abs() < 1e-12, "{vb}");
+        let (_, hi) = m.evaluate(a).unwrap()[0].solid.bounds();
+        assert!((hi.x - 4.1).abs() < 1e-12, "the outer corner reaches the outside of the other member: {hi}");
+    }
+
+    #[test]
+    fn connections_that_cannot_be_made_are_refused() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, beam(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0)));
+        let parallel = add(&mut m, beam(DVec3::new(0.0, 1.0, 0.0), DVec3::new(4.0, 1.0, 0.0)));
+        let far = add(&mut m, beam(DVec3::new(10.0, 5.0, 0.0), DVec3::new(10.0, 8.0, 0.0)));
+        let wall = add(
+            &mut m,
+            Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::Y, base: 0.0, height: 1.0 }, thickness: 0.1, openings: Vec::new() }),
+        );
+        let grid = m.grid;
+        let try_join = |m: &mut Model, kind, primary, secondary| m.add(Element::in_project(&grid, "c", None, Shape::Connection(ConnectionDef { kind, primary, secondary })));
+        assert_eq!(try_join(&mut m, ConnectionKind::Butt, a, parallel), Err(Refusal::Parallel));
+        assert_eq!(try_join(&mut m, ConnectionKind::Butt, a, far), Err(Refusal::NotTouching));
+        assert_eq!(try_join(&mut m, ConnectionKind::Mitre, a, far), Err(Refusal::NotTouching));
+        assert_eq!(try_join(&mut m, ConnectionKind::Butt, a, a), Err(Refusal::SameMember));
+        assert_eq!(try_join(&mut m, ConnectionKind::Butt, a, wall), Err(Refusal::NotLinear));
+        assert_eq!(try_join(&mut m, ConnectionKind::Butt, a, ElementId(999)), Err(Refusal::Missing));
+    }
+
+    #[test]
+    fn removing_a_member_removes_its_connections() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, beam(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0)));
+        let b = add(&mut m, beam(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0, 3.0, 0.0)));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Mitre, primary: a, secondary: b }));
+        assert_eq!(m.remove(b).len(), 2);
+        assert_eq!(m.len(), 1);
+        assert!((m.evaluate(a).unwrap()[0].solid.volume() - 4.0 * 0.08).abs() < 1e-12, "square again");
+    }
+
+    fn far_wall(o: DVec2) -> Shape {
+        Shape::Planar(PlanarDef {
+            form: PlanarForm::Wall { start: DVec2::new(0.123, 0.456) + o, end: DVec2::new(7.891, 3.21) + o, base: 0.0, height: 2.8 },
+            thickness: 0.3,
+            openings: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn far_from_the_origin_a_tile_frame_gives_the_same_solid_bit_for_bit() {
+        // the same definition in tile (500, 300), 500 km out, as in tile (0, 0): the kernel only
+        // ever sees the small local coordinates, so the solids are identical
+        let mut m = Model::new(TileGrid::default());
+        let near = add(&mut m, far_wall(DVec2::ZERO));
+        let mut far = m.get(near).unwrap().clone();
+        far.tile = TileKey { x: 500, y: 300 };
+        let far = m.add(far).unwrap();
+        let (pn, pf) = (&m.evaluate(near).unwrap()[0], &m.evaluate(far).unwrap()[0]);
+        assert_eq!(pf.tile, TileKey { x: 500, y: 300 });
+        assert_eq!(pn.solid, pf.solid);
+        let mesh = Mesh::of(&pf.solid).unwrap();
+        assert!(mesh.positions.iter().all(|p| p.length() < 20.0), "mesh coordinates stay small in the tile frame");
+    }
+
+    #[test]
+    fn far_from_the_origin_project_input_is_off_by_no_more_than_f64_resolves() {
+        // typing the wall in project coordinates 500 km out rounds each coordinate once when it is
+        // entered (f64 resolves about 6e-11 m there); the tile frame adds nothing to that
+        let mut m = Model::new(TileGrid::default());
+        let near = add(&mut m, far_wall(DVec2::ZERO));
+        let far = add(&mut m, far_wall(DVec2::new(500_000.0, 300_000.0)));
+        let (pn, pf) = (&m.evaluate(near).unwrap()[0], &m.evaluate(far).unwrap()[0]);
+        let worst = pn.solid.positions.iter().zip(&pf.solid.positions).map(|(a, b)| (*a - *b).length()).fold(0.0, f64::max);
+        assert!(worst < 2.0 * 500_000f64 * f64::EPSILON, "{worst}");
+        assert!(worst < crate::LINEAR_TOLERANCE * 1e-4);
+    }
+
+    #[test]
+    fn members_in_different_tiles_join_in_one_frame() {
+        let mut m = Model::new(TileGrid::new(10).unwrap());
+        // a beam crossing the tile boundary at x = 10 onto a column in the next tile
+        let column = add(
+            &mut m,
+            Shape::Linear(LinearDef { start: DVec3::new(12.0, 0.0, 0.0), end: DVec3::new(12.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }),
+        );
+        let b = add(&mut m, beam(DVec3::new(6.0, 0.0, 2.5), DVec3::new(12.0, 0.0, 2.5)));
+        assert_ne!(m.get(column).unwrap().tile, m.get(b).unwrap().tile);
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: column, secondary: b }));
+        let part = &m.evaluate(b).unwrap()[0];
+        let (_, hi) = part.solid.bounds();
+        // the beam's tile is (0, 0): its end stops at x = 11.8 in that frame
+        assert!((hi.x - 11.8).abs() < 1e-12, "{hi}");
+    }
+
+    #[test]
+    fn every_base_element_evaluates() {
+        let mut m = Model::new(TileGrid::default());
+        let point = add(&mut m, Shape::Point(PointDef { at: DVec3::new(1.0, 1.0, 0.0), rotation: 0.5, size: DVec3::new(0.6, 0.6, 0.9) }));
+        let system = add(
+            &mut m,
+            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02 }),
+        );
+        assert!((m.evaluate(point).unwrap()[0].solid.volume() - 0.6 * 0.6 * 0.9).abs() < 1e-12);
+        assert!(m.evaluate(system).unwrap().len() > 10);
+        for id in [point, system] {
+            for part in m.evaluate(id).unwrap() {
+                Mesh::of(&part.solid).unwrap();
+            }
+        }
+        assert_eq!(m.tiles().len(), 1);
+    }
+
+    #[test]
+    fn a_model_round_trips_through_json() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, beam(DVec3::new(1000.5, 2.0, 0.0), DVec3::new(1004.5, 2.0, 0.0)));
+        let b = add(&mut m, beam(DVec3::new(1004.5, 2.0, 0.0), DVec3::new(1004.5, 5.0, 0.0)));
+        add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::Mitre, primary: a, secondary: b }));
+        let json = serde_json::to_string(&m).unwrap();
+        let back: Model = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.evaluate(a), m.evaluate(a));
+    }
+}

@@ -1,12 +1,26 @@
 //! Application state, messages and the main window layout:
-//! ribbon on top, layers left, 3D viewport centre, properties right, status bar bottom.
+//! ribbon on top, explorer left, 3D viewport centre, properties and layers right, status bar
+//! bottom.
 
+mod export_drawing;
+mod grids;
+mod ifc;
+mod layers;
 mod levels;
+mod marks;
+pub mod modeller;
+mod paper;
 mod schedules;
+mod view_props;
+mod views;
 mod sheets;
 mod structural;
 
+pub use ifc::{IfcTab, IfcView};
+pub use layers::SideTab;
+pub use view_props::ViewField;
 pub use levels::{ExplorerTab, LevelForm};
+pub use views::{DocTab, OpenPlan, ViewSlot};
 
 pub use schedules::{tab_id, tab_schedule, VIEW_3D};
 
@@ -95,7 +109,20 @@ pub struct App {
     pub tab: RibbonTab,
     pub show_layers: bool,
     pub show_properties: bool,
+    /// What the explorer's search field holds.
     pub layer_filter: String,
+    /// The tab of the right pane shown.
+    pub side_tab: SideTab,
+    /// What the Layers tab's search field holds.
+    pub layers_query: String,
+    /// What is being typed in a field of the right pane's View section: the view's path, the
+    /// field and the text.
+    pub view_typing: Option<(String, ViewField, String)>,
+    /// The 3D view's layer switches while another view shows: every layer's, and per model its
+    /// own.
+    parked_layers: Option<(Vec<bool>, Vec<Vec<bool>>)>,
+    /// The undo histories of the views not shown, by view path (the 3D view: "").
+    parked_histories: std::collections::HashMap<String, History<ViewState>>,
     pub status: Status,
     pub viewport_size: (f32, f32),
     /// The last press was a finger's, not the mouse's: the hint shows the touch gestures.
@@ -130,6 +157,8 @@ pub struct App {
     pub active_view: Option<usize>,
     /// Show the model's grid lines with their bubbles.
     pub show_grids: bool,
+    /// The grid line picked with a click (index into the model's grids), shown in the properties.
+    pub picked_grid: Option<usize>,
     /// Explorer groups opened: views, rooms, layers, schedules, sheets.
     pub explorer_open: [bool; 5],
     /// The explorer's tab shown.
@@ -138,6 +167,35 @@ pub struct App {
     pub document: Document,
     /// The form of a new level, while it is open.
     pub level_form: Option<LevelForm>,
+    /// The floor plan whose tab shows (its path); `None`: the 3D view.
+    pub active_plan: Option<String>,
+    /// Floor plans open in a document tab, in tab order, each with its own camera and section.
+    pub open_plans: Vec<views::OpenPlan>,
+    /// The 3D view's camera and section box while a floor plan's tab shows.
+    model_view: Option<views::ViewSlot>,
+    /// Sheets of the document open in a document tab (paths), and the one shown.
+    pub open_doc_sheets: Vec<String>,
+    pub active_doc_sheet: Option<String>,
+    /// The cut of every floor plan placed on a sheet, by the plan's path.
+    pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
+    /// The bar's Export button is open: the formats to export the drawing shown in follow it.
+    pub export_menu: bool,
+    /// The dimension tool of the sheets is on.
+    pub dimension_tool: bool,
+    /// The section tool of the sheets is on: two clicks on a floor plan draw a section.
+    pub section_tool: bool,
+    /// What is picked on the sheet shown: a placed view or a dimension.
+    pub sheet_pick: Option<paper::SheetPick>,
+    /// The cut height being typed for a floor plan: its path and the text.
+    pub cut_edit: Option<(String, String)>,
+    /// The view taken from the Views list while the mouse button is down, to drop on a sheet.
+    pub dragging_view: Option<Arc<str>>,
+    /// The text tool is on: a click on a view (its tab, or placed on a sheet) puts a text there.
+    pub note_tool: bool,
+    /// The wording of the next text placed, or of the picked text.
+    pub note_text: String,
+    /// What is picked on the view shown in its tab: a dimension or a text.
+    pub mark_pick: Option<marks::MarkPick>,
     /// Groups of layers opened in the explorer (closed by default).
     pub open_layer_groups: HashSet<String>,
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
@@ -148,6 +206,8 @@ pub struct App {
     pub active_schedule: Option<usize>,
     /// The table of the shown schedule: scrolled offset and height (logical pixels).
     pub schedule_scroll: (f32, f32),
+    /// The IFC tab: how the model's IFCX file is built up.
+    pub ifc: IfcTab,
     /// The schedules of the model, once computed (they follow the model), and whether they are
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
@@ -193,6 +253,8 @@ pub struct App {
     pick_index: Option<PickIndex>,
     /// The selection and hover of structural nodes and members.
     pub(crate) structural: structural::StructuralView,
+    /// The modelled elements and the tool placing them.
+    pub modeller: modeller::Modeller,
 }
 
 /// Width of the right-click menu (logical pixels), and about its height, to keep it inside the
@@ -243,6 +305,14 @@ pub enum Message {
     /// Show or hide every layer of a group.
     LayerGroup(String, bool),
     LayerFilter(String),
+    /// Show a tab of the right pane.
+    SideTab(SideTab),
+    /// What the Layers tab's search field holds.
+    LayersQuery(String),
+    /// Typed in a field of the right pane's View section.
+    ViewField(ViewField, String),
+    /// Enter in a field of the View section: it shows the value in use again.
+    ViewFieldDone,
     Navigate(Navigate),
     Cube(CubeEvent),
     /// Show a view saved in the file.
@@ -261,6 +331,86 @@ pub enum Message {
     CancelLevel,
     /// Remove an added level (its IfcX path).
     RemoveLevel(Arc<str>),
+    /// Make a floor plan of a level (its path) and show it.
+    NewPlan(Arc<str>),
+    /// Show a floor plan (its path) in its tab.
+    OpenPlan(Arc<str>),
+    RemovePlan(Arc<str>),
+    /// Make a sheet of the document, named this, and show it.
+    NewSheet(&'static str),
+    /// Lay the views of a sheet (its path) out: one scale, in rows, centred.
+    ArrangeSheet(Arc<str>),
+    /// Put the views on no sheet on new sheets, named for floor plans and for sections.
+    FillSheets([&'static str; 2]),
+    /// Show a sheet of the document (its path) in its tab.
+    OpenDocSheet(Arc<str>),
+    RemoveSheet(Arc<str>),
+    /// Place a floor plan on a sheet: sheet, plan.
+    PlaceOnSheet(Arc<str>, Arc<str>),
+    /// Move a placed view: sheet, its index on the sheet, its new middle (paper metres).
+    MoveOnSheet(Arc<str>, usize, [f64; 2]),
+    /// Switch the dimension tool of the sheets on or off.
+    DimensionTool(bool),
+    /// Crop a floor plan (its path) to a rectangle in plan, or show all of it (`None`).
+    CropPlan(Arc<str>, Option<([f64; 2], [f64; 2])>),
+    /// Pick a placed view or a dimension on the sheet shown (`None`: nothing).
+    PickOnSheet(Option<paper::SheetPick>),
+    /// Pressed on a view in the Views list: it can be dragged onto the sheet shown.
+    GrabView(Arc<str>),
+    /// Let go over a view in the Views list: it opens (a click), unless another was carried.
+    ReleaseView(Arc<str>),
+    /// A view let go over the sheet shown, at a paper point: placed there, its middle on it.
+    DropOnSheet(Arc<str>, [f64; 2]),
+    /// The mouse button went up: the view carried, if any, is let go.
+    LetGoView,
+    /// Switch the text tool on or off.
+    NoteTool(bool),
+    /// The wording typed for the next text, or for the picked one.
+    NoteText(String),
+    /// Put a text on a view: the view, the point of its drawing, the wording.
+    AddNote(Arc<str>, [f64; 2], String),
+    /// Move a view's text (its index) to a point of its drawing.
+    MoveNote(Arc<str>, usize, [f64; 2]),
+    /// Pick a dimension or text on the view shown in its tab (`None`: nothing).
+    PickMark(Option<marks::MarkPick>),
+    /// Remove what is picked on the view shown in its tab.
+    RemoveMark,
+    /// Put the picked dimension on the other side of what it measures.
+    FlipDimension,
+    /// Give a view (its path) its standard dimensions.
+    StandardDimensions(Arc<str>),
+    /// Open or close the bar's Export button.
+    ExportMenu(bool),
+    /// Export the drawing of the view or sheet shown in this format.
+    ExportDrawing(crate::export::drawing::DrawingFormat),
+    /// The drawing was exported (where, in how many seconds), or not; `None`: the dialog was
+    /// cancelled.
+    Exported(Option<Result<(PathBuf, f32), String>>),
+    /// Delete was pressed (not in a text field): remove what is picked, on a sheet or a view.
+    DeletePicked,
+    /// Remove what is picked on the sheet shown.
+    RemovePicked,
+    /// Set the scale of a placed view: sheet, index, 1 : scale.
+    SetScale(Arc<str>, usize, f64),
+    /// Give a sheet another paper (width, height in metres).
+    SetPaper(Arc<str>, [f64; 2]),
+    /// The cut height being typed, and its use.
+    CutText(String),
+    ApplyCut,
+    /// Add a dimension to a floor plan: plan, from, to (model x, y).
+    AddDimension(Arc<str>, [f64; 2], [f64; 2]),
+    /// Show a document tab ([`App::doc_tabs`]).
+    SelectTab(usize),
+    /// Close a document tab; the 3D view's stays.
+    CloseTab(usize),
+    /// Remove a section or elevation (its path).
+    RemoveSection(Arc<str>),
+    /// Make the four elevations of the model, named so (north, east, south, west).
+    MakeElevations([&'static str; 4]),
+    /// Make a section along a line drawn on a floor plan (plan x, y), named after this word.
+    NewSection([f64; 2], [f64; 2], &'static str),
+    /// Switch the section tool of the sheets on or off.
+    SectionTool(bool),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
     /// Show a sheet's tab (`None`: not a sheet).
@@ -278,6 +428,20 @@ pub enum Message {
     ScheduleScroll(scrollable::Viewport),
     /// The schedules of a model (by id), computed.
     Schedules(u64, Vec<crate::model::Schedule>),
+    /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
+    OpenIfc,
+    CloseIfc,
+    IfcView(IfcView),
+    IfcScroll(IfcView, scrollable::Viewport),
+    /// Pick a node of the IFC tab (its index): its elements are selected.
+    IfcPick(u32),
+    /// Open or close a row of the IFC tab's tree (its key).
+    IfcToggle(String),
+    /// The relation the IFC tab's Relations view shows (all: `None`).
+    IfcRelation(Option<crate::ifcx_structure::Relation>),
+    /// Search the IFC tab; jump to the next (or the previous) line found in its text.
+    IfcQuery(String),
+    IfcNext(bool),
     ToggleSection,
     ResetSection,
     SectionToSelection,
@@ -334,8 +498,15 @@ pub enum Message {
     ContextMenu(MenuItem),
     /// A click beside the right-click menu: it closes.
     CloseContextMenu,
-    /// Esc: stop placing the section plane, else stop measuring, else clear the selection.
+    /// Esc: stop placing the section plane, else stop modelling or measuring, else clear the
+    /// selection.
     Escape,
+    /// Start an empty model to model in, its first level named so.
+    NewModel(&'static str),
+    /// Switch a modelling tool on (what it places named so), or off (`None`).
+    ModelTool(Option<(modeller::ModelTool, &'static str)>),
+    /// Join the two linear elements selected (the first is the primary), the joint named so.
+    Connect(bim_core::ConnectionKind, &'static str),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -378,6 +549,7 @@ const ANIM_SECONDS: f32 = 0.45;
 
 impl Default for App {
     fn default() -> Self {
+        crate::i18n::install();
         Self {
             theme: ThemeKind::Light,
             model: None,
@@ -394,6 +566,11 @@ impl Default for App {
             show_layers: true,
             show_properties: true,
             layer_filter: String::new(),
+            side_tab: SideTab::default(),
+            layers_query: String::new(),
+            view_typing: None,
+            parked_layers: None,
+            parked_histories: Default::default(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
             fingers: false,
@@ -412,16 +589,33 @@ impl Default for App {
             plane_picking: false,
             active_view: None,
             show_grids: true,
+            picked_grid: None,
             explorer_open: [false, false, true, false, false],
             explorer_tab: ExplorerTab::Model,
             document: Document::default(),
             level_form: None,
+            active_plan: None,
+            open_plans: Vec::new(),
+            model_view: None,
+            open_doc_sheets: Vec::new(),
+            active_doc_sheet: None,
+            cuts: Default::default(),
+            export_menu: false,
+            dimension_tool: false,
+            section_tool: false,
+            sheet_pick: None,
+            cut_edit: None,
+            dragging_view: None,
+            note_tool: false,
+            note_text: String::new(),
+            mark_pick: None,
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
+            ifc: IfcTab::default(),
             schedules: Vec::new(),
             schedules_pending: false,
             measurements: Vec::new(),
@@ -444,6 +638,7 @@ impl Default for App {
             hover_scene: None,
             pick_index: None,
             structural: Default::default(),
+            modeller: Default::default(),
         }
     }
 }
@@ -646,7 +841,8 @@ impl App {
     /// by the exploded view.
     pub(crate) fn world_bounds(&self) -> Option<Bounds> {
         let model = self.model.as_ref()?;
-        self.explode_bounds.or_else(|| Some(transform_bounds(&model.bounds, &self.model_matrix())))
+        // an empty model (one to model in) has no bounds yet
+        self.explode_bounds.or_else(|| model.bounds.is_valid().then(|| transform_bounds(&model.bounds, &self.model_matrix())))
     }
 
     /// The offset (world) of vertex `i` of layer `l` in the exploded view.
@@ -707,8 +903,17 @@ impl App {
     /// a section's crop, a plan's range from the view depth up to the cut plane) as the section
     /// box.
     pub fn apply_view(&mut self, i: usize) {
-        let Some(model) = self.model.clone() else { return };
-        let Some(view) = model.views.get(i).cloned() else { return };
+        let Some(view) = self.model.as_ref().and_then(|m| m.views.get(i).cloned()) else { return };
+        // a saved view of the model shows in the 3D view's tab
+        self.load_view(None);
+        if self.show_view(&view) {
+            self.active_view = Some(i);
+        }
+    }
+
+    /// Shows a view: its section box or plan range and its camera, animated; false without a
+    /// model to show.
+    fn show_view(&mut self, view: &crate::model::SavedView) -> bool {
         // views are in the file's coordinates, of the model at rest
         if self.flip_up {
             self.flip_up = false;
@@ -718,8 +923,7 @@ impl App {
             self.explode_on = false;
             self.update_explode();
         }
-        let Some(world) = self.world_bounds() else { return };
-        self.active_view = Some(i);
+        let Some(world) = self.world_bounds() else { return false };
         let clip = match (view.plan, view.clip) {
             (Some(plan), _) => {
                 let mut b = SectionBox::around(&world);
@@ -769,6 +973,7 @@ impl App {
             }
         }
         self.anim = Some((self.camera, to, Instant::now()));
+        true
     }
 
     /// Turns the camera to (yaw, pitch) and frames the model, animated.
@@ -813,9 +1018,13 @@ impl App {
     pub fn set_model(&mut self, model: Arc<Model>) {
         self.hidden = Arc::default();
         self.history.clear();
+        self.parked_layers = None;
+        self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
-        self.set_scene(model);
+        self.modeller = modeller::Modeller::default();
+        self.set_scene(model.clone());
+        self.adopt_elements(&model);
     }
 
     pub fn add_model(&mut self, model: Arc<Model>) {
@@ -855,6 +1064,9 @@ impl App {
     }
 
     fn set_scene(&mut self, model: Arc<Model>) {
+        // the views' tabs close: the 3D view's layers and undo come back first
+        self.load_view(None);
+        self.parked_histories.clear();
         self.context_menu = None;
         self.visible = model.layers.iter().map(|l| !l.hidden).collect();
         self.status = Status::Loaded(format!(
@@ -869,8 +1081,19 @@ impl App {
         self.plane = None;
         self.plane_picking = false;
         self.active_view = None;
+        self.active_plan = None;
+        self.open_plans.clear();
+        self.model_view = None;
+        self.open_doc_sheets.clear();
+        self.active_doc_sheet = None;
+        self.cuts.clear();
+        self.sheet_pick = None;
+        self.cut_edit = None;
+        self.view_typing = None;
+        self.mark_pick = None;
         self.open_schedules.clear();
         self.active_schedule = None;
+        self.close_ifc();
         self.schedules.clear();
         self.schedules_pending = false;
         self.open_sheets.clear();
@@ -879,6 +1102,7 @@ impl App {
         self.sel.clear();
         self.selected = None;
         self.selection.clear();
+        self.picked_grid = None;
         self.structural.reset();
         self.measure.reset();
         self.measurements.clear();
@@ -935,9 +1159,13 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let before = changes_visibility(&message).then(|| self.view_state());
+        let shown = before.is_some() || matches!(message, Message::Undo | Message::Redo);
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);
+        }
+        if shown {
+            self.keep_view_layers();
         }
         self.refresh_hover();
         // the structural hover goes when the camera moves (it no longer lies under the cursor) and
@@ -945,6 +1173,8 @@ impl App {
         if self.structural.note_camera(self.camera) || self.measure.tool.is_some() || self.plane_picking {
             self.set_structural_hover(None);
         }
+        // the IFC tab follows the element selected in the model
+        let task = if self.ifc.shown { Task::batch([task, self.ifc_follow()]) } else { task };
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
             None => task,
@@ -1025,6 +1255,9 @@ impl App {
             Message::Remote(call) => return self.remote(call),
             Message::RemoteShot(shot) => self.remote_shot(shot),
             Message::ClearMeasurements => self.measurements.clear(),
+            Message::NewModel(level) => self.new_model(level),
+            Message::ModelTool(tool) => self.set_model_tool(tool),
+            Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -1100,7 +1333,7 @@ impl App {
             Message::Fit => self.fit(),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
             Message::TogglePropertiesPanel => self.show_properties = !self.show_properties,
-            Message::Layer(i, v) => self.set_layer_visible(i, v),
+            Message::Layer(i, v) => self.switch_layers(&[i], v),
             Message::ModelVisible(i, shown) => {
                 if let Some(entry) = self.models.get_mut(i) {
                     entry.visible = shown;
@@ -1108,17 +1341,15 @@ impl App {
                     self.selection_changed();
                     self.set_structural_selection(Vec::new());
                     self.restore_model_visibility();
+                    self.cut_all_again();
                 }
             }
             Message::AllLayers(v) => {
-                let filter = self.layer_filter.to_lowercase();
-                if let Some(m) = &self.model {
-                    let layers: Vec<_> = m.layers.iter().enumerate().filter(|(_, layer)| filter.is_empty() || layer.name.to_lowercase().contains(&filter)).map(|(i, _)| i).collect();
-                    for layer in layers { self.set_layer_visible(layer, v); }
-                }
-                // unfiltered, it shows or hides the structural objects too (a model of only those
-                // has no layers: its entry follows)
-                if filter.is_empty() {
+                let layers = self.layers_found();
+                self.switch_layers(&layers, v);
+                // unfiltered in the viewport, it shows or hides the structural objects too (a
+                // model of only those has no layers: its entry follows)
+                if self.layers_query.trim().is_empty() && !matches!(self.layers_of(), Some(layers::LayersOf::Placed(_))) {
                     self.structural.all_hidden = !v;
                     for entry in self.models.iter_mut().filter(|e| e.layers.is_empty()) {
                         entry.visible = v;
@@ -1134,15 +1365,25 @@ impl App {
             Message::LayerGroup(group, v) => {
                 if let Some(m) = &self.model {
                     let layers: Vec<usize> = (0..m.layers.len()).filter(|&i| layer_group(&m.layers[i].name).0 == Some(group.as_str())).collect();
-                    for layer in layers { self.set_layer_visible(layer, v); }
+                    self.switch_layers(&layers, v);
                 }
             }
             Message::LayerFilter(f) => self.layer_filter = f,
+            Message::SideTab(tab) => self.side_tab = tab,
+            Message::LayersQuery(q) => self.layers_query = q,
+            Message::ViewField(field, typed) => self.type_view_field(field, typed),
+            Message::ViewFieldDone => self.view_typing = None,
             Message::Navigate(n) => {
                 if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
                     self.context_menu = None;
                 }
                 match n {
+                // a floor plan is not turned: dragging moves it
+                Navigate::Orbit { dx, dy } if self.active_plan.is_some() => {
+                    self.anim = None;
+                    self.measure.hover = None;
+                    self.camera.pan(dx, dy, self.viewport_size.1)
+                }
                 Navigate::Orbit { dx, dy } => {
                     self.anim = None;
                     self.measure.hover = None;
@@ -1213,7 +1454,12 @@ impl App {
             }
             Message::CloseContextMenu => self.context_menu = None,
             Message::ApplyView(i) => self.apply_view(i),
-            Message::ToggleGrids => self.show_grids = !self.show_grids,
+            Message::ToggleGrids => {
+                self.show_grids = !self.show_grids;
+                if !self.show_grids {
+                    self.picked_grid = None;
+                }
+            }
             Message::ToggleExplorer(i) => {
                 if let Some(open) = self.explorer_open.get_mut(i) {
                     *open = !*open;
@@ -1236,6 +1482,140 @@ impl App {
             Message::RemoveLevel(path) => {
                 self.document.remove_level(&path);
             }
+            Message::NewPlan(level) => self.new_plan(&level),
+            Message::OpenPlan(plan) => self.open_plan(&plan),
+            Message::RemovePlan(plan) => {
+                self.close_plan(&plan);
+                self.document.remove_plan(&plan);
+                self.cuts.remove(&*plan);
+            }
+            Message::NewSheet(name) => self.new_sheet(name),
+            Message::ArrangeSheet(sheet) => self.arrange_sheet(&sheet),
+            Message::FillSheets(names) => self.fill_sheets(names),
+            Message::OpenDocSheet(sheet) => self.open_doc_sheet(&sheet),
+            Message::RemoveSheet(sheet) => {
+                self.close_doc_sheet(&sheet);
+                self.document.remove_sheet(&sheet);
+            }
+            Message::PlaceOnSheet(sheet, plan) => self.place_on_sheet(&sheet, &plan),
+            Message::MoveOnSheet(sheet, i, at) => {
+                self.document.move_placed(&sheet, i, at);
+            }
+            Message::DimensionTool(on) => {
+                self.dimension_tool = on;
+                if on {
+                    self.section_tool = false;
+                    self.note_tool = false;
+                    // the view in its tab is cut, to snap to its lines
+                    if let Some(view) = self.shown_view().map(str::to_string) {
+                        self.cut_view(&view);
+                    }
+                }
+                self.pick_on_sheet(None);
+                self.mark_pick = None;
+            }
+            Message::NoteTool(on) => {
+                self.note_tool = on;
+                if on {
+                    self.section_tool = false;
+                    self.dimension_tool = false;
+                    if self.mark_pick.is_some() || self.sheet_pick.is_some() {
+                        self.note_text.clear();
+                    }
+                }
+                self.pick_on_sheet(None);
+                self.mark_pick = None;
+            }
+            Message::NoteText(wording) => self.note_text_changed(wording),
+            Message::AddNote(view, at, wording) => {
+                self.document.add_note(&view, at, &wording);
+            }
+            Message::MoveNote(view, k, at) => {
+                self.document.move_note(&view, k, at);
+            }
+            Message::PickMark(pick) => self.pick_mark(pick),
+            Message::RemoveMark => self.remove_mark(),
+            Message::FlipDimension => self.flip_dimension(),
+            Message::StandardDimensions(view) => {
+                self.standard_dimensions(&view);
+            }
+            Message::ExportMenu(open) => self.export_menu = open,
+            Message::ExportDrawing(format) => {
+                self.export_menu = false;
+                return self.export_drawing(format);
+            }
+            Message::Exported(None) => {}
+            Message::Exported(Some(result)) => {
+                self.status = match result {
+                    Ok((path, secs)) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        Status::Loaded(format!("Exported {file} in {secs:.2} s"))
+                    }
+                    Err(e) => Status::Error(e),
+                };
+            }
+            Message::DeletePicked => {
+                if self.delete_modelled() {
+                    // modelled elements selected: they go
+                } else if self.active_doc_sheet.is_some() {
+                    if self.sheet_pick.is_some() {
+                        self.remove_picked();
+                    }
+                } else if self.mark_pick.is_some() {
+                    self.remove_mark();
+                }
+            }
+            Message::PickOnSheet(pick) => self.pick_on_sheet(pick),
+            Message::GrabView(view) => self.grab_view(view),
+            Message::ReleaseView(view) => {
+                let carried = self.dragging_view.take();
+                if carried.is_none_or(|c| c == view) {
+                    self.open_plan(&view);
+                }
+            }
+            Message::DropOnSheet(view, at) => self.drop_on_sheet(&view, at),
+            Message::LetGoView => self.dragging_view = None,
+            Message::CropPlan(plan, crop) => {
+                if self.document.set_crop(&plan, crop) {
+                    self.fit_plan_section(&plan);
+                }
+            }
+            Message::RemovePicked => self.remove_picked(),
+            Message::SetScale(sheet, i, scale) => {
+                self.document.set_scale(&sheet, i, scale);
+            }
+            Message::SetPaper(sheet, paper) => {
+                self.document.set_paper(&sheet, paper);
+            }
+            Message::CutText(text) => {
+                if let Some((_, t)) = &mut self.cut_edit {
+                    *t = text;
+                }
+            }
+            Message::ApplyCut => self.apply_cut(),
+            Message::AddDimension(plan, from, to) => {
+                self.document.add_dimension(&plan, from, to);
+            }
+            Message::SelectTab(i) => return self.select_tab(i),
+            Message::RemoveSection(path) => {
+                self.close_plan(&path);
+                self.document.remove_section(&path);
+                self.cuts.remove(&*path);
+            }
+            Message::MakeElevations(names) => self.make_elevations(names),
+            Message::NewSection(from, to, word) => {
+                self.section_tool = false;
+                self.new_section(from, to, word);
+            }
+            Message::SectionTool(on) => {
+                self.section_tool = on;
+                if on {
+                    self.dimension_tool = false;
+                    self.note_tool = false;
+                }
+                self.pick_on_sheet(None);
+            }
+            Message::CloseTab(i) => return self.close_tab(i),
             Message::OpenSheet(i) => return self.open_sheet(i),
             Message::ShowSheet(i) => return self.show_sheet(i),
             Message::CloseSheet(i) => return self.close_sheet(i),
@@ -1245,6 +1625,15 @@ impl App {
             Message::CloseSchedule(i) => return self.close_schedule(i),
             Message::ScheduleRow(s, r) => self.select_row(s, r),
             Message::ScheduleScroll(v) => return self.scrolled(v),
+            Message::OpenIfc => return self.open_ifc(),
+            Message::CloseIfc => self.close_ifc(),
+            Message::IfcView(view) => return self.ifc_show_view(view),
+            Message::IfcScroll(view, v) => return self.ifc_scrolled(view, v),
+            Message::IfcPick(node) => self.ifc_pick(node),
+            Message::IfcToggle(key) => self.ifc_toggle(key),
+            Message::IfcRelation(relation) => return self.ifc_relation(relation),
+            Message::IfcQuery(query) => return self.ifc_query(query),
+            Message::IfcNext(forward) => return self.ifc_next(forward),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;
@@ -1434,6 +1823,11 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
+                if !self.escape_model_tool() {
+                    self.modeller.refusal = None;
+                }
+            }
             Message::Escape => {
                 if self.context_menu.take().is_some() {
                     return Task::none();
@@ -1472,6 +1866,8 @@ impl App {
                 match key.as_ref() {
                     Key::Named(Named::Home) => Some(Message::Preset(ViewPreset::Iso)),
                     Key::Named(Named::Enter) => Some(Message::MeasureFinish),
+                    // what is picked on a sheet or a view; not while a text field takes the key
+                    Key::Named(Named::Delete | Named::Backspace) => Some(Message::DeletePicked),
                     _ => None,
                 }
             }
@@ -1481,7 +1877,16 @@ impl App {
         // files from the page: `?file=URL` and drag and drop
         #[cfg(target_arch = "wasm32")]
         let remote = Subscription::batch([remote, crate::web::subscription()]);
-        Subscription::batch([events, ticks, remote])
+        // a view carried from the Views list is let go wherever the button goes up
+        let letting_go = if self.dragging_view.is_some() {
+            event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => Some(Message::LetGoView),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([events, ticks, remote, letting_go])
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -1535,6 +1940,9 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        if self.modeller.tool.is_some() {
+            return self.model_click(x, y, width, height);
+        }
         if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
             let screen = self.screen(width, height);
             let holds = self.hover_scene_holds() && self.measure.hover.as_ref().is_some_and(|h| h.holds_for(&screen, Vec2::new(x, y)));
@@ -1568,10 +1976,14 @@ impl App {
             }
             return;
         }
-        // a structural node or member, unless a triangle lies clearly in front of it; Ctrl adds or
-        // removes it, keeping the rest of the selection
+        // a grid line, unless a triangle lies clearly in front of it (its bubbles always); then a
+        // structural node or member, the same; Ctrl adds or removes it, keeping the rest of the
+        // selection
         let mm = self.model_matrix();
         let triangle = hit.and_then(|(l, t, s)| face_at(&model.layers[l], t, origin - s, dir).map(|(p, _)| mm.transform_point3(p + s)));
+        if let Some(g) = self.grid_under(x, y, width, height, triangle) {
+            return self.pick_grid(Some(g));
+        }
         if let Some(h) = self.pick_structural(x, y, width, height, triangle) {
             self.click_structural(h.element, add);
             return;
@@ -1599,6 +2011,8 @@ impl App {
     /// After `sel` changed: the shown element (the first picked), the index ranges and the flags
     /// of the units.
     pub(crate) fn selection_changed(&mut self) {
+        // a grid is picked alone
+        self.picked_grid = None;
         let model = self.model.clone();
         self.selected = model.as_deref().and_then(|m| match self.sel.primary()? {
             Pickable::Element(id) => Some((m.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == id))?, Some(id))),
@@ -2013,13 +2427,14 @@ impl App {
     // ---- panels ---------------------------------------------------------------------------
 
     fn layers_panel(&self, p: Palette) -> Element<'_, Message> {
-        let header = panel_header(p, "Layers", self.model.as_ref().map(|m| m.layers.len().to_string()));
+        let header = panel_header(p, "Explorer", None);
         panel(p, header, self.explorer_body(p, standalone_language()), 220)
     }
 
-    /// The explorer pane, organised as Revit's project browser: one search field, then
-    /// collapsible groups (views by kind, rooms by level, layers) with their counts.
-    pub fn layers_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
+    /// The explorer's Model tab, organised as Revit's project browser: one search field, the
+    /// models, then collapsible groups (views by kind, schedules, sheets, rooms by level) with
+    /// their counts. The layers are in the right pane, per view.
+    pub fn model_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(model) = &self.model else {
             return text(l.text("Geen model geopend", "No model loaded")).size(12).color(p.text_muted).into();
         };
@@ -2134,103 +2549,6 @@ impl App {
             }
         }
 
-        // layers (categories)
-        let mut order: Vec<usize> = (0..model.layers.len()).filter(|&i| hit(&model.layers[i].name)).collect();
-        order.sort_by(|&a, &b| model.layers[a].name.to_lowercase().cmp(&model.layers[b].name.to_lowercase()));
-        let open = self.explorer_open[2] || searching;
-        body = body.push(group_header(p, l.text("Lagen", "Layers"), None, order.len(), open, Message::ToggleExplorer(2)));
-        if open {
-            let small = |label: &'static str, msg: Message| {
-                button(text(label).size(11)).padding([2, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(msg)
-            };
-            body = body.push(indent(
-                row![
-                    small(l.text("Alles tonen", "Show all"), Message::AllLayers(true)),
-                    small(l.text("Alles verbergen", "Hide all"), Message::AllLayers(false)),
-                ]
-                .spacing(4)
-                .padding([4, 0])
-                .into(),
-            ));
-            let eye_icon = move |visible: bool, partly: bool| {
-                svg(icons::handle(if visible || partly { icons::EYE } else { icons::EYE_OFF }))
-                    .width(14)
-                    .height(14)
-                    .style(move |_, _| svg::Style { color: Some(if visible { p.text_secondary } else { p.text_muted }) })
-            };
-            let layer_row = |i: usize, label: String| -> Element<'static, Message> {
-                let layer = &model.layers[i];
-                let visible = self.visible.get(i).copied().unwrap_or(true);
-                let [r, g, b] = layer.color;
-                let swatch = container(Space::new().width(10).height(10)).style(move |_| Palette::swatch(iced::Color::from_rgb(r, g, b)));
-                button(
-                    row![
-                        eye_icon(visible, false),
-                        swatch,
-                        text(label)
-                            .size(12)
-                            .color(if visible { p.text } else { p.text_muted })
-                            .wrapping(Wrapping::WordOrGlyph)
-                            .width(Fill),
-                        text(format_count(if layer.points { layer.point_count() } else { layer.triangle_count() })).size(10).color(p.text_muted),
-                    ]
-                    .spacing(6)
-                    .align_y(Center),
-                )
-                .padding([3, 6])
-                .width(Fill)
-                .style(move |_, s| p.row_button(s))
-                .on_press(Message::Layer(i, !visible))
-                .into()
-            };
-            // Layers named "Group › Layer" (a BTL panel and its member types) sit under their
-            // group, which shows or hides them together; the others follow on their own.
-            let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
-            for &i in &order {
-                if let (Some(group), _) = layer_group(&model.layers[i].name) {
-                    match groups.iter_mut().find(|(g, _)| *g == group) {
-                        Some((_, members)) => members.push(i),
-                        None => groups.push((group, vec![i])),
-                    }
-                }
-            }
-            for (group, members) in &groups {
-                let shown = members.iter().filter(|&&i| self.visible.get(i).copied().unwrap_or(true)).count();
-                let (all, some) = (shown == members.len(), shown > 0);
-                let open = searching || self.open_layer_groups.contains(*group);
-                use openaec_ui::icons::Icon;
-                let arrow = svg(svg::Handle::from_memory(if open { Icon::DisclosureExpanded } else { Icon::DisclosureCollapsed }.bytes()))
-                    .width(12)
-                    .height(12)
-                    .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
-                let triangles: usize = members.iter().map(|&i| model.layers[i].triangle_count()).sum();
-                let eye = button(eye_icon(some, some && !all)).padding([3, 4]).style(move |_, s| p.row_button(s)).on_press(Message::LayerGroup(group.to_string(), !all));
-                let title = button(
-                    row![
-                        arrow,
-                        text(group.to_string()).size(12).font(FONT_BOLD).color(if some { p.text } else { p.text_muted }).wrapping(Wrapping::WordOrGlyph).width(Fill),
-                        text(format_count(triangles)).size(10).color(p.text_muted),
-                    ]
-                    .spacing(6)
-                    .align_y(Center),
-                )
-                .padding([3, 6])
-                .width(Fill)
-                .style(move |_, s| p.row_button(s))
-                .on_press(Message::ToggleLayerGroup(group.to_string()));
-                body = body.push(indent(row![eye, title].spacing(0).align_y(Center).into()));
-                if open {
-                    for &i in members {
-                        let label = layer_group(&model.layers[i].name).1.to_string();
-                        body = body.push(indent(indent(layer_row(i, label))));
-                    }
-                }
-            }
-            for &i in order.iter().filter(|&&i| layer_group(&model.layers[i].name).0.is_none()) {
-                body = body.push(indent(layer_row(i, model.layers[i].name.clone())));
-            }
-        }
-
         let search = text_input(l.text("Zoeken in verkenner…", "Search explorer…"), &self.layer_filter)
             .on_input(Message::LayerFilter)
             .size(12)
@@ -2248,10 +2566,10 @@ impl App {
         panel(p, header, self.properties_body(p, standalone_language()), 290)
     }
 
-    /// The properties pane: project data (nothing selected) or the selection, the section box,
-    /// then file, geometry and bounds. Labels and values share the width 2 : 3 and wrap, so long
-    /// words never run into each other.
-    pub fn properties_body(&self, p: Palette, l: Language) -> Element<'_, Message> {
+    /// The right pane's Properties tab: the view shown and project data (nothing selected) or the
+    /// selection, the section box, then file, geometry and bounds. Labels and values share the
+    /// width 2 : 3 and wrap, so long words never run into each other.
+    fn properties_tab(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(model) = &self.model else {
             return text(l.text("Open een model om de eigenschappen te zien", "Open a model to see its properties"))
                 .size(12)
@@ -2280,7 +2598,10 @@ impl App {
 
         // project data while nothing is selected
         let pd = &model.project;
-        if self.selected.is_none() && self.structural.selected.is_empty() {
+        if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() {
+            if let Some(view) = self.view_properties(p, l) {
+                content = content.push(section(l.text("Weergave", "View"))).push(view).push(rule::horizontal(1));
+            }
             if !pd.info.is_empty() {
                 content = content.push(section(l.text("Project", "Project")));
                 for (k, v) in &pd.info {
@@ -2295,13 +2616,7 @@ impl App {
                 }
                 content = content.push(rule::horizontal(1));
             }
-            if !pd.levels.is_empty() {
-                content = content.push(section(l.text("Niveaus", "Levels")));
-                for (name, z) in pd.levels.iter().rev() {
-                    content = content.push(prop(name, format!("{z:+.3} m")));
-                }
-                content = content.push(rule::horizontal(1));
-            }
+            // the levels are not listed here: they have their own tab in the explorer
             if !pd.phases.is_empty() {
                 content = content
                     .push(section(l.text("Fasen", "Phases")))
@@ -2318,6 +2633,8 @@ impl App {
                 content = content.push(container(text(count).size(12).color(p.text_secondary)).padding([2, 8]));
             }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
+            // a modelled element's definition is kept for the file, not shown
+            props.retain(|(k, _)| k != crate::export::ifcx::DEFINITION);
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
                 if let Some(id) = element {
@@ -2345,6 +2662,11 @@ impl App {
                 content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
             }
             content = content.push(rule::horizontal(1));
+        }
+
+        // the picked grid line
+        if let Some(grid) = self.grid_properties(p, l) {
+            content = content.push(section(l.text("Stramien", "Grid"))).push(grid).push(rule::horizontal(1));
         }
 
         // structural objects: properties built from the document
@@ -2525,7 +2847,12 @@ impl App {
             if count > 1 {
                 body = body.push(prop_row(
                     p,
-                    format!("{} {} ({count})", l.text("Totaal", "Total"), category.label(l).to_lowercase()),
+                    {
+                        // German keeps its nouns capitalised
+                        let name = category.label(l);
+                        let name = if l == Language::German { name.to_string() } else { name.to_lowercase() };
+                        format!("{} ({count})", l.text("Totaal {category}", "Total {category}").replace("{category}", &name))
+                    },
                     units.format(l, category, total),
                 ));
             }
@@ -2583,9 +2910,12 @@ impl App {
             section: self.active_section(),
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
-            grids: self.show_grids && !self.flip_up,
+            grids: self.grids_shown(),
             bounds: self.world_bounds(),
         };
+        // the grid lines and levels where the view shown draws them
+        let datums = self.datums();
+        let segments = Arc::new(datums.iter().map(|d| [d.line.a, d.line.b]).collect::<Vec<_>>());
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),
             visible: &self.visible,
@@ -2594,10 +2924,11 @@ impl App {
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
             hover: (self.measure.tool.is_some() || self.structural_hover_on()) && !self.plane_picking,
-            crosshair: self.measure.tool.is_some() && !self.plane_picking,
+            crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
             structural_shown: self.structural.shown_marks.as_ref(),
+            datum: Some(segments),
         })
             .width(Fill)
             .height(Fill);
@@ -2634,7 +2965,8 @@ impl App {
                 .width(Fill)
                 .height(Fill)
         });
-        let section = self.active_section().filter(|_| overlay.is_none()).map(|section| {
+        // a view's tab keeps its box without the handles: its crop is set on the sheet
+        let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none()).map(|section| {
             canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {
@@ -2642,6 +2974,14 @@ impl App {
         });
         let banner = if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
+        } else if let Some((tool, _)) = self.modeller.tool {
+            let hint = tool.hint(l, self.modeller.points.len());
+            Some(match self.modeller.refusal {
+                Some(refusal) => format!("{}: {} · {}", tool.label(l), l.translate(refusal.reason()), hint),
+                None => format!("{}: {}", tool.label(l), hint),
+            })
+        } else if let Some(refusal) = self.modeller.refusal {
+            Some(l.translate(refusal.reason()).to_string())
         } else {
             self.measure.tool.map(|tool| {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
@@ -2686,16 +3026,14 @@ impl App {
             .align_top(Fill)
             .center_x(Fill)
         });
-        let grids = self
-            .model
-            .as_ref()
-            .filter(|m| self.show_grids && !self.flip_up && overlay.is_none() && !m.project.grids.is_empty())
-            .map(|m| {
+        let grids = (overlay.is_none() && !datums.is_empty()).then(|| {
                 canvas(crate::annotations::GridOverlay {
-                    grids: &m.project.grids,
+                    datums,
                     view_proj: self.camera.view_proj(self.aspect()),
                     fill: p.surface,
                     ink: p.text_secondary,
+                    picked: self.picked_grid,
+                    accent: p.accent,
                 })
                 .width(Fill)
                 .height(Fill)
@@ -2712,6 +3050,8 @@ impl App {
             .height(Fill)
         });
         let boxed = self.box_select.map(|(from, to)| canvas(crate::viewport::box_select::BoxOverlay { from, to }).width(Fill).height(Fill));
+        // the dimensions and texts of the view shown in its tab
+        let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
         stack![scene, hint]
             .push(grids)
@@ -2719,6 +3059,7 @@ impl App {
             .push(plane)
             .push(measures)
             .push(measurements)
+            .push(marks)
             .push(boxed)
             .push(picking)
             .push(cube)
@@ -3290,12 +3631,10 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
     .into()
 }
 
-/// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
+/// The language of the stand-alone layout (`--screenshot`): English, or the language of
+/// `O3V_LANG` (`nl`, `de`, `fr`).
 pub(crate) fn standalone_language() -> Language {
-    match std::env::var("O3V_LANG").as_deref() {
-        Ok("nl") => Language::Dutch,
-        _ => Language::English,
-    }
+    std::env::var("O3V_LANG").ok().and_then(|code| Language::from_code(&code)).unwrap_or(Language::English)
 }
 
 /// A side panel of the stand-alone layout, as wide as the shell's pane (explorer 220, properties

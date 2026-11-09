@@ -491,10 +491,10 @@ impl App {
         task
     }
 
-    /// Where `save_file` writes: `path` (in the work folder), else next to the open file as IFC.
+    /// Where `save_file` writes: `path` (in the work folder), else next to the open file as IFCX.
     /// Only formats the viewer writes, and an existing file only with `overwrite`. The default is
-    /// never the open file itself: the viewer's IFC is a re-export (triangles, the properties it
-    /// shows), so an open `a.ifc` is saved as `a-viewer.ifc` beside it.
+    /// never the open file itself: the viewer's IFCX is a re-export (triangles, the properties it
+    /// shows), so an open `a.ifcx` is saved as `a-viewer.ifcx` beside it.
     pub(crate) fn save_target(&self, a: &Value) -> Result<PathBuf, String> {
         let model = self.require_model()?;
         if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -517,7 +517,7 @@ impl App {
             path.set_extension(default_ext);
         }
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        crate::export::writer_for(&name).map_err(|e| format!("{e}: the viewer saves models as IFC (.ifc)"))?;
+        crate::export::writer_for(&name).map_err(|e| format!("{e}: the viewer saves models as IFCX (.ifcx) or IFC (.ifc)"))?;
         if path.parent().is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir()) {
             return Err(format!("the folder of {} does not exist", path.display()));
         }
@@ -700,6 +700,10 @@ impl App {
     /// selected.
     fn selection_json(&self) -> Value {
         let Some(model) = &self.model else { return Value::Null };
+        // a picked grid line, picked alone
+        if let Some(grid) = self.picked_grid.and_then(|g| model.project.grids.get(g)) {
+            return grid_json(grid);
+        }
         let structural: Vec<Value> = self.structural.selected.iter().map(|&id| crate::structural::id_json(id)).collect();
         let Some((layer, element)) = self.selected else {
             let Some(&first) = self.structural.selected.first() else { return Value::Null };
@@ -1215,6 +1219,18 @@ impl App {
         let (vx, vy) = self.to_viewport(x, y);
         let hit = self.hit_at(vx, vy);
         let (w, h) = self.viewport_size;
+        // a grid line drawn there (its bubble, or within 5 px of its line where it is seen), as a
+        // click takes it first (unless it measures or places a plane)
+        let clicks = self.measure.tool.is_none() && !self.plane_picking;
+        let grid = self.grid_under(vx, vy, w, h, hit.as_ref().map(|h| h.point)).filter(|_| clicks);
+        if let (Some(g), Some(model)) = (grid, self.model.clone()) {
+            if flag(a, "select").unwrap_or(false) {
+                self.pick_grid(Some(g));
+            }
+            let mut out = grid_json(&model.project.grids[g]);
+            out["hit"] = json!(true);
+            return Ok(out);
+        }
         let structural = self.pick_structural(vx, vy, w, h, hit.as_ref().map(|h| h.point));
         if flag(a, "select").unwrap_or(false) {
             match &structural {
@@ -1735,6 +1751,11 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// A grid line: its name and the ends of its line (world, metres).
+fn grid_json(grid: &crate::model::GridLine) -> Value {
+    json!({ "grid": grid.name, "start": jv(Vec3::from_array(grid.a)), "end": jv(Vec3::from_array(grid.b)) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1811,23 +1832,27 @@ mod tests {
     #[test]
     fn saves_only_what_the_viewer_writes() {
         let app = app();
-        // next to the open file, as IFC
-        assert_eq!(app.save_target(&json!({})), Ok(PathBuf::from("test.ifc")));
+        // next to the open file, as IFCX
+        assert_eq!(app.save_target(&json!({})), Ok(PathBuf::from("test.ifcx")));
         let dir = std::env::temp_dir().join(format!("o3v-save-target-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
-        assert_eq!(app.save_target(&json!({ "path": at("out") })), Ok(dir.join("out.ifc")));
+        assert_eq!(app.save_target(&json!({ "path": at("out") })), Ok(dir.join("out.ifcx")));
         assert!(app.save_target(&json!({ "path": at("out.glb") })).unwrap_err().contains("glb"));
         assert!(app.save_target(&json!({ "path": at("missing/out.ifc") })).is_err());
         // an existing file only with overwrite
         std::fs::write(dir.join("old.ifc"), b"x").unwrap();
         assert!(app.save_target(&json!({ "path": at("old.ifc") })).unwrap_err().contains("overwrite"));
         assert_eq!(app.save_target(&json!({ "path": at("old.ifc"), "overwrite": true })), Ok(dir.join("old.ifc")));
-        // an open IFC is not the default target: the viewer's IFC goes beside it
+        // an open IFC gets its IFCX beside it; an open IFCX is not the default target: the
+        // viewer's IFCX goes beside it
         let mut ifc = App::default();
         ifc.set_model(Arc::new(Model::new(dir.join("a.IFC"), "IFC", vec![])));
-        assert_eq!(ifc.save_target(&json!({})), Ok(dir.join("a-viewer.ifc")));
+        assert_eq!(ifc.save_target(&json!({})), Ok(dir.join("a.ifcx")));
         assert_eq!(ifc.save_target(&json!({ "path": at("a.IFC"), "overwrite": true })), Ok(dir.join("a.IFC")));
+        let mut ifcx = App::default();
+        ifcx.set_model(Arc::new(Model::new(dir.join("b.IFCX"), "IFCX", vec![])));
+        assert_eq!(ifcx.save_target(&json!({})), Ok(dir.join("b-viewer.ifcx")));
         let _ = std::fs::remove_dir_all(&dir);
         // nothing open, nothing to save
         assert!(App::default().save_target(&json!({})).is_err());
@@ -1952,6 +1977,29 @@ mod tests {
         assert_eq!(hit["element"], json!(7));
         assert_eq!(hit["normal"], json!([1.0, 0.0, 0.0]));
         assert!((hit["point"][0].as_f64().unwrap() - 2.0).abs() < 1e-3, "{hit}");
+    }
+
+    /// `pick` names a grid line under the pixel, as a click takes it before what lies behind it,
+    /// and with select picks it; the state shows it then.
+    #[test]
+    fn pick_names_a_grid_line_and_selects_it() {
+        let mut model = Model::new(PathBuf::from("grids.rvt"), "Revit", Vec::new());
+        model.project.grids = vec![crate::model::GridLine { name: "A".into(), a: [-5.0, 0.0, 0.0], b: [5.0, 0.0, 0.0] }];
+        let mut app = App::default();
+        app.set_model(Arc::new(model));
+        app.viewport_size = (800.0, 600.0);
+        app.camera.set_preset(ViewPreset::Top);
+        app.camera.target = Vec3::ZERO;
+        app.camera.distance = 20.0;
+        let hit = run(&mut app, "pick", json!({ "x": 400, "y": 302 })).unwrap();
+        assert_eq!(hit["grid"], json!("A"), "{hit}");
+        assert_eq!((hit["start"].clone(), hit["end"].clone()), (json!([-5.0, 0.0, 0.0]), json!([5.0, 0.0, 0.0])));
+        assert_eq!(app.picked_grid, None);
+        run(&mut app, "pick", json!({ "x": 400, "y": 302, "select": true })).unwrap();
+        assert_eq!(app.picked_grid, Some(0));
+        let state = run(&mut app, "get_state", json!({})).unwrap();
+        assert_eq!(state["selection"]["grid"], json!("A"), "{state}");
+        assert!(run(&mut app, "pick", json!({ "x": 400, "y": 380 })).unwrap()["grid"].is_null());
     }
 
     #[test]

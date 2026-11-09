@@ -405,12 +405,23 @@ struct Scene {
     elements: usize,
     /// The storeys (`IfcBuildingStorey`): name and elevation.
     levels: Vec<(String, f32)>,
+    /// The definitions of elements this viewer modelled (`openaec::element`).
+    definitions: Vec<Value>,
 }
 
 impl Scene {
     #[allow(clippy::too_many_arguments)]
     fn walk(&mut self, node: &Composed, name: &str, tree: &str, parent: DMat4, color: Option<[f32; 4]>, element: Option<&Element>, depth: usize) {
         if depth > 256 || invisible(node) {
+            return;
+        }
+        // a modelled element: its definitions (its own and its connections') come back, its mesh is
+        // made from them again
+        if let Some(definition) = node.attribute("openaec::element") {
+            match definition {
+                Value::Array(all) => self.definitions.extend(all.iter().cloned()),
+                one => self.definitions.push(one.clone()),
+            }
             return;
         }
         let world = transform(node).map_or(parent, |m| parent * m);
@@ -583,11 +594,12 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         return Err("IFCX: every node is held by another (a cycle); nothing to draw".into());
     }
     let mut composer = Composer { flat: &flat, deep, memo: HashMap::new(), busy: HashSet::new() };
-    let mut scene = Scene { layers: BTreeMap::new(), clouds: BTreeMap::new(), written: HashSet::new(), next_id: 0, elements: 0, levels: Vec::new() };
+    let mut scene = Scene { layers: BTreeMap::new(), clouds: BTreeMap::new(), written: HashSet::new(), next_id: 0, elements: 0, levels: Vec::new(), definitions: Vec::new() };
     for root in roots {
         let node = composer.compose(root);
         scene.walk(&node, root, root, DMat4::IDENTITY, None, None, 0);
     }
+    let definitions = std::mem::take(&mut scene.definitions);
     let mut layers: Vec<Layer> = scene.layers.into_values().filter(|l| !l.indices.is_empty()).collect();
     if layers.iter().all(|l| l.hidden) {
         // a file of only spaces or openings: show them
@@ -618,13 +630,27 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     if remote > 0 {
         info.push(("IFCX imports not read (web)".into(), remote.to_string()));
     }
-    if layers.is_empty() {
+    if layers.is_empty() && definitions.is_empty() {
         return Err("IFCX: no meshes found".into());
     }
     let mut levels = scene.levels;
     levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     levels.dedup();
-    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, levels, ..ProjectData::default() } })
+    // the drawings this viewer wrote (`o3v::` attributes), in file order, the later file winning
+    let mut drawings: Vec<(String, Value)> = Vec::new();
+    for node in files.iter().flat_map(|r| &r.file.data) {
+        let own: serde_json::Map<String, Value> =
+            node.attributes.iter().flatten().filter(|(k, _)| k.starts_with("o3v::")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if own.is_empty() {
+            continue;
+        }
+        match drawings.iter_mut().find(|(p, _)| *p == node.path) {
+            Some((_, attributes)) => attributes.as_object_mut().into_iter().for_each(|a| a.extend(own.clone())),
+            None => drawings.push((node.path.clone(), Value::Object(own))),
+        }
+    }
+    let project = ProjectData { info, levels, drawings, elements: definitions, ..ProjectData::default() };
+    Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
 
 #[cfg(test)]

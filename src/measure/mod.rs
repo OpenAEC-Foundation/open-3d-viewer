@@ -204,6 +204,14 @@ impl MeasureState {
         self.building_edges = false;
     }
 
+    /// Forgets the edges of the layers (the scene's layers changed) and the hover; measurements
+    /// stay (they are in world space).
+    pub fn forget_edges(&mut self) {
+        self.hover = None;
+        self.topology.clear();
+        self.building_edges = false;
+    }
+
     /// Esc: drop the picks in progress, else switch the tool off. False when there was nothing
     /// to stop.
     pub fn escape(&mut self) -> bool {

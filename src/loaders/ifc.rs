@@ -6,7 +6,7 @@
 //! A zipped IFC (`.ifczip`, as buildingSMART defines it) opens the first `.ifc` in the archive.
 
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{Layer, ProjectData};
+use crate::model::{GridLine, Layer, ProjectData};
 use ifc_lite_processing::{process, ProcessingRequest};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -162,8 +162,19 @@ impl Loader for IfcLoader {
             storeys(header, scale).into_iter().map(|(name, z)| (name, (building_z + z - anchor[2]) as f32)).collect();
         levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         levels.dedup();
+        // the grids, as Revit's: at the level nearest the building's zero (peil 0)
+        let zero = building_z - anchor[2];
+        let ground = levels.iter().map(|l| l.1 as f64).min_by(|a, b| (a - zero).abs().total_cmp(&(b - zero).abs())).unwrap_or(zero);
+        let to_scene = |p: [f64; 3]| [(p[0] - anchor[0]) as f32, (p[1] - anchor[1]) as f32, ground as f32];
+        let mut grids: Vec<GridLine> = grid_lines(header, scale).into_iter().map(|(name, a, b)| GridLine { name, a: to_scene(a), b: to_scene(b) }).collect();
+        // one grid per storey (as Revit writes them) is the same grid: once, to the millimetre
+        let mut seen = std::collections::HashSet::new();
+        let mm = |p: [f32; 3]| [(p[0] * 1000.0).round() as i64, (p[1] * 1000.0).round() as i64];
+        grids.retain(|g| seen.insert((g.name.clone(), mm(g.a), mm(g.b))));
+        grids.sort_by(|a, b| a.name.cmp(&b.name));
         let project = ProjectData {
             levels,
+            grids,
             info: vec![
                 ("IFC schema".into(), result.metadata.schema_version),
                 ("IFC world origin (metres)".into(), format!("{}, {}, {}", anchor[0], anchor[1], anchor[2])),
@@ -216,6 +227,79 @@ fn storeys(content: &[u8], scale: f64) -> Vec<(String, f64)> {
         }
     }
     out
+}
+
+/// The axes of the file's grids (`IfcGrid`): each its tag and the two ends of its curve in the
+/// IFC world (metres), the grid's placement applied. An axis is a polyline (first to last point)
+/// or a line trimmed by points or parameters; other curves are left out.
+fn grid_lines(content: &[u8], scale: f64) -> Vec<(String, [f64; 3], [f64; 3])> {
+    use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner};
+    let mut scanner = EntityScanner::new(content);
+    let mut decoder = EntityDecoder::new(content);
+    let mut out = Vec::new();
+    while let Some((_, keyword, start, end)) = scanner.next_entity() {
+        if !keyword.eq_ignore_ascii_case("IFCGRID") {
+            continue;
+        }
+        let Ok(grid) = decoder.decode_at(start, end) else { continue };
+        let placement = match ifc_lite_geometry::placement::resolve_object_placement(&grid, &mut decoder) {
+            Ok(Some(m)) => glam::DMat4::from_cols_slice(m.as_slice()),
+            Ok(None) => glam::DMat4::IDENTITY,
+            Err(_) => continue,
+        };
+        let world = |p: [f64; 3]| (placement.transform_point3(glam::DVec3::from_array(p)) * scale).to_array();
+        // the U, V and W axes
+        for list in 7..=9 {
+            for id in grid.get_refs(list).unwrap_or_default() {
+                let Ok(axis) = decoder.decode_by_id(id) else { continue };
+                let tag = axis.get_string(0).map(|s| decode_ifc_string(s).trim().to_string()).unwrap_or_default();
+                let Some((a, b)) = axis.get_ref(1).and_then(|curve| curve_ends(&mut decoder, curve)) else { continue };
+                out.push((tag, world(a), world(b)));
+            }
+        }
+    }
+    out
+}
+
+/// The two ends of a grid axis's curve in its grid's frame (file units): a polyline's first and
+/// last point, or a trimmed line's trims (points, or parameters along its vector).
+fn curve_ends(decoder: &mut ifc_lite_core::EntityDecoder, curve: u32) -> Option<([f64; 3], [f64; 3])> {
+    use ifc_lite_core::IfcType;
+    let point = |decoder: &mut ifc_lite_core::EntityDecoder, id: u32| -> Option<[f64; 3]> {
+        let p = decoder.decode_by_id(id).ok()?;
+        let c = p.get_list(0)?;
+        Some([c.first()?.as_float()?, c.get(1)?.as_float()?, c.get(2).and_then(|v| v.as_float()).unwrap_or(0.0)])
+    };
+    let curve = decoder.decode_by_id(curve).ok()?;
+    match curve.ifc_type {
+        IfcType::IfcPolyline => {
+            let points = curve.get_refs(0)?;
+            Some((point(decoder, *points.first()?)?, point(decoder, *points.last()?)?))
+        }
+        IfcType::IfcTrimmedCurve => {
+            let line = decoder.decode_by_id(curve.get_ref(0)?).ok()?;
+            if line.ifc_type != IfcType::IfcLine {
+                return None;
+            }
+            let origin = glam::DVec3::from_array(point(decoder, line.get_ref(0)?)?);
+            let vector = decoder.decode_by_id(line.get_ref(1)?).ok()?;
+            let ratios = decoder.decode_by_id(vector.get_ref(0)?).ok()?;
+            let r = ratios.get_list(0)?;
+            let direction = glam::DVec3::new(r.first()?.as_float()?, r.get(1)?.as_float()?, r.get(2).and_then(|v| v.as_float()).unwrap_or(0.0));
+            let along = direction.normalize_or_zero() * vector.get_float(1).unwrap_or(1.0);
+            let mut trim = |list: usize| -> Option<[f64; 3]> {
+                let items = curve.get_list(list)?.to_vec();
+                // a point where there is one, else the parameter
+                if let Some(id) = items.iter().find_map(|v| v.as_entity_ref()) {
+                    return point(decoder, id);
+                }
+                let t = items.iter().find_map(|v| v.as_float())?;
+                Some((origin + along * t).to_array())
+            };
+            Some((trim(1)?, trim(2)?))
+        }
+        _ => None,
+    }
 }
 
 /// The Z of a local placement's own offset (`IfcLocalPlacement` → `IfcAxis2Placement3D` →
@@ -406,7 +490,10 @@ END-ISO-10303-21;"#;
 
     /// A building placed 10 m up its site with two storeys: the ground floor without an
     /// `Elevation` (so its placement's 0 counts) and the first floor at 3 with a wall standing on
-    /// it, 3 high. Lengths are given in `unit` (`$` metres, `.MILLI.` millimetres) times `scale`.
+    /// it, 3 high, and a grid placed 1 m east of the building: axes 1 and 2 at its x = 0 and 4
+    /// (polylines from y = -1 to 6), axis A at its y = 0 (a line trimmed by parameters, x = -1 to
+    /// 5), and the same grid again on the first floor, as Revit writes one per storey. Lengths are
+    /// given in `unit` (`$` metres, `.MILLI.` millimetres) times `scale`.
     fn storeys_ifc(unit: &str, scale: f64) -> Vec<u8> {
         let l = |v: f64| format!("{:.1}", v * scale);
         format!(
@@ -449,10 +536,34 @@ DATA;
 #15=IFCPRODUCTDEFINITIONSHAPE($,$,(#14));
 #16=IFCWALL('1YvctVUKr0kugbFTf53O9L',$,'Wall',$,$,#9,#15,$,.NOTDEFINED.);
 #45=IFCRELCONTAINEDINSPATIALSTRUCTURE('9YvctVUKr0kugbFTf53O9L',$,$,$,(#16),#41);
+#50=IFCCARTESIANPOINT(({one},0.,0.));
+#51=IFCAXIS2PLACEMENT3D(#50,$,$);
+#52=IFCLOCALPLACEMENT(#34,#51);
+#53=IFCCARTESIANPOINT((0.,{minus_one}));
+#54=IFCCARTESIANPOINT((0.,{six}));
+#55=IFCPOLYLINE((#53,#54));
+#56=IFCCARTESIANPOINT(({four},{minus_one}));
+#57=IFCCARTESIANPOINT(({four},{six}));
+#58=IFCPOLYLINE((#56,#57));
+#59=IFCCARTESIANPOINT((0.,0.));
+#60=IFCDIRECTION((2.,0.));
+#61=IFCVECTOR(#60,{one});
+#62=IFCLINE(#59,#61);
+#63=IFCTRIMMEDCURVE(#62,(IFCPARAMETERVALUE(-1.)),(IFCPARAMETERVALUE(5.)),.T.,.PARAMETER.);
+#64=IFCGRIDAXIS('1',#55,.T.);
+#65=IFCGRIDAXIS('2',#58,.T.);
+#66=IFCGRIDAXIS('A',#63,.T.);
+#67=IFCGRID('AYvctVUKr0kugbFTf53O9L',$,'Grid',$,$,#52,$,(#64,#65),(#66),$,.RECTANGULAR.);
+#68=IFCLOCALPLACEMENT(#40,#51);
+#69=IFCGRID('BYvctVUKr0kugbFTf53O9L',$,'Grid',$,$,#68,$,(#64,#65),(#66),$,.RECTANGULAR.);
 ENDSEC;
 END-ISO-10303-21;"#,
             building = l(10.0),
             first = l(3.0),
+            one = l(1.0),
+            minus_one = l(-1.0),
+            four = l(4.0),
+            six = l(6.0),
             length = l(4.0),
             thickness = l(0.2),
             height = l(3.0),
@@ -488,6 +599,22 @@ END-ISO-10303-21;"#,
         assert_levels(&model, &[("00 Begane grond", 10.0), ("01 Eerste verdieping é", 13.0)]);
     }
 
+    /// Grids are shown at the level nearest the building's zero (peil 0), as Revit's are.
+    #[test]
+    fn reads_grids_at_the_level_of_the_buildings_zero_in_metres_and_millimetres() {
+        for (name, unit, scale) in [("grids.ifc", "$", 1.0), ("grids-mm.ifc", ".MILLI.", 1000.0)] {
+            let model = load_bytes(name, storeys_ifc(unit, scale));
+            let grids = &model.project.grids;
+            let names: Vec<&str> = grids.iter().map(|g| g.name.as_str()).collect();
+            assert_eq!(names, ["1", "2", "A"], "{name}: the first floor's copy is the same grid");
+            let close = |p: [f32; 3], q: [f32; 3]| p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.001);
+            let ends = |i: usize| (grids[i].a, grids[i].b);
+            assert!(close(ends(0).0, [1.0, -1.0, 10.0]) && close(ends(0).1, [1.0, 6.0, 10.0]), "{name}: {grids:?}");
+            assert!(close(ends(1).0, [5.0, -1.0, 10.0]) && close(ends(1).1, [5.0, 6.0, 10.0]), "{name}: {grids:?}");
+            assert!(close(ends(2).0, [0.0, 0.0, 10.0]) && close(ends(2).1, [6.0, 0.0, 10.0]), "{name}: {grids:?}");
+        }
+    }
+
     #[test]
     fn levels_saved_as_ifc_read_back_as_the_same_levels() {
         let positions = vec![0.,0.,3., 2.,0.,3., 2.,3.,3., 0.,3.,3., 0.,0.,6., 2.,0.,6., 2.,3.,6., 0.,3.,6.];
@@ -501,3 +628,4 @@ END-ISO-10303-21;"#,
         assert_levels(&model, &[("Level 0", 0.0), ("Level 1", 3.0), ("Roof", 6.5)]);
     }
 }
+

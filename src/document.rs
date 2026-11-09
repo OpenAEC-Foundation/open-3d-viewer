@@ -1,6 +1,7 @@
 //! The project document in IfcX (IFC5) form, kept beside the loaded model: what the app
 //! recognises in a model and what the user adds, in the shape of IfcX nodes, so that it can be
-//! written as `.ifcx` (the native format to come). Levels for now; floor plans and sheets follow.
+//! written as `.ifcx` (the native format to come): levels and the floor plans made on them; sheets
+//! follow.
 //!
 //! Headless: no GUI or GPU, so the MCP server and a later BIM kernel crate can use it as it is.
 
@@ -24,6 +25,129 @@ pub struct Level {
     pub added: bool,
 }
 
+/// The layers a view shows otherwise than the model has them, by layer name: on (`true`) or off.
+/// Empty: the view shows the layers as the model does.
+pub type LayerSwitches = std::collections::BTreeMap<String, bool>;
+
+/// How far a floor plan cuts above its level (metres), as is usual for floor plans.
+pub const PLAN_CUT: f64 = 1.2;
+/// How far a floor plan looks below its level (metres), so the floor it stands on shows.
+pub const PLAN_DEPTH: f64 = 0.3;
+
+/// A floor plan: the model seen from above, cut at [`PlanView::cut`] above its level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanView {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub name: String,
+    /// The path of its level.
+    pub level: String,
+    /// The cut above the level (metres).
+    pub cut: f64,
+    /// How far it looks below the level (metres).
+    pub depth: f64,
+    /// Its dimensions, shown wherever it is placed.
+    pub dimensions: Vec<Dimension>,
+    /// Its texts, shown wherever it is placed.
+    pub notes: Vec<Note>,
+    /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
+    /// all of it.
+    pub crop: Option<([f64; 2], [f64; 2])>,
+    /// Its own layers: those it shows otherwise than the model.
+    pub layers: LayerSwitches,
+}
+
+/// A section or an elevation: the model seen level, looking to the left of the line `from` →
+/// `to` (plan, metres), cut along that line and seen as far as `depth` beyond it. An elevation
+/// stands outside the model, so it cuts nothing. Its drawing has `u` along the line (from
+/// `from`) and `v` up (the model's height).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionView {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub name: String,
+    pub from: [f64; 2],
+    pub to: [f64; 2],
+    /// How far it looks beyond its line (metres).
+    pub depth: f64,
+    /// Its dimensions, in its drawing's (u, v).
+    pub dimensions: Vec<Dimension>,
+    /// Its texts, in its drawing's (u, v).
+    pub notes: Vec<Note>,
+    /// What it shows, in its drawing's (u, v); `None`: all of it.
+    pub crop: Option<([f64; 2], [f64; 2])>,
+    /// Its own layers: those it shows otherwise than the model.
+    pub layers: LayerSwitches,
+}
+
+impl SectionView {
+    /// Along the line (unit, plan) and the way it looks (unit, plan: to the left of the line).
+    pub fn axes(&self) -> ([f64; 2], [f64; 2]) {
+        let (dx, dy) = (self.to[0] - self.from[0], self.to[1] - self.from[1]);
+        let run = dx.hypot(dy).max(1e-9);
+        let along = [dx / run, dy / run];
+        (along, [-along[1], along[0]])
+    }
+}
+
+/// A dimension on a drawing: the distance between two of its points (a floor plan's x, y in the
+/// model's frame, a section's u, v; metres).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dimension {
+    pub from: [f64; 2],
+    pub to: [f64; 2],
+}
+
+impl Dimension {
+    /// Its length (metres).
+    pub fn length(&self) -> f64 {
+        (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1])
+    }
+}
+
+/// A text on a drawing, standing on a point of it (its lower left; a floor plan's x, y, a
+/// section's u, v; metres).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    pub at: [f64; 2],
+    pub text: String,
+}
+
+/// A3 landscape, the paper of a new sheet (metres).
+pub const A3_LANDSCAPE: [f64; 2] = [0.420, 0.297];
+/// The ISO papers a sheet can have, landscape: name, width and height (metres).
+pub const PAPERS: [(&str, [f64; 2]); 5] =
+    [("A4", [0.297, 0.210]), ("A3", A3_LANDSCAPE), ("A2", [0.594, 0.420]), ("A1", [0.841, 0.594]), ("A0", [1.189, 0.841])];
+/// The scales a placed view can have (1 : this).
+pub const SCALES: [f64; 6] = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
+/// The scale a view gets when it is placed on a sheet (1 : this).
+pub const SHEET_SCALE: f64 = 100.0;
+
+/// A sheet: paper with views placed on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sheet {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub number: String,
+    pub name: String,
+    /// Number and name, as a tab shows them.
+    pub title: String,
+    /// Width and height (metres).
+    pub paper: [f64; 2],
+    pub views: Vec<PlacedView>,
+}
+
+/// A view on a sheet.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedView {
+    /// The path of the floor plan.
+    pub plan: String,
+    /// Where its middle is on the paper (metres from the lower left corner).
+    pub at: [f64; 2],
+    /// 1 : `scale`.
+    pub scale: f64,
+}
+
 /// Why a level was not added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LevelError {
@@ -39,7 +163,13 @@ pub enum LevelError {
 pub struct Document {
     /// Low to high; equal elevations by name.
     levels: Vec<Level>,
-    /// Levels added so far, for the paths of new ones.
+    /// Floor plans, in the order they were made.
+    plans: Vec<PlanView>,
+    /// Sections and elevations, in the order they were made.
+    sections: Vec<SectionView>,
+    /// Sheets, in the order they were made.
+    sheets: Vec<Sheet>,
+    /// Levels and views made so far, for the paths of new ones.
     added: u64,
 }
 
@@ -78,6 +208,112 @@ impl Document {
         }
         self.levels = levels;
         self.sort();
+        self.drop_orphan_plans();
+        self.adopt_ifcx(&model.project.drawings);
+    }
+
+    /// The floor plans, sections, elevations and sheets as IfcX nodes in the `o3v::` namespace,
+    /// under one root node; a plan names its level, so it finds it again in the file's storeys.
+    pub fn ifcx_drawing_nodes(&self) -> Vec<Value> {
+        let rect = |c: Option<([f64; 2], [f64; 2])>| c.map_or(Value::Null, |(lo, hi)| json!([lo, hi]));
+        let dims = |d: &[Dimension]| d.iter().map(|d| json!([d.from, d.to])).collect::<Vec<_>>();
+        let notes = |n: &[Note]| n.iter().map(|n| json!({"at": n.at, "text": n.text})).collect::<Vec<_>>();
+        let mut nodes = Vec::new();
+        let mut children = serde_json::Map::new();
+        for (i, p) in self.plans.iter().enumerate() {
+            let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
+            children.insert(format!("plan {}", i + 1), p.path.clone().into());
+            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": {
+                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "layers": p.layers,
+            }}}));
+        }
+        for (i, s) in self.sections.iter().enumerate() {
+            children.insert(format!("section {}", i + 1), s.path.clone().into());
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": {
+                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
+            }}}));
+        }
+        for (i, s) in self.sheets.iter().enumerate() {
+            children.insert(format!("sheet {}", i + 1), s.path.clone().into());
+            let views: Vec<Value> = s.views.iter().map(|v| json!({"view": v.plan, "at": v.at, "scale": v.scale})).collect();
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "paper": s.paper, "views": views}}}));
+        }
+        if !nodes.is_empty() {
+            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1}}}));
+        }
+        nodes
+    }
+
+    /// Takes over the drawings an IFCX file holds (its `o3v::` nodes), except those it has
+    /// already; a floor plan finds its level by name.
+    pub fn adopt_ifcx(&mut self, nodes: &[(String, Value)]) {
+        let pair = |v: &Value| -> Option<[f64; 2]> { Some([v.get(0)?.as_f64()?, v.get(1)?.as_f64()?]) };
+        let rect = |v: Option<&Value>| -> Option<([f64; 2], [f64; 2])> {
+            let v = v?;
+            Some((pair(v.get(0)?)?, pair(v.get(1)?)?))
+        };
+        let dims = |v: Option<&Value>| -> Vec<Dimension> {
+            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)? })).collect()
+        };
+        let notes = |v: Option<&Value>| -> Vec<Note> {
+            let all = v.and_then(Value::as_array).into_iter().flatten();
+            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string() })).filter(|n| !n.text.trim().is_empty()).collect()
+        };
+        let layers = |v: Option<&Value>| -> LayerSwitches {
+            let all = v.and_then(Value::as_object).into_iter().flatten();
+            all.filter_map(|(name, on)| Some((name.clone(), on.as_bool()?))).collect()
+        };
+        let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+        let number = |v: &Value, key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
+        let known = |doc: &Document, path: &str| doc.plan(path).is_some() || doc.section(path).is_some() || doc.sheet(path).is_some();
+        for (path, attributes) in nodes {
+            if known(self, path) {
+                continue;
+            }
+            if let Some(p) = attributes.get("o3v::view::plan") {
+                let Some(level) = self.levels.iter().find(|l| same_name(&l.name, &text(p, "level"))).map(|l| l.path.clone()) else { continue };
+                self.plans.push(PlanView {
+                    path: path.clone(),
+                    name: text(p, "name"),
+                    level,
+                    cut: number(p, "cut", PLAN_CUT),
+                    depth: number(p, "depth", PLAN_DEPTH),
+                    dimensions: dims(p.get("dimensions")),
+                    notes: notes(p.get("notes")),
+                    crop: rect(p.get("crop")),
+                    layers: layers(p.get("layers")),
+                });
+            } else if let Some(s) = attributes.get("o3v::view::section") {
+                let (Some(from), Some(to)) = (s.get("from").and_then(pair), s.get("to").and_then(pair)) else { continue };
+                self.sections.push(SectionView {
+                    path: path.clone(),
+                    name: text(s, "name"),
+                    from,
+                    to,
+                    depth: number(s, "depth", 100.0),
+                    dimensions: dims(s.get("dimensions")),
+                    notes: notes(s.get("notes")),
+                    crop: rect(s.get("crop")),
+                    layers: layers(s.get("layers")),
+                });
+            }
+        }
+        // sheets last: their views are known by then
+        for (path, attributes) in nodes {
+            let Some(s) = attributes.get("o3v::sheet") else { continue };
+            if known(self, path) {
+                continue;
+            }
+            let views = s.get("views").and_then(Value::as_array).into_iter().flatten().filter_map(|v| {
+                let view = v.get("view")?.as_str()?.to_string();
+                (self.plan(&view).is_some() || self.section(&view).is_some()).then_some(())?;
+                Some(PlacedView { plan: view, at: pair(v.get("at")?)?, scale: number(v, "scale", SHEET_SCALE) })
+            });
+            let views: Vec<PlacedView> = views.collect();
+            let (number, name) = (text(s, "number"), text(s, "name"));
+            let paper = s.get("paper").and_then(pair).unwrap_or(A3_LANDSCAPE);
+            self.sheets.push(Sheet { path: path.clone(), title: format!("{number} {name}"), number, name, paper, views });
+        }
     }
 
     /// Adds a level and gives its index in [`Self::levels`].
@@ -103,7 +339,391 @@ impl Document {
     pub fn remove_level(&mut self, path: &str) -> bool {
         let before = self.levels.len();
         self.levels.retain(|l| !(l.added && l.path == path));
+        self.drop_orphan_plans();
         self.levels.len() < before
+    }
+
+    /// The level at `path`.
+    pub fn level(&self, path: &str) -> Option<&Level> {
+        self.levels.iter().find(|l| l.path == path)
+    }
+
+    /// The floor plans, in the order they were made.
+    pub fn plans(&self) -> &[PlanView] {
+        &self.plans
+    }
+
+    /// The floor plan at `path`.
+    pub fn plan(&self, path: &str) -> Option<&PlanView> {
+        self.plans.iter().find(|p| p.path == path)
+    }
+
+    /// Makes a floor plan of the level at `path`, named after the level (with a number when the
+    /// level has one already), and gives its path.
+    pub fn add_plan(&mut self, level: &str) -> Option<String> {
+        let base = self.level(level)?.name.clone();
+        let mut name = base.clone();
+        let mut n = 1;
+        while self.plans.iter().any(|p| same_name(&p.name, &name)) {
+            n += 1;
+            name = format!("{base} ({n})");
+        }
+        self.added += 1;
+        let path = uuid(&format!("plan/{}/{level}", self.added));
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new() });
+        Some(path)
+    }
+
+    /// Removes the floor plan at `path`, and it from the sheets.
+    pub fn remove_plan(&mut self, path: &str) -> bool {
+        let before = self.plans.len();
+        self.plans.retain(|p| p.path != path);
+        self.drop_orphan_plans();
+        self.plans.len() < before
+    }
+
+    /// The sections and elevations, in the order they were made.
+    pub fn sections(&self) -> &[SectionView] {
+        &self.sections
+    }
+
+    /// The section or elevation at `path`.
+    pub fn section(&self, path: &str) -> Option<&SectionView> {
+        self.sections.iter().find(|s| s.path == path)
+    }
+
+    /// Makes a section or elevation along `from` → `to` (at least 10 cm long), looking `depth`
+    /// beyond it, and gives its path.
+    pub fn add_section(&mut self, name: &str, from: [f64; 2], to: [f64; 2], depth: f64) -> Option<String> {
+        let finite = from.iter().chain(&to).chain([&depth]).all(|v| v.is_finite());
+        if !finite || (to[0] - from[0]).hypot(to[1] - from[1]) < 0.1 || depth <= 0.0 {
+            return None;
+        }
+        self.added += 1;
+        let path = uuid(&format!("section/{}/{name}", self.added));
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new() });
+        Some(path)
+    }
+
+    /// The next free section name: `<word> A`, `<word> B`, ..
+    pub fn next_section_name(&self, word: &str) -> String {
+        let taken = |name: &str| self.sections.iter().any(|s| same_name(&s.name, name));
+        (b'A'..=b'Z').map(|c| format!("{word} {}", c as char)).find(|n| !taken(n)).unwrap_or_else(|| format!("{word} {}", self.sections.len() + 1))
+    }
+
+    /// Removes a section or elevation, and it from the sheets.
+    pub fn remove_section(&mut self, path: &str) -> bool {
+        let before = self.sections.len();
+        self.sections.retain(|s| s.path != path);
+        self.drop_orphan_plans();
+        self.sections.len() < before
+    }
+
+    /// The name of a view (floor plan, section or elevation).
+    pub fn view_name(&self, path: &str) -> Option<&str> {
+        self.plan(path).map(|p| p.name.as_str()).or_else(|| self.section(path).map(|s| s.name.as_str()))
+    }
+
+    /// The dimensions and the crop of a view (floor plan, section or elevation).
+    pub fn view_marks(&self, path: &str) -> Option<(&[Dimension], Option<([f64; 2], [f64; 2])>)> {
+        if let Some(p) = self.plan(path) {
+            return Some((&p.dimensions, p.crop));
+        }
+        self.section(path).map(|s| (&s.dimensions[..], s.crop))
+    }
+
+    /// The dimensions and crop of a view, to change.
+    fn marks_mut(&mut self, path: &str) -> Option<(&mut Vec<Dimension>, &mut Option<([f64; 2], [f64; 2])>)> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some((&mut p.dimensions, &mut p.crop));
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| (&mut s.dimensions, &mut s.crop))
+    }
+
+    /// Adds a dimension between two points to a view's drawing; two points less than a
+    /// millimetre apart, or not finite, measure nothing.
+    pub fn add_dimension(&mut self, view: &str, from: [f64; 2], to: [f64; 2]) -> bool {
+        let dimension = Dimension { from, to };
+        if !(from.iter().chain(&to).all(|v| v.is_finite()) && dimension.length() >= 0.001) {
+            return false;
+        }
+        let Some((dimensions, _)) = self.marks_mut(view) else { return false };
+        dimensions.push(dimension);
+        true
+    }
+
+    /// Puts a view's dimension on the other side of what it measures: its line stands to the
+    /// left of from → to, so the two swap.
+    pub fn flip_dimension(&mut self, view: &str, index: usize) -> bool {
+        let Some(d) = self.marks_mut(view).and_then(|(d, _)| d.get_mut(index)) else { return false };
+        std::mem::swap(&mut d.from, &mut d.to);
+        true
+    }
+
+    /// Removes a dimension of a view.
+    pub fn remove_dimension(&mut self, view: &str, index: usize) -> bool {
+        let Some((dimensions, _)) = self.marks_mut(view) else { return false };
+        if index >= dimensions.len() {
+            return false;
+        }
+        dimensions.remove(index);
+        true
+    }
+
+    /// A view's own layers (a floor plan's, a section's or an elevation's).
+    pub fn view_layers(&self, path: &str) -> Option<&LayerSwitches> {
+        match self.plan(path) {
+            Some(p) => Some(&p.layers),
+            None => self.section(path).map(|s| &s.layers),
+        }
+    }
+
+    /// Gives a view its own layers; false when there is no such view or nothing changes.
+    pub fn set_view_layers(&mut self, path: &str, layers: LayerSwitches) -> bool {
+        let own = match self.plans.iter_mut().find(|p| p.path == path) {
+            Some(p) => &mut p.layers,
+            None => match self.sections.iter_mut().find(|s| s.path == path) {
+                Some(s) => &mut s.layers,
+                None => return false,
+            },
+        };
+        if *own == layers {
+            return false;
+        }
+        *own = layers;
+        true
+    }
+
+    /// The texts of a view.
+    pub fn view_notes(&self, path: &str) -> Option<&[Note]> {
+        if let Some(p) = self.plan(path) {
+            return Some(&p.notes);
+        }
+        self.section(path).map(|s| &s.notes[..])
+    }
+
+    fn notes_mut(&mut self, path: &str) -> Option<&mut Vec<Note>> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some(&mut p.notes);
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| &mut s.notes)
+    }
+
+    /// Adds a text to a view's drawing at a point of it; a text of only spaces, or a point that
+    /// is not finite, adds nothing.
+    pub fn add_note(&mut self, view: &str, at: [f64; 2], text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || !at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(notes) = self.notes_mut(view) else { return false };
+        notes.push(Note { at, text: text.to_string() });
+        true
+    }
+
+    /// Moves a view's text to another point of its drawing.
+    pub fn move_note(&mut self, view: &str, index: usize, at: [f64; 2]) -> bool {
+        if !at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
+        note.at = at;
+        true
+    }
+
+    /// Gives a view's text another wording; it keeps one.
+    pub fn set_note_text(&mut self, view: &str, index: usize, text: &str) -> bool {
+        if text.trim().is_empty() {
+            return false;
+        }
+        let Some(note) = self.notes_mut(view).and_then(|n| n.get_mut(index)) else { return false };
+        note.text = text.to_string();
+        true
+    }
+
+    /// Removes a view's text.
+    pub fn remove_note(&mut self, view: &str, index: usize) -> bool {
+        let Some(notes) = self.notes_mut(view) else { return false };
+        if index >= notes.len() {
+            return false;
+        }
+        notes.remove(index);
+        true
+    }
+
+    /// The sheets, in the order they were made.
+    pub fn sheets(&self) -> &[Sheet] {
+        &self.sheets
+    }
+
+    /// The sheet at `path`.
+    pub fn sheet(&self, path: &str) -> Option<&Sheet> {
+        self.sheets.iter().find(|s| s.path == path)
+    }
+
+    /// Makes an empty A3 sheet numbered after the last (`A01`, `A02`, ..) and named `name`, and
+    /// gives its path.
+    pub fn add_sheet(&mut self, name: &str) -> String {
+        let mut n = self.sheets.len() + 1;
+        while self.sheets.iter().any(|s| s.number == format!("A{n:02}")) {
+            n += 1;
+        }
+        self.added += 1;
+        let path = uuid(&format!("sheet/{}/{n}", self.added));
+        let number = format!("A{n:02}");
+        let title = format!("{number} {name}");
+        self.sheets.push(Sheet { path: path.clone(), number, name: name.to_string(), title, paper: A3_LANDSCAPE, views: Vec::new() });
+        path
+    }
+
+    /// Removes the sheet at `path`.
+    pub fn remove_sheet(&mut self, path: &str) -> bool {
+        let before = self.sheets.len();
+        self.sheets.retain(|s| s.path != path);
+        self.sheets.len() < before
+    }
+
+    /// Places a view (a floor plan, section or elevation) in the middle of a sheet at 1:100 and
+    /// gives its index on the sheet.
+    pub fn place_plan(&mut self, sheet: &str, plan: &str) -> Option<usize> {
+        self.view_name(plan)?;
+        let sheet = self.sheets.iter_mut().find(|s| s.path == sheet)?;
+        let at = [sheet.paper[0] / 2.0, sheet.paper[1] / 2.0];
+        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale: SHEET_SCALE });
+        Some(sheet.views.len() - 1)
+    }
+
+    /// Moves a placed view so that its middle is at `at`, kept on the paper.
+    pub fn move_placed(&mut self, sheet: &str, index: usize, at: [f64; 2]) -> bool {
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == sheet) else { return false };
+        let paper = sheet.paper;
+        let Some(view) = sheet.views.get_mut(index) else { return false };
+        if !(at[0].is_finite() && at[1].is_finite()) {
+            return false;
+        }
+        view.at = [at[0].clamp(0.0, paper[0]), at[1].clamp(0.0, paper[1])];
+        true
+    }
+
+    /// Sets the scale of a placed view (1 : `scale`).
+    pub fn set_scale(&mut self, sheet: &str, index: usize, scale: f64) -> bool {
+        if !(scale.is_finite() && scale > 0.0) {
+            return false;
+        }
+        let Some(view) = self.sheets.iter_mut().find(|s| s.path == sheet).and_then(|s| s.views.get_mut(index)) else { return false };
+        view.scale = scale;
+        true
+    }
+
+    /// Gives a sheet another paper; its views stay on it.
+    pub fn set_paper(&mut self, sheet: &str, paper: [f64; 2]) -> bool {
+        if !(paper.iter().all(|v| v.is_finite() && *v > 0.0)) {
+            return false;
+        }
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == sheet) else { return false };
+        sheet.paper = paper;
+        for view in &mut sheet.views {
+            view.at = [view.at[0].min(paper[0]), view.at[1].min(paper[1])];
+        }
+        true
+    }
+
+    /// Sets how far a floor plan cuts above its level (metres, above its view depth).
+    pub fn set_cut(&mut self, plan: &str, cut: f64) -> bool {
+        let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
+        if !(cut.is_finite() && cut > -plan.depth) {
+            return false;
+        }
+        plan.cut = cut;
+        true
+    }
+
+    /// Renames a view (floor plan, section or elevation): not empty, and not another view's name;
+    /// false when it is not renamed.
+    pub fn set_view_name(&mut self, path: &str, name: &str) -> bool {
+        let name = name.trim();
+        let mut others = self.plans.iter().map(|p| (&p.path, &p.name)).chain(self.sections.iter().map(|s| (&s.path, &s.name)));
+        if name.is_empty() || others.any(|(p, n)| p != path && same_name(n, name)) {
+            return false;
+        }
+        let own = match self.plans.iter_mut().find(|p| p.path == path) {
+            Some(p) => &mut p.name,
+            None => match self.sections.iter_mut().find(|s| s.path == path) {
+                Some(s) => &mut s.name,
+                None => return false,
+            },
+        };
+        if own == name {
+            return false;
+        }
+        *own = name.to_string();
+        true
+    }
+
+    /// Sets how far a view looks: a floor plan below its level (at least 0, and its cut stays
+    /// above that), a section or elevation beyond its line (more than 0); false when it does not
+    /// change.
+    pub fn set_view_depth(&mut self, path: &str, depth: f64) -> bool {
+        if !depth.is_finite() {
+            return false;
+        }
+        let own = if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            if depth < 0.0 || p.cut <= -depth {
+                return false;
+            }
+            &mut p.depth
+        } else if let Some(s) = self.sections.iter_mut().find(|s| s.path == path) {
+            if depth <= 0.0 {
+                return false;
+            }
+            &mut s.depth
+        } else {
+            return false;
+        };
+        if *own == depth {
+            return false;
+        }
+        *own = depth;
+        true
+    }
+
+    /// Crops a floor plan to a rectangle in plan (lower left, upper right; at least 10 cm each
+    /// way), or shows all of it again (`None`).
+    pub fn set_crop(&mut self, plan: &str, crop: Option<([f64; 2], [f64; 2])>) -> bool {
+        if let Some((lo, hi)) = crop {
+            if !(lo.iter().chain(&hi).all(|v| v.is_finite()) && hi[0] - lo[0] >= 0.1 && hi[1] - lo[1] >= 0.1) {
+                return false;
+            }
+        }
+        let Some((_, own)) = self.marks_mut(plan) else { return false };
+        *own = crop;
+        true
+    }
+
+    /// Takes a view off a sheet.
+    pub fn remove_placed(&mut self, sheet: &str, index: usize) -> bool {
+        let Some(sheet) = self.sheets.iter_mut().find(|s| s.path == sheet) else { return false };
+        if index >= sheet.views.len() {
+            return false;
+        }
+        sheet.views.remove(index);
+        true
+    }
+
+    /// The heights a floor plan shows, from low to high (metres, the model's frame).
+    pub fn plan_range(&self, plan: &PlanView) -> Option<(f64, f64)> {
+        let z = self.level(&plan.level)?.elevation;
+        Some((z - plan.depth, z + plan.cut))
+    }
+
+    /// A floor plan goes with its level, and a placed view with its floor plan.
+    fn drop_orphan_plans(&mut self) {
+        let levels = &self.levels;
+        self.plans.retain(|p| levels.iter().any(|l| l.path == p.level));
+        let (plans, sections) = (&self.plans, &self.sections);
+        for sheet in &mut self.sheets {
+            sheet.views.retain(|v| plans.iter().any(|p| p.path == v.plan) || sections.iter().any(|s| s.path == v.plan));
+        }
     }
 
     /// The levels added in the app, low to high.
@@ -166,7 +786,7 @@ fn micrometres(z: f64) -> f64 {
 }
 
 /// A UUID (version 8, RFC 9562) derived from `seed`: the same seed gives the same path.
-fn uuid(seed: &str) -> String {
+pub(crate) fn uuid(seed: &str) -> String {
     let fnv = |offset: u64| seed.bytes().fold(offset, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3));
     let (hi, lo) = (fnv(0xcbf2_9ce4_8422_2325), fnv(0x84222325_cbf29ce4));
     let hi = (hi & !0xf000) | 0x8000; // version 8
@@ -270,6 +890,229 @@ mod tests {
         assert_eq!(parse_elevation(""), None);
         assert_eq!(parse_elevation("three"), None);
         assert_eq!(parse_elevation("inf"), None);
+    }
+
+    #[test]
+    fn makes_floor_plans_of_levels_named_after_them() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let first = document.levels()[1].path.clone();
+        let plan = document.add_plan(&first).expect("a plan");
+        let again = document.add_plan(&first).expect("a second plan");
+        assert_ne!(plan, again);
+        let names: Vec<&str> = document.plans().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["01", "01 (2)"]);
+        let view = document.plan(&plan).unwrap();
+        assert_eq!((view.level.as_str(), view.cut, view.depth), (first.as_str(), PLAN_CUT, PLAN_DEPTH));
+        // from just below the floor up to the cut
+        assert_eq!(document.plan_range(view), Some((3.0 - PLAN_DEPTH, 3.0 + PLAN_CUT)));
+        assert_eq!(document.add_plan("no such level"), None);
+        assert!(document.remove_plan(&again));
+        assert_eq!(document.plans().len(), 1);
+    }
+
+    #[test]
+    fn a_floor_plan_goes_with_its_level() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        document.add_level("Roof", 6.0).unwrap();
+        let ground = document.levels()[0].path.clone();
+        let roof = document.levels()[1].path.clone();
+        document.add_plan(&ground).unwrap();
+        document.add_plan(&roof).unwrap();
+        document.remove_level(&roof);
+        assert_eq!(document.plans().iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["00"]);
+        // the model read again keeps the plan of a level it still has, not of one it lost
+        document.recognise(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        assert_eq!(document.plans().len(), 1);
+        document.recognise(&model_with(&[("01", 3.0)]));
+        assert!(document.plans().is_empty());
+    }
+
+    #[test]
+    fn sheets_hold_floor_plans_that_move_on_the_paper() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let sheet = document.add_sheet("Floor plans");
+        let second = document.add_sheet("Details");
+        let numbers: Vec<&str> = document.sheets().iter().map(|s| s.number.as_str()).collect();
+        assert_eq!(numbers, ["A01", "A02"]);
+        assert_eq!(document.sheet(&sheet).unwrap().paper, A3_LANDSCAPE);
+        let ground = document.levels()[0].path.clone();
+        let plan = document.add_plan(&ground).unwrap();
+        assert_eq!(document.place_plan(&sheet, &plan), Some(0));
+        assert_eq!(document.place_plan(&sheet, "no plan"), None);
+        assert_eq!(document.place_plan("no sheet", &plan), None);
+        let placed = &document.sheet(&sheet).unwrap().views[0];
+        assert_eq!((placed.at, placed.scale), ([0.21, 0.1485], SHEET_SCALE));
+        // moved, and kept on the paper
+        assert!(document.move_placed(&sheet, 0, [0.1, 0.08]));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].at, [0.1, 0.08]);
+        assert!(document.move_placed(&sheet, 0, [-1.0, 9.0]));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].at, [0.0, 0.297]);
+        assert!(!document.move_placed(&sheet, 1, [0.1, 0.1]));
+        // a removed plan leaves its sheets
+        document.remove_plan(&plan);
+        assert!(document.sheet(&sheet).unwrap().views.is_empty());
+        assert!(document.remove_sheet(&second));
+        assert_eq!(document.add_sheet("Again").len(), 36);
+        assert_eq!(document.sheets()[1].number, "A02");
+    }
+
+    #[test]
+    fn scale_paper_and_cut_can_change() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let sheet = document.add_sheet("Plans");
+        document.place_plan(&sheet, &plan).unwrap();
+        assert!(document.set_scale(&sheet, 0, 50.0));
+        assert!(!document.set_scale(&sheet, 0, 0.0));
+        assert!(!document.set_scale(&sheet, 3, 50.0));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].scale, 50.0);
+        // a smaller paper keeps the view on it
+        assert!(document.set_paper(&sheet, PAPERS[0].1));
+        let s = document.sheet(&sheet).unwrap();
+        assert_eq!((s.paper, s.views[0].at), ([0.297, 0.210], [0.21, 0.1485]));
+        assert!(document.set_paper(&sheet, [0.1, 0.1]));
+        assert_eq!(document.sheet(&sheet).unwrap().views[0].at, [0.1, 0.1]);
+        assert!(!document.set_paper(&sheet, [0.0, 0.1]));
+        // the cut, not below the view depth
+        assert!(document.set_cut(&plan, 2.0));
+        assert_eq!(document.plan_range(document.plan(&plan).unwrap()), Some((-PLAN_DEPTH, 2.0)));
+        assert!(!document.set_cut(&plan, -0.5));
+        assert!(!document.set_cut(&plan, f64::NAN));
+    }
+
+    #[test]
+    fn a_floor_plan_is_cropped_to_a_rectangle() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        assert!(document.set_crop(&plan, Some(([0.0, 0.0], [4.0, 3.0]))));
+        assert_eq!(document.plan(&plan).unwrap().crop, Some(([0.0, 0.0], [4.0, 3.0])));
+        assert!(!document.set_crop(&plan, Some(([0.0, 0.0], [0.05, 3.0]))), "under 10 cm");
+        assert!(!document.set_crop(&plan, Some(([2.0, 0.0], [1.0, 3.0]))), "inside out");
+        assert!(document.set_crop(&plan, None));
+        assert_eq!(document.plan(&plan).unwrap().crop, None);
+    }
+
+    #[test]
+    fn sections_look_left_of_their_line_and_take_dimensions() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        assert_eq!(document.next_section_name("Section"), "Section A");
+        let a = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert_eq!(document.next_section_name("Section"), "Section B");
+        assert_eq!(document.add_section("Too short", [0.0, 0.0], [0.05, 0.0], 20.0), None);
+        let s = document.section(&a).unwrap();
+        assert_eq!(s.axes(), ([1.0, 0.0], [-0.0, 1.0]));
+        assert_eq!(document.view_name(&a), Some("Section A"));
+        assert!(document.add_dimension(&a, [0.0, 0.0], [0.0, 3.0]));
+        assert!(document.set_crop(&a, Some(([0.0, -0.5], [8.0, 4.0]))));
+        let (dimensions, crop) = document.view_marks(&a).unwrap();
+        assert_eq!((dimensions.len(), crop), (1, Some(([0.0, -0.5], [8.0, 4.0]))));
+        // on a sheet, then gone with its section
+        let sheet = document.add_sheet("Sections");
+        assert_eq!(document.place_plan(&sheet, &a), Some(0));
+        assert!(document.remove_section(&a));
+        assert!(document.sheet(&sheet).unwrap().views.is_empty());
+    }
+
+    #[test]
+    fn floor_plans_keep_their_dimensions() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        assert!(document.add_dimension(&plan, [0.0, 0.0], [3.6, 0.0]));
+        assert!(document.add_dimension(&plan, [0.0, 0.0], [3.0, 4.0]));
+        assert!(!document.add_dimension(&plan, [1.0, 1.0], [1.0, 1.0005]), "less than a millimetre");
+        assert!(!document.add_dimension(&plan, [0.0, f64::NAN], [1.0, 1.0]));
+        assert!(!document.add_dimension("no plan", [0.0, 0.0], [1.0, 0.0]));
+        let lengths: Vec<f64> = document.plan(&plan).unwrap().dimensions.iter().map(Dimension::length).collect();
+        assert_eq!(lengths, [3.6, 5.0]);
+        assert!(document.flip_dimension(&plan, 1));
+        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0] });
+        assert!(!document.flip_dimension(&plan, 9));
+        assert!(document.remove_dimension(&plan, 0));
+        assert!(!document.remove_dimension(&plan, 5));
+        assert_eq!(document.plan(&plan).unwrap().dimensions.len(), 1);
+    }
+
+    #[test]
+    fn views_keep_their_notes_and_save_them_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert!(document.add_note(&plan, [1.0, 2.0], "Kitchen"));
+        assert!(document.add_note(&plan, [4.0, 2.0], "Hall"));
+        assert!(document.add_note(&section, [0.5, 3.0], "Roof +3.000"));
+        assert!(!document.add_note(&plan, [1.0, 1.0], "  "), "no text");
+        assert!(!document.add_note(&plan, [f64::NAN, 1.0], "x"));
+        assert!(!document.add_note("no view", [1.0, 1.0], "x"));
+        assert!(document.move_note(&plan, 1, [5.0, 2.5]));
+        assert!(document.set_note_text(&plan, 1, "Hall 2"));
+        assert!(!document.set_note_text(&plan, 1, ""), "a note keeps a text");
+        assert!(!document.move_note(&plan, 7, [0.0, 0.0]));
+        let notes = document.view_notes(&plan).unwrap();
+        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into() }, Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
+        assert!(document.remove_note(&plan, 0));
+        assert!(!document.remove_note(&plan, 3));
+        // saved with the drawings and taken over again
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
+        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into() }]);
+    }
+
+    #[test]
+    fn a_views_own_layers_are_saved_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert!(document.view_layers(&plan).unwrap().is_empty(), "a new view shows the layers as the model does");
+        let switches = LayerSwitches::from([("IfcSpace".to_string(), true), ("IfcFurniture".to_string(), false)]);
+        assert!(document.set_view_layers(&plan, switches.clone()));
+        assert!(!document.set_view_layers(&plan, switches.clone()), "nothing changed");
+        assert!(document.set_view_layers(&section, LayerSwitches::from([("IfcRoof".to_string(), false)])));
+        assert!(!document.set_view_layers("no view", switches.clone()));
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.view_layers(&plan), Some(&switches));
+        assert_eq!(again.view_layers(&section), Some(&LayerSwitches::from([("IfcRoof".to_string(), false)])));
+    }
+
+    #[test]
+    fn a_view_is_renamed_and_looks_as_far_as_is_typed() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        assert!(document.set_view_name(&plan, " Ground floor "));
+        assert_eq!(document.view_name(&plan), Some("Ground floor"));
+        assert!(!document.set_view_name(&plan, "Ground floor"), "nothing changes");
+        assert!(!document.set_view_name(&plan, "  "));
+        assert!(!document.set_view_name(&section, "ground FLOOR"), "another view's name");
+        assert!(document.set_view_name(&section, "Section 1"));
+        assert_eq!(document.view_name(&section), Some("Section 1"));
+        assert!(!document.set_view_name("no view", "X"));
+        // a floor plan looks down to its level at least, and its cut stays above that
+        assert!(document.set_view_depth(&plan, 0.0));
+        assert!(!document.set_view_depth(&plan, 0.0), "nothing changes");
+        assert!(!document.set_view_depth(&plan, -0.1));
+        assert!(!document.set_view_depth(&plan, f64::NAN));
+        assert!(!document.set_cut(&plan, -0.5));
+        assert!(document.set_view_depth(&plan, 1.0));
+        assert!(document.set_cut(&plan, -0.5));
+        assert!(!document.set_view_depth(&plan, 0.4), "the cut would be under it");
+        assert_eq!(document.plan(&plan).unwrap().depth, 1.0);
+        // a section looks beyond its line
+        assert!(!document.set_view_depth(&section, 0.0));
+        assert!(document.set_view_depth(&section, 5.0));
+        assert_eq!(document.section(&section).unwrap().depth, 5.0);
+        assert!(!document.set_view_depth("no view", 1.0));
     }
 
     #[test]

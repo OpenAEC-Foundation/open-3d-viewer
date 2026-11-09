@@ -80,19 +80,18 @@ pub fn dialog_folder(model_folder: Option<PathBuf>, work: Option<PathBuf>) -> Op
     }
 }
 
-/// `OPENAEC_TAAL`: the user's language in the SuperCloud. The viewer speaks Dutch and English;
-/// every other language gets English.
+/// `OPENAEC_TAAL`: the user's language in the SuperCloud. The viewer speaks Dutch, English, German
+/// and French; every other language gets English.
 pub fn language() -> Option<Language> {
     language_from(&std::env::var("OPENAEC_TAAL").ok()?)
 }
 
 fn language_from(value: &str) -> Option<Language> {
     let code = value.trim().to_ascii_lowercase();
-    match code.get(..2) {
-        _ if code.is_empty() => None,
-        Some("nl") => Some(Language::Dutch),
-        _ => Some(Language::English),
+    if code.is_empty() {
+        return None;
     }
+    Some(Language::from_code(&code).unwrap_or(Language::English))
 }
 
 /// `OPENAEC_THEMA`: `light`, `dark` or one of the viewer's own themes (as `--theme`).
@@ -264,7 +263,9 @@ mod tests {
         assert_eq!(language_from("nl"), Some(Language::Dutch));
         assert_eq!(language_from("nl-BE"), Some(Language::Dutch));
         assert_eq!(language_from("en"), Some(Language::English));
-        assert_eq!(language_from("de"), Some(Language::English));
+        assert_eq!(language_from("de"), Some(Language::German));
+        assert_eq!(language_from("fr-FR"), Some(Language::French));
+        assert_eq!(language_from("es"), Some(Language::English));
         assert_eq!(language_from(" "), None);
     }
 }

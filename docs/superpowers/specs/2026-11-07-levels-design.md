@@ -32,12 +32,12 @@ The native file format of Open 3D Viewer Studio is going to be IfcX (IFC5). Edit
 
 ### The left panel
 
-The explorer gets two tabs at the top: **Model** (what the explorer shows today: models, views, schedules, sheets, rooms, layers) and **Levels** (Dutch: *Model* and *Niveaus*, matching the *Niveaus* heading the properties pane already uses). Floor plans and sheets become further tabs later. The tab bar is part of the explorer pane itself, so the stand-alone layout and the OpenAEC shell show the same thing.
+The explorer gets two tabs at the top: **Model** (what the explorer shows today: models, views, schedules, sheets, rooms, layers) and **Levels** (Dutch: *Model* and *Niveaus*). The properties pane no longer lists the levels: they are in this tab only. Floor plans and sheets become further tabs later. The tab bar is part of the explorer pane itself, so the stand-alone layout and the OpenAEC shell show the same thing.
 
 ### The Levels tab
 
 - A header row: *Levels*, the count, and a **+** button.
-- The levels from high to low, each with its name and its elevation (`+3.000 m`, three decimals, as the properties pane shows them). A level the user added carries a small *added* marker and a remove button.
+- The levels from high to low, each with its name and its elevation (`+3.000 m`, three decimals). A level the user added carries a small *added* marker and a remove button.
 - **+** opens an inline form under the header: a name field (pre-filled with the next free *Level n*, Dutch *Niveau n*) and an elevation field (pre-filled with the highest level plus 3 m, or 0 when there is none), with *Add* and *Cancel*. Enter in either field adds.
 - Refusals are shown under the form and nothing is added: an empty name, a name another level already has (case-insensitive), or an elevation that is not a number. A comma is accepted as the decimal separator.
 - Without a model the tab says *No model loaded*, like the explorer. A model without levels shows a line saying so and pointing at **+**.
@@ -79,8 +79,8 @@ A new module, `src/document.rs`: the project document in IfcX form, headless (no
 These were settled by the builder, not by the project owner, and are open to correction:
 
 - IfcX has no fixed attribute for a storey's elevation yet; the document writes `bsi::ifc::prop::Elevation` and a matching `usd::xformop`, and reads either.
-- The tab is called *Niveaus* in Dutch, as the properties pane's heading, and *Levels* in English; the current explorer content becomes the *Model* tab.
-- Levels are listed high to low, as the properties pane does.
+- The tab is called *Niveaus* in Dutch and *Levels* in English; the current explorer content becomes the *Model* tab.
+- Levels are listed high to low.
 - No element count per level yet (IFC and IFCX elements do not know their storey yet).
 - Added levels are kept in memory and written by *Save as IFC*; opening another model in place of the current one drops them without asking.
 - The UUID of a level is derived from its name (and a counter for added ones), not random, so tests and repeated loads give the same paths.

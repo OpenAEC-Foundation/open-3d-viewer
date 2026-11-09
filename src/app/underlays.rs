@@ -54,7 +54,7 @@ impl App {
 
     /// Makes the lines the 3D view draws again, after an underlay changed.
     pub(super) fn refresh_underlays(&mut self) {
-        self.underlay_lines = Arc::new(self.underlay_segments());
+        self.refresh_overlay();
     }
 
     /// Switches underlay `i` on or off.

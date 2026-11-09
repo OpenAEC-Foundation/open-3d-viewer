@@ -117,8 +117,9 @@ pub struct ScenePrimitive {
     /// The datum lines (grid lines, levels) where the view shown draws them, as world segments;
     /// `None`: the model's grids where they are.
     pub datum: Option<Arc<Vec<DatumSegment>>>,
-    /// The lines of the underlays on the levels (world), drawn solid.
-    pub underlay: Arc<Vec<DatumSegment>>,
+    /// The lines drawn over the model with their colours (world), solid: the underlays', the
+    /// views' in 3D.
+    pub overlay: Arc<Vec<crate::views3d::Colored>>,
 }
 
 /// A datum line (a grid line or a level) as drawn: its two ends (world).
@@ -207,9 +208,9 @@ pub struct ScenePipeline {
     /// built from.
     datum: Option<(wgpu::Buffer, u32)>,
     datum_source: Vec<DatumSegment>,
-    /// The underlays' lines and what they were built from.
-    underlay: Option<(wgpu::Buffer, u32)>,
-    underlay_source: Arc<Vec<DatumSegment>>,
+    /// The lines drawn over the model and what they were built from.
+    overlay: Option<(wgpu::Buffer, u32)>,
+    overlay_source: Arc<Vec<crate::views3d::Colored>>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
     rect: (u32, u32, u32, u32),
     /// Member axes and node glyphs (`super::structural`), made with the first model that has
@@ -540,8 +541,8 @@ impl ScenePipeline {
             layers: Vec::new(),
             grid: None,
             datum: None,
-            underlay: None,
-            underlay_source: Default::default(),
+            overlay: None,
+            overlay_source: Default::default(),
             datum_source: Vec::new(),
             rect: (0, 0, 1, 1),
             structural: None,
@@ -736,21 +737,21 @@ impl ScenePipeline {
         self.datum_source = segments;
     }
 
-    /// The underlays' lines, built again when they change.
-    fn upload_underlay(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
-        if Arc::ptr_eq(&primitive.underlay, &self.underlay_source) {
+    /// The lines drawn over the model, built again when they change.
+    fn upload_overlay(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
+        if Arc::ptr_eq(&primitive.overlay, &self.overlay_source) {
             return;
         }
-        let vertices = underlay_lines(&primitive.underlay);
-        self.underlay = (!vertices.is_empty()).then(|| {
+        let vertices = overlay_lines(&primitive.overlay);
+        self.overlay = (!vertices.is_empty()).then(|| {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("o3v.underlay"),
+                label: Some("o3v.overlay"),
                 contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
             (buffer, vertices.len() as u32)
         });
-        self.underlay_source = primitive.underlay.clone();
+        self.overlay_source = primitive.overlay.clone();
     }
 
     fn ensure_grid(&mut self, device: &wgpu::Device, bounds: &Bounds, settings: &RenderSettings) {
@@ -820,7 +821,7 @@ impl ScenePipeline {
 
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
         self.upload_datum(device, primitive);
-        self.upload_underlay(device, primitive);
+        self.upload_overlay(device, primitive);
         self.gather_structural_marks(device, primitive);
         if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
             let n = primitive.offsets.len().min(self.offsets_len);
@@ -1004,9 +1005,9 @@ impl ScenePipeline {
                 pass.set_vertex_buffer(0, datum.slice(..));
                 pass.draw(0..*count, 0..1);
             }
-            if let Some((underlay, count)) = &self.underlay {
+            if let Some((overlay, count)) = &self.overlay {
                 pass.set_bind_group(0, &self.world_group, &[]);
-                pass.set_vertex_buffer(0, underlay.slice(..));
+                pass.set_vertex_buffer(0, overlay.slice(..));
                 pass.draw(0..*count, 0..1);
             }
             if primitive.settings.grid {
@@ -1120,12 +1121,10 @@ fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms
     })
 }
 
-/// The underlays' lines as a line list, solid, in a blue that reads on light and dark
-/// backgrounds and stands apart from the model's own lines.
-fn underlay_lines(segments: &[DatumSegment]) -> Vec<Vertex> {
-    let color = [52, 128, 204, 255];
-    let vertex = |p: [f32; 3]| Vertex { position: p, normal: [0.0, 0.0, 1.0], color, unit: 0 };
-    segments.iter().flat_map(|[a, b]| [vertex(*a), vertex(*b)]).collect()
+/// The lines drawn over the model as a line list, solid, each in its own colour.
+fn overlay_lines(lines: &[crate::views3d::Colored]) -> Vec<Vertex> {
+    let vertex = |p: [f32; 3], color: [u8; 4]| Vertex { position: p, normal: [0.0, 0.0, 1.0], color, unit: 0 };
+    lines.iter().flat_map(|([a, b], color)| [vertex(*a, *color), vertex(*b, *color)]).collect()
 }
 
 /// Grid lines and levels as a dash-dot line list (Revit's grid line pattern: long dash, gap, dot,

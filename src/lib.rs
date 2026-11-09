@@ -44,6 +44,7 @@ pub mod structural;
 mod swipe;
 mod theme;
 pub mod underlay;
+pub mod views3d;
 mod units;
 mod view_cube;
 mod viewport;

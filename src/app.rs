@@ -16,6 +16,7 @@ mod views;
 mod sheets;
 mod structural;
 mod underlays;
+mod views_in_3d;
 
 pub use ifc::{IfcTab, IfcView};
 pub use layers::SideTab;
@@ -181,8 +182,13 @@ pub struct App {
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
     /// The drawings laid on the levels.
     pub underlays: Vec<crate::underlay::Underlay>,
-    /// Their lines as the 3D view draws them (world), made again when an underlay changes.
-    underlay_lines: Arc<Vec<crate::viewport::render::DatumSegment>>,
+    /// The lines the 3D view draws over the model, with their colours: the underlays' and the
+    /// views' in 3D (world), made again when they change.
+    overlay_lines: Arc<Vec<crate::views3d::Colored>>,
+    /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
+    pub views_in_3d: bool,
+    views_3d_key: Vec<u64>,
+    views_3d_labels: Vec<(String, [f32; 3])>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
@@ -393,6 +399,8 @@ pub enum Message {
     ToggleUnderlay(usize),
     /// Take an underlay (its index) away.
     RemoveUnderlay(usize),
+    /// Show the views in the 3D view on their planes, or not.
+    ToggleViewsIn3d,
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -615,7 +623,10 @@ impl Default for App {
             active_doc_sheet: None,
             cuts: Default::default(),
             underlays: Vec::new(),
-            underlay_lines: Arc::new(Vec::new()),
+            overlay_lines: Arc::new(Vec::new()),
+            views_in_3d: false,
+            views_3d_key: Vec::new(),
+            views_3d_labels: Vec::new(),
             export_menu: false,
             dimension_tool: false,
             section_tool: false,
@@ -1183,6 +1194,7 @@ impl App {
         if shown {
             self.keep_view_layers();
         }
+        self.keep_views_in_3d();
         self.refresh_hover();
         // the structural hover goes when the camera moves (it no longer lies under the cursor) and
         // while measuring or placing a section plane
@@ -1559,6 +1571,7 @@ impl App {
             Message::UnderlayRead(level, name, read) => self.underlay_read(&level, &name, read),
             Message::ToggleUnderlay(i) => self.toggle_underlay(i),
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
+            Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;
@@ -2949,7 +2962,7 @@ impl App {
             structural_hovered: &self.structural.hovered_marks,
             structural_shown: self.structural.shown_marks.as_ref(),
             datum: Some(segments),
-            underlay: self.underlay_lines.clone(),
+            overlay: self.overlay_lines.clone(),
         })
             .width(Fill)
             .height(Fill);
@@ -3059,6 +3072,11 @@ impl App {
                 .width(Fill)
                 .height(Fill)
             });
+        let view_labels = (overlay.is_none() && !self.views_3d_labels.is_empty()).then(|| {
+            canvas(views_in_3d::ViewLabels { labels: self.views_3d_labels.clone(), view_proj: self.camera.view_proj(self.aspect()), ink: p.text })
+                .width(Fill)
+                .height(Fill)
+        });
         let measurements = (!self.measurements.is_empty() && overlay.is_none()).then(|| {
             canvas(crate::annotations::MeasureOverlay {
                 items: &self.measurements,
@@ -3076,6 +3094,7 @@ impl App {
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
         stack![scene, hint]
             .push(grids)
+            .push(view_labels)
             .push(section)
             .push(plane)
             .push(measures)

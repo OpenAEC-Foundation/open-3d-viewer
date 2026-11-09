@@ -103,8 +103,11 @@ const fn named<T>(value: T, label: &'static str) -> Named<T> {
     Named { value, label }
 }
 
-/// The settings per language: Dutch, English.
-const THEMES: [[Named<ThemeId>; 5]; 2] = [
+/// The number of interface languages ([`Language::ALL`]).
+const LANGUAGES: usize = Language::ALL.len();
+
+/// The settings per language, in the order of [`Language::ALL`]: Dutch, English, German, French.
+const THEMES: [[Named<ThemeId>; 5]; LANGUAGES] = [
     [
         named(ThemeId::Light, "Licht"),
         named(ThemeId::Dark, "Donker"),
@@ -119,19 +122,37 @@ const THEMES: [[Named<ThemeId>; 5]; 2] = [
         named(ThemeId::HighContrastDark, "High contrast dark"),
         named(ThemeId::HighContrastLight, "High contrast light"),
     ],
+    [
+        named(ThemeId::Light, "Hell"),
+        named(ThemeId::Dark, "Dunkel"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Hoher Kontrast dunkel"),
+        named(ThemeId::HighContrastLight, "Hoher Kontrast hell"),
+    ],
+    [
+        named(ThemeId::Light, "Clair"),
+        named(ThemeId::Dark, "Sombre"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Contraste élevé sombre"),
+        named(ThemeId::HighContrastLight, "Contraste élevé clair"),
+    ],
 ];
-const WORKSPACES: [[Named<WorkspaceSetting>; 3]; 2] = [
+const WORKSPACES: [[Named<WorkspaceSetting>; 3]; LANGUAGES] = [
     [named(WorkspaceSetting::Theme, "Volgt thema"), named(WorkspaceSetting::Light, "Altijd licht"), named(WorkspaceSetting::Dark, "Altijd donker")],
     [named(WorkspaceSetting::Theme, "Follows the theme"), named(WorkspaceSetting::Light, "Always light"), named(WorkspaceSetting::Dark, "Always dark")],
+    [named(WorkspaceSetting::Theme, "Folgt dem Thema"), named(WorkspaceSetting::Light, "Immer hell"), named(WorkspaceSetting::Dark, "Immer dunkel")],
+    [named(WorkspaceSetting::Theme, "Suit le thème"), named(WorkspaceSetting::Light, "Toujours clair"), named(WorkspaceSetting::Dark, "Toujours sombre")],
 ];
-const STATUSBARS: [[Named<StatusbarSetting>; 2]; 2] = [
+const STATUSBARS: [[Named<StatusbarSetting>; 2]; LANGUAGES] = [
     [named(StatusbarSetting::Theme, "Volgt thema"), named(StatusbarSetting::Dark, "Altijd donker")],
     [named(StatusbarSetting::Theme, "Follows the theme"), named(StatusbarSetting::Dark, "Always dark")],
+    [named(StatusbarSetting::Theme, "Folgt dem Thema"), named(StatusbarSetting::Dark, "Immer dunkel")],
+    [named(StatusbarSetting::Theme, "Suit le thème"), named(StatusbarSetting::Dark, "Toujours sombre")],
 ];
 
 /// The options of a setting in `language`, and the one that is chosen.
-fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; 2], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
-    let list = &lists[usize::from(language == Language::English)];
+fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; LANGUAGES], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
+    let list = &lists[language.index()];
     (list, list.iter().find(|n| n.value == chosen).copied())
 }
 
@@ -998,7 +1019,11 @@ impl Studio {
             Status::Error(e) => match crate::loaders::desktop_only_error(e) {
                 // a format only the desktop app opens: the short message in the chosen language
                 // (the download link is in the dialog that opens with it)
-                Some(format) => format!("{}: {}", l.text("Fout", "Error"), crate::loaders::desktop_only_message(format, l == Language::Dutch)),
+                Some(format) => format!(
+                    "{}: {}",
+                    l.text("Fout", "Error"),
+                    l.text("{format} vereist de desktop-app", "{format} needs the desktop app").replace("{format}", format)
+                ),
                 None => format!("{}: {e}", l.text("Fout", "Error")),
             },
         }
@@ -1347,14 +1372,11 @@ impl Studio {
 
 /// What the desktop-only dialog says about a `format` file.
 fn desktop_only_text(l: Language, format: &str) -> String {
-    match l {
-        Language::Dutch => format!(
-            "{format}-bestanden openen alleen in de desktop-app; de browserversie kan ze niet lezen. De desktop-app is gratis, voor Windows, macOS en Linux: Downloaden opent de releasepagina op GitHub."
-        ),
-        Language::English => format!(
-            "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub."
-        ),
-    }
+    l.text(
+        "{format}-bestanden openen alleen in de desktop-app; de browserversie kan ze niet lezen. De desktop-app is gratis, voor Windows, macOS en Linux: Downloaden opent de releasepagina op GitHub.",
+        "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub.",
+    )
+    .replace("{format}", format)
 }
 
 /// Opens `url` in the browser: a new tab on the web, the default browser on the desktop.
@@ -1376,12 +1398,12 @@ fn open_url(url: &str) -> Result<(), String> {
 /// (as the file dialog), and how many more it opens. Built once per language: the registry is
 /// fixed before the app starts.
 fn formats_hint(l: Language) -> &'static str {
-    static HINTS: std::sync::OnceLock<[String; 2]> = std::sync::OnceLock::new();
+    static HINTS: std::sync::OnceLock<[String; LANGUAGES]> = std::sync::OnceLock::new();
     let hints = HINTS.get_or_init(|| {
         let (featured, others) = crate::loaders::featured_formats();
-        [Language::Dutch, Language::English].map(|l| hint_text(l, &featured, others))
+        Language::ALL.map(|l| hint_text(l, &featured, others))
     });
-    &hints[usize::from(l == Language::English)]
+    &hints[l.index()]
 }
 
 /// The start screen's hint in language `l`: the `featured` format names, then how many `others`.
@@ -1391,10 +1413,7 @@ fn hint_text(l: Language, featured: &[&str], others: usize) -> String {
     match others {
         0 => {}
         1 => items.push(l.text("een ander formaat", "one other format").into()),
-        n => items.push(match l {
-            Language::Dutch => format!("een van {n} andere formaten"),
-            Language::English => format!("one of {n} other formats"),
-        }),
+        n => items.push(l.text("een van {n} andere formaten", "one of {n} other formats").replace("{n}", &n.to_string())),
     }
     let list = match items.split_last() {
         None => String::new(),
@@ -1662,8 +1681,8 @@ mod tests {
     }
 
     #[test]
-    fn every_setting_has_a_name_in_both_languages() {
-        for i in 0..2 {
+    fn every_setting_has_a_name_in_every_language() {
+        for i in 0..LANGUAGES {
             assert_eq!(THEMES[i].map(|n| n.value), ThemeId::ALL);
             assert_eq!(WORKSPACES[i].map(|n| n.value), WorkspaceSetting::ALL);
             assert_eq!(STATUSBARS[i].map(|n| n.value), StatusbarSetting::ALL);

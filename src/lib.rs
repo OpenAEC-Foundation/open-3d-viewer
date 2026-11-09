@@ -21,6 +21,7 @@ pub mod drawing;
 mod explode;
 pub mod export;
 mod history;
+pub mod i18n;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu;
 mod icons;

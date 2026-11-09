@@ -522,6 +522,7 @@ const ANIM_SECONDS: f32 = 0.45;
 
 impl Default for App {
     fn default() -> Self {
+        crate::i18n::install();
         Self {
             theme: ThemeKind::Light,
             model: None,
@@ -2780,7 +2781,12 @@ impl App {
             if count > 1 {
                 body = body.push(prop_row(
                     p,
-                    format!("{} {} ({count})", l.text("Totaal", "Total"), category.label(l).to_lowercase()),
+                    {
+                        // German keeps its nouns capitalised
+                        let name = category.label(l);
+                        let name = if l == Language::German { name.to_string() } else { name.to_lowercase() };
+                        format!("{} ({count})", l.text("Totaal {category}", "Total {category}").replace("{category}", &name))
+                    },
                     units.format(l, category, total),
                 ));
             }
@@ -3551,12 +3557,10 @@ fn panel_header<'a>(p: Palette, title: &'static str, badge: Option<String>) -> E
     .into()
 }
 
-/// The language of the stand-alone layout (`--screenshot`): English, Dutch with `O3V_LANG=nl`.
+/// The language of the stand-alone layout (`--screenshot`): English, or the language of
+/// `O3V_LANG` (`nl`, `de`, `fr`).
 pub(crate) fn standalone_language() -> Language {
-    match std::env::var("O3V_LANG").as_deref() {
-        Ok("nl") => Language::Dutch,
-        _ => Language::English,
-    }
+    std::env::var("O3V_LANG").ok().and_then(|code| Language::from_code(&code)).unwrap_or(Language::English)
 }
 
 /// A side panel of the stand-alone layout, as wide as the shell's pane (explorer 220, properties

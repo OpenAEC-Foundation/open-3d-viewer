@@ -38,6 +38,8 @@ impl App {
         self.document = Document::default();
         self.level_form = None;
         self.cuts.clear();
+        self.underlays.clear();
+        self.refresh_underlays();
     }
 
     /// Opens the form of a new level, filled with the next free name (`word` and a number) and
@@ -126,7 +128,11 @@ impl App {
                 .push(level.added.then(|| text(l.text("toegevoegd", "added")).size(10).color(p.accent)))
                 .width(Fill);
             let elevation = text(format!("{:+.3} m", level.elevation)).size(11).color(p.text_secondary);
-            let mut item = row![name, elevation].spacing(6).align_y(Center);
+            let underlay = button(text(l.text("Onderlegger", "Underlay")).size(10).color(p.text_secondary))
+                .padding([2, 6])
+                .style(move |_, s| p.row_button(s))
+                .on_press(Message::AddUnderlay(Arc::from(level.path.as_str())));
+            let mut item = row![name, elevation, underlay].spacing(6).align_y(Center);
             if level.added {
                 let close = svg(svg::Handle::from_memory(openaec_ui::icons::Icon::Close.bytes()))
                     .width(12)
@@ -137,6 +143,9 @@ impl App {
                 );
             }
             body = body.push(container(item).padding([4, 8]).width(Fill));
+            if let Some(rows) = self.underlay_rows(&level.path, p, l) {
+                body = body.push(rows);
+            }
         }
         scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
     }

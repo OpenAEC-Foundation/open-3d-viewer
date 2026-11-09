@@ -248,6 +248,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 structural_hovered: Arc::default(),
                 structural_shown: None,
                 datum: None,
+                overlay: Default::default(),
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -398,6 +399,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 structural_hovered: Arc::default(),
                 structural_shown: None,
                 datum: None,
+                overlay: Default::default(),
             };
             primitive.prepare(pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -674,6 +676,7 @@ mod tests {
             structural_hovered: Arc::default(),
             structural_shown: None,
             datum: None,
+            overlay: Default::default(),
         };
         let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(w as f32, h as f32));
         primitive.prepare(&mut pipeline, &device, &queue, &bounds, &Viewport::with_physical_size(iced::Size::new(w, h), 1.0));
@@ -829,6 +832,7 @@ mod tests {
                 structural_hovered: Arc::new(hovered),
                 structural_shown: None,
                 datum: None,
+                overlay: Default::default(),
             };
             primitive.prepare(&mut pipeline, &device, &queue, &bounds, &viewport);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

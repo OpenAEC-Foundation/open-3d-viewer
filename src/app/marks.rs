@@ -67,7 +67,7 @@ impl App {
     /// line, u from its start and v up.
     pub(super) fn drawing_frame(&self, path: &str) -> Option<DrawingFrame> {
         if let Some(plan) = self.document.plan(path) {
-            let (_, cut) = self.document.plan_range(plan)?;
+            let cut = self.document.cut_height(plan)?;
             return Some(DrawingFrame { origin: Vec3::new(0.0, 0.0, cut as f32), u: Vec3::X, v: Vec3::Y });
         }
         let s = self.document.section(path)?;

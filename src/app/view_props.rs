@@ -95,8 +95,13 @@ impl App {
         let mut rows = column![field(l.text("Naam", "Name"), ViewField::Name)].spacing(5);
         if let Some(plan) = self.document.plan(&path) {
             let level = self.document.level(&plan.level).map(|lv| lv.name.clone()).unwrap_or_default();
+            let kind = match plan.kind {
+                crate::document::PlanKind::Floor => l.text("Plattegrond", "Floor plan"),
+                crate::document::PlanKind::Structural => l.text("Constructieve plattegrond", "Structural plan"),
+                crate::document::PlanKind::Ceiling => l.text("Plafondplan", "Ceiling plan"),
+            };
             rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Plattegrond", "Floor plan").into()))
+                .push(row(l.text("Soort", "Kind"), kind.into()))
                 .push(row(l.text("Niveau", "Level"), level))
                 .push(field(l.text("Snijhoogte (m)", "Cut height (m)"), ViewField::Cut))
                 .push(field(l.text("Kijkdiepte (m)", "View depth (m)"), ViewField::Depth));

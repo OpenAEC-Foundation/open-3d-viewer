@@ -36,7 +36,52 @@ pub const PLAN_CUT: f64 = 1.2;
 /// How far a floor plan looks below its level (metres), so the floor it stands on shows.
 pub const PLAN_DEPTH: f64 = 0.3;
 
-/// A floor plan: the model seen from above, cut at [`PlanView::cut`] above its level.
+/// How far a structural plan looks below its level (metres), so the beams under its floor show.
+pub const STRUCTURAL_DEPTH: f64 = 1.0;
+/// How far a ceiling plan cuts above its level (metres), under the ceilings.
+pub const CEILING_CUT: f64 = 2.3;
+/// How far a ceiling plan looks up from its cut (metres) when no level lies above its own.
+pub const CEILING_DEPTH: f64 = 1.0;
+
+/// The kinds of plan a level has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlanKind {
+    /// Seen from above, cut [`PLAN_CUT`] above its level, looking [`PLAN_DEPTH`] below it.
+    #[default]
+    Floor,
+    /// The building's structure seen from above: cut as a floor plan, looking
+    /// [`STRUCTURAL_DEPTH`] below its level; elements that carry nothing are left out.
+    Structural,
+    /// A reflected ceiling plan: cut [`CEILING_CUT`] above its level, looking up to the next
+    /// level (else [`CEILING_DEPTH`] beyond its cut), drawn as the floor plan is oriented.
+    Ceiling,
+}
+
+impl PlanKind {
+    pub const ALL: [PlanKind; 3] = [PlanKind::Floor, PlanKind::Structural, PlanKind::Ceiling];
+
+    /// Its name in IFCX (`kind` of an `o3v::view::plan` node).
+    pub fn key(self) -> &'static str {
+        match self {
+            PlanKind::Floor => "floor",
+            PlanKind::Structural => "structural",
+            PlanKind::Ceiling => "ceiling",
+        }
+    }
+
+    /// The kind named `key` in IFCX; a floor plan for anything else.
+    pub fn from_key(key: &str) -> Self {
+        Self::ALL.into_iter().find(|k| k.key() == key).unwrap_or_default()
+    }
+
+    /// Whether it looks up from its cut (a ceiling plan), not down.
+    pub fn looks_up(self) -> bool {
+        self == PlanKind::Ceiling
+    }
+}
+
+/// A plan of a level: the model seen from above (or from below, a ceiling plan), cut at
+/// [`PlanView::cut`] above its level.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanView {
     /// The IfcX path, a UUID.
@@ -44,9 +89,11 @@ pub struct PlanView {
     pub name: String,
     /// The path of its level.
     pub level: String,
+    pub kind: PlanKind,
     /// The cut above the level (metres).
     pub cut: f64,
-    /// How far it looks below the level (metres).
+    /// How far it looks below the level (metres); a ceiling plan: how far it looks up from its
+    /// cut.
     pub depth: f64,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
@@ -243,7 +290,7 @@ impl Document {
             let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
             let view = json!({
-                "name": p.name, "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "layers": p.layers,
+                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "layers": p.layers,
             });
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(view, &p.hidden)}}));
         }
@@ -300,12 +347,15 @@ impl Document {
             }
             if let Some(p) = attributes.get("o3v::view::plan") {
                 let Some(level) = self.levels.iter().find(|l| same_name(&l.name, &text(p, "level"))).map(|l| l.path.clone()) else { continue };
+                let kind = PlanKind::from_key(&text(p, "kind"));
+                let (cut, depth) = self.plan_defaults(&level, kind);
                 self.plans.push(PlanView {
                     path: path.clone(),
                     name: text(p, "name"),
                     level,
-                    cut: number(p, "cut", PLAN_CUT),
-                    depth: number(p, "depth", PLAN_DEPTH),
+                    kind,
+                    cut: number(p, "cut", cut),
+                    depth: number(p, "depth", depth),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     crop: rect(p.get("crop")),
@@ -391,7 +441,16 @@ impl Document {
     /// Makes a floor plan of the level at `path`, named after the level (with a number when the
     /// level has one already), and gives its path.
     pub fn add_plan(&mut self, level: &str) -> Option<String> {
-        let base = self.level(level)?.name.clone();
+        self.add_plan_of(level, PlanKind::Floor, "")
+    }
+
+    /// Makes a plan of `kind` of the level at `path` with that kind's cut and depth, and gives its
+    /// path. A floor plan is named after the level, another kind `<level> (<word>)`; a number
+    /// follows when that name is taken.
+    pub fn add_plan_of(&mut self, level: &str, kind: PlanKind, word: &str) -> Option<String> {
+        let level_name = self.level(level)?.name.clone();
+        let base = if kind == PlanKind::Floor || word.trim().is_empty() { level_name } else { format!("{level_name} ({})", word.trim()) };
+        let (cut, depth) = self.plan_defaults(level, kind);
         let mut name = base.clone();
         let mut n = 1;
         while self.plans.iter().any(|p| same_name(&p.name, &name)) {
@@ -400,8 +459,22 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), cut: PLAN_CUT, depth: PLAN_DEPTH, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
+    }
+
+    /// The cut and depth a new plan of `kind` of the level at `level` gets: a ceiling plan looks
+    /// up from its cut to the next level, else [`CEILING_DEPTH`].
+    fn plan_defaults(&self, level: &str, kind: PlanKind) -> (f64, f64) {
+        match kind {
+            PlanKind::Floor => (PLAN_CUT, PLAN_DEPTH),
+            PlanKind::Structural => (PLAN_CUT, STRUCTURAL_DEPTH),
+            PlanKind::Ceiling => {
+                let z = self.level(level).map_or(0.0, |l| l.elevation);
+                let next = self.levels.iter().map(|l| l.elevation).filter(|&e| e > z + CEILING_CUT + 0.05).fold(f64::INFINITY, f64::min);
+                (CEILING_CUT, if next.is_finite() { micrometres(next - z - CEILING_CUT) } else { CEILING_DEPTH })
+            }
+        }
     }
 
     /// Removes the floor plan at `path`, and it from the sheets.
@@ -682,10 +755,11 @@ impl Document {
         true
     }
 
-    /// Sets how far a floor plan cuts above its level (metres, above its view depth).
+    /// Sets how far a plan cuts above its level (metres; a plan that looks down: above its view
+    /// depth).
     pub fn set_cut(&mut self, plan: &str, cut: f64) -> bool {
         let Some(plan) = self.plans.iter_mut().find(|p| p.path == plan) else { return false };
-        if !(cut.is_finite() && cut > -plan.depth) {
+        if !(cut.is_finite() && (plan.kind.looks_up() || cut > -plan.depth)) {
             return false;
         }
         plan.cut = cut;
@@ -715,14 +789,14 @@ impl Document {
     }
 
     /// Sets how far a view looks: a floor plan below its level (at least 0, and its cut stays
-    /// above that), a section or elevation beyond its line (more than 0); false when it does not
-    /// change.
+    /// above that), a ceiling plan up from its cut, a section or elevation beyond its line (both
+    /// more than 0); false when it does not change.
     pub fn set_view_depth(&mut self, path: &str, depth: f64) -> bool {
         if !depth.is_finite() {
             return false;
         }
         let own = if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
-            if depth < 0.0 || p.cut <= -depth {
+            if if p.kind.looks_up() { depth <= 0.0 } else { depth < 0.0 || p.cut <= -depth } {
                 return false;
             }
             &mut p.depth
@@ -764,10 +838,16 @@ impl Document {
         true
     }
 
-    /// The heights a floor plan shows, from low to high (metres, the model's frame).
+    /// The height of a plan's cut (metres, the model's frame).
+    pub fn cut_height(&self, plan: &PlanView) -> Option<f64> {
+        Some(self.level(&plan.level)?.elevation + plan.cut)
+    }
+
+    /// The heights a plan shows, from low to high (metres, the model's frame): from its view
+    /// depth up to its cut, or, a ceiling plan, from its cut up to its view depth.
     pub fn plan_range(&self, plan: &PlanView) -> Option<(f64, f64)> {
         let z = self.level(&plan.level)?.elevation;
-        Some((z - plan.depth, z + plan.cut))
+        Some(if plan.kind.looks_up() { (z + plan.cut, z + plan.cut + plan.depth) } else { (z - plan.depth, z + plan.cut) })
     }
 
     /// A floor plan goes with its level, and a placed view with its floor plan.
@@ -962,6 +1042,47 @@ mod tests {
         assert_eq!(document.add_plan("no such level"), None);
         assert!(document.remove_plan(&again));
         assert_eq!(document.plans().len(), 1);
+    }
+
+    /// A structural plan cuts as a floor plan and looks deeper; a ceiling plan looks up from its
+    /// cut to the next level (or 1 m without one); IFCX keeps the kind.
+    #[test]
+    fn plans_of_each_kind_get_their_own_name_and_range_and_come_back_from_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        let (ground, first) = (document.levels()[0].path.clone(), document.levels()[1].path.clone());
+        let structural = document.add_plan_of(&ground, PlanKind::Structural, "structure").unwrap();
+        let ceiling = document.add_plan_of(&ground, PlanKind::Ceiling, "ceiling").unwrap();
+        let top = document.add_plan_of(&first, PlanKind::Ceiling, "ceiling").unwrap();
+        let floor = document.add_plan_of(&ground, PlanKind::Floor, "floor").unwrap();
+        let names: Vec<&str> = document.plans().iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["00 (structure)", "00 (ceiling)", "01 (ceiling)", "00"]);
+        let view = |path: &str| document.plan(path).unwrap().clone();
+        assert_eq!((view(&structural).cut, view(&structural).depth), (PLAN_CUT, STRUCTURAL_DEPTH));
+        assert_eq!(document.plan_range(&view(&structural)), Some((-STRUCTURAL_DEPTH, PLAN_CUT)));
+        // from its cut up to the next level, or 1 m beyond the cut at the top
+        let near = |range: Option<(f64, f64)>, want: (f64, f64)| range.is_some_and(|(lo, hi)| (lo - want.0).abs() < 1e-9 && (hi - want.1).abs() < 1e-9);
+        assert!(near(document.plan_range(&view(&ceiling)), (CEILING_CUT, 3.0)));
+        assert!(near(document.plan_range(&view(&top)), (3.0 + CEILING_CUT, 3.0 + CEILING_CUT + CEILING_DEPTH)));
+        assert_eq!(view(&floor).kind, PlanKind::Floor);
+        // a ceiling plan looks up: any cut, a depth above 0
+        assert!(document.set_cut(&ceiling, 2.5));
+        assert!(!document.set_view_depth(&ceiling, 0.0));
+        assert!(document.set_view_depth(&ceiling, 0.4));
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.plans(), document.plans());
+        // an IFCX file from before the kinds: floor plans
+        let mut old = nodes.clone();
+        for (_, attributes) in &mut old {
+            if let Some(plan) = attributes.get_mut("o3v::view::plan").and_then(Value::as_object_mut) {
+                plan.remove("kind");
+            }
+        }
+        let mut before = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
+        before.adopt_ifcx(&old);
+        assert!(before.plans().iter().all(|p| p.kind == PlanKind::Floor));
     }
 
     #[test]

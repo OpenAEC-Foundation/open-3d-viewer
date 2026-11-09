@@ -60,7 +60,9 @@ stl_io = "0.11"
 # Polygon triangulation, LandXML surfaces and native CAD mesh import.
 earcutr = "0.5"
 roxmltree = "0.20"
-acadrust = { git = "https://github.com/hakanaktt/acadrust", rev = "299dc758f958b08accc35a10d98b83e228fafc89", default-features = false }
+# The shared OpenCAD drawing model (MPL-2.0): DWG and DXF through its acadrust codec (also the DWG/DXF
+# reader of src/loaders/cad.rs), IFCCAD (the open 2D drawing profile on IFCX) through ifccad (MPL-2.0).
+opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
 tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }

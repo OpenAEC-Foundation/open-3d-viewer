@@ -1,10 +1,12 @@
-//! DWG/DXF polygon geometry through Hakan's MPL-2.0 acadrust reader.
+//! DWG/DXF polygon geometry through Hakan's MPL-2.0 acadrust reader (the codec of the shared
+//! OpenCAD drawing model, which the drawing export writes with too).
 //!
 //! This importer deliberately renders model-space polygon geometry, not a complete CAD
 //! drawing. ACIS solids, annotations, curves and external references are counted as omitted.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
+use opencaddocument::acadrust;
 use acadrust::{CadDocument, Color, DwgReader, DxfReader, EntityType, Vector3};
 use glam::{DMat4, DVec3};
 use std::collections::{BTreeMap, BTreeSet};

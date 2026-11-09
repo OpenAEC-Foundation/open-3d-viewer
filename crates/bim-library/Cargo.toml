@@ -1,0 +1,19 @@
+[package]
+name = "bim-library"
+version = "0.1.0"
+description = "Headless BIM libraries: materials with their hatches, layered build-ups of walls, floors, roofs and ceilings, profiles and linear types, and their IFCX form"
+authors = ["Open 3D Viewer Studio Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+publish = false
+
+[dependencies]
+# f64 vectors of profile outlines (MIT OR Apache-2.0)
+glam = "0.30"
+# Profile outlines with their fillets and section properties: one implementation, in this workspace
+bim-structural = { path = "../bim-structural" }
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: exact f64 parsing, so a library read back equals the one written
+serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -1761,6 +1761,34 @@ mod tests {
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-edit-nl.png")).expect("snapshot");
     }
 
+    /// The Library tab with a build-up and a steel profile picked, in every language:
+    /// `cargo test --lib export_library_renders -- --ignored`.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_library_renders() {
+        use crate::app::library::{Group, LibraryMessage, Pick};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let shots: [(&str, Group, Pick); 2] = [
+            ("wall", Group::BuildUps(bim_library::Role::Wall), Pick::BuildUp("wall.timber-frame-outer".into())),
+            ("steel", Group::Series(bim_library::Series::Hea), Pick::Steel("HEA 200".into())),
+        ];
+        for l in Language::ALL {
+            for (name, group, pick) in shots.clone() {
+                let mut app = App::default();
+                app.explorer_tab = crate::app::ExplorerTab::Library;
+                if matches!(group, Group::Series(_)) {
+                    let _ = app.update(Message::Library(LibraryMessage::Toggle(Group::Steel)));
+                }
+                let _ = app.update(Message::Library(LibraryMessage::Toggle(group)));
+                let _ = app.update(Message::Library(LibraryMessage::Pick(pick)));
+                let mut studio = Studio::new(app);
+                studio.prefs.language = l;
+                studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-{name}-{}.png", l.code()))).expect("snapshot");
+            }
+        }
+    }
+
     #[test]
     fn every_setting_has_a_name_in_every_language() {
         for i in 0..LANGUAGES {

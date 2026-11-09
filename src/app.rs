@@ -7,7 +7,9 @@ mod grids;
 mod ifc;
 mod layers;
 mod edit;
+mod element_props;
 mod levels;
+pub mod library;
 mod marks;
 pub mod modeller;
 mod paper;
@@ -166,6 +168,10 @@ pub struct App {
     pub explorer_open: [bool; 5],
     /// The explorer's tab shown.
     pub explorer_tab: ExplorerTab,
+    /// The project's library: materials, layered build-ups and linear types.
+    pub library: bim_library::Library,
+    /// The Library tab's open groups and pick.
+    pub library_view: library::LibraryView,
     /// The project document (IfcX): the levels of the model and those added.
     pub document: Document,
     /// The form of a new level, while it is open.
@@ -325,6 +331,8 @@ pub enum Message {
     ToggleExplorer(usize),
     /// Show a tab of the explorer.
     ExplorerTab(ExplorerTab),
+    /// The Library tab.
+    Library(library::LibraryMessage),
     /// Open the form of a new level, named after this word ("Level") and a number.
     NewLevel(&'static str),
     LevelName(String),
@@ -516,6 +524,14 @@ pub enum Message {
     Edit(edit::EditEvent),
     /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
     EditKey(char),
+    /// Typed in a field of the selected modelled element's Definition section.
+    ElementField(element_props::ElementField, String),
+    /// Enter in such a field: it shows the value in use again.
+    ElementFieldDone,
+    /// Add a door (`true`) or a window to the selected wall.
+    AddOpening(bool),
+    /// Remove an opening (its index) of the selected wall.
+    RemoveOpening(usize),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -601,6 +617,8 @@ impl Default for App {
             picked_grid: None,
             explorer_open: [false, false, true, false, false],
             explorer_tab: ExplorerTab::Model,
+            library: bim_library::Library::starter(),
+            library_view: library::LibraryView::default(),
             document: Document::default(),
             level_form: None,
             active_plan: None,
@@ -1270,6 +1288,10 @@ impl App {
             Message::EditMode => self.toggle_edit(),
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
+            Message::ElementField(field, typed) => self.type_element_field(field, typed),
+            Message::ElementFieldDone => self.modeller.typing = None,
+            Message::AddOpening(door) => self.add_opening(door),
+            Message::RemoveOpening(index) => self.remove_opening(index),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -1479,6 +1501,7 @@ impl App {
                 }
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
+            Message::Library(message) => return self.library_update(message),
             Message::NewLevel(word) => self.new_level(word),
             Message::LevelName(name) => {
                 if let Some(form) = &mut self.level_form {
@@ -2644,6 +2667,11 @@ impl App {
                     .push(text(pd.phases.join(" → ")).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
                     .push(rule::horizontal(1));
             }
+        }
+
+        // a modelled element's definition, typed in
+        if let Some(rows) = self.element_properties(p, l) {
+            content = content.push(section(l.text("Definitie", "Definition"))).push(rows).push(rule::horizontal(1));
         }
 
         // the selection

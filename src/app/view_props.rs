@@ -95,15 +95,20 @@ impl App {
         let mut rows = column![field(l.text("Naam", "Name"), ViewField::Name)].spacing(5);
         if let Some(plan) = self.document.plan(&path) {
             let level = self.document.level(&plan.level).map(|lv| lv.name.clone()).unwrap_or_default();
+            let kind = match plan.kind {
+                crate::document::PlanKind::Floor => l.text("Plattegrond", "Floor plan"),
+                crate::document::PlanKind::Structural => l.text("Constructieve plattegrond", "Structural plan"),
+                crate::document::PlanKind::Ceiling => l.text("Plafondplan", "Ceiling plan"),
+            };
             rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Plattegrond", "Floor plan").into()))
+                .push(row(l.text("Soort", "Kind"), kind.into()))
                 .push(row(l.text("Niveau", "Level"), level))
                 .push(field(l.text("Snijhoogte (m)", "Cut height (m)"), ViewField::Cut))
                 .push(field(l.text("Kijkdiepte (m)", "View depth (m)"), ViewField::Depth));
         } else if let Some(s) = self.document.section(&path) {
             let length = (s.to[0] - s.from[0]).hypot(s.to[1] - s.from[1]);
             rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Doorsnede of aanzicht", "Section or elevation").into()))
+                .push(row(l.text("Soort", "Kind"), if s.kind == crate::document::SectionKind::Elevation { l.text("Aanzicht", "Elevation view") } else { l.text("Doorsnede", "Section") }.into()))
                 .push(row(l.text("Lengte", "Length"), format!("{length:.3} m")))
                 .push(field(l.text("Diepte (m)", "Depth (m)"), ViewField::Depth));
         }

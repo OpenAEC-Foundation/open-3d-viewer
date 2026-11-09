@@ -13,8 +13,8 @@ pub type Segment = [[f32; 2]; 2];
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Cut {
     pub segments: Vec<Segment>,
-    /// The edges seen from above between the plan's view depth and its cut: outlines and creases
-    /// of the triangles there, drawn thin under the cut.
+    /// The edges seen beyond the cut, between it and the plan's view depth (below it, or above
+    /// it in a ceiling plan): outlines and creases of the triangles there, drawn thin.
     pub below: Vec<Segment>,
     /// Lower left and upper right of the segments; `None` when nothing is cut.
     pub extent: Option<([f32; 2], [f32; 2])>,
@@ -58,6 +58,15 @@ impl<'a> Shown<'a> {
 /// `high`, of what is `shown`.
 pub fn plan_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, high);
+    cut.below = edges_between(model, shown, low, high);
+    cut.extent = extent(cut.segments.iter().chain(&cut.below));
+    cut
+}
+
+/// A reflected ceiling plan's drawing: the cut at `low` and the edges seen from below between
+/// `low` and `high`, of what is `shown`, laid out as a floor plan (x, y as seen from above).
+pub fn ceiling_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
+    let mut cut = cut_at(model, shown, low);
     cut.below = edges_between(model, shown, low, high);
     cut.extent = extent(cut.segments.iter().chain(&cut.below));
     cut
@@ -392,6 +401,21 @@ mod tests {
         assert_eq!(plan.extent, Some(([0.0, 0.0], [6.0, 2.0])));
         // above the table's top, the range shows nothing of it
         assert!(edges_between(&model, Shown::all(), 1.0, 1.2).iter().all(|[a, b]| a[0] < 5.0 && b[0] < 5.0));
+    }
+
+    /// A ceiling plan cuts the wall at its cut and sees what hangs above it, not what stands under
+    /// it, in plan as a floor plan has it.
+    #[test]
+    fn a_ceiling_plan_shows_the_edges_above_its_cut() {
+        let lamp = block("Lamp", [1.0, 0.5, 2.6], [1.5, 1.0, 2.9]);
+        let model = Model::new(PathBuf::from("room.obj"), "OBJ", vec![box_layer("Wall"), table(), lamp]);
+        let ceiling = ceiling_at(&model, Shown::all(), 2.3, 3.0);
+        assert_eq!(ceiling.segments.len(), 8, "the wall cut at 2.3 m");
+        assert!(ceiling.below.iter().all(|[a, b]| a[0] < 5.0 && b[0] < 5.0), "no table: it stands under the cut");
+        let lamp: Vec<&Segment> = ceiling.below.iter().filter(|[a, b]| (1.0..=1.5).contains(&a[0]) && (1.0..=1.5).contains(&b[0]) && a[1] >= 0.5 && b[1] <= 1.0).collect();
+        let length: f32 = lamp.iter().map(|[a, b]| (b[0] - a[0]).hypot(b[1] - a[1])).sum();
+        assert!(length >= 2.0 - 1e-4, "the lamp's outline, {length}: {lamp:?}");
+        assert_eq!(ceiling.extent, Some(([0.0, 0.0], [4.0, 2.0])));
     }
 
     /// A box from `lo` to `hi`, its own vertices per face.

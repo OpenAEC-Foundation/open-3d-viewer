@@ -5,8 +5,8 @@
 //! dimension to that plan, shown wherever it is placed.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::{parse_elevation, Dimension, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
-use crate::drawing::{plan_at, section_at, Cut, Shown};
+use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
+use crate::drawing::{ceiling_at, plan_at, section_at, Cut, Shown};
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -181,8 +181,16 @@ impl App {
         }
         let layers = self.view_visibility(path);
         // the elements hidden in the view, by the unit of a triangle's first vertex
-        let units = self.document.view_hidden(path).map(|h| self.hidden_units(h)).unwrap_or_default();
-        let index = self.explode_index.clone().filter(|_| !units.is_empty());
+        let mut units = self.document.view_hidden(path).map(|h| self.hidden_units(h)).unwrap_or_default();
+        // a structural plan leaves out what carries nothing
+        if self.is_structural_plan(Some(path)) {
+            let left_out = self.non_structural_units();
+            units.resize(left_out.len().max(units.len()), false);
+            for (u, out) in units.iter_mut().zip(left_out.iter()) {
+                *u |= *out;
+            }
+        }
+        let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
         let shown = Shown { layers: &layers, hidden: &hidden };
         let cut = if let Some(s) = self.document.section(path) {
@@ -190,7 +198,11 @@ impl App {
         } else {
             let Some(view) = self.document.plan(path) else { return };
             let Some((low, high)) = self.document.plan_range(view) else { return };
-            plan_at(&model, shown, low as f32, high as f32)
+            if view.kind.looks_up() {
+                ceiling_at(&model, shown, low as f32, high as f32)
+            } else {
+                plan_at(&model, shown, low as f32, high as f32)
+            }
         };
         self.cuts.insert(path.to_string(), Arc::new(cut));
     }
@@ -293,7 +305,7 @@ impl App {
         let lines = [([x1, y1 + m], [x0, y1 + m]), ([x1 + m, y0], [x1 + m, y1]), ([x0, y0 - m], [x1, y0 - m]), ([x0 - m, y1], [x0 - m, y0])];
         let mut first = None;
         for (name, (from, to)) in names.iter().zip(lines) {
-            if let Some(path) = self.document.add_section(name, from, to, depth) {
+            if let Some(path) = self.document.add_section_of(SectionKind::Elevation, name, from, to, depth) {
                 first.get_or_insert(path);
             }
         }

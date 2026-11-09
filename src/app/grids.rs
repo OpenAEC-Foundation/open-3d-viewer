@@ -47,7 +47,7 @@ impl App {
     /// A section's datum lines, just in front of its cut: the grids it crosses (within their
     /// length and its crop), upright from the bottom to the top of the model and its levels; the
     /// levels across the model's width along it, 1 m past it on both sides (or its crop).
-    fn section_datums(&self, s: &SectionView, grids: &[GridLine]) -> Vec<Datum> {
+    pub(super) fn section_datums(&self, s: &SectionView, grids: &[GridLine]) -> Vec<Datum> {
         let Some(world) = self.world_bounds() else { return Vec::new() };
         let (along, n) = s.axes();
         let cross = |a: [f64; 2], b: [f64; 2]| a[0] * b[1] - a[1] * b[0];

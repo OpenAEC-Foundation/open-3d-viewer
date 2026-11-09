@@ -136,6 +136,8 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// Edit mode (Tab) on an element.
     pub edit: Option<super::edit::Edit>,
+    /// A value being typed in the Definition section: the element, the field, the text.
+    pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
 }
 
 impl App {

@@ -7,6 +7,7 @@ mod grids;
 mod ifc;
 mod layers;
 mod edit;
+mod element_props;
 mod levels;
 mod marks;
 pub mod modeller;
@@ -516,6 +517,14 @@ pub enum Message {
     Edit(edit::EditEvent),
     /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
     EditKey(char),
+    /// Typed in a field of the selected modelled element's Definition section.
+    ElementField(element_props::ElementField, String),
+    /// Enter in such a field: it shows the value in use again.
+    ElementFieldDone,
+    /// Add a door (`true`) or a window to the selected wall.
+    AddOpening(bool),
+    /// Remove an opening (its index) of the selected wall.
+    RemoveOpening(usize),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -1270,6 +1279,10 @@ impl App {
             Message::EditMode => self.toggle_edit(),
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
+            Message::ElementField(field, typed) => self.type_element_field(field, typed),
+            Message::ElementFieldDone => self.modeller.typing = None,
+            Message::AddOpening(door) => self.add_opening(door),
+            Message::RemoveOpening(index) => self.remove_opening(index),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -2644,6 +2657,11 @@ impl App {
                     .push(text(pd.phases.join(" → ")).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
                     .push(rule::horizontal(1));
             }
+        }
+
+        // a modelled element's definition, typed in
+        if let Some(rows) = self.element_properties(p, l) {
+            content = content.push(section(l.text("Definitie", "Definition"))).push(rows).push(rule::horizontal(1));
         }
 
         // the selection

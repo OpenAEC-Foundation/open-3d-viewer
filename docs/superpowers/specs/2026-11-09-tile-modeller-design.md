@@ -181,3 +181,18 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
     it closes.
 - **Next:** typed parameters (thickness, height, profile, openings) in the properties pane, a
   live solid during a move, and a sketch mode for outlines with arcs.
+
+## Fourth slice: the definition typed in (2026-11-09)
+
+- The right pane gets a Definition section for one selected modelled element. It holds the
+  element's name and the values of its definition, each typed in:
+  - a wall's height, thickness and base;
+  - a slab's thickness and top;
+  - a member's rectangular profile or diameter, and its roll;
+  - an object's size, base and turn;
+  - a curtain wall's height, base, spacing, member size and panel thickness.
+- A wall's openings are listed with their distance from the start, sill, width and height.
+  **Add door** and **Add window** put one in the middle of the wall; **Remove** takes one out.
+- A value is used as soon as it is valid and the kernel can make the element with it. Until then
+  the field keeps what was typed and the banner says why. Enter shows the value in use again, as
+  the View section does.

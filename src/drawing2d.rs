@@ -19,6 +19,9 @@ const MARGIN: f64 = 0.010;
 const ARROW: f64 = 0.005;
 /// How wide a text is per character, for its capitals' height.
 const CHARACTER: f64 = 0.8;
+/// The radius of a grid's bubble on paper (metres), and how many lines draw it round.
+const BUBBLE: f64 = 0.004;
+const BUBBLE_SIDES: usize = 24;
 
 /// What a line or text is, and so how it is drawn and which CAD layer it goes on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,10 +34,12 @@ pub enum Pen {
     Text,
     /// The sheet's border, the marks of sections.
     Frame,
+    /// Grid lines and levels, with their bubbles and names.
+    Grids,
 }
 
 impl Pen {
-    pub const ALL: [Pen; 5] = [Pen::Cut, Pen::Beyond, Pen::Dimension, Pen::Text, Pen::Frame];
+    pub const ALL: [Pen; 6] = [Pen::Cut, Pen::Beyond, Pen::Dimension, Pen::Text, Pen::Frame, Pen::Grids];
 
     /// The CAD layer name.
     pub fn name(self) -> &'static str {
@@ -44,6 +49,7 @@ impl Pen {
             Pen::Dimension => "O3V-Dimensions",
             Pen::Text => "O3V-Text",
             Pen::Frame => "O3V-Frame",
+            Pen::Grids => "O3V-Grids",
         }
     }
 
@@ -51,7 +57,7 @@ impl Pen {
     pub fn weight_mm(self) -> f64 {
         match self {
             Pen::Cut => 0.50,
-            Pen::Beyond | Pen::Dimension => 0.18,
+            Pen::Beyond | Pen::Dimension | Pen::Grids => 0.18,
             Pen::Text => 0.25,
             Pen::Frame => 0.35,
         }
@@ -163,6 +169,16 @@ impl Dim2d {
     }
 }
 
+/// A grid line or a level on a view's drawing: its name, its ends (the drawing's metres) and, for a
+/// level, its height.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Datum2 {
+    pub name: String,
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    pub level: Option<f64>,
+}
+
 /// A drawing to export.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drawing2d {
@@ -177,6 +193,44 @@ pub struct Drawing2d {
 }
 
 impl Drawing2d {
+    /// Draws grid lines and levels as the view's tab shows them: a grid with a bubble and its name
+    /// past both ends, a level with its name and height past both ends.
+    pub fn datums(&mut self, datums: &[Datum2]) {
+        let unit = 1.0 / self.paper_per_unit();
+        let (r, h) = (BUBBLE * unit, TEXT * unit);
+        for d in datums {
+            let (dx, dy) = (d.b[0] - d.a[0], d.b[1] - d.a[1]);
+            let run = dx.hypot(dy);
+            if run <= 0.0 {
+                continue;
+            }
+            self.line(Pen::Grids, d.a, d.b);
+            let u = [dx / run, dy / run];
+            match d.level {
+                None => {
+                    for (end, out) in [(d.a, [-u[0], -u[1]]), (d.b, u)] {
+                        let c = add(end, out, r);
+                        let point = |k: usize| {
+                            let t = std::f64::consts::TAU * k as f64 / BUBBLE_SIDES as f64;
+                            [c[0] + r * t.cos(), c[1] + r * t.sin()]
+                        };
+                        for k in 0..BUBBLE_SIDES {
+                            self.line(Pen::Grids, point(k), point(k + 1));
+                        }
+                        self.texts.push(Text2d { pen: Pen::Grids, at: [c[0], c[1] - h / 2.0], height: h, text: d.name.clone(), align: Align::Center });
+                    }
+                }
+                Some(z) => {
+                    let label = format!("{} {z:+.3}", d.name);
+                    let gap = h * 0.6;
+                    let (right, left) = (add(d.b, u, gap), add(d.a, [-u[0], -u[1]], gap));
+                    self.texts.push(Text2d { pen: Pen::Grids, at: [right[0], right[1] - h / 2.0], height: h, text: label.clone(), align: Align::Left });
+                    self.texts.push(Text2d { pen: Pen::Grids, at: [left[0], left[1] - h / 2.0], height: h, text: label, align: Align::Right });
+                }
+            }
+        }
+    }
+
     /// Paper metres per metre of the drawing.
     pub fn paper_per_unit(&self) -> f64 {
         match self.space {
@@ -512,7 +566,27 @@ mod tests {
 
     #[test]
     fn pens_have_their_layer_and_weight() {
-        assert_eq!(Pen::ALL.map(Pen::name), ["O3V-Cut", "O3V-Beyond", "O3V-Dimensions", "O3V-Text", "O3V-Frame"]);
-        assert_eq!(Pen::ALL.map(Pen::weight_mm), [0.50, 0.18, 0.18, 0.25, 0.35]);
+        assert_eq!(Pen::ALL.map(Pen::name), ["O3V-Cut", "O3V-Beyond", "O3V-Dimensions", "O3V-Text", "O3V-Frame", "O3V-Grids"]);
+        assert_eq!(Pen::ALL.map(Pen::weight_mm), [0.50, 0.18, 0.18, 0.25, 0.35, 0.18]);
+    }
+
+    #[test]
+    fn grids_and_levels_are_drawn_with_bubbles_names_and_heights() {
+        let (doc, plan) = plan();
+        let mut d = view_drawing(&doc, &plan, &room()).unwrap();
+        d.datums(&[
+            Datum2 { name: "A".into(), a: [0.0, -1.0], b: [0.0, 6.0], level: None },
+            Datum2 { name: "01".into(), a: [-1.0, 3.0], b: [9.0, 3.0], level: Some(3.0) },
+        ]);
+        let grid_lines = d.lines.iter().filter(|l| l.pen == Pen::Grids).count();
+        // the two lines, and a round bubble at both ends of the grid
+        assert!(grid_lines >= 2 + 2 * 16, "{grid_lines}");
+        assert_eq!(d.texts.iter().filter(|t| t.text == "A" && t.align == Align::Center).count(), 2);
+        // the bubbles stand past the grid's ends: the one below under y = -1
+        assert!(d.texts.iter().any(|t| t.text == "A" && t.at[1] < -1.0), "{:?}", d.texts);
+        // the level's name and height past both ends
+        let level: Vec<&Text2d> = d.texts.iter().filter(|t| t.text == "01 +3.000").collect();
+        assert_eq!(level.len(), 2, "{:?}", d.texts);
+        assert!(level.iter().any(|t| t.at[0] > 9.0 && t.align == Align::Left) && level.iter().any(|t| t.at[0] < -1.0 && t.align == Align::Right));
     }
 }

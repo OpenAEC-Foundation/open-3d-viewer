@@ -71,11 +71,15 @@ the DynLex code is not ported.
 
 - A **Model** tab in the ribbon with **New model** and one tool per base element: Point, Beam,
   Column, Wall, Slab, System. **Connect** and **Mitre** join two selected linear elements.
-- Points are clicked on the work plane: the height of the level chosen in the Levels tab, else 0.
+- Points are clicked on the work plane: the level of the floor plan shown, else the level nearest
+  0. Clicks snap to element ends within 12 px, straighten within 4° of the first point's axes and
+  round to 10 mm; walls, beams and systems continue from the last end.
 - Modelled elements show as a model of their own, on layers per IFC class. They are selected,
   hidden and measured like any element, and Delete removes them.
-- Saving as IFCX writes each modelled element with its IFC class, its tile and its definition.
-  Reading the file back gives back editable elements.
+- Saving as IFCX writes each modelled element with its IFC class, its mesh and its definition
+  (`openaec::element`, with the tile). A connection has no body and so no node: its definition
+  travels with its primary member. Reading the file back gives the definitions back instead of
+  the meshes, as editable elements.
 
 ## Languages
 
@@ -108,6 +112,10 @@ The author made these calls, not the project owner. They are open to correction:
   The edit layer of the 2026-11-06 design is the follow-up for large models.
 - German and French are the added languages. Their catalogues are a first translation that needs
   review by native speakers.
+- A test fails when an interface text (`text(nl, en)` or `translate(en)` with literal strings)
+  has no German or French translation, so new texts arrive translated.
+- Property names of modelled elements (Length, Thickness, Tile) are data, like an IFC file's, and
+  stay English in every interface language.
 
 ## Not in this slice
 

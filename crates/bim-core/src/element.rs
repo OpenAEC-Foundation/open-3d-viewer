@@ -293,7 +293,7 @@ pub struct PartSolid {
 pub fn linear_axes(l: &LinearDef) -> Result<(Axes, f64), Refusal> {
     let axis = l.end - l.start;
     let length = axis.length();
-    if !(length > LINEAR_TOLERANCE) {
+    if !positive(length) {
         return Err(Refusal::ZeroLength);
     }
     let z = axis / length;
@@ -350,7 +350,7 @@ pub fn planar_solid(p: &PlanarDef) -> Result<Solid, Refusal> {
 fn wall_axes(start: DVec2, end: DVec2, base: f64, thickness: f64) -> Result<(Axes, f64), Refusal> {
     let d = end - start;
     let length = d.length();
-    if !(length > LINEAR_TOLERANCE) {
+    if !positive(length) {
         return Err(Refusal::ZeroLength);
     }
     let dir = (d / length).extend(0.0);
@@ -404,7 +404,7 @@ pub fn system_parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
     }
     let d = s.end - s.start;
     let length = d.length();
-    if !(length > LINEAR_TOLERANCE) {
+    if !positive(length) {
         return Err(Refusal::ZeroLength);
     }
     let dir = (d / length).extend(0.0);

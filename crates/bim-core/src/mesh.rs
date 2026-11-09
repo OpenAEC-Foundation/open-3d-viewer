@@ -42,7 +42,7 @@ impl Mesh {
             let first = mesh.positions.len() as u32;
             mesh.positions.extend(&corners);
             mesh.normals.extend(std::iter::repeat_n(normal, corners.len()));
-            for t in triangles.chunks_exact(3) {
+            for t in triangles.as_chunks::<3>().0 {
                 let (a, b, c) = (corners[t[0]], corners[t[1]], corners[t[2]]);
                 let flip = (b - a).cross(c - a).dot(normal) < 0.0;
                 let (i, j, k) = (first + t[0] as u32, first + t[1] as u32, first + t[2] as u32);
@@ -63,7 +63,7 @@ impl Mesh {
     /// The area of the triangles (m²).
     pub fn area(&self) -> f64 {
         self.indices
-            .chunks_exact(3)
+            .as_chunks::<3>().0.iter()
             .map(|t| {
                 let (a, b, c) = (self.positions[t[0] as usize], self.positions[t[1] as usize], self.positions[t[2] as usize]);
                 (b - a).cross(c - a).length() / 2.0
@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(m.indices.len(), 36);
         assert!((m.area() - 2.0 * (1.0 * 2.0 + 1.0 * 3.0 + 2.0 * 3.0)).abs() < 1e-12);
         let centre = DVec3::new(0.0, 0.0, 1.5);
-        for t in m.indices.chunks_exact(3) {
+        for t in m.indices.as_chunks::<3>().0 {
             let (a, b, c) = (m.positions[t[0] as usize], m.positions[t[1] as usize], m.positions[t[2] as usize]);
             let n = (b - a).cross(c - a);
             assert!(n.dot(a - centre) > 0.0, "every triangle faces out");

@@ -2,9 +2,18 @@
 //! [`save`] picks the writer by extension.
 //!
 //! To add a format: implement [`Writer`] in a new module and add it to [`registry`].
+//!
+//! The drawings of views and sheets ([`crate::drawing2d`]) are exported apart from the model:
+//! [`cad`] (DWG, DXF, IFCCAD), [`pdf`] and [`svg`] (SVG, PNG).
 
+pub mod cad;
+pub mod drawing;
 mod ifc;
+pub(crate) mod ifcx;
+pub mod pdf;
+pub mod svg;
 
+use crate::document::Document;
 use crate::model::Model;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,13 +29,15 @@ pub trait Writer: Send + Sync {
     fn mime(&self) -> &'static str {
         "application/octet-stream"
     }
-    /// Writes the model as the file `file_name` to `out`.
-    fn write(&self, model: &Model, file_name: &str, out: &mut dyn io::Write) -> io::Result<()>;
+    /// Writes the model, with what the document adds to it (levels), as the file `file_name` to
+    /// `out`.
+    fn write(&self, model: &Model, document: &Document, file_name: &str, out: &mut dyn io::Write) -> io::Result<()>;
 }
 
-/// All available writers, in the order of the save dialog's filters.
+/// All available writers, in the order of the save dialog's filters; the first is the default,
+/// IFCX, the viewer's own project file (model, levels and drawings).
 pub fn registry() -> Vec<Box<dyn Writer>> {
-    vec![Box::new(ifc::IfcWriter)]
+    vec![Box::new(ifcx::IfcxWriter), Box::new(ifc::IfcWriter)]
 }
 
 /// The writer for the extension of `file_name`.
@@ -43,10 +54,10 @@ pub fn writer_for(file_name: &str) -> Result<Box<dyn Writer>, String> {
 
 /// Saves a model with the writer matching the extension of `path`, through [`write_file`]: a failed
 /// save leaves no half file behind, and an existing file is only replaced when `replace`.
-pub fn save(model: &Model, path: &Path, replace: bool) -> Result<(), String> {
+pub fn save(model: &Model, document: &Document, path: &Path, replace: bool) -> Result<(), String> {
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let writer = writer_for(&file_name)?;
-    write_file(path, replace, |out| writer.write(model, &file_name, out)).map_err(|e| format!("Cannot save {file_name}: {e}"))
+    write_file(path, replace, |out| writer.write(model, document, &file_name, out)).map_err(|e| format!("Cannot save {file_name}: {e}"))
 }
 
 /// The temporary files of the writes under way, so a stop (SIGTERM) can wait for them or clean up.
@@ -107,9 +118,9 @@ fn put_in_place(part: &Path, path: &Path, replace: bool) -> io::Result<()> {
 }
 
 /// The model as the file `file_name`, in memory (the web app hands it to the browser).
-pub fn to_bytes(model: &Model, file_name: &str) -> Result<Vec<u8>, String> {
+pub fn to_bytes(model: &Model, document: &Document, file_name: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    writer_for(file_name)?.write(model, file_name, &mut out).map_err(|e| format!("Cannot save {file_name}: {e}"))?;
+    writer_for(file_name)?.write(model, document, file_name, &mut out).map_err(|e| format!("Cannot save {file_name}: {e}"))?;
     Ok(out)
 }
 
@@ -120,6 +131,13 @@ mod tests {
 
     fn repo_file(rel: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+    }
+
+    /// Save as offers IFCX first, the viewer's own project file; IFC stays a choice.
+    #[test]
+    fn ifcx_is_the_default_save_format() {
+        let formats: Vec<&str> = super::registry().iter().map(|w| w.extensions()[0]).collect();
+        assert_eq!(formats, ["ifcx", "ifc"]);
     }
 
     /// Every test model of the repository (all formats the viewer opens) saves as IFC.
@@ -136,7 +154,7 @@ mod tests {
                 continue;
             }
             let out = dir.join(path.file_stem().unwrap()).with_extension("ifc");
-            super::save(&model, &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            super::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.starts_with("ISO-10303-21;") && text.trim_end().ends_with("END-ISO-10303-21;"));
             assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());

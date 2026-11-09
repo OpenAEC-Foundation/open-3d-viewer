@@ -208,11 +208,18 @@ impl App {
     /// Whether hit `h` is not behind `triangle` (the world point of the triangle under the same
     /// cursor): a triangle in front of it by more than 1 % of the view distance hides it.
     fn not_hidden_by(&self, triangle: Option<Vec3>) -> impl Fn(&Hit) -> bool {
+        let seen = self.not_behind(triangle);
+        move |h: &Hit| seen(h.world)
+    }
+
+    /// Whether a world point is not behind `triangle` (the world point of the triangle under the
+    /// same cursor) by more than 1 % of the view distance.
+    pub(crate) fn not_behind(&self, triangle: Option<Vec3>) -> impl Fn(Vec3) -> bool {
         let eye = self.camera.eye();
         let forward = (self.camera.target - eye).normalize_or_zero();
         let depth = move |w: Vec3| (w - eye).dot(forward);
         let margin = 0.01 * self.camera.distance;
-        move |h: &Hit| triangle.is_none_or(|t| depth(t) >= depth(h.world) - margin)
+        move |w: Vec3| triangle.is_none_or(|t| depth(t) >= depth(w) - margin)
     }
 
     /// The structural node or member under (x, y), leaving out what a triangle lies clearly in

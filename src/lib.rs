@@ -16,12 +16,17 @@ pub mod app;
 mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
+pub mod document;
+pub mod drawing;
+pub mod drawing2d;
 mod explode;
 pub mod export;
 mod history;
+pub mod i18n;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu;
 mod icons;
+pub mod ifcx_structure;
 pub mod loaders;
 #[cfg(not(target_arch = "wasm32"))]
 mod managed;
@@ -34,6 +39,7 @@ pub mod remote_link;
 pub mod section;
 mod selection;
 pub mod shell;
+pub mod sheet_layout;
 pub mod structural;
 mod swipe;
 mod theme;

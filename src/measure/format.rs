@@ -158,7 +158,12 @@ impl UnitSettings {
 
 /// A number with a fixed number of decimals and thousands separators.
 pub fn format_number(l: Language, value: f64, decimals: u8) -> String {
-    let (decimal, thousands) = if l == Language::Dutch { (',', '.') } else { ('.', ',') };
+    // French groups thousands with a (no-break) space, Dutch and German with a point
+    let (decimal, thousands) = match l {
+        Language::English => ('.', ','),
+        Language::French => (',', '\u{a0}'),
+        Language::Dutch | Language::German => (',', '.'),
+    };
     let mut s = format!("{:.*}", decimals as usize, value.abs());
     // never "-0,0"
     let negative = value < 0.0 && s.chars().any(|c| c.is_ascii_digit() && c != '0');
@@ -191,6 +196,8 @@ mod tests {
         assert_eq!(format_number(Language::Dutch, -0.0004, 2), "0,00");
         assert_eq!(format_number(Language::Dutch, -12.6, 0), "-13");
         assert_eq!(format_number(Language::Dutch, 999.0, 0), "999");
+        assert_eq!(format_number(Language::German, 1234.5, 1), "1.234,5");
+        assert_eq!(format_number(Language::French, 1234.5, 1), "1\u{a0}234,5");
     }
 
     #[test]

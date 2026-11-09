@@ -178,7 +178,7 @@ codes=(
     "$(mcp save "$(call viewer3d_opslaan '{}')" "${auth[@]}")"
     "$(mcp outside "$(call viewer3d_open "{\"path\":\"$work/outside/$name\"}")" "${auth[@]}")"
     "$(mcp outside-up "$(call viewer3d_open "{\"path\":\"../outside/$name\"}")" "${auth[@]}")"
-    "$(mcp open-ifc "$(call viewer3d_open "{\"path\":\"$stem.ifc\"}")" "${auth[@]}")"
+    "$(mcp open-ifc "$(call viewer3d_open "{\"path\":\"$stem.ifcx\"}")" "${auth[@]}")"
     "$(mcp save-ifc "$(call viewer3d_opslaan '{}')" "${auth[@]}")"
     "$(mcp origin '{}' "${auth[@]}" -H 'Origin: http://localhost')"
     "$(mcp nosecret '{}')"
@@ -203,12 +203,17 @@ for step in ["open", "save", "open-ifc", "save-ifc"]:
 for step in ["outside", "outside-up"]:
     if not answer(step)["isError"] or "outside the work folder" not in text(step):
         sys.exit(f"::error::viewer3d_open opened a file outside the work folder ({step}): {text(step)}")
-# saved next to the model as IFC; an open IFC is not replaced but saved beside it
-for name in [f"{stem}.ifc", f"{stem}-viewer.ifc"]:
-    ifc = os.path.join(folder, name)
-    if not os.path.isfile(ifc) or not open(ifc, "rb").read(16).startswith(b"ISO-10303-21"):
+# saved next to the model as IFCX (the viewer's own file); an open IFCX is not replaced but
+# saved beside it
+def is_ifcx(path):
+    try:
+        return json.load(open(path, encoding="utf-8"))["header"]["ifcxVersion"].startswith("ifcx")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+for name in [f"{stem}.ifcx", f"{stem}-viewer.ifcx"]:
+    if not is_ifcx(os.path.join(folder, name)):
         sys.exit(f"::error::viewer3d_opslaan did not write {name}")
-print(f"MCP over HTTP: {len(names)} tools viewer3d_*, opened and saved {stem}.ifc and {stem}-viewer.ifc "
+print(f"MCP over HTTP: {len(names)} tools viewer3d_*, opened and saved {stem}.ifcx and {stem}-viewer.ifcx "
       f"in the work folder; browsers, missing secrets and paths outside refused")
 EOF
 

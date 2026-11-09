@@ -20,6 +20,7 @@
 //! - Units: metres. OBJ, STL and PLY carry no unit; such a model larger than 500 units is taken to
 //!   be in millimetres.
 
+use crate::document::Document;
 use crate::model::Model;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -41,8 +42,8 @@ impl super::Writer for IfcWriter {
         "application/x-step"
     }
 
-    fn write(&self, model: &Model, file_name: &str, mut out: &mut dyn Write) -> io::Result<()> {
-        write(model, file_name, &mut out)
+    fn write(&self, model: &Model, document: &Document, file_name: &str, mut out: &mut dyn Write) -> io::Result<()> {
+        write(model, document, file_name, &mut out)
     }
 }
 
@@ -335,8 +336,8 @@ fn materials(props: &[(String, String)]) -> Vec<String> {
     }
 }
 
-/// Writes the model as an IFC 4 file named `file_name`.
-pub fn write(model: &Model, file_name: &str, out: &mut impl Write) -> io::Result<()> {
+/// Writes the model as an IFC 4 file named `file_name`, with the document's levels as storeys.
+pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl Write) -> io::Result<()> {
     let units = Units::of(model);
     let app = format!("Open 3D Viewer Studio {}", env!("CARGO_PKG_VERSION"));
     let ids = Guids { seed: file_name.to_string() };
@@ -390,15 +391,14 @@ pub fn write(model: &Model, file_name: &str, out: &mut impl Write) -> io::Result
     f.add(format!("IFCRELAGGREGATES({},$,$,$,#{project},(#{site}))", text(&ids.get("aggregates/project"))))?;
     f.add(format!("IFCRELAGGREGATES({},$,$,$,#{site},(#{building}))", text(&ids.get("aggregates/site"))))?;
 
-    // storeys: the model's levels (low to high), else one at zero
-    let mut levels: Vec<(String, f32)> = model.project.levels.iter().filter(|(_, z)| z.is_finite()).cloned().collect();
-    levels.sort_by(|a, b| a.1.total_cmp(&b.1));
+    // storeys: the document's levels (low to high: the model's and those added), else one at zero
+    let mut levels: Vec<(String, f64)> = document.levels().iter().map(|l| (l.name.clone(), l.elevation)).collect();
     if levels.is_empty() {
         levels.push(("Level 0".to_string(), 0.0));
     }
     let mut storeys: Vec<(u64, u64, i64)> = Vec::new(); // entity, placement, elevation (quantised)
     for (i, (name, z)) in levels.iter().enumerate() {
-        let elevation = units.quantise(*z as f64);
+        let elevation = units.quantise(*z);
         let point = f.add(format!("IFCCARTESIANPOINT((0.,0.,{}))", fixed(elevation, units.decimals)))?;
         let axes = f.add(format!("IFCAXIS2PLACEMENT3D(#{point},$,$)"))?;
         let placement = f.add(format!("IFCLOCALPLACEMENT(#{building_placement},#{axes})"))?;
@@ -436,7 +436,7 @@ pub fn write(model: &Model, file_name: &str, out: &mut impl Write) -> io::Result
         let level = props.iter().find(|(k, _)| k == "level").map(|(_, v)| v.as_str());
         let storey = level
             .and_then(|l| levels.iter().position(|(n, _)| n == l))
-            .unwrap_or_else(|| levels.iter().rposition(|(_, z)| (*z as f64) <= body.min_z + 0.01).unwrap_or(0));
+            .unwrap_or_else(|| levels.iter().rposition(|(_, z)| *z <= body.min_z + 0.01).unwrap_or(0));
         let (_, storey_placement, elevation) = storeys[storey];
 
         let mut items = Vec::new();
@@ -788,8 +788,25 @@ mod tests {
 
     fn ifc(model: &Model) -> String {
         let mut out = Vec::new();
-        write(model, "test.ifc", &mut out).unwrap();
+        write(model, &Document::from_model(model), "test.ifc", &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn levels_added_to_the_document_become_storeys_in_order() {
+        let model = revit_model();
+        let mut document = Document::from_model(&model);
+        document.add_level("Roof", 6.0).unwrap();
+        document.add_level("Foundation", -1.5).unwrap();
+        let mut out = Vec::new();
+        write(&model, &document, "test.ifc", &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let storeys: Vec<&str> = s.lines().filter(|l| l.contains("=IFCBUILDINGSTOREY(")).collect();
+        assert_eq!(storeys.len(), 4, "{storeys:?}");
+        for (line, (name, elevation)) in storeys.iter().zip([("Foundation", -1.5), ("Level 1", 0.0), ("Level 2", 3.0), ("Roof", 6.0)]) {
+            let written = line.rsplit(".ELEMENT.,").next().and_then(|v| v.strip_suffix(");")).and_then(|v| v.parse::<f64>().ok());
+            assert!(line.contains(&format!(",'{name}',")) && written == Some(elevation), "{line}");
+        }
     }
 
     #[test]

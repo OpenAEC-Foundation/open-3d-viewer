@@ -73,9 +73,12 @@ impl App {
 
     /// Shows a schedule's tab, from its top (`None`: the 3D view alone).
     pub(super) fn show_schedule(&mut self, i: Option<usize>) -> Task<Message> {
-        // a schedule's tab replaces a shown sheet
+        // a schedule's tab replaces a shown sheet, under the 3D view
         if i.is_some() {
             self.active_sheet = None;
+            self.active_doc_sheet = None;
+            self.ifc.shown = false;
+            self.load_view(None);
         }
         if self.active_schedule == i {
             return Task::none();
@@ -142,12 +145,22 @@ impl App {
     /// The workspace: the shown sheet, or the viewport with the table of the shown schedule
     /// under it.
     pub fn workspace_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        if let Some(sheet) = self.doc_sheet_workspace(p, l) {
+            return sheet;
+        }
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i)) {
             return self.sheet_view_element(p, l, sheet);
         }
         let viewport = self.viewport_view(p, l);
+        // a view's tab: its tools over it
+        let viewport = match self.view_bar(p, l) {
+            Some(bar) => column![bar, viewport].into(),
+            None => viewport,
+        };
+        if self.ifc.shown && self.ifc.structure.is_some() {
+            return column![container(viewport).height(FillPortion(1)), rule::horizontal(1), container(self.ifc_panel(p, l)).height(FillPortion(1)).style(move |_| p.panel())].into();
+        }
         let Some((i, s)) = self.active_schedule.and_then(|i| Some((i, self.schedules.get(i)?))) else {
-
             return viewport;
         };
         column![

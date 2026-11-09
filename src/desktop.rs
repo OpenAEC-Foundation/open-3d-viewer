@@ -69,11 +69,7 @@ fn parse_args() -> Result<Args, String> {
         match s.as_str() {
             "--theme" => args.theme = Some(shell::theme_from_arg(&value()?).ok_or("unknown theme")?),
             "--language" => {
-                args.language = Some(match value()?.as_str() {
-                    "en" => Language::English,
-                    "nl" => Language::Dutch,
-                    _ => return Err("--language en|nl".into()),
-                })
+                args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts")?,
             "--schedule" => args.schedule = Some(value()?),
@@ -165,7 +161,7 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let file = args.file.as_ref().ok_or("--save-as needs a FILE to convert")?;
     let model = loaders::load(file)?;
     let start = web_time::Instant::now();
-    export::save(&model, out, true)?;
+    export::save(&model, &crate::document::Document::from_model(&model), out, true)?;
     println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }

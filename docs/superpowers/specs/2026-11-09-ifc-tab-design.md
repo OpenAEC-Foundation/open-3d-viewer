@@ -22,6 +22,7 @@ IfcX (IFC5) is the viewer's own file. The project owner wants to see how such a 
     - an element holding an element is `IfcRelAggregates`;
     - a child without a class is a part (its geometry);
     - an inherit of a classified node is `IfcRelDefinesByType`, and of a material `IfcRelAssociatesMaterial`.
+- **Search** (one field for the four views, any case): the text marks the lines holding the word and jumps from one to the next (Enter, or the arrows; round the end); the tree shows the nodes whose path, name or class holds it, opened down to where they first hang, with only the rows above them; the table shows the entries whose path, name, class or an attribute key holds it; the relations those from or to a node found, or named after the word.
 - **Four views**: Text, Nodes, Table and Relations. Relations has a filter per relation with its count. Only the rows in sight are drawn. A 4 MB IFCX of 15,000 lines and 842 nodes opens in 0.12 s.
 - **Selection both ways**:
   - A node picked in any view selects its elements in the model: it and what it holds along children (a storey: all its elements). A node without elements (a body) selects the element it is part of.
@@ -36,4 +37,4 @@ IfcX (IFC5) is the viewer's own file. The project owner wants to see how such a 
 
 ## Not yet
 
-Searching the text or the tree, editing the file in the tab, the files an IFCX imports shown with it, and binary IFCX.
+Editing the file in the tab, the files an IFCX imports shown with it, and binary IFCX.

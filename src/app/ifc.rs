@@ -18,8 +18,8 @@ use crate::theme::Palette;
 use iced::widget::operation::AbsoluteOffset;
 use iced::widget::scrollable::{Direction, Scrollbar, Viewport};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, operation, row, rule, scrollable, text, Column, Space};
-use iced::{Center, Element, Fill, Font, Task};
+use iced::widget::{button, column, container, operation, row, rule, scrollable, text, text_input, Column, Space};
+use iced::{Center, Color, Element, Fill, Font, Task};
 use openaec_ui::Language;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -34,6 +34,8 @@ const STEP: f32 = 16.0;
 const SELECT_LIMIT: usize = 100_000;
 /// The scrollable of the table's headings.
 const TABLE_HEAD: &str = "ifc-table-head";
+/// Nodes found whose place in the tree is opened, at most.
+const MATCHES_OPENED: usize = 5_000;
 
 /// What the IFC tab shows of the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,6 +93,13 @@ pub struct IfcTab {
     /// The relation the Relations view shows (all when `None`), and those links.
     pub relation: Option<Relation>,
     pub links: Vec<u32>,
+    /// What is searched for (any case); the lines of the text holding it and the one jumped to;
+    /// the nodes whose path, name or class holds it; and the entries the table shows.
+    pub query: String,
+    pub hits: Vec<u32>,
+    pub hit: usize,
+    pub matches: HashSet<u32>,
+    pub table: Vec<u32>,
 }
 
 impl IfcTab {
@@ -131,8 +140,7 @@ impl App {
             self.ifc.opened.insert(root);
         }
         self.ifc.structure = Some(Arc::new(s));
-        self.ifc_rows();
-        self.ifc_links();
+        self.ifc_filter();
         self.show_ifc();
         let follow = self.ifc_follow();
         Task::batch([operation::snap_to(self.ifc.view.id(), iced::widget::scrollable::RelativeOffset::START), follow])
@@ -187,16 +195,90 @@ impl App {
         Ok((file, bytes, links))
     }
 
-    /// The rows of the tree as it is opened.
+    /// The rows of the tree as it is opened; while searching, the nodes found with the rows above
+    /// them only (opened down to them).
     fn ifc_rows(&mut self) {
-        self.ifc.rows = self.ifc.structure.as_ref().map(|s| s.tree_rows(&self.ifc.opened)).unwrap_or_default();
+        let Some(s) = self.ifc.structure.clone() else { return };
+        if self.ifc.query.is_empty() {
+            self.ifc.rows = s.tree_rows(&self.ifc.opened);
+            return;
+        }
+        let above: HashSet<String> = self.ifc.matches.iter().take(MATCHES_OPENED).flat_map(|&k| s.keys_above(k)).collect();
+        let opened: HashSet<String> = self.ifc.opened.union(&above).cloned().collect();
+        let matches = &self.ifc.matches;
+        self.ifc.rows = s.tree_rows(&opened).into_iter().filter(|r| r.node.is_some_and(|k| matches.contains(&k)) || above.contains(&r.key)).collect();
     }
 
-    /// The links the Relations view shows.
+    /// The links the Relations view shows: of the relation asked for, and while searching those
+    /// from or to a node found, or named after what is searched for.
     fn ifc_links(&mut self) {
         let Some(s) = &self.ifc.structure else { return };
         let want = self.ifc.relation;
-        self.ifc.links = (0..s.links.len() as u32).filter(|&k| want.is_none_or(|r| s.links[k as usize].kind == r)).collect();
+        let query = self.ifc.query.to_lowercase();
+        let matches = &self.ifc.matches;
+        self.ifc.links = (0..s.links.len() as u32)
+            .filter(|&k| {
+                let link = &s.links[k as usize];
+                want.is_none_or(|r| link.kind == r)
+                    && (query.is_empty() || matches.contains(&link.from) || link.to.is_some_and(|t| matches.contains(&t)) || link.name.to_lowercase().contains(&query))
+            })
+            .collect();
+    }
+
+    /// What the search finds: the lines, nodes, entries, tree rows and links.
+    fn ifc_filter(&mut self) {
+        let Some(s) = self.ifc.structure.clone() else { return };
+        let query = self.ifc.query.to_lowercase();
+        let holds = |t: &str| t.to_lowercase().contains(&query);
+        if query.is_empty() {
+            self.ifc.hits.clear();
+            self.ifc.matches.clear();
+            self.ifc.table = (0..s.entries.len() as u32).collect();
+        } else {
+            self.ifc.hits = (0..s.lines.len() as u32).filter(|&k| holds(&s.lines[k as usize].text)).collect();
+            self.ifc.matches = (0..s.nodes.len() as u32)
+                .filter(|&k| {
+                    let n = &s.nodes[k as usize];
+                    holds(&n.path) || n.name.as_deref().is_some_and(holds) || n.class.as_deref().is_some_and(holds)
+                })
+                .collect();
+            self.ifc.table = (0..s.entries.len() as u32)
+                .filter(|&k| {
+                    let e = &s.entries[k as usize];
+                    holds(&e.path) || e.name.as_deref().is_some_and(holds) || e.class.as_deref().is_some_and(holds) || e.attributes.iter().any(|(a, _)| holds(a))
+                })
+                .collect();
+        }
+        self.ifc.hit = 0;
+        self.ifc_rows();
+        self.ifc_links();
+    }
+
+    /// Searches the file: every view shows what holds `query`, the text jumps to the first line.
+    pub(super) fn ifc_query(&mut self, query: String) -> Task<Message> {
+        self.ifc.query = query;
+        self.ifc_filter();
+        let jump = self.ifc_jump();
+        let tops = [IfcView::Nodes, IfcView::Table, IfcView::Relations].map(|v| operation::snap_to(v.id(), iced::widget::scrollable::RelativeOffset::START));
+        Task::batch(tops.into_iter().chain([jump]))
+    }
+
+    /// The next (or the previous) line found in the text, round the end.
+    pub(super) fn ifc_next(&mut self, forward: bool) -> Task<Message> {
+        let n = self.ifc.hits.len();
+        if n == 0 {
+            return Task::none();
+        }
+        self.ifc.hit = if forward { (self.ifc.hit + 1) % n } else { (self.ifc.hit + n - 1) % n };
+        self.ifc_jump()
+    }
+
+    /// Scrolls the text to the line found that is jumped to.
+    fn ifc_jump(&self) -> Task<Message> {
+        let Some(&line) = self.ifc.hits.get(self.ifc.hit) else { return Task::none() };
+        let (_, height) = self.ifc.scroll(IfcView::Text);
+        let top = (line as f32 * LINE - height.max(LINE * 6.0) / 3.0).max(0.0);
+        operation::scroll_to(IfcView::Text.id(), AbsoluteOffset { x: None, y: Some(top) })
     }
 
     /// Shows another view of the file, scrolled to the picked node.
@@ -274,7 +356,7 @@ impl App {
                 let key = s.keys.get(&node);
                 self.ifc.rows.iter().position(|r| r.node == Some(node) && Some(&r.key) == key).or_else(|| self.ifc.rows.iter().position(|r| r.node == Some(node)))
             }
-            IfcView::Table => n.entries.first().map(|&e| e as usize),
+            IfcView::Table => self.ifc.table.iter().position(|e| n.entries.contains(e)),
             IfcView::Relations => self.ifc.links.iter().position(|&k| s.links[k as usize].from == node || s.links[k as usize].to == Some(node)),
         };
         let Some(at) = at else { return Task::none() };
@@ -310,10 +392,8 @@ impl App {
             s.lines.len(),
             l.text("regels", "lines")
         );
-        let mut bar = row![text("IFC").size(12).font(FONT_BOLD).color(p.text), text(s.source.as_str()).size(12).color(p.text), text(info).size(11).color(p.text_muted), Space::new().width(Fill)]
-            .spacing(10)
-            .align_y(Center)
-            .padding([4, 8]);
+        // the views first, then the file (cut off when the bar is narrow), then the search
+        let mut bar = row![text("IFC").size(12).font(FONT_BOLD).color(p.text)].spacing(10).align_y(Center).padding([4, 8]);
         for view in IfcView::ALL {
             let active = self.ifc.view == view;
             bar = bar.push(
@@ -322,6 +402,30 @@ impl App {
                     .style(move |_, st| p.ribbon_button(active, st))
                     .on_press(Message::IfcView(view)),
             );
+        }
+        let file = row![text(s.source.as_str()).size(12).color(p.text).wrapping(Wrapping::None), text(info).size(11).color(p.text_muted).wrapping(Wrapping::None)].spacing(10).align_y(Center);
+        bar = bar.push(container(file).width(Fill).clip(true));
+        // the search: what it finds in the view shown; the text jumps from line to line
+        let search = text_input(l.text("Zoeken in IFC…", "Search IFC…"), &self.ifc.query)
+            .on_input(Message::IfcQuery)
+            .on_submit(Message::IfcNext(true))
+            .size(12)
+            .padding([3, 8])
+            .width(220);
+        bar = bar.push(search);
+        if !self.ifc.query.is_empty() {
+            let found = match self.ifc.view {
+                IfcView::Text if self.ifc.hits.is_empty() => l.text("niets gevonden", "nothing found").to_string(),
+                IfcView::Text => format!("{} / {}", self.ifc.hit + 1, self.ifc.hits.len()),
+                IfcView::Nodes => self.ifc.matches.len().to_string(),
+                IfcView::Table => self.ifc.table.len().to_string(),
+                IfcView::Relations => self.ifc.links.len().to_string(),
+            };
+            bar = bar.push(text(found).size(11).color(p.text_muted));
+            if self.ifc.view == IfcView::Text && !self.ifc.hits.is_empty() {
+                let step = |label: &'static str, forward: bool| button(text(label).size(12).color(p.text_secondary)).padding([0, 5]).style(move |_, st| p.row_button(st)).on_press(Message::IfcNext(forward));
+                bar = bar.push(step("▲", false)).push(step("▼", true));
+            }
         }
         let close = button(text("×").size(14).color(p.text_secondary)).padding([0, 6]).style(move |_, st| p.row_button(st)).on_press(Message::CloseIfc);
         bar = bar.push(close);
@@ -381,6 +485,10 @@ impl App {
             let mine = line.entry.is_some_and(|e| picked.contains(&e));
             let number = text(format!("{:>digits$}", first + k + 1)).size(12).font(mono).color(p.text_muted);
             let content = row![container(number).width(number_width).padding([0, 8]), text(t).size(12).font(mono).color(if mine { p.accent } else { p.text }).wrapping(Wrapping::None)].align_y(Center);
+            // a line found is marked, the one jumped to more
+            let at = (first + k) as u32;
+            let found = self.ifc.hits.binary_search(&at).ok().map(|h| if h == self.ifc.hit { 0.32 } else { 0.14 });
+            let content = container(content).width(Fill).style(move |_| container::Style { background: found.map(|a| Color { a, ..p.accent }.into()), ..Default::default() });
             let node = line.entry.and_then(|e| s.index.get(&s.entries[e as usize].path).copied());
             lines = lines.push(self.ifc_row(p, content, node));
         }
@@ -450,13 +558,15 @@ impl App {
         ];
         let width: f32 = W.iter().sum();
         let header = row(headings.iter().zip(W).map(|(h, w)| cell(text(*h).size(11).font(FONT_BOLD).color(p.text_secondary), w).into())).height(LINE + 4.0).align_y(Center);
-        let (first, last) = self.ifc_sight(IfcView::Table, s.entries.len());
+        let shown = &self.ifc.table;
+        let (first, last) = self.ifc_sight(IfcView::Table, shown.len());
         let mut rows = column![Space::new().height(first as f32 * LINE)];
         let pairs = |v: &[(String, Option<String>)]| v.iter().map(|(n, t)| format!("{n} → {}", t.as_deref().unwrap_or("null"))).collect::<Vec<_>>().join(", ");
-        for (k, e) in s.entries[first..last].iter().enumerate() {
+        for &k in &shown[first..last] {
+            let e = &s.entries[k as usize];
             let attrs: Vec<&str> = e.attributes.iter().map(|(a, _)| a.as_str()).collect();
             let cells = row![
-                cell(text((first + k + 1).to_string()).size(12).color(p.text_muted), W[0]),
+                cell(text((k + 1).to_string()).size(12).color(p.text_muted), W[0]),
                 cell(text(e.path.as_str()).size(12).font(Font::MONOSPACE).color(p.text), W[1]),
                 cell(text(e.class.as_deref().unwrap_or("")).size(12).color(p.accent), W[2]),
                 cell(text(e.name.as_deref().unwrap_or("")).size(12).color(p.text), W[3]),
@@ -467,7 +577,7 @@ impl App {
             .align_y(Center);
             rows = rows.push(self.ifc_row(p, cells, s.index.get(&e.path).copied()));
         }
-        rows = rows.push(Space::new().height((s.entries.len() - last) as f32 * LINE));
+        rows = rows.push(Space::new().height((shown.len() - last) as f32 * LINE));
         // the headings stay in place while the rows scroll, and follow them sideways
         column![
             scrollable(header.width(width)).id(TABLE_HEAD).direction(Direction::Horizontal(Scrollbar::hidden())).width(Fill),
@@ -625,6 +735,40 @@ mod tests {
         let south = s.nodes.iter().position(|n| n.name.as_deref() == Some("South wall")).unwrap() as u32;
         assert_eq!(app.ifc.pick, Some(south));
         assert!(app.ifc.rows.iter().any(|r| r.node == Some(south)));
+    }
+
+    #[test]
+    fn a_search_finds_lines_nodes_entries_and_relations() {
+        let mut app = app();
+        let _ = app.update(Message::OpenIfc);
+        let s = structure(&app);
+        let south = s.nodes.iter().position(|n| n.name.as_deref() == Some("South wall")).unwrap() as u32;
+        let _ = app.update(Message::IfcQuery("SOUTH".into()));
+        // the text: its name and its name as the storey's child, the first one jumped to
+        assert_eq!(app.ifc.hits.len(), 2);
+        assert!(app.ifc.hits.iter().all(|&l| s.lines[l as usize].text.to_lowercase().contains("south")));
+        assert_eq!(app.ifc.hit, 0);
+        let _ = app.update(Message::IfcNext(true));
+        assert_eq!(app.ifc.hit, 1);
+        let _ = app.update(Message::IfcNext(true));
+        assert_eq!(app.ifc.hit, 0, "past the last one it starts again");
+        let _ = app.update(Message::IfcNext(false));
+        assert_eq!(app.ifc.hit, 1);
+        // the nodes: the wall, with the rows above it only
+        assert_eq!(app.ifc.matches, HashSet::from([south]));
+        let key = s.keys[&south].clone();
+        assert!(app.ifc.rows.iter().any(|r| r.node == Some(south)));
+        assert!(app.ifc.rows.iter().all(|r| r.node == Some(south) || key.starts_with(&r.key)), "{:?}", app.ifc.rows);
+        // the table: its entry; the relations: the storey holding it
+        assert_eq!(app.ifc.table.len(), 1);
+        assert_eq!(app.ifc.links.len(), 1);
+        assert_eq!(s.links[app.ifc.links[0] as usize].to, Some(south));
+        // the field and the count are drawn
+        assert!(shows(&app, "2 / 2"));
+        // an empty search shows everything again, the tree as it was opened
+        let _ = app.update(Message::IfcQuery(String::new()));
+        assert_eq!((app.ifc.hits.len(), app.ifc.table.len(), app.ifc.links.len()), (0, s.entries.len(), s.links.len()));
+        assert!(app.ifc.rows.len() > 2);
     }
 
     #[test]

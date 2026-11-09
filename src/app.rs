@@ -422,6 +422,9 @@ pub enum Message {
     IfcToggle(String),
     /// The relation the IFC tab's Relations view shows (all: `None`).
     IfcRelation(Option<crate::ifcx_structure::Relation>),
+    /// Search the IFC tab; jump to the next (or the previous) line found in its text.
+    IfcQuery(String),
+    IfcNext(bool),
     ToggleSection,
     ResetSection,
     SectionToSelection,
@@ -1577,6 +1580,8 @@ impl App {
             Message::IfcPick(node) => self.ifc_pick(node),
             Message::IfcToggle(key) => self.ifc_toggle(key),
             Message::IfcRelation(relation) => return self.ifc_relation(relation),
+            Message::IfcQuery(query) => return self.ifc_query(query),
+            Message::IfcNext(forward) => return self.ifc_next(forward),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;

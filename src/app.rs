@@ -126,6 +126,8 @@ pub struct App {
     /// The 3D view's layer switches while another view shows: every layer's, and per model its
     /// own.
     parked_layers: Option<(Vec<bool>, Vec<Vec<bool>>)>,
+    /// The elements hidden in the 3D view while another view shows.
+    parked_hidden: Option<Arc<UnitKeySet>>,
     /// The undo histories of the views not shown, by view path (the 3D view: "").
     parked_histories: std::collections::HashMap<String, History<ViewState>>,
     pub status: Status,
@@ -180,6 +182,11 @@ pub struct App {
     pub active_plan: Option<String>,
     /// Floor plans open in a document tab, in tab order, each with its own camera and section.
     pub open_plans: Vec<views::OpenPlan>,
+    /// The kind of plan whose New in the Views tab lists the levels to make one of.
+    pub views_picker: Option<crate::document::PlanKind>,
+    /// Per unit, whether a structural plan leaves it out, and the explode index it was worked
+    /// out for.
+    structure_units: Option<(Arc<ExplodeIndex>, Arc<Vec<bool>>)>,
     /// The 3D view's camera and section box while a floor plan's tab shows.
     model_view: Option<views::ViewSlot>,
     /// Sheets of the document open in a document tab (paths), and the one shown.
@@ -344,6 +351,11 @@ pub enum Message {
     RemoveLevel(Arc<str>),
     /// Make a floor plan of a level (its path) and show it.
     NewPlan(Arc<str>),
+    /// Make a plan of a kind of a level (its path), named with the word after the level, and
+    /// show it.
+    NewPlanOf(Arc<str>, crate::document::PlanKind, &'static str),
+    /// List the levels under a kind of plan in the Views tab, to make one of (`None`: close).
+    PickLevelFor(Option<crate::document::PlanKind>),
     /// Show a floor plan (its path) in its tab.
     OpenPlan(Arc<str>),
     RemovePlan(Arc<str>),
@@ -595,6 +607,7 @@ impl Default for App {
             layers_query: String::new(),
             view_typing: None,
             parked_layers: None,
+            parked_hidden: None,
             parked_histories: Default::default(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
@@ -623,6 +636,8 @@ impl Default for App {
             level_form: None,
             active_plan: None,
             open_plans: Vec::new(),
+            views_picker: None,
+            structure_units: None,
             model_view: None,
             open_doc_sheets: Vec::new(),
             active_doc_sheet: None,
@@ -1046,6 +1061,7 @@ impl App {
         self.hidden = Arc::default();
         self.history.clear();
         self.parked_layers = None;
+        self.parked_hidden = None;
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
@@ -1519,6 +1535,8 @@ impl App {
                 self.document.remove_level(&path);
             }
             Message::NewPlan(level) => self.new_plan(&level),
+            Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
+            Message::PickLevelFor(kind) => self.views_picker = kind,
             Message::OpenPlan(plan) => self.open_plan(&plan),
             Message::RemovePlan(plan) => {
                 self.close_plan(&plan);
@@ -2111,6 +2129,13 @@ impl App {
                 if index.owner(u).is_some_and(|o| self.hidden.contains(&self.unit_key(o))) {
                     *f |= UNIT_HIDDEN;
                 }
+            }
+        }
+        // a structural plan leaves out what carries nothing
+        if self.is_structural_plan(self.active_plan.as_deref()) {
+            let left_out = self.non_structural_units();
+            for (f, _) in flags.iter_mut().zip(left_out.iter()).filter(|(_, out)| **out) {
+                *f |= UNIT_HIDDEN;
             }
         }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));

@@ -112,15 +112,25 @@ impl App {
     }
 
     /// The viewport goes from the view shown so far to `target` (a view's path; `None`: the 3D
-    /// view): the layers and the undo history of the one stay with it, those of the other come.
+    /// view): the layers, the hidden elements and the undo history of the one stay with it,
+    /// those of the other come.
     pub(super) fn swap_view_layers(&mut self, target: Option<&str>) {
         let from = self.active_plan.clone();
         if from.is_none() {
             self.parked_layers = Some((self.visible.clone(), self.models.iter().map(|e| e.layer_visibility.clone()).collect()));
+            self.parked_hidden = Some(self.hidden.clone());
         }
         let history = std::mem::take(&mut self.history);
         self.parked_histories.insert(from.unwrap_or_default(), history);
         self.history = self.parked_histories.remove(target.unwrap_or_default()).unwrap_or_default();
+        let hidden = match target {
+            Some(path) => self.document.view_hidden(path).cloned(),
+            None => self.parked_hidden.take(),
+        };
+        if let Some(hidden) = hidden.filter(|h| *h != self.hidden) {
+            self.hidden = hidden;
+            self.update_units();
+        }
         match target {
             Some(path) => {
                 let on = self.switches_of(path);
@@ -141,14 +151,22 @@ impl App {
         }
     }
 
-    /// Keeps the layer switches of the view in the viewport in the document (the 3D view keeps
-    /// its own in the app), and cuts it again when they changed.
+    /// Keeps the layer switches and the hidden elements of the view in the viewport in the
+    /// document (the 3D view keeps its own in the app), and cuts it again when they changed.
     pub(super) fn keep_view_layers(&mut self) {
         let Some(path) = self.active_plan.clone() else { return };
         let own = self.own_switches(&self.viewport_switches());
-        if self.document.set_view_layers(&path, own) {
+        let layers = self.document.set_view_layers(&path, own);
+        let hidden = self.document.set_view_hidden(&path, self.hidden.clone());
+        if layers || hidden {
             self.cut_again(&path);
         }
+    }
+
+    /// Per unit of the shown model, whether `hidden` holds it (empty when it holds nothing).
+    pub(super) fn hidden_units(&self, hidden: &crate::units::UnitKeySet) -> Vec<bool> {
+        let Some(index) = self.explode_index.as_deref().filter(|_| !hidden.is_empty()) else { return Vec::new() };
+        (0..index.len()).map(|u| u > 0 && index.owner(u).is_some_and(|o| hidden.contains(&self.unit_key(o)))).collect()
     }
 
     /// Cuts a view again that was cut, through its layers as they are now.
@@ -461,6 +479,52 @@ pub(super) mod tests {
         let _ = app.update(Message::Layer(WALLS, false));
         assert_eq!(app.document.view_layers(&plan), Some(&off("Walls")));
         assert!(app.visible[WALLS], "the 3D view under the sheet keeps its layers");
+    }
+
+    #[test]
+    fn an_element_hidden_in_a_floor_plan_stays_in_the_3d_view_and_leaves_the_plans_drawing() {
+        use crate::explode::UnitOwner;
+        use crate::selection::Pickable;
+        let (mut app, plan) = app_with_plan();
+        let _ = app.update(Message::NewSheet("Sheet"));
+        let sheet = Arc::<str>::from(app.document.sheets()[0].path.as_str());
+        let _ = app.update(Message::PlaceOnSheet(sheet, plan.clone()));
+        let all = app.cuts[&*plan].segments.len();
+        let (walls, cupboard) = (app.unit_key(UnitOwner::Element(10)), app.unit_key(UnitOwner::Element(20)));
+        // hidden in the plan's tab
+        let _ = app.update(Message::SelectTab(1));
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::HideSelection);
+        assert!(app.hidden.contains(&cupboard));
+        assert!(app.document.view_hidden(&plan).unwrap().contains(&cupboard), "kept in the document");
+        assert!(app.cuts[&*plan].segments.len() < all, "cut again without the cupboard");
+        let _ = app.update(Message::SelectTab(0));
+        assert!(app.hidden.is_empty(), "the 3D view hides nothing");
+        // hidden in the 3D view: the plan keeps its own
+        app.click(Some(Pickable::Element(10)), false);
+        let _ = app.update(Message::HideSelection);
+        let _ = app.update(Message::SelectTab(1));
+        assert_eq!(app.hidden.iter().collect::<Vec<_>>(), [&cupboard]);
+        let _ = app.update(Message::ShowAllElements);
+        assert!(app.document.view_hidden(&plan).unwrap().is_empty());
+        assert_eq!(app.cuts[&*plan].segments.len(), all);
+        let _ = app.update(Message::SelectTab(0));
+        assert_eq!(app.hidden.iter().collect::<Vec<_>>(), [&walls], "the walls stay hidden in the 3D view");
+    }
+
+    #[test]
+    fn isolating_in_a_view_hides_the_rest_there_and_undo_brings_it_back() {
+        use crate::explode::UnitOwner;
+        use crate::selection::Pickable;
+        let (mut app, plan) = app_with_plan();
+        assert!(shows(&app, "Hidden elements") && shows(&app, "none"));
+        app.click(Some(Pickable::Element(20)), false);
+        let _ = app.update(Message::IsolateSelection);
+        let walls = app.unit_key(UnitOwner::Element(10));
+        assert_eq!(app.document.view_hidden(&plan).unwrap().iter().collect::<Vec<_>>(), [&walls]);
+        let _ = app.update(Message::Undo);
+        assert!(app.document.view_hidden(&plan).unwrap().is_empty());
+        assert!(app.hidden.is_empty());
     }
 
     #[test]

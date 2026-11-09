@@ -569,6 +569,8 @@ impl Studio {
         let key = |c: char| Shortcut { key: ShortcutKey::Char(c), ctrl: false, shift: false, alt: false };
         let go = |m: Message| Msg::App(m);
         let mut list = vec![
+            // an empty project to model in, with a first level; beside a model it opens in a tab of its own
+            Command::new("file.new", l.text("Nieuw", "New"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("file.new"), large("file.new")).shortcut(Shortcut::ctrl('n')),
             Command::new("file.open", l.text("Openen…", "Open…"), go(Message::OpenDialog)).icon(small("file.open"), large("file.open")).shortcut(Shortcut::ctrl('o')).dialog(),
             Command::new("file.add", l.text("Toevoegen…", "Add…"), go(Message::AddDialog))
                 .icon(small("file.import"), large("file.import"))
@@ -1129,7 +1131,7 @@ impl Studio {
     }
 
     fn title_bar(&self, look: Look) -> Element<'_, Msg> {
-        let quick = vec![cm::icon_button(look, &self.command("file.open"), 28.0), cm::icon_button(look, &self.command("file.save-as"), 28.0)];
+        let quick: Vec<Element<'_, Msg>> = ["file.new", "file.open", "file.save-as"].iter().map(|id| cm::icon_button(look, &self.command(id), 28.0)).collect();
         let mut extra = Vec::new();
         if let Some(available) = &self.update {
             extra.push(container(upd::notice(look, available, Msg::Update)).padding([0, 8]).into());
@@ -1188,7 +1190,7 @@ impl Studio {
             ]
         } else {
             vec![
-            w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+            w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])]),
             w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
             w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
             w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
@@ -1224,12 +1226,13 @@ impl Studio {
         }
     }
 
-    /// Bestand: open, save as, settings, and the files opened last.
+    /// Bestand: new, open, save as, settings, and the files opened last.
     fn backstage_view(&self, look: Look) -> Element<'_, Msg> {
         let l = self.l();
         let c = look.color;
         let loaded = self.app.model.is_some();
         let nav = column![
+            t::file_nav_row(look, small("file.new"), l.text("Nieuw", "New"), false, Some(Msg::App(Message::NewModel(l.text("Niveau 0", "Level 0"))))),
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
@@ -1281,13 +1284,15 @@ impl Studio {
         let p = palette(look);
         let app = &self.app;
         let workspace: Element<'_, Msg> = if app.model.is_none() && !matches!(app.status, Status::Loading { .. }) {
+            // open a model, or start an empty project to model in
             let open = cm::button(look, &self.command("file.open"), K::Primary, D::Regular);
+            let new = cm::button(look, &self.command("file.new"), K::Secondary, D::Regular);
             container(w::empty_state(
                 look,
                 large("project.folder"),
                 l.text("Geen model geopend", "No model open"),
                 formats_hint(l),
-                Some(open),
+                Some(row![open, new].spacing(8).into()),
             ))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -1657,6 +1662,36 @@ mod tests {
         let _ = after.update(Msg::CloseProject(0));
         assert_eq!(kept(), format!("tab 0\n{}\n", b.display()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// File, New (Ctrl+N): an empty project with a first level, in the empty project shown, else
+    /// in a tab of its own beside the model.
+    #[test]
+    fn new_starts_an_empty_project_with_a_level_beside_the_model_open() {
+        use iced::keyboard::{Key, Modifiers};
+        let ctrl_n = Msg::Key(KeyPress { key: Key::Character("n".into()), modifiers: Modifiers::CTRL });
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(ctrl_n.clone());
+        assert_eq!(studio.tabs.len(), 1, "in the empty project");
+        let model = studio.app.model.clone().expect("an empty model");
+        assert!(model.layers.is_empty());
+        assert_eq!(studio.app.document.levels().iter().map(|l| (l.name.as_str(), l.elevation)).collect::<Vec<_>>(), [("Level 0", 0.0)]);
+        // beside it, the next new project in a tab of its own, shown
+        let first = studio.project;
+        let _ = studio.update(ctrl_n);
+        assert_eq!(studio.tabs.len(), 2);
+        assert_ne!(studio.project, first);
+        assert_ne!(studio.app.model.as_ref().map(|m| m.id), Some(model.id));
+        assert_eq!(studio.app.document.levels().len(), 1);
+        // the File page has it first, and the start page beside Open
+        studio.backstage = true;
+        let names = accessibility(&studio).summary();
+        assert!(names.iter().any(|n| n.contains("New")), "{names:?}");
+        let mut blank = Studio::new(App::default());
+        blank.prefs.language = Language::English;
+        let names = accessibility(&blank).summary();
+        assert!(names.iter().any(|n| n.contains("New")) && names.iter().any(|n| n.contains("Open…")), "{names:?}");
     }
 
     #[test]

@@ -332,6 +332,10 @@ pub enum Message {
     RemovePlan(Arc<str>),
     /// Make a sheet of the document, named this, and show it.
     NewSheet(&'static str),
+    /// Lay the views of a sheet (its path) out: one scale, in rows, centred.
+    ArrangeSheet(Arc<str>),
+    /// Put the views on no sheet on new sheets, named for floor plans and for sections.
+    FillSheets([&'static str; 2]),
     /// Show a sheet of the document (its path) in its tab.
     OpenDocSheet(Arc<str>),
     RemoveSheet(Arc<str>),
@@ -1457,6 +1461,8 @@ impl App {
                 self.cuts.remove(&*plan);
             }
             Message::NewSheet(name) => self.new_sheet(name),
+            Message::ArrangeSheet(sheet) => self.arrange_sheet(&sheet),
+            Message::FillSheets(names) => self.fill_sheets(names),
             Message::OpenDocSheet(sheet) => self.open_doc_sheet(&sheet),
             Message::RemoveSheet(sheet) => {
                 self.close_doc_sheet(&sheet);

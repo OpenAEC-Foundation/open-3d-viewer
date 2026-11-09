@@ -37,6 +37,7 @@ pub mod remote_link;
 pub mod section;
 mod selection;
 pub mod shell;
+pub mod sheet_layout;
 pub mod structural;
 mod swipe;
 mod theme;

@@ -358,11 +358,13 @@ pub fn linear_class(axis: DVec3) -> &'static str {
 }
 
 /// A solid of an element and the IFC class of what it is (a curtain wall's members and panels have
-/// classes of their own).
+/// classes of their own), and what it is made of when that is known (a material key of the
+/// project's library).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartSolid {
     pub class: &'static str,
     pub solid: Solid,
+    pub material: Option<String>,
 }
 
 /// The frame of a linear element: at its start, `z` along it, the profile's `x` square to it
@@ -531,14 +533,14 @@ pub fn system_parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
     let mullion = Profile::rectangle(w, depth)?;
     for i in 0..=bays {
         let axes = Axes::new(at(i as f64 * bay, 0.0), dir, DVec3::Z)?;
-        parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&mullion, &axes, s.height)? });
+        parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&mullion, &axes, s.height)?, material: None });
     }
     // transoms on every division up, between the mullions
     let transom = Profile::rectangle(depth, w)?;
     for i in 0..bays {
         for j in 0..=rows {
             let axes = Axes::new(at(i as f64 * bay + w / 2.0, j as f64 * row), right, dir)?;
-            parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&transom, &axes, bay - w)? });
+            parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&transom, &axes, bay - w)?, material: None });
         }
     }
     // a panel in every bay, centred in the face
@@ -549,7 +551,7 @@ pub fn system_parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
             let corner = at(i as f64 * bay + w / 2.0, j as f64 * row + w / 2.0) - right * (s.panel / 2.0);
             let axes = Axes::new(corner, dir, right)?;
             let face = Profile::new(vec![p(0.0, 0.0), p(du, 0.0), p(du, dv), p(0.0, dv)], Vec::new())?;
-            parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, s.panel)? });
+            parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, s.panel)?, material: None });
         }
     }
     Ok(parts)

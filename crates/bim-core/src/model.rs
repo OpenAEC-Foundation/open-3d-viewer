@@ -147,7 +147,7 @@ impl Model {
         match &element.shape {
             Shape::Point(p) => Ok(vec![part(point_solid(p)?)]),
             Shape::Planar(p) => Ok(planar_parts(p)?.into_iter().map(|(material, solid)| Part { material, ..part(solid) }).collect()),
-            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: None }).collect()),
+            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
             Shape::Linear(l) => {
                 let (start, end) = self.end_planes(element.id, element.tile);
                 Ok(vec![part(linear_solid(l, start, end)?)])

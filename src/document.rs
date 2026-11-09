@@ -108,6 +108,31 @@ pub struct PlanView {
     pub hidden: Arc<UnitKeySet>,
 }
 
+/// The kinds of view along a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SectionKind {
+    /// Cut along its line, inside the model.
+    #[default]
+    Section,
+    /// Outside the model, looking at a side of it: it cuts nothing.
+    Elevation,
+}
+
+impl SectionKind {
+    /// Its name in IFCX (`kind` of an `o3v::view::section` node).
+    pub fn key(self) -> &'static str {
+        match self {
+            SectionKind::Section => "section",
+            SectionKind::Elevation => "elevation",
+        }
+    }
+
+    /// The kind named `key` in IFCX; a section for anything else.
+    pub fn from_key(key: &str) -> Self {
+        if key == "elevation" { SectionKind::Elevation } else { SectionKind::Section }
+    }
+}
+
 /// A section or an elevation: the model seen level, looking to the left of the line `from` →
 /// `to` (plan, metres), cut along that line and seen as far as `depth` beyond it. An elevation
 /// stands outside the model, so it cuts nothing. Its drawing has `u` along the line (from
@@ -117,6 +142,7 @@ pub struct SectionView {
     /// The IfcX path, a UUID.
     pub path: String,
     pub name: String,
+    pub kind: SectionKind,
     pub from: [f64; 2],
     pub to: [f64; 2],
     /// How far it looks beyond its line (metres).
@@ -297,7 +323,7 @@ impl Document {
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
             let view = json!({
-                "name": s.name, "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
+                "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
             });
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
         }
@@ -367,6 +393,7 @@ impl Document {
                 self.sections.push(SectionView {
                     path: path.clone(),
                     name: text(s, "name"),
+                    kind: SectionKind::from_key(&text(s, "kind")),
                     from,
                     to,
                     depth: number(s, "depth", 100.0),
@@ -495,16 +522,22 @@ impl Document {
         self.sections.iter().find(|s| s.path == path)
     }
 
+    /// Makes a section along `from` → `to` (at least 10 cm long), looking `depth` beyond it, and
+    /// gives its path.
+    pub fn add_section(&mut self, name: &str, from: [f64; 2], to: [f64; 2], depth: f64) -> Option<String> {
+        self.add_section_of(SectionKind::Section, name, from, to, depth)
+    }
+
     /// Makes a section or elevation along `from` → `to` (at least 10 cm long), looking `depth`
     /// beyond it, and gives its path.
-    pub fn add_section(&mut self, name: &str, from: [f64; 2], to: [f64; 2], depth: f64) -> Option<String> {
+    pub fn add_section_of(&mut self, kind: SectionKind, name: &str, from: [f64; 2], to: [f64; 2], depth: f64) -> Option<String> {
         let finite = from.iter().chain(&to).chain([&depth]).all(|v| v.is_finite());
         if !finite || (to[0] - from[0]).hypot(to[1] - from[1]) < 0.1 || depth <= 0.0 {
             return None;
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1083,6 +1116,31 @@ mod tests {
         let mut before = Document::from_model(&model_with(&[("00", 0.0), ("01", 3.0)]));
         before.adopt_ifcx(&old);
         assert!(before.plans().iter().all(|p| p.kind == PlanKind::Floor));
+    }
+
+    /// Sections and elevations are kinds of their own, kept in IFCX; a node without a kind is a
+    /// section.
+    #[test]
+    fn sections_and_elevations_keep_their_kind_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let section = document.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 20.0).unwrap();
+        let north = document.add_section_of(SectionKind::Elevation, "North", [8.0, 7.0], [0.0, 7.0], 12.0).unwrap();
+        assert_eq!(document.section(&section).unwrap().kind, SectionKind::Section);
+        assert_eq!(document.section(&north).unwrap().kind, SectionKind::Elevation);
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.sections(), document.sections());
+        let mut old = nodes;
+        for (_, attributes) in &mut old {
+            if let Some(view) = attributes.get_mut("o3v::view::section").and_then(Value::as_object_mut) {
+                view.remove("kind");
+            }
+        }
+        let mut before = Document::from_model(&model_with(&[("00", 0.0)]));
+        before.adopt_ifcx(&old);
+        assert!(before.sections().iter().all(|s| s.kind == SectionKind::Section));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! at their height above the level; sections and elevations, and the sheets.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::PlanKind;
+use crate::document::{PlanKind, SectionKind};
 use crate::explode::{ExplodeIndex, UnitOwner};
 use crate::model::{PlanRange, SavedView, ViewKind};
 use crate::section::SectionBox;
@@ -354,7 +354,7 @@ impl App {
             container(
                 row![
                     text(l.text("Weergaven", "Views")).size(12).font(FONT_BOLD).width(Fill),
-                    text(document.plans().len().to_string()).size(11).color(p.text_secondary),
+                    text((document.plans().len() + document.sections().len()).to_string()).size(11).color(p.text_secondary),
                 ]
                 .spacing(6)
                 .align_y(Center),
@@ -409,9 +409,42 @@ impl App {
             }
         }
 
-        // sections and elevations; the four elevations at once
-        body = body.push(subheader(l.text("Doorsneden en aanzichten", "Sections and elevations")));
-        for section in document.sections() {
+        // sections, drawn on a sheet; elevations, the four at once
+        for kind in [SectionKind::Section, SectionKind::Elevation] {
+            body = body.push(match kind {
+                SectionKind::Section => subheader(l.text("Doorsneden", "Sections")),
+                SectionKind::Elevation => subheader(l.text("Aanzichten", "Elevations")),
+            });
+            body = self.section_rows(p, body, kind);
+            body = body.push(match kind {
+                SectionKind::Section => {
+                    let hint = l.text("Een doorsnede teken je op een blad: Doorsnede, dan twee punten op een plattegrond.", "Draw a section on a sheet: Section, then two points on a floor plan.");
+                    container(text(hint).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]).into()
+                }
+                SectionKind::Elevation => {
+                    let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
+                    let names = [l.text("Aanzicht noord", "North elevation"), l.text("Aanzicht oost", "East elevation"), l.text("Aanzicht zuid", "South elevation"), l.text("Aanzicht west", "West elevation")];
+                    Element::from(
+                        button(row![plus, text(l.text("Vier aanzichten maken", "Make four elevations")).size(12).color(p.text)].spacing(6).align_y(Center))
+                            .padding([4, 8])
+                            .width(Fill)
+                            .style(move |_, s| p.row_button(s))
+                            .on_press(Message::MakeElevations(names)),
+                    )
+                }
+            });
+        }
+
+        // the sheets, then a new one
+        body = body.push(subheader(l.text("Bladen", "Sheets")));
+        body = super::paper::sheets_list(self, p, l, body);
+        scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
+    }
+
+    /// The sections or the elevations of the document, to open (a click), drag onto a sheet or
+    /// remove.
+    fn section_rows<'a>(&'a self, p: Palette, mut body: Column<'a, Message>, kind: SectionKind) -> Column<'a, Message> {
+        for section in self.document.sections().iter().filter(|s| s.kind == kind) {
             let active = self.active_plan.as_deref() == Some(section.path.as_str());
             let name = text(section.name.clone()).size(12).color(if active { p.accent } else { p.text }).wrapping(Wrapping::WordOrGlyph).width(Fill);
             let open = button(draggable(name, &section.path))
@@ -426,23 +459,7 @@ impl App {
             let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSection(Arc::from(section.path.as_str())));
             body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
         }
-        let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
-        let names = [l.text("Aanzicht noord", "North elevation"), l.text("Aanzicht oost", "East elevation"), l.text("Aanzicht zuid", "South elevation"), l.text("Aanzicht west", "West elevation")];
-        body = body.push(
-            button(row![plus, text(l.text("Vier aanzichten maken", "Make four elevations")).size(12).color(p.text)].spacing(6).align_y(Center))
-                .padding([4, 8])
-                .width(Fill)
-                .style(move |_, s| p.row_button(s))
-                .on_press(Message::MakeElevations(names)),
-        );
-        let hint = l.text("Een doorsnede teken je op een blad: Doorsnede, dan twee punten op een plattegrond.", "Draw a section on a sheet: Section, then two points on a floor plan.");
-        body = body.push(container(text(hint).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]));
-
-        // the sheets, then a new one
-        body = body.push(subheader(l.text("Bladen", "Sheets")));
-        body = super::paper::sheets_list(self, p, l, body);
-
-        scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
+        body
     }
 
     /// The levels to make a plan of `kind` of, high to low, under its kind's header.
@@ -663,6 +680,29 @@ mod tests {
         let drawing = app.cuts[ceiling.path.as_str()].clone();
         assert!(draws(&drawing.below, 1.0, 1.5), "the lamp");
         assert!(!draws(&drawing.below, 3.0, 5.0), "no cupboard: it stands under the cut");
+    }
+
+    /// The four elevations are listed under Elevations, a section drawn on a sheet under
+    /// Sections; the right pane names the kind.
+    #[test]
+    fn sections_and_elevations_are_listed_apart() {
+        let mut app = App::default();
+        app.set_model(fitted_room());
+        let _ = app.update(Message::MakeElevations(["North elevation", "East elevation", "South elevation", "West elevation"]));
+        app.new_section([0.0, 2.5], [8.0, 2.5], "Section");
+        let kinds: Vec<(&str, SectionKind)> = app.document.sections().iter().map(|s| (s.name.as_str(), s.kind)).collect();
+        assert_eq!(kinds[..2], [("North elevation", SectionKind::Elevation), ("East elevation", SectionKind::Elevation)]);
+        assert_eq!(kinds[4], ("Section A", SectionKind::Section));
+        click(&mut app, "Views");
+        for label in ["SECTIONS", "ELEVATIONS", "Section A", "North elevation"] {
+            assert!(simulator(&app).find(label).is_ok(), "{label}");
+        }
+        // the section shows: its kind in the right pane
+        assert_eq!(app.document.view_name(app.active_plan.as_deref().unwrap()), Some("Section A"));
+        assert!(simulator(&app).find("Section").is_ok());
+        let north = Arc::<str>::from(app.document.sections()[0].path.as_str());
+        let _ = app.update(Message::OpenPlan(north));
+        assert!(simulator(&app).find("Elevation view").is_ok());
     }
 
     #[test]

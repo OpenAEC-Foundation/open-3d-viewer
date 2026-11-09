@@ -108,7 +108,7 @@ impl App {
         } else if let Some(s) = self.document.section(&path) {
             let length = (s.to[0] - s.from[0]).hypot(s.to[1] - s.from[1]);
             rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Doorsnede of aanzicht", "Section or elevation").into()))
+                .push(row(l.text("Soort", "Kind"), if s.kind == crate::document::SectionKind::Elevation { l.text("Aanzicht", "Elevation view") } else { l.text("Doorsnede", "Section") }.into()))
                 .push(row(l.text("Lengte", "Length"), format!("{length:.3} m")))
                 .push(field(l.text("Diepte (m)", "Depth (m)"), ViewField::Depth));
         }

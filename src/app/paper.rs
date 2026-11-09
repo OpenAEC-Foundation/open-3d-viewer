@@ -5,7 +5,7 @@
 //! dimension to that plan, shown wherever it is placed.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::{parse_elevation, Dimension, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
+use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
 use crate::drawing::{ceiling_at, plan_at, section_at, Cut, Shown};
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
@@ -305,7 +305,7 @@ impl App {
         let lines = [([x1, y1 + m], [x0, y1 + m]), ([x1 + m, y0], [x1 + m, y1]), ([x0, y0 - m], [x1, y0 - m]), ([x0 - m, y1], [x0 - m, y0])];
         let mut first = None;
         for (name, (from, to)) in names.iter().zip(lines) {
-            if let Some(path) = self.document.add_section(name, from, to, depth) {
+            if let Some(path) = self.document.add_section_of(SectionKind::Elevation, name, from, to, depth) {
                 first.get_or_insert(path);
             }
         }

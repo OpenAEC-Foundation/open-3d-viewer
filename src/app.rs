@@ -15,6 +15,7 @@ mod view_props;
 mod views;
 mod sheets;
 mod structural;
+mod underlays;
 
 pub use ifc::{IfcTab, IfcView};
 pub use layers::SideTab;
@@ -178,6 +179,10 @@ pub struct App {
     pub active_doc_sheet: Option<String>,
     /// The cut of every floor plan placed on a sheet, by the plan's path.
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
+    /// The drawings laid on the levels.
+    pub underlays: Vec<crate::underlay::Underlay>,
+    /// Their lines as the 3D view draws them (world), made again when an underlay changes.
+    underlay_lines: Arc<Vec<crate::viewport::render::DatumSegment>>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
@@ -379,6 +384,15 @@ pub enum Message {
     FlipDimension,
     /// Give a view (its path) its standard dimensions.
     StandardDimensions(Arc<str>),
+    /// Lay a drawing on a level (its path): asks for the file.
+    AddUnderlay(Arc<str>),
+    /// A drawing (its name) read to lay on a level (its path): its lines and how many entities it
+    /// left out, or why not.
+    UnderlayRead(Arc<str>, String, underlays::UnderlayRead),
+    /// Switch an underlay (its index) on or off.
+    ToggleUnderlay(usize),
+    /// Take an underlay (its index) away.
+    RemoveUnderlay(usize),
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -600,6 +614,8 @@ impl Default for App {
             open_doc_sheets: Vec::new(),
             active_doc_sheet: None,
             cuts: Default::default(),
+            underlays: Vec::new(),
+            underlay_lines: Arc::new(Vec::new()),
             export_menu: false,
             dimension_tool: false,
             section_tool: false,
@@ -1539,6 +1555,10 @@ impl App {
             Message::StandardDimensions(view) => {
                 self.standard_dimensions(&view);
             }
+            Message::AddUnderlay(level) => return self.add_underlay(level),
+            Message::UnderlayRead(level, name, read) => self.underlay_read(&level, &name, read),
+            Message::ToggleUnderlay(i) => self.toggle_underlay(i),
+            Message::RemoveUnderlay(i) => self.remove_underlay(i),
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;
@@ -2929,6 +2949,7 @@ impl App {
             structural_hovered: &self.structural.hovered_marks,
             structural_shown: self.structural.shown_marks.as_ref(),
             datum: Some(segments),
+            underlay: self.underlay_lines.clone(),
         })
             .width(Fill)
             .height(Fill);

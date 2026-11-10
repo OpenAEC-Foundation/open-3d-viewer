@@ -17,6 +17,7 @@
 
 pub mod boolean;
 pub mod element;
+pub mod join;
 mod joins;
 pub mod mesh;
 pub mod model;
@@ -81,6 +82,8 @@ pub enum Refusal {
     BooleanFailed,
     /// An element without a body (a connection) cannot cut or be cut.
     NoBody,
+    /// A join of this kind takes two members.
+    TwoMembers,
     /// A build-up has no layer that is not a cavity.
     NoLayers,
     /// A system would be generated as more parts than [`system::MAX_PARTS`].
@@ -112,6 +115,7 @@ impl Refusal {
             Refusal::Empty => "Nothing would be left.",
             Refusal::BooleanFailed => "The cut could not be made exactly.",
             Refusal::NoBody => "A connection has no body to cut with.",
+            Refusal::TwoMembers => "This join takes two members.",
             Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
             Refusal::TooManyParts => "A system would have more than 50000 parts.",
         }

@@ -16,12 +16,22 @@ use wasm_bindgen_futures::JsFuture;
 
 /// Starts the app in the page.
 pub fn main() {
+    main_as(crate::product::Edition::Studio)
+}
+
+/// Starts `edition` in the page: the Studio or one product alone.
+pub fn main_as(edition: crate::product::Edition) {
     console_error_panic_hook::set_once();
-    wasm_bindgen_futures::spawn_local(async {
+    wasm_bindgen_futures::spawn_local(async move {
         // the overlay is smoothed with WebGPU only: on WebGL2 (most phones) iced's multisampled
         // overlay pass keeps stale pixels, so a view cube stays behind after the layout moves
         let antialiasing = webgpu().await.unwrap_or(false);
-        if let Err(e) = shell::run(shell::Studio::new(App::default()), None, antialiasing) {
+        let mut studio = shell::Studio::new(App::default()).with_edition(edition);
+        // `?product=modeller` starts in that product
+        if let Some(product) = url_param("product").and_then(|p| crate::product::Product::parse(&p)) {
+            studio.set_product(product);
+        }
+        if let Err(e) = shell::run(studio, None, antialiasing) {
             web_sys::console::error_1(&format!("Open 3D Viewer: {e}").into());
         }
     });
@@ -94,9 +104,14 @@ pub fn files() -> impl Stream<Item = Message> {
 
 /// The `file` parameter of the page address, e.g. `?file=samples/house.skp`.
 fn start_url() -> Option<String> {
+    url_param("file")
+}
+
+/// A parameter of the page address, when it is there and not empty.
+fn url_param(name: &str) -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
     let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
-    params.get("file").filter(|f| !f.is_empty())
+    params.get(name).filter(|f| !f.is_empty())
 }
 
 /// Downloads a model file.

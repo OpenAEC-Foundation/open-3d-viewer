@@ -18,6 +18,8 @@ mod view_props;
 mod views;
 mod sheets;
 mod structural;
+mod underlays;
+mod views_in_3d;
 
 pub use ifc::{IfcTab, IfcView};
 #[cfg(test)]
@@ -126,6 +128,8 @@ pub struct App {
     /// The 3D view's layer switches while another view shows: every layer's, and per model its
     /// own.
     parked_layers: Option<(Vec<bool>, Vec<Vec<bool>>)>,
+    /// The elements hidden in the 3D view while another view shows.
+    parked_hidden: Option<Arc<UnitKeySet>>,
     /// The undo histories of the views not shown, by view path (the 3D view: "").
     parked_histories: std::collections::HashMap<String, History<ViewState>>,
     pub status: Status,
@@ -180,6 +184,11 @@ pub struct App {
     pub active_plan: Option<String>,
     /// Floor plans open in a document tab, in tab order, each with its own camera and section.
     pub open_plans: Vec<views::OpenPlan>,
+    /// The kind of plan whose New in the Views tab lists the levels to make one of.
+    pub views_picker: Option<crate::document::PlanKind>,
+    /// Per unit, whether a structural plan leaves it out, and the explode index it was worked
+    /// out for.
+    structure_units: Option<(Arc<ExplodeIndex>, Arc<Vec<bool>>)>,
     /// The 3D view's camera and section box while a floor plan's tab shows.
     model_view: Option<views::ViewSlot>,
     /// Sheets of the document open in a document tab (paths), and the one shown.
@@ -187,6 +196,15 @@ pub struct App {
     pub active_doc_sheet: Option<String>,
     /// The cut of every floor plan placed on a sheet, by the plan's path.
     pub cuts: std::collections::HashMap<String, Arc<crate::drawing::Cut>>,
+    /// The drawings laid on the levels.
+    pub underlays: Vec<crate::underlay::Underlay>,
+    /// The lines the 3D view draws over the model, with their colours: the underlays' and the
+    /// views' in 3D (world), made again when they change.
+    overlay_lines: Arc<Vec<crate::views3d::Colored>>,
+    /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
+    pub views_in_3d: bool,
+    views_3d_key: Vec<u64>,
+    views_3d_labels: Vec<(String, [f32; 3])>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
@@ -344,6 +362,11 @@ pub enum Message {
     RemoveLevel(Arc<str>),
     /// Make a floor plan of a level (its path) and show it.
     NewPlan(Arc<str>),
+    /// Make a plan of a kind of a level (its path), named with the word after the level, and
+    /// show it.
+    NewPlanOf(Arc<str>, crate::document::PlanKind, &'static str),
+    /// List the levels under a kind of plan in the Views tab, to make one of (`None`: close).
+    PickLevelFor(Option<crate::document::PlanKind>),
     /// Show a floor plan (its path) in its tab.
     OpenPlan(Arc<str>),
     RemovePlan(Arc<str>),
@@ -390,6 +413,19 @@ pub enum Message {
     FlipDimension,
     /// Give a view (its path) its standard dimensions.
     StandardDimensions(Arc<str>),
+    /// Lay a drawing on a level (its path): asks for the file.
+    AddUnderlay(Arc<str>),
+    /// A drawing (its name) read to lay on a level (its path): its lines and how many entities it
+    /// left out, or why not.
+    UnderlayRead(Arc<str>, String, underlays::UnderlayRead),
+    /// Switch an underlay (its index) on or off.
+    ToggleUnderlay(usize),
+    /// Take an underlay (its index) away.
+    RemoveUnderlay(usize),
+    /// Lay a PDF underlay (its index) at the next scale.
+    UnderlayScale(usize),
+    /// Show the views in the 3D view on their planes, or not.
+    ToggleViewsIn3d,
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -595,6 +631,7 @@ impl Default for App {
             layers_query: String::new(),
             view_typing: None,
             parked_layers: None,
+            parked_hidden: None,
             parked_histories: Default::default(),
             status: Status::Ready,
             viewport_size: (1000.0, 700.0),
@@ -623,10 +660,17 @@ impl Default for App {
             level_form: None,
             active_plan: None,
             open_plans: Vec::new(),
+            views_picker: None,
+            structure_units: None,
             model_view: None,
             open_doc_sheets: Vec::new(),
             active_doc_sheet: None,
             cuts: Default::default(),
+            underlays: Vec::new(),
+            overlay_lines: Arc::new(Vec::new()),
+            views_in_3d: false,
+            views_3d_key: Vec::new(),
+            views_3d_labels: Vec::new(),
             export_menu: false,
             dimension_tool: false,
             section_tool: false,
@@ -1046,6 +1090,7 @@ impl App {
         self.hidden = Arc::default();
         self.history.clear();
         self.parked_layers = None;
+        self.parked_hidden = None;
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
@@ -1194,6 +1239,7 @@ impl App {
         if shown {
             self.keep_view_layers();
         }
+        self.keep_views_in_3d();
         self.refresh_hover();
         // the structural hover goes when the camera moves (it no longer lies under the cursor) and
         // while measuring or placing a section plane
@@ -1519,6 +1565,8 @@ impl App {
                 self.document.remove_level(&path);
             }
             Message::NewPlan(level) => self.new_plan(&level),
+            Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
+            Message::PickLevelFor(kind) => self.views_picker = kind,
             Message::OpenPlan(plan) => self.open_plan(&plan),
             Message::RemovePlan(plan) => {
                 self.close_plan(&plan);
@@ -1575,6 +1623,12 @@ impl App {
             Message::StandardDimensions(view) => {
                 self.standard_dimensions(&view);
             }
+            Message::AddUnderlay(level) => return self.add_underlay(level),
+            Message::UnderlayRead(level, name, read) => self.underlay_read(&level, &name, read),
+            Message::ToggleUnderlay(i) => self.toggle_underlay(i),
+            Message::RemoveUnderlay(i) => self.remove_underlay(i),
+            Message::UnderlayScale(i) => self.next_underlay_scale(i),
+            Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;
@@ -1650,6 +1704,10 @@ impl App {
                 if on {
                     self.dimension_tool = false;
                     self.note_tool = false;
+                    // a floor plan in its tab is cut, to snap to its lines
+                    if let Some(view) = self.shown_view().map(str::to_string) {
+                        self.cut_view(&view);
+                    }
                 }
                 self.pick_on_sheet(None);
             }
@@ -2111,6 +2169,13 @@ impl App {
                 if index.owner(u).is_some_and(|o| self.hidden.contains(&self.unit_key(o))) {
                     *f |= UNIT_HIDDEN;
                 }
+            }
+        }
+        // a structural plan leaves out what carries nothing
+        if self.is_structural_plan(self.active_plan.as_deref()) {
+            let left_out = self.non_structural_units();
+            for (f, _) in flags.iter_mut().zip(left_out.iter()).filter(|(_, out)| **out) {
+                *f |= UNIT_HIDDEN;
             }
         }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
@@ -2978,6 +3043,7 @@ impl App {
             structural_hovered: &self.structural.hovered_marks,
             structural_shown: self.structural.shown_marks.as_ref(),
             datum: Some(segments),
+            overlay: self.overlay_lines.clone(),
         })
             .width(Fill)
             .height(Fill);
@@ -3106,6 +3172,11 @@ impl App {
                 .width(Fill)
                 .height(Fill)
             });
+        let view_labels = (overlay.is_none() && !self.views_3d_labels.is_empty()).then(|| {
+            canvas(views_in_3d::ViewLabels { labels: self.views_3d_labels.clone(), view_proj: self.camera.view_proj(self.aspect()), ink: p.text })
+                .width(Fill)
+                .height(Fill)
+        });
         let measurements = (!self.measurements.is_empty() && overlay.is_none()).then(|| {
             canvas(crate::annotations::MeasureOverlay {
                 items: &self.measurements,
@@ -3124,6 +3195,7 @@ impl App {
         let editing = self.edit_overlay(p.accent, p.surface).map(|o| canvas(o).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
+            .push(view_labels)
             .push(editing)
             .push(section)
             .push(plane)

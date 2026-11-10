@@ -8,7 +8,7 @@
 
 pub mod cad;
 pub mod drawing;
-mod ifc;
+pub(crate) mod ifc;
 pub(crate) mod ifcx;
 pub mod pdf;
 pub mod svg;

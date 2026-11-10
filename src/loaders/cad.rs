@@ -258,7 +258,7 @@ fn triangulate(points: &[DVec3]) -> Result<Vec<[DVec3; 3]>, String> {
     }).collect())
 }
 
-fn metres_per_unit(unit: i16) -> f64 {
+pub(crate) fn metres_per_unit(unit: i16) -> f64 {
     match unit {
         1 => 0.0254, 2 => 0.3048, 3 => 1609.344, 4 => 0.001, 5 => 0.01, 6 => 1.0,
         7 => 1000.0, 8 => 0.0000000254, 9 => 0.0000254, 10 => 0.9144, 11 => 1e-10,

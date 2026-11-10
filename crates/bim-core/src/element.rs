@@ -194,7 +194,7 @@ pub struct SystemDef {
 }
 
 /// How a connection joins its members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionKind {
     /// The secondary member stops at the face of the primary one, which runs through.
@@ -204,6 +204,9 @@ pub enum ConnectionKind {
     /// The primary element cuts its body out of the secondary one (a beam through a wall, a duct
     /// through a slab). Any two elements with a body; the secondary keeps what is left.
     Cut,
+    /// A steel end plate: the secondary stops a plate's thickness short of the primary's face,
+    /// and a plate against that face is bolted to the primary (see [`crate::join::EndPlate`]).
+    EndPlate(crate::join::EndPlate),
 }
 
 /// A connection between two elements: two linear ones joined (butt, mitre), or any two with a
@@ -269,6 +272,8 @@ impl Element {
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, .. }) => "IfcWall",
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { .. }, .. }) => "IfcSlab",
             Shape::System(_) => "IfcCurtainWall",
+            // a join with parts of its own is an assembly of them; one without is a relation only
+            Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(_), .. }) => "IfcElementAssembly",
             Shape::Connection(_) => "IfcRelConnectsElements",
         }
     }

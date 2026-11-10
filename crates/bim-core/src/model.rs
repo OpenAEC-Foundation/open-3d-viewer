@@ -207,7 +207,7 @@ impl Model {
             return Err(Refusal::SameMember);
         }
         match c.kind {
-            ConnectionKind::Butt | ConnectionKind::Mitre => self.join(c).map(|_| ()),
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => self.join(c).map(|_| ()),
             ConnectionKind::Cut => {
                 let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
                 let parts = self.body(target)?;
@@ -262,6 +262,7 @@ impl Model {
             ConnectionKind::Cut => return Ok((Vec::new(), JoinResult::default())),
             ConnectionKind::Butt => JoinKind::Butt,
             ConnectionKind::Mitre => JoinKind::Mitre,
+            ConnectionKind::EndPlate(plate) => JoinKind::EndPlate(plate),
         };
         let members = [Member::of(&self.member(c.primary)?)?, Member::of(&self.member(c.secondary)?)?];
         Ok((vec![c.primary, c.secondary], join::cuts(kind, &members)?))
@@ -516,6 +517,33 @@ mod tests {
         assert_eq!(cut.len(), parts, "the beam cuts a hole in one panel, no part goes");
         let glass: f64 = cut.iter().filter(|p| p.class == "IfcPlate").map(|p| p.solid.volume()).sum();
         assert!((glass - (4.0 * 1.45 * 1.45 * 0.02 - 0.2 * 0.4 * 0.02)).abs() < 1e-9, "{glass}");
+    }
+
+    #[test]
+    fn an_end_plate_connection_has_a_body_and_changes_both_members() {
+        let mut m = Model::new(TileGrid::default());
+        let column = add(
+            &mut m,
+            Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }),
+        );
+        let b = add(&mut m, beam(DVec3::new(0.0, 0.0, 2.5), DVec3::new(5.0, 0.0, 2.5)));
+        let (column_before, beam_before) = (m.evaluate(column).unwrap()[0].solid.volume(), m.evaluate(b).unwrap()[0].solid.volume());
+        let plate = crate::join::EndPlate::default();
+        let joint = add(&mut m, Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(plate), primary: column, secondary: b }));
+        assert_eq!(m.get(joint).unwrap().class(), "IfcElementAssembly");
+        let parts = m.evaluate(joint).unwrap();
+        assert_eq!(parts.len(), 5, "a plate and four bolts");
+        // the beam stops at the plate: 0.15 + 0.015 from the column's axis
+        let beam_after = m.evaluate(b).unwrap()[0].solid.volume();
+        assert!((beam_before - beam_after - 0.165 * 0.2 * 0.4).abs() < 1e-9, "{beam_before} - {beam_after}");
+        // the column is drilled for the bolts, 50 mm deep (the holes start at its face)
+        let hole = crate::profile::Profile::circle(0.022).unwrap().area();
+        let column_after = m.evaluate(column).unwrap()[0].solid.volume();
+        assert!((column_before - column_after - 4.0 * hole * 0.05).abs() < 1e-9, "{column_before} - {column_after}");
+        // and it reads back from JSON with its sizes
+        let json = serde_json::to_string(m.get(joint).unwrap()).unwrap();
+        assert!(json.contains("end_plate") && json.contains("0.015"), "{json}");
+        assert_eq!(&serde_json::from_str::<Element>(&json).unwrap(), m.get(joint).unwrap());
     }
 
     #[test]

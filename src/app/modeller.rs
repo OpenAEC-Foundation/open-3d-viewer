@@ -376,7 +376,7 @@ impl App {
         // a join takes two linear elements; a cut any two with a body, the first cutting the second
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
-            ConnectionKind::Butt | ConnectionKind::Mitre => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -491,12 +491,12 @@ impl App {
         let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 });
         let c1 = add(self, "Column", column(p(13.0, 0.0)));
         add(self, "Column", column(p(13.0, 6.0)));
-        let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.8), end: b.extend(2.8), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 });
+        let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.6), end: b.extend(2.6), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 });
         let b1 = add(self, "Beam", beam(p(13.0, 6.0), p(13.0, 0.0)));
         let b2 = add(self, "Beam", beam(p(13.0, 6.0), p(17.0, 6.0)));
         let b3 = add(self, "Beam", beam(p(13.0, 0.0), p(17.0, 0.0)));
         add(self, "Connection", Shape::Connection(ConnectionDef { kind: ConnectionKind::Mitre, primary: b1, secondary: b2 }));
-        add(self, "Connection", Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: c1, secondary: b3 }));
+        add(self, "End plate", Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), primary: c1, secondary: b3 }));
         add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT }));
         // a beam through the side wall, cutting its way
         let through = add(self, "Beam", beam(p(8.5, 3.0), p(13.0, 3.0)));
@@ -617,6 +617,7 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Butt => "Butt",
                 ConnectionKind::Mitre => "Mitre",
                 ConnectionKind::Cut => "Cut",
+                ConnectionKind::EndPlate(_) => "End plate",
             };
             put("Kind", kind.into());
             put("Primary", c.primary.0.to_string());

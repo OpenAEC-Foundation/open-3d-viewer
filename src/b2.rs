@@ -48,7 +48,7 @@ icons! {
     "object.show", "object.hide", "project.folder", "data.table",
     // the modeller
     "object.add", "draw.coordinate", "pile.columns", "draw.line", "construction.types", "draw.filled-area",
-    "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut", "object.edit",
+    "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut", "object.edit", "frame.combination",
     // the BIM Collaborator
     "git.issue", "bcf.import", "bcf.export", "validation.select-specification", "validation.workspace", "note.reply", "team.add",
 }

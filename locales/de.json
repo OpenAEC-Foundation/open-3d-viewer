@@ -442,6 +442,10 @@
     "Corner at start": "Ecke am Anfang",
     "Corner at end": "Ecke am Ende",
     "Runs through": "Läuft durch",
-    "Stops against the other": "Endet an der anderen"
+    "Stops against the other": "Endet an der anderen",
+    "T junction at start": "T-Anschluss am Anfang",
+    "T junction at end": "T-Anschluss am Ende",
+    "Stands against the other": "Steht an der anderen",
+    "Frames against it": "Anschließende Wände"
   }
 }

@@ -303,6 +303,15 @@ impl App {
                 let role = if meeting.through { l.text("Loopt door", "Runs through") } else { l.text("Stopt tegen de andere", "Stops against the other") };
                 rows = rows.push(prop_row(p, end.to_string(), role.to_string()));
             }
+            // where it stands against the side of another frame, and how many stand against its own
+            let tees = bim_core::system::tees(&self.modeller.model, e);
+            let ends = [l.text("T-aansluiting bij begin", "T junction at start"), l.text("T-aansluiting bij eind", "T junction at end")];
+            for (_, end) in tees.ends.into_iter().zip(ends).filter(|(with, _)| with.is_some()) {
+                rows = rows.push(prop_row(p, end.to_string(), l.text("Staat tegen de andere", "Stands against the other").to_string()));
+            }
+            if !tees.sides.is_empty() {
+                rows = rows.push(prop_row(p, l.text("Wanden ertegenaan", "Frames against it").to_string(), tees.sides.len().to_string()));
+            }
         }
         for (f, label) in fields.into_iter().filter(|(f, _)| has(*f)) {
             // what a type gives is shown, not typed
@@ -471,6 +480,55 @@ mod tests {
         // the right pane lists it with its fields and the buttons to add more
         let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
         assert!(ui.find("Door 1").is_ok() && ui.find("Add window").is_ok());
+    }
+
+    #[test]
+    fn a_timber_frame_against_the_side_of_another_shows_its_t_junction() {
+        use bim_core::system::tees;
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let frame = |app: &App, start: DVec2, end: DVec2, id: &str| {
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+            Shape::System(s.typed_from(&app.library, id).unwrap())
+        };
+        let outer = frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0), "system.timber-frame-140");
+        let inner = frame(&app, DVec2::new(2.4, 0.0), DVec2::new(2.4, 3.0), "system.timber-frame-internal-89");
+        let x = app.add_element("Timber frame", None, outer).unwrap();
+        // alone nothing stands against it, and its two units meet in the middle
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("2400 + 2400").is_ok() && ui.find("Frames against it").is_err());
+        }
+        let y = app.add_element("Inner wall", None, inner).unwrap();
+        let model = &app.modeller.model;
+        assert_eq!(tees(model, model.get(y).unwrap()).ends, [Some(x), None]);
+        // the one that runs through: one frame against it, and its units meet clear of it
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Frames against it").is_ok() && ui.find("T junction at start").is_err());
+            assert!(ui.find("1800 + 3000").is_ok());
+        }
+        // what the viewer shows is the model's: its plywood left out across the other's frame
+        let boarded = |app: &App| app.modeller.model.evaluate(x).unwrap().iter().filter(|p| p.material.as_deref() == Some("plywood")).map(|p| p.solid.bounds()).any(|(lo, hi)| lo.x < 2.44 && hi.x > 2.36);
+        assert!(!boarded(&app));
+        // the one that stands against it says at which end
+        app.select_modelled(y);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("T junction at start").is_ok() && ui.find("Stands against the other").is_ok());
+            assert!(ui.find("T junction at end").is_err() && ui.find("Frames against it").is_err());
+        }
+        // made higher it no longer stands against the other, which is whole again
+        type_in(&mut app, ElementField::Height, "3");
+        let model = &app.modeller.model;
+        assert_eq!(tees(model, model.get(y).unwrap()).ends, [None, None]);
+        assert!(boarded(&app));
+        app.select_modelled(x);
+        let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+        assert!(ui.find("2400 + 2400").is_ok() && ui.find("Frames against it").is_err());
     }
 
     #[test]

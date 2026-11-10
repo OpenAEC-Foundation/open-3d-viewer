@@ -305,13 +305,31 @@ live recipes (studs at 600 with OSB outside and gypsum board inside):
   a stud line; the prefab units are those of the frame as long as it is made, and an opening keeps
   clear of a corner stud. A corner is made only where both frames can be made with it and without
   it, so each stays when the other goes; otherwise, and where three frames end on a point, at
-  another angle, at a T junction or with unequal heights, each ends on its line as before (a
-  frame that cannot be made alone is refused at a corner too). Frames of two types make a corner
+  another angle or with unequal heights, each ends on its line as before (a frame that cannot be
+  made alone is refused at a corner too). Frames of two types make a corner
   too (an exterior wall and an interior one). The right pane says at which end a frame makes a
   corner and whether it runs through, and lists its units as the corner leaves them.
+- **T junctions** (built): a timber frame that ends on the line of another, between that one's
+  ends, on one base, as high as it and square to it, stands against its side. It is the inside of
+  a corner twice over, back to back. The frame that stands against the other stops against the
+  face of the other's frame, and each of its layers, on either side of it, starts against the
+  layers of the other it would cross. The other runs through: its frame is whole, and its layers
+  on that side are left out across the wall that stands against it, each running on, either side
+  of that wall, to what the wall has between its frame and that layer's depth. A stud more stands
+  in the frame that runs through either side of the stretch its boards leave open, behind their
+  edges, the pocket between the two filled as any bay (its noggins carry the end stud of the wall
+  that stands against it); a service zone that is left out ends with a batten either side, as a
+  unit does, and gets a batten more where its board ends short of it. The studs, the battens and
+  the boards' seams of the frame that runs through stay where they were. A joint between prefab
+  units keeps clear of the junction, and so does an opening. A T junction is made only where both
+  frames can be made with it and without it; where two frames end on one point of a third's line
+  (a crossing), or the junction leaves no room, each is made as before. A frame can carry several
+  T junctions along it, on either side, and corners at its ends. The right pane says at which end
+  a frame stands against the side of another, and how many stand against its own.
 - **Later**: membrane laps and returns, a layer left out on one system (no interior lining), a
-  stock list (stud lengths, boards, rolls), T junctions and corners at other angles, and a choice
-  of which system runs through.
+  stock list (stud lengths, boards, rolls), crossings and corners at other angles, layers that
+  run on behind a wall that stands against them (an airtight layer), and a choice of which system
+  runs through.
 
 ## Delivery
 
@@ -331,7 +349,8 @@ Small PRs, each with tests, each visible where it can be:
    layers and materials, drawn in the tab and assigned to selected systems.
 7. **Joints in systems** with `bim_core::join`, then lying systems and frames in openings.
 8. **The timber frame worked out** ([above](#the-first-full-system-the-timber-frame)): the frame
-   and its layers, then openings, then prefab units, then corners, each its own PR.
+   and its layers, then openings, then prefab units, then corners, then T junctions, each its
+   own PR.
 
 ## Calls made in writing this design
 
@@ -375,6 +394,10 @@ The author made these calls, not the project owner. They are open to correction.
   met, without laps or corner profiles. Frames meet only when they end on one point (within the
   kernel's join tolerance of a millimetre); which runs through is not yet a choice of the user.
   Every frame looks through the model for the frames at its ends when it is made, as walls do.
+- T junctions are the author's too: the frame that stands against another reaches that one's
+  frame, so every layer of the other on that side is left out across it, the membranes included
+  (no layer runs on behind the wall yet), and the frame that runs through gets two studs more
+  with a pocket between them rather than one stud laid flat.
 
 ## Questions for the project owner
 

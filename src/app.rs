@@ -15,6 +15,7 @@ pub mod library;
 mod marks;
 pub mod modeller;
 mod paper;
+mod placement;
 mod placing;
 mod schedules;
 mod view_props;
@@ -570,6 +571,8 @@ pub enum Message {
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
     ElementFieldDone,
+    /// Something the placement strip over the view sends.
+    Place(placement::PlaceMessage),
     /// Add a door (`true`) or a window to the selected wall.
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
@@ -1342,6 +1345,7 @@ impl App {
             Message::EditKey(key) => self.edit_key(key),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
+            Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::SaveDialog => {

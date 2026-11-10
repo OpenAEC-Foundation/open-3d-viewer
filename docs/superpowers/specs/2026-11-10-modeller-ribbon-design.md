@@ -92,10 +92,6 @@ The Modeller's ribbon has four tabs after File:
 
 ## Not in this slice
 
-- **A placement strip.** All of the products above give the tool on a type and its options
-  (height, location line, offset) in one strip. The Modeller's tools still place fixed sizes.
-  That strip is the next step: the properties pane, while a tool is on, showing the type and the
-  values the next element gets.
 - **Move, Copy, Rotate and Mirror** for a selection, and a contextual Modify group.
 - **Roof, Stair and Railing**, and **Grid** as a datum command.
 - **Duplicate controls.** The bar over a floor plan's tab still has its own Dimension, Text and
@@ -105,3 +101,25 @@ The Modeller's ribbon has four tabs after File:
 
 Adopt this layout for the Modeller now. Revisit it when the placement strip and the modify
 commands come, which add groups but do not move these.
+
+## The placement strip (2026-11-10)
+
+While a tool is on, a strip over the view holds what its next element gets, as Revit's Options
+Bar and Type Selector, Archicad's Info Box and Bonsai's header do (`src/app/placement.rs`):
+
+- **Type**: a wall's or slab's build-up and a curtain wall's upright system type from the
+  project's library; a column's or beam's steel profile from the catalogue; or Generic, sized in
+  the strip. A typed element's thickness or profile is its type's.
+- **Sizes**: a wall's thickness, height and base; a slab's thickness and top; a column's width,
+  depth, height and base; a beam's width, profile height and top; an object's size; a door's
+  size; a window's size and sill. An empty height runs up to the next level.
+- **Location line** of a wall: its centre line, its exterior face (on its right) or its interior
+  face on the line drawn. Walls chained on a face meet where their axes cross: the last wall's
+  end moves there, so the kernel cuts their corner.
+- **Chain**: off, every wall, beam or curtain wall starts afresh.
+- A value is used once it is valid; until then the field keeps what was typed. The preview is
+  made with the strip's values.
+- **Calls made:**
+  - The strip lies over the view, beside the plan's own bar, rather than in the properties pane,
+    which keeps showing the selection.
+  - The settings belong to the project tab and start afresh with a new model.

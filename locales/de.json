@@ -435,6 +435,21 @@
     "Annotate": "Beschriften",
     "Openings": "Öffnungen",
     "Click a wall where the door goes · Esc: stop": "Klicken Sie auf eine Wand, wo die Tür hinkommt · Esc: beenden",
-    "Click a wall where the window goes · Esc: stop": "Klicken Sie auf eine Wand, wo das Fenster hinkommt · Esc: beenden"
+    "Click a wall where the window goes · Esc: stop": "Klicken Sie auf eine Wand, wo das Fenster hinkommt · Esc: beenden",
+    "Centre line": "Mittellinie",
+    "Exterior face": "Außenseite",
+    "Interior face": "Innenseite",
+    "Thickness": "Dicke",
+    "Width": "Breite",
+    "Depth": "Tiefe",
+    "Height": "Höhe",
+    "Base": "Basis",
+    "Profile height": "Profilhöhe",
+    "Sill": "Brüstung",
+    "to level": "bis Geschoss",
+    "Location line": "Referenzlinie",
+    "Chain": "Kette",
+    "Generic": "Generisch",
+    "Top height": "Oberkante"
   }
 }

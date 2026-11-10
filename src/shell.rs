@@ -651,6 +651,10 @@ impl Studio {
                 .icon(small("measure.distance"), large("measure.distance"))
                 .toggle(app.show_grids && has_grids)
                 .enabled(has_grids),
+            Command::new("view.views-3d", l.text("Weergaven in 3D", "Views in 3D"), go(Message::ToggleViewsIn3d))
+                .icon(small("view.saved"), large("view.saved"))
+                .toggle(app.views_in_3d)
+                .enabled(loaded),
             Command::new("view.flip-up", l.text("Z-as omdraaien", "Flip up"), go(Message::ToggleFlipUp))
                 .icon(small("transform.flip-vertical"), large("transform.flip-vertical"))
                 .toggle(app.flip_up)
@@ -1291,7 +1295,7 @@ impl Studio {
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
                 w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
-                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
+                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
                 w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
                 w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
                 w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),

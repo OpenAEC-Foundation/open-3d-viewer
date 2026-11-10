@@ -75,6 +75,8 @@ web-time = "1"
 png = "0.18"
 # Drawings exported as PNG: their SVG rendered with the app's fonts (Apache-2.0 OR MIT; already built for iced's svg)
 resvg = { version = "0.45", default-features = false, features = ["text"] }
+# PDF drawings laid on a level as underlays: their pages' paths (MIT; without its clock and threads)
+lopdf = { version = "0.47", default-features = false }
 # The gzip-compressed B2 icon masters in assets/b2, and the zlib-compressed arrays of FBX and Rhino
 # .3dm meshes (MIT OR Apache-2.0). Rhino .3dm needs no other dependency: src/loaders/rhino.rs is
 # written from McNeel's openNURBS source (published for reading 3dm files); no openNURBS code is built.

@@ -90,9 +90,9 @@ const WINDOWS: i32 = -2000014;
 
 /// The straight walls of the project that the Modeller can take over ([`SourceWall`]), by
 /// element id: the location line, base and height of the wall, its type's thickness, the name of
-/// its base level, and the doors and windows it hosts as openings. Curved, stacked, in-place and
-/// curtain walls, walls without a thickness or a height, and walls with a door or window whose
-/// extent along them cannot be told, are left out: they stay meshes.
+/// its base level, and the doors and windows it hosts as openings ([`cut_of`]). Curved, stacked,
+/// in-place and curtain walls, walls without a thickness or a height, and walls with a door or
+/// window whose extent along them cannot be told, are left out: they stay meshes.
 fn source_walls(doc: &rvt_read::Document) -> HashMap<u64, SourceWall> {
     let levels: HashMap<i64, String> = doc.levels().into_iter().map(|l| (l.id as i64, l.name)).collect();
     let mut walls = HashMap::new();
@@ -114,17 +114,29 @@ fn source_walls(doc: &rvt_read::Document) -> HashMap<u64, SourceWall> {
         walls.insert(w.id, wall);
     }
     // a door's or window's category is its family's, which its instance record carries
-    let doors_windows: std::collections::HashSet<u64> = doc.instances().into_iter().filter(|i| matches!(i.cat, DOORS | WINDOWS)).map(|i| i.id).collect();
+    let doors_windows: HashMap<u64, rvt_model::Instance> = doc.instances().into_iter().filter(|i| matches!(i.cat, DOORS | WINDOWS)).map(|i| (i.id, i)).collect();
+    // their types' Width (−1001301) and Height (−1001300), where both are given
+    let types: HashMap<u64, rvt_model::ValueSet> = doc.type_values_by_chain().into_iter().flat_map(|(_, _, m)| m).collect();
+    let size = |symbol: Option<u64>| -> Option<(f64, f64)> {
+        let rows = &types.get(&symbol?)?.rows;
+        let value = |param: i64| rows.iter().find(|r| r.param == param).map(|r| r.num).filter(|v| *v > 1e-6);
+        Some((value(-1001301)?, value(-1001300)?))
+    };
     let mut unknown = std::collections::HashSet::new();
     for h in doc.hosted() {
         let Some(host) = h.host.and_then(|x| u64::try_from(x).ok()) else { continue };
         let Some(wall) = walls.get_mut(&host) else { continue };
-        if !doors_windows.contains(&h.id) {
-            continue;
-        }
-        match doc.element(h.id).and_then(|e| e.bbox).and_then(|bb| opening_of(wall, bb)) {
-            Some(o) => wall.openings.push(o),
-            None => {
+        let Some(instance) = doors_windows.get(&h.id) else { continue };
+        let hole = Hole {
+            bb: doc.element(h.id).and_then(|e| e.bbox),
+            size: size(instance.symbol),
+            origin: instance.origin,
+            bottom: doc.level_elevation(h.level).map(|z| z + h.sill.unwrap_or(0.0)),
+        };
+        match cut_of(wall, &hole) {
+            Cut::Opening(o) => wall.openings.push(o),
+            Cut::Nothing => {}
+            Cut::Unknown => {
                 unknown.insert(host);
             }
         }
@@ -157,32 +169,70 @@ fn merged(mut openings: Vec<bim_core::Opening>) -> Vec<bim_core::Opening> {
     out
 }
 
-/// The opening that a door or window with box `bb` (feet: xmin, ymin, zmin, xmax, ymax, zmax) makes
-/// in `wall`, as the mesher cuts it: its extent along the axis and its height, within the wall.
-/// A box turned with the wall is `w·c + t·s` wide in x and `w·s + t·c` in y, for a width `w` along
-/// the wall, a depth `t` across it and the axis direction's `c = |cos|`, `s = |sin|`; the width
-/// follows from both, except near 45°, where `None` says the box does not tell it.
-fn opening_of(wall: &SourceWall, bb: [f64; 6]) -> Option<bim_core::Opening> {
-    let bb = bb.map(|v| v * FT);
+/// What a door or window tells of the hole it makes in its wall, in feet and the file's frame.
+struct Hole {
+    /// Its box (xmin, ymin, zmin, xmax, ymax, zmax), if stored.
+    bb: Option<[f64; 6]>,
+    /// Its type's width and height, when the type gives both.
+    size: Option<(f64, f64)>,
+    /// Its insertion point: the middle of its width.
+    origin: Option<[f64; 3]>,
+    /// The height its bottom stands at: its level's elevation plus its sill.
+    bottom: Option<f64>,
+}
+
+/// What a door or window does to its wall.
+#[derive(Debug, PartialEq)]
+enum Cut {
+    Opening(bim_core::Opening),
+    /// It takes nothing from the wall: a symbol without height (a swing drawn in plan), or a hole
+    /// beside the wall.
+    Nothing,
+    /// Its extent along the wall cannot be told: the wall stays a mesh.
+    Unknown,
+}
+
+/// The opening a door or window makes in `wall`, within the wall:
+/// - by its type, where the type gives a width and a height: that width about its insertion
+///   point, that height from its level plus its sill. A type's width is its nominal width (often
+///   the clear opening), so the wall may reach a few centimetres into the door's frame;
+/// - else by its box, as the mesher cuts it: the box's extent along the axis and its height. A
+///   box turned with the wall is `w·c + t·s` wide in x and `w·s + t·c` in y, for a width `w` along
+///   the wall, a depth `t` across it and the axis direction's `c = |cos|`, `s = |sin|`; the width
+///   follows from both, except near 45°, where the box does not tell it.
+fn cut_of(wall: &SourceWall, hole: &Hole) -> Cut {
     let length = wall.start.distance(wall.end);
     let d = (wall.end - wall.start) / length;
-    let (c, s) = (d.x.abs(), d.y.abs());
-    let (ex, ey) = (bb[3] - bb[0], bb[4] - bb[1]);
-    let width = if s < 1e-6 {
-        ex
-    } else if c < 1e-6 {
-        ey
+    let (from, to, bottom, top) = if let (Some((w, h)), Some(o), Some(z)) = (hole.size, hole.origin, hole.bottom) {
+        let middle = (glam::DVec2::new(o[0], o[1]) * FT - wall.start).dot(d);
+        (middle - w * FT / 2.0, middle + w * FT / 2.0, z * FT, (z + h) * FT)
+    } else if let Some(bb) = hole.bb {
+        let bb = bb.map(|v| v * FT);
+        let (c, s) = (d.x.abs(), d.y.abs());
+        let (ex, ey) = (bb[3] - bb[0], bb[4] - bb[1]);
+        let width = if s < 1e-6 {
+            ex
+        } else if c < 1e-6 {
+            ey
+        } else {
+            let det = c * c - s * s;
+            if det.abs() < 0.2 {
+                return Cut::Unknown;
+            }
+            (ex * c - ey * s) / det
+        };
+        let middle = (glam::DVec2::new(bb[0] + bb[3], bb[1] + bb[4]) / 2.0 - wall.start).dot(d);
+        (middle - width / 2.0, middle + width / 2.0, bb[2], bb[5])
     } else {
-        let det = c * c - s * s;
-        if det.abs() < 0.2 {
-            return None;
-        }
-        (ex * c - ey * s) / det
+        return Cut::Unknown;
     };
-    let middle = (glam::DVec2::new(bb[0] + bb[3], bb[1] + bb[4]) / 2.0 - wall.start).dot(d);
-    let (from, to) = ((middle - width / 2.0).max(0.0), (middle + width / 2.0).min(length));
-    let (bottom, top) = ((bb[2] - wall.base).max(0.0), (bb[5] - wall.base).min(wall.height));
-    (to - from > 1e-3 && top - bottom > 1e-3).then_some(bim_core::Opening { along: from, sill: bottom, width: to - from, height: top - bottom })
+    let (from, to) = (from.max(0.0), to.min(length));
+    let (bottom, top) = ((bottom - wall.base).max(0.0), (top - wall.base).min(wall.height));
+    if to - from > 1e-3 && top - bottom > 1e-3 {
+        Cut::Opening(bim_core::Opening { along: from, sill: bottom, width: to - from, height: top - bottom })
+    } else {
+        Cut::Nothing
+    }
 }
 
 /// The schedules as the viewer shows them: templates left out, the shown columns only.
@@ -533,16 +583,48 @@ mod tests {
         b.map(|v| v / FT)
     }
 
+    /// A door or window known by its box (metres) alone.
+    fn boxed(b: [f64; 6]) -> Hole {
+        Hole { bb: Some(feet(b)), size: None, origin: None, bottom: None }
+    }
+
+    fn opening(cut: Cut) -> bim_core::Opening {
+        match cut {
+            Cut::Opening(o) => o,
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn a_door_in_a_wall_along_x_opens_where_its_box_is() {
         let w = wall(glam::DVec2::ZERO, glam::DVec2::new(6.0, 0.0));
         // 0.9 wide from 2 m, 2.1 high from the wall's base, its frame standing out of the wall
-        let o = opening_of(&w, feet([2.0, -0.2, 1.0, 2.9, 0.2, 3.1])).unwrap();
+        let o = opening(cut_of(&w, &boxed([2.0, -0.2, 1.0, 2.9, 0.2, 3.1])));
         assert!((o.along - 2.0).abs() < 1e-9 && (o.width - 0.9).abs() < 1e-9 && o.sill.abs() < 1e-9 && (o.height - 2.1).abs() < 1e-9, "{o:?}");
         // drawn the other way, along y: the same opening, measured from that wall's start
         let w = wall(glam::DVec2::new(0.0, 6.0), glam::DVec2::ZERO);
-        let o = opening_of(&w, feet([-0.2, 2.0, 2.0, 0.2, 2.9, 3.2])).unwrap();
+        let o = opening(cut_of(&w, &boxed([-0.2, 2.0, 2.0, 0.2, 2.9, 3.2])));
         assert!((o.along - 3.1).abs() < 1e-9 && (o.width - 0.9).abs() < 1e-9 && (o.sill - 1.0).abs() < 1e-9 && (o.height - 1.2).abs() < 1e-9, "{o:?}");
+    }
+
+    #[test]
+    fn a_door_with_its_types_sizes_opens_about_its_insertion_point() {
+        let w = wall(glam::DVec2::ZERO, glam::DVec2::new(6.0, 0.0));
+        // a box that reaches far to one side (its swing) and above the wall; the type says 0.9 × 2.1
+        let hole = Hole { bb: Some(feet([1.5, -0.2, 0.9, 3.4, 0.2, 4.1])), size: Some((0.9 / FT, 2.1 / FT)), origin: Some([3.0 / FT, 0.0, 1.0 / FT]), bottom: Some(1.0 / FT) };
+        let o = opening(cut_of(&w, &hole));
+        assert!((o.along - 2.55).abs() < 1e-9 && (o.width - 0.9).abs() < 1e-9 && o.sill.abs() < 1e-9 && (o.height - 2.1).abs() < 1e-9, "{o:?}");
+        // a type without sizes: its box
+        let o = opening(cut_of(&w, &Hole { size: None, ..hole }));
+        assert!((o.along - 1.5).abs() < 1e-9 && (o.width - 1.9).abs() < 1e-9 && (o.height - 3.0).abs() < 1e-9, "{o:?}");
+    }
+
+    #[test]
+    fn a_swing_drawn_in_plan_cuts_nothing_and_a_door_without_a_box_or_type_is_unknown() {
+        let w = wall(glam::DVec2::ZERO, glam::DVec2::new(6.0, 0.0));
+        assert_eq!(cut_of(&w, &boxed([2.0, -0.2, 1.0, 2.9, 0.2, 1.0])), Cut::Nothing, "no height");
+        assert_eq!(cut_of(&w, &boxed([7.0, -0.2, 1.0, 8.0, 0.2, 3.0])), Cut::Nothing, "beside the wall");
+        assert_eq!(cut_of(&w, &Hole { bb: None, size: None, origin: None, bottom: None }), Cut::Unknown);
     }
 
     #[test]
@@ -565,12 +647,12 @@ mod tests {
         let (c, s) = (d.cos(), d.sin());
         let (ex, ey) = (1.2 * c + 0.3 * s, 1.2 * s + 0.3 * c);
         let bb = [centre.x - ex / 2.0, centre.y - ey / 2.0, 1.9, centre.x + ex / 2.0, centre.y + ey / 2.0, 3.1];
-        let o = opening_of(&w, feet(bb)).unwrap();
+        let o = opening(cut_of(&w, &boxed(bb)));
         assert!((o.width - 1.2).abs() < 1e-9 && (o.along - 1.4).abs() < 1e-9 && (o.sill - 0.9).abs() < 1e-9, "{o:?}");
         // at 45° the box does not tell
         let dir = glam::DVec2::new(1.0, 1.0).normalize();
         let w = wall(glam::DVec2::ZERO, dir * 5.0);
-        assert!(opening_of(&w, feet([1.0, 1.0, 1.0, 2.0, 2.0, 3.0])).is_none());
+        assert_eq!(cut_of(&w, &boxed([1.0, 1.0, 1.0, 2.0, 2.0, 3.0])), Cut::Unknown);
     }
 
     /// The location line of a sample's walls against their meshes: how far the middle of each

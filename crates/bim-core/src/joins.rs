@@ -248,6 +248,18 @@ mod tests {
     }
 
     #[test]
+    fn a_door_at_a_corner_goes_through_the_walls_reach_into_it() {
+        let mut m = Model::new(TileGrid::default());
+        let mut shape = wall((0.0, 0.0), (5.0, 0.0), 0.2);
+        let Shape::Planar(p) = &mut shape else { unreachable!() };
+        p.openings = vec![Opening { along: 4.5, sill: 0.0, width: 0.5, height: 2.1 }];
+        let a = add(&mut m, shape);
+        add(&mut m, wall((5.0, 0.0), (5.0, 4.0), 0.2));
+        // the mitred footprint from 4.5 on is 0.4 | 0.6 long, 0.2 wide: 0.1 m², 2.1 high
+        assert!(close(volume(&m, a), 3.0 - 0.1 * 2.1), "{}", volume(&m, a));
+    }
+
+    #[test]
     fn walls_of_two_thicknesses_meet_face_to_face() {
         let mut m = Model::new(TileGrid::default());
         let a = add(&mut m, wall((0.0, 0.0), (5.0, 0.0), 0.3));

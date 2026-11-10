@@ -284,12 +284,18 @@ mod tests {
             }
         }
         eprintln!("{} drawn walls, the kernel makes {}; refused: {refusals:?}", drawn.len(), drawn.len() - refusals.values().sum::<usize>());
+        // the drawn walls with doors or windows: how many are made, and why not the others
+        let mut with_openings = (0, 0);
         for id in drawn.iter().filter(|id| !model.project.walls[id].openings.is_empty()) {
             let w = &model.project.walls[id];
             let wall = PlanarDef { form: PlanarForm::Wall { start: w.start, end: w.end, base: w.base, height: w.height }, thickness: w.thickness, openings: w.openings.clone(), build_up: None };
-            let made = bim_core::Model::new(grid).add(Element::in_project(&grid, "", None, Shape::Planar(wall)));
-            eprintln!("drawn wall {id}: {:.3} m long, {:.3} high, openings {:?}: {:?}", w.start.distance(w.end), w.height, w.openings, made.err());
+            with_openings.0 += 1;
+            match bim_core::Model::new(grid).add(Element::in_project(&grid, "", None, Shape::Planar(wall))) {
+                Ok(_) => with_openings.1 += 1,
+                Err(r) => eprintln!("drawn wall {id} refused, {r:?}: {:.3} m long, {:.3} high, openings {:?}", w.start.distance(w.end), w.height, w.openings),
+            }
         }
+        eprintln!("{} drawn walls with doors or windows, the kernel makes {}", with_openings.0, with_openings.1);
         // a drawn wall the kernel makes, one with a door or window when there is one, taken over
         let mut app = App::default();
         app.set_model(model.clone());
@@ -323,14 +329,14 @@ mod tests {
     #[test]
     fn a_wall_the_kernel_cannot_make_stays_the_files() {
         let mut model = Arc::try_unwrap(house()).unwrap();
-        // a door wider than the wall is long
-        model.project.walls.get_mut(&7).unwrap().openings[0].width = 9.0;
+        // two openings that overlap
+        model.project.walls.get_mut(&7).unwrap().openings.push(bim_core::Opening { along: 1.5, sill: 1.0, width: 1.0, height: 1.0 });
         let mut app = opened();
         app.set_model(Arc::new(model));
         app.modeller.in_modeller = true;
         select(&mut app, 7);
         drag(&mut app, 1, 8.0, 0.15);
-        assert!(app.modeller.refusal.is_some());
+        assert_eq!(app.modeller.refusal, Some(bim_core::Refusal::OpeningsOverlap));
         assert!(app.modeller.model.is_empty());
         let scene = app.model.clone().unwrap();
         assert!(scene.element_with_key(ElementKey { model: 0, source: 7 }).is_some());

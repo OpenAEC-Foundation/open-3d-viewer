@@ -1668,6 +1668,10 @@ impl App {
                 if on {
                     self.dimension_tool = false;
                     self.note_tool = false;
+                    // a floor plan in its tab is cut, to snap to its lines
+                    if let Some(view) = self.shown_view().map(str::to_string) {
+                        self.cut_view(&view);
+                    }
                 }
                 self.pick_on_sheet(None);
             }

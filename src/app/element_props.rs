@@ -1,7 +1,7 @@
 //! The Definition section of the right pane for a modelled element: its name and the sizes of its
 //! definition typed in (a wall's height, thickness and base; a slab's thickness and top; a
 //! member's profile and roll; an object's size and turn; a curtain wall's spacing, members and
-//! panels), and a wall's openings, added, typed in and removed.
+//! panels), and the openings of a wall or a timber frame, added, typed in and removed.
 //!
 //! A value is used as soon as it is valid and the kernel can make the element with it, as the
 //! View section does; until then the field keeps what was typed and the view's banner says why.
@@ -39,7 +39,7 @@ pub enum ElementField {
     /// A curtain wall's spacing along its line and up.
     SpacingAlong,
     SpacingUp,
-    /// A wall opening's distance from the wall's start, sill, width and height.
+    /// An opening's distance from its wall's (or timber frame's) start, sill, width and height.
     Along(usize),
     Sill(usize),
     OpeningWidth(usize),
@@ -93,6 +93,29 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::System(s), F::Depth) => Some(s.member.y),
         (Shape::System(s), F::SpacingAlong) => Some(s.spacing.x),
         (Shape::System(s), F::SpacingUp) => Some(s.spacing.y),
+        (Shape::System(s), F::Along(i)) => opening(&s.openings, i).map(|o| o.along),
+        (Shape::System(s), F::Sill(i)) => opening(&s.openings, i).map(|o| o.sill),
+        (Shape::System(s), F::OpeningWidth(i)) => opening(&s.openings, i).map(|o| o.width),
+        (Shape::System(s), F::OpeningHeight(i)) => opening(&s.openings, i).map(|o| o.height),
+        _ => None,
+    }
+}
+
+/// The openings of `shape` and how long it is, if it can have openings: a wall, or a system whose
+/// type is framed (a timber frame).
+fn openings_of(shape: &Shape) -> Option<(&[Opening], f64)> {
+    match shape {
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, .. }, openings, .. }) => Some((openings, (end - start).length())),
+        Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some((&s.openings, (s.end - s.start).length())),
+        _ => None,
+    }
+}
+
+/// The openings of `shape` to change, if it can have openings.
+fn openings_mut(shape: &mut Shape) -> Option<&mut Vec<Opening>> {
+    match shape {
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) => Some(openings),
+        Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some(&mut s.openings),
         _ => None,
     }
 }
@@ -138,6 +161,10 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::System(s), F::Depth) if s.system_type.is_none() => set(&mut s.member.y),
         (Shape::System(s), F::SpacingAlong) => set(&mut s.spacing.x),
         (Shape::System(s), F::SpacingUp) => set(&mut s.spacing.y),
+        (Shape::System(s), F::Along(i)) => set(&mut s.openings.get_mut(i)?.along),
+        (Shape::System(s), F::Sill(i)) => set(&mut s.openings.get_mut(i)?.sill),
+        (Shape::System(s), F::OpeningWidth(i)) => set(&mut s.openings.get_mut(i)?.width),
+        (Shape::System(s), F::OpeningHeight(i)) => set(&mut s.openings.get_mut(i)?.height),
         _ => return None,
     }
     Some(shape)
@@ -182,29 +209,27 @@ impl App {
         self.modeller.typing = Some((e.id, field, typed));
     }
 
-    /// Adds a door (with no sill) or a window in the middle of the selected wall, if it fits.
+    /// Adds a door (with no sill) or a window in the middle of the selected wall or timber frame,
+    /// if it fits.
     pub(super) fn add_opening(&mut self, door: bool) {
         let Some(e) = self.defined().cloned() else { return };
-        let shape = e.shape_in_project(&self.modeller.model.grid);
-        let Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, .. }, .. }) = &shape else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Some((_, length)) = openings_of(&shape) else { return };
         let (width, height, sill) = if door { DOOR } else { WINDOW };
-        let mut with = shape.clone();
-        if let Shape::Planar(p) = &mut with {
-            p.openings.push(Opening { along: ((end - start).length() - width) / 2.0, sill, width, height });
+        if let Some(openings) = openings_mut(&mut shape) {
+            openings.push(Opening { along: (length - width) / 2.0, sill, width, height });
         }
         self.modeller.refusal = None;
-        self.change_shape(&e, with);
+        self.change_shape(&e, shape);
     }
 
-    /// Removes opening `index` of the selected wall.
+    /// Removes opening `index` of the selected wall or timber frame.
     pub(super) fn remove_opening(&mut self, index: usize) {
         let Some(e) = self.defined().cloned() else { return };
         let mut shape = e.shape_in_project(&self.modeller.model.grid);
-        if let Shape::Planar(p) = &mut shape {
-            if index < p.openings.len() {
-                p.openings.remove(index);
-                self.change_shape(&e, shape);
-            }
+        if let Some(openings) = openings_mut(&mut shape).filter(|o| index < o.len()) {
+            openings.remove(index);
+            self.change_shape(&e, shape);
         }
     }
 
@@ -229,8 +254,8 @@ impl App {
         }
     }
 
-    /// The Definition section: the selected modelled element's values to type in, and a wall's
-    /// openings.
+    /// The Definition section: the selected modelled element's values to type in, and the openings
+    /// of a wall or a timber frame.
     pub(super) fn element_properties(&self, p: Palette, l: Language) -> Option<Widget<'_, Message>> {
         let e = self.defined()?;
         let shape = e.shape_in_project(&self.modeller.model.grid);
@@ -274,7 +299,7 @@ impl App {
             };
             rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
-        if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) = &shape {
+        if let Some((openings, _)) = openings_of(&shape) {
             for i in 0..openings.len() {
                 let kind = if openings[i].sill <= bim_core::LINEAR_TOLERANCE { l.text("Deur", "Door") } else { l.text("Raam", "Window") };
                 let remove = button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveOpening(i));
@@ -390,6 +415,43 @@ mod tests {
         assert!((volume - (15.0 - 0.9 * 2.1 - 1.2 * 1.2) * 0.2).abs() < 1e-9);
         let _ = app.update(Message::RemoveOpening(0));
         assert_eq!(wall(&app).openings.len(), 1);
+    }
+
+    #[test]
+    fn a_timber_frame_takes_a_door_and_a_window_and_a_curtain_wall_none() {
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
+        app.select_modelled(id);
+        let system = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
+            Shape::System(s) => s,
+            _ => panic!(),
+        };
+        // a curtain wall has no openings to add
+        let _ = app.update(Message::AddOpening(false));
+        assert!(system(&app).openings.is_empty());
+        assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
+        let _ = app.update(Message::AddOpening(false));
+        assert_eq!(system(&app).openings, [Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2 }]);
+        // its header: a member as deep as the studs, 200 high, over the window and its trimmers
+        let header = |app: &App| {
+            app.modeller.model.evaluate(id).unwrap().iter().any(|p| {
+                let (lo, hi) = p.solid.bounds();
+                p.material.as_deref() == Some("timber") && (hi.z - lo.z - 0.2).abs() < 1e-9 && (lo.z - 2.1).abs() < 1e-9
+            })
+        };
+        assert!(header(&app));
+        type_in(&mut app, ElementField::Along(0), "0.5");
+        assert_eq!(system(&app).openings[0].along, 0.5);
+        let _ = app.update(Message::AddOpening(true));
+        assert_eq!(system(&app).openings.len(), 2, "a door in the middle beside the window");
+        let _ = app.update(Message::RemoveOpening(0));
+        assert_eq!(system(&app).openings, [Opening { along: 2.05, sill: 0.0, width: 0.9, height: 2.1 }]);
+        // the right pane lists it with its fields and the buttons to add more
+        let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view());
+        assert!(ui.find("Door 1").is_ok() && ui.find("Add window").is_ok());
     }
 
     #[test]

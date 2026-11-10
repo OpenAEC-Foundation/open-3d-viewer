@@ -276,10 +276,15 @@ live recipes (studs at 600 with OSB outside and gypsum board inside):
   timber behind it (Open BIM Studio's "supported board edges" rule).
 - **The types** (built): studs 38 wide and 140, 184 or 235 deep at 600 or 610 centres, and an
   interior wall 38×89 at 600 with gypsum board on either face, as in the catalogue.
-- **Openings** (next): a system gets openings, as a wall has. A framed face frames each one: king
-  studs either side, trimmers carrying a header, a sill under a window, cripple studs at the
-  regular centres above and below; the insulation stops, the boards are cut around it into
-  rectangles. The right pane adds a door or a window to a system.
+- **Openings** (built): a system gets openings, as a wall has, measured from its start and base.
+  A framed face frames each one: a king stud either side from plate to plate, trimmers carrying a
+  header (the type's nominal size, 200 high, not a sized lintel), a sill under a window, cripple
+  studs over the trimmers and at the regular centres above the header and below the sill; the
+  bottom plates stop at a door. The insulation stops at the opening, the boards and membranes are
+  cut around it into rectangles (the strips beside it, then the pieces below and above it), and
+  the cripples over the trimmers carry the seam on the jamb. Only framed systems take openings; a
+  curtain wall or masonry with one is refused until their own openings are worked out. The right
+  pane adds a door or a window to a timber frame as to a wall.
 - **Prefab units** (then): a type's largest unit (3300 in the catalogue); a system is split into
   units with their joints outside the openings, an end stud on either side of each joint, and
   boards that do not cross one.
@@ -337,6 +342,11 @@ The author made these calls, not the project owner. They are open to correction.
   50 m long, laps left out. Boards are 1200×3000 at 600 centres and 1220×2440 at 610; the service
   battens are 45×45; one bottom and one top plate; the interior wall has mineral wool too. All are
   authoring examples, as the catalogue says, not checked structural or building-physics values.
+- An opening's header is 200 high in the exterior frames, a plate laid flat in the interior wall
+  and a batten in the service zone. The service zone frames an opening as the frame does, with its
+  own battens, so two openings stand at least four battens' widths apart. Boards are cut around
+  openings into rectangles, the policy the catalogue calls rectangular opening regions; boards cut
+  to an L around a corner come later.
 
 ## Questions for the project owner
 

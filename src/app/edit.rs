@@ -699,7 +699,7 @@ mod tests {
                 openings: Vec::new(),
                 build_up: None,
             }),
-            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None }),
+            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
         ];
         for shape in shapes {
             let (points, _) = edit_points(&shape);

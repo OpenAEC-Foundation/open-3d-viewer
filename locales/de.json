@@ -435,6 +435,9 @@
     "Bottom plates": "Schwellen",
     "top plates": "Rähme",
     "header": "Sturz",
-    "Only a framed system, such as a timber frame, can have openings.": "Nur ein gerahmtes System wie ein Holzrahmenbau kann Öffnungen haben."
+    "Only a framed system, such as a timber frame, can have openings.": "Nur ein gerahmtes System wie ein Holzrahmenbau kann Öffnungen haben.",
+    "Prefab units": "Fertigteile",
+    "Prefab units up to": "Fertigteile bis",
+    "The frame cannot be split into prefab units clear of its openings.": "Der Rahmen lässt sich nicht neben seinen Öffnungen in Fertigteile teilen."
   }
 }

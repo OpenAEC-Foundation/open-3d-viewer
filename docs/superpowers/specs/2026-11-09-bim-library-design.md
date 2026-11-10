@@ -285,9 +285,11 @@ live recipes (studs at 600 with OSB outside and gypsum board inside):
   the cripples over the trimmers carry the seam on the jamb. Only framed systems take openings; a
   curtain wall or masonry with one is refused until their own openings are worked out. The right
   pane adds a door or a window to a timber frame as to a wall.
-- **Prefab units** (then): a type's largest unit (3300 in the catalogue); a system is split into
-  units with their joints outside the openings, an end stud on either side of each joint, and
-  boards that do not cross one.
+- **Prefab units** (built): a framing's longest unit (3300 in the catalogue's exterior walls). A
+  longer frame is made of as few units as can be, as equal as can be, each with its own plates and
+  end studs. A joint lies on a stud line or, where none is clear, right beside an opening's
+  framing, clear of its king studs; no board or membrane crosses one. A frame that cannot be split
+  so is refused rather than made with a unit too long. The right pane lists a frame's units.
 - **Later**: membrane laps and returns, a layer left out on one system (no interior lining), a
   stock list (stud lengths, boards, rolls), and corners where two timber-frame systems meet.
 

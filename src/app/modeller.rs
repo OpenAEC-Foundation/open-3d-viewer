@@ -322,6 +322,7 @@ impl App {
                 spacing: SYSTEM_SPACING,
                 member: SYSTEM_MEMBER,
                 panel: SYSTEM_PANEL,
+                system_type: None,
             }),
         };
         match self.add_element(name, level, shape) {
@@ -507,7 +508,7 @@ impl App {
         add(self, "Wall", wall(p(0.0, 0.0), p(10.0, 0.0), vec![door, window]));
         let side = add(self, "Wall", wall(p(10.0, 0.0), p(10.0, 6.0), Vec::new()));
         add(self, "Wall", wall(p(0.0, 6.0), p(0.0, 0.0), Vec::new()));
-        add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL }));
+        add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None }));
         // a pergola beside it: two columns and three beams in a U; the joins come by themselves
         // (butts at the columns, mitres at the far corners), and one butt becomes an end plate
         let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 });
@@ -637,6 +638,9 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
             put("Length", m((s.end - s.start).length()));
             put("Height", m(s.height));
             put("Parts", parts.len().to_string());
+            if let Some(t) = &s.system_type {
+                put("Type", library.system_name(&t.id, bim_library::Lang::En).unwrap_or_else(|| t.id.clone()));
+            }
         }
         Shape::Connection(c) => {
             let kind = match c.kind {

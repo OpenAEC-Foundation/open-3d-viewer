@@ -1,6 +1,7 @@
 //! The libraries of the BIM modeller of Open 3D Viewer Studio: the materials things are made of,
-//! the layered build-ups of walls, floors, roofs and ceilings (planar types), and the profiles
-//! and linear types of columns, beams and other members.
+//! the layered build-ups of walls, floors, roofs and ceilings (planar types), the profiles and
+//! linear types of columns, beams and other members, and the system types systems are generated
+//! by: curtain walls, frames, timber frames, masonry, cladding, floors and ceilings.
 //!
 //! Headless: no GUI, no kernel. The kernel (`bim-core`), the app, the MCP server and other OpenAEC
 //! tools can all use it.
@@ -23,11 +24,13 @@ pub mod ifcx;
 pub mod library;
 pub mod material;
 pub mod profile;
+pub mod system;
 
 pub use buildup::{BuildUp, Layer, Role};
 pub use library::Library;
 pub use material::{DrawingStandard, HatchKind, HatchPattern, Material, Names};
 pub use profile::{LinearRole, LinearType, ProfileShape, Series, SteelProfile};
+pub use system::{Corner, Grid, Members, Panels, Pattern, SystemGroup, SystemLayer, SystemType};
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +72,8 @@ pub enum LibraryError {
     Unreadable(String),
     /// A profile's dimensions do not make a profile; the text says which.
     BadProfile(String),
+    /// A system type's bays or rows are not wider than its members.
+    BadGrid,
 }
 
 impl std::fmt::Display for LibraryError {
@@ -81,6 +86,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::NoKey => f.write_str("A key cannot be empty."),
             LibraryError::Unreadable(why) => write!(f, "Not a library: {why}"),
             LibraryError::BadProfile(why) => write!(f, "Not a profile: {why}"),
+            LibraryError::BadGrid => f.write_str("A system's bays and rows must be wider than its members."),
         }
     }
 }

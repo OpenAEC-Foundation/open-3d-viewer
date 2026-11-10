@@ -147,9 +147,10 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::Planar(p), F::OpeningHeight(i)) => set(&mut p.openings.get_mut(i)?.height),
         (Shape::System(s), F::Height) => set(&mut s.height),
         (Shape::System(s), F::Base) => set(&mut s.base),
-        (Shape::System(s), F::Thickness) => set(&mut s.panel),
-        (Shape::System(s), F::Width) => set(&mut s.member.x),
-        (Shape::System(s), F::Depth) => set(&mut s.member.y),
+        // a typed system's members and panels are its type's
+        (Shape::System(s), F::Thickness) if s.system_type.is_none() => set(&mut s.panel),
+        (Shape::System(s), F::Width) if s.system_type.is_none() => set(&mut s.member.x),
+        (Shape::System(s), F::Depth) if s.system_type.is_none() => set(&mut s.member.y),
         (Shape::System(s), F::SpacingAlong) => set(&mut s.spacing.x),
         (Shape::System(s), F::SpacingUp) => set(&mut s.spacing.y),
         (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
@@ -295,15 +296,26 @@ impl App {
             Shape::Planar(PlanarDef { build_up: Some(b), .. }) => Some(b),
             _ => None,
         };
+        let system_type = match &shape {
+            Shape::System(bim_core::SystemDef { system_type: Some(t), .. }) => Some(t),
+            _ => None,
+        };
         if let Some(b) = layered {
             let name = self.library.name(&b.id, crate::app::library::lang(l)).unwrap_or_else(|| b.id.clone());
             rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
         }
+        if let Some(t) = system_type {
+            let name = self.library.system_name(&t.id, crate::app::library::lang(l)).unwrap_or_else(|| t.id.clone());
+            rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
+        }
         for (f, label) in fields.into_iter().filter(|(f, _)| has(*f)) {
-            rows = match (f, layered) {
-                (F::Thickness, Some(_)) => rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))),
-                _ => rows.push(field(label, f)),
+            // what a type gives is shown, not typed
+            let fixed = match f {
+                F::Thickness => layered.is_some() || system_type.is_some(),
+                F::Width | F::Depth => system_type.is_some(),
+                _ => false,
             };
+            rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
         // a join: its kind to choose, and an end plate's sizes
         if let Shape::Connection(c) = &shape {

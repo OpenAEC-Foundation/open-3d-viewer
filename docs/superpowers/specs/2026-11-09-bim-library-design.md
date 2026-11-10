@@ -203,19 +203,62 @@ The original proposal:
    inherits its material node.
 6. Floor plans and sections hatch each layer by its material.
 
-### The building systems (to brainstorm with the project owner)
+### The building systems: a built-in system generator
 
 There are two kinds of system in Open BIM Studio, and both are asked for:
 
 - **Layered build-ups** are the planar types above. They are in the first parts.
-- **Building systems** generate members and panels on a domain. The kernel's `SystemDef` is a
-  first, simple one (bays, rows, member size, panel thickness). Open BIM Studio's 43 recipes need
-  more of it: a running-bond pattern, panels of a type, joints set back from the face, extra layers
-  at offsets, and floors and ceilings lying level. Its generator design goes much further
-  (openings, prefab units, cutting, overrides).
+- **Building systems** generate members and panels on a domain. The project owner asked for a
+  built-in system generator that works like a layered curtain wall, with a set of proposed
+  systems. The kernel's `SystemDef` is a first, simple one (bays, rows, member size, panel
+  thickness). Open BIM Studio's recipes need more of it: a running-bond pattern, panels of a
+  material, joints set back from the face, extra layers at offsets, and floors and ceilings lying
+  level. Its generator design goes much further (openings, prefab units, cutting, overrides).
 
-What the first vertical slice of the systems should be is a decision for the project owner.
-Open BIM Studio's design proposes a suspended ceiling first, then a timber-frame wall with a window.
+**System types** (`bim_library::system`, built). A type is a recipe:
+- a group (curtain wall, frame, timber frame, masonry, cladding, floor, ceiling);
+- the grid of its face (bay and row, centre to centre; stacked rows or a running bond, every second
+  row shifted half a bay);
+- the members on the grid's lines (width in the face, depth across it, material);
+- the panels in its bays (material, thickness, centred on the face);
+- layers across the face, each at an offset (to the exterior positive), with a grid of its own,
+  members or none, and panels;
+- for a floor or a ceiling, how high above its level it lies.
+
+The 21 starter types are Open BIM Studio's recipes with generic names: three curtain walls, three
+frames, two timber frames with OSB outside and gypsum board inside, three brick bonds, sand-lime
+elements, zinc, timber and HPL cladding, five hollow-core floors and a 600×600 ceiling. Its window
+layouts (casement, tilt-turn, sliding) need a frame hosted in a wall opening with its leaves, and
+come later. A type is named by rule, after its members when it is framed ("Vliesgevel aluminium
+50×150 h.o.h. 1500", "Houtskeletbouw 38×140 h.o.h. 600"), after its panels otherwise
+("Metselwerk 100 220×62.5 halfsteensverband", "Kanaalplaat 260 1200×6000"). An import matches
+types by what they make, as build-ups. In IFCX a type is a node of its group's type class with
+`openaec::systemtype`.
+
+**In the kernel** (agreed with the kernel's owner; the first two points are built, the second with the kernel's joins):
+- `SystemDef` gets an optional `system_type` (`bim_core::system::SystemTypeDef`), copied from the
+  library as a build-up is, so the element is whole without the library; `SystemDef::typed` sets
+  the spacing, members and panels to the type's. `system_parts` generates from it
+  (`bim_core::system`): the running bond (the rows' lines run through, the joints between the
+  units stop against them, so they do not run through), the layers across the face, and the
+  material of every member and panel. A system of more than 50 000 parts is refused rather than
+  generated. In the app, the Library tab draws a type's face from the kernel's own parts, and
+  **Assign to selection** gives the selected systems the picked type; a typed system's member and
+  panel sizes are its type's, shown and not typed, its spacing still its own.
+- Members stay parts of their system, with one join rule per pair of roles (the mullion runs
+  through, the transom stops against it), not a join element per crossing. Each crossing goes
+  through the kernel's join geometry (`bim_core::join::cuts` and `finish`), so a joint in a system
+  looks and behaves as a join element. A type says how the edge members meet at the corners
+  (`Corner::Butt`, the member that runs through reaching the corner, or `Corner::Mitre`); the
+  aluminium and PVC frames are mitred.
+- A generated joint becomes selectable, keyed by the system and its two grid lines, its kind
+  stored as an override on the system. Where a system meets another element, the joint is an
+  ordinary join element.
+- Lying systems need a domain that lies (an outline and a height), and come after upright ones.
+
+What the first vertical slice of the systems should be is still a decision for the project
+owner. Open BIM Studio's design proposes a suspended ceiling first, then a timber-frame wall with a
+window.
 
 ## Delivery
 
@@ -230,7 +273,11 @@ Small PRs, each with tests, each visible where it can be:
    library file. This is what the dev viewer shows first (#129).
 4. **Kernel and Model tab**, once agreed (see above): layered walls and slabs, catalogue profiles,
    the type chooser.
-5. **Building systems**, after brainstorming.
+5. **System types** in the library: the generator's recipes, the starter types, their IFCX form.
+6. **The system generator in the kernel and the Library tab**: typed systems with running bonds,
+   layers and materials, drawn in the tab and assigned to selected systems.
+7. **Joints in systems** with `bim_core::join`, then lying systems, frames in openings and the
+   first full slice the project owner chooses.
 
 ## Calls made in writing this design
 
@@ -252,6 +299,11 @@ The author made these calls, not the project owner. They are open to correction.
 - Screed gets a neutral warm grey; Open BIM Studio had no colour for it.
 - The IFCX attributes for build-ups and linear types are in the `openaec::` namespace, next to
   `openaec::element`, because IFCX has no layer-set schema yet.
+- System types are named by rule as well, after their members or their panels, and their
+  materials, thicknesses and grids come from Open BIM Studio's recipes. Glass is 24 mm, as there;
+  zinc is 0.8 mm, as its recipe's name says.
+- A frame (kozijn) type is an IfcWindowType and a timber frame or masonry type an IfcWallType;
+  the exchange's owner may choose other classes.
 
 ## Questions for the project owner
 

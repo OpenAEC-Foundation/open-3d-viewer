@@ -75,10 +75,11 @@ impl App {
         Some(DrawingFrame { origin: Vec3::new(s.from[0] as f32, s.from[1] as f32, 0.0), u: Vec3::new(along[0] as f32, along[1] as f32, 0.0), v: Vec3::Z })
     }
 
-    /// The view whose tab shows in the workspace (no sheet over it).
+    /// The drawing view (a plan, section or elevation) whose tab shows in the workspace, no sheet
+    /// over it; a 3D view's tab shows as the 3D view does.
     pub(super) fn shown_view(&self) -> Option<&str> {
         (self.active_doc_sheet.is_none() && self.active_sheet.is_none()).then_some(())?;
-        self.active_plan.as_deref()
+        self.active_plan.as_deref().filter(|p| self.document.view_3d(p).is_none())
     }
 
     /// The text a click of the text tool places: the one typed, else "Text".

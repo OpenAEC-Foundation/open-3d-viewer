@@ -6,7 +6,7 @@
 //! bolts) are its body. A connection that cannot be made is refused by its own evaluation and
 //! leaves its members as they are.
 
-use crate::element::{planar_parts, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::element::{planar_parts, point_solid, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
 use crate::join::{self, JoinKind, JoinResult, Member, MemberEnd};
 use crate::solid::{Plane, Solid};
 use crate::tile::{TileGrid, TileKey};
@@ -153,7 +153,8 @@ impl Model {
                 };
                 Ok(parts.into_iter().map(|(material, solid)| Part { material, ..part(solid) }).collect())
             }
-            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
+            // a framed system meeting another at a corner ends there as the corner says
+            Shape::System(s) => Ok(crate::system::joined_parts(self, element, s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
             Shape::Linear(l) => {
                 let joined = self.joined(element.id, element.tile);
                 let body = join::finish(&Member::of(l)?, joined.start, joined.end, &joined.additions, &joined.removals);

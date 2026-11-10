@@ -321,6 +321,7 @@ impl App {
                 member: SYSTEM_MEMBER,
                 panel: SYSTEM_PANEL,
                 system_type: None,
+                openings: Vec::new(),
             }),
         };
         match self.add_element(name, level, shape) {
@@ -487,7 +488,7 @@ impl App {
         add(self, "Wall", wall(p(0.0, 0.0), p(10.0, 0.0), vec![door, window]));
         let side = add(self, "Wall", wall(p(10.0, 0.0), p(10.0, 6.0), Vec::new()));
         add(self, "Wall", wall(p(0.0, 6.0), p(0.0, 0.0), Vec::new()));
-        add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None }));
+        add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new() }));
         // a pergola beside it: columns, a beam stopping at a column, two beams in a mitre
         let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 });
         let c1 = add(self, "Column", column(p(13.0, 0.0)));

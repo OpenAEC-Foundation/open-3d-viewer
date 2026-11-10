@@ -444,7 +444,7 @@ mod tests {
         let point = add(&mut m, Shape::Point(PointDef { at: DVec3::new(1.0, 1.0, 0.0), rotation: 0.5, size: DVec3::new(0.6, 0.6, 0.9) }));
         let system = add(
             &mut m,
-            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None }),
+            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
         );
         assert!((m.evaluate(point).unwrap()[0].solid.volume() - 0.6 * 0.6 * 0.9).abs() < 1e-12);
         assert!(m.evaluate(system).unwrap().len() > 10);
@@ -507,7 +507,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let s = add(
             &mut m,
-            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None }),
+            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
         );
         let parts = m.evaluate(s).unwrap().len();
         let b = add(&mut m, beam(DVec3::new(0.75, -1.0, 2.0), DVec3::new(0.75, 1.0, 2.0)));

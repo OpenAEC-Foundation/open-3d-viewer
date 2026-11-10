@@ -461,7 +461,18 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     };
     list = list.push(line(&t.members.material, format!("{members}: {} {}", material(&t.members.material), size(t.members.width, t.members.depth))));
     if let Some(framing) = t.members.framing {
-        list = list.push(small(format!("{} {} · {} {}", l.text("Onderregels", "Bottom plates"), framing.bottom_plates, l.text("bovenregels", "top plates"), framing.top_plates), p));
+        list = list.push(small(
+            format!(
+                "{} {} · {} {} · {} {} mm",
+                l.text("Onderregels", "Bottom plates"),
+                framing.bottom_plates,
+                l.text("bovenregels", "top plates"),
+                framing.top_plates,
+                l.text("latei", "header"),
+                mm(framing.header, l)
+            ),
+            p,
+        ));
     }
     list = list.push(line(&t.panels.material, format!("{}: {} {}", l.text("Panelen", "Panels"), material(&t.panels.material), mm(t.panels.thickness, l))));
     for layer in &t.layers {
@@ -500,15 +511,20 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
 }
 
 /// The face of system type `t` as the kernel generates it, a few bays wide (as wide as a row is
-/// high, at least 1.2 m) and rows high (a lying type as if it stood, without its layers): its
-/// panels, then its members, as rectangles along and up the face in their materials' colours.
+/// high, at least 1.2 m) and rows high (a lying type as if it stood, without its layers), a framed
+/// one with a window 1200 by 1200 in the middle as it frames one: its panels, then its members, as
+/// rectangles along and up the face in their materials' colours.
 fn elevation(t: &SystemType, lib: &Library, line: Color) -> Elevation {
     let bays = (t.grid.row.max(1.2) / t.grid.bay).ceil().clamp(2.0, 8.0);
     let rows = (0.9 / t.grid.row).ceil().clamp(1.0, 8.0);
     let (length, height) = (bays * t.grid.bay, rows * t.grid.row);
     let upright = SystemType { lying: None, layers: Vec::new(), ..t.clone() };
-    let face = SystemDef { start: glam::DVec2::ZERO, end: glam::DVec2::new(length, 0.0), base: 0.0, height, spacing: glam::DVec2::ONE, member: glam::DVec2::ONE, panel: 1.0, system_type: None };
-    let mut parts = face.typed(&upright).and_then(|s| bim_core::system::parts(&s).ok()).unwrap_or_default();
+    let face = SystemDef { start: glam::DVec2::ZERO, end: glam::DVec2::new(length, 0.0), base: 0.0, height, spacing: glam::DVec2::ONE, member: glam::DVec2::ONE, panel: 1.0, system_type: None, openings: Vec::new() };
+    let typed = face.typed(&upright);
+    let window = bim_core::Opening { along: (length - 1.2) / 2.0, sill: 0.9, width: 1.2, height: 1.2 };
+    let with_window = typed.clone().filter(|_| t.members.framing.is_some()).map(|s| SystemDef { openings: vec![window], ..s });
+    // without the window where it does not fit
+    let mut parts = with_window.and_then(|s| bim_core::system::parts(&s).ok()).or_else(|| typed.and_then(|s| bim_core::system::parts(&s).ok())).unwrap_or_default();
     // panels first, so the members lie over their edges
     parts.sort_by_key(|part| part.class != "IfcPlate");
     let colour = |key: Option<&str>| key.and_then(|k| lib.material(k)).map_or([175, 182, 195], |m| m.colour);
@@ -891,11 +907,17 @@ mod tests {
         click(&mut app, "Timber frames");
         click(&mut app, "Timber frame 38×140 c/c 600");
         let mut ui = simulator(&app);
-        assert!(ui.find("Bottom plates 1 · top plates 1").is_ok());
+        assert!(ui.find("Bottom plates 1 · top plates 1 · header 200 mm").is_ok());
         // its face: the plates through, studs between them
         let face = elevation(&frame, &app.library, Color::BLACK);
         let timber = face.rects.iter().filter(|(_, c)| *c == [205, 165, 115]).map(|(r, _)| r[2] - r[0]).fold(0.0, f64::max);
         assert!((timber - face.size[0]).abs() < 1e-9, "a plate as long as the face");
+        // a window in the middle, framed: its header 200 high over the window and its trimmers,
+        // nothing in the window itself
+        let header = face.rects.iter().find(|(r, _)| (r[3] - r[1] - 0.2).abs() < 1e-9).map(|(r, _)| *r).expect("a header");
+        assert!((header[1] - 2.1).abs() < 1e-9 && (header[2] - header[0] - (1.2 + 2.0 * 0.038)).abs() < 1e-9, "{header:?}");
+        let middle = (face.size[0] / 2.0, 1.5);
+        assert!(face.rects.iter().all(|(r, _)| !(r[0] < middle.0 && middle.0 < r[2] && r[1] < middle.1 && middle.1 < r[3])));
     }
 
     #[test]
@@ -903,7 +925,7 @@ mod tests {
         use glam::DVec2;
         let mut app = App::default();
         app.new_model("Level 0");
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(2.4, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(2.4, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
         app.select_modelled(id);
         assert_eq!(app.assignable_systems("system.timber-frame-140"), vec![id]);

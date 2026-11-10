@@ -433,6 +433,8 @@
     "←  Return to workspace": "←  Retour à l'espace de travail",
     "Mitred corners": "Angles en onglet",
     "Bottom plates": "Lisses basses",
-    "top plates": "lisses hautes"
+    "top plates": "lisses hautes",
+    "header": "linteau",
+    "Only a framed system, such as a timber frame, can have openings.": "Seul un système à ossature, comme une ossature bois, peut avoir des ouvertures."
   }
 }

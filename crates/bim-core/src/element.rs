@@ -183,7 +183,8 @@ impl PlanarDef {
 /// divided into equal bays about `spacing` (along, up) apart. Members of `member` (width in the
 /// face, depth across it) run on the division lines; panels `panel` thick fill the bays. A type
 /// (`system_type`, copied from a library) adds a running bond, the materials and layers across the
-/// face ([`crate::system`]).
+/// face ([`crate::system`]). A framed type (a timber frame) frames `openings` in the face, measured
+/// as a wall's from the system's start and base; a system that is not framed has none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemDef {
     pub start: DVec2,
@@ -195,6 +196,8 @@ pub struct SystemDef {
     pub panel: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_type: Option<crate::system::SystemTypeDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<Opening>,
 }
 
 /// How a connection joins its members.
@@ -687,7 +690,7 @@ mod tests {
 
     #[test]
     fn a_system_fills_its_domain_with_members_and_panels() {
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None, openings: Vec::new() };
         let parts = system_parts(&s).unwrap();
         let members = parts.iter().filter(|p| p.class == "IfcMember").count();
         let panels = parts.iter().filter(|p| p.class == "IfcPlate").count();

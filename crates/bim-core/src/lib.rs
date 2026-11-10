@@ -88,6 +88,8 @@ pub enum Refusal {
     NoLayers,
     /// A system would be generated as more parts than [`system::MAX_PARTS`].
     TooManyParts,
+    /// A system that is not framed has an opening.
+    OpeningNotFramed,
 }
 
 impl Refusal {
@@ -118,6 +120,7 @@ impl Refusal {
             Refusal::TwoMembers => "This join takes two members.",
             Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
             Refusal::TooManyParts => "A system would have more than 50000 parts.",
+            Refusal::OpeningNotFramed => "Only a framed system, such as a timber frame, can have openings.",
         }
     }
 }

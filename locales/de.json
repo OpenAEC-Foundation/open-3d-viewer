@@ -433,6 +433,8 @@
     "←  Return to workspace": "←  Zurück zum Arbeitsbereich",
     "Mitred corners": "Gehrungsecken",
     "Bottom plates": "Schwellen",
-    "top plates": "Rähme"
+    "top plates": "Rähme",
+    "header": "Sturz",
+    "Only a framed system, such as a timber frame, can have openings.": "Nur ein gerahmtes System wie ein Holzrahmenbau kann Öffnungen haben."
   }
 }

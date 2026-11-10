@@ -20,11 +20,18 @@
 //! line on an edge member needs no member of its own, and a stud or a noggin that would overlap an
 //! edge member stands against it, so a board's seam always has timber behind it.
 //!
+//! A framed face frames the system's openings (a timber frame's): a king stud either side runs from
+//! plate to plate, a trimmer inside it carries the header over the opening, a window has a sill
+//! under it, and cripple studs stand above the header (over the trimmers too) and below the sill
+//! at the bay's centres. The bottom plates stop at a door. Insulation and boards stop at the openings, a board cut around one
+//! into rectangles: the strips beside it, then the pieces below and above it. Only framed systems
+//! take openings.
+//!
 //! Panels fill the bays (or the cells of a frame) between the members, centred on their face. A
 //! layer without members lays whole boards edge to edge from the face's start and foot, the last
 //! ones cut to fit.
 
-use crate::element::{PartSolid, SystemDef};
+use crate::element::{Opening, PartSolid, SystemDef};
 use crate::join::{self, JoinKind, Member, MemberEnd};
 use crate::profile::Profile;
 use crate::solid::{Axes, Plane, Solid};
@@ -124,14 +131,21 @@ impl Face<'_> {
         (bays, rows, length / bays as f64, height / rows as f64)
     }
 
-    /// At most how many parts it is generated as.
-    fn most_parts(&self, length: f64, height: f64) -> usize {
+    /// At most how many parts it is generated as, with `openings` openings.
+    fn most_parts(&self, length: f64, height: f64, openings: usize) -> usize {
         let (bays, rows, _, _) = self.division(length, height);
         if let Some(framing) = self.framing {
-            // up to three studs more than the bays and a noggin row more than the rows; a noggin
-            // and a cell beside every stud in every row, and the plates
-            let plates = usize::from(framing.bottom_plates) + usize::from(framing.top_plates);
-            return bays.saturating_add(3).saturating_mul(rows.saturating_add(2)).saturating_mul(2).saturating_add(plates);
+            // up to three studs more than the bays and a noggin row more than the rows, and six
+            // studs more for every opening (its king studs, its trimmers, a cripple against either
+            // side); every stud cut in two by an opening, a noggin and a cell beside every stud in
+            // every row; the plates, cut at every opening, its header and its sill
+            let plates = (usize::from(framing.bottom_plates) + usize::from(framing.top_plates)).saturating_mul(openings + 1);
+            let studs = bays.saturating_add(3).saturating_add(openings.saturating_mul(6));
+            return studs.saturating_mul(rows.saturating_add(2)).saturating_mul(4).saturating_add(plates).saturating_add(openings.saturating_mul(2));
+        }
+        if self.member.is_none() {
+            // every opening cuts a board into four pieces at most
+            return bays.saturating_mul(rows).saturating_mul(openings.saturating_mul(3).saturating_add(1));
         }
         let cells = bays.saturating_mul(rows);
         match self.pattern {
@@ -144,8 +158,8 @@ impl Face<'_> {
     }
 
     /// Checks it: positive sizes, bays and rows wider than the members; a frame with room for its
-    /// end studs and, between its plates, for its studs.
-    fn check(&self, length: f64, height: f64) -> Result<(), Refusal> {
+    /// end studs and, between its plates, for its studs, and for the framing of its openings.
+    fn check(&self, length: f64, height: f64, openings: &[Opening]) -> Result<(), Refusal> {
         let sizes = [self.spacing.x, self.spacing.y, self.panel.0];
         let member = self.member.map_or(Vec::new(), |(m, _)| vec![m.x, m.y]);
         if !sizes.into_iter().chain(member).all(positive) || !self.offset.is_finite() {
@@ -154,7 +168,10 @@ impl Face<'_> {
         if let (Some(framing), Some((m, _))) = (self.framing, self.member) {
             let plates = f64::from(framing.bottom_plates) + f64::from(framing.top_plates);
             let room = [self.spacing.x - m.x, self.spacing.y - m.x, length - 2.0 * m.x, height - plates * m.x];
-            return if room.into_iter().all(|r| r > LINEAR_TOLERANCE) { Ok(()) } else { Err(Refusal::NotPositive) };
+            if !room.into_iter().all(|r| r > LINEAR_TOLERANCE) || !positive(framing.header) {
+                return Err(Refusal::NotPositive);
+            }
+            return framed_openings(length, height, framing, m.x, openings);
         }
         let (_, _, bay, row) = self.division(length, height);
         if bay - self.width() <= LINEAR_TOLERANCE || row - self.width() <= LINEAR_TOLERANCE {
@@ -199,17 +216,21 @@ pub fn parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
         return Err(Refusal::ZeroLength);
     }
     let faces = faces(s);
-    for f in &faces {
-        f.check(length, s.height)?;
+    // openings are framed: by the system's own face and by every face with members
+    if !s.openings.is_empty() && faces.iter().any(|f| f.member.is_some() && f.framing.is_none()) {
+        return Err(Refusal::OpeningNotFramed);
     }
-    if faces.iter().map(|f| f.most_parts(length, s.height)).fold(0usize, usize::saturating_add) > MAX_PARTS {
+    for f in &faces {
+        f.check(length, s.height, &s.openings)?;
+    }
+    if faces.iter().map(|f| f.most_parts(length, s.height, s.openings.len())).fold(0usize, usize::saturating_add) > MAX_PARTS {
         return Err(Refusal::TooManyParts);
     }
     let dir = (d / length).extend(0.0);
     let line = Line { origin: s.start.extend(s.base), dir, right: dir.cross(DVec3::Z), length, height: s.height };
     let mut parts = Vec::new();
     for f in &faces {
-        line.generate(f, &mut parts)?;
+        line.generate(f, &s.openings, &mut parts)?;
     }
     Ok(parts)
 }
@@ -260,58 +281,73 @@ impl Line {
         Ok(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, thickness)?, material: material.map(str::to_string) })
     }
 
-    /// Framed face `f`: its plates, its studs and noggins between them, and the cells between
-    /// those, all inside the face.
-    fn framed(&self, f: &Face, framing: Framing, size: DVec2, material: Option<&str>, parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
+    /// Framed face `f`: its plates, its end studs, its openings each between its king studs, the
+    /// studs and noggins between those, and the cells between all of them, inside the face.
+    fn framed(&self, f: &Face, framing: Framing, size: DVec2, material: Option<&str>, openings: &[Opening], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let w = size.x;
         let (length, height) = (self.length, self.height);
         let (bottom, top) = (f64::from(framing.bottom_plates) * w, height - f64::from(framing.top_plates) * w);
-        let mut members = Vec::new();
+        let mut openings: Vec<&Opening> = openings.iter().collect();
+        openings.sort_by(|a, b| a.along.total_cmp(&b.along));
+        let mut frame = Frame { line: self, face: f, size, members: Vec::new(), cells: Vec::new() };
+        // the plates, the bottom ones stopping at the doors
         for k in 0..framing.bottom_plates {
-            members.push(self.horizontal(f, size, (f64::from(k) + 0.5) * w, 0.0, length)?);
+            let v = (f64::from(k) + 0.5) * w;
+            let mut from = 0.0;
+            for o in openings.iter().filter(|o| is_door(o)) {
+                frame.rail(v, from, o.along, w)?;
+                from = o.along + o.width;
+            }
+            frame.rail(v, from, length, w)?;
         }
         for k in 0..framing.top_plates {
-            members.push(self.horizontal(f, size, height - (f64::from(k) + 0.5) * w, 0.0, length)?);
+            frame.rail(height - (f64::from(k) + 0.5) * w, 0.0, length, w)?;
         }
-        // a stud at either end and at every bay between, a noggin row at every row between the plates
-        let mut studs = vec![w / 2.0];
-        studs.extend(inner_lines(w, length - w, f.spacing.x, w));
-        studs.push(length - w / 2.0);
-        let noggins = inner_lines(bottom, top, f.spacing.y, w);
-        for &u in &studs {
-            members.push(self.vertical(f, size, u, bottom, top)?);
-        }
-        // studs that stand against one another have no noggin or cell between them
-        let bays: Vec<(f64, f64)> = studs.windows(2).map(|s| (s[0] + w / 2.0, s[1] - w / 2.0)).filter(|(a, b)| b - a > LINEAR_TOLERANCE).collect();
-        for &(from, to) in &bays {
-            for &v in &noggins {
-                members.push(self.horizontal(f, size, v, from, to)?);
+        // the end studs, and between them each opening between its king studs
+        frame.stud(w / 2.0, bottom, top)?;
+        let mut from = w;
+        for o in &openings {
+            let (a, b, head) = (o.along, o.along + o.width, o.sill + o.height);
+            frame.fill(from, a - 2.0 * w, bottom, top)?;
+            frame.stud(a - 1.5 * w, bottom, top)?;
+            frame.stud(a - 0.5 * w, bottom, head)?;
+            frame.stud(b + 0.5 * w, bottom, head)?;
+            frame.stud(b + 1.5 * w, bottom, top)?;
+            frame.rail(head + framing.header / 2.0, a - w, b + w, framing.header)?;
+            // cripples over the trimmers, so a board's seam on the jamb has timber behind it, and
+            // between them at the bay's centres
+            frame.stud(a - 0.5 * w, head + framing.header, top)?;
+            frame.stud(b + 0.5 * w, head + framing.header, top)?;
+            frame.fill(a, b, head + framing.header, top)?;
+            if !is_door(o) {
+                frame.rail(o.sill - w / 2.0, a, b, w)?;
+                frame.fill(a, b, bottom, o.sill - w)?;
             }
+            from = b + 2.0 * w;
         }
-        for m in &members {
+        frame.fill(from, length - w, bottom, top)?;
+        frame.stud(length - w / 2.0, bottom, top)?;
+        for m in &frame.members {
             parts.push(PartSolid { class: "IfcMember", solid: join::finish(&m.member, None, None, &[], &[])?, material: material.map(str::to_string) });
         }
-        let mut bands = vec![bottom];
-        for &v in &noggins {
-            bands.extend([v - w / 2.0, v + w / 2.0]);
-        }
-        bands.push(top);
-        for &(from, to) in &bays {
-            for band in bands.chunks(2) {
-                parts.push(self.panel(f, from, band[0], to - from, band[1] - band[0])?);
-            }
+        for c in &frame.cells {
+            parts.push(self.panel(f, c[0], c[1], c[2] - c[0], c[3] - c[1])?);
         }
         Ok(())
     }
 
-    fn generate(&self, f: &Face, parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
+    fn generate(&self, f: &Face, openings: &[Opening], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         if let (Some(framing), Some((size, material))) = (f.framing, f.member) {
-            return self.framed(f, framing, size, material, parts);
+            return self.framed(f, framing, size, material, openings, parts);
         }
         let (bays, rows, bay, row) = f.division(self.length, self.height);
         let w = f.width();
-        // a panel between the lines `w` apart, up to the face's end and head (where boards are cut)
-        let panel = |u: f64, v: f64, du: f64, dv: f64| self.panel(f, u + w / 2.0, v + w / 2.0, du.min(self.length - u) - w, dv.min(self.height - v) - w);
+        // a panel between the lines `w` apart, up to the face's end and head (where boards are
+        // cut), and cut around the openings
+        let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
+            let r = [u + w / 2.0, v + w / 2.0, u + du.min(self.length - u) - w / 2.0, v + dv.min(self.height - v) - w / 2.0];
+            around(r, openings).into_iter().map(|r| self.panel(f, r[0], r[1], r[2] - r[0], r[3] - r[1])).collect()
+        };
         let mut pieces: Vec<Piece> = Vec::new();
         // the joins between members: their kind, the member that runs through (or the first of a
         // mitre) and the one that stops
@@ -347,7 +383,7 @@ impl Line {
                 }
                 for i in 0..bays {
                     for j in 0..rows {
-                        parts.push(panel(i as f64 * bay, j as f64 * row, bay, row)?);
+                        parts.extend(panel(i as f64 * bay, j as f64 * row, bay, row)?);
                     }
                 }
             }
@@ -394,7 +430,7 @@ impl Line {
                         }
                     }
                     for pair in lines.windows(2) {
-                        parts.push(panel(pair[0], v, pair[1] - pair[0], row)?);
+                        parts.extend(panel(pair[0], v, pair[1] - pair[0], row)?);
                     }
                 }
             }
@@ -422,6 +458,132 @@ impl Line {
         for p in pieces {
             let solid = join::finish(&p.member, p.start, p.end, &p.additions, &p.removals)?;
             parts.push(PartSolid { class: "IfcMember", solid, material: material.clone() });
+        }
+        Ok(())
+    }
+}
+
+/// Whether an opening is a door: it has no sill.
+fn is_door(o: &Opening) -> bool {
+    o.sill <= LINEAR_TOLERANCE
+}
+
+/// Checks openings against a frame `length` by `height` framed as `framing`, its members `w` wide:
+/// each with its king studs inside the end studs, its header under the top plates and, a window,
+/// its sill over the bottom plates; their framing apart.
+fn framed_openings(length: f64, height: f64, framing: Framing, w: f64, openings: &[Opening]) -> Result<(), Refusal> {
+    let tol = LINEAR_TOLERANCE;
+    let (bottom, top) = (f64::from(framing.bottom_plates) * w, height - f64::from(framing.top_plates) * w);
+    let mut spans = Vec::with_capacity(openings.len());
+    for o in openings {
+        if !positive(o.width) || !positive(o.height) || !o.along.is_finite() || !o.sill.is_finite() {
+            return Err(Refusal::NotPositive);
+        }
+        let along = o.along - 3.0 * w >= -tol && o.along + o.width + 3.0 * w <= length + tol;
+        let foot = if is_door(o) { o.sill >= -tol } else { o.sill - w >= bottom - tol };
+        if !along || !foot || o.sill + o.height + framing.header > top + tol {
+            return Err(Refusal::OpeningOutside);
+        }
+        spans.push((o.along - 2.0 * w, o.along + o.width + 2.0 * w));
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if spans.windows(2).any(|p| p[1].0 < p[0].1 - tol) {
+        return Err(Refusal::OpeningsOverlap);
+    }
+    Ok(())
+}
+
+/// Rectangle `r` (`[u0, v0, u1, v1]`) less the openings: for each, the strips beside it, then the
+/// pieces below and above it.
+fn around(r: [f64; 4], openings: &[Opening]) -> Vec<[f64; 4]> {
+    let tol = LINEAR_TOLERANCE;
+    let mut rects = vec![r];
+    for o in openings {
+        let (a, b, s, t) = (o.along, o.along + o.width, o.sill.max(0.0), o.sill + o.height);
+        let mut cut = Vec::with_capacity(rects.len() + 3);
+        for r in rects {
+            if a >= r[2] - tol || b <= r[0] + tol || s >= r[3] - tol || t <= r[1] + tol {
+                cut.push(r);
+                continue;
+            }
+            if a > r[0] + tol {
+                cut.push([r[0], r[1], a, r[3]]);
+            }
+            if b < r[2] - tol {
+                cut.push([b, r[1], r[2], r[3]]);
+            }
+            let (u0, u1) = (a.max(r[0]), b.min(r[2]));
+            if s > r[1] + tol {
+                cut.push([u0, r[1], u1, s]);
+            }
+            if t < r[3] - tol {
+                cut.push([u0, t, u1, r[3]]);
+            }
+        }
+        rects = cut;
+    }
+    rects
+}
+
+/// A framed face being laid out: its members and the cells between them, as rectangles
+/// `[u0, v0, u1, v1]` in the face.
+struct Frame<'a> {
+    line: &'a Line,
+    face: &'a Face<'a>,
+    size: DVec2,
+    members: Vec<Piece>,
+    cells: Vec<[f64; 4]>,
+}
+
+impl Frame<'_> {
+    /// A stud centred at `u`, from `from` up to `to`, if that is a length.
+    fn stud(&mut self, u: f64, from: f64, to: f64) -> Result<(), Refusal> {
+        if to - from > LINEAR_TOLERANCE {
+            self.members.push(self.line.vertical(self.face, self.size, u, from, to)?);
+        }
+        Ok(())
+    }
+
+    /// A horizontal member `high` in the face, centred at `v`, from `from` along to `to`, if that
+    /// is a length.
+    fn rail(&mut self, v: f64, from: f64, to: f64, high: f64) -> Result<(), Refusal> {
+        if to - from > LINEAR_TOLERANCE {
+            self.members.push(self.line.horizontal(self.face, DVec2::new(high, self.size.y), v, from, to)?);
+        }
+        Ok(())
+    }
+
+    /// Fills the room between members ending at `lo` and starting at `hi`, from `v0` up to `v1`:
+    /// studs at the bay's centres, noggins between them at the rows, and the cells between those.
+    fn fill(&mut self, lo: f64, hi: f64, v0: f64, v1: f64) -> Result<(), Refusal> {
+        let tol = LINEAR_TOLERANCE;
+        if hi - lo <= tol || v1 - v0 <= tol {
+            return Ok(());
+        }
+        let w = self.size.x;
+        let studs = inner_lines(lo, hi, self.face.spacing.x, w);
+        for &u in &studs {
+            self.stud(u, v0, v1)?;
+        }
+        let noggins = inner_lines(v0, v1, self.face.spacing.y, w);
+        let mut edges = vec![lo];
+        for &u in &studs {
+            edges.extend([u - w / 2.0, u + w / 2.0]);
+        }
+        edges.push(hi);
+        let mut bands = vec![v0];
+        for &v in &noggins {
+            bands.extend([v - w / 2.0, v + w / 2.0]);
+        }
+        bands.push(v1);
+        // studs that stand against one another have no noggin or cell between them
+        for column in edges.chunks(2).filter(|c| c[1] - c[0] > tol) {
+            for &v in &noggins {
+                self.rail(v, column[0], column[1], w)?;
+            }
+            for band in bands.chunks(2).filter(|b| b[1] - b[0] > tol) {
+                self.cells.push([column[0], band[0], column[1], band[1]]);
+            }
         }
         Ok(())
     }
@@ -460,7 +622,7 @@ mod tests {
     use super::*;
 
     fn system(length: f64, height: f64) -> SystemDef {
-        SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None }
+        SystemDef { start: DVec2::ZERO, end: DVec2::new(length, 0.0), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }
     }
 
     fn typed(length: f64, height: f64, id: &str) -> SystemDef {
@@ -604,6 +766,109 @@ mod tests {
         assert_eq!(materials.into_iter().collect::<Vec<_>>(), ["gypsum-board", "mineral-wool", "timber"]);
     }
 
+    /// Timber frame `id`, `length` by `height`, with `openings`.
+    fn opened(length: f64, height: f64, id: &str, openings: Vec<Opening>) -> SystemDef {
+        SystemDef { openings, ..typed(length, height, id) }
+    }
+
+    /// Whether every seam of the boards of `material`, inside the face and off the openings' edges,
+    /// has a member of the frame behind it.
+    fn seams_carried(parts: &[PartSolid], material: &str, members: &[[f64; 4]], size: [f64; 2], openings: &[Opening]) -> Result<(), String> {
+        let on_opening = |u: f64, v: f64| {
+            openings.iter().any(|o| {
+                let (a, b, s, t) = (o.along, o.along + o.width, o.sill, o.sill + o.height);
+                let within = |x: f64, lo: f64, hi: f64| x >= lo - 1e-9 && x <= hi + 1e-9;
+                ((u - a).abs() < 1e-9 || (u - b).abs() < 1e-9) && within(v, s, t) || ((v - s).abs() < 1e-9 || (v - t).abs() < 1e-9) && within(u, a, b)
+            })
+        };
+        for b in rects(parts, material) {
+            for (u, v) in [(b[0], (b[1] + b[3]) / 2.0), (b[2], (b[1] + b[3]) / 2.0), ((b[0] + b[2]) / 2.0, b[1]), ((b[0] + b[2]) / 2.0, b[3])] {
+                let inside = u > 1e-9 && u < size[0] - 1e-9 && v > 1e-9 && v < size[1] - 1e-9;
+                let carried = members.iter().any(|m| m[0] - 1e-9 <= u && u <= m[2] + 1e-9 && m[1] - 1e-9 <= v && v <= m[3] + 1e-9);
+                if inside && !on_opening(u, v) && !carried {
+                    return Err(format!("{material}: seam at {u} {v} without timber behind it"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_window_in_a_timber_frame_is_framed() {
+        // 3.6 m by 2.7 m, a window 1.2 by 1.2 from 1.2 along at a sill of 0.9
+        let (w, d, header) = (0.038, 0.14, 0.2);
+        let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2 };
+        let parts = parts(&opened(3.6, 2.7, "system.timber-frame-140", vec![window])).unwrap();
+        let members = frame(&parts, d);
+        let has = |r: [f64; 4]| members.iter().any(|m| near(*m, r));
+        // king studs plate to plate, trimmers up to the header, which lies on them
+        assert!(has([1.2 - 2.0 * w, w, 1.2 - w, 2.7 - w]) && has([2.4 + w, w, 2.4 + 2.0 * w, 2.7 - w]), "king studs");
+        assert!(has([1.2 - w, w, 1.2, 2.1]) && has([2.4, w, 2.4 + w, 2.1]), "trimmers");
+        assert!(has([1.2 - w, 2.1, 2.4 + w, 2.1 + header]), "the header over the trimmers");
+        assert!(has([1.2, 0.9 - w, 2.4, 0.9]), "the sill between the trimmers");
+        // cripples over the trimmers and at the bay's centres between them, above the header, and
+        // at 1800 below the sill (the trimmers carry 1200 and 2400 there)
+        assert!(has([1.2 - w, 2.1 + header, 1.2, 2.7 - w]) && has([2.4, 2.1 + header, 2.4 + w, 2.7 - w]), "over the trimmers");
+        assert!(has([1.8 - w / 2.0, 2.1 + header, 1.8 + w / 2.0, 2.7 - w]), "between them");
+        assert!(has([1.8 - w / 2.0, w, 1.8 + w / 2.0, 0.9 - w]), "below the sill");
+        assert_eq!(members.len(), 2 + 2 + 4 + 2 + 2 + 3 + 1, "plates, end studs, kings and trimmers, header and sill, studs at 600 and 3000, cripples");
+        // the frame, its cells and the opening fill the face: nothing overlaps, nothing is missing
+        let wool: Vec<[f64; 4]> = parts.iter().filter(|p| p.material.as_deref() == Some("mineral-wool") && { let (lo, hi) = p.solid.bounds(); (hi.y - lo.y - d).abs() < 1e-9 }).map(|p| { let (lo, hi) = p.solid.bounds(); [lo.x, lo.z, hi.x, hi.z] }).collect();
+        let area = |rs: &[[f64; 4]]| rs.iter().map(|r| (r[2] - r[0]) * (r[3] - r[1])).sum::<f64>();
+        assert!((area(&members) + area(&wool) + 1.2 * 1.2 - 3.6 * 2.7).abs() < 1e-9, "{} {}", area(&members), area(&wool));
+        // the boards are cut around the window and every seam has timber behind it
+        for material in ["plywood", "gypsum-board", "breather-membrane"] {
+            assert!((area(&rects(&parts, material)) - (3.6 * 2.7 - 1.2 * 1.2)).abs() < 1e-9, "{material}");
+            assert!(rects(&parts, material).iter().all(|r| r[2] <= 1.2 + 1e-9 || r[0] >= 2.4 - 1e-9 || r[3] <= 0.9 + 1e-9 || r[1] >= 2.1 - 1e-9), "{material} in the window");
+        }
+        seams_carried(&parts, "plywood", &members, [3.6, 2.7], &[window]).unwrap();
+        assert_eq!(rects(&parts, "plywood").len(), 4, "a whole board either side, one below and one above the window");
+    }
+
+    #[test]
+    fn a_door_stops_the_bottom_plate_and_has_no_sill() {
+        let (w, d) = (0.038, 0.14);
+        let door = Opening { along: 0.6, sill: 0.0, width: 0.9, height: 2.1 };
+        let parts = parts(&opened(3.0, 2.7, "system.timber-frame-140", vec![door])).unwrap();
+        let members = frame(&parts, d);
+        let bottom: Vec<_> = members.iter().filter(|r| r[1].abs() < 1e-9).collect();
+        assert_eq!(bottom.len(), 2, "{bottom:?}");
+        assert!(near(*bottom[0], [0.0, 0.0, 0.6, w]) && near(*bottom[1], [1.5, 0.0, 3.0, w]));
+        // nothing of any layer in the door
+        for p in &parts {
+            let (lo, hi) = p.solid.bounds();
+            let apart = hi.x <= 0.6 + 1e-9 || lo.x >= 1.5 - 1e-9 || lo.z >= 2.1 - 1e-9;
+            assert!(apart, "{:?} {lo} {hi}", p.material);
+        }
+        seams_carried(&parts, "gypsum-board", &members, [3.0, 2.7], &[door]).unwrap();
+    }
+
+    #[test]
+    fn openings_that_do_not_fit_a_frame_are_refused() {
+        let frame = |openings: Vec<Opening>| parts(&opened(3.6, 2.7, "system.timber-frame-140", openings)).map(|p| p.len());
+        let window = |along: f64, sill: f64, width: f64, height: f64| Opening { along, sill, width, height };
+        assert_eq!(frame(vec![window(0.05, 0.9, 1.0, 1.2)]), Err(Refusal::OpeningOutside), "no room for its king stud");
+        assert_eq!(frame(vec![window(1.0, 0.9, 1.0, 1.7)]), Err(Refusal::OpeningOutside), "its header through the top plate");
+        assert_eq!(frame(vec![window(1.0, 0.03, 1.0, 1.2)]), Err(Refusal::OpeningOutside), "its sill in the bottom plate");
+        assert_eq!(frame(vec![window(0.5, 0.9, 1.0, 1.2), window(1.6, 0.9, 1.0, 1.2)]), Err(Refusal::OpeningsOverlap), "their king studs in one another");
+        assert_eq!(frame(vec![window(1.0, 0.9, 0.0, 1.2)]), Err(Refusal::NotPositive));
+        // two openings with their king studs side by side are framed; the service zone frames them
+        // too, with its battens 45 wide, so they are as far apart as its framing needs
+        assert!(frame(vec![window(0.5, 0.9, 1.0, 1.2), window(1.5 + 4.0 * 0.045, 0.9, 1.0, 1.2)]).is_ok());
+        // a curtain wall (not framed) takes none
+        let curtain = SystemDef { openings: vec![window(1.0, 0.9, 1.0, 1.2)], ..system(3.6, 2.7) };
+        assert_eq!(parts(&curtain).map(|p| p.len()), Err(Refusal::OpeningNotFramed));
+    }
+
+    #[test]
+    fn a_board_is_cut_around_an_opening_into_rectangles() {
+        let o = Opening { along: 1.0, sill: 0.5, width: 1.0, height: 1.0 };
+        // beside it full height, then below and above it
+        assert_eq!(around([0.0, 0.0, 3.0, 3.0], &[o]), vec![[0.0, 0.0, 1.0, 3.0], [2.0, 0.0, 3.0, 3.0], [1.0, 0.0, 2.0, 0.5], [1.0, 1.5, 2.0, 3.0]]);
+        assert_eq!(around([2.0, 0.0, 3.0, 3.0], &[o]), vec![[2.0, 0.0, 3.0, 3.0]], "a board beside it is whole");
+        assert!(around([1.0, 0.5, 2.0, 1.5], &[o]).is_empty(), "a board in it is gone");
+    }
+
     #[test]
     fn a_frame_too_small_for_its_studs_is_refused() {
         assert_eq!(parts(&typed(0.07, 2.7, "system.timber-frame-140")).map(|p| p.len()), Err(Refusal::NotPositive), "no room for two end studs");
@@ -684,9 +949,10 @@ mod tests {
 
     #[test]
     fn a_typed_system_keeps_its_type_in_json_and_an_old_one_reads() {
-        let s = typed(3.0, 3.0, "system.timber-frame-184");
+        let s = opened(3.0, 3.0, "system.timber-frame-184", vec![Opening { along: 1.0, sill: 0.0, width: 0.9, height: 2.1 }]);
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<SystemDef>(&text).unwrap(), s);
+        assert!(text.contains("\"openings\"") && !serde_json::to_string(&typed(3.0, 3.0, "system.timber-frame-184")).unwrap().contains("openings"));
         let old = r#"{"start":[0.0,0.0],"end":[3.0,0.0],"base":0.0,"height":3.0,"spacing":[1.5,1.5],"member":[0.05,0.15],"panel":0.02}"#;
         assert_eq!(serde_json::from_str::<SystemDef>(old).unwrap(), system(3.0, 3.0));
         assert!(!serde_json::to_string(&system(3.0, 3.0)).unwrap().contains("system_type"));

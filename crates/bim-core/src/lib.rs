@@ -24,6 +24,7 @@ pub mod model;
 pub mod predicates;
 pub mod profile;
 pub mod solid;
+pub mod system;
 pub mod tile;
 
 pub use boolean::{boolean, BooleanOp};
@@ -32,6 +33,7 @@ pub use mesh::Mesh;
 pub use model::{Model, Part};
 pub use profile::{Profile, ProfileDef};
 pub use solid::{Axes, Plane, Solid};
+pub use system::SystemTypeDef;
 pub use tile::{TileGrid, TileKey, TilePoint};
 
 /// Why the kernel refused a construction or an evaluation. Each reason is a fixed English text
@@ -84,6 +86,8 @@ pub enum Refusal {
     TwoMembers,
     /// A build-up has no layer that is not a cavity.
     NoLayers,
+    /// A system would be generated as more parts than [`system::MAX_PARTS`].
+    TooManyParts,
 }
 
 impl Refusal {
@@ -113,6 +117,7 @@ impl Refusal {
             Refusal::NoBody => "A connection has no body to cut with.",
             Refusal::TwoMembers => "This join takes two members.",
             Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
+            Refusal::TooManyParts => "A system would have more than 50000 parts.",
         }
     }
 }

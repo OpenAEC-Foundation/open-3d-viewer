@@ -1,7 +1,10 @@
-//! The explorer's Views tab: the floor plans of the project document, made per level and shown
-//! from above, cut at their height above the level.
+//! The explorer's Views tab: the views of the project document by kind. Plans (floor,
+//! structural, ceiling) are made per level and shown from above (a ceiling plan from below), cut
+//! at their height above the level; sections and elevations, and the sheets.
 
 use super::{App, Message, FONT_BOLD};
+use crate::document::{PlanKind, SectionKind};
+use crate::explode::{ExplodeIndex, UnitOwner};
 use crate::model::{PlanRange, SavedView, ViewKind};
 use crate::section::SectionBox;
 use crate::theme::Palette;
@@ -47,9 +50,60 @@ pub enum DocTab {
 impl App {
     /// Makes a floor plan of a level and shows it in its tab.
     pub(super) fn new_plan(&mut self, level: &str) {
-        if let Some(plan) = self.document.add_plan(level) {
+        self.new_plan_of(level, PlanKind::Floor, "");
+    }
+
+    /// Makes a plan of `kind` of a level (named with `word` after the level's name, a floor plan
+    /// excepted) and shows it in its tab; the level list of the Views tab closes.
+    pub(super) fn new_plan_of(&mut self, level: &str, kind: PlanKind, word: &str) {
+        self.views_picker = None;
+        if let Some(plan) = self.document.add_plan_of(level, kind, word) {
             self.open_plan(&plan);
         }
+    }
+
+    /// Whether the view at `path` is a structural plan, which leaves out what carries nothing.
+    pub(super) fn is_structural_plan(&self, path: Option<&str>) -> bool {
+        path.and_then(|p| self.document.plan(p)).is_some_and(|p| p.kind == PlanKind::Structural)
+    }
+
+    /// Per unit of the shown model, whether a structural plan leaves it out: an element whose
+    /// class or `LoadBearing` says it carries nothing ([`crate::element_class::load_bearing`]).
+    /// Elements nothing is known of, and the rest of a layer, stay. Worked out once per model.
+    pub(super) fn non_structural_units(&mut self) -> Arc<Vec<bool>> {
+        let Some(index) = self.explode_index.clone() else { return Arc::default() };
+        if let Some((of, units)) = &self.structure_units {
+            if Arc::ptr_eq(of, &index) {
+                return units.clone();
+            }
+        }
+        let units = Arc::new(self.carrying_nothing(&index));
+        self.structure_units = Some((index, units.clone()));
+        units
+    }
+
+    fn carrying_nothing(&self, index: &ExplodeIndex) -> Vec<bool> {
+        let Some(model) = self.model.as_deref() else { return Vec::new() };
+        // the first layer of every element, for its category where its properties name none
+        let mut layer_of = std::collections::HashMap::new();
+        for (l, layer) in model.layers.iter().enumerate() {
+            for e in &layer.elements {
+                layer_of.entry(e.0).or_insert(l);
+            }
+        }
+        let format = |id: u64| -> &str {
+            let entry = model.keys.get(&id).and_then(|k| self.models.get(k.model as usize));
+            entry.map_or(model.format.as_str(), |e| e.model.format.as_str())
+        };
+        (0..index.len())
+            .map(|u| match index.owner(u).filter(|_| u > 0) {
+                Some(UnitOwner::Element(id)) => {
+                    let layer = layer_of.get(&id).and_then(|&l| model.layers.get(l)).map_or("", |l| l.name.as_str());
+                    crate::element_class::load_bearing(format(id), layer, &model.element_props(id)) == Some(false)
+                }
+                _ => false,
+            })
+            .collect()
     }
 
     /// Shows a floor plan in its tab, opening the tab the first time: from above, orthographic,
@@ -84,7 +138,7 @@ impl App {
                 kind: ViewKind::Plan,
                 camera: None,
                 clip: None,
-                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: false }),
+                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: plan.kind.looks_up() }),
                 level: self.document.level(&plan.level).map(|l| l.name.clone()),
             });
         }
@@ -187,8 +241,13 @@ impl App {
         }
         self.anim = None;
         self.swap_view_layers(target.as_deref());
+        let structural = self.is_structural_plan(self.active_plan.as_deref()) || self.is_structural_plan(target.as_deref());
         self.active_plan = target;
         self.mark_pick = None;
+        // into or out of a structural plan: what carries nothing goes or comes back
+        if structural {
+            self.update_units();
+        }
     }
 
     /// The document tabs, in order: the 3D view, the open floor plans, schedules and sheets.
@@ -295,7 +354,7 @@ impl App {
             container(
                 row![
                     text(l.text("Weergaven", "Views")).size(12).font(FONT_BOLD).width(Fill),
-                    text(document.plans().len().to_string()).size(11).color(p.text_secondary),
+                    text((document.plans().len() + document.sections().len()).to_string()).size(11).color(p.text_secondary),
                 ]
                 .spacing(6)
                 .align_y(Center),
@@ -304,37 +363,88 @@ impl App {
             .style(move |_| p.panel_header()),
         );
 
-        // the floor plans, by level from high to low
-        body = body.push(subheader(l.text("Plattegronden", "Floor plans")));
-        if document.plans().is_empty() {
-            let none = l.text("Nog geen plattegronden. Maak er een bij een niveau hieronder.", "No floor plans yet. Make one of a level below.");
-            body = body.push(container(text(none).size(12).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([4, 8]));
-        }
-        for level in document.levels().iter().rev() {
-            for plan in document.plans().iter().filter(|plan| plan.level == level.path) {
-                let active = self.active_plan.as_deref() == Some(plan.path.as_str());
-                let name = text(plan.name.clone())
-                    .size(12)
-                    .color(if active { p.accent } else { p.text })
-                    .wrapping(Wrapping::WordOrGlyph)
-                    .width(Fill);
-                let open = button(draggable(name, &plan.path))
-                    .padding([3, 6])
-                    .width(Fill)
-                    .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
-                    .on_press(Message::OpenPlan(Arc::from(plan.path.as_str())));
-                let close = svg(svg::Handle::from_memory(openaec_ui::icons::Icon::Close.bytes()))
-                    .width(12)
-                    .height(12)
-                    .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
-                let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemovePlan(Arc::from(plan.path.as_str())));
-                body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+        // the plans per kind, each by level from high to low; New lists the levels to make one of
+        for kind in PlanKind::ALL {
+            let (label, word) = match kind {
+                PlanKind::Floor => (l.text("Plattegronden", "Floor plans"), ""),
+                PlanKind::Structural => (l.text("Constructieve plattegronden", "Structural plans"), l.text("constructie", "structure")),
+                PlanKind::Ceiling => (l.text("Plafondplannen", "Ceiling plans"), l.text("plafond", "ceiling")),
+            };
+            let picking = self.views_picker == Some(kind);
+            let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
+            let new = button(row![plus, text(l.text("Nieuw", "New")).size(11).color(p.text)].spacing(4).align_y(Center))
+                .padding([2, 6])
+                .style(move |_, s| if picking { p.ribbon_button(true, s) } else { p.row_button(s) })
+                .on_press(Message::PickLevelFor((!picking).then_some(kind)));
+            body = body.push(row![container(subheader(label)).width(Fill), container(new).padding(Padding { top: 6.0, right: 4.0, bottom: 0.0, left: 0.0 })].align_y(iced::alignment::Vertical::Bottom));
+            if picking {
+                body = self.level_picker(p, l, body, kind, word);
+            }
+            let mut any = false;
+            for level in document.levels().iter().rev() {
+                for plan in document.plans().iter().filter(|plan| plan.level == level.path && plan.kind == kind) {
+                    any = true;
+                    let active = self.active_plan.as_deref() == Some(plan.path.as_str());
+                    let name = text(plan.name.clone())
+                        .size(12)
+                        .color(if active { p.accent } else { p.text })
+                        .wrapping(Wrapping::WordOrGlyph)
+                        .width(Fill);
+                    let open = button(draggable(name, &plan.path))
+                        .padding([3, 6])
+                        .width(Fill)
+                        .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
+                        .on_press(Message::OpenPlan(Arc::from(plan.path.as_str())));
+                    let close = svg(svg::Handle::from_memory(openaec_ui::icons::Icon::Close.bytes()))
+                        .width(12)
+                        .height(12)
+                        .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
+                    let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemovePlan(Arc::from(plan.path.as_str())));
+                    body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+                }
+            }
+            if !any && !picking {
+                let none = l.text("Nog geen. Nieuw maakt er een van een niveau.", "None yet. New makes one of a level.");
+                body = body.push(container(text(none).size(12).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]));
             }
         }
 
-        // sections and elevations; the four elevations at once
-        body = body.push(subheader(l.text("Doorsneden en aanzichten", "Sections and elevations")));
-        for section in document.sections() {
+        // sections, drawn on a sheet; elevations, the four at once
+        for kind in [SectionKind::Section, SectionKind::Elevation] {
+            body = body.push(match kind {
+                SectionKind::Section => subheader(l.text("Doorsneden", "Sections")),
+                SectionKind::Elevation => subheader(l.text("Aanzichten", "Elevations")),
+            });
+            body = self.section_rows(p, body, kind);
+            body = body.push(match kind {
+                SectionKind::Section => {
+                    let hint = l.text("Een doorsnede teken je op een blad: Doorsnede, dan twee punten op een plattegrond.", "Draw a section on a sheet: Section, then two points on a floor plan.");
+                    container(text(hint).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]).into()
+                }
+                SectionKind::Elevation => {
+                    let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
+                    let names = [l.text("Aanzicht noord", "North elevation"), l.text("Aanzicht oost", "East elevation"), l.text("Aanzicht zuid", "South elevation"), l.text("Aanzicht west", "West elevation")];
+                    Element::from(
+                        button(row![plus, text(l.text("Vier aanzichten maken", "Make four elevations")).size(12).color(p.text)].spacing(6).align_y(Center))
+                            .padding([4, 8])
+                            .width(Fill)
+                            .style(move |_, s| p.row_button(s))
+                            .on_press(Message::MakeElevations(names)),
+                    )
+                }
+            });
+        }
+
+        // the sheets, then a new one
+        body = body.push(subheader(l.text("Bladen", "Sheets")));
+        body = super::paper::sheets_list(self, p, l, body);
+        scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
+    }
+
+    /// The sections or the elevations of the document, to open (a click), drag onto a sheet or
+    /// remove.
+    fn section_rows<'a>(&'a self, p: Palette, mut body: Column<'a, Message>, kind: SectionKind) -> Column<'a, Message> {
+        for section in self.document.sections().iter().filter(|s| s.kind == kind) {
             let active = self.active_plan.as_deref() == Some(section.path.as_str());
             let name = text(section.name.clone()).size(12).color(if active { p.accent } else { p.text }).wrapping(Wrapping::WordOrGlyph).width(Fill);
             let open = button(draggable(name, &section.path))
@@ -349,41 +459,31 @@ impl App {
             let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSection(Arc::from(section.path.as_str())));
             body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
         }
-        let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
-        let names = [l.text("Aanzicht noord", "North elevation"), l.text("Aanzicht oost", "East elevation"), l.text("Aanzicht zuid", "South elevation"), l.text("Aanzicht west", "West elevation")];
-        body = body.push(
-            button(row![plus, text(l.text("Vier aanzichten maken", "Make four elevations")).size(12).color(p.text)].spacing(6).align_y(Center))
-                .padding([4, 8])
-                .width(Fill)
-                .style(move |_, s| p.row_button(s))
-                .on_press(Message::MakeElevations(names)),
-        );
-        let hint = l.text("Een doorsnede teken je op een blad: Doorsnede, dan twee punten op een plattegrond.", "Draw a section on a sheet: Section, then two points on a floor plan.");
+        body
+    }
+
+    /// The levels to make a plan of `kind` of, high to low, under its kind's header.
+    fn level_picker<'a>(&'a self, p: Palette, l: Language, mut body: Column<'a, Message>, kind: PlanKind, word: &'static str) -> Column<'a, Message> {
+        let levels = self.document.levels();
+        let hint = if levels.is_empty() { l.text("Dit model heeft geen niveaus. Voeg er een toe in het tabblad Niveaus.", "This model has no levels. Add one in the Levels tab.") } else { l.text("Van niveau", "Of level") };
         body = body.push(container(text(hint).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]));
-
-        // the sheets, then a new one
-        body = body.push(subheader(l.text("Bladen", "Sheets")));
-        body = super::paper::sheets_list(self, p, l, body);
-
-        // a floor plan of every level
-        body = body.push(subheader(l.text("Plattegrond maken van", "Make a floor plan of")));
-        if document.levels().is_empty() {
-            let none = l.text("Dit model heeft geen niveaus. Voeg er een toe in het tabblad Niveaus.", "This model has no levels. Add one in the Levels tab.");
-            body = body.push(container(text(none).size(12).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([4, 8]));
-        }
-        for level in document.levels().iter().rev() {
+        for level in levels.iter().rev() {
             let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
             let label = column![text(level.name.clone()).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph)].width(Fill);
             let elevation = text(format!("{:+.3} m", level.elevation)).size(11).color(p.text_secondary);
+            let make = match kind {
+                PlanKind::Floor => Message::NewPlan(Arc::from(level.path.as_str())),
+                _ => Message::NewPlanOf(Arc::from(level.path.as_str()), kind, word),
+            };
             body = body.push(
                 button(row![plus, label, elevation].spacing(6).align_y(Center))
-                    .padding([4, 8])
+                    .padding(Padding { top: 4.0, right: 8.0, bottom: 4.0, left: 16.0 })
                     .width(Fill)
                     .style(move |_, s| p.row_button(s))
-                    .on_press(Message::NewPlan(Arc::from(level.path.as_str()))),
+                    .on_press(make),
             );
         }
-        scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
+        body
     }
 }
 
@@ -431,8 +531,12 @@ mod tests {
         app.set_model(tower());
         click(&mut app, "Views");
         assert_eq!(app.explorer_tab, ExplorerTab::Views);
-        assert!(simulator(&app).find("No floor plans yet. Make one of a level below.").is_ok());
+        assert!(simulator(&app).find("None yet. New makes one of a level.").is_ok());
+        // New lists the levels under its kind
+        let _ = app.update(Message::PickLevelFor(Some(PlanKind::Floor)));
+        assert!(simulator(&app).find("Of level").is_ok());
         click(&mut app, "01 first");
+        assert_eq!(app.views_picker, None, "the list closes");
         let plan = app.document.plans().first().expect("a plan").clone();
         assert_eq!(plan.name, "01 first");
         assert_eq!(app.active_plan.as_deref(), Some(plan.path.as_str()));
@@ -512,6 +616,93 @@ mod tests {
         }
         assert_eq!(app.active_plan.as_deref(), Some(&*plan));
         assert_eq!(app.dragging_view, None);
+    }
+
+    /// A room with walls, a cupboard standing on its floor and a lamp under its ceiling, as Revit
+    /// categories; levels at 0 and 3 m.
+    fn fitted_room() -> Arc<Model> {
+        let block = |name: &str, id: u64, lo: [f32; 3], hi: [f32; 3]| {
+            let ([x0, y0, z0], [x1, y1, z1]) = (lo, hi);
+            let positions = vec![x0,y0,z0, x1,y0,z0, x1,y1,z0, x0,y1,z0, x0,y0,z1, x1,y0,z1, x1,y1,z1, x0,y1,z1];
+            let indices = vec![0,2,1, 0,3,2, 4,5,6, 4,6,7, 0,1,5, 0,5,4, 1,2,6, 1,6,5, 2,3,7, 2,7,6, 3,0,4, 3,4,7];
+            Layer { name: name.into(), positions, indices, elements: vec![(id, 0, 36)], ..Layer::default() }
+        };
+        let layers = vec![
+            block("Walls", 10, [0.0, 0.0, 0.0], [8.0, 5.0, 3.0]),
+            block("Furniture and casework", 20, [3.0, 2.0, 0.0], [5.0, 3.0, 2.0]),
+            block("Lighting fixtures", 30, [1.0, 1.0, 2.6], [1.5, 1.5, 2.9]),
+        ];
+        let mut model = Model::new(PathBuf::from("room.rvt"), "Revit", layers);
+        model.project.levels = vec![("00".into(), 0.0), ("01".into(), 3.0)];
+        Arc::new(model)
+    }
+
+    /// Whether a drawing has a line within x from..to.
+    fn draws(lines: &[crate::drawing::Segment], from: f32, to: f32) -> bool {
+        lines.iter().any(|[a, b]| (from..=to).contains(&a[0]) && (from..=to).contains(&b[0]))
+    }
+
+    #[test]
+    fn a_structural_plan_leaves_out_what_carries_nothing_and_a_ceiling_plan_looks_up() {
+        let mut app = App::default();
+        app.set_model(fitted_room());
+        let level = Arc::<str>::from(app.document.levels()[0].path.as_str());
+        // the kinds are listed apart, each with its own New
+        click(&mut app, "Views");
+        assert!(simulator(&app).find("STRUCTURAL PLANS").is_ok() && simulator(&app).find("CEILING PLANS").is_ok());
+        // a structural plan: the walls, not the cupboard or the lamp, in its tab and its drawing
+        let _ = app.update(Message::NewPlanOf(level.clone(), PlanKind::Structural, "structure"));
+        let plan = app.document.plans()[0].clone();
+        assert_eq!((plan.name.as_str(), plan.kind), ("00 (structure)", PlanKind::Structural));
+        assert_eq!(app.active_plan.as_deref(), Some(plan.path.as_str()));
+        let (walls, cupboard, lamp) = (0, 1, 2);
+        assert!(!app.hidden_test()(walls, 0) && app.hidden_test()(cupboard, 0) && app.hidden_test()(lamp, 0));
+        assert!(app.hidden.is_empty(), "left out by the kind, not hidden by hand");
+        app.cut_view(&plan.path);
+        let drawing = app.cuts[plan.path.as_str()].clone();
+        assert!(!drawing.segments.is_empty() && !draws(&drawing.below, 3.0, 5.0), "no cupboard");
+        assert!(simulator(&app).find("Structural plan").is_ok(), "its kind in the right pane");
+        // the 3D view shows them all again
+        let _ = app.update(Message::SelectTab(0));
+        assert!(!app.hidden_test()(cupboard, 0));
+        let _ = app.update(Message::SelectTab(1));
+        assert!(app.hidden_test()(cupboard, 0));
+        // a ceiling plan: from below, cut at 2.3 m up to the next level, seeing the lamp
+        let _ = app.update(Message::NewPlanOf(level, PlanKind::Ceiling, "ceiling"));
+        let ceiling = app.document.plans()[1].clone();
+        assert_eq!(ceiling.name, "00 (ceiling)");
+        assert!(!app.hidden_test()(cupboard, 0), "a ceiling plan leaves nothing out");
+        let section = app.section.expect("its range");
+        assert!((section.min.z - 2.3).abs() < 1e-5 && (section.max.z - 3.0).abs() < 1e-5, "{section:?}");
+        let (_, to, _) = app.anim.expect("the camera turns");
+        assert!((to.pitch - ViewPreset::Bottom.orientation().1).abs() < 1e-3, "looking up");
+        app.cut_view(&ceiling.path);
+        let drawing = app.cuts[ceiling.path.as_str()].clone();
+        assert!(draws(&drawing.below, 1.0, 1.5), "the lamp");
+        assert!(!draws(&drawing.below, 3.0, 5.0), "no cupboard: it stands under the cut");
+    }
+
+    /// The four elevations are listed under Elevations, a section drawn on a sheet under
+    /// Sections; the right pane names the kind.
+    #[test]
+    fn sections_and_elevations_are_listed_apart() {
+        let mut app = App::default();
+        app.set_model(fitted_room());
+        let _ = app.update(Message::MakeElevations(["North elevation", "East elevation", "South elevation", "West elevation"]));
+        app.new_section([0.0, 2.5], [8.0, 2.5], "Section");
+        let kinds: Vec<(&str, SectionKind)> = app.document.sections().iter().map(|s| (s.name.as_str(), s.kind)).collect();
+        assert_eq!(kinds[..2], [("North elevation", SectionKind::Elevation), ("East elevation", SectionKind::Elevation)]);
+        assert_eq!(kinds[4], ("Section A", SectionKind::Section));
+        click(&mut app, "Views");
+        for label in ["SECTIONS", "ELEVATIONS", "Section A", "North elevation"] {
+            assert!(simulator(&app).find(label).is_ok(), "{label}");
+        }
+        // the section shows: its kind in the right pane
+        assert_eq!(app.document.view_name(app.active_plan.as_deref().unwrap()), Some("Section A"));
+        assert!(simulator(&app).find("Section").is_ok());
+        let north = Arc::<str>::from(app.document.sections()[0].path.as_str());
+        let _ = app.update(Message::OpenPlan(north));
+        assert!(simulator(&app).find("Elevation view").is_ok());
     }
 
     #[test]

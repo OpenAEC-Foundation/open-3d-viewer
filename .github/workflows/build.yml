@@ -50,10 +50,15 @@ jobs:
       # Headless structural analysis model: unit tests, sam-json conformance, sam-check
       - name: Tests (bim-structural)
         run: cargo test --release --locked -p bim-structural
+      # Headless libraries: materials, layered build-ups, their IFCX form
+      - name: Tests (bim-library)
+        run: cargo test --release --locked -p bim-library
       - name: Web build (wasm32)
         run: |
           cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer --bin open-bim-modeller --bin open-bim-collaborator
           cargo check --locked --target wasm32-unknown-unknown -p bim-structural
+          cargo check --locked --target wasm32-unknown-unknown -p bim-library
+
       # One product per build (docs/architecture/products.md): each feature on its own still
       # compiles; only the app crate is checked again
       - name: Product builds (wasm32)

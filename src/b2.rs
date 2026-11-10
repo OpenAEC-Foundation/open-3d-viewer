@@ -34,7 +34,7 @@ macro_rules! icons {
 
 icons! {
     "window.minimize", "window.maximize", "window.restore", "window.close",
-    "file.open", "file.import", "file.save-as", "file.examples",
+    "file.new", "file.open", "file.import", "file.save-as", "file.examples",
     "ui.settings", "ui.about", "ui.close", "ui.help",
     "panel.left", "panel.right", "panel.schedules", "panel.model-tree", "panel.measurements",
     "view.fit", "view.fit-selection", "view.isometric", "view.top", "view.front", "view.right",
@@ -48,7 +48,7 @@ icons! {
     "object.show", "object.hide", "project.folder", "data.table",
     // the modeller
     "object.add", "draw.coordinate", "pile.columns", "draw.line", "construction.types", "draw.filled-area",
-    "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete",
+    "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut", "object.edit",
     // the BIM Collaborator
     "git.issue", "bcf.import", "bcf.export", "validation.select-specification", "validation.workspace", "note.reply", "team.add",
 }

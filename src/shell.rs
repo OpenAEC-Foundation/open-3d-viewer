@@ -622,6 +622,8 @@ impl Studio {
         let key = |c: char| Shortcut { key: ShortcutKey::Char(c), ctrl: false, shift: false, alt: false };
         let go = |m: Message| Msg::App(m);
         let mut list = vec![
+            // an empty project to model in, with a first level; beside a model it opens in a tab of its own
+            Command::new("file.new", l.text("Nieuw", "New"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("file.new"), large("file.new")).shortcut(Shortcut::ctrl('n')),
             Command::new("file.open", l.text("Openen…", "Open…"), go(Message::OpenDialog)).icon(small("file.open"), large("file.open")).shortcut(Shortcut::ctrl('o')).dialog(),
             Command::new("file.add", l.text("Toevoegen…", "Add…"), go(Message::AddDialog))
                 .icon(small("file.import"), large("file.import"))
@@ -723,9 +725,16 @@ impl Studio {
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.cut", l.text("Uitsparen", "Cut"), go(Message::Connect(bim_core::ConnectionKind::Cut, l.text("Uitsparing", "Cut-out"))))
+                .icon(small("edit.cut"), large("edit.cut"))
+                .enabled(app.selected_bodies() == 2),
             Command::new("model.mitre", l.text("Verstek", "Mitre"), go(Message::Connect(bim_core::ConnectionKind::Mitre, l.text("Verbinding", "Connection"))))
                 .icon(small("draw.l-shape"), large("draw.l-shape"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.edit", l.text("Bewerken", "Edit"), go(Message::EditMode))
+                .icon(small("object.edit"), large("object.edit"))
+                .toggle(app.modeller.edit.is_some())
+                .enabled(app.wants_tab()),
             Command::new("model.delete", l.text("Verwijderen", "Delete"), go(Message::DeletePicked))
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
@@ -1006,11 +1015,24 @@ impl Studio {
                     }
                     return self.update(Msg::App(Message::Escape));
                 }
+                // in edit mode G, X, Y, Z and A are its own keys
+                if self.dialog.is_none() && self.app.modeller.edit.is_some() && !press.modifiers.control() && !press.modifiers.alt() {
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c)) {
+                            return self.update(Msg::App(Message::EditKey(c)));
+                        }
+                    }
+                }
                 if self.dialog.is_none() {
                     if let Some(message) = cm::find(&self.commands(), &press.key, press.modifiers) {
                         return self.update(message);
                     }
                 }
+            }
+            // Tab on a selected modelled element opens its edit mode, as in Blender; else it moves
+            // the focus
+            Msg::Navigate(openaec_ui::keyboard::Navigation::Next) if self.dialog.is_none() && !self.backstage && self.app.wants_tab() => {
+                return self.update(Msg::App(Message::EditMode));
             }
             Msg::Navigate(step) => return openaec_ui::keyboard::navigate(step),
             Msg::TitlePress => {
@@ -1175,7 +1197,7 @@ impl Studio {
     }
 
     fn title_bar(&self, look: Look) -> Element<'_, Msg> {
-        let quick = vec![cm::icon_button(look, &self.command("file.open"), 28.0), cm::icon_button(look, &self.command("file.save-as"), 28.0)];
+        let quick: Vec<Element<'_, Msg>> = ["file.new", "file.open", "file.save-as"].iter().map(|id| cm::icon_button(look, &self.command(id), 28.0)).collect();
         let mut extra = Vec::new();
         if let Some(available) = &self.update {
             extra.push(container(upd::notice(look, available, Msg::Update)).padding([0, 8]).into());
@@ -1280,7 +1302,7 @@ impl Studio {
         };
         let groups = match self.ribbon_page() {
             RibbonPage::Home => {
-                let mut groups = vec![w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                let mut groups = vec![w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
                 groups.extend(view_groups());
                 groups
             }
@@ -1293,8 +1315,8 @@ impl Studio {
                 w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
-                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre"])]),
-                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.delete")]),
+                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
+                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
@@ -1330,12 +1352,13 @@ impl Studio {
         }
     }
 
-    /// Bestand: open, save as, settings, and the files opened last.
+    /// Bestand: new, open, save as, settings, and the files opened last.
     fn backstage_view(&self, look: Look) -> Element<'_, Msg> {
         let l = self.l();
         let c = look.color;
         let loaded = self.app.model.is_some();
         let nav = column![
+            t::file_nav_row(look, small("file.new"), l.text("Nieuw", "New"), false, Some(Msg::App(Message::NewModel(l.text("Niveau 0", "Level 0"))))),
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
@@ -1390,7 +1413,13 @@ impl Studio {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer => ("project.folder", l.text("Geen model geopend", "No model open"), formats_hint(l), open(K::Primary)),
+                Product::Viewer => (
+                    "project.folder",
+                    l.text("Geen model geopend", "No model open"),
+                    formats_hint(l),
+                    // open a model, or start an empty project to model in
+                    row![open(K::Primary), cm::button(look, &self.command("file.new"), K::Secondary, D::Regular)].spacing(8).into(),
+                ),
                 Product::Modeller => (
                     "object.add",
                     l.text("Nog geen model", "No model yet"),
@@ -1794,6 +1823,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// File, New (Ctrl+N): an empty project with a first level, in the empty project shown, else
+    /// in a tab of its own beside the model.
+    #[test]
+    fn new_starts_an_empty_project_with_a_level_beside_the_model_open() {
+        use iced::keyboard::{Key, Modifiers};
+        let ctrl_n = Msg::Key(KeyPress { key: Key::Character("n".into()), modifiers: Modifiers::CTRL });
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(ctrl_n.clone());
+        assert_eq!(studio.tabs.len(), 1, "in the empty project");
+        let model = studio.app.model.clone().expect("an empty model");
+        assert!(model.layers.is_empty());
+        assert_eq!(studio.app.document.levels().iter().map(|l| (l.name.as_str(), l.elevation)).collect::<Vec<_>>(), [("Level 0", 0.0)]);
+        // beside it, the next new project in a tab of its own, shown
+        let first = studio.project;
+        let _ = studio.update(ctrl_n);
+        assert_eq!(studio.tabs.len(), 2);
+        assert_ne!(studio.project, first);
+        assert_ne!(studio.app.model.as_ref().map(|m| m.id), Some(model.id));
+        assert_eq!(studio.app.document.levels().len(), 1);
+        // the File page has it first, and the start page beside Open
+        studio.backstage = true;
+        let names = accessibility(&studio).summary();
+        assert!(names.iter().any(|n| n.contains("New")), "{names:?}");
+        let mut blank = Studio::new(App::default());
+        blank.prefs.language = Language::English;
+        let names = accessibility(&blank).summary();
+        assert!(names.iter().any(|n| n.contains("New")) && names.iter().any(|n| n.contains("Open…")), "{names:?}");
+    }
+
     #[test]
     fn closing_a_tab_shows_its_neighbour_and_the_last_leaves_an_empty_project() {
         let mut studio = Studio::new(App::default());
@@ -1883,6 +1942,44 @@ mod tests {
             studio.set_product(Product::Modeller);
             let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Wall, "Wall")))));
             studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("modeller-{}.png", l.code()))).expect("snapshot");
+        }
+        // edit mode (Tab) on the slab, its far corner picked
+        let mut app = App::default();
+        app.add_demo_building();
+        app.select_modelled(bim_core::ElementId(1));
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.ribbon_tab = 1;
+        let _ = studio.update(Msg::App(Message::EditMode));
+        let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(2))));
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-edit-nl.png")).expect("snapshot");
+    }
+
+    /// The Library tab with a build-up and a steel profile picked, in every language:
+    /// `cargo test --lib export_library_renders -- --ignored`.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_library_renders() {
+        use crate::app::library::{Group, LibraryMessage, Pick};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let shots: [(&str, Group, Pick); 2] = [
+            ("wall", Group::BuildUps(bim_library::Role::Wall), Pick::BuildUp("wall.timber-frame-outer".into())),
+            ("steel", Group::Series(bim_library::Series::Hea), Pick::Steel("HEA 200".into())),
+        ];
+        for l in Language::ALL {
+            for (name, group, pick) in shots.clone() {
+                let mut app = App::default();
+                app.explorer_tab = crate::app::ExplorerTab::Library;
+                if matches!(group, Group::Series(_)) {
+                    let _ = app.update(Message::Library(LibraryMessage::Toggle(Group::Steel)));
+                }
+                let _ = app.update(Message::Library(LibraryMessage::Toggle(group)));
+                let _ = app.update(Message::Library(LibraryMessage::Pick(pick)));
+                let mut studio = Studio::new(app);
+                studio.prefs.language = l;
+                studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-{name}-{}.png", l.code()))).expect("snapshot");
+            }
         }
     }
 
@@ -2048,6 +2145,30 @@ mod tests {
         let left = studio.prefs.left;
         let _ = studio.update(Msg::Key(KeyPress { key: Key::Character("1".into()), modifiers: Modifiers::CTRL }));
         assert_eq!(studio.prefs.left, !left);
+    }
+
+    #[test]
+    fn tab_on_a_modelled_element_opens_edit_mode_and_its_keys_are_its_own() {
+        use iced::keyboard::{Key, Modifiers};
+        use openaec_ui::keyboard::Navigation;
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        // nothing selected: Tab moves the focus, edit mode stays shut
+        let _ = studio.update(Msg::Navigate(Navigation::Next));
+        assert!(studio.app.modeller.edit.is_none());
+        studio.app.select_modelled(bim_core::ElementId(2));
+        let _ = studio.update(Msg::Navigate(Navigation::Next));
+        assert!(studio.app.modeller.edit.is_some(), "Tab opens edit mode");
+        // G is edit mode's, not the grid's
+        let grid = studio.app.grid;
+        let _ = studio.update(Msg::Key(KeyPress { key: Key::Character("a".into()), modifiers: Modifiers::empty() }));
+        let _ = studio.update(Msg::Key(KeyPress { key: Key::Character("g".into()), modifiers: Modifiers::empty() }));
+        assert_eq!(studio.app.grid, grid);
+        assert!(studio.app.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some()), "G grabbed the points A picked");
+        let _ = studio.update(Msg::Key(KeyPress { key: Key::Named(iced::keyboard::key::Named::Escape), modifiers: Modifiers::empty() }));
+        let _ = studio.update(Msg::Navigate(Navigation::Next));
+        assert!(studio.app.modeller.edit.is_none(), "Tab leaves");
     }
 
     #[test]

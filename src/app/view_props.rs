@@ -95,21 +95,28 @@ impl App {
         let mut rows = column![field(l.text("Naam", "Name"), ViewField::Name)].spacing(5);
         if let Some(plan) = self.document.plan(&path) {
             let level = self.document.level(&plan.level).map(|lv| lv.name.clone()).unwrap_or_default();
+            let kind = match plan.kind {
+                crate::document::PlanKind::Floor => l.text("Plattegrond", "Floor plan"),
+                crate::document::PlanKind::Structural => l.text("Constructieve plattegrond", "Structural plan"),
+                crate::document::PlanKind::Ceiling => l.text("Plafondplan", "Ceiling plan"),
+            };
             rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Plattegrond", "Floor plan").into()))
+                .push(row(l.text("Soort", "Kind"), kind.into()))
                 .push(row(l.text("Niveau", "Level"), level))
                 .push(field(l.text("Snijhoogte (m)", "Cut height (m)"), ViewField::Cut))
                 .push(field(l.text("Kijkdiepte (m)", "View depth (m)"), ViewField::Depth));
         } else if let Some(s) = self.document.section(&path) {
             let length = (s.to[0] - s.from[0]).hypot(s.to[1] - s.from[1]);
             rows = rows
-                .push(row(l.text("Soort", "Kind"), l.text("Doorsnede of aanzicht", "Section or elevation").into()))
+                .push(row(l.text("Soort", "Kind"), if s.kind == crate::document::SectionKind::Elevation { l.text("Aanzicht", "Elevation view") } else { l.text("Doorsnede", "Section") }.into()))
                 .push(row(l.text("Lengte", "Length"), format!("{length:.3} m")))
                 .push(field(l.text("Diepte (m)", "Depth (m)"), ViewField::Depth));
         }
         let own = self.document.view_layers(&path).map_or(0, |o| o.len());
         let own = if own == 0 { l.text("zoals het model", "as the model").to_string() } else { own.to_string() };
-        Some(rows.push(row(l.text("Eigen lagen", "Own layers"), own)).into())
+        let hidden = self.document.view_hidden(&path).map_or(0, |h| h.len());
+        let hidden = if hidden == 0 { l.text("geen", "none").to_string() } else { super::format_count(hidden) };
+        Some(rows.push(row(l.text("Eigen lagen", "Own layers"), own)).push(row(l.text("Verborgen elementen", "Hidden elements"), hidden)).into())
     }
 }
 

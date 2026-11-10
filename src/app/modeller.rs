@@ -10,6 +10,7 @@ use super::{App, ModelEntry};
 use crate::model::{Layer, Model};
 use crate::selection::Pickable;
 use bim_core::element::PlanarForm;
+use super::placement::Settings;
 use bim_core::{ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Mesh, PlanarDef, PointDef, ProfileDef, Refusal, Shape, SystemDef};
 use glam::{DVec2, DVec3, Vec3};
 use openaec_ui::Language;
@@ -103,8 +104,8 @@ impl ModelTool {
         }
     }
 
-    /// Whether the next element starts where the last one ended.
-    fn chains(self) -> bool {
+    /// Whether the next element can start where the last one ended (the strip's Chain).
+    pub(super) fn chains(self) -> bool {
         matches!(self, ModelTool::Wall | ModelTool::Beam | ModelTool::System)
     }
 
@@ -124,11 +125,11 @@ impl ModelTool {
 }
 
 /// Sizes the tools give what they place (metres).
-const WALL_THICKNESS: f64 = 0.2;
-const SLAB_THICKNESS: f64 = 0.25;
-const COLUMN: f64 = 0.3;
-const BEAM: (f64, f64) = (0.2, 0.4);
-const OBJECT: DVec3 = DVec3::new(0.6, 0.6, 0.9);
+pub(super) const WALL_THICKNESS: f64 = 0.2;
+pub(super) const SLAB_THICKNESS: f64 = 0.25;
+pub(super) const COLUMN: f64 = 0.3;
+pub(super) const BEAM: (f64, f64) = (0.2, 0.4);
+pub(super) const OBJECT: DVec3 = DVec3::new(0.6, 0.6, 0.9);
 const SYSTEM_SPACING: DVec2 = DVec2::new(1.5, 1.5);
 const SYSTEM_MEMBER: DVec2 = DVec2::new(0.05, 0.15);
 const SYSTEM_PANEL: f64 = 0.02;
@@ -161,6 +162,8 @@ pub struct Modeller {
     pub cursor: Option<DVec3>,
     /// Where a door or window would go, while the cursor is over a wall.
     pub aim: Option<super::openings::Aim>,
+    /// The type and sizes each tool places with, typed in the strip over the view.
+    pub placement: super::placement::Placement,
     /// A value being typed in the Definition section: the element, the field, the text.
     pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
 }
@@ -202,6 +205,7 @@ impl App {
         self.modeller.points.clear();
         self.modeller.cursor = None;
         self.modeller.aim = None;
+        self.modeller.placement.last_wall = None;
         self.modeller.refusal = None;
         if self.modeller.tool.is_some() {
             self.measure.tool = None;
@@ -222,6 +226,7 @@ impl App {
             self.modeller.aim = None;
         } else {
             self.modeller.points.clear();
+            self.modeller.placement.last_wall = None;
         }
         true
     }
@@ -315,7 +320,7 @@ impl App {
         if tool.opens() {
             return self.place_opening(tool, x, y, width, height);
         }
-        let (z, storey, level) = self.work_plane();
+        let (z, _, level) = self.work_plane();
         let Some(p) = self.plane_point(x, y, width, height, z) else { return };
         let p = self.snapped(p, x, y, width, height);
         self.modeller.points.push(p);
@@ -323,12 +328,23 @@ impl App {
         if self.modeller.points.len() < tool.clicks() {
             return;
         }
-        let points = std::mem::take(&mut self.modeller.points);
-        let (a, b) = (points[0], *points.last().unwrap());
-        let shape = tool_shape(tool, a, b, z, storey);
+        let (a, b) = (self.modeller.points[0], *self.modeller.points.last().unwrap());
+        let shape = self.shape_for(tool, a, b);
+        // a wall on a face, chained: the last one's end goes to where the axes cross
+        let joined = match (&shape, self.modeller.placement.last_wall.filter(|_| tool == ModelTool::Wall && self.modeller.points.len() > 1)) {
+            (Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, .. }, .. }), Some(last)) => Some((last, *start)),
+            _ => None,
+        };
+        self.modeller.points.clear();
+        if let Some((last, start)) = joined {
+            self.move_wall_end(last, start);
+        }
         match self.add_element(name, level, shape) {
-            Ok(_) if tool.chains() => self.modeller.points = vec![b],
-            Ok(_) => {}
+            Ok(id) if tool.chains() && self.modeller.placement.chain => {
+                self.modeller.points = vec![b];
+                self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
+            }
+            Ok(_) => self.modeller.placement.last_wall = None,
             Err(refusal) => self.modeller.refusal = Some(refusal),
         }
     }
@@ -511,38 +527,79 @@ impl App {
 }
 
 /// What `tool` places from its first point `a` to its last `b` (scene coordinates), on a work
-/// plane at height `z` with a storey of `storey` above it.
-pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64) -> Shape {
+/// plane at height `z` with a storey of `storey` above it, with the type and sizes `s` (types
+/// from `library`). A wall's `a` and `b` are its axis ends, already on its location line.
+pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64, s: &Settings, library: &bim_library::Library) -> Shape {
+    // up to the next level, unless a height was typed
+    let up_to = |base: f64| s.height.unwrap_or(z + storey - base);
+    let profile = || s.kind.as_deref().and_then(ProfileDef::steel).unwrap_or(ProfileDef::Rectangle { width: s.width, height: s.depth });
+    let build_up = |id: &Option<String>| id.as_deref().and_then(|id| bim_core::BuildUpDef::from_library(library, id));
     match tool {
         // an opening tool places none of its own (see `openings`): an object stands for it
-        ModelTool::Point | ModelTool::Door | ModelTool::Window => Shape::Point(PointDef { at: a, rotation: 0.0, size: OBJECT }),
-        ModelTool::Column => Shape::Linear(LinearDef { start: a, end: a + DVec3::Z * storey, profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 }),
-        // a beam's top lies at the top of the storey
-        ModelTool::Beam => {
-            let up = DVec3::Z * (storey - BEAM.1 / 2.0);
-            Shape::Linear(LinearDef { start: a + up, end: b + up, profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 })
+        ModelTool::Point | ModelTool::Door | ModelTool::Window => {
+            Shape::Point(PointDef { at: a + DVec3::Z * s.offset, rotation: 0.0, size: DVec3::new(s.width, s.depth.max(0.01), s.height.unwrap_or(OBJECT.z)) })
         }
-        ModelTool::Wall => Shape::Planar(PlanarDef {
-            form: PlanarForm::Wall { start: a.truncate(), end: b.truncate(), base: z, height: storey },
-            thickness: WALL_THICKNESS,
-            openings: Vec::new(),
-            build_up: None,
-        }),
+        ModelTool::Column => {
+            let base = z + s.offset;
+            Shape::Linear(LinearDef { start: a.truncate().extend(base), end: a.truncate().extend(base + up_to(base)), profile: profile(), roll: 0.0 })
+        }
+        // a beam's top lies at the top of the storey, or at the height typed above its level
+        ModelTool::Beam => {
+            let profile = profile();
+            let half = profile.profile().map_or(s.depth / 2.0, |p| p.outer().iter().map(|q| q.y).fold(0.0, f64::max));
+            let up = DVec3::Z * (z + s.height.unwrap_or(storey) - half - a.z);
+            Shape::Linear(LinearDef { start: a + up, end: b + up, profile, roll: 0.0 })
+        }
+        ModelTool::Wall => {
+            let base = z + s.offset;
+            let wall = PlanarDef { form: PlanarForm::Wall { start: a.truncate(), end: b.truncate(), base, height: up_to(base) }, thickness: s.width, openings: Vec::new(), build_up: None };
+            Shape::Planar(wall.with_build_up(build_up(&s.kind)))
+        }
         ModelTool::Slab => {
             let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
             let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z }, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None })
+            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset }, thickness: s.width, openings: Vec::new(), build_up: None };
+            Shape::Planar(slab.with_build_up(build_up(&s.kind)))
         }
-        ModelTool::System => Shape::System(SystemDef {
-            start: a.truncate(),
-            end: b.truncate(),
-            base: z,
-            height: storey,
-            spacing: SYSTEM_SPACING,
-            member: SYSTEM_MEMBER,
-            panel: SYSTEM_PANEL,
-            system_type: None,
-        }),
+        ModelTool::System => {
+            let base = z + s.offset;
+            let generic = SystemDef {
+                start: a.truncate(),
+                end: b.truncate(),
+                base,
+                height: up_to(base),
+                spacing: SYSTEM_SPACING,
+                member: SYSTEM_MEMBER,
+                panel: SYSTEM_PANEL,
+                system_type: None,
+            };
+            let typed = s.kind.as_deref().and_then(|id| generic.clone().typed_from(library, id));
+            Shape::System(typed.unwrap_or(generic))
+        }
+    }
+}
+
+impl App {
+    /// What the tool places from `a` to `b` (scene coordinates, as clicked) with the strip's type
+    /// and sizes: a wall on its location line.
+    pub(super) fn shape_for(&self, tool: ModelTool, a: DVec3, b: DVec3) -> Shape {
+        let (z, storey, _) = self.work_plane();
+        let s = self.modeller.placement.of(tool);
+        let (a, b) = if tool == ModelTool::Wall { self.wall_axis(a, b, &s) } else { (a, b) };
+        tool_shape(tool, a, b, z, storey, &s, &self.library)
+    }
+
+    /// Moves the end of wall `id` to `to` (in plan), if the kernel can make it so.
+    fn move_wall_end(&mut self, id: ElementId, to: DVec2) {
+        let Some(e) = self.modeller.model.get(id).cloned() else { return };
+        let grid = self.modeller.model.grid;
+        let mut shape = e.shape_in_project(&grid);
+        if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { end, .. }, .. }) = &mut shape {
+            *end = to;
+        }
+        let mut moved = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+        moved.id = id;
+        let _ = self.modeller.model.replace(moved);
     }
 }
 

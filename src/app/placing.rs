@@ -6,7 +6,6 @@
 //! The preview is the kernel's own evaluation of that element on its own, so it has the thickness,
 //! height and layers the placed element gets; its corners with other walls show once it is placed.
 
-use super::modeller::tool_shape;
 use super::App;
 use bim_core::{Element, Shape};
 use glam::{Mat4, Vec3};
@@ -38,8 +37,7 @@ impl App {
             return None;
         }
         let first = self.modeller.points.first().copied().unwrap_or(cursor);
-        let (z, storey, _) = self.work_plane();
-        Some(tool_shape(tool, first, cursor, z, storey))
+        Some(self.shape_for(tool, first, cursor))
     }
 
     /// The preview over the viewport: the faces of the element [`App::placing`] gives, the points

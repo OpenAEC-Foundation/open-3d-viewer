@@ -33,7 +33,7 @@ fn half_width(shape: &Shape) -> Option<f64> {
 
 /// Where the line through `a` and `b` meets the line through `c` and `d` (in plan), unless they
 /// run (nearly) parallel.
-fn crossing(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<DVec2> {
+pub(super) fn crossing(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<DVec2> {
     let (r, s) = (b - a, d - c);
     let denom = r.perp_dot(s);
     if denom.abs() < 1e-9 * r.length() * s.length() {

@@ -55,7 +55,9 @@ impl App {
     /// Where `tool` (a door or a window) would go with a click at (x, y) in a viewport of
     /// width × height: on the nearest wall the cursor's ray meets. `None` when it meets none.
     pub(super) fn opening_at(&self, tool: ModelTool, x: f32, y: f32, width: f32, height: f32) -> Option<Aim> {
-        let (w, h, sill) = if tool == ModelTool::Door { DOOR } else { WINDOW };
+        // the size and sill typed in the strip
+        let s = self.modeller.placement.of(tool);
+        let (w, h, sill) = (s.width, s.height.unwrap_or(if tool == ModelTool::Door { DOOR.1 } else { WINDOW.1 }), if tool == ModelTool::Door { 0.0 } else { s.sill });
         let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
         let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
         let a = inv.project_point3(Vec3::new(nx, ny, 0.0)).as_dvec3();

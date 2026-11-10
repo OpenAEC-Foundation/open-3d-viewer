@@ -237,12 +237,14 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
 
 - **What the file gives.** The Revit loader keeps, per straight wall, the location line, the base
   (base level elevation plus base offset), the height, the type's total thickness, the base level's
-  name, and the hosted doors and windows as openings (their boxes projected on the axis, as the
-  mesher cuts them; overlapping boxes, such as a door's frame, leaf and lining, make one opening
-  of their extent). Curved, stacked, in-place and curtain walls stay meshes, and so does a wall
+  name, and the hosted doors and windows as openings. An opening comes from the door's or window's
+  type (its Width and Height about its insertion point, from its level plus its sill) where the
+  type gives both; else from its box, as the mesher cuts it. A symbol without height (a swing
+  drawn in plan) cuts nothing, and overlapping openings (a door's frame, leaf and lining) make one
+  of their extent. Curved, stacked, in-place and curtain walls stay meshes, and so does a wall
   with a door or window whose width its box cannot tell (a wall near 45°). It is read on a thread
   beside the mesher.
-- **Measured, not assumed:** on four local Revit files with saved graphics, all 906 walls drawn with
+- **Measured, not assumed:** on four local Revit files with saved graphics, all 922 walls drawn with
   their ids lie centred on their location line, as thick as their type. The Modeller still
   centres a wall on its own mesh when that lies beside the line.
 - **Only in the Modeller**, a selected wall of the file has grips. A press models the wall (the
@@ -251,11 +253,23 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
 - **The project becomes IFCX**: named after the Revit file with `.ifcx`, in its folder. Save as
   writes the remaining meshes and the modelled elements with their definitions, and opening it
   again gives the taken-over wall back as an editable wall.
-- **Openings measured:** in the one local file with doors in ordinary walls (Revit 2026), 24 walls
-  get openings; all 7 of them drawn with their ids are refused by the kernel (`OpeningOutside`),
-  as their doors' boxes reach the wall's top or end. Such a wall stays a mesh and the banner says
-  why. The other 322 drawn walls of that file are made.
+
+## Openings up to a wall's edges (2026-11-10)
+
+- **The kernel** cuts a wall's elevation on the grid of the wall's and the openings' edges: a cell
+  is wall or opening, the cells of wall that share a side are one piece, and each piece's outline
+  and holes are traced with the wall on their left. An opening may reach the base, the top or an
+  end; one through the whole height (or length) splits the wall into pieces, each a solid (per
+  layer). What lies past the wall's edges takes nothing. Refused: an opening that takes nothing,
+  openings that touch, and an opening that takes the whole wall (`Empty`). An opening that reaches
+  an end goes on through the wall's reach past it, so a corner is cut back with it.
+- **Why:** in a local Revit 2026 file, every wall with a door that is drawn with its ids was
+  refused before, its door's box reaching the wall's top or end; swing symbols drawn in plan (doors
+  without height) kept 31 more walls out. Now that file gives 634 walls, 345 of them drawn, and the
+  kernel makes all 345, the 17 with doors or windows included.
+- **Door sizes:** the type's Width is its nominal width (in the files measured, the clear opening:
+  a 900 door in a 1012 frame), so the wall may reach a few centimetres into the frame. A type of
+  sliding doors gave no sizes; its box is used.
 - **Not yet:** the type's layers (the reader gives them with material ids, but not on which side
-  the exterior lies); openings that reach a wall's top or end (the kernel keeps wall above and
-  beside every opening), and openings from the door's or window's type sizes instead of its box;
-  joins between a taken-over wall and the file's meshes.
+  the exterior lies); a door's frame size, which families name in their own parameters; joins
+  between a taken-over wall and the file's meshes.

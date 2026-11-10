@@ -97,13 +97,86 @@ pub enum PlanarForm {
     },
 }
 
-/// A planar element: a wall or a slab, `thickness` thick, with openings (walls only).
+/// A planar element: a wall or a slab, `thickness` thick, with openings (walls only). With a
+/// build-up, it is made of the build-up's layers and is as thick as they are together.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanarDef {
     pub form: PlanarForm,
     pub thickness: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub openings: Vec<Opening>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_up: Option<BuildUpDef>,
+}
+
+/// A layer of a planar element: a material (a key of the project's library) and a thickness. A
+/// cavity (an air layer) takes up its room but has no solid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerDef {
+    pub material: String,
+    pub thickness: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cavity: bool,
+}
+
+/// A planar element's build-up: its type (the id of a build-up in the project's library) and the
+/// type's layers, copied, so the element is whole without the library. A wall's layers run from
+/// its exterior face in, its exterior on the right walking from start to end (as in Open BIM
+/// Studio); a slab's from its top down.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BuildUpDef {
+    pub id: String,
+    pub layers: Vec<LayerDef>,
+}
+
+impl BuildUpDef {
+    /// The build-up of the library's build-up `id`; a layer of a material hatched as air is a
+    /// cavity. `None` when the library has no such build-up.
+    pub fn from_library(library: &bim_library::Library, id: &str) -> Option<Self> {
+        let b = library.buildup(id)?;
+        let layers = b
+            .layers
+            .iter()
+            .map(|l| LayerDef {
+                material: l.material.clone(),
+                thickness: l.thickness,
+                cavity: library.material(&l.material).is_some_and(|m| m.hatch == bim_library::HatchKind::Air),
+            })
+            .collect();
+        Some(Self { id: b.id.clone(), layers })
+    }
+
+    /// The layers together.
+    pub fn thickness(&self) -> f64 {
+        self.layers.iter().map(|l| l.thickness).sum()
+    }
+
+    /// Checks the layers: each thicker than the linear tolerance, and at least one not a cavity.
+    pub fn check(&self) -> Result<(), Refusal> {
+        if self.layers.iter().any(|l| !positive(l.thickness)) {
+            return Err(Refusal::NotPositive);
+        }
+        if self.layers.iter().all(|l| l.cavity) {
+            return Err(Refusal::NoLayers);
+        }
+        Ok(())
+    }
+}
+
+impl PlanarDef {
+    /// How thick it is: its build-up's layers together, else its own thickness.
+    pub fn total_thickness(&self) -> f64 {
+        self.build_up.as_ref().map_or(self.thickness, BuildUpDef::thickness)
+    }
+
+    /// It with build-up `build_up` (or none): its thickness becomes the build-up's.
+    pub fn with_build_up(mut self, build_up: Option<BuildUpDef>) -> Self {
+        if let Some(b) = &build_up {
+            self.thickness = b.thickness();
+        }
+        self.build_up = build_up;
+        self
+    }
 }
 
 /// A system: a vertical domain on its line from `start` to `end`, from `base` up `height`,
@@ -128,9 +201,13 @@ pub enum ConnectionKind {
     Butt,
     /// Both members are cut by the plane that halves the angle between them.
     Mitre,
+    /// The primary element cuts its body out of the secondary one (a beam through a wall, a duct
+    /// through a slab). Any two elements with a body; the secondary keeps what is left.
+    Cut,
 }
 
-/// A connection between two linear elements.
+/// A connection between two elements: two linear ones joined (butt, mitre), or any two with a
+/// body where one cuts the other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionDef {
     pub kind: ConnectionKind,
@@ -281,11 +358,13 @@ pub fn linear_class(axis: DVec3) -> &'static str {
 }
 
 /// A solid of an element and the IFC class of what it is (a curtain wall's members and panels have
-/// classes of their own).
+/// classes of their own), and what it is made of when that is known (a material key of the
+/// project's library).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartSolid {
     pub class: &'static str,
     pub solid: Solid,
+    pub material: Option<String>,
 }
 
 /// The frame of a linear element: at its start, `z` along it, the profile's `x` square to it
@@ -325,22 +404,55 @@ pub fn point_solid(p: &PointDef) -> Result<Solid, Refusal> {
     Solid::extrude(&Profile::rectangle(p.size.x, p.size.y)?, &axes, p.size.z)
 }
 
-/// The solid of a planar element.
+/// The solid of a planar element, as one body through all its layers.
 pub fn planar_solid(p: &PlanarDef) -> Result<Solid, Refusal> {
-    if !positive(p.thickness) {
+    let thickness = p.total_thickness();
+    if !positive(thickness) {
         return Err(Refusal::NotPositive);
     }
+    if let Some(b) = &p.build_up {
+        b.check()?;
+    }
+    let (profile, axes) = planar_base(p, thickness)?;
+    Solid::extrude(&profile, &axes, thickness)
+}
+
+/// The solids of a planar element with their materials: one per layer of its build-up (none for a
+/// cavity), or its one solid without a material.
+pub fn planar_parts(p: &PlanarDef) -> Result<Vec<(Option<String>, Solid)>, Refusal> {
+    let Some(b) = &p.build_up else { return Ok(vec![(None, planar_solid(p)?)]) };
+    b.check()?;
+    let thickness = b.thickness();
+    let (profile, axes) = planar_base(p, thickness)?;
+    let mut parts = Vec::new();
+    let mut from = 0.0;
+    for layer in &b.layers {
+        let to = from + layer.thickness;
+        if !layer.cavity {
+            // a wall's layers from its exterior (its right face, at z = thickness) in; a slab's
+            // from its top (at z = thickness) down
+            let at = Axes::new(axes.origin + axes.z * (thickness - to), axes.x, axes.z)?;
+            parts.push((Some(layer.material.clone()), Solid::extrude(&profile, &at, layer.thickness)?));
+        }
+        from = to;
+    }
+    Ok(parts)
+}
+
+/// What a planar element `thickness` thick extrudes, and the frame it extrudes in along its z: a
+/// wall's elevation from its left face, a slab's outline from its underside.
+fn planar_base(p: &PlanarDef, thickness: f64) -> Result<(Profile, Axes), Refusal> {
     match &p.form {
         PlanarForm::Wall { start, end, base, height } => {
-            let (axes, length) = wall_axes(*start, *end, *base, p.thickness)?;
+            let (axes, length) = wall_axes(*start, *end, *base, thickness)?;
             if !positive(*height) {
                 return Err(Refusal::NotPositive);
             }
-            Solid::extrude(&wall_elevation(length, *height, &p.openings)?, &axes, p.thickness)
+            Ok((wall_elevation(length, *height, &p.openings)?, axes))
         }
         PlanarForm::Slab { outline, holes, top } => {
-            let axes = Axes::new(DVec3::new(0.0, 0.0, top - p.thickness), DVec3::X, DVec3::Z)?;
-            Solid::extrude(&Profile::new(outline.clone(), holes.clone())?, &axes, p.thickness)
+            let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
+            Ok((Profile::new(outline.clone(), holes.clone())?, axes))
         }
     }
 }
@@ -421,14 +533,14 @@ pub fn system_parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
     let mullion = Profile::rectangle(w, depth)?;
     for i in 0..=bays {
         let axes = Axes::new(at(i as f64 * bay, 0.0), dir, DVec3::Z)?;
-        parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&mullion, &axes, s.height)? });
+        parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&mullion, &axes, s.height)?, material: None });
     }
     // transoms on every division up, between the mullions
     let transom = Profile::rectangle(depth, w)?;
     for i in 0..bays {
         for j in 0..=rows {
             let axes = Axes::new(at(i as f64 * bay + w / 2.0, j as f64 * row), right, dir)?;
-            parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&transom, &axes, bay - w)? });
+            parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&transom, &axes, bay - w)?, material: None });
         }
     }
     // a panel in every bay, centred in the face
@@ -439,7 +551,7 @@ pub fn system_parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
             let corner = at(i as f64 * bay + w / 2.0, j as f64 * row + w / 2.0) - right * (s.panel / 2.0);
             let axes = Axes::new(corner, dir, right)?;
             let face = Profile::new(vec![p(0.0, 0.0), p(du, 0.0), p(du, dv), p(0.0, dv)], Vec::new())?;
-            parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, s.panel)? });
+            parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, s.panel)?, material: None });
         }
     }
     Ok(parts)
@@ -450,7 +562,7 @@ mod tests {
     use super::*;
 
     fn wall(openings: Vec<Opening>) -> PlanarDef {
-        PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings }
+        PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings, build_up: None }
     }
 
     #[test]
@@ -485,10 +597,93 @@ mod tests {
     #[test]
     fn a_slab_hangs_under_its_top() {
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.25, openings: Vec::new() }).unwrap();
+        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
         let (lo, hi) = s.bounds();
         assert_eq!((lo.z, hi.z), (2.75, 3.0));
         assert!((s.volume() - 4.0 * 3.0 * 0.25).abs() < 1e-12);
+    }
+
+    fn cavity_wall() -> PlanarDef {
+        let layer = |material: &str, thickness, cavity| LayerDef { material: material.into(), thickness, cavity };
+        let build_up = BuildUpDef {
+            id: "wall.cavity-pir-360".into(),
+            layers: vec![layer("brick", 0.1, false), layer("air", 0.04, true), layer("insulation-pir", 0.1, false), layer("sand-lime", 0.12, false)],
+        };
+        wall(Vec::new()).with_build_up(Some(build_up))
+    }
+
+    #[test]
+    fn a_layered_wall_is_a_solid_per_layer_from_its_exterior_on_the_right() {
+        let w = cavity_wall();
+        assert!((w.thickness - 0.36).abs() < 1e-12, "the thickness follows the layers");
+        let parts = planar_parts(&w).unwrap();
+        let materials: Vec<&str> = parts.iter().map(|(m, _)| m.as_deref().unwrap()).collect();
+        assert_eq!(materials, ["brick", "insulation-pir", "sand-lime"], "the cavity has no solid");
+        // the wall runs along +x, so its right (exterior) side is -y; it is centred on its axis
+        let (lo, hi) = parts[0].1.bounds();
+        assert!((lo.y + 0.18).abs() < 1e-12 && (hi.y + 0.08).abs() < 1e-12, "the brick outside: {lo} {hi}");
+        let (lo, hi) = parts[2].1.bounds();
+        assert!((lo.y - 0.06).abs() < 1e-12 && (hi.y - 0.18).abs() < 1e-12, "the sand-lime inside: {lo} {hi}");
+        let volume: f64 = parts.iter().map(|(_, s)| s.volume()).sum();
+        assert!((volume - 5.0 * 3.0 * 0.32).abs() < 1e-9, "all but the 40 mm cavity: {volume}");
+        assert!((planar_solid(&w).unwrap().volume() - 5.0 * 3.0 * 0.36).abs() < 1e-9, "one body through all layers");
+    }
+
+    #[test]
+    fn openings_go_through_every_layer() {
+        let mut w = cavity_wall();
+        w.openings = vec![Opening { along: 1.0, sill: 0.9, width: 1.2, height: 1.2 }];
+        let volume: f64 = planar_parts(&w).unwrap().iter().map(|(_, s)| s.volume()).sum();
+        assert!((volume - (5.0 * 3.0 - 1.2 * 1.2) * 0.32).abs() < 1e-9, "{volume}");
+    }
+
+    #[test]
+    fn a_layered_slab_has_its_first_layer_on_top() {
+        let layer = |material: &str, thickness| LayerDef { material: material.into(), thickness, cavity: false };
+        let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
+        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.0, openings: Vec::new(), build_up: None }
+            .with_build_up(Some(BuildUpDef { id: "floor".into(), layers: vec![layer("screed", 0.05), layer("concrete", 0.2), layer("insulation", 0.1)] }));
+        let parts = planar_parts(&slab).unwrap();
+        let z = |i: usize| {
+            let (lo, hi) = parts[i].1.bounds();
+            (lo.z, hi.z)
+        };
+        let near = |(a, b): (f64, f64), (c, d): (f64, f64)| (a - c).abs() < 1e-12 && (b - d).abs() < 1e-12;
+        assert!(near(z(0), (2.95, 3.0)), "the screed on top: {:?}", z(0));
+        assert!(near(z(1), (2.75, 2.95)), "{:?}", z(1));
+        assert!(near(z(2), (2.65, 2.75)), "{:?}", z(2));
+    }
+
+    #[test]
+    fn a_build_up_of_cavities_or_empty_layers_is_refused() {
+        let mut w = cavity_wall();
+        w.build_up.as_mut().unwrap().layers.iter_mut().for_each(|l| l.cavity = true);
+        assert_eq!(planar_parts(&w), Err(Refusal::NoLayers));
+        assert_eq!(planar_solid(&w), Err(Refusal::NoLayers));
+        let mut w = cavity_wall();
+        w.build_up.as_mut().unwrap().layers[1].thickness = 0.0;
+        assert_eq!(planar_parts(&w), Err(Refusal::NotPositive));
+        let mut w = cavity_wall();
+        w.build_up.as_mut().unwrap().layers.clear();
+        assert_eq!(planar_parts(&w), Err(Refusal::NoLayers), "no layers at all");
+    }
+
+    #[test]
+    fn a_build_up_comes_from_the_library_with_its_cavities() {
+        let library = bim_library::Library::starter();
+        let b = BuildUpDef::from_library(&library, "wall.cavity-pir-360").unwrap();
+        assert_eq!(b, cavity_wall().build_up.unwrap());
+        assert!(BuildUpDef::from_library(&library, "wall.nothing").is_none());
+    }
+
+    #[test]
+    fn a_layered_definition_round_trips_and_an_old_one_still_reads() {
+        let w = cavity_wall();
+        let json = serde_json::to_string(&w).unwrap();
+        assert!(json.contains("\"cavity\":true") && json.matches("cavity").count() == 2, "{json}");
+        assert_eq!(serde_json::from_str::<PlanarDef>(&json).unwrap(), w);
+        let old = r#"{"form":{"wall":{"start":[0.0,0.0],"end":[5.0,0.0],"base":0.0,"height":3.0}},"thickness":0.2}"#;
+        assert_eq!(serde_json::from_str::<PlanarDef>(old).unwrap(), wall(Vec::new()));
     }
 
     #[test]
@@ -543,6 +738,7 @@ mod tests {
             form: PlanarForm::Wall { start: DVec2::new(0.1, 0.2), end: DVec2::new(7.3, 0.2), base: 0.0, height: 2.7 },
             thickness: 0.214,
             openings: vec![Opening { along: 1.0, sill: 0.0, width: 0.93, height: 2.315 }],
+            build_up: None,
         });
         let e = Element::in_project(&grid, "Wall 1", Some("level-path".into()), shape);
         let json = serde_json::to_string(&e).unwrap();

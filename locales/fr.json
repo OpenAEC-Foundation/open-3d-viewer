@@ -358,6 +358,7 @@
     "Theme": "Thème",
     "These layers apply to this view only": "Ces calques s'appliquent uniquement à cette vue",
     "Thickness (m)": "Épaisseur (m)",
+    "This join takes two members.": "Cet assemblage relie deux éléments.",
     "This model has no levels. Add one in the Levels tab.": "Cette maquette n'a aucun niveau. Ajoutez-en un dans l'onglet Niveaux.",
     "This model has no levels. Add one.": "Cette maquette n'a aucun niveau. Ajoutez-en un.",
     "This tab has no layers": "Cet onglet n'a aucun calque",
@@ -426,6 +427,7 @@
     "unequal": "à ailes inégales",
     "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub.": "Les fichiers {format} ne s'ouvrent que dans l'application de bureau ; la version navigateur ne peut pas les lire. L'application de bureau est gratuite, pour Windows, macOS et Linux : Télécharger ouvre la page des versions sur GitHub.",
     "{format} needs the desktop app": "{format} nécessite l'application de bureau",
-    "←  Return to workspace": "←  Retour à l'espace de travail"
+    "←  Return to workspace": "←  Retour à l'espace de travail",
+    "Mitred corners": "Angles en onglet"
   }
 }

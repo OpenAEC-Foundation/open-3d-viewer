@@ -326,6 +326,12 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     Identity { name, object_type, tag, class, predefined }
 }
 
+/// The IFC class (upper case) the export gives an element of `format` with these properties on
+/// layer `layer`.
+pub(crate) fn export_class(format: &str, layer: &str, props: &[(String, String)]) -> &'static str {
+    identity(format, &Key::Element(0), layer, props).class
+}
+
 /// The material names of an element: Revit's "materials" list or a single "Material".
 fn materials(props: &[(String, String)]) -> Vec<String> {
     let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.trim()).filter(|v| !v.is_empty());

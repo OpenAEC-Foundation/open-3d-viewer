@@ -232,3 +232,30 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
 - **Calls made:**
   - Grips are for walls and curtain walls only; beams, columns and slabs keep edit mode (Tab).
   - Tab's edit mode moves only the edited element; joined walls follow grips only.
+
+## Taking over a Revit wall (2026-11-10)
+
+- **What the file gives.** The Revit loader keeps, per straight wall, the location line, the base
+  (base level elevation plus base offset), the height, the type's total thickness, the base level's
+  name, and the hosted doors and windows as openings (their boxes projected on the axis, as the
+  mesher cuts them; overlapping boxes, such as a door's frame, leaf and lining, make one opening
+  of their extent). Curved, stacked, in-place and curtain walls stay meshes, and so does a wall
+  with a door or window whose width its box cannot tell (a wall near 45°). It is read on a thread
+  beside the mesher.
+- **Measured, not assumed:** on four local Revit files with saved graphics, all 906 walls drawn with
+  their ids lie centred on their location line, as thick as their type. The Modeller still
+  centres a wall on its own mesh when that lies beside the line.
+- **Only in the Modeller**, a selected wall of the file has grips. A press models the wall (the
+  kernel must make it, or nothing changes), takes its mesh out of the file's model and goes on
+  with the drag. Only the dragged wall is taken over; the rest stays meshes.
+- **The project becomes IFCX**: named after the Revit file with `.ifcx`, in its folder. Save as
+  writes the remaining meshes and the modelled elements with their definitions, and opening it
+  again gives the taken-over wall back as an editable wall.
+- **Openings measured:** in the one local file with doors in ordinary walls (Revit 2026), 24 walls
+  get openings; all 7 of them drawn with their ids are refused by the kernel (`OpeningOutside`),
+  as their doors' boxes reach the wall's top or end. Such a wall stays a mesh and the banner says
+  why. The other 322 drawn walls of that file are made.
+- **Not yet:** the type's layers (the reader gives them with material ids, but not on which side
+  the exterior lies); openings that reach a wall's top or end (the kernel keeps wall above and
+  beside every opening), and openings from the door's or window's type sizes instead of its box;
+  joins between a taken-over wall and the file's meshes.

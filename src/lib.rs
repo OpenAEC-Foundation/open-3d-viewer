@@ -35,6 +35,7 @@ mod managed;
 mod mcp;
 mod measure;
 pub mod model;
+pub mod product;
 mod remote;
 pub mod remote_link;
 pub mod section;

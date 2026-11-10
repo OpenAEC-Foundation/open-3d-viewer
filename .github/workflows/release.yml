@@ -120,7 +120,7 @@ jobs:
       - name: System libraries and packaging tools
         run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev libfontconfig1-dev rpm file
       - name: Build the viewer and the MCP server
-        run: cargo build --release --locked
+        run: cargo build --release --locked --bin open-3d-viewer --bin open-3d-viewer-mcp
       - name: Package
         run: |
           set -euo pipefail
@@ -251,7 +251,7 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
-          cargo build --release --locked
+          cargo build --release --locked --bin open-3d-viewer --bin open-3d-viewer-mcp
           mkdir -p sign
           cp target/release/open-3d-viewer.exe target/release/open-3d-viewer-mcp.exe vendor/vertex/vertex.dll sign/
       - name: Sign the programs
@@ -386,7 +386,7 @@ jobs:
         run: |
           set -euo pipefail
           for t in aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --release --locked --target "$t"
+            cargo build --release --locked --target "$t" --bin open-3d-viewer --bin open-3d-viewer-mcp
           done
           mkdir -p build
           for bin in open-3d-viewer open-3d-viewer-mcp; do

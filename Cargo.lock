@@ -274,9 +274,20 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 name = "bim-core"
 version = "0.1.0"
 dependencies = [
+ "bim-library",
  "earcutr",
  "glam 0.30.10",
  "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bim-library"
+version = "0.1.0"
+dependencies = [
+ "bim-structural",
+ "glam 0.30.10",
  "serde",
  "serde_json",
 ]
@@ -3441,6 +3452,7 @@ name = "open-3d-viewer"
 version = "2026.45.12"
 dependencies = [
  "bim-core",
+ "bim-library",
  "bim-structural",
  "bytemuck",
  "cadmpeg-codec-step",
@@ -3506,7 +3518,7 @@ dependencies = [
 [[package]]
 name = "opencaddocument"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/opencaddocument?rev=b9e1762#b9e1762969f3897e67e1801a2199445b6cf83b5d"
+source = "git+https://github.com/HakanSeven12/opencaddocument?rev=b9e1762969f3897e67e1801a2199445b6cf83b5d#b9e1762969f3897e67e1801a2199445b6cf83b5d"
 dependencies = [
  "acadrust",
  "ifccad",

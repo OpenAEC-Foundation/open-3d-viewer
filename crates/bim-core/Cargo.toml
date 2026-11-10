@@ -17,5 +17,7 @@ robust = "1.2"
 # Ear clipping of faces with holes for display meshes (ISC)
 earcutr = "0.5"
 serde = { version = "1", features = ["derive"] }
+# The project's library: the materials of layers, and catalogue profiles; headless, in this workspace
+bim-library = { path = "../bim-library" }
 # float_roundtrip: exact f64 parsing, so a definition read back equals the one written
 serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -6,7 +6,10 @@ mod export_drawing;
 mod grids;
 mod ifc;
 mod layers;
+mod edit;
+mod element_props;
 mod levels;
+pub mod library;
 mod marks;
 pub mod modeller;
 mod paper;
@@ -17,6 +20,8 @@ mod sheets;
 mod structural;
 
 pub use ifc::{IfcTab, IfcView};
+#[cfg(test)]
+pub use edit::press as edit_press;
 pub use layers::SideTab;
 pub use view_props::ViewField;
 pub use levels::{ExplorerTab, LevelForm};
@@ -165,6 +170,10 @@ pub struct App {
     pub explorer_open: [bool; 5],
     /// The explorer's tab shown.
     pub explorer_tab: ExplorerTab,
+    /// The project's library: materials, layered build-ups and linear types.
+    pub library: bim_library::Library,
+    /// The Library tab's open groups and pick.
+    pub library_view: library::LibraryView,
     /// The project document (IfcX): the levels of the model and those added.
     pub document: Document,
     /// The form of a new level, while it is open.
@@ -329,6 +338,8 @@ pub enum Message {
     ToggleExplorer(usize),
     /// Show a tab of the explorer.
     ExplorerTab(ExplorerTab),
+    /// The Library tab.
+    Library(library::LibraryMessage),
     /// Open the form of a new level, named after this word ("Level") and a number.
     NewLevel(&'static str),
     LevelName(String),
@@ -522,6 +533,20 @@ pub enum Message {
     ModelTool(Option<(modeller::ModelTool, &'static str)>),
     /// Join the two linear elements selected (the first is the primary), the joint named so.
     Connect(bim_core::ConnectionKind, &'static str),
+    /// Tab: into edit mode on the selected modelled element, or out of it.
+    EditMode,
+    /// What the edit overlay reports: a point pressed, dragged, let go.
+    Edit(edit::EditEvent),
+    /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
+    EditKey(char),
+    /// Typed in a field of the selected modelled element's Definition section.
+    ElementField(element_props::ElementField, String),
+    /// Enter in such a field: it shows the value in use again.
+    ElementFieldDone,
+    /// Add a door (`true`) or a window to the selected wall.
+    AddOpening(bool),
+    /// Remove an opening (its index) of the selected wall.
+    RemoveOpening(usize),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -608,6 +633,8 @@ impl Default for App {
             picked_grid: None,
             explorer_open: [false, false, true, false, false],
             explorer_tab: ExplorerTab::Model,
+            library: bim_library::Library::starter(),
+            library_view: library::LibraryView::default(),
             document: Document::default(),
             level_form: None,
             active_plan: None,
@@ -1277,6 +1304,13 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
+            Message::EditMode => self.toggle_edit(),
+            Message::Edit(event) => self.edit_event(event),
+            Message::EditKey(key) => self.edit_key(key),
+            Message::ElementField(field, typed) => self.type_element_field(field, typed),
+            Message::ElementFieldDone => self.modeller.typing = None,
+            Message::AddOpening(door) => self.add_opening(door),
+            Message::RemoveOpening(index) => self.remove_opening(index),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -1433,6 +1467,7 @@ impl App {
                         self.select_box(rect, width, height);
                     }
                 }
+                Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -1485,6 +1520,7 @@ impl App {
                 }
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
+            Message::Library(message) => return self.library_update(message),
             Message::NewLevel(word) => self.new_level(word),
             Message::LevelName(name) => {
                 if let Some(form) = &mut self.level_form {
@@ -1581,7 +1617,9 @@ impl App {
                 };
             }
             Message::DeletePicked => {
-                if self.delete_modelled() {
+                if self.edit_delete() {
+                    // in edit mode: the picked corners go
+                } else if self.delete_modelled() {
                     // modelled elements selected: they go
                 } else if self.active_doc_sheet.is_some() {
                     if self.sheet_pick.is_some() {
@@ -1638,6 +1676,10 @@ impl App {
                 if on {
                     self.dimension_tool = false;
                     self.note_tool = false;
+                    // a floor plan in its tab is cut, to snap to its lines
+                    if let Some(view) = self.shown_view().map(str::to_string) {
+                        self.cut_view(&view);
+                    }
                 }
                 self.pick_on_sheet(None);
             }
@@ -1849,6 +1891,9 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.edit.is_some() => {
+                self.edit_escape();
+            }
             Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
                 if !self.escape_model_tool() {
                     self.modeller.refusal = None;
@@ -1968,6 +2013,9 @@ impl App {
         let (width, height) = (width.max(1.0), height.max(1.0));
         if self.modeller.tool.is_some() {
             return self.model_click(x, y, width, height);
+        }
+        if self.modeller.edit.is_some() {
+            return self.edit_click();
         }
         if let Some(tool) = self.measure.tool.filter(|_| !self.plane_picking) {
             let screen = self.screen(width, height);
@@ -2658,6 +2706,11 @@ impl App {
             }
         }
 
+        // a modelled element's definition, typed in
+        if let Some(rows) = self.element_properties(p, l) {
+            content = content.push(section(l.text("Definitie", "Definition"))).push(rows).push(rule::horizontal(1));
+        }
+
         // the selection
         if let Some((li, element)) = self.selected {
             content = content.push(section(l.text("Selectie", "Selection")));
@@ -2956,7 +3009,7 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
-            hover: (self.measure.tool.is_some() || self.structural_hover_on()) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor()) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3005,7 +3058,26 @@ impl App {
         let plane = self.plane.zip(self.world_bounds()).filter(|_| overlay.is_none() && !self.plane_picking).map(|(plane, world)| {
             canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
-        let banner = if self.plane_picking {
+        let editing = self.modeller.edit.as_ref().and_then(|e| Some((e, self.modeller.model.get(e.element)?)));
+        let banner = if let Some((edit, element)) = editing {
+            let hint = match &edit.grab {
+                Some(g) if g.by_key => l.text("Klik: neerzetten · X, Y, Z: as · Esc: annuleren", "Click: put down · X, Y, Z: axis · Esc: cancel"),
+                Some(_) => l.text("Sleep naar de nieuwe plek · X, Y, Z: as", "Drag to the new place · X, Y, Z: axis"),
+                None => l.text(
+                    "Sleep een punt · klik: kiezen, Ctrl: erbij · G: verplaatsen · A: alles · Tab: klaar",
+                    "Drag a point · click: pick, Ctrl: add · G: move · A: all · Tab: done",
+                ),
+            };
+            let axis = edit.grab.as_ref().and_then(|g| g.axis).map(|a| match a {
+                edit::Axis::X => " · X",
+                edit::Axis::Y => " · Y",
+                edit::Axis::Z => " · Z",
+            });
+            Some(match self.modeller.refusal {
+                Some(refusal) => format!("{}: {} · {}", element.name, l.translate(refusal.reason()), hint),
+                None => format!("{} {}: {}{}", l.text("Bewerken", "Editing"), element.name, hint, axis.unwrap_or("")),
+            })
+        } else if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
         } else if let Some((tool, _)) = self.modeller.tool {
             let hint = tool.hint(l, self.modeller.points.len());
@@ -3086,8 +3158,10 @@ impl App {
         // the dimensions and texts of the view shown in its tab
         let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
+        let editing = self.edit_overlay(p.accent, p.surface).map(|o| canvas(o).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
+            .push(editing)
             .push(section)
             .push(plane)
             .push(measures)

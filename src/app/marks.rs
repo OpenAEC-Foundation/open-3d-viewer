@@ -25,6 +25,8 @@ const PICK: f32 = 5.0;
 const OFFSET: f32 = 18.0;
 /// The size of a text in a view's tab (logical pixels).
 const NOTE_SIZE: f32 = 13.0;
+/// How long the arrows of a section's mark are on a floor plan's tab (logical pixels).
+const SECTION_ARROW: f32 = 14.0;
 
 /// What can be picked on the view shown in its tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +97,8 @@ impl App {
         let view = self.shown_view()?;
         let frame = self.drawing_frame(view)?;
         let (dimensions, _) = self.document.view_marks(view)?;
+        // sections are drawn on floor plans, and shown there
+        let is_plan = self.document.plan(view).is_some();
         Some(ViewMarks {
             view: Arc::from(view),
             frame,
@@ -104,6 +108,9 @@ impl App {
             cut: self.cuts.get(view).cloned(),
             measuring: self.dimension_tool,
             noting: self.note_tool.then(|| self.note_to_place(l)),
+            cutting: self.section_tool && is_plan,
+            sections: if is_plan { self.document.sections().iter().map(|s| (s.name.clone(), s.from, s.to)).collect() } else { Vec::new() },
+            word: l.text("Doorsnede", "Section"),
             pick: self.mark_pick,
             palette: p,
         })
@@ -113,6 +120,8 @@ impl App {
     pub(super) fn view_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let view = self.shown_view()?;
         let (measuring, noting) = (self.dimension_tool, self.note_tool);
+        let is_plan = self.document.plan(view).is_some();
+        let cutting = self.section_tool && is_plan;
         let tool = |label: &'static str, on: bool, message: Message| {
             button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(message)
         };
@@ -121,7 +130,11 @@ impl App {
             .spacing(6)
             .align_y(Center)
             .push(tool(l.text("Maatvoering", "Dimension"), measuring, Message::DimensionTool(!measuring)))
-            .push(tool(l.text("Tekst", "Text"), noting, Message::NoteTool(!noting)))
+            .push(tool(l.text("Tekst", "Text"), noting, Message::NoteTool(!noting)));
+        if is_plan {
+            bar = bar.push(tool(l.text("Doorsnede", "Section"), cutting, Message::SectionTool(!cutting)));
+        }
+        bar = bar
             .push(tool(l.text("Standaard maatvoering", "Standard dimensions"), false, Message::StandardDimensions(Arc::from(view))))
             .push(self.export_control(p, l))
             .push(text("|").size(12).color(p.text_muted));
@@ -129,6 +142,11 @@ impl App {
         let remove = |label: &'static str| tool(label, false, Message::RemoveMark);
         bar = if measuring {
             bar.push(hint(l.text("Klik twee punten; ze springen naar de uiteinden van de lijnen. Esc breekt af.", "Click two points; they snap to the ends of the lines. Esc cancels.")))
+        } else if cutting {
+            bar.push(hint(l.text(
+                "Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.",
+                "Click where the section starts and ends on a floor plan; it looks to the left.",
+            )))
         } else if noting {
             bar.push(wording()).push(hint(l.text("Klik waar de tekst komt.", "Click where the text goes.")))
         } else {
@@ -293,6 +311,12 @@ pub(super) struct ViewMarks {
     measuring: bool,
     /// The text tool is on, with the text a click places.
     noting: Option<String>,
+    /// The section tool is on (a floor plan): two clicks draw a section.
+    cutting: bool,
+    /// The sections, drawn on a floor plan: name, line (plan).
+    sections: Vec<(String, [f64; 2], [f64; 2])>,
+    /// What a new section is called before its letter.
+    word: &'static str,
     pick: Option<MarkPick>,
     palette: Palette,
 }
@@ -365,7 +389,47 @@ impl ViewMarks {
     }
 
     fn busy(&self) -> bool {
-        self.measuring || self.noting.is_some()
+        self.measuring || self.cutting || self.noting.is_some()
+    }
+
+    /// The tools of two clicks (dimension, section), which snap to the view's lines.
+    fn two_clicks(&self) -> bool {
+        self.measuring || self.cutting
+    }
+
+    /// A section's mark on the floor plan, as a sheet draws it: its line dash-dotted, at each end
+    /// an arrow the way it looks (to the left of `from` -> `to`) and its letter past it.
+    fn draw_section(&self, frame: &mut Frame, screen: &Screen, from: [f64; 2], to: [f64; 2], letter: String, color: Color) {
+        let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+        let run = dx.hypot(dy);
+        let (Some(a), Some(b)) = (self.px(screen, from), self.px(screen, to)) else { return };
+        if run <= 0.0 {
+            return;
+        }
+        let mut line = Stroke::default().with_color(color).with_width(1.0);
+        line.line_dash = canvas::LineDash { segments: &[10.0, 3.0, 2.0, 3.0], offset: 0 };
+        frame.stroke(&Path::line(a, b), line);
+        let look = [-dy / run, dx / run];
+        for (end, at) in [(from, a), (to, b)] {
+            // the way it looks, on screen
+            let Some(ahead) = self.px(screen, [end[0] + look[0], end[1] + look[1]]) else { continue };
+            let d = ahead - at;
+            let length = (d.x * d.x + d.y * d.y).sqrt().max(1e-3);
+            let unit = iced::Vector::new(d.x / length, d.y / length);
+            frame.stroke(&Path::line(at, at + unit * SECTION_ARROW), Stroke::default().with_color(color).with_width(1.6));
+            if !letter.is_empty() {
+                frame.fill_text(canvas::Text {
+                    content: letter.clone(),
+                    position: at + unit * (SECTION_ARROW * 1.8),
+                    align_x: alignment::Horizontal::Center.into(),
+                    align_y: alignment::Vertical::Center,
+                    size: iced::Pixels(12.0),
+                    color,
+                    font: openaec_ui::fonts::MEDIUM,
+                    ..canvas::Text::default()
+                });
+            }
+        }
     }
 }
 
@@ -381,7 +445,7 @@ impl canvas::Program<Message> for ViewMarks {
 
     fn update(&self, state: &mut MarksState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
         let screen = self.screen(bounds);
-        if !self.measuring {
+        if !self.two_clicks() {
             state.first = None;
         }
         if !self.busy() {
@@ -395,7 +459,7 @@ impl canvas::Program<Message> for ViewMarks {
                     return Some(canvas::Action::publish(Message::MoveNote(self.view.clone(), k, [q[0] + grip[0], q[1] + grip[1]])).and_capture());
                 }
                 if self.busy() {
-                    state.aim = pointer.and_then(|p| if self.measuring { self.snap(&screen, p) } else { self.at(&screen, p) });
+                    state.aim = pointer.and_then(|p| if self.two_clicks() { self.snap(&screen, p) } else { self.at(&screen, p) });
                     return Some(canvas::Action::request_redraw());
                 }
                 let hover = pointer.and_then(|p| self.mark_at(&screen, p)).is_some();
@@ -406,13 +470,14 @@ impl canvas::Program<Message> for ViewMarks {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let p = pointer?;
-                if self.measuring {
+                if self.two_clicks() {
                     let q = self.snap(&screen, p)?;
                     return match state.first.take() {
                         None => {
                             state.first = Some(q);
                             Some(canvas::Action::request_redraw().and_capture())
                         }
+                        Some(from) if self.cutting => Some(canvas::Action::publish(Message::NewSection(from, q, self.word)).and_capture()),
                         Some(from) => Some(canvas::Action::publish(Message::AddDimension(self.view.clone(), from, q)).and_capture()),
                     };
                 }
@@ -440,6 +505,9 @@ impl canvas::Program<Message> for ViewMarks {
                 if self.measuring {
                     return Some(canvas::Action::publish(Message::DimensionTool(false)).and_capture());
                 }
+                if self.cutting {
+                    return Some(canvas::Action::publish(Message::SectionTool(false)).and_capture());
+                }
                 self.noting.is_some().then(|| canvas::Action::publish(Message::NoteTool(false)).and_capture())
             }
             _ => None,
@@ -451,6 +519,10 @@ impl canvas::Program<Message> for ViewMarks {
         let screen = self.screen(bounds);
         let mut frame = Frame::new(renderer, bounds.size());
         let ink = p.text;
+        for (name, from, to) in &self.sections {
+            let letter = name.rsplit(' ').next().unwrap_or(name).to_string();
+            self.draw_section(&mut frame, &screen, *from, *to, letter, ink);
+        }
         for (k, d) in self.dimensions.iter().enumerate() {
             let (Some(a), Some(b)) = (self.px(&screen, d.from), self.px(&screen, d.to)) else { continue };
             let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else { ink };
@@ -471,6 +543,7 @@ impl canvas::Program<Message> for ViewMarks {
             let (aim, c) = q;
             match (&self.noting, state.first) {
                 (Some(wording), _) => draw_note(&mut frame, c, wording, NOTE_SIZE, Color { a: 0.6, ..p.accent }),
+                (None, Some(from)) if self.cutting => self.draw_section(&mut frame, &screen, from, aim, String::new(), p.accent),
                 (None, Some(from)) => {
                     if let Some(a) = self.px(&screen, from) {
                         let length = Dimension { from, to: aim }.length();
@@ -479,7 +552,7 @@ impl canvas::Program<Message> for ViewMarks {
                 }
                 (None, None) => {}
             }
-            if self.measuring {
+            if self.two_clicks() {
                 frame.stroke(&Path::circle(c, 4.0), Stroke::default().with_color(p.accent).with_width(1.5));
             }
         }
@@ -685,6 +758,39 @@ mod tests {
         let _ = app.update(Message::DeletePicked);
         assert!(app.document.plan(&plan).unwrap().dimensions.is_empty());
         assert_eq!(app.mark_pick, None);
+    }
+
+    #[test]
+    fn two_clicks_with_the_section_tool_draw_a_section_on_the_floor_plan() {
+        let (mut app, plan) = plan_shown();
+        let _ = app.update(Message::SectionTool(true));
+        assert!(app.cuts.contains_key(&*plan), "cut to snap to");
+        let marks = layer(&app);
+        assert!(marks.cutting);
+        let mut state = MarksState::default();
+        let off = iced::Vector::new(3.0, -2.0);
+        assert!(message(press(&marks, &mut state, on_screen(&app, [0.0, 0.0]) + off)).is_none());
+        let made = message(press(&marks, &mut state, on_screen(&app, [8.0, 0.0]) + off)).expect("a section");
+        assert!(matches!(&made, Message::NewSection([0.0, 0.0], [8.0, 0.0], _)), "{made:?}");
+        let _ = app.update(made);
+        assert_eq!(app.document.sections().len(), 1);
+        assert!(!app.section_tool, "one section a time");
+        // back on the floor plan, its tab draws the section's line with its letter
+        let _ = app.update(Message::OpenPlan(plan.clone()));
+        let marks = layer(&app);
+        assert_eq!(marks.sections.len(), 1);
+        assert_eq!((marks.sections[0].1, marks.sections[0].2), ([0.0, 0.0], [8.0, 0.0]));
+        assert!(marks.sections[0].0.ends_with('A'), "{:?}", marks.sections[0]);
+    }
+
+    #[test]
+    fn a_section_is_not_drawn_on_a_section() {
+        let (mut app, _) = plan_shown();
+        let _ = app.update(Message::NewSection([0.0, 0.0], [8.0, 0.0], "Section"));
+        // the new section shows in its tab: no section tool and no section marks there
+        let _ = app.update(Message::SectionTool(true));
+        let marks = layer(&app);
+        assert!(!marks.cutting && marks.sections.is_empty());
     }
 
     #[test]

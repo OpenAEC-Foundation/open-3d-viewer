@@ -90,6 +90,9 @@ pub enum Refusal {
     TooManyParts,
     /// A system that is not framed has an opening.
     OpeningNotFramed,
+    /// A frame cannot be split into prefab units short enough, with their joints clear of its
+    /// openings.
+    NoUnitJoint,
 }
 
 impl Refusal {
@@ -121,6 +124,7 @@ impl Refusal {
             Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
             Refusal::TooManyParts => "A system would have more than 50000 parts.",
             Refusal::OpeningNotFramed => "Only a framed system, such as a timber frame, can have openings.",
+            Refusal::NoUnitJoint => "The frame cannot be split into prefab units clear of its openings.",
         }
     }
 }

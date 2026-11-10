@@ -146,17 +146,22 @@ impl Grid {
 /// it carries a header `header` high (as deep as the studs) over the opening, a window has a sill
 /// under it, and cripple studs stand above the header (over the trimmers too) and below the sill
 /// at the bay's centres. The header is the type's nominal size, not a lintel sized for its load.
+///
+/// A frame longer than its `unit` is made of prefab units, each with its own plates and end studs;
+/// no board crosses a joint between them.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Framing {
     pub bottom_plates: u8,
     pub top_plates: u8,
     #[serde(default = "Framing::nominal_header")]
     pub header: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<f64>,
 }
 
 impl Framing {
-    /// One plate at the foot and one at the head, headers 200 high.
-    pub const PLATES: Framing = Framing { bottom_plates: 1, top_plates: 1, header: 0.2 };
+    /// One plate at the foot and one at the head, headers 200 high, made in one piece.
+    pub const PLATES: Framing = Framing { bottom_plates: 1, top_plates: 1, header: 0.2, unit: None };
 
     fn nominal_header() -> f64 {
         Self::PLATES.header
@@ -165,6 +170,11 @@ impl Framing {
     /// This framing with headers `header` high.
     pub fn with_header(self, header: f64) -> Self {
         Self { header, ..self }
+    }
+
+    /// This framing made in prefab units at most `unit` long.
+    pub fn with_unit(self, unit: f64) -> Self {
+        Self { unit: Some(unit), ..self }
     }
 }
 
@@ -269,7 +279,7 @@ impl SystemType {
                 return Err(LibraryError::NotPositive);
             }
             if let Some(m) = members {
-                if !thick(m.width) || !thick(m.depth) || m.framing.is_some_and(|f| !thick(f.header)) {
+                if !thick(m.width) || !thick(m.depth) || m.framing.is_some_and(|f| !thick(f.header) || f.unit.is_some_and(|u| !thick(u))) {
                     return Err(LibraryError::NotPositive);
                 }
                 known(&m.material)?;
@@ -346,7 +356,8 @@ pub fn starter() -> Vec<SystemType> {
     // a top plate, mineral wool between them; plywood; a vapour control layer; a service zone of
     // 45×45 battens framed at the studs' centres, mineral wool between them; gypsum board. The
     // boards are two bays wide (1200 at 600, 1220 at 610) and as high as the frame's rows (3000,
-    // or 2440 with the 1220 boards), so their seams fall on studs and on noggins.
+    // or 2440 with the 1220 boards), so their seams fall on studs and on noggins. The frame is made
+    // in prefab units of at most 3300, the catalogue's example.
     let timber_frame = |id: &str, depth: f64, centres: f64| {
         let row = if centres > 0.6 { 2.44 } else { 3.0 };
         let (membrane, plywood, vapour, service, gypsum) = (0.0005, 0.018, 0.0002, 0.045, 0.0125);
@@ -362,7 +373,7 @@ pub fn starter() -> Vec<SystemType> {
                 SystemLayer { offset: inside(plywood + vapour, service), grid: Grid::new(centres, row, Stack), members: Some(battens), panels: Panels::new("mineral-wool", service) },
                 boards(inside(plywood + vapour + service, gypsum), "gypsum-board", gypsum, 2.0 * centres, row),
             ],
-            ..upright(id, TimberFrame, Grid::new(centres, row, Stack), Members::new(0.038, depth, "timber").framed(Framing::PLATES), Panels::new("mineral-wool", depth))
+            ..upright(id, TimberFrame, Grid::new(centres, row, Stack), Members::new(0.038, depth, "timber").framed(Framing::PLATES.with_unit(3.3)), Panels::new("mineral-wool", depth))
         }
     };
     // an interior timber frame: studs 38×89 at 600 with mineral wool, gypsum board on either face,
@@ -449,7 +460,7 @@ mod tests {
     #[test]
     fn a_timber_frame_has_its_layers_against_one_another() {
         let t = starter().into_iter().find(|t| t.id == "system.timber-frame-140").unwrap();
-        assert_eq!(t.members.framing, Some(Framing::PLATES));
+        assert_eq!(t.members.framing, Some(Framing::PLATES.with_unit(3.3)));
         // from the outside in: the membrane, the frame, plywood, the vapour control layer, the
         // service zone, gypsum board; each layer against the one before it
         let mut faces: Vec<(f64, f64, &str)> = t.faces().map(|(offset, _, m, p)| (offset, m.map_or(0.0, |m| m.depth).max(p.thickness), p.material.as_str())).collect();
@@ -503,7 +514,7 @@ mod tests {
         assert_eq!(serde_json::to_value(&aluminium).unwrap()["corners"], "mitre");
         assert!(serde_json::to_value(&aluminium).unwrap()["members"].get("framing").is_none());
         let frame = serde_json::to_value(starter().into_iter().find(|t| t.id == "system.timber-frame-140").unwrap()).unwrap();
-        assert_eq!(frame["members"]["framing"], serde_json::json!({"bottom_plates": 1, "top_plates": 1, "header": 0.2}));
+        assert_eq!(frame["members"]["framing"], serde_json::json!({"bottom_plates": 1, "top_plates": 1, "header": 0.2, "unit": 3.3}));
         // a framing written without a header has the nominal one
         let read: Framing = serde_json::from_str(r#"{"bottom_plates": 1, "top_plates": 2}"#).unwrap();
         assert_eq!(read, Framing { top_plates: 2, ..Framing::PLATES });

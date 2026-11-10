@@ -289,6 +289,13 @@ impl App {
         if let Some(t) = system_type {
             let name = self.library.system_name(&t.id, crate::app::library::lang(l)).unwrap_or_else(|| t.id.clone());
             rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
+            // a frame made in prefab units: their lengths
+            if let (Shape::System(s), true) = (&shape, t.framing.is_some_and(|f| f.unit.is_some())) {
+                if let Ok(units) = bim_core::system::units(s) {
+                    let lengths: Vec<String> = units.iter().map(|u| bim_library::millimetres(*u, crate::app::library::lang(l))).collect();
+                    rows = rows.push(prop_row(p, l.text("Prefab-elementen", "Prefab units").to_string(), lengths.join(" + ")));
+                }
+            }
         }
         for (f, label) in fields.into_iter().filter(|(f, _)| has(*f)) {
             // what a type gives is shown, not typed
@@ -433,6 +440,11 @@ mod tests {
         let _ = app.update(Message::AddOpening(false));
         assert!(system(&app).openings.is_empty());
         assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
+        {
+            // 5 m in prefab units of at most 3300, on the stud lines
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Prefab units").is_ok() && ui.find("2400 + 2600").is_ok());
+        }
         let _ = app.update(Message::AddOpening(false));
         assert_eq!(system(&app).openings, [Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2 }]);
         // its header: a member as deep as the studs, 200 high, over the window and its trimmers

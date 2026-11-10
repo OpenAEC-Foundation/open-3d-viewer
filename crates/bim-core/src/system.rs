@@ -27,6 +27,11 @@
 //! into rectangles: the strips beside it, then the pieces below and above it. Only framed systems
 //! take openings.
 //!
+//! A frame longer than its framing's longest unit is made of prefab units ([`units`]): as few as
+//! can be, as equal as can be, each with its own plates and end studs. A joint between two units
+//! lies on a stud line or right beside an opening's framing, clear of its king studs; no board or
+//! membrane crosses a joint.
+//!
 //! Panels fill the bays (or the cells of a frame) between the members, centred on their face. A
 //! layer without members lays whole boards edge to edge from the face's start and foot, the last
 //! ones cut to fit.
@@ -40,6 +45,7 @@ use bim_library::system::{Corner, Framing, Pattern, SystemLayer, SystemType};
 use bim_library::Library;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
+use std::iter::once;
 
 /// The most parts one system is generated as; a system that would have more is refused.
 pub const MAX_PARTS: usize = 50_000;
@@ -157,6 +163,21 @@ impl Face<'_> {
         }
     }
 
+    /// At most how many parts more each joint between prefab units makes of it: a framed face made
+    /// in units gets plates, two end studs and a noggin and a cell either side in every row; a face
+    /// of boards one more board in every row.
+    fn joint_parts(&self, height: f64) -> usize {
+        let (_, rows, _, _) = self.division(1.0, height);
+        match (self.framing, self.member) {
+            (Some(framing), Some(_)) if framing.unit.is_some() => {
+                let plates = usize::from(framing.bottom_plates) + usize::from(framing.top_plates);
+                rows.saturating_add(2).saturating_mul(4).saturating_add(plates).saturating_add(2)
+            }
+            (_, None) => rows,
+            _ => 0,
+        }
+    }
+
     /// Checks it: positive sizes, bays and rows wider than the members; a frame with room for its
     /// end studs and, between its plates, for its studs, and for the framing of its openings.
     fn check(&self, length: f64, height: f64, openings: &[Opening]) -> Result<(), Refusal> {
@@ -168,7 +189,7 @@ impl Face<'_> {
         if let (Some(framing), Some((m, _))) = (self.framing, self.member) {
             let plates = f64::from(framing.bottom_plates) + f64::from(framing.top_plates);
             let room = [self.spacing.x - m.x, self.spacing.y - m.x, length - 2.0 * m.x, height - plates * m.x];
-            if !room.into_iter().all(|r| r > LINEAR_TOLERANCE) || !positive(framing.header) {
+            if !room.into_iter().all(|r| r > LINEAR_TOLERANCE) || !positive(framing.header) || framing.unit.is_some_and(|u| !positive(u)) {
                 return Err(Refusal::NotPositive);
             }
             return framed_openings(length, height, framing, m.x, openings);
@@ -223,16 +244,88 @@ pub fn parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
     for f in &faces {
         f.check(length, s.height, &s.openings)?;
     }
-    if faces.iter().map(|f| f.most_parts(length, s.height, s.openings.len())).fold(0usize, usize::saturating_add) > MAX_PARTS {
+    let most = faces.iter().map(|f| f.most_parts(length, s.height, s.openings.len())).fold(0usize, usize::saturating_add);
+    if most > MAX_PARTS {
+        return Err(Refusal::TooManyParts);
+    }
+    let joints = joints(s, &faces, length)?;
+    let more = joints.len().saturating_mul(faces.iter().map(|f| f.joint_parts(s.height)).fold(0usize, usize::saturating_add));
+    if most.saturating_add(more) > MAX_PARTS {
         return Err(Refusal::TooManyParts);
     }
     let dir = (d / length).extend(0.0);
     let line = Line { origin: s.start.extend(s.base), dir, right: dir.cross(DVec3::Z), length, height: s.height };
     let mut parts = Vec::new();
     for f in &faces {
-        line.generate(f, &s.openings, &mut parts)?;
+        line.generate(f, &s.openings, &joints, &mut parts)?;
     }
     Ok(parts)
+}
+
+/// The lengths of the prefab units system `s` is made of, from its start: its whole length, unless
+/// its framing has a longest unit that it is longer than.
+pub fn units(s: &SystemDef) -> Result<Vec<f64>, Refusal> {
+    let length = (s.end - s.start).length();
+    let joints = joints(s, &faces(s), length)?;
+    let ends: Vec<f64> = once(0.0).chain(joints).chain(once(length)).collect();
+    Ok(ends.windows(2).map(|u| u[1] - u[0]).collect())
+}
+
+/// Where system `s`, `length` long, is split into prefab units: by its own face's framing.
+fn joints(s: &SystemDef, faces: &[Face], length: f64) -> Result<Vec<f64>, Refusal> {
+    match faces.first().map(|f| (f.framing, f.member, f.spacing.x)) {
+        Some((Some(framing), Some((m, _)), bay)) => unit_joints(length, bay, framing, m.x, &s.openings),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Where a frame `length` long, its studs `w` wide at `bay`, is split into prefab units no longer
+/// than its framing's `unit`: into as few units as can be, as equal as can be. A joint lies on a
+/// stud line or right beside an opening's framing, with an end stud either side of it clear of
+/// the frame's end studs and the openings' king studs. With no such joints the frame is refused.
+fn unit_joints(length: f64, bay: f64, framing: Framing, w: f64, openings: &[Opening]) -> Result<Vec<f64>, Refusal> {
+    let tol = LINEAR_TOLERANCE;
+    let Some(longest) = framing.unit else { return Ok(Vec::new()) };
+    if length <= longest + tol {
+        return Ok(Vec::new());
+    }
+    let clear = |u: f64| u >= 2.0 * w - tol && u <= length - 2.0 * w + tol && openings.iter().all(|o| u <= o.along - 3.0 * w + tol || u >= o.along + o.width + 3.0 * w - tol);
+    let lines = (length / bay).floor().min(1e7) as usize;
+    let beside = openings.iter().flat_map(|o| [o.along - 3.0 * w, o.along + o.width + 3.0 * w]);
+    let mut places: Vec<f64> = (1..=lines).map(|k| k as f64 * bay).chain(beside).filter(|&u| clear(u)).collect();
+    places.sort_by(f64::total_cmp);
+    places.dedup_by(|a, b| (*a - *b).abs() < tol);
+    // the place nearest a joint where the units would be equal
+    let nearest = |target: f64| {
+        let i = places.partition_point(|&u| u < target);
+        [i.checked_sub(1), Some(i).filter(|&i| i < places.len())].into_iter().flatten().map(|i| places[i]).min_by(|a, b| (a - target).abs().total_cmp(&(b - target).abs()))
+    };
+    let fewest = ((length - tol) / longest).ceil() as usize;
+    for n in fewest.max(2)..=places.len() + 1 {
+        let mut joints: Vec<f64> = (1..n).filter_map(|k| nearest(length * k as f64 / n as f64)).collect();
+        joints.dedup_by(|a, b| (*a - *b).abs() < tol);
+        let ends: Vec<f64> = once(0.0).chain(joints.iter().copied()).chain(once(length)).collect();
+        if ends.windows(2).all(|u| u[1] - u[0] <= longest + tol && u[1] - u[0] >= 2.0 * w - tol) {
+            return Ok(joints);
+        }
+    }
+    Err(Refusal::NoUnitJoint)
+}
+
+/// Rectangles `rects` cut at the joints `joints` along (in order), so none crosses one.
+fn split(rects: Vec<[f64; 4]>, joints: &[f64]) -> Vec<[f64; 4]> {
+    let tol = LINEAR_TOLERANCE;
+    let mut cut = Vec::with_capacity(rects.len());
+    for mut r in rects {
+        for &u in joints {
+            if u > r[0] + tol && u < r[2] - tol {
+                cut.push([r[0], r[1], u, r[3]]);
+                r[0] = u;
+            }
+        }
+        cut.push(r);
+    }
+    cut
 }
 
 /// A system's line: where its face starts, along it, to its right, and how long and high it is.
@@ -281,32 +374,62 @@ impl Line {
         Ok(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, thickness)?, material: material.map(str::to_string) })
     }
 
-    /// Framed face `f`: its plates, its end studs, its openings each between its king studs, the
-    /// studs and noggins between those, and the cells between all of them, inside the face.
-    fn framed(&self, f: &Face, framing: Framing, size: DVec2, material: Option<&str>, openings: &[Opening], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
-        let w = size.x;
-        let (length, height) = (self.length, self.height);
-        let (bottom, top) = (f64::from(framing.bottom_plates) * w, height - f64::from(framing.top_plates) * w);
+    /// Framed face `f`, unit by unit (split at `joints` when its framing is made in units): its
+    /// plates, its end studs, its openings each between its king studs, the studs and noggins
+    /// between those, and the cells between all of them, inside the face.
+    #[allow(clippy::too_many_arguments)]
+    fn framed(&self, f: &Face, framing: Framing, size: DVec2, material: Option<&str>, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let mut openings: Vec<&Opening> = openings.iter().collect();
         openings.sort_by(|a, b| a.along.total_cmp(&b.along));
         let mut frame = Frame { line: self, face: f, size, members: Vec::new(), cells: Vec::new() };
-        // the plates, the bottom ones stopping at the doors
+        let joints = if framing.unit.is_some() { joints } else { &[] };
+        let ends: Vec<f64> = once(0.0).chain(joints.iter().copied()).chain(once(self.length)).collect();
+        for unit in ends.windows(2) {
+            let (start, end) = (unit[0], unit[1]);
+            let inside: Vec<&Opening> = openings.iter().copied().filter(|o| o.along > start && o.along < end).collect();
+            frame.unit(framing, start, end, &inside)?;
+        }
+        for m in &frame.members {
+            parts.push(PartSolid { class: "IfcMember", solid: join::finish(&m.member, None, None, &[], &[])?, material: material.map(str::to_string) });
+        }
+        for c in &frame.cells {
+            parts.push(self.panel(f, c[0], c[1], c[2] - c[0], c[3] - c[1])?);
+        }
+        Ok(())
+    }
+
+    fn generate(&self, f: &Face, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
+        if let (Some(framing), Some((size, material))) = (f.framing, f.member) {
+            return self.framed(f, framing, size, material, openings, joints, parts);
+        }
+        self.grid(f, openings, joints, parts)
+    }
+}
+
+impl Frame<'_> {
+    /// One unit of a frame, from `start` along to `end`, with `openings` in it (in order): its
+    /// plates, the bottom ones stopping at the doors, its end studs, and between them each
+    /// opening between its king studs, filled between.
+    fn unit(&mut self, framing: Framing, start: f64, end: f64, openings: &[&Opening]) -> Result<(), Refusal> {
+        let w = self.size.x;
+        let height = self.line.height;
+        let (bottom, top) = (f64::from(framing.bottom_plates) * w, height - f64::from(framing.top_plates) * w);
+        let frame = self;
         for k in 0..framing.bottom_plates {
             let v = (f64::from(k) + 0.5) * w;
-            let mut from = 0.0;
+            let mut from = start;
             for o in openings.iter().filter(|o| is_door(o)) {
                 frame.rail(v, from, o.along, w)?;
                 from = o.along + o.width;
             }
-            frame.rail(v, from, length, w)?;
+            frame.rail(v, from, end, w)?;
         }
         for k in 0..framing.top_plates {
-            frame.rail(height - (f64::from(k) + 0.5) * w, 0.0, length, w)?;
+            frame.rail(height - (f64::from(k) + 0.5) * w, start, end, w)?;
         }
-        // the end studs, and between them each opening between its king studs
-        frame.stud(w / 2.0, bottom, top)?;
-        let mut from = w;
-        for o in &openings {
+        frame.stud(start + w / 2.0, bottom, top)?;
+        let mut from = start + w;
+        for o in openings {
             let (a, b, head) = (o.along, o.along + o.width, o.sill + o.height);
             frame.fill(from, a - 2.0 * w, bottom, top)?;
             frame.stud(a - 1.5 * w, bottom, top)?;
@@ -325,28 +448,22 @@ impl Line {
             }
             from = b + 2.0 * w;
         }
-        frame.fill(from, length - w, bottom, top)?;
-        frame.stud(length - w / 2.0, bottom, top)?;
-        for m in &frame.members {
-            parts.push(PartSolid { class: "IfcMember", solid: join::finish(&m.member, None, None, &[], &[])?, material: material.map(str::to_string) });
-        }
-        for c in &frame.cells {
-            parts.push(self.panel(f, c[0], c[1], c[2] - c[0], c[3] - c[1])?);
-        }
-        Ok(())
+        frame.fill(from, end - w, bottom, top)?;
+        frame.stud(end - w / 2.0, bottom, top)
     }
+}
 
-    fn generate(&self, f: &Face, openings: &[Opening], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
-        if let (Some(framing), Some((size, material))) = (f.framing, f.member) {
-            return self.framed(f, framing, size, material, openings, parts);
-        }
+impl Line {
+    /// Face `f` on a grid: its members on the grid's lines, joined, and its panels (or boards) in
+    /// its bays, cut around `openings` and at the prefab units' `joints`.
+    fn grid(&self, f: &Face, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let (bays, rows, bay, row) = f.division(self.length, self.height);
         let w = f.width();
         // a panel between the lines `w` apart, up to the face's end and head (where boards are
         // cut), and cut around the openings
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
             let r = [u + w / 2.0, v + w / 2.0, u + du.min(self.length - u) - w / 2.0, v + dv.min(self.height - v) - w / 2.0];
-            around(r, openings).into_iter().map(|r| self.panel(f, r[0], r[1], r[2] - r[0], r[3] - r[1])).collect()
+            split(around(r, openings), joints).into_iter().map(|r| self.panel(f, r[0], r[1], r[2] - r[0], r[3] - r[1])).collect()
         };
         let mut pieces: Vec<Piece> = Vec::new();
         // the joins between members: their kind, the member that runs through (or the first of a
@@ -739,7 +856,8 @@ mod tests {
         let battens = rects(&parts, "timber").into_iter().filter(|r| (r[1] - (3.0 - 0.0225)).abs() < 1e-9).count();
         assert_eq!(battens, 9);
         // the membranes in courses of 1.5 m, the last cut
-        assert_eq!(rects(&parts, "breather-membrane").iter().map(|r| r[3] - r[1]).map(|h| (h * 1e6).round() / 1e6).collect::<Vec<_>>(), [1.5, 1.5, 0.4]);
+        let first: Vec<f64> = rects(&parts, "breather-membrane").iter().filter(|r| r[0].abs() < 1e-9).map(|r| ((r[3] - r[1]) * 1e6).round() / 1e6).collect();
+        assert_eq!(first, [1.5, 1.5, 0.4]);
     }
 
     #[test]
@@ -798,7 +916,7 @@ mod tests {
         // 3.6 m by 2.7 m, a window 1.2 by 1.2 from 1.2 along at a sill of 0.9
         let (w, d, header) = (0.038, 0.14, 0.2);
         let window = Opening { along: 1.2, sill: 0.9, width: 1.2, height: 1.2 };
-        let parts = parts(&opened(3.6, 2.7, "system.timber-frame-140", vec![window])).unwrap();
+        let parts = parts(&opened(3.3, 2.7, "system.timber-frame-140", vec![window])).unwrap();
         let members = frame(&parts, d);
         let has = |r: [f64; 4]| members.iter().any(|m| near(*m, r));
         // king studs plate to plate, trimmers up to the header, which lies on them
@@ -815,13 +933,13 @@ mod tests {
         // the frame, its cells and the opening fill the face: nothing overlaps, nothing is missing
         let wool: Vec<[f64; 4]> = parts.iter().filter(|p| p.material.as_deref() == Some("mineral-wool") && { let (lo, hi) = p.solid.bounds(); (hi.y - lo.y - d).abs() < 1e-9 }).map(|p| { let (lo, hi) = p.solid.bounds(); [lo.x, lo.z, hi.x, hi.z] }).collect();
         let area = |rs: &[[f64; 4]]| rs.iter().map(|r| (r[2] - r[0]) * (r[3] - r[1])).sum::<f64>();
-        assert!((area(&members) + area(&wool) + 1.2 * 1.2 - 3.6 * 2.7).abs() < 1e-9, "{} {}", area(&members), area(&wool));
+        assert!((area(&members) + area(&wool) + 1.2 * 1.2 - 3.3 * 2.7).abs() < 1e-9, "{} {}", area(&members), area(&wool));
         // the boards are cut around the window and every seam has timber behind it
         for material in ["plywood", "gypsum-board", "breather-membrane"] {
-            assert!((area(&rects(&parts, material)) - (3.6 * 2.7 - 1.2 * 1.2)).abs() < 1e-9, "{material}");
+            assert!((area(&rects(&parts, material)) - (3.3 * 2.7 - 1.2 * 1.2)).abs() < 1e-9, "{material}");
             assert!(rects(&parts, material).iter().all(|r| r[2] <= 1.2 + 1e-9 || r[0] >= 2.4 - 1e-9 || r[3] <= 0.9 + 1e-9 || r[1] >= 2.1 - 1e-9), "{material} in the window");
         }
-        seams_carried(&parts, "plywood", &members, [3.6, 2.7], &[window]).unwrap();
+        seams_carried(&parts, "plywood", &members, [3.3, 2.7], &[window]).unwrap();
         assert_eq!(rects(&parts, "plywood").len(), 4, "a whole board either side, one below and one above the window");
     }
 
@@ -861,12 +979,69 @@ mod tests {
     }
 
     #[test]
+    fn a_long_timber_frame_is_made_in_prefab_units() {
+        let (w, d) = (0.038, 0.14);
+        // 7.2 m: three units of 2400, each with its own plates and end studs
+        let s = typed(7.2, 2.7, "system.timber-frame-140");
+        let lengths = units(&s).unwrap();
+        assert!(lengths.len() == 3 && lengths.iter().all(|u| (u - 2.4).abs() < 1e-9), "{lengths:?}");
+        let parts = parts(&s).unwrap();
+        let members = frame(&parts, d);
+        let bottom: Vec<_> = members.iter().filter(|r| r[1].abs() < 1e-9).collect();
+        assert!(bottom.len() == 3 && near(*bottom[1], [2.4, 0.0, 4.8, w]), "{bottom:?}");
+        for joint in [2.4, 4.8] {
+            let has = |r: [f64; 4]| members.iter().any(|m| near(*m, r));
+            assert!(has([joint - w, w, joint, 2.7 - w]) && has([joint, w, joint + w, 2.7 - w]), "end studs either side of {joint}");
+            for material in ["plywood", "gypsum-board", "breather-membrane", "vapour-control-membrane"] {
+                assert!(rects(&parts, material).iter().all(|r| r[2] <= joint + 1e-9 || r[0] >= joint - 1e-9), "{material} across {joint}");
+            }
+        }
+        seams_carried(&parts, "plywood", &members, [7.2, 2.7], &[]).unwrap();
+        // one unit when it is short enough, and an interior wall is made in one piece
+        assert_eq!(units(&typed(3.3, 2.7, "system.timber-frame-140")).unwrap(), [3.3]);
+        assert_eq!(units(&typed(7.2, 2.7, "system.timber-frame-internal-89")).unwrap(), [7.2]);
+        // 5 m: as equal as the stud lines let them be
+        let lengths = units(&typed(5.0, 2.7, "system.timber-frame-140")).unwrap();
+        assert!((lengths[0] - 2.4).abs() < 1e-9 && (lengths[1] - 2.6).abs() < 1e-9, "{lengths:?}");
+    }
+
+    #[test]
+    fn prefab_joints_keep_clear_of_openings() {
+        let w = 0.038;
+        let window = |along: f64, sill: f64, width: f64, height: f64| Opening { along, sill, width, height };
+        for (length, openings) in [
+            (10.0, vec![window(4.5, 0.9, 1.2, 1.2)]),
+            // no stud line between these is clear: a joint right beside one of them
+            (5.0, vec![window(0.5, 0.9, 1.2, 1.2), window(2.05, 0.0, 0.9, 2.1)]),
+        ] {
+            let s = opened(length, 2.7, "system.timber-frame-140", openings.clone());
+            let lengths = units(&s).unwrap();
+            assert!(lengths.iter().all(|u| *u <= 3.3 + 1e-9) && (lengths.iter().sum::<f64>() - length).abs() < 1e-9, "{lengths:?}");
+            let mut at = 0.0;
+            for u in &lengths[..lengths.len() - 1] {
+                at += u;
+                assert!(openings.iter().all(|o| at <= o.along - 3.0 * w + 1e-9 || at >= o.along + o.width + 3.0 * w - 1e-9), "{length}: a joint at {at} in an opening's framing");
+            }
+            assert!(parts(&s).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_frame_that_cannot_be_split_clear_of_its_openings_is_refused() {
+        // a window 6 m wide in a 7 m frame leaves no joint that keeps the units under 3300
+        let s = opened(7.0, 2.7, "system.timber-frame-140", vec![Opening { along: 0.5, sill: 0.9, width: 6.0, height: 1.2 }]);
+        assert_eq!(parts(&s).map(|p| p.len()), Err(Refusal::NoUnitJoint));
+        assert_eq!(units(&s), Err(Refusal::NoUnitJoint));
+    }
+
+    #[test]
     fn a_board_is_cut_around_an_opening_into_rectangles() {
         let o = Opening { along: 1.0, sill: 0.5, width: 1.0, height: 1.0 };
         // beside it full height, then below and above it
         assert_eq!(around([0.0, 0.0, 3.0, 3.0], &[o]), vec![[0.0, 0.0, 1.0, 3.0], [2.0, 0.0, 3.0, 3.0], [1.0, 0.0, 2.0, 0.5], [1.0, 1.5, 2.0, 3.0]]);
         assert_eq!(around([2.0, 0.0, 3.0, 3.0], &[o]), vec![[2.0, 0.0, 3.0, 3.0]], "a board beside it is whole");
         assert!(around([1.0, 0.5, 2.0, 1.5], &[o]).is_empty(), "a board in it is gone");
+        assert_eq!(split(vec![[0.0, 0.0, 3.0, 1.0]], &[1.0, 2.4]), vec![[0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 2.4, 1.0], [2.4, 0.0, 3.0, 1.0]], "cut at the joints");
     }
 
     #[test]

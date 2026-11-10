@@ -473,6 +473,9 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
             ),
             p,
         ));
+        if let Some(unit) = framing.unit {
+            list = list.push(small(format!("{} {} mm", l.text("Prefab-elementen tot", "Prefab units up to"), mm(unit, l)), p));
+        }
     }
     list = list.push(line(&t.panels.material, format!("{}: {} {}", l.text("Panelen", "Panels"), material(&t.panels.material), mm(t.panels.thickness, l))));
     for layer in &t.layers {
@@ -907,7 +910,7 @@ mod tests {
         click(&mut app, "Timber frames");
         click(&mut app, "Timber frame 38×140 c/c 600");
         let mut ui = simulator(&app);
-        assert!(ui.find("Bottom plates 1 · top plates 1 · header 200 mm").is_ok());
+        assert!(ui.find("Bottom plates 1 · top plates 1 · header 200 mm").is_ok() && ui.find("Prefab units up to 3300 mm").is_ok());
         // its face: the plates through, studs between them
         let face = elevation(&frame, &app.library, Color::BLACK);
         let timber = face.rects.iter().filter(|(_, c)| *c == [205, 165, 115]).map(|(r, _)| r[2] - r[0]).fold(0.0, f64::max);

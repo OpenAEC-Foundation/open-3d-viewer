@@ -181,7 +181,9 @@ impl PlanarDef {
 
 /// A system: a vertical domain on its line from `start` to `end`, from `base` up `height`,
 /// divided into equal bays about `spacing` (along, up) apart. Members of `member` (width in the
-/// face, depth across it) run on the division lines; panels `panel` thick fill the bays.
+/// face, depth across it) run on the division lines; panels `panel` thick fill the bays. A type
+/// (`system_type`, copied from a library) adds a running bond, the materials and layers across the
+/// face ([`crate::system`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemDef {
     pub start: DVec2,
@@ -191,6 +193,8 @@ pub struct SystemDef {
     pub spacing: DVec2,
     pub member: DVec2,
     pub panel: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_type: Option<crate::system::SystemTypeDef>,
 }
 
 /// How a connection joins its members.
@@ -534,53 +538,9 @@ fn wall_elevation(length: f64, height: f64, openings: &[Opening]) -> Result<Prof
     Profile::new(outer, holes)
 }
 
-/// The members and panels of a system.
+/// The members and panels of a system, by its type when it has one ([`crate::system`]).
 pub fn system_parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
-    let (w, depth) = (s.member.x, s.member.y);
-    if ![s.height, s.spacing.x, s.spacing.y, w, depth, s.panel].into_iter().all(positive) {
-        return Err(Refusal::NotPositive);
-    }
-    let d = s.end - s.start;
-    let length = d.length();
-    if !positive(length) {
-        return Err(Refusal::ZeroLength);
-    }
-    let dir = (d / length).extend(0.0);
-    let right = dir.cross(DVec3::Z);
-    let bays = ((length / s.spacing.x).round() as usize).max(1);
-    let rows = ((s.height / s.spacing.y).round() as usize).max(1);
-    let (bay, row) = (length / bays as f64, s.height / rows as f64);
-    if bay - w <= LINEAR_TOLERANCE || row - w <= LINEAR_TOLERANCE {
-        return Err(Refusal::NotPositive);
-    }
-    let at = |u: f64, v: f64| s.start.extend(s.base) + dir * u + DVec3::Z * v;
-    let mut parts = Vec::new();
-    // mullions on every division along, the whole height
-    let mullion = Profile::rectangle(w, depth)?;
-    for i in 0..=bays {
-        let axes = Axes::new(at(i as f64 * bay, 0.0), dir, DVec3::Z)?;
-        parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&mullion, &axes, s.height)?, material: None });
-    }
-    // transoms on every division up, between the mullions
-    let transom = Profile::rectangle(depth, w)?;
-    for i in 0..bays {
-        for j in 0..=rows {
-            let axes = Axes::new(at(i as f64 * bay + w / 2.0, j as f64 * row), right, dir)?;
-            parts.push(PartSolid { class: "IfcMember", solid: Solid::extrude(&transom, &axes, bay - w)?, material: None });
-        }
-    }
-    // a panel in every bay, centred in the face
-    let p = DVec2::new;
-    for i in 0..bays {
-        for j in 0..rows {
-            let (du, dv) = (bay - w, row - w);
-            let corner = at(i as f64 * bay + w / 2.0, j as f64 * row + w / 2.0) - right * (s.panel / 2.0);
-            let axes = Axes::new(corner, dir, right)?;
-            let face = Profile::new(vec![p(0.0, 0.0), p(du, 0.0), p(du, dv), p(0.0, dv)], Vec::new())?;
-            parts.push(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, s.panel)?, material: None });
-        }
-    }
-    Ok(parts)
+    crate::system::parts(s)
 }
 
 #[cfg(test)]
@@ -732,7 +692,7 @@ mod tests {
 
     #[test]
     fn a_system_fills_its_domain_with_members_and_panels() {
-        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03 };
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.03, system_type: None };
         let parts = system_parts(&s).unwrap();
         let members = parts.iter().filter(|p| p.class == "IfcMember").count();
         let panels = parts.iter().filter(|p| p.class == "IfcPlate").count();

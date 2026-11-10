@@ -1983,16 +1983,24 @@ mod tests {
         use crate::app::library::{Group, LibraryMessage, Pick};
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
         std::fs::create_dir_all(&dir).expect("folder");
-        let shots: [(&str, Group, Pick); 2] = [
+        let shots: [(&str, Group, Pick); 4] = [
             ("wall", Group::BuildUps(bim_library::Role::Wall), Pick::BuildUp("wall.timber-frame-outer".into())),
             ("steel", Group::Series(bim_library::Series::Hea), Pick::Steel("HEA 200".into())),
+            ("masonry", Group::SystemGroup(bim_library::SystemGroup::Masonry), Pick::System("system.masonry-waal-stretcher".into())),
+            ("timber-frame", Group::SystemGroup(bim_library::SystemGroup::TimberFrame), Pick::System("system.timber-frame-140".into())),
         ];
         for l in Language::ALL {
             for (name, group, pick) in shots.clone() {
                 let mut app = App::default();
                 app.explorer_tab = crate::app::ExplorerTab::Library;
-                if matches!(group, Group::Series(_)) {
-                    let _ = app.update(Message::Library(LibraryMessage::Toggle(Group::Steel)));
+                match group {
+                    Group::Series(_) => {
+                        let _ = app.update(Message::Library(LibraryMessage::Toggle(Group::Steel)));
+                    }
+                    Group::SystemGroup(_) => {
+                        let _ = app.update(Message::Library(LibraryMessage::Toggle(Group::Systems)));
+                    }
+                    _ => {}
                 }
                 let _ = app.update(Message::Library(LibraryMessage::Toggle(group)));
                 let _ = app.update(Message::Library(LibraryMessage::Pick(pick)));

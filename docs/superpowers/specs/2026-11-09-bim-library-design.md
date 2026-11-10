@@ -290,8 +290,28 @@ live recipes (studs at 600 with OSB outside and gypsum board inside):
   end studs. A joint lies on a stud line or, where none is clear, right beside an opening's
   framing, clear of its king studs; no board or membrane crosses one. A frame that cannot be split
   so is refused rather than made with a unit too long. The right pane lists a frame's units.
+- **Corners** (built): two timber frames on one base and of one height, an end of each within a
+  millimetre of the other's and square to each other, make a corner. The longer one runs through,
+  its frame as far as the outer face of the other's frame; the other stops against its inner face.
+  Of two as long as each other the one made first runs through. Their layers nest around the
+  corner without a gap or an overlap: outside, the layers of the one that runs through run on
+  around the corner, each as far out as it lies from its own frame, and the other's stop against
+  them; inside, each of its layers runs on to what the other has between its frame and that
+  layer's depth, and the other's layers start against the layers they would cross. A board inside
+  that ends a member's width or more short of the members it is fixed to gets a member behind its
+  edge: a corner stud in the frame that runs through, with an insulated pocket between it and the
+  end stud, and a batten more in its service zone. A frame keeps its studs at their centres from
+  its own start; the battens and the boards' seams follow the studs, the first board cut to reach
+  a stud line; the prefab units are those of the frame as long as it is made, and an opening keeps
+  clear of a corner stud. A corner is made only where both frames can be made with it and without
+  it, so each stays when the other goes; otherwise, and where three frames end on a point, at
+  another angle, at a T junction or with unequal heights, each ends on its line as before (a
+  frame that cannot be made alone is refused at a corner too). Frames of two types make a corner
+  too (an exterior wall and an interior one). The right pane says at which end a frame makes a
+  corner and whether it runs through, and lists its units as the corner leaves them.
 - **Later**: membrane laps and returns, a layer left out on one system (no interior lining), a
-  stock list (stud lengths, boards, rolls), and corners where two timber-frame systems meet.
+  stock list (stud lengths, boards, rolls), T junctions and corners at other angles, and a choice
+  of which system runs through.
 
 ## Delivery
 
@@ -311,7 +331,7 @@ Small PRs, each with tests, each visible where it can be:
    layers and materials, drawn in the tab and assigned to selected systems.
 7. **Joints in systems** with `bim_core::join`, then lying systems and frames in openings.
 8. **The timber frame worked out** ([above](#the-first-full-system-the-timber-frame)): the frame
-   and its layers, then openings, then prefab units, each its own PR.
+   and its layers, then openings, then prefab units, then corners, each its own PR.
 
 ## Calls made in writing this design
 
@@ -349,6 +369,12 @@ The author made these calls, not the project owner. They are open to correction.
   own battens, so two openings stand at least four battens' widths apart. Boards are cut around
   openings into rectangles, the policy the catalogue calls rectangular opening regions; boards cut
   to an L around a corner come later.
+- Corners between timber frames are the author's: the catalogue names corner details but gives no
+  rule for them. The longer system runs through (the earlier one of two equally long), a three-stud
+  corner with an insulated pocket carries the inner board, and layers butt in the order they are
+  met, without laps or corner profiles. Frames meet only when they end on one point (within the
+  kernel's join tolerance of a millimetre); which runs through is not yet a choice of the user.
+  Every frame looks through the model for the frames at its ends when it is made, as walls do.
 
 ## Questions for the project owner
 

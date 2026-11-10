@@ -289,12 +289,19 @@ impl App {
         if let Some(t) = system_type {
             let name = self.library.system_name(&t.id, crate::app::library::lang(l)).unwrap_or_else(|| t.id.clone());
             rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
-            // a frame made in prefab units: their lengths
-            if let (Shape::System(s), true) = (&shape, t.framing.is_some_and(|f| f.unit.is_some())) {
-                if let Ok(units) = bim_core::system::units(s) {
+            // a frame made in prefab units: their lengths, its frame as long as its corners make it
+            if t.framing.is_some_and(|f| f.unit.is_some()) {
+                if let Ok(units) = bim_core::system::joined_units(&self.modeller.model, e) {
                     let lengths: Vec<String> = units.iter().map(|u| bim_library::millimetres(*u, crate::app::library::lang(l))).collect();
                     rows = rows.push(prop_row(p, l.text("Prefab-elementen", "Prefab units").to_string(), lengths.join(" + ")));
                 }
+            }
+            // where it meets another frame in a corner: which of the two runs through
+            let ends = [l.text("Hoek bij begin", "Corner at start"), l.text("Hoek bij eind", "Corner at end")];
+            for (meeting, end) in bim_core::system::corners(&self.modeller.model, e).into_iter().zip(ends) {
+                let Some(meeting) = meeting else { continue };
+                let role = if meeting.through { l.text("Loopt door", "Runs through") } else { l.text("Stopt tegen de andere", "Stops against the other") };
+                rows = rows.push(prop_row(p, end.to_string(), role.to_string()));
             }
         }
         for (f, label) in fields.into_iter().filter(|(f, _)| has(*f)) {
@@ -464,6 +471,51 @@ mod tests {
         // the right pane lists it with its fields and the buttons to add more
         let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
         assert!(ui.find("Door 1").is_ok() && ui.find("Add window").is_ok());
+    }
+
+    #[test]
+    fn two_timber_frames_at_a_corner_show_which_runs_through() {
+        use bim_core::system::{corners, Meeting};
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let frame = |app: &App, start: DVec2, end: DVec2| {
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+            Shape::System(s.typed_from(&app.library, "system.timber-frame-140").unwrap())
+        };
+        let (long, short) = (frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0)), frame(&app, DVec2::new(4.8, 0.0), DVec2::new(4.8, 3.0)));
+        let x = app.add_element("Timber frame", None, long).unwrap();
+        // alone it has no corner, and is as long as it is drawn
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("2400 + 2400").is_ok() && ui.find("Corner at end").is_err());
+        }
+        let y = app.add_element("Timber frame", None, short).unwrap();
+        let model = &app.modeller.model;
+        assert_eq!(corners(model, model.get(x).unwrap()), [None, Some(Meeting { with: y, through: true })]);
+        // the longer one runs on to the outer face of the other's frame: 70 mm longer
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Corner at end").is_ok() && ui.find("Runs through").is_ok() && ui.find("Corner at start").is_err());
+            assert!(ui.find("2400 + 2470").is_ok());
+        }
+        // the other stops at its inner face: 70 mm shorter
+        app.select_modelled(y);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Corner at start").is_ok() && ui.find("Stops against the other").is_ok());
+            assert!(ui.find("2930").is_ok());
+        }
+        // what the viewer shows is the model's: the frame that runs through, redrawn to the corner
+        let reach = |app: &App, id| app.modeller.model.evaluate(id).unwrap().iter().filter(|p| p.material.as_deref() == Some("timber")).map(|p| p.solid.bounds().1.x).fold(f64::MIN, f64::max);
+        assert!((reach(&app, x) - 4.87).abs() < 1e-9);
+        // a frame made higher no longer makes the corner
+        type_in(&mut app, ElementField::Height, "3");
+        let model = &app.modeller.model;
+        assert_eq!(corners(model, model.get(x).unwrap()), [None, None]);
+        assert!((reach(&app, x) - 4.8).abs() < 1e-9);
     }
 
     #[test]

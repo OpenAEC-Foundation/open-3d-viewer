@@ -100,6 +100,122 @@ impl Model {
         std::iter::once(element).chain(joined.into_iter().filter_map(|j| self.elements.remove(&j))).collect()
     }
 
+    /// The point where a join's members meet, in the project frame: the end of its second member
+    /// nearest the first's axis. `None` for a cut, or a join whose members are gone.
+    pub fn join_node(&self, id: ElementId) -> Option<glam::DVec3> {
+        let Shape::Connection(c) = &self.elements.get(&id)?.shape else { return None };
+        if c.kind == ConnectionKind::Cut {
+            return None;
+        }
+        let (p, s) = (self.member(c.primary).ok()?, self.member(c.secondary).ok()?);
+        let near = |q| join::to_segment(q, p.start, p.end);
+        Some(if near(s.start) <= near(s.end) { s.start } else { s.end })
+    }
+
+    /// Keeps the joins of linear elements up to date, as a model is drawn and changed:
+    ///
+    /// - a join whose members no longer meet (or that lost a member) goes;
+    /// - a linear element's end that meets another linear element and is not joined yet gets a
+    ///   join, named `name` and a number: a mitre between two of one profile meeting end to end at
+    ///   an angle; a butt where it ends on the other's side (the other runs through), or where two
+    ///   profiles meet end to end (the larger runs through). Members in one straight line get none.
+    ///   Only meetings that involve an element of `changed` are joined (all, when `None`), so a join
+    ///   taken away stays away until one of its members changes.
+    ///
+    /// Returns the joins added and removed.
+    pub fn update_joins(&mut self, name: &str, changed: Option<&[ElementId]>) -> (Vec<ElementId>, Vec<ElementId>) {
+        let broken: Vec<ElementId> = self
+            .elements
+            .values()
+            .filter_map(|e| match &e.shape {
+                Shape::Connection(c) if c.kind != ConnectionKind::Cut => {
+                    matches!(self.join(c), Err(Refusal::NotTouching | Refusal::Parallel | Refusal::Missing | Refusal::NotLinear)).then_some(e.id)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in &broken {
+            self.elements.remove(id);
+        }
+        // the ends joined already, and the pairs joined already
+        let mut taken: std::collections::HashSet<(ElementId, MemberEnd)> = Default::default();
+        let mut paired: std::collections::HashSet<(ElementId, ElementId)> = Default::default();
+        for e in self.elements.values() {
+            let Shape::Connection(c) = &e.shape else { continue };
+            paired.insert((c.primary.min(c.secondary), c.primary.max(c.secondary)));
+            if let Ok((members, result)) = self.join(c) {
+                for (k, end, _) in result.trims {
+                    if let Some(&m) = members.get(k) {
+                        taken.insert((m, end));
+                    }
+                }
+            }
+        }
+        let linear: Vec<(ElementId, LinearDef)> = self.elements.values().filter_map(|e| Some((e.id, self.member(e.id).ok()?))).collect();
+        let mut added = Vec::new();
+        for (id, me) in &linear {
+            for (end, at) in [(MemberEnd::Start, me.start), (MemberEnd::End, me.end)] {
+                if taken.contains(&(*id, end)) {
+                    continue;
+                }
+                let Some((other, other_end, def)) = self.partner(*id, at, &linear, &paired) else { continue };
+                if changed.is_some_and(|c| !c.contains(id) && !c.contains(&other)) {
+                    continue;
+                }
+                let Some(kind) = auto_kind(me, &def, other_end) else { continue };
+                let (primary, secondary) = match (kind, other_end) {
+                    // in a butt end to end, the larger profile runs through
+                    (ConnectionKind::Butt, Some(_)) if profile_area(me) > profile_area(&def) => (*id, other),
+                    _ => (other, *id),
+                };
+                let number = self.elements.values().filter(|e| e.base() == crate::element::BaseKind::Connection).count() + 1;
+                let level = self.elements.get(id).and_then(|e| e.level.clone());
+                let joint = Element::in_project(&self.grid, format!("{name} {number}"), level, Shape::Connection(ConnectionDef { kind, primary, secondary }));
+                if let Ok(joint) = self.add(joint) {
+                    added.push(joint);
+                    paired.insert((primary.min(secondary), primary.max(secondary)));
+                    taken.insert((*id, end));
+                    if let Some(e) = other_end {
+                        taken.insert((other, e));
+                    }
+                }
+            }
+        }
+        (added, broken)
+    }
+
+    /// The linear element that element `id` meets with its end at `at`, not joined to it
+    /// yet: one whose end lies there (and which of its ends), else one on whose side it ends.
+    fn partner(
+        &self,
+        id: ElementId,
+        at: glam::DVec3,
+        linear: &[(ElementId, LinearDef)],
+        paired: &std::collections::HashSet<(ElementId, ElementId)>,
+    ) -> Option<(ElementId, Option<MemberEnd>, LinearDef)> {
+        let others = linear.iter().filter(|(o, _)| *o != id && !paired.contains(&(id.min(*o), id.max(*o))));
+        let mut side = None;
+        for (o, def) in others {
+            if def.start.distance(at) <= JOIN_TOLERANCE {
+                return Some((*o, Some(MemberEnd::Start), def.clone()));
+            }
+            if def.end.distance(at) <= JOIN_TOLERANCE {
+                return Some((*o, Some(MemberEnd::End), def.clone()));
+            }
+            let axis = def.end - def.start;
+            let t = (at - def.start).dot(axis) / axis.length_squared().max(1e-300);
+            let length = axis.length();
+            let radius = def.profile.profile().map_or(0.0, |p| p.outer().iter().map(|q| q.length()).fold(0.0, f64::max));
+            if t * length > JOIN_TOLERANCE && (1.0 - t) * length > JOIN_TOLERANCE && join::to_segment(at, def.start, def.end) <= radius + JOIN_TOLERANCE {
+                let d = join::to_segment(at, def.start, def.end);
+                if side.as_ref().is_none_or(|(_, best, _): &(ElementId, f64, LinearDef)| d < *best) {
+                    side = Some((*o, d, def.clone()));
+                }
+            }
+        }
+        side.map(|(o, _, def)| (o, None, def))
+    }
+
     /// The elements per tile.
     pub fn tiles(&self) -> BTreeMap<TileKey, Vec<ElementId>> {
         let mut tiles: BTreeMap<TileKey, Vec<ElementId>> = BTreeMap::new();
@@ -267,6 +383,24 @@ impl Model {
         let members = [Member::of(&self.member(c.primary)?)?, Member::of(&self.member(c.secondary)?)?];
         Ok((vec![c.primary, c.secondary], join::cuts(kind, &members)?))
     }
+}
+
+/// The kind a join made automatically gets between `me` and `other`, which meet end to end (with
+/// `other_end`) or end to side (`None`): `None` for two in one straight line.
+fn auto_kind(me: &LinearDef, other: &LinearDef, other_end: Option<MemberEnd>) -> Option<ConnectionKind> {
+    let (a, b) = ((me.end - me.start).normalize_or_zero(), (other.end - other.start).normalize_or_zero());
+    if a.cross(b).length() < 1e-6 {
+        return None;
+    }
+    Some(match other_end {
+        Some(_) if me.profile == other.profile => ConnectionKind::Mitre,
+        _ => ConnectionKind::Butt,
+    })
+}
+
+/// The area of a member's profile (0 when it has none).
+fn profile_area(l: &LinearDef) -> f64 {
+    l.profile.profile().map_or(0.0, |p| p.area())
 }
 
 /// What the connections joining a member do to it, in its tile's frame.
@@ -544,6 +678,78 @@ mod tests {
         let json = serde_json::to_string(m.get(joint).unwrap()).unwrap();
         assert!(json.contains("end_plate") && json.contains("0.015"), "{json}");
         assert_eq!(&serde_json::from_str::<Element>(&json).unwrap(), m.get(joint).unwrap());
+    }
+
+    fn joints(m: &Model) -> Vec<ConnectionDef> {
+        m.iter()
+            .filter_map(|e| match &e.shape {
+                Shape::Connection(c) => Some(c.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn members_drawn_to_meet_are_joined_automatically() {
+        let mut m = Model::new(TileGrid::default());
+        // two beams of one profile at a corner: a mitre
+        let a = add(&mut m, beam(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0)));
+        add(&mut m, beam(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0, 3.0, 0.0)));
+        let (added, removed) = m.update_joins("Joint", None);
+        assert_eq!((added.len(), removed.len()), (1, 0));
+        assert_eq!(joints(&m)[0].kind, ConnectionKind::Mitre);
+        assert_eq!(m.get(added[0]).unwrap().name, "Joint 1");
+        // a third ending on the first's side: a butt, the first runs through
+        let c = add(&mut m, beam(DVec3::new(2.0, -3.0, 0.0), DVec3::new(2.0, 0.0, 0.0)));
+        let (added, _) = m.update_joins("Joint", None);
+        assert_eq!(added.len(), 1);
+        let butt = joints(&m).into_iter().find(|j| j.secondary == c).unwrap();
+        assert_eq!((butt.kind, butt.primary), (ConnectionKind::Butt, a));
+        // nothing more to join: running again adds nothing
+        assert_eq!(m.update_joins("Joint", None), (Vec::new(), Vec::new()));
+        // the node of the mitre is the corner
+        let mitre = m.iter().find(|e| matches!(&e.shape, Shape::Connection(j) if j.kind == ConnectionKind::Mitre)).unwrap().id;
+        assert!((m.join_node(mitre).unwrap() - DVec3::new(4.0, 0.0, 0.0)).length() < 1e-12);
+    }
+
+    #[test]
+    fn a_larger_profile_runs_through_and_a_straight_line_gets_no_join() {
+        let mut m = Model::new(TileGrid::default());
+        let column = add(
+            &mut m,
+            Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 0.0), end: DVec3::new(0.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.4, height: 0.4 }, roll: 0.0 }),
+        );
+        let b = add(&mut m, beam(DVec3::new(0.0, 0.0, 3.0), DVec3::new(5.0, 0.0, 3.0)));
+        add(&mut m, beam(DVec3::new(5.0, 0.0, 3.0), DVec3::new(9.0, 0.0, 3.0)));
+        let (added, _) = m.update_joins("Joint", None);
+        assert_eq!(added.len(), 1, "the beams in one line get none");
+        let j = &joints(&m)[0];
+        assert_eq!((j.kind, j.primary, j.secondary), (ConnectionKind::Butt, column, b));
+    }
+
+    #[test]
+    fn only_meetings_of_what_changed_are_joined() {
+        let mut m = Model::new(TileGrid::default());
+        let a = add(&mut m, beam(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0)));
+        let b = add(&mut m, beam(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0, 3.0, 0.0)));
+        let c = add(&mut m, beam(DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 3.0, 0.0)));
+        assert!(m.update_joins("Joint", Some(&[c])).0.is_empty(), "c meets nothing");
+        assert_eq!(m.update_joins("Joint", Some(&[b])).0.len(), 1, "b meets a");
+        let _ = a;
+    }
+
+    #[test]
+    fn a_join_goes_when_its_members_part() {
+        let mut m = Model::new(TileGrid::default());
+        add(&mut m, beam(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0)));
+        let b = add(&mut m, beam(DVec3::new(4.0, 0.0, 0.0), DVec3::new(4.0, 3.0, 0.0)));
+        m.update_joins("Joint", None);
+        let mut moved = m.get(b).unwrap().clone();
+        moved.translate(&m.grid, DVec3::new(1.0, 0.0, 0.0));
+        m.replace(moved).unwrap();
+        let (added, removed) = m.update_joins("Joint", None);
+        assert_eq!((added.len(), removed.len()), (0, 1));
+        assert!(joints(&m).is_empty());
     }
 
     #[test]

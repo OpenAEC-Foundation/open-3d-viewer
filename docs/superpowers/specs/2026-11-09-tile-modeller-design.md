@@ -217,3 +217,27 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
   - Joins are found from the walls' definitions every time a wall is evaluated (no join elements
     to keep up to date). Moving a wall in edit mode re-cuts its neighbours.
   - Cross junctions and joins with slabs or roofs are follow-ups.
+
+## Sixth slice: joins between members (2026-11-10)
+
+- **A join is an element.** A connection between two linear elements is selectable and has
+  properties. `bim_core::join::cuts` turns a join kind and its members into what it does to them:
+  trims of a member's end, solids added to a member, solids taken from it, and parts of the join's
+  own. Mitre, butt and end plate are kinds of the same element; tooth joints can be added as
+  another kind.
+- **Steel end plate.** The member that stops is cut back a plate's thickness short of the other's
+  face. A plate as large as its profile plus a margin lies against that face, with two rows of
+  bolts in the margin. The plate (`IfcPlate`) and the bolts (`IfcMechanicalFastener`) are the
+  join's parts, and the member that runs through is drilled for the bolts. The sizes are editable
+  defaults (15 mm plate, 80 mm margin, M20 bolts in 22 mm holes), not a checked design.
+- **Automatic joins.** After every drawn element, edit and typed change, `Model::update_joins`
+  removes joins whose members no longer meet. It adds one where a member's end meets another
+  member: a mitre between two of one profile at an angle, else a butt in which the other (or the
+  larger profile) runs through, none in a straight line. Only meetings that involve a changed
+  element are joined, so a deleted join stays deleted until a member changes.
+- **Node marks.** Every join gets a diamond over the 3D view at `Model::join_node`; a click
+  selects it, so a join without parts of its own can be picked.
+- **Calls made:**
+  - Choosing a join kind for two members that are joined already changes their join.
+  - Bolt holes are blind (50 mm), not through a flange; one join per member end is not enforced
+    for joins made by hand; walls and slabs get no join elements yet.

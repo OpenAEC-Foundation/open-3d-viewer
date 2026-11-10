@@ -1,7 +1,7 @@
 //! The project document in IfcX (IFC5) form, kept beside the loaded model: what the app
 //! recognises in a model and what the user adds, in the shape of IfcX nodes, so that it can be
-//! written as `.ifcx` (the native format to come): levels and the floor plans made on them; sheets
-//! follow.
+//! written as `.ifcx` (the native format to come): levels, the plans made on them, sections and
+//! elevations, 3D views and sheets.
 //!
 //! Headless: no GUI or GPU, so the MCP server and a later BIM kernel crate can use it as it is.
 
@@ -42,6 +42,9 @@ pub const STRUCTURAL_DEPTH: f64 = 1.0;
 pub const CEILING_CUT: f64 = 2.3;
 /// How far a ceiling plan looks up from its cut (metres) when no level lies above its own.
 pub const CEILING_DEPTH: f64 = 1.0;
+
+/// The field of view a 3D view gets when its file names none (degrees, vertical).
+pub const VIEW_3D_FOV: f64 = 45.0;
 
 /// The kinds of plan a level has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -169,6 +172,43 @@ impl SectionView {
     }
 }
 
+/// Where a 3D view looks from and to (world, Z up, metres), and how.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Camera3d {
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
+    /// In perspective, else parallel (orthographic).
+    pub perspective: bool,
+    /// The vertical field of view (degrees).
+    pub fov: f64,
+}
+
+/// A 3D view's section box: its limits in its own frame, which is the world turned by −`turn`
+/// (radians, counter-clockwise seen from above) about the vertical through `pivot` (metres).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewBox {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+    pub turn: f64,
+    pub pivot: [f64; 3],
+}
+
+/// A 3D view: the model as its camera sees it, within its section box, with its own layers and
+/// hidden elements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct View3d {
+    /// The IfcX path, a UUID.
+    pub path: String,
+    pub name: String,
+    pub camera: Camera3d,
+    /// Its section box, when it has one on.
+    pub section: Option<ViewBox>,
+    /// Its own layers: those it shows otherwise than the model.
+    pub layers: LayerSwitches,
+    /// The elements hidden in it with Hide or Isolate.
+    pub hidden: Arc<UnitKeySet>,
+}
+
 /// A dimension on a drawing: the distance between two of its points (a floor plan's x, y in the
 /// model's frame, a section's u, v; metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -246,6 +286,8 @@ pub struct Document {
     plans: Vec<PlanView>,
     /// Sections and elevations, in the order they were made.
     sections: Vec<SectionView>,
+    /// 3D views, in the order they were made.
+    views_3d: Vec<View3d>,
     /// Sheets, in the order they were made.
     sheets: Vec<Sheet>,
     /// Levels and views made so far, for the paths of new ones.
@@ -291,7 +333,7 @@ impl Document {
         self.adopt_ifcx_with(&model.project.drawings, &|view| crate::export::ifcx::hidden_in(model, view));
     }
 
-    /// The floor plans, sections, elevations and sheets as IfcX nodes in the `o3v::` namespace,
+    /// The plans, sections, elevations, 3D views and sheets as IfcX nodes in the `o3v::` namespace,
     /// under one root node; a plan names its level, so it finds it again in the file's storeys.
     /// The elements a view hides are left out (see [`Self::ifcx_drawing_nodes_with`]).
     pub fn ifcx_drawing_nodes(&self) -> Vec<Value> {
@@ -326,6 +368,15 @@ impl Document {
                 "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
             });
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
+        }
+        for (i, v) in self.views_3d.iter().enumerate() {
+            children.insert(format!("3d view {}", i + 1), v.path.clone().into());
+            let c = &v.camera;
+            let section = v.section.map_or(Value::Null, |b| json!({"min": b.min, "max": b.max, "turn": b.turn, "pivot": b.pivot}));
+            let view = json!({
+                "name": v.name, "camera": {"eye": c.eye, "target": c.target, "perspective": c.perspective, "fov": c.fov}, "box": section, "layers": v.layers,
+            });
+            nodes.push(json!({"path": v.path, "attributes": {"o3v::view::3d": with_hidden(view, &v.hidden)}}));
         }
         for (i, s) in self.sheets.iter().enumerate() {
             children.insert(format!("sheet {}", i + 1), s.path.clone().into());
@@ -366,7 +417,12 @@ impl Document {
         };
         let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
         let number = |v: &Value, key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
-        let known = |doc: &Document, path: &str| doc.plan(path).is_some() || doc.section(path).is_some() || doc.sheet(path).is_some();
+        let triple = |v: Option<&Value>| -> Option<[f64; 3]> {
+            let v = v?;
+            let xyz = [v.get(0)?.as_f64()?, v.get(1)?.as_f64()?, v.get(2)?.as_f64()?];
+            xyz.iter().all(|x| x.is_finite()).then_some(xyz)
+        };
+        let known = |doc: &Document, path: &str| doc.view_name(path).is_some() || doc.sheet(path).is_some();
         for (path, attributes) in nodes {
             if known(self, path) {
                 continue;
@@ -402,6 +458,23 @@ impl Document {
                     crop: rect(s.get("crop")),
                     layers: layers(s.get("layers")),
                     hidden: hidden(s),
+                });
+            } else if let Some(v) = attributes.get("o3v::view::3d") {
+                let c = v.get("camera");
+                let (Some(eye), Some(target)) = (triple(c.and_then(|c| c.get("eye"))), triple(c.and_then(|c| c.get("target")))) else { continue };
+                let perspective = c.and_then(|c| c.get("perspective")).and_then(Value::as_bool).unwrap_or(true);
+                let fov = c.map_or(VIEW_3D_FOV, |c| number(c, "fov", VIEW_3D_FOV)).clamp(1.0, 179.0);
+                let section = v.get("box").and_then(|b| {
+                    let (min, max, pivot) = (triple(b.get("min"))?, triple(b.get("max"))?, triple(b.get("pivot"))?);
+                    (0..3).all(|i| min[i] < max[i]).then_some(ViewBox { min, max, turn: number(b, "turn", 0.0), pivot })
+                });
+                self.views_3d.push(View3d {
+                    path: path.clone(),
+                    name: text(v, "name"),
+                    camera: Camera3d { eye, target, perspective, fov },
+                    section,
+                    layers: layers(v.get("layers")),
+                    hidden: hidden(v),
                 });
             }
         }
@@ -555,9 +628,93 @@ impl Document {
         self.sections.len() < before
     }
 
-    /// The name of a view (floor plan, section or elevation).
+    /// The 3D views, in the order they were made.
+    pub fn views_3d(&self) -> &[View3d] {
+        &self.views_3d
+    }
+
+    /// The 3D view at `path`.
+    pub fn view_3d(&self, path: &str) -> Option<&View3d> {
+        self.views_3d.iter().find(|v| v.path == path)
+    }
+
+    /// Makes a 3D view named `name` (with a number when the name is taken) that looks as `camera`
+    /// within `section`, showing `layers` otherwise than the model and hiding `hidden`, and gives
+    /// its path.
+    pub fn add_view_3d(&mut self, name: &str, camera: Camera3d, section: Option<ViewBox>, layers: LayerSwitches, hidden: Arc<UnitKeySet>) -> String {
+        let base = match name.trim() {
+            "" => "3D".to_string(),
+            name => name.to_string(),
+        };
+        let mut name = base.clone();
+        let mut n = 1;
+        while self.view_name_taken(&name, "") {
+            n += 1;
+            name = format!("{base} ({n})");
+        }
+        self.added += 1;
+        let path = uuid(&format!("view3d/{}/{name}", self.added));
+        self.views_3d.push(View3d { path: path.clone(), name, camera, section, layers, hidden });
+        path
+    }
+
+    /// The next free name of a 3D view: `<word> 1`, `<word> 2`, ..
+    pub fn next_view_3d_name(&self, word: &str) -> String {
+        (1..).map(|n| format!("{word} {n}")).find(|name| !self.view_name_taken(name, "")).unwrap_or_default()
+    }
+
+    /// Lets a 3D view look as `camera`, within `section`; false when there is no such view or
+    /// nothing changes.
+    pub fn set_view_3d_camera(&mut self, path: &str, camera: Camera3d, section: Option<ViewBox>) -> bool {
+        let Some(view) = self.views_3d.iter_mut().find(|v| v.path == path) else { return false };
+        if view.camera == camera && view.section == section {
+            return false;
+        }
+        (view.camera, view.section) = (camera, section);
+        true
+    }
+
+    /// Removes the 3D view at `path`.
+    pub fn remove_view_3d(&mut self, path: &str) -> bool {
+        let before = self.views_3d.len();
+        self.views_3d.retain(|v| v.path != path);
+        self.views_3d.len() < before
+    }
+
+    /// Whether a view other than the one at `path` has the name `name` (case does not count).
+    fn view_name_taken(&self, name: &str, path: &str) -> bool {
+        let plans = self.plans.iter().map(|p| (&p.path, &p.name));
+        let sections = self.sections.iter().map(|s| (&s.path, &s.name));
+        let views_3d = self.views_3d.iter().map(|v| (&v.path, &v.name));
+        plans.chain(sections).chain(views_3d).any(|(p, n)| p != path && same_name(n, name))
+    }
+
+    /// The name, own layers and hidden elements of a view (a plan, section, elevation or 3D
+    /// view).
+    fn own(&self, path: &str) -> Option<(&str, &LayerSwitches, &Arc<UnitKeySet>)> {
+        if let Some(p) = self.plan(path) {
+            return Some((&p.name, &p.layers, &p.hidden));
+        }
+        if let Some(s) = self.section(path) {
+            return Some((&s.name, &s.layers, &s.hidden));
+        }
+        self.view_3d(path).map(|v| (v.name.as_str(), &v.layers, &v.hidden))
+    }
+
+    /// [`Self::own`], to change.
+    fn own_mut(&mut self, path: &str) -> Option<(&mut String, &mut LayerSwitches, &mut Arc<UnitKeySet>)> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some((&mut p.name, &mut p.layers, &mut p.hidden));
+        }
+        if let Some(s) = self.sections.iter_mut().find(|s| s.path == path) {
+            return Some((&mut s.name, &mut s.layers, &mut s.hidden));
+        }
+        self.views_3d.iter_mut().find(|v| v.path == path).map(|v| (&mut v.name, &mut v.layers, &mut v.hidden))
+    }
+
+    /// The name of a view (a plan, section, elevation or 3D view).
     pub fn view_name(&self, path: &str) -> Option<&str> {
-        self.plan(path).map(|p| p.name.as_str()).or_else(|| self.section(path).map(|s| s.name.as_str()))
+        self.own(path).map(|(name, _, _)| name)
     }
 
     /// The dimensions and the crop of a view (floor plan, section or elevation).
@@ -606,23 +763,14 @@ impl Document {
         true
     }
 
-    /// A view's own layers (a floor plan's, a section's or an elevation's).
+    /// A view's own layers (a plan's, a section's, an elevation's or a 3D view's).
     pub fn view_layers(&self, path: &str) -> Option<&LayerSwitches> {
-        match self.plan(path) {
-            Some(p) => Some(&p.layers),
-            None => self.section(path).map(|s| &s.layers),
-        }
+        self.own(path).map(|(_, layers, _)| layers)
     }
 
     /// Gives a view its own layers; false when there is no such view or nothing changes.
     pub fn set_view_layers(&mut self, path: &str, layers: LayerSwitches) -> bool {
-        let own = match self.plans.iter_mut().find(|p| p.path == path) {
-            Some(p) => &mut p.layers,
-            None => match self.sections.iter_mut().find(|s| s.path == path) {
-                Some(s) => &mut s.layers,
-                None => return false,
-            },
-        };
+        let Some((_, own, _)) = self.own_mut(path) else { return false };
         if *own == layers {
             return false;
         }
@@ -630,23 +778,14 @@ impl Document {
         true
     }
 
-    /// The elements a view hides (a floor plan's, a section's or an elevation's).
+    /// The elements a view hides (a plan's, a section's, an elevation's or a 3D view's).
     pub fn view_hidden(&self, path: &str) -> Option<&Arc<UnitKeySet>> {
-        match self.plan(path) {
-            Some(p) => Some(&p.hidden),
-            None => self.section(path).map(|s| &s.hidden),
-        }
+        self.own(path).map(|(_, _, hidden)| hidden)
     }
 
     /// Gives a view the elements it hides; false when there is no such view or nothing changes.
     pub fn set_view_hidden(&mut self, path: &str, hidden: Arc<UnitKeySet>) -> bool {
-        let own = match self.plans.iter_mut().find(|p| p.path == path) {
-            Some(p) => &mut p.hidden,
-            None => match self.sections.iter_mut().find(|s| s.path == path) {
-                Some(s) => &mut s.hidden,
-                None => return false,
-            },
-        };
+        let Some((_, _, own)) = self.own_mut(path) else { return false };
         if *own == hidden {
             return false;
         }
@@ -799,21 +938,14 @@ impl Document {
         true
     }
 
-    /// Renames a view (floor plan, section or elevation): not empty, and not another view's name;
-    /// false when it is not renamed.
+    /// Renames a view (a plan, section, elevation or 3D view): not empty, and not another view's
+    /// name; false when it is not renamed.
     pub fn set_view_name(&mut self, path: &str, name: &str) -> bool {
         let name = name.trim();
-        let mut others = self.plans.iter().map(|p| (&p.path, &p.name)).chain(self.sections.iter().map(|s| (&s.path, &s.name)));
-        if name.is_empty() || others.any(|(p, n)| p != path && same_name(n, name)) {
+        if name.is_empty() || self.view_name_taken(name, path) {
             return false;
         }
-        let own = match self.plans.iter_mut().find(|p| p.path == path) {
-            Some(p) => &mut p.name,
-            None => match self.sections.iter_mut().find(|s| s.path == path) {
-                Some(s) => &mut s.name,
-                None => return false,
-            },
-        };
+        let Some((own, _, _)) = self.own_mut(path) else { return false };
         if own == name {
             return false;
         }
@@ -1141,6 +1273,49 @@ mod tests {
         let mut before = Document::from_model(&model_with(&[("00", 0.0)]));
         before.adopt_ifcx(&old);
         assert!(before.sections().iter().all(|s| s.kind == SectionKind::Section));
+    }
+
+    #[test]
+    fn a_3d_view_keeps_its_camera_box_layers_and_name_in_ifcx() {
+        let mut document = Document::from_model(&model_with(&[("00", 0.0)]));
+        let camera = Camera3d { eye: [20.0, -15.0, 12.0], target: [4.0, 3.0, 1.5], perspective: true, fov: 50.0 };
+        let section = ViewBox { min: [0.0, 0.0, -0.5], max: [8.0, 6.0, 3.0], turn: 0.25, pivot: [4.0, 3.0, 1.25] };
+        assert_eq!(document.next_view_3d_name("3D view"), "3D view 1");
+        let furniture_off = LayerSwitches::from([("IfcFurniture".to_string(), false)]);
+        let view = document.add_view_3d("3D view 1", camera, Some(section), furniture_off.clone(), Arc::default());
+        assert_eq!(document.next_view_3d_name("3D view"), "3D view 2");
+        // a name is the view's own among all views
+        let level = document.levels()[0].path.clone();
+        let plan = document.add_plan(&level).unwrap();
+        assert!(!document.set_view_name(&view, "00"), "the floor plan's name");
+        assert!(document.set_view_name(&view, "Entrance"));
+        assert_eq!(document.view_name(&view), Some("Entrance"));
+        let parallel = document.add_view_3d("entrance", Camera3d { perspective: false, ..camera }, None, LayerSwitches::new(), Arc::default());
+        assert_eq!(document.view_name(&parallel), Some("entrance (2)"));
+        // it looks again as it was left
+        let turned = Camera3d { eye: [-10.0, 8.0, 30.0], ..camera };
+        assert!(document.set_view_3d_camera(&view, turned, Some(section)));
+        assert!(!document.set_view_3d_camera(&view, turned, Some(section)), "nothing changed");
+        assert!(!document.set_view_3d_camera(&plan, turned, None), "a floor plan has no camera");
+        let nodes: Vec<(String, Value)> =
+            document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
+        again.adopt_ifcx(&nodes);
+        assert_eq!(again.views_3d(), document.views_3d());
+        assert_eq!(again.view_3d(&view).unwrap().camera, turned);
+        assert_eq!(again.view_layers(&view), Some(&furniture_off));
+        assert_eq!(again.view_3d(&parallel).unwrap().section, None);
+        // a node without its camera is no 3D view; one without a field of view gets one
+        let mut broken = nodes;
+        for (path, attributes) in &mut broken {
+            let Some(v) = attributes.get_mut("o3v::view::3d").and_then(|v| v.get_mut("camera")).and_then(Value::as_object_mut) else { continue };
+            if *path == view { v.remove("eye"); } else { v.remove("fov"); }
+        }
+        let mut other = Document::from_model(&model_with(&[("00", 0.0)]));
+        other.adopt_ifcx(&broken);
+        assert_eq!(other.views_3d().len(), 1);
+        assert_eq!(other.views_3d()[0].camera.fov, VIEW_3D_FOV);
+        assert!(document.remove_view_3d(&view) && document.view_3d(&view).is_none());
     }
 
     #[test]

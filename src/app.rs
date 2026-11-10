@@ -367,9 +367,12 @@ pub enum Message {
     NewPlanOf(Arc<str>, crate::document::PlanKind, &'static str),
     /// List the levels under a kind of plan in the Views tab, to make one of (`None`: close).
     PickLevelFor(Option<crate::document::PlanKind>),
-    /// Show a floor plan (its path) in its tab.
+    /// Show a view of the document (its path) in its tab.
     OpenPlan(Arc<str>),
     RemovePlan(Arc<str>),
+    /// Make a 3D view of what the 3D tab shows, named with this and a number, and show it.
+    NewView3d(&'static str),
+    RemoveView3d(Arc<str>),
     /// Make a sheet of the document, named this, and show it.
     NewSheet(&'static str),
     /// Lay the views of a sheet (its path) out: one scale, in rows, centred.
@@ -882,7 +885,7 @@ impl App {
         }
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.status = Status::Saving { file, since: Instant::now() };
-        save_task(model, self.document.clone(), path, replace)
+        save_task(model, self.document_now(), path, replace)
     }
 
     pub(crate) fn model_matrix(&self) -> Mat4 {
@@ -1461,8 +1464,8 @@ impl App {
                     self.context_menu = None;
                 }
                 match n {
-                // a floor plan is not turned: dragging moves it
-                Navigate::Orbit { dx, dy } if self.active_plan.is_some() => {
+                // a drawing view is not turned: dragging moves it (a 3D view turns)
+                Navigate::Orbit { dx, dy } if self.active_plan.as_deref().is_some_and(|p| self.document.view_3d(p).is_none()) => {
                     self.anim = None;
                     self.measure.hover = None;
                     self.camera.pan(dx, dy, self.viewport_size.1)
@@ -1575,6 +1578,11 @@ impl App {
                 self.close_plan(&plan);
                 self.document.remove_plan(&plan);
                 self.cuts.remove(&*plan);
+            }
+            Message::NewView3d(word) => self.new_view_3d(word),
+            Message::RemoveView3d(view) => {
+                self.close_plan(&view);
+                self.document.remove_view_3d(&view);
             }
             Message::NewSheet(name) => self.new_sheet(name),
             Message::ArrangeSheet(sheet) => self.arrange_sheet(&sheet),

@@ -4,6 +4,7 @@
 use crate::buildup::{self, BuildUp, Role};
 use crate::material::{self, Material};
 use crate::profile::{self, LinearRole, LinearType};
+use crate::system::{self, SystemGroup, SystemType};
 use crate::{Lang, LibraryError};
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// (metres): 0.01 mm.
 pub const SAME_THICKNESS: f64 = 1e-5;
 
-/// Materials, build-ups and linear types, in the order they were added.
+/// Materials, build-ups, linear types and system types, in the order they were added.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Library {
     #[serde(default)]
@@ -20,6 +21,8 @@ pub struct Library {
     pub buildups: Vec<BuildUp>,
     #[serde(default)]
     pub linear_types: Vec<LinearType>,
+    #[serde(default)]
+    pub system_types: Vec<SystemType>,
 }
 
 /// Names made unique: " (2)", " (3)" after a name given before, in order.
@@ -50,11 +53,11 @@ fn free_id(id: &str, taken: impl Fn(&str) -> bool) -> String {
 }
 
 impl Library {
-    /// The library a new project starts with: Open BIM Studio's starter materials, planar types
-    /// and linear types. The steel profiles are a catalogue ([`profile::steel_profiles`]) a
-    /// project takes types from, not starter types.
+    /// The library a new project starts with: Open BIM Studio's starter materials, planar types,
+    /// linear types and system types. The steel profiles are a catalogue
+    /// ([`profile::steel_profiles`]) a project takes types from, not starter types.
     pub fn starter() -> Self {
-        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter() }
+        Self { materials: material::starter(), buildups: buildup::starter(), linear_types: profile::starter(), system_types: system::starter() }
     }
 
     pub fn material(&self, key: &str) -> Option<&Material> {
@@ -142,6 +145,58 @@ impl Library {
         self.linear_types_of(linear.role).find(|t| t.material == linear.material && t.designation == linear.designation && t.profile.same(&linear.profile))
     }
 
+    pub fn system_type(&self, id: &str) -> Option<&SystemType> {
+        self.system_types.iter().find(|t| t.id == id)
+    }
+
+    /// The system types of `group`, in library order.
+    pub fn system_types_of(&self, group: SystemGroup) -> impl Iterator<Item = &SystemType> {
+        self.system_types.iter().filter(move |t| t.group == group)
+    }
+
+    /// Adds a system type under an id of its own, once it checks against the library's materials.
+    pub fn add_system_type(&mut self, system: SystemType) -> Result<(), LibraryError> {
+        system.check(&self.materials)?;
+        if self.system_type(&system.id).is_some() {
+            return Err(LibraryError::Duplicate(system.id));
+        }
+        self.system_types.push(system);
+        Ok(())
+    }
+
+    /// The name of system type `id` in `lang`, made unique within its group as a build-up's.
+    pub fn system_name(&self, id: &str, lang: Lang) -> Option<String> {
+        let group = self.system_type(id)?.group;
+        self.system_names(group, lang).into_iter().find(|(i, _)| *i == id).map(|(_, name)| name)
+    }
+
+    /// The system types of `group` with their names in `lang`, in library order.
+    pub fn system_names(&self, group: SystemGroup, lang: Lang) -> Vec<(&str, String)> {
+        let names = numbered(self.system_types_of(group).map(|t| t.rule_name(&self.materials, lang)));
+        self.system_types_of(group).map(|t| t.id.as_str()).zip(names).collect()
+    }
+
+    /// The system type this library already has that makes the same system as `system`: the
+    /// same group, grids, members, panels, layers and level, lengths within 0.01 mm.
+    pub fn matching_system(&self, system: &SystemType) -> Option<&SystemType> {
+        let near = |a: f64, b: f64| (a - b).abs() <= SAME_THICKNESS;
+        let same_grid = |a: &system::Grid, b: &system::Grid| a.pattern == b.pattern && near(a.bay, b.bay) && near(a.row, b.row);
+        let same_members = |a: Option<&system::Members>, b: Option<&system::Members>| match (a, b) {
+            (Some(a), Some(b)) => a.material == b.material && near(a.width, b.width) && near(a.depth, b.depth),
+            (None, None) => true,
+            _ => false,
+        };
+        let same = |t: &SystemType| {
+            t.lying.is_some() == system.lying.is_some()
+                && near(t.lying.unwrap_or(0.0), system.lying.unwrap_or(0.0))
+                && t.faces().count() == system.faces().count()
+                && t.faces().zip(system.faces()).all(|((oa, ga, ma, pa), (ob, gb, mb, pb))| {
+                    near(oa, ob) && same_grid(ga, gb) && same_members(ma, mb) && pa.material == pb.material && near(pa.thickness, pb.thickness)
+                })
+        };
+        self.system_types_of(system.group).find(|t| same(t))
+    }
+
     /// The build-up this library already has with the role and the layers of `buildup`: the same
     /// materials in the same order, each as thick within 0.01 mm. A name says less than the layers
     /// (two layers of brick are named as one), so the layers decide.
@@ -155,7 +210,8 @@ impl Library {
 
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
     /// materials by key, build-ups by role and layers ([`Library::matching`]), linear types by
-    /// role, material and profile ([`Library::matching_linear`]). Nothing this library has is
+    /// role, material and profile ([`Library::matching_linear`]), system types by what they make
+    /// ([`Library::matching_system`]). Nothing this library has is
     /// changed. A type whose id is taken gets a new one; one that does not check is left out.
     /// Returns how many materials and types were added.
     pub fn merge(&mut self, other: &Library) -> usize {
@@ -185,6 +241,16 @@ impl Library {
                 added += 1;
             }
         }
+        for t in &other.system_types {
+            if self.matching_system(t).is_some() {
+                continue;
+            }
+            let mut fresh = t.clone();
+            fresh.id = free_id(&t.id, |id| self.system_type(id).is_some());
+            if self.add_system_type(fresh).is_ok() {
+                added += 1;
+            }
+        }
         added
     }
 }
@@ -204,6 +270,9 @@ mod tests {
         }
         for t in &lib.linear_types {
             fresh.add_linear_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+        }
+        for t in &lib.system_types {
+            fresh.add_system_type(t.clone()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }
         assert_eq!(fresh, lib);
         assert_eq!(lib.name("roof.flat-concrete-pir", Lang::Nl).unwrap(), "Isolatie PIR-beton 320");
@@ -276,6 +345,34 @@ mod tests {
         project.add_linear_type(LinearType::new("column.steel-200x200-b", LinearRole::Column, "steel", crate::ProfileShape::Rectangle { width: 0.2, depth: 0.2 })).unwrap();
         assert_eq!(project.linear_name("column.steel-200x200-b", Lang::Nl).unwrap(), "Staal 200x200 (2)");
         assert_eq!(project.linear_names(LinearRole::Pipe, Lang::En), vec![("pipe.generic-110", "Generic round 110".to_string())]);
+    }
+
+    #[test]
+    fn system_types_merge_by_what_they_make() {
+        let mut project = Library::starter();
+        let mut other = Library::starter();
+        // the project's aluminium curtain wall under another id, 0.001 mm off
+        let mut copy = project.system_types[0].clone();
+        copy.id = "system.copy".into();
+        copy.grid.bay += 1e-6;
+        other.system_types.push(copy);
+        // a curtain wall at 1800 instead, under an id the project uses
+        let mut wider = project.system_types[0].clone();
+        wider.grid.bay = 1.8;
+        other.system_types.push(wider);
+        assert_eq!(project.merge(&other), 1, "only the curtain wall at 1800");
+        assert!(project.system_type("system.copy").is_none());
+        assert_eq!(project.system_name("system.curtain-wall-aluminium-1500-2", Lang::Nl).unwrap(), "Vliesgevel aluminium 50×150 h.o.h. 1800");
+        // the same name twice in a group gets a number
+        let mut twin = project.system_types[0].clone();
+        twin.id = "system.twin".into();
+        twin.grid.row = 2.0;
+        project.add_system_type(twin).unwrap();
+        assert_eq!(project.system_name("system.twin", Lang::Nl).unwrap(), "Vliesgevel aluminium 50×150 h.o.h. 1500 (2)");
+        assert_eq!(project.system_names(SystemGroup::Ceiling, Lang::En), vec![("system.ceiling-600x600", "Mineral fibre 15 600×600".to_string())]);
+        let other = Library { system_types: vec![SystemType { id: "system.x".into(), ..project.system_types[0].clone() }], ..Library::default() };
+        let mut bare = Library::default();
+        assert_eq!(bare.merge(&other), 0, "a type of materials the library lacks is left out");
     }
 
     #[test]

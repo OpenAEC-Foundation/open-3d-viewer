@@ -1,9 +1,10 @@
 //! The explorer's Views tab: the views of the project document by kind. Plans (floor,
 //! structural, ceiling) are made per level and shown from above (a ceiling plan from below), cut
-//! at their height above the level; sections and elevations, and the sheets.
+//! at their height above the level; 3D views keep a camera and a section box; sections and
+//! elevations, and the sheets.
 
 use super::{App, Message, FONT_BOLD};
-use crate::document::{PlanKind, SectionKind};
+use crate::document::{Camera3d, PlanKind, SectionKind, ViewBox};
 use crate::explode::{ExplodeIndex, UnitOwner};
 use crate::model::{PlanRange, SavedView, ViewKind};
 use crate::section::SectionBox;
@@ -23,7 +24,7 @@ pub struct ViewSlot {
     pub section_on: bool,
 }
 
-/// A floor plan open in its own document tab.
+/// A view of the document open in its own tab.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenPlan {
     pub path: String,
@@ -31,11 +32,11 @@ pub struct OpenPlan {
     pub slot: ViewSlot,
 }
 
-/// A document tab: the 3D view (always first), floor plans, schedules, sheets.
+/// A document tab: the 3D view (always first), views of the document, schedules, sheets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocTab {
     Model,
-    /// Index in `App::open_plans`.
+    /// Index in `App::open_plans`: a plan, section, elevation or 3D view of the document.
     Plan(usize),
     /// Index in `App::schedules`.
     Schedule(usize),
@@ -106,26 +107,87 @@ impl App {
             .collect()
     }
 
-    /// Shows a floor plan in its tab, opening the tab the first time: from above, orthographic,
-    /// the section box from just under its level up to its cut.
+    /// Shows a view of the document in its tab, opening the tab the first time: a plan from
+    /// above, orthographic, the section box from just under its level up to its cut; a section
+    /// or elevation level, in its box; a 3D view as it was left.
     pub(super) fn open_plan(&mut self, path: &str) {
         self.active_doc_sheet = None;
-        if self.open_plans.iter().any(|o| o.path == path) {
-            self.active_sheet = None;
-            self.active_schedule = None;
-            self.ifc.shown = false;
-            self.load_view(Some(path.to_string()));
-            return;
+        let mut drawing = None;
+        if !self.open_plans.iter().any(|o| o.path == path) {
+            let slot = match self.view_3d_slot(path) {
+                Some(slot) => slot,
+                None => {
+                    let Some(view) = self.saved_view_of(path) else { return };
+                    drawing = Some(view);
+                    self.view_slot()
+                }
+            };
+            self.open_plans.push(OpenPlan { path: path.to_string(), slot });
         }
-        let Some(view) = self.saved_view_of(path) else { return };
         self.active_sheet = None;
         self.active_schedule = None;
         self.ifc.shown = false;
-        let slot = self.view_slot();
-        self.open_plans.push(OpenPlan { path: path.to_string(), slot });
         self.load_view(Some(path.to_string()));
-        self.show_view(&view);
-        self.fit_plan_section(path);
+        if let Some(view) = drawing {
+            self.show_view(&view);
+            self.fit_plan_section(path);
+        }
+    }
+
+    /// Makes a 3D view of what the 3D tab shows (its camera, section box, layers and hidden
+    /// elements), named `<word> <n>`, and shows it in its tab.
+    pub(super) fn new_view_3d(&mut self, word: &str) {
+        if self.model.is_none() {
+            return;
+        }
+        let in_3d = self.active_plan.is_none();
+        let slot = if in_3d { self.view_slot() } else { self.model_view.unwrap_or_else(|| self.view_slot()) };
+        let switches = match (&self.parked_layers, in_3d) {
+            (Some((visible, models)), false) => {
+                let mut on = visible.clone();
+                for (entry, layers) in self.models.iter().zip(models) {
+                    for (i, &v) in entry.layers.clone().zip(layers) {
+                        if let Some(o) = on.get_mut(i) {
+                            *o = v;
+                        }
+                    }
+                }
+                on
+            }
+            _ => self.viewport_switches(),
+        };
+        let layers = self.own_switches(&switches);
+        let hidden = if in_3d { self.hidden.clone() } else { self.parked_hidden.clone().unwrap_or_default() };
+        let name = self.document.next_view_3d_name(word);
+        let section = slot.section.filter(|_| slot.section_on).map(|b| view_box(&b));
+        let path = self.document.add_view_3d(&name, camera_3d(&slot.camera), section, layers, hidden);
+        self.open_plan(&path);
+    }
+
+    /// The camera and section box a 3D view opens with: as it was left.
+    fn view_3d_slot(&self, path: &str) -> Option<ViewSlot> {
+        let view = self.document.view_3d(path)?;
+        let radius = self.world_bounds().map_or(10.0, |b| b.radius().max(1e-3));
+        let section = view.section.map(|b| section_box(&b));
+        Some(ViewSlot { camera: camera_of(&view.camera, radius), section, section_on: section.is_some() })
+    }
+
+    /// Lets the 3D view at `path` (if it is one) keep the camera and section box of `slot`.
+    fn keep_view_3d(&mut self, path: &str, slot: &ViewSlot) {
+        let section = slot.section.filter(|_| slot.section_on).map(|b| view_box(&b));
+        self.document.set_view_3d_camera(path, camera_3d(&slot.camera), section);
+    }
+
+    /// The document as it is now: with the camera and section box of the 3D view whose tab
+    /// shows, which it keeps for good when its tab is left.
+    pub(crate) fn document_now(&self) -> crate::document::Document {
+        let mut document = self.document.clone();
+        if let Some(path) = self.active_plan.as_deref().filter(|p| document.view_3d(p).is_some()) {
+            let slot = self.view_slot();
+            let section = slot.section.filter(|_| slot.section_on).map(|b| view_box(&b));
+            document.set_view_3d_camera(path, camera_3d(&slot.camera), section);
+        }
+        document
     }
 
     /// A view of the document as the viewport shows it: a floor plan from above in its range, a
@@ -222,11 +284,12 @@ impl App {
             return;
         }
         let slot = self.view_slot();
-        match &self.active_plan {
+        match self.active_plan.clone() {
             Some(path) => {
-                if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == *path) {
+                if let Some(open) = self.open_plans.iter_mut().find(|o| o.path == path) {
                     open.slot = slot;
                 }
+                self.keep_view_3d(&path, &slot);
             }
             None => self.model_view = Some(slot),
         }
@@ -354,7 +417,7 @@ impl App {
             container(
                 row![
                     text(l.text("Weergaven", "Views")).size(12).font(FONT_BOLD).width(Fill),
-                    text((document.plans().len() + document.sections().len()).to_string()).size(11).color(p.text_secondary),
+                    text((document.plans().len() + document.sections().len() + document.views_3d().len()).to_string()).size(11).color(p.text_secondary),
                 ]
                 .spacing(6)
                 .align_y(Center),
@@ -407,6 +470,34 @@ impl App {
                 let none = l.text("Nog geen. Nieuw maakt er een van een niveau.", "None yet. New makes one of a level.");
                 body = body.push(container(text(none).size(12).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]));
             }
+        }
+
+        // 3D views; New keeps what the 3D tab shows
+        let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
+        let new = button(row![plus, text(l.text("Nieuw", "New")).size(11).color(p.text)].spacing(4).align_y(Center))
+            .padding([2, 6])
+            .style(move |_, s| p.row_button(s))
+            .on_press(Message::NewView3d(l.text("3D-weergave", "3D view")));
+        let header = subheader(l.text("3D-weergaven", "3D views"));
+        body = body.push(row![container(header).width(Fill), container(new).padding(Padding { top: 6.0, right: 4.0, bottom: 0.0, left: 0.0 })].align_y(iced::alignment::Vertical::Bottom));
+        for view in document.views_3d() {
+            let active = self.active_plan.as_deref() == Some(view.path.as_str());
+            let name = text(view.name.clone()).size(12).color(if active { p.accent } else { p.text }).wrapping(Wrapping::WordOrGlyph).width(Fill);
+            let open = button(name)
+                .padding([3, 6])
+                .width(Fill)
+                .style(move |_, s| if active { p.ribbon_button(true, s) } else { p.row_button(s) })
+                .on_press(Message::OpenPlan(Arc::from(view.path.as_str())));
+            let close = svg(svg::Handle::from_memory(openaec_ui::icons::Icon::Close.bytes()))
+                .width(12)
+                .height(12)
+                .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
+            let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveView3d(Arc::from(view.path.as_str())));
+            body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+        }
+        if document.views_3d().is_empty() {
+            let none = l.text("Nog geen. Nieuw legt vast wat het tabblad 3D toont.", "None yet. New keeps what the 3D tab shows.");
+            body = body.push(container(text(none).size(12).color(p.text_muted).wrapping(Wrapping::WordOrGlyph)).padding([2, 8]));
         }
 
         // sections, drawn on a sheet; elevations, the four at once
@@ -485,6 +576,43 @@ impl App {
         }
         body
     }
+}
+
+/// A camera as a 3D view keeps it.
+fn camera_3d(c: &Camera) -> Camera3d {
+    let f = |v: glam::Vec3| [f64::from(v.x), f64::from(v.y), f64::from(v.z)];
+    Camera3d { eye: f(c.eye()), target: f(c.target), perspective: !c.ortho, fov: f64::from(c.fov_y.to_degrees()) }
+}
+
+/// The camera of a 3D view, orbiting its target; `radius`: the scene's, for the near and far
+/// planes.
+fn camera_of(v: &Camera3d, radius: f32) -> Camera {
+    let f = |a: [f64; 3]| glam::Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32);
+    let (eye, target) = (f(v.eye), f(v.target));
+    let d = eye - target;
+    let distance = d.length().max(1e-3);
+    let max_pitch = 89.9f32.to_radians();
+    Camera {
+        target,
+        distance,
+        yaw: d.y.atan2(d.x),
+        pitch: (d.z / distance).clamp(-1.0, 1.0).asin().clamp(-max_pitch, max_pitch),
+        fov_y: (v.fov as f32).clamp(1.0, 179.0).to_radians(),
+        scene_radius: radius,
+        ortho: !v.perspective,
+    }
+}
+
+/// A section box as a 3D view keeps it.
+fn view_box(b: &SectionBox) -> ViewBox {
+    let f = |v: glam::Vec3| [f64::from(v.x), f64::from(v.y), f64::from(v.z)];
+    ViewBox { min: f(b.min), max: f(b.max), turn: f64::from(b.turn), pivot: f(b.pivot) }
+}
+
+/// The section box of a 3D view.
+fn section_box(b: &ViewBox) -> SectionBox {
+    let f = |a: [f64; 3]| glam::Vec3::new(a[0] as f32, a[1] as f32, a[2] as f32);
+    SectionBox { min: f(b.min), max: f(b.max), turn: b.turn as f32, pivot: f(b.pivot) }
 }
 
 /// The name of a view in the list, which a press takes (to drag onto the sheet shown) and a
@@ -594,6 +722,55 @@ mod tests {
         assert_eq!(app.document.plans().len(), 1);
         let _ = app.update(Message::CloseTab(0));
         assert_eq!(app.doc_tabs(), [DocTab::Model], "the 3D view stays");
+    }
+
+    #[test]
+    fn a_3d_view_keeps_what_the_3d_tab_showed_and_how_it_was_left() {
+        let mut app = App::default();
+        app.set_model(fitted_room());
+        // the 3D tab: turned, a section box under the ceiling, the furniture off
+        app.anim = None;
+        (app.camera.yaw, app.camera.pitch) = (0.7, 0.4);
+        let mut b = SectionBox::around(&app.world_bounds().unwrap());
+        b.max.z = 2.5;
+        (app.section, app.section_on) = (Some(b), true);
+        app.switch_layers(&[1], false);
+        click(&mut app, "Views");
+        assert!(simulator(&app).find("None yet. New keeps what the 3D tab shows.").is_ok());
+        let made = app.camera;
+        let _ = app.update(Message::NewView3d("3D view"));
+        let view = app.document.views_3d().first().expect("a 3D view").clone();
+        assert_eq!(view.name, "3D view 1");
+        assert_eq!(view.layers, crate::document::LayerSwitches::from([("Furniture and casework".to_string(), false)]));
+        assert_eq!(app.active_plan.as_deref(), Some(view.path.as_str()));
+        assert_eq!(app.doc_tabs(), [DocTab::Model, DocTab::Plan(0)]);
+        assert_eq!(app.tab_title(DocTab::Plan(0)), "3D view 1");
+        // its tab shows what the 3D tab showed
+        let near = |a: Camera, b: Camera| (a.yaw - b.yaw).abs() < 1e-4 && (a.pitch - b.pitch).abs() < 1e-4 && (a.distance - b.distance).abs() < 1e-3 && a.ortho == b.ortho;
+        assert!(near(app.camera, made), "{:?} against {made:?}", app.camera);
+        assert!(app.section_on && (app.section.unwrap().max.z - 2.5).abs() < 1e-6);
+        assert!(!app.visible[1]);
+        assert!(simulator(&app).find("3D VIEWS").is_ok());
+        // it is no drawing: it turns, and its section box is there to drag
+        assert_eq!(app.shown_view(), None);
+        let _ = app.update(Message::Navigate(crate::viewport::Navigate::Orbit { dx: 40.0, dy: 10.0 }));
+        assert!((app.camera.yaw - made.yaw).abs() > 0.1);
+        let turned = app.camera;
+        assert_eq!(app.document_now().view_3d(&view.path).unwrap().camera, camera_3d(&turned), "saved as it shows");
+        // the 3D tab comes back as it was; the view keeps how it was left
+        let _ = app.update(Message::SelectTab(0));
+        assert_eq!(app.camera, made);
+        assert_eq!(app.document.view_3d(&view.path).unwrap().camera, camera_3d(&turned));
+        app.switch_layers(&[1], true);
+        let _ = app.update(Message::CloseTab(1));
+        let _ = app.update(Message::OpenPlan(Arc::from(view.path.as_str())));
+        assert!(near(app.camera, turned), "{:?} against {turned:?}", app.camera);
+        assert!(!app.visible[1], "the furniture stays off in the view");
+        // removed, its tab closes and the 3D tab shows as it was left
+        let _ = app.update(Message::RemoveView3d(Arc::from(view.path.as_str())));
+        assert!(app.document.views_3d().is_empty());
+        assert_eq!((app.active_plan.as_deref(), app.doc_tabs()), (None, vec![DocTab::Model]));
+        assert!(app.visible[1]);
     }
 
     /// A press on a view in the list takes it (to drag onto a sheet); let go on it, it opens.

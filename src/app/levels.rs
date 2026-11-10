@@ -21,6 +21,8 @@ pub enum ExplorerTab {
     Levels,
     /// Floor plans (and further views) of the document.
     Views,
+    /// The project's library of materials and types.
+    Library,
 }
 
 /// The form of a new level, as typed.
@@ -75,12 +77,16 @@ impl App {
             tab(l.text("Model", "Model"), ExplorerTab::Model),
             tab(l.text("Niveaus", "Levels"), ExplorerTab::Levels),
             tab(l.text("Weergaven", "Views"), ExplorerTab::Views),
+            tab(l.text("Bibliotheek", "Library"), ExplorerTab::Library),
         ]
-        .spacing(2);
+        .spacing(2)
+        .wrap()
+        .vertical_spacing(2);
         let body = match self.explorer_tab {
             ExplorerTab::Model => self.model_body(p, l),
             ExplorerTab::Levels => self.levels_body(p, l),
             ExplorerTab::Views => self.views_body(p, l),
+            ExplorerTab::Library => self.library_body(p, l),
         };
         column![tabs, rule::horizontal(1), body].spacing(6).into()
     }

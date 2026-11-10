@@ -50,10 +50,22 @@ jobs:
       # Headless structural analysis model: unit tests, sam-json conformance, sam-check
       - name: Tests (bim-structural)
         run: cargo test --release --locked -p bim-structural
+      # Headless libraries: materials, layered build-ups, their IFCX form
+      - name: Tests (bim-library)
+        run: cargo test --release --locked -p bim-library
       - name: Web build (wasm32)
         run: |
-          cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer
+          cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer --bin open-bim-modeller --bin open-bim-collaborator
           cargo check --locked --target wasm32-unknown-unknown -p bim-structural
+          cargo check --locked --target wasm32-unknown-unknown -p bim-library
+
+      # One product per build (docs/architecture/products.md): each feature on its own still
+      # compiles; only the app crate is checked again
+      - name: Product builds (wasm32)
+        run: |
+          cargo check --locked --target wasm32-unknown-unknown --no-default-features --features viewer --lib --bin open-3d-viewer
+          cargo check --locked --target wasm32-unknown-unknown --no-default-features --features modeller --lib --bin open-bim-modeller
+          cargo check --locked --target wasm32-unknown-unknown --no-default-features --features collaborator --lib --bin open-bim-collaborator
 
   desktop:
     needs: test
@@ -91,8 +103,9 @@ jobs:
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev libgtk-3-dev
+      # the released programs; the binaries of one product alone are not packaged yet
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --bin open-3d-viewer --bin open-3d-viewer-mcp
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

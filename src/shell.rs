@@ -743,7 +743,53 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
-        for tool in crate::app::modeller::ModelTool::ALL {
+        // the project's levels, views, sheets and library
+        use crate::document::PlanKind;
+        let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
+            Command::new(id, label, go(Message::PickLevelFor((app.views_picker != Some(kind)).then_some(kind)))).icon(small("drawing.plan"), large("drawing.plan")).mode(app.views_picker == Some(kind)).enabled(loaded)
+        };
+        list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
+        list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
+        list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
+        list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
+        list.push(Command::new("project.sheet", l.text("Blad", "Sheet"), go(Message::NewSheet(l.text("Blad", "Sheet")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
+        list.push(
+            Command::new("project.library", l.text("Bibliotheek", "Library"), go(Message::ExplorerTab(crate::app::ExplorerTab::Library)))
+                .icon(small("construction.library"), large("construction.library"))
+                .mode(app.explorer_tab == crate::app::ExplorerTab::Library),
+        );
+        // dimensions, texts and sections in the floor plan or on the sheet shown
+        let (annotatable, sections) = app.annotatable();
+        list.push(
+            Command::new("annotate.dimension", l.text("Maatvoering", "Dimension"), go(Message::DimensionTool(!app.dimension_tool)))
+                .icon(small("draw.dimension"), large("draw.dimension"))
+                .toggle(app.dimension_tool && annotatable)
+                .enabled(annotatable),
+        );
+        // the standard dimensions of the drawing view shown
+        let plan_shown = app.shown_drawing();
+        list.push(
+            Command::new(
+                "annotate.standard-dimensions",
+                l.text("Standaard maatvoering", "Standard dimensions"),
+                plan_shown.clone().map_or(Msg::Dialog(None), |v| go(Message::StandardDimensions(v))),
+            )
+            .icon(small("draw.dimension"), large("draw.dimension"))
+            .enabled(plan_shown.is_some()),
+        );
+        list.push(
+            Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
+                .icon(small("draw.text"), large("draw.text"))
+                .toggle(app.note_tool && annotatable)
+                .enabled(annotatable),
+        );
+        list.push(
+            Command::new("annotate.section", l.text("Doorsnede", "Section"), go(Message::SectionTool(!app.section_tool)))
+                .icon(small("drawing.section"), large("drawing.section"))
+                .toggle(app.section_tool && sections)
+                .enabled(sections),
+        );
+        for tool in crate::app::modeller::ModelTool::ALL.into_iter().chain(crate::app::modeller::ModelTool::OPENINGS) {
             let on = app.modeller.tool.is_some_and(|t| t.0 == tool);
             list.push(Command::new(tool.id(), tool.label(l), go(Message::ModelTool(Some((tool, tool.label(l)))))).icon(small(tool.icon()), large(tool.icon())).mode(on).enabled(loaded));
         }
@@ -856,6 +902,11 @@ impl Studio {
     fn handle(&mut self, message: Msg) -> Task<Msg> {
         match message {
             Msg::App(message) => {
+                // what opens in the explorer shows it
+                if matches!(message, Message::NewLevel(_) | Message::PickLevelFor(Some(_)) | Message::ExplorerTab(_)) && !self.prefs.left {
+                    self.prefs.left = true;
+                    self.save_prefs();
+                }
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
@@ -1311,16 +1362,30 @@ impl Studio {
                 groups
             }
             RibbonPage::View => view_groups(),
-            // the five base elements: planar (wall, slab), linear (column, beam), system, point;
-            // connection joins two selected linear elements
+            // what is built, in the order of the five base elements: planar (wall, slab), linear
+            // (column, beam), system, point; then the openings in walls, the connection that joins
+            // two selected elements, and changes. New, open and save are on the File page and in
+            // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
-                w::ribbon_group(look, l.text("Model", "Model"), vec![large("model.new"), smalls(&["file.open", "file.save-as"])]),
                 w::ribbon_group(look, l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
+                w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
                 w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
+            ],
+            // what the model is drawn on and in: its levels, its views and sheets, its types
+            RibbonPage::Project => vec![
+                w::ribbon_group(look, l.text("Niveaus", "Levels"), vec![large("project.level")]),
+                w::ribbon_group(look, l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
+                w::ribbon_group(look, l.text("Bladen", "Sheets"), vec![large("project.sheet")]),
+                w::ribbon_group(look, l.text("Bibliotheek", "Library"), vec![large("project.library")]),
+            ],
+            // in the floor plan, section or sheet shown
+            RibbonPage::Annotate => vec![
+                w::ribbon_group(look, l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
+                w::ribbon_group(look, l.text("Tekst", "Text"), vec![large("annotate.text")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
@@ -1970,6 +2035,22 @@ mod tests {
         studio.app.modeller.points = vec![glam::DVec3::new(10.0, 0.0, 0.0)];
         studio.app.modeller.cursor = Some(glam::DVec3::new(10.0, -4.0, 0.0));
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-placing-nl.png")).expect("snapshot");
+        // a window aimed at the front wall's face
+        let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Window, "Raam")))));
+        let (w, h) = studio.viewport_in(1440.0, 900.0);
+        studio.app.viewport_size = (w, h);
+        let (x, y) = studio.app.on_screen(glam::DVec3::new(7.0, -0.1, 1.5), w, h).expect("on screen");
+        let _ = studio.update(Msg::App(Message::Navigate(crate::viewport::Navigate::Hover { x, y, width: w, height: h })));
+        assert!(studio.app.modeller.aim.is_some(), "the cursor is over the wall");
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-window-nl.png")).expect("snapshot");
+        // the Project tab, and the Annotate tab in a floor plan
+        let _ = studio.update(Msg::App(Message::ModelTool(None)));
+        studio.ribbon_tab = 1;
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-project-nl.png")).expect("snapshot");
+        let level: std::sync::Arc<str> = studio.app.document.levels()[0].path.as_str().into();
+        let _ = studio.update(Msg::App(Message::NewPlan(level)));
+        studio.ribbon_tab = 2;
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-annotate-nl.png")).expect("snapshot");
     }
 
     /// The Library tab with a build-up and a steel profile picked, in every language:
@@ -2083,6 +2164,39 @@ mod tests {
     }
 
     #[test]
+    fn the_modellers_project_and_annotate_tabs_open_levels_views_and_marks() {
+        use crate::app::ExplorerTab;
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        studio.set_product(Product::Modeller);
+        studio.prefs.left = false;
+        // Level opens the form of a new level in the explorer's Levels tab, and shows the explorer
+        let _ = studio.update(studio.command("project.level").message);
+        assert!(studio.prefs.left && studio.app.explorer_tab == ExplorerTab::Levels && studio.app.level_form.is_some());
+        // Floor plan lists the levels to make one of, in the Views tab; again closes the list
+        let _ = studio.update(studio.command("project.floor-plan").message);
+        assert_eq!((studio.app.explorer_tab, studio.app.views_picker), (ExplorerTab::Views, Some(crate::document::PlanKind::Floor)));
+        let _ = studio.update(studio.command("project.floor-plan").message);
+        assert_eq!(studio.app.views_picker, None);
+        let _ = studio.update(studio.command("project.library").message);
+        assert_eq!(studio.app.explorer_tab, ExplorerTab::Library);
+        // dimensions, texts and sections need a floor plan (or a sheet) shown
+        for id in ["annotate.dimension", "annotate.standard-dimensions", "annotate.text", "annotate.section"] {
+            assert!(!studio.command(id).enabled, "{id} without a plan");
+        }
+        let level: std::sync::Arc<str> = studio.app.document.levels()[0].path.as_str().into();
+        let _ = studio.update(Msg::App(Message::NewPlan(level)));
+        for id in ["annotate.dimension", "annotate.standard-dimensions", "annotate.text", "annotate.section"] {
+            assert!(studio.command(id).enabled, "{id} in a plan");
+        }
+        let _ = studio.update(studio.command("annotate.dimension").message);
+        assert!(studio.app.dimension_tool && studio.command("annotate.dimension").kind == openaec_ui::design::command::CommandKind::Toggle(true));
+        // the door and window tools are on the Model tab
+        assert!(studio.command("model.door").enabled && studio.command("model.window").enabled);
+    }
+
+    #[test]
     fn the_switch_at_the_top_right_shows_each_product_with_its_own_ribbon() {
         let mut studio = Studio::new(App::default());
         assert_eq!(studio.product(), Product::Viewer);
@@ -2095,8 +2209,11 @@ mod tests {
         assert!(shown.contains(&"Tab: Home".to_string()) && !shown.contains(&"Tab: Model".to_string()), "{shown:?}");
         let _ = studio.update(Msg::Product(Product::Modeller));
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Modeller, RibbonPage::Model));
-        assert!(tabs(&studio).contains(&"Tab: View".to_string()));
-        let _ = studio.update(Msg::RibbonTab(1));
+        let shown = tabs(&studio);
+        for tab in ["Tab: Model", "Tab: Project", "Tab: Annotate", "Tab: View"] {
+            assert!(shown.contains(&tab.to_string()), "{shown:?}");
+        }
+        let _ = studio.update(Msg::RibbonTab(3));
         assert_eq!(studio.ribbon_page(), RibbonPage::View);
         // another product opens on its first tab
         let _ = studio.update(Msg::Product(Product::Collaborator));

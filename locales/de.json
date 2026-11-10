@@ -431,6 +431,10 @@
     "{format} files open only in the desktop app; the browser version cannot read them. The desktop app is free, for Windows, macOS and Linux: Download opens the releases page on GitHub.": "{format}-Dateien öffnen sich nur in der Desktop-App; die Browserversion kann sie nicht lesen. Die Desktop-App ist kostenlos, für Windows, macOS und Linux: Herunterladen öffnet die Release-Seite auf GitHub.",
     "{format} needs the desktop app": "{format} erfordert die Desktop-App",
     "←  Return to workspace": "←  Zurück zum Arbeitsbereich",
-    "Mitred corners": "Gehrungsecken"
+    "Mitred corners": "Gehrungsecken",
+    "Annotate": "Beschriften",
+    "Openings": "Öffnungen",
+    "Click a wall where the door goes · Esc: stop": "Klicken Sie auf eine Wand, wo die Tür hinkommt · Esc: beenden",
+    "Click a wall where the window goes · Esc: stop": "Klicken Sie auf eine Wand, wo das Fenster hinkommt · Esc: beenden"
   }
 }

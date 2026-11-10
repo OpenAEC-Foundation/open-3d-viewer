@@ -9,6 +9,7 @@ mod layers;
 mod edit;
 mod element_props;
 mod grips;
+mod openings;
 mod levels;
 pub mod library;
 mod marks;
@@ -1510,6 +1511,7 @@ impl App {
                 }
                 Navigate::HoverOff => {
                     self.modeller.cursor = None;
+                    self.modeller.aim = None;
                     self.hover_request = None;
                     self.measure.hover = None;
                     self.structural_hover_off();
@@ -1555,7 +1557,11 @@ impl App {
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
-            Message::NewLevel(word) => self.new_level(word),
+            Message::NewLevel(word) => {
+                // the form is in the Levels tab
+                self.explorer_tab = ExplorerTab::Levels;
+                self.new_level(word);
+            }
             Message::LevelName(name) => {
                 if let Some(form) = &mut self.level_form {
                     form.name = name;
@@ -1573,7 +1579,13 @@ impl App {
             }
             Message::NewPlan(level) => self.new_plan(&level),
             Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
-            Message::PickLevelFor(kind) => self.views_picker = kind,
+            Message::PickLevelFor(kind) => {
+                // the levels to pick from are listed in the Views tab
+                if kind.is_some() {
+                    self.explorer_tab = ExplorerTab::Views;
+                }
+                self.views_picker = kind;
+            }
             Message::OpenPlan(plan) => self.open_plan(&plan),
             Message::RemovePlan(plan) => {
                 self.close_plan(&plan);

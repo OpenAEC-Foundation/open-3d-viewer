@@ -25,10 +25,22 @@ pub enum ModelTool {
     Wall,
     Slab,
     System,
+    /// A door in the wall clicked: an opening down to the floor.
+    Door,
+    /// A window in the wall clicked: an opening above a sill.
+    Window,
 }
 
 impl ModelTool {
+    /// The tools that place an element of their own.
     pub const ALL: [ModelTool; 6] = [ModelTool::Wall, ModelTool::Slab, ModelTool::Column, ModelTool::Beam, ModelTool::System, ModelTool::Point];
+    /// The tools that make an opening in a wall.
+    pub const OPENINGS: [ModelTool; 2] = [ModelTool::Door, ModelTool::Window];
+
+    /// Whether it makes an opening in a wall rather than an element.
+    pub fn opens(self) -> bool {
+        matches!(self, ModelTool::Door | ModelTool::Window)
+    }
 
     /// Its command id.
     pub fn id(self) -> &'static str {
@@ -39,6 +51,8 @@ impl ModelTool {
             ModelTool::Wall => "model.wall",
             ModelTool::Slab => "model.slab",
             ModelTool::System => "model.system",
+            ModelTool::Door => "model.door",
+            ModelTool::Window => "model.window",
         }
     }
 
@@ -51,6 +65,8 @@ impl ModelTool {
             ModelTool::Wall => l.text("Wand", "Wall"),
             ModelTool::Slab => l.text("Vloer", "Slab"),
             ModelTool::System => l.text("Vliesgevel", "Curtain wall"),
+            ModelTool::Door => l.text("Deur", "Door"),
+            ModelTool::Window => l.text("Raam", "Window"),
         }
     }
 
@@ -63,6 +79,8 @@ impl ModelTool {
             ModelTool::Wall => "construction.types",
             ModelTool::Slab => "draw.filled-area",
             ModelTool::System => "curtain.new",
+            ModelTool::Door => "frame.new-door",
+            ModelTool::Window => "frame.new-turn-tilt",
         }
     }
 
@@ -72,7 +90,7 @@ impl ModelTool {
         match self {
             ModelTool::Point => BaseKind::Point,
             ModelTool::Column | ModelTool::Beam => BaseKind::Linear,
-            ModelTool::Wall | ModelTool::Slab => BaseKind::Planar,
+            ModelTool::Wall | ModelTool::Slab | ModelTool::Door | ModelTool::Window => BaseKind::Planar,
             ModelTool::System => BaseKind::System,
         }
     }
@@ -80,7 +98,7 @@ impl ModelTool {
     /// The clicks it takes.
     pub(super) fn clicks(self) -> usize {
         match self {
-            ModelTool::Point | ModelTool::Column => 1,
+            ModelTool::Point | ModelTool::Column | ModelTool::Door | ModelTool::Window => 1,
             ModelTool::Beam | ModelTool::Wall | ModelTool::Slab | ModelTool::System => 2,
         }
     }
@@ -95,6 +113,8 @@ impl ModelTool {
         match (self, placed) {
             (ModelTool::Point, _) => l.text("Klik waar het object staat · Esc: stoppen", "Click where the object stands · Esc: stop"),
             (ModelTool::Column, _) => l.text("Klik waar de kolom staat · Esc: stoppen", "Click where the column stands · Esc: stop"),
+            (ModelTool::Door, _) => l.text("Klik op een wand waar de deur komt · Esc: stoppen", "Click a wall where the door goes · Esc: stop"),
+            (ModelTool::Window, _) => l.text("Klik op een wand waar het raam komt · Esc: stoppen", "Click a wall where the window goes · Esc: stop"),
             (ModelTool::Slab, 0) => l.text("Klik een hoek van de vloer · Esc: stoppen", "Click a corner of the slab · Esc: stop"),
             (ModelTool::Slab, _) => l.text("Klik de andere hoek · Esc: opnieuw", "Click the opposite corner · Esc: start again"),
             (_, 0) => l.text("Klik het beginpunt · Esc: stoppen", "Click the start point · Esc: stop"),
@@ -139,6 +159,8 @@ pub struct Modeller {
     /// Where the next click of the tool would place a point (snapped, scene coordinates), while
     /// the cursor is over the viewport: the preview runs to it.
     pub cursor: Option<DVec3>,
+    /// Where a door or window would go, while the cursor is over a wall.
+    pub aim: Option<super::openings::Aim>,
     /// A value being typed in the Definition section: the element, the field, the text.
     pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
 }
@@ -179,6 +201,7 @@ impl App {
         self.modeller.tool = if same { None } else { tool };
         self.modeller.points.clear();
         self.modeller.cursor = None;
+        self.modeller.aim = None;
         self.modeller.refusal = None;
         if self.modeller.tool.is_some() {
             self.measure.tool = None;
@@ -196,6 +219,7 @@ impl App {
         if self.modeller.points.is_empty() {
             self.modeller.tool = None;
             self.modeller.cursor = None;
+            self.modeller.aim = None;
         } else {
             self.modeller.points.clear();
         }
@@ -229,7 +253,7 @@ impl App {
     }
 
     /// Where a scene point shows in the viewport (logical pixels), if in front of the camera.
-    pub(super) fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
+    pub(crate) fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
         let c = (self.camera.view_proj(width / height) * self.model_matrix()).project_point3(p.as_vec3());
         ((0.0..=1.0).contains(&c.z)).then(|| ((c.x + 1.0) / 2.0 * width, (1.0 - c.y) / 2.0 * height))
     }
@@ -288,6 +312,9 @@ impl App {
     /// A click in the viewport while a tool is on.
     pub(super) fn model_click(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some((tool, name)) = self.modeller.tool else { return };
+        if tool.opens() {
+            return self.place_opening(tool, x, y, width, height);
+        }
         let (z, storey, level) = self.work_plane();
         let Some(p) = self.plane_point(x, y, width, height, z) else { return };
         let p = self.snapped(p, x, y, width, height);
@@ -487,7 +514,8 @@ impl App {
 /// plane at height `z` with a storey of `storey` above it.
 pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64) -> Shape {
     match tool {
-        ModelTool::Point => Shape::Point(PointDef { at: a, rotation: 0.0, size: OBJECT }),
+        // an opening tool places none of its own (see `openings`): an object stands for it
+        ModelTool::Point | ModelTool::Door | ModelTool::Window => Shape::Point(PointDef { at: a, rotation: 0.0, size: OBJECT }),
         ModelTool::Column => Shape::Linear(LinearDef { start: a, end: a + DVec3::Z * storey, profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 }),
         // a beam's top lies at the top of the storey
         ModelTool::Beam => {

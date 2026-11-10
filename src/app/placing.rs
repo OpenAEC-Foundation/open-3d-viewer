@@ -17,18 +17,22 @@ impl App {
     /// The cursor rests at (x, y) in a viewport of width × height while a tool is on: the preview
     /// follows it. False when no tool is on.
     pub(super) fn model_hover(&mut self, x: f32, y: f32, width: f32, height: f32) -> bool {
-        if self.modeller.tool.is_none() {
-            return false;
+        let Some((tool, _)) = self.modeller.tool else { return false };
+        let (width, height) = (width.max(1.0), height.max(1.0));
+        if tool.opens() {
+            // a door or window aims at the wall under the cursor
+            self.modeller.aim = self.opening_at(tool, x, y, width, height);
+            self.modeller.cursor = self.modeller.aim.as_ref().map(|a| a.hit);
+            return true;
         }
         let (z, _, _) = self.work_plane();
-        let (width, height) = (width.max(1.0), height.max(1.0));
         self.modeller.cursor = self.plane_point(x, y, width, height, z).map(|p| self.snapped(p, x, y, width, height));
         true
     }
 
     /// The element the tool would place with a click where the cursor is (scene coordinates).
     pub(crate) fn placing(&self) -> Option<Shape> {
-        let (tool, _) = self.modeller.tool?;
+        let (tool, _) = self.modeller.tool.filter(|(t, _)| !t.opens())?;
         let cursor = self.modeller.cursor?;
         if self.modeller.points.len() + 1 < tool.clicks() {
             return None;
@@ -44,6 +48,9 @@ impl App {
         self.modeller.tool?;
         let cursor = self.modeller.cursor?;
         let mut faces = Vec::new();
+        if let Some(aim) = &self.modeller.aim {
+            faces = aim.faces();
+        }
         if let Some(shape) = self.placing() {
             let grid = self.modeller.model.grid;
             let mut alone = bim_core::Model::new(grid);

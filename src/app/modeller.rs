@@ -78,7 +78,7 @@ impl ModelTool {
     }
 
     /// The clicks it takes.
-    fn clicks(self) -> usize {
+    pub(super) fn clicks(self) -> usize {
         match self {
             ModelTool::Point | ModelTool::Column => 1,
             ModelTool::Beam | ModelTool::Wall | ModelTool::Slab | ModelTool::System => 2,
@@ -134,8 +134,11 @@ pub struct Modeller {
     pub shown: Option<u64>,
     /// Why the last step was refused.
     pub refusal: Option<Refusal>,
-    /// Edit mode (Tab) on an element.
+    /// Edit mode (Tab) on an element, or a drag of a selected element's grip.
     pub edit: Option<super::edit::Edit>,
+    /// Where the next click of the tool would place a point (snapped, scene coordinates), while
+    /// the cursor is over the viewport: the preview runs to it.
+    pub cursor: Option<DVec3>,
     /// A value being typed in the Definition section: the element, the field, the text.
     pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
 }
@@ -175,6 +178,7 @@ impl App {
         let same = tool.map(|t| t.0) == self.modeller.tool.map(|t| t.0);
         self.modeller.tool = if same { None } else { tool };
         self.modeller.points.clear();
+        self.modeller.cursor = None;
         self.modeller.refusal = None;
         if self.modeller.tool.is_some() {
             self.measure.tool = None;
@@ -191,6 +195,7 @@ impl App {
         self.modeller.refusal = None;
         if self.modeller.points.is_empty() {
             self.modeller.tool = None;
+            self.modeller.cursor = None;
         } else {
             self.modeller.points.clear();
         }
@@ -210,7 +215,7 @@ impl App {
     }
 
     /// The point of the work plane under the cursor (scene coordinates).
-    fn plane_point(&self, x: f32, y: f32, width: f32, height: f32, z: f64) -> Option<DVec3> {
+    pub(super) fn plane_point(&self, x: f32, y: f32, width: f32, height: f32, z: f64) -> Option<DVec3> {
         let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
         let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
         let a = inv.project_point3(Vec3::new(nx, ny, 0.0)).as_dvec3();
@@ -254,7 +259,7 @@ impl App {
 
     /// A click on the work plane at `p`: onto a point of an element near the cursor, else in line
     /// with the last point when nearly so, else rounded.
-    fn snapped(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> DVec3 {
+    pub(super) fn snapped(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> DVec3 {
         let near = self
             .snap_points()
             .into_iter()
@@ -293,36 +298,7 @@ impl App {
         }
         let points = std::mem::take(&mut self.modeller.points);
         let (a, b) = (points[0], *points.last().unwrap());
-        let shape = match tool {
-            ModelTool::Point => Shape::Point(PointDef { at: a, rotation: 0.0, size: OBJECT }),
-            ModelTool::Column => Shape::Linear(LinearDef { start: a, end: a + DVec3::Z * storey, profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 }),
-            // a beam's top lies at the top of the storey
-            ModelTool::Beam => {
-                let up = DVec3::Z * (storey - BEAM.1 / 2.0);
-                Shape::Linear(LinearDef { start: a + up, end: b + up, profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 })
-            }
-            ModelTool::Wall => Shape::Planar(PlanarDef {
-                form: PlanarForm::Wall { start: a.truncate(), end: b.truncate(), base: z, height: storey },
-                thickness: WALL_THICKNESS,
-                openings: Vec::new(),
-                build_up: None,
-            }),
-            ModelTool::Slab => {
-                let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
-                let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z }, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None })
-            }
-            ModelTool::System => Shape::System(SystemDef {
-                start: a.truncate(),
-                end: b.truncate(),
-                base: z,
-                height: storey,
-                spacing: SYSTEM_SPACING,
-                member: SYSTEM_MEMBER,
-                panel: SYSTEM_PANEL,
-                system_type: None,
-            }),
-        };
+        let shape = tool_shape(tool, a, b, z, storey);
         match self.add_element(name, level, shape) {
             Ok(_) if tool.chains() => self.modeller.points = vec![b],
             Ok(_) => {}
@@ -505,6 +481,41 @@ impl App {
         let _ = self.update(super::Message::Fit);
     }
 
+}
+
+/// What `tool` places from its first point `a` to its last `b` (scene coordinates), on a work
+/// plane at height `z` with a storey of `storey` above it.
+pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64) -> Shape {
+    match tool {
+        ModelTool::Point => Shape::Point(PointDef { at: a, rotation: 0.0, size: OBJECT }),
+        ModelTool::Column => Shape::Linear(LinearDef { start: a, end: a + DVec3::Z * storey, profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 }),
+        // a beam's top lies at the top of the storey
+        ModelTool::Beam => {
+            let up = DVec3::Z * (storey - BEAM.1 / 2.0);
+            Shape::Linear(LinearDef { start: a + up, end: b + up, profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 })
+        }
+        ModelTool::Wall => Shape::Planar(PlanarDef {
+            form: PlanarForm::Wall { start: a.truncate(), end: b.truncate(), base: z, height: storey },
+            thickness: WALL_THICKNESS,
+            openings: Vec::new(),
+            build_up: None,
+        }),
+        ModelTool::Slab => {
+            let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
+            let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z }, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None })
+        }
+        ModelTool::System => Shape::System(SystemDef {
+            start: a.truncate(),
+            end: b.truncate(),
+            base: z,
+            height: storey,
+            spacing: SYSTEM_SPACING,
+            member: SYSTEM_MEMBER,
+            panel: SYSTEM_PANEL,
+            system_type: None,
+        }),
+    }
 }
 
 /// The colour of a layer of modelled elements, by IFC class (sRGB).

@@ -11,6 +11,10 @@
 //! A move snaps to the points of the other modelled elements and is rounded to 10 mm. It is
 //! evaluated by the kernel when it is put down; a refusal leaves the element as it was and shows
 //! why.
+//!
+//! Without Tab, a selected wall or curtain wall shows grips: its ends and its middle (see
+//! [`crate::app::grips`]). A drag of a grip is a move of edit mode that ends when the button comes
+//! up, and the walls joined to it follow.
 
 use super::{App, Message};
 use crate::selection::Pickable;
@@ -33,8 +37,8 @@ pub enum Axis {
 pub struct Grab {
     /// The element's points when the move began (scene coordinates).
     pub from: Vec<DVec3>,
-    /// The point the cursor holds.
-    pub anchor: usize,
+    /// Where the point the cursor holds was when the move began: one of `from`, or a grip's middle.
+    pub origin: DVec3,
     /// How far the picked points have moved.
     pub delta: DVec3,
     pub axis: Option<Axis>,
@@ -50,6 +54,8 @@ pub struct Edit {
     /// The picked points (indices into [`edit_points`]).
     pub picked: Vec<usize>,
     pub grab: Option<Grab>,
+    /// A drag of a grip, not edit mode: it ends when the move is put down or dropped.
+    pub grips: bool,
 }
 
 /// What the edit overlay reports.
@@ -148,12 +154,12 @@ impl App {
             self.modeller.points.clear();
             self.modeller.refusal = None;
             self.measure.tool = None;
-            self.modeller.edit = Some(Edit { element, picked: Vec::new(), grab: None });
+            self.modeller.edit = Some(Edit { element, picked: Vec::new(), grab: None, grips: false });
         }
     }
 
     /// The edited element and its definition in scene coordinates.
-    fn edited(&self) -> Option<(&Element, Shape)> {
+    pub(super) fn edited(&self) -> Option<(&Element, Shape)> {
         let e = self.modeller.model.get(self.modeller.edit.as_ref()?.element)?;
         Some((e, e.shape_in_project(&self.modeller.model.grid)))
     }
@@ -177,6 +183,13 @@ impl App {
 
     /// Something the edit overlay reports.
     pub(super) fn edit_event(&mut self, event: EditEvent) {
+        if self.modeller.edit.is_none() {
+            // a press on a grip of the selected element begins a drag of it
+            if let EditEvent::Press { index, .. } = event {
+                self.grip_press(index);
+            }
+            return;
+        }
         let Some(edit) = self.modeller.edit.as_mut() else { return };
         match event {
             EditEvent::Press { index, add } => {
@@ -200,10 +213,12 @@ impl App {
         }
     }
 
-    fn begin_grab(&mut self, anchor: usize, by_key: bool) {
+    /// Begins a move held at point `anchor` (a grip's middle past the element's points).
+    pub(super) fn begin_grab(&mut self, anchor: usize, by_key: bool) {
         let Some((points, _)) = self.edited().map(|(_, s)| edit_points(&s)) else { return };
+        let origin = points.get(anchor).copied().unwrap_or_else(|| points.iter().sum::<DVec3>() / points.len().max(1) as f64);
         if let Some(edit) = self.modeller.edit.as_mut() {
-            edit.grab = Some(Grab { from: points, anchor, delta: DVec3::ZERO, axis: None, by_key });
+            edit.grab = Some(Grab { from: points, origin, delta: DVec3::ZERO, axis: None, by_key });
         }
         self.modeller.refusal = None;
     }
@@ -266,7 +281,7 @@ impl App {
     /// Esc in edit mode: drops a move under way, else leaves. False when not in edit mode.
     pub(super) fn edit_escape(&mut self) -> bool {
         let Some(edit) = self.modeller.edit.as_mut() else { return false };
-        if edit.grab.take().is_none() {
+        if edit.grab.take().is_none() || edit.grips {
             self.modeller.edit = None;
         }
         true
@@ -300,7 +315,7 @@ impl App {
     fn grab_to(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(edit) = self.modeller.edit.as_ref() else { return };
         let Some(g) = edit.grab.clone() else { return };
-        let anchor = g.from[g.anchor];
+        let anchor = g.origin;
         let mm = self.model_matrix();
         let inv = (self.camera.view_proj(width / height) * mm).inverse();
         let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
@@ -352,6 +367,9 @@ impl App {
     fn put_down(&mut self) {
         let Some((points, _)) = self.edit_points_now() else { return };
         let moved = self.modeller.edit.as_ref().and_then(|e| e.grab.as_ref()).is_some_and(|g| g.delta != DVec3::ZERO);
+        if self.modeller.edit.as_ref().is_some_and(|e| e.grips) {
+            return self.put_grip_down(points, moved);
+        }
         if let Some(edit) = self.modeller.edit.as_mut() {
             edit.grab = None;
         }
@@ -364,7 +382,7 @@ impl App {
 
     /// Gives the edited element `shape` (scene coordinates), if the kernel can make it; else keeps
     /// it and shows why. Whether it changed.
-    fn change_edited(&mut self, shape: Shape) -> bool {
+    pub(super) fn change_edited(&mut self, shape: Shape) -> bool {
         let Some((id, name, level)) = self.edited().map(|(e, _)| (e.id, e.name.clone(), e.level.clone())) else { return false };
         let grid = self.modeller.model.grid;
         let mut element = Element::in_project(&grid, name, level, shape);
@@ -385,7 +403,11 @@ impl App {
     /// The edit overlay: the edited element's points and the lines between them.
     pub(super) fn edit_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
         let edit = self.modeller.edit.as_ref()?;
-        let (points, closed) = self.edit_points_now()?;
+        let (mut points, closed) = self.edit_points_now()?;
+        if edit.grips {
+            // a grip drag shows the grips where the move has them
+            points.push(points.iter().sum::<DVec3>() / points.len().max(1) as f64);
+        }
         let picked = (0..points.len()).map(|i| edit.picked.contains(&i)).collect();
         Some(EditOverlay {
             points: points.iter().map(|p| p.as_vec3()).collect(),
@@ -409,6 +431,7 @@ impl App {
 
 /// The points of the edited element over the viewport, to pick and drag.
 pub struct EditOverlay {
+    /// The points (a grip's middle last).
     pub points: Vec<Vec3>,
     pub closed: bool,
     pub picked: Vec<bool>,

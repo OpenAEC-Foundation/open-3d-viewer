@@ -1957,6 +1957,19 @@ mod tests {
         let _ = studio.update(Msg::App(Message::EditMode));
         let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(2))));
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-edit-nl.png")).expect("snapshot");
+        // the selected wall's grips, without edit mode
+        let mut app = App::default();
+        app.add_demo_building();
+        app.select_modelled(bim_core::ElementId(2));
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Modeller);
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-grips-nl.png")).expect("snapshot");
+        // a wall being placed: from the building's corner to the cursor
+        let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Wall, "Wand")))));
+        studio.app.modeller.points = vec![glam::DVec3::new(10.0, 0.0, 0.0)];
+        studio.app.modeller.cursor = Some(glam::DVec3::new(10.0, -4.0, 0.0));
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-placing-nl.png")).expect("snapshot");
     }
 
     /// The Library tab with a build-up and a steel profile picked, in every language:

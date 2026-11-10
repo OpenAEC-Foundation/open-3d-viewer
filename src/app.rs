@@ -8,11 +8,13 @@ mod ifc;
 mod layers;
 mod edit;
 mod element_props;
+mod grips;
 mod levels;
 pub mod library;
 mod marks;
 pub mod modeller;
 mod paper;
+mod placing;
 mod schedules;
 mod view_props;
 mod views;
@@ -1498,6 +1500,7 @@ impl App {
                     }
                 }
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
+                Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -1506,6 +1509,7 @@ impl App {
                     }
                 }
                 Navigate::HoverOff => {
+                    self.modeller.cursor = None;
                     self.hover_request = None;
                     self.measure.hover = None;
                     self.structural_hover_off();
@@ -3045,7 +3049,7 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor()) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some()) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3200,10 +3204,14 @@ impl App {
         // the dimensions and texts of the view shown in its tab
         let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
-        let editing = self.edit_overlay(p.accent, p.surface).map(|o| canvas(o).width(Fill).height(Fill));
+        // edit mode's points, else the selected element's grips: one slot, so a drag that begins on
+        // a grip keeps its overlay
+        let editing = self.edit_overlay(p.accent, p.surface).or_else(|| self.grip_overlay(p.accent, p.surface)).map(|o| canvas(o).width(Fill).height(Fill));
+        let placing = self.placing_overlay(p.accent).filter(|_| overlay.is_none()).map(|o| canvas(o).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(view_labels)
+            .push(placing)
             .push(editing)
             .push(section)
             .push(plane)

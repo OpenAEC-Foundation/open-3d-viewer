@@ -84,6 +84,19 @@ impl App {
         self.active_plan.as_deref().filter(|p| self.document.view_3d(p).is_none())
     }
 
+    /// Whether a floor plan, section or sheet shows, to dimension and write on; and whether
+    /// sections can be drawn there (a floor plan or a sheet).
+    pub(crate) fn annotatable(&self) -> (bool, bool) {
+        let sheet = self.active_doc_sheet.is_some();
+        let view = self.shown_view();
+        (sheet || view.is_some(), sheet || view.is_some_and(|v| self.document.plan(v).is_some()))
+    }
+
+    /// The drawing view (a plan, section or elevation) whose tab shows, no sheet over it.
+    pub(crate) fn shown_drawing(&self) -> Option<Arc<str>> {
+        self.shown_view().map(Arc::from)
+    }
+
     /// The text a click of the text tool places: the one typed, else "Text".
     pub(super) fn note_to_place(&self, l: Language) -> String {
         match self.note_text.trim() {

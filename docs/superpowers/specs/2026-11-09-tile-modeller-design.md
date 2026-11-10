@@ -217,3 +217,18 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
   - Joins are found from the walls' definitions every time a wall is evaluated (no join elements
     to keep up to date). Moving a wall in edit mode re-cuts its neighbours.
   - Cross junctions and joins with slabs or roofs are follow-ups.
+
+## Placing preview and grips (2026-11-10)
+
+- **Preview.** While a tool is on, the element the next click would make is drawn over the
+  viewport: the kernel's evaluation of that element alone, its faces filled lightly and outlined,
+  from the points clicked so far to the point under the cursor, snapped as the click will be. A
+  column or object shows before any click; corners with other walls show once it is placed.
+- **Grips.** A selected wall or curtain wall, outside edit mode, has a grip at each end and in the
+  middle. A drag of a grip is a move of edit mode that ends when the button comes up.
+- **Joined walls follow** a grip's move: an end that met a moved end moves with it; an end that
+  lay on the moved axis, between its ends, slides along its own line to the new axis. If the
+  kernel refuses any of them, nothing moves.
+- **Calls made:**
+  - Grips are for walls and curtain walls only; beams, columns and slabs keep edit mode (Tab).
+  - Tab's edit mode moves only the edited element; joined walls follow grips only.

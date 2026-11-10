@@ -186,8 +186,8 @@ only. What was built:
   kernel's chord tolerance; `ProfileDef::steel("HEA 200")`.
 - In the app, a layered element shows each layer in its material's colour, its Type and Layers as
   properties, and its thickness read only. The Library tab's **Assign to selection** gives the
-  selected walls (or slabs, for a floor, roof or ceiling type) the picked build-up. The Wall and
-  Slab tools still place elements without a type.
+  selected walls (or slabs, for a floor, roof or ceiling type) the picked build-up, and the
+  placement strip above the 3D view gives the Wall and Slab tools the type of the next element.
 
 The original proposal:
 
@@ -243,8 +243,9 @@ types by what they make, as build-ups. In IFCX a type is a node of its group's t
   units stop against them, so they do not run through), the layers across the face, and the
   material of every member and panel. A system of more than 50 000 parts is refused rather than
   generated. In the app, the Library tab draws a type's face from the kernel's own parts, and
-  **Assign to selection** gives the selected systems the picked type; a typed system's member and
-  panel sizes are its type's, shown and not typed, its spacing still its own.
+  **Assign to selection** gives the selected systems the picked type; the Curtain wall tool draws
+  one directly, its type picked in the placement strip. A typed system's member and panel sizes
+  are its type's, shown and not typed, its spacing still its own.
 - Members stay parts of their system, with one join rule per pair of roles (the mullion runs
   through, the transom stops against it), not a join element per crossing. Each crossing goes
   through the kernel's join geometry (`bim_core::join::cuts` and `finish`), so a joint in a system
@@ -326,6 +327,14 @@ live recipes (studs at 600 with OSB outside and gypsum board inside):
   (a crossing), or the junction leaves no room, each is made as before. A frame can carry several
   T junctions along it, on either side, and corners at its ends. The right pane says at which end
   a frame stands against the side of another, and how many stand against its own.
+- **Drawn directly** (built): the Curtain wall tool's placement strip lists every upright system
+  type by name, generic first; a lying one (a floor, a ceiling) is not drawn as a wall. The list
+  is as wide as its longest name, since the names differ at their end (the centres, the bond). The
+  type picked is what the cursor shows and what the second click places, with the height and the
+  base typed in the strip. Frames drawn in a chain make their corners, and one drawn from the side
+  of another its T junction, as frames given their type afterwards do. A system drawn with a type
+  is named after the type's group (Timber frame 1, Masonry 2) in the language of the interface, a
+  generic one after the tool; all of them are numbered as one class.
 - **Later**: membrane laps and returns, a layer left out on one system (no interior lining), a
   stock list (stud lengths, boards, rolls), crossings and corners at other angles, layers that
   run on behind a wall that stands against them (an airtight layer), and a choice of which system

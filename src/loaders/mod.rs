@@ -18,7 +18,7 @@ mod tekla;
 mod ply;
 mod cityjson;
 mod landxml;
-mod cad;
+pub(crate) mod cad;
 mod allplan;
 mod dgn;
 mod archicad;

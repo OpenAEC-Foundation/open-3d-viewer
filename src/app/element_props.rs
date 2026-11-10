@@ -450,7 +450,7 @@ mod tests {
         let _ = app.update(Message::RemoveOpening(0));
         assert_eq!(system(&app).openings, [Opening { along: 2.05, sill: 0.0, width: 0.9, height: 2.1 }]);
         // the right pane lists it with its fields and the buttons to add more
-        let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view());
+        let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
         assert!(ui.find("Door 1").is_ok() && ui.find("Add window").is_ok());
     }
 

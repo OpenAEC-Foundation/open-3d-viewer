@@ -4,8 +4,8 @@
 //!
 //! - **Which meet.** Two framed systems with one end of each within [`JOIN_TOLERANCE`] of the
 //!   other's, no third framed system ending there, on one base, as high as each other and square
-//!   to each other. Anything else is left as it is: three at a point, an end against another's
-//!   side, a corner that is not square.
+//!   to each other. An end against another's side is a T junction ([`super::tee`]). Anything else
+//!   is left as it is: three at a point, a corner that is not square.
 //! - **Which runs through.** The longer one; of two as long as each other, the one made first. Its
 //!   frame runs on to the outer face of the other's frame, which stops against its inner face.
 //! - **The layers.** On the outside of the corner the layers of the one that runs through run on
@@ -19,7 +19,10 @@
 //!
 //! A corner is made only when both systems can be made with it (an opening too near the end leaves
 //! it unmade) and without it, so the two always agree on it and each stays when the other goes.
+//! The same holds for a T junction, and a system is made with all it meets together: the corners
+//! at its ends, the system it stands against there, and those that stand against its own side.
 
+use super::tee::{self, Tee};
 use super::{build, faces, parts, plan, units, Ends, FaceEnd};
 use crate::element::{Element, ElementId, PartSolid, Shape, SystemDef};
 use crate::model::{Model, JOIN_TOLERANCE};
@@ -29,7 +32,7 @@ use glam::DVec2;
 use std::iter::once;
 
 /// Two systems are square to each other when the cosine of the angle between them is within this.
-const SQUARE: f64 = 1e-6;
+pub(super) const SQUARE: f64 = 1e-6;
 
 /// How a framed system meets another at one of its ends: the element it meets, and whether it is
 /// the one that runs through (the other stops against it).
@@ -42,26 +45,26 @@ pub struct Meeting {
 /// A layer beside a frame: which face of the system it is, from where to where it lies out from
 /// the frame's face, the width of its members when it is framed, and whether it is boards.
 #[derive(Debug, Clone, Copy)]
-struct Band {
-    face: usize,
-    x1: f64,
-    x2: f64,
-    framed: Option<f64>,
-    boards: bool,
+pub(super) struct Band {
+    pub(super) face: usize,
+    pub(super) x1: f64,
+    pub(super) x2: f64,
+    pub(super) framed: Option<f64>,
+    pub(super) boards: bool,
 }
 
 /// A system across its depth: half the depth of its frame, the width of its studs, how many faces
 /// it has, and the layers to the right of its frame and to the left of it. A layer within the
 /// frame's depth ends as the frame does.
-struct Section {
-    half: f64,
-    width: f64,
-    faces: usize,
-    sides: [Vec<Band>; 2],
+pub(super) struct Section {
+    pub(super) half: f64,
+    pub(super) width: f64,
+    pub(super) faces: usize,
+    pub(super) sides: [Vec<Band>; 2],
 }
 
 impl Section {
-    fn of(s: &SystemDef) -> Self {
+    pub(super) fn of(s: &SystemDef) -> Self {
         let faces = faces(s);
         let own = &faces[0];
         let (width, depth) = own.member.map_or((0.0, own.panel.0), |(m, _)| (m.x, m.y.max(own.panel.0)));
@@ -80,7 +83,7 @@ impl Section {
     }
 
     /// Where the layers on `side` start and end, out from the frame's face, in order.
-    fn bounds(&self, side: usize) -> Vec<f64> {
+    pub(super) fn bounds(&self, side: usize) -> Vec<f64> {
         let mut bounds: Vec<f64> = once(0.0).chain(self.sides[side].iter().flat_map(|l| [l.x1, l.x2])).collect();
         bounds.sort_by(f64::total_cmp);
         bounds
@@ -88,50 +91,50 @@ impl Section {
 }
 
 /// The last of `bounds` at or before `x`.
-fn before(bounds: &[f64], x: f64) -> f64 {
+pub(super) fn before(bounds: &[f64], x: f64) -> f64 {
     bounds.iter().copied().filter(|b| *b <= x + LINEAR_TOLERANCE).fold(0.0, f64::max)
 }
 
 /// The first of `bounds` at or after `x`; the last of them when none is.
-fn after(bounds: &[f64], x: f64) -> f64 {
+pub(super) fn after(bounds: &[f64], x: f64) -> f64 {
     bounds.iter().copied().find(|b| *b >= x - LINEAR_TOLERANCE).or(bounds.last().copied()).unwrap_or(0.0)
 }
 
 /// A framed system and the ends of its line, in one tile's frame.
 #[derive(Clone, Copy)]
-struct Framed<'a> {
-    id: ElementId,
-    def: &'a SystemDef,
-    ends: [DVec2; 2],
+pub(super) struct Framed<'a> {
+    pub(super) id: ElementId,
+    pub(super) def: &'a SystemDef,
+    pub(super) ends: [DVec2; 2],
 }
 
 impl<'a> Framed<'a> {
-    fn of(model: &Model, e: &'a Element, tile: TileKey) -> Option<Self> {
+    pub(super) fn of(model: &Model, e: &'a Element, tile: TileKey) -> Option<Self> {
         let Shape::System(s) = &e.shape else { return None };
         Self::new(model, e.id, e.tile, s, tile)
     }
 
     /// System `s` of element `id`, its coordinates in tile `from`, in the frame of `tile`; `None`
     /// when it is not framed.
-    fn new(model: &Model, id: ElementId, from: TileKey, s: &'a SystemDef, tile: TileKey) -> Option<Self> {
+    pub(super) fn new(model: &Model, id: ElementId, from: TileKey, s: &'a SystemDef, tile: TileKey) -> Option<Self> {
         s.system_type.as_ref()?.framing?;
         let offset = model.grid.offset(from, tile).truncate();
         let ends = [s.start + offset, s.end + offset];
         ((ends[1] - ends[0]).length() > LINEAR_TOLERANCE).then_some(Self { id, def: s, ends })
     }
 
-    fn length(&self) -> f64 {
+    pub(super) fn length(&self) -> f64 {
         (self.ends[1] - self.ends[0]).length()
     }
 
     /// The direction from end `end` into the system.
-    fn inward(&self, end: usize) -> DVec2 {
+    pub(super) fn inward(&self, end: usize) -> DVec2 {
         let dir = (self.ends[1] - self.ends[0]) / self.length();
         if end == 0 { dir } else { -dir }
     }
 
     /// To the right of its line: its exterior.
-    fn right(&self) -> DVec2 {
+    pub(super) fn right(&self) -> DVec2 {
         let dir = self.inward(0);
         DVec2::new(dir.y, -dir.x)
     }
@@ -159,7 +162,7 @@ fn at_end<'a>(model: &'a Model, me: &Framed<'_>, end: usize, tile: TileKey) -> O
 /// whether this one runs through, which side of each is the outside of the corner (0 its right, 1
 /// its left), and how far the other's end lies past this one's, along this one's line.
 #[derive(Clone, Copy)]
-struct Join<'a> {
+pub(super) struct Join<'a> {
     end: usize,
     other: Framed<'a>,
     other_end: usize,
@@ -199,17 +202,52 @@ fn geometric<'a>(model: &'a Model, me: &Framed<'_>, end: usize, tile: TileKey) -
     join(me, end, other, other_end)
 }
 
-/// Corner `j` alone, at its end.
-fn only(j: Join<'_>) -> [Option<Join<'_>>; 2] {
-    let mut joins = [None, None];
-    joins[j.end] = Some(j);
-    joins
+/// What a framed system meets: a corner at its start and at its end, or the system against whose
+/// side it stands there, and the systems that stand against its own side, in order along it.
+#[derive(Clone, Default)]
+pub(super) struct Joins<'a> {
+    pub(super) corners: [Option<Join<'a>>; 2],
+    pub(super) butts: [Option<Tee<'a>>; 2],
+    pub(super) sides: Vec<Tee<'a>>,
+}
+
+impl<'a> Joins<'a> {
+    /// Corner `j` alone, at its end.
+    fn corner(j: Join<'a>) -> Self {
+        let mut joins = Self::default();
+        joins.corners[j.end] = Some(j);
+        joins
+    }
+
+    /// T junction `t` alone, as the system that stands against the other sees it.
+    fn butt(t: Tee<'a>) -> Self {
+        let mut joins = Self::default();
+        joins.butts[t.end] = Some(t);
+        joins
+    }
+
+    /// T junction `t` alone, as the system that runs through sees it.
+    fn side(t: Tee<'a>) -> Self {
+        Self { sides: vec![t], ..Self::default() }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.corners.iter().all(Option::is_none) && self.butts.iter().all(Option::is_none) && self.sides.is_empty()
+    }
+}
+
+/// How far short of the end of face `face`, its members `w` wide, the first board of `layers` out
+/// from `from` ends, where that is a member's width or more: there a member more backs the board's
+/// edge. The faces end as `ends` say.
+pub(super) fn short(layers: &[Band], ends: &[FaceEnd], face: usize, w: f64, from: f64) -> Option<f64> {
+    let tol = LINEAR_TOLERANCE;
+    let board = layers.iter().filter(|l| l.boards && l.x1 >= from - tol).min_by(|a, b| a.x1.total_cmp(&b.x1))?;
+    Some(ends[face].reach - ends[board.face].reach).filter(|d| *d >= w - tol)
 }
 
 /// How the faces of a system with section `mine` end at corner `j` with a system with section
 /// `theirs`: one for every face.
 fn face_ends(mine: &Section, theirs: &Section, j: &Join) -> Vec<FaceEnd> {
-    let tol = LINEAR_TOLERANCE;
     let h = theirs.half;
     // the frame, and what lies within its depth: on to the other frame's outer face, or up to
     // this side of it
@@ -227,10 +265,8 @@ fn face_ends(mine: &Section, theirs: &Section, j: &Join) -> Vec<FaceEnd> {
     // layer's; where they end a member's width or more short of those, a member more backs them
     let framed = inner.iter().filter_map(|l| l.framed.map(|w| (l.face, w, l.x2)));
     for (face, w, from) in once((0, mine.width, 0.0)).chain(framed) {
-        let board = inner.iter().filter(|l| l.boards && l.x1 >= from - tol).min_by(|a, b| a.x1.total_cmp(&b.x1));
-        let short = board.map(|b| ends[face].reach - ends[b.face].reach).filter(|d| *d >= w - tol);
-        if short.is_some() {
-            ends[face].backing = short;
+        if let Some(d) = short(inner, &ends, face, w, from) {
+            ends[face].backing = Some(d);
         }
     }
     for e in &mut ends {
@@ -239,47 +275,65 @@ fn face_ends(mine: &Section, theirs: &Section, j: &Join) -> Vec<FaceEnd> {
     ends
 }
 
-/// The ends of the faces of system `s` with the corners `joins` at its start and at its end.
-fn ends_of(s: &SystemDef, joins: &[Option<Join>; 2]) -> Ends {
+/// The ends of the faces of system `s` with what it meets, `joins`; `None` where it cannot stand
+/// against another's side as its layers lie.
+fn ends_of(s: &SystemDef, joins: &Joins) -> Option<Ends> {
     let mine = Section::of(s);
-    let at = |j: &Option<Join>| j.as_ref().map_or(Vec::new(), |j| face_ends(&mine, &Section::of(j.other.def), j));
-    Ends { start: at(&joins[0]), end: at(&joins[1]) }
+    let at = |end: usize| match (&joins.corners[end], &joins.butts[end]) {
+        (Some(j), _) => Some(face_ends(&mine, &Section::of(j.other.def), j)),
+        (None, Some(t)) => tee::butt_ends(&mine, &Section::of(t.runs.def), t),
+        (None, None) => Some(Vec::new()),
+    };
+    let breaks = joins.sides.iter().map(|t| tee::breaks(&mine, &Section::of(t.stands.def), t)).collect();
+    Some(Ends { start: at(0)?, end: at(1)?, breaks })
 }
 
-/// Whether system `s` can be made with the corners `joins`.
-fn fits(s: &SystemDef, joins: &[Option<Join>; 2]) -> bool {
-    plan(s, &ends_of(s, joins)).is_ok()
+/// Whether system `s` can be made with what it meets, `joins`.
+fn fits(s: &SystemDef, joins: &Joins) -> bool {
+    ends_of(s, joins).is_some_and(|ends| plan(s, &ends).is_ok())
 }
 
-/// The corners of `me` that could be made: each one alone fits both of its systems, and both can
-/// be made without it too, so that each stays when the other goes.
-fn candidates<'a>(model: &'a Model, me: &Framed<'_>, tile: TileKey) -> [Option<Join<'a>>; 2] {
-    let makes = |s: &SystemDef, j: Join| fits(s, &[None, None]) && fits(s, &only(j));
-    [0, 1].map(|end| geometric(model, me, end, tile).filter(|j| makes(me.def, *j) && join(&j.other, j.other_end, *me, j.end).is_some_and(|back| makes(j.other.def, back))))
+/// The corners and the T junctions of `me` that could be made: each one alone fits both of its
+/// systems, and both can be made without it too, so that each stays when the other goes.
+fn candidates<'a>(model: &'a Model, me: &Framed<'a>, tile: TileKey) -> Joins<'a> {
+    let makes = |s: &SystemDef, joins: Joins| fits(s, &Joins::default()) && fits(s, &joins);
+    let corners = [0, 1].map(|end| geometric(model, me, end, tile).filter(|j| makes(me.def, Joins::corner(*j)) && join(&j.other, j.other_end, *me, j.end).is_some_and(|back| makes(j.other.def, Joins::corner(back)))));
+    let made = |t: &Tee| makes(t.runs.def, Joins::side(*t)) && makes(t.stands.def, Joins::butt(*t));
+    let butts = [0, 1].map(|end| tee::geometric(model, *me, end, tile).filter(|t| made(t)));
+    let sides = tee::standing(model, *me, tile).into_iter().filter(|t| made(t)).collect();
+    Joins { corners, butts, sides }
 }
 
-/// The corners of `me` that are made: those that could be, where `me` fits with all of its own
-/// and the other system with all of its own. Both systems of a corner come to the same answer, and
-/// a system made with only some of its possible corners still fits.
-fn applied<'a>(model: &'a Model, me: &Framed<'_>, tile: TileKey) -> [Option<Join<'a>>; 2] {
+/// The corners and the T junctions of `me` that are made: those that could be, where `me` fits
+/// with all of its own and the other system with all of its own. Both systems of a junction come
+/// to the same answer.
+pub(super) fn applied<'a>(model: &'a Model, me: &Framed<'a>, tile: TileKey) -> Joins<'a> {
     let mine = candidates(model, me, tile);
     if !fits(me.def, &mine) {
-        return [None, None];
+        return Joins::default();
     }
-    mine.map(|j| j.filter(|j| fits(j.other.def, &candidates(model, &j.other, tile))))
+    let stays = |other: &Framed<'a>| fits(other.def, &candidates(model, other, tile));
+    Joins {
+        corners: mine.corners.map(|j| j.filter(|j| stays(&j.other))),
+        butts: mine.butts.map(|t| t.filter(|t| stays(&t.runs))),
+        sides: mine.sides.into_iter().filter(|t| stays(&t.stands)).collect(),
+    }
 }
 
-/// The ends of the faces of system `s` of `element` at its corners in `model`; `None` when it has
-/// no corner.
+/// The ends of the faces of system `s` of `element` at what it meets in `model`; `None` when it
+/// meets nothing.
 fn joined_ends(model: &Model, element: &Element, s: &SystemDef) -> Option<Ends> {
     let me = Framed::new(model, element.id, element.tile, s, element.tile)?;
     let joins = applied(model, &me, element.tile);
-    joins.iter().any(Option::is_some).then(|| ends_of(s, &joins))
+    if joins.is_empty() {
+        return None;
+    }
+    ends_of(s, &joins)
 }
 
-/// The members and panels of system `s` of `element`, its faces ending at its corners with the
-/// other framed systems of `model`. A system whose corners cannot be made after all is made as it
-/// is without them.
+/// The members and panels of system `s` of `element`, its faces ending at its corners and its T
+/// junctions with the other framed systems of `model`. A system that cannot be made with them
+/// after all is made as it is without them.
 pub(crate) fn joined_parts(model: &Model, element: &Element, s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
     match joined_ends(model, element, s) {
         Some(ends) => build(s, &ends).or_else(|_| parts(s)),
@@ -288,7 +342,8 @@ pub(crate) fn joined_parts(model: &Model, element: &Element, s: &SystemDef) -> R
 }
 
 /// The lengths of the prefab units `element` is made of in `model`, from its frame's start: as
-/// [`units`], with its frame ending at its corners. None for an element that is not a system.
+/// [`units`], with its frame ending at its corners and its T junctions. None for an element that
+/// is not a system.
 pub fn joined_units(model: &Model, element: &Element) -> Result<Vec<f64>, Refusal> {
     let Shape::System(s) = &element.shape else { return Ok(Vec::new()) };
     match joined_ends(model, element, s).and_then(|ends| plan(s, &ends).ok()) {
@@ -301,12 +356,12 @@ pub fn joined_units(model: &Model, element: &Element) -> Result<Vec<f64>, Refusa
 pub fn corners(model: &Model, element: &Element) -> [Option<Meeting>; 2] {
     let Shape::System(s) = &element.shape else { return [None, None] };
     let Some(me) = Framed::new(model, element.id, element.tile, s, element.tile) else { return [None, None] };
-    applied(model, &me, element.tile).map(|j| j.map(|j| Meeting { with: j.other.id, through: j.through }))
+    applied(model, &me, element.tile).corners.map(|j| j.map(|j| Meeting { with: j.other.id, through: j.through }))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::{parts, units};
+pub(super) mod tests {
+    use super::super::{parts, tees, units, Tees};
     use super::{corners, joined_units, Meeting};
     use crate::element::{Opening, Shape, SystemDef};
     use crate::model::Model;
@@ -315,25 +370,25 @@ mod tests {
     use bim_library::Library;
     use glam::{DVec2, DVec3};
 
-    const EXTERIOR: &str = "system.timber-frame-140";
-    const INTERIOR: &str = "system.timber-frame-internal-89";
+    pub(in crate::system) const EXTERIOR: &str = "system.timber-frame-140";
+    pub(in crate::system) const INTERIOR: &str = "system.timber-frame-internal-89";
     /// Where the corner of [`corner`] lies along x.
-    const L: f64 = 4.8;
+    pub(in crate::system) const L: f64 = 4.8;
     /// The width of a stud and of a service batten.
-    const STUD: f64 = 0.038;
-    const BATTEN: f64 = 0.045;
+    pub(in crate::system) const STUD: f64 = 0.038;
+    pub(in crate::system) const BATTEN: f64 = 0.045;
 
-    fn def(a: (f64, f64), b: (f64, f64), height: f64, id: &str) -> SystemDef {
+    pub(in crate::system) fn def(a: (f64, f64), b: (f64, f64), height: f64, id: &str) -> SystemDef {
         let s = SystemDef { start: DVec2::new(a.0, a.1), end: DVec2::new(b.0, b.1), base: 0.0, height, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
         s.typed_from(&Library::starter(), id).unwrap()
     }
 
     /// An exterior timber frame 2.7 m high from `a` to `b`.
-    fn frame(a: (f64, f64), b: (f64, f64)) -> Shape {
+    pub(in crate::system) fn frame(a: (f64, f64), b: (f64, f64)) -> Shape {
         Shape::System(def(a, b, 2.7, EXTERIOR))
     }
 
-    fn add(m: &mut Model, shape: Shape) -> ElementId {
+    pub(in crate::system) fn add(m: &mut Model, shape: Shape) -> ElementId {
         let grid = m.grid;
         m.add(Element::in_project(&grid, "w", None, shape)).unwrap()
     }
@@ -349,28 +404,28 @@ mod tests {
 
     /// A part's material and its bounds in project coordinates.
     #[derive(Debug, Clone, PartialEq)]
-    struct Piece {
-        material: Option<String>,
-        lo: DVec3,
-        hi: DVec3,
+    pub(in crate::system) struct Piece {
+        pub(in crate::system) material: Option<String>,
+        pub(in crate::system) lo: DVec3,
+        pub(in crate::system) hi: DVec3,
     }
 
     impl Piece {
-        fn is(&self, material: &str) -> bool {
+        pub(in crate::system) fn is(&self, material: &str) -> bool {
             self.material.as_deref() == Some(material)
         }
 
-        fn size(&self, axis: usize) -> f64 {
+        pub(in crate::system) fn size(&self, axis: usize) -> f64 {
             self.hi[axis] - self.lo[axis]
         }
 
         /// A member of `material`, `deep` on `axis` (across its face).
-        fn member(&self, material: &str, axis: usize, deep: f64) -> bool {
+        pub(in crate::system) fn member(&self, material: &str, axis: usize, deep: f64) -> bool {
             self.is(material) && (self.size(axis) - deep).abs() < 1e-9
         }
     }
 
-    fn pieces(m: &Model, id: ElementId) -> Vec<Piece> {
+    pub(in crate::system) fn pieces(m: &Model, id: ElementId) -> Vec<Piece> {
         let piece = |p: crate::model::Part| {
             let (origin, (lo, hi)) = (m.grid.origin(p.tile), p.solid.bounds());
             Piece { material: p.material, lo: lo + origin, hi: hi + origin }
@@ -380,41 +435,41 @@ mod tests {
 
     /// From where to where the pieces of `material` lie along `axis`; of those `deep` on another
     /// axis only, when given (a frame's studs and plates, a service zone's battens).
-    fn extent(pieces: &[Piece], material: &str, axis: usize, deep: Option<(usize, f64)>) -> (f64, f64) {
+    pub(in crate::system) fn extent(pieces: &[Piece], material: &str, axis: usize, deep: Option<(usize, f64)>) -> (f64, f64) {
         let picked = pieces.iter().filter(|p| deep.map_or(p.is(material), |(across, d)| p.member(material, across, d)));
         picked.fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.lo[axis]), hi.max(p.hi[axis])))
     }
 
-    fn close(a: (f64, f64), b: (f64, f64)) -> bool {
+    pub(in crate::system) fn close(a: (f64, f64), b: (f64, f64)) -> bool {
         (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9
     }
 
-    fn overlapping(a: &Piece, b: &Piece) -> bool {
+    pub(in crate::system) fn overlapping(a: &Piece, b: &Piece) -> bool {
         (0..3).all(|k| a.lo[k].max(b.lo[k]) + 1e-9 < a.hi[k].min(b.hi[k]))
     }
 
     /// The first piece of `a` and piece of `b` that lie in one another.
-    fn overlap(a: &[Piece], b: &[Piece]) -> Option<(Piece, Piece)> {
+    pub(in crate::system) fn overlap(a: &[Piece], b: &[Piece]) -> Option<(Piece, Piece)> {
         a.iter().flat_map(|p| b.iter().map(move |q| (p, q))).find(|(p, q)| overlapping(p, q)).map(|(p, q)| (p.clone(), q.clone()))
     }
 
     /// The first two pieces of `a` that lie in one another.
-    fn overlap_within(a: &[Piece]) -> Option<(Piece, Piece)> {
+    pub(in crate::system) fn overlap_within(a: &[Piece]) -> Option<(Piece, Piece)> {
         a.iter().enumerate().flat_map(|(i, p)| a[i + 1..].iter().map(move |q| (p, q))).find(|(p, q)| overlapping(p, q)).map(|(p, q)| (p.clone(), q.clone()))
     }
 
-    fn system(m: &Model, id: ElementId) -> &SystemDef {
+    pub(in crate::system) fn system(m: &Model, id: ElementId) -> &SystemDef {
         match &m.get(id).unwrap().shape {
             Shape::System(s) => s,
             _ => panic!("not a system"),
         }
     }
 
-    /// Whether element `id` is made as it is alone: no corner at either end.
-    fn plain(m: &Model, id: ElementId) -> bool {
+    /// Whether element `id` is made as it is alone: no corner at either end, no T junction.
+    pub(in crate::system) fn plain(m: &Model, id: ElementId) -> bool {
         let made: Vec<_> = m.evaluate(id).unwrap().iter().map(|p| p.solid.bounds()).collect();
         let alone: Vec<_> = parts(system(m, id)).unwrap().iter().map(|p| p.solid.bounds()).collect();
-        made == alone && corners(m, m.get(id).unwrap()) == [None, None]
+        made == alone && corners(m, m.get(id).unwrap()) == [None, None] && tees(m, m.get(id).unwrap()) == Tees::default()
     }
 
     #[test]
@@ -538,8 +593,8 @@ mod tests {
             Shape::System(SystemDef { base: 0.5, ..def((L, 0.0), (L, 3.0), 2.7, EXTERIOR) }),
             // not square
             frame((L, 0.0), (L + 2.0, 2.0)),
-            // its end against the other's side
-            frame((2.4, 0.0), (2.4, 3.0)),
+            // across the other
+            frame((2.4, -1.5), (2.4, 1.5)),
             // a system that is not framed
             Shape::System(def((L, 0.0), (L, 3.6), 2.7, "system.curtain-wall-aluminium-1500")),
         ];
@@ -628,7 +683,7 @@ mod tests {
 
     impl Piece {
         /// This piece from `from` to `to` along `axis`.
-        fn along(mut self, axis: usize, from: f64, to: f64) -> Self {
+        pub(in crate::system) fn along(mut self, axis: usize, from: f64, to: f64) -> Self {
             self.lo[axis] = from;
             self.hi[axis] = to;
             self

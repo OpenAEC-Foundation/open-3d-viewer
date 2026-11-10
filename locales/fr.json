@@ -442,6 +442,10 @@
     "Corner at start": "Angle au début",
     "Corner at end": "Angle à la fin",
     "Runs through": "Filant",
-    "Stops against the other": "S'arrête contre l'autre"
+    "Stops against the other": "S'arrête contre l'autre",
+    "T junction at start": "Jonction en T au début",
+    "T junction at end": "Jonction en T à la fin",
+    "Stands against the other": "Bute contre l'autre",
+    "Frames against it": "Murs en butée"
   }
 }

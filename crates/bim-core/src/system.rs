@@ -41,6 +41,11 @@
 //! the frame's own start; a framed layer's members and the seams of its boards follow them, the
 //! first board cut to reach a stud line; and a member more stands behind the edge of a board that
 //! ends short of a frame's end.
+//!
+//! Where a framed system ends against the side of another ([`tee`]) it stops at the other's frame,
+//! and the other's layers on that side are left out across it: a face is then made stretch by
+//! stretch, each with its own end members, and the frame behind it gets a stud either side of
+//! the stretch its boards leave open.
 
 use crate::element::{Opening, PartSolid, SystemDef};
 use crate::join::{self, JoinKind, Member, MemberEnd};
@@ -54,9 +59,11 @@ use serde::{Deserialize, Serialize};
 use std::iter::once;
 
 mod corner;
+mod tee;
 
 pub(crate) use corner::joined_parts;
 pub use corner::{corners, joined_units, Meeting};
+pub use tee::{tees, Abutment, Tees};
 
 /// The most parts one system is generated as; a system that would have more is refused.
 pub const MAX_PARTS: usize = 50_000;
@@ -204,10 +211,11 @@ impl Face<'_> {
         ((first - bay).abs() > tol).then_some(first)
     }
 
-    /// Checks it: positive sizes, bays and rows wider than the members; a frame with room for its
-    /// end studs and the members `back` in from either end, between its plates for its studs, and
-    /// for the framing of its openings.
-    fn check(&self, length: f64, height: f64, openings: &[Opening], back: [Option<f64>; 2]) -> Result<(), Refusal> {
+    /// Checks it: positive sizes, bays and rows wider than the members; a frame with room in every
+    /// one of its `stretches` for its end studs and the members that stand in from them, between
+    /// its plates for its studs, for the members either side of `posts`, and for the framing of
+    /// its openings.
+    fn check(&self, length: f64, height: f64, openings: &[Opening], stretches: &[Stretch], posts: &[(f64, f64)]) -> Result<(), Refusal> {
         let sizes = [self.spacing.x, self.spacing.y, self.panel.0];
         let member = self.member.map_or(Vec::new(), |(m, _)| vec![m.x, m.y]);
         if !sizes.into_iter().chain(member).all(positive) || !self.offset.is_finite() {
@@ -215,12 +223,20 @@ impl Face<'_> {
         }
         if let (Some(framing), Some((m, _))) = (self.framing, self.member) {
             let plates = f64::from(framing.bottom_plates) + f64::from(framing.top_plates);
-            let margins = back.map(|b| b.unwrap_or(0.0));
-            let room = [self.spacing.x - m.x, self.spacing.y - m.x, length - 2.0 * m.x - margins[0] - margins[1], height - plates * m.x];
-            if !room.into_iter().all(|r| r > LINEAR_TOLERANCE) || !positive(framing.header) || framing.unit.is_some_and(|u| !positive(u)) {
+            let tol = LINEAR_TOLERANCE;
+            let w = m.x;
+            let room = [self.spacing.x - w, self.spacing.y - w, height - plates * w];
+            let long = stretches.iter().all(|s| s.hi - s.lo - 2.0 * w - s.margin(0) - s.margin(1) > tol);
+            if !room.into_iter().all(|r| r > tol) || !long || !positive(framing.header) || framing.unit.is_some_and(|u| !positive(u)) {
                 return Err(Refusal::NotPositive);
             }
-            return framed_openings(length, height, framing, m.x, openings, margins);
+            // the members either side of a stretch the boards leave open: clear of the end studs,
+            // of the members in from them and of one another
+            let inside = |&(a, b): &(f64, f64)| stretches.iter().any(|s| a - w >= s.lo + w + s.margin(0) - tol && b + w <= s.hi - w - s.margin(1) + tol);
+            if !posts.iter().all(|p| p.1 - p.0 > tol && inside(p)) || posts.windows(2).any(|p| p[1].0 - w < p[0].1 + w - tol) {
+                return Err(Refusal::NotPositive);
+            }
+            return framed_openings(stretches, height, framing, w, openings, posts);
         }
         let (_, _, bay, row) = self.division(length, height);
         if bay - self.width() <= LINEAR_TOLERANCE || row - self.width() <= LINEAR_TOLERANCE {
@@ -263,12 +279,64 @@ struct FaceEnd {
     backing: Option<f64>,
 }
 
+/// How one face of a system is where another system stands against the system's side (a T
+/// junction): the stretch of it that is left out, along the system's line from the line's start
+/// (`None` where it runs on); a framed face that is left out, how far in from either edge of that
+/// stretch a member more stands, as at an end; and a framed face that runs on, the stretch its
+/// boards leave open, either side of which a member more stands behind their edges.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct FaceBreak {
+    gap: Option<(f64, f64)>,
+    back: [Option<f64>; 2],
+    posts: Option<(f64, f64)>,
+}
+
 /// The ends of a system's faces at its start and at its end, one for every face as [`faces`] lists
-/// them; none where the system ends on its line.
+/// them; none where the system ends on its line. And its faces where other systems stand against
+/// its side: for each of those, one for every face.
 #[derive(Debug, Clone, PartialEq, Default)]
 struct Ends {
     start: Vec<FaceEnd>,
     end: Vec<FaceEnd>,
+    breaks: Vec<Vec<FaceBreak>>,
+}
+
+/// A stretch left out of a face, from `from` along to `to` from the face's start, and how far in
+/// from either edge of it a backing member stands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Gap {
+    from: f64,
+    to: f64,
+    back: [Option<f64>; 2],
+}
+
+/// A stretch of a face between its ends and its gaps, and how far in from its start and from its
+/// end a backing member stands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Stretch {
+    lo: f64,
+    hi: f64,
+    back: [Option<f64>; 2],
+}
+
+impl Stretch {
+    /// How far in from end `k` its backing member stands; nothing without one.
+    fn margin(&self, k: usize) -> f64 {
+        self.back[k].unwrap_or(0.0)
+    }
+}
+
+/// The stretches of a face `length` long, with backing members `back` in from its ends, that its
+/// `gaps` (in order) leave.
+fn stretches(length: f64, back: [Option<f64>; 2], gaps: &[Gap]) -> Vec<Stretch> {
+    let mut left = Vec::with_capacity(gaps.len() + 1);
+    let (mut lo, mut first) = (0.0, back[0]);
+    for g in gaps {
+        left.push(Stretch { lo, hi: g.from, back: [first, g.back[0]] });
+        (lo, first) = (g.to, g.back[1]);
+    }
+    left.push(Stretch { lo, hi: length, back: [first, back[1]] });
+    left
 }
 
 /// A face as it is generated: where it lies along the system's line and how it is laid out there.
@@ -286,6 +354,11 @@ struct Span {
     /// The system's openings and the joints between its prefab units, from this face's start.
     openings: Vec<Opening>,
     joints: Vec<f64>,
+    /// The stretches left out of it where other systems stand against the system's side, and the
+    /// stretches its boards leave open there, a member more either side; in order, from this
+    /// face's start.
+    gaps: Vec<Gap>,
+    posts: Vec<(f64, f64)>,
 }
 
 /// A system checked and laid out, ready to be generated: its faces, each on its span, along `dir`.
@@ -316,7 +389,7 @@ fn build(s: &SystemDef, ends: &Ends) -> Result<Vec<PartSolid>, Refusal> {
     let mut parts = Vec::new();
     for (f, span) in plan.faces.iter().zip(&plan.spans) {
         let origin = s.start.extend(s.base) + plan.dir * span.lo;
-        let line = Line { origin, dir: plan.dir, right, length: span.hi - span.lo, height: s.height, phase: span.phase, lead: span.lead, back: span.back };
+        let line = Line { origin, dir: plan.dir, right, length: span.hi - span.lo, height: s.height, phase: span.phase, lead: span.lead, back: span.back, gaps: span.gaps.clone(), posts: span.posts.clone() };
         line.generate(f, &span.openings, &span.joints, &mut parts)?;
     }
     Ok(parts)
@@ -348,10 +421,22 @@ fn plan<'a>(s: &'a SystemDef, ends: &Ends) -> Result<Plan<'a>, Refusal> {
         if !positive(hi - lo) {
             return Err(Refusal::NotPositive);
         }
-        let back = [start.backing, end.backing].map(|b| b.filter(|_| f.framing.is_some()));
+        let framed = f.framing.is_some();
+        let back = [start.backing, end.backing].map(|b| b.filter(|_| framed));
         let openings: Vec<Opening> = s.openings.iter().map(|o| Opening { along: o.along - lo, ..*o }).collect();
-        f.check(hi - lo, s.height, &openings, back)?;
-        spans.push(Span { lo, hi, phase: 0.0, lead: None, back, openings, joints: Vec::new() });
+        // where other systems stand against the system's side
+        let breaks = || ends.breaks.iter().filter_map(|b| b.get(i));
+        let mut gaps: Vec<Gap> = breaks().filter_map(|b| b.gap.map(|(from, to)| Gap { from: from - lo, to: to - lo, back: b.back.map(|d| d.filter(|_| framed)) })).collect();
+        gaps.sort_by(|a, b| a.from.total_cmp(&b.from));
+        let mut posts: Vec<(f64, f64)> = breaks().filter_map(|b| b.posts.filter(|_| framed)).map(|(a, b)| (a - lo, b - lo)).collect();
+        posts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // a gap lies inside the face, clear of the next one; members on a grid cannot leave one
+        let inside = gaps.iter().all(|g| g.to - g.from > tol && g.from > tol && g.to < hi - lo - tol) && gaps.windows(2).all(|g| g[1].from > g[0].to + tol);
+        if !inside || (!gaps.is_empty() && f.member.is_some() && !framed) {
+            return Err(Refusal::NotPositive);
+        }
+        f.check(hi - lo, s.height, &openings, &stretches(hi - lo, back, &gaps), &posts)?;
+        spans.push(Span { lo, hi, phase: 0.0, lead: None, back, openings, joints: Vec::new(), gaps, posts });
     }
     let most = faces.iter().zip(&spans).map(|(f, span)| f.most_parts(span.hi - span.lo, s.height, s.openings.len())).fold(0usize, usize::saturating_add);
     if most > MAX_PARTS {
@@ -359,7 +444,17 @@ fn plan<'a>(s: &'a SystemDef, ends: &Ends) -> Result<Plan<'a>, Refusal> {
     }
     // the frame's prefab units; the other faces follow the frame's studs from where it starts
     let frame = spans[0].lo;
-    let joints = joints(&faces, spans[0].hi - frame, &spans[0].openings, spans[0].back.map(|b| b.unwrap_or(0.0)))?;
+    // a joint keeps two members' widths clear of the members a T junction puts in a face that is
+    // made in units
+    let mut keep_out: Vec<(f64, f64)> = Vec::new();
+    for (f, span) in faces.iter().zip(&spans) {
+        if let (Some(_), Some((m, _))) = (f.framing.and_then(|f| f.unit), f.member) {
+            let (shift, clear) = (span.lo - frame, 2.0 * m.x);
+            keep_out.extend(span.posts.iter().map(|&(a, b)| (a - clear + shift, b + clear + shift)));
+            keep_out.extend(span.gaps.iter().map(|g| (g.from - clear - g.back[0].unwrap_or(0.0) + shift, g.to + clear + g.back[1].unwrap_or(0.0) + shift)));
+        }
+    }
+    let joints = joints(&faces, spans[0].hi - frame, &spans[0].openings, spans[0].back.map(|b| b.unwrap_or(0.0)), &keep_out)?;
     let stud_bay = faces[0].framing.map(|_| faces[0].spacing.x);
     let mut more = joints.len().saturating_mul(faces.iter().map(|f| f.joint_parts(s.height)).fold(0usize, usize::saturating_add));
     for (f, span) in faces.iter().zip(&mut spans) {
@@ -368,11 +463,21 @@ fn plan<'a>(s: &'a SystemDef, ends: &Ends) -> Result<Plan<'a>, Refusal> {
         span.joints = joints.iter().map(|u| u + span.phase).filter(|&u| u > tol && u < length - tol).collect();
         span.lead = stud_bay.and_then(|bay| f.lead(span.phase, bay));
         // a backing member is a stud more, with a noggin and a cell beside it in every row; a cut
-        // first board is a column of boards more
+        // first board is a column of boards more. A gap ends a frame with a stud either side and
+        // its backing members, and cuts its plates; boards get a column more. A stretch the
+        // boards leave open puts two studs in a frame and makes room for a third between them.
         let (_, rows, _, _) = f.division(1.0, s.height);
-        let backings = span.back.iter().flatten().count();
-        let boards = if span.lead.is_some() { rows.saturating_mul(s.openings.len().saturating_mul(3).saturating_add(1)) } else { 0 };
-        more = more.saturating_add(backings.saturating_mul(rows.saturating_add(2)).saturating_mul(4)).saturating_add(boards);
+        let cuts = s.openings.len().saturating_add(1);
+        let (mut studs, mut columns, mut plates) = (span.back.iter().flatten().count(), usize::from(span.lead.is_some()), 0usize);
+        if let Some(framing) = f.framing {
+            let ended: usize = span.gaps.iter().map(|g| 2 + g.back.iter().flatten().count()).sum();
+            studs = studs.saturating_add(ended).saturating_add(span.posts.len().saturating_mul(3));
+            plates = span.gaps.len().saturating_mul(usize::from(framing.bottom_plates) + usize::from(framing.top_plates)).saturating_mul(cuts);
+        } else if f.member.is_none() {
+            columns = columns.saturating_add(span.gaps.len());
+        }
+        let boards = columns.saturating_mul(rows).saturating_mul(cuts.saturating_mul(3));
+        more = more.saturating_add(studs.saturating_mul(rows.saturating_add(2)).saturating_mul(4)).saturating_add(boards).saturating_add(plates);
     }
     if most.saturating_add(more) > MAX_PARTS {
         return Err(Refusal::TooManyParts);
@@ -384,16 +489,17 @@ fn plan<'a>(s: &'a SystemDef, ends: &Ends) -> Result<Plan<'a>, Refusal> {
 /// its framing has a longest unit that it is longer than.
 pub fn units(s: &SystemDef) -> Result<Vec<f64>, Refusal> {
     let length = (s.end - s.start).length();
-    let joints = joints(&faces(s), length, &s.openings, [0.0; 2])?;
+    let joints = joints(&faces(s), length, &s.openings, [0.0; 2], &[])?;
     let ends: Vec<f64> = once(0.0).chain(joints).chain(once(length)).collect();
     Ok(ends.windows(2).map(|u| u[1] - u[0]).collect())
 }
 
 /// Where a frame `length` long with `openings` is split into prefab units: by the framing of the
-/// system's own face, the first of `faces`, clear of the members `margins` in from either end.
-fn joints(faces: &[Face], length: f64, openings: &[Opening], margins: [f64; 2]) -> Result<Vec<f64>, Refusal> {
+/// system's own face, the first of `faces`, clear of the members `margins` in from either end and
+/// outside the stretches `keep_out`.
+fn joints(faces: &[Face], length: f64, openings: &[Opening], margins: [f64; 2], keep_out: &[(f64, f64)]) -> Result<Vec<f64>, Refusal> {
     match faces.first().map(|f| (f.framing, f.member, f.spacing.x)) {
-        Some((Some(framing), Some((m, _)), bay)) => unit_joints(length, bay, framing, m.x, openings, margins),
+        Some((Some(framing), Some((m, _)), bay)) => unit_joints(length, bay, framing, m.x, openings, margins, keep_out),
         _ => Ok(Vec::new()),
     }
 }
@@ -401,15 +507,16 @@ fn joints(faces: &[Face], length: f64, openings: &[Opening], margins: [f64; 2]) 
 /// Where a frame `length` long, its studs `w` wide at `bay`, is split into prefab units no longer
 /// than its framing's `unit`: into as few units as can be, as equal as can be. A joint lies on a
 /// stud line or right beside an opening's framing, with an end stud either side of it clear of
-/// the frame's end studs, the members `margins` in from either end and the openings' king studs.
-/// With no such joints the frame is refused.
-fn unit_joints(length: f64, bay: f64, framing: Framing, w: f64, openings: &[Opening], margins: [f64; 2]) -> Result<Vec<f64>, Refusal> {
+/// the frame's end studs, the members `margins` in from either end and the openings' king studs,
+/// and outside the stretches `keep_out`. With no such joints the frame is refused.
+fn unit_joints(length: f64, bay: f64, framing: Framing, w: f64, openings: &[Opening], margins: [f64; 2], keep_out: &[(f64, f64)]) -> Result<Vec<f64>, Refusal> {
     let tol = LINEAR_TOLERANCE;
     let Some(longest) = framing.unit else { return Ok(Vec::new()) };
     if length <= longest + tol {
         return Ok(Vec::new());
     }
-    let clear = |u: f64| u >= 2.0 * w + margins[0] - tol && u <= length - 2.0 * w - margins[1] + tol && openings.iter().all(|o| u <= o.along - 3.0 * w + tol || u >= o.along + o.width + 3.0 * w - tol);
+    let free = |u: f64| keep_out.iter().all(|&(a, b)| u <= a + tol || u >= b - tol);
+    let clear = |u: f64| free(u) && u >= 2.0 * w + margins[0] - tol && u <= length - 2.0 * w - margins[1] + tol && openings.iter().all(|o| u <= o.along - 3.0 * w + tol || u >= o.along + o.width + 3.0 * w - tol);
     let lines = (length / bay).floor().min(1e7) as usize;
     let beside = openings.iter().flat_map(|o| [o.along - 3.0 * w, o.along + o.width + 3.0 * w]);
     let mut places: Vec<f64> = (1..=lines).map(|k| k as f64 * bay).chain(beside).filter(|&u| clear(u)).collect();
@@ -448,9 +555,32 @@ fn split(rects: Vec<[f64; 4]>, joints: &[f64]) -> Vec<[f64; 4]> {
     cut
 }
 
+/// Rectangles `rects` less the stretches `gaps` along (in order), each left out over its whole
+/// height.
+fn outside(rects: Vec<[f64; 4]>, gaps: &[Gap]) -> Vec<[f64; 4]> {
+    let tol = LINEAR_TOLERANCE;
+    let mut left = Vec::with_capacity(rects.len());
+    for mut r in rects {
+        for g in gaps {
+            if g.to <= r[0] + tol || g.from >= r[2] - tol {
+                continue;
+            }
+            if g.from > r[0] + tol {
+                left.push([r[0], r[1], g.from, r[3]]);
+            }
+            r[0] = g.to.min(r[2]);
+        }
+        if r[2] - r[0] > tol {
+            left.push(r);
+        }
+    }
+    left
+}
+
 /// A face's line: where the face starts, along it, to its right, and how long and high it is; and
 /// how it is laid out, as its [`Span`] says: where the frame's studs start from its start, the
-/// width of a cut first board, and the backing members in from either end.
+/// width of a cut first board, the backing members in from either end, the stretches left out of
+/// it and the stretches its boards leave open.
 struct Line {
     origin: DVec3,
     dir: DVec3,
@@ -460,6 +590,8 @@ struct Line {
     phase: f64,
     lead: Option<f64>,
     back: [Option<f64>; 2],
+    gaps: Vec<Gap>,
+    posts: Vec<(f64, f64)>,
 }
 
 /// A member being generated: its centre line as a join member, and the planes its joins trim its
@@ -499,22 +631,28 @@ impl Line {
         Ok(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, thickness)?, material: material.map(str::to_string) })
     }
 
-    /// Framed face `f`, unit by unit (split at `joints` when its framing is made in units): its
-    /// plates, its end studs, its openings each between its king studs, the studs and noggins
-    /// between those, and the cells between all of them, inside the face.
+    /// Framed face `f`, stretch by stretch between its gaps and unit by unit (split at `joints`
+    /// when its framing is made in units): its plates, its end studs, its openings each between
+    /// its king studs, the studs and noggins between those, and the cells between all of them,
+    /// inside the face.
     #[allow(clippy::too_many_arguments)]
     fn framed(&self, f: &Face, framing: Framing, size: DVec2, material: Option<&str>, openings: &[Opening], joints: &[f64], parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let mut openings: Vec<&Opening> = openings.iter().collect();
         openings.sort_by(|a, b| a.along.total_cmp(&b.along));
         let mut frame = Frame { line: self, face: f, size, members: Vec::new(), cells: Vec::new() };
+        let tol = LINEAR_TOLERANCE;
         let joints = if framing.unit.is_some() { joints } else { &[] };
-        let ends: Vec<f64> = once(0.0).chain(joints.iter().copied()).chain(once(self.length)).collect();
-        for (k, unit) in ends.windows(2).enumerate() {
-            let (start, end) = (unit[0], unit[1]);
-            let inside: Vec<&Opening> = openings.iter().copied().filter(|o| o.along > start && o.along < end).collect();
-            // the backing members stand at the frame's ends: in its first unit and in its last
-            let back = [self.back[0].filter(|_| k == 0), self.back[1].filter(|_| k + 2 == ends.len())];
-            frame.unit(framing, start, end, &inside, back)?;
+        for s in stretches(self.length, self.back, &self.gaps) {
+            let between = joints.iter().copied().filter(|&u| u > s.lo + tol && u < s.hi - tol);
+            let ends: Vec<f64> = once(s.lo).chain(between).chain(once(s.hi)).collect();
+            for (k, unit) in ends.windows(2).enumerate() {
+                let (start, end) = (unit[0], unit[1]);
+                let inside: Vec<&Opening> = openings.iter().copied().filter(|o| o.along > start && o.along < end).collect();
+                let posts: Vec<(f64, f64)> = self.posts.iter().copied().filter(|p| p.0 > start && p.1 < end).collect();
+                // the backing members stand at the stretch's ends: in its first unit and in its last
+                let back = [s.back[0].filter(|_| k == 0), s.back[1].filter(|_| k + 2 == ends.len())];
+                frame.unit(framing, start, end, &inside, &posts, back)?;
+            }
         }
         for m in &frame.members {
             parts.push(PartSolid { class: "IfcMember", solid: join::finish(&m.member, None, None, &[], &[])?, material: material.map(str::to_string) });
@@ -537,8 +675,11 @@ impl Frame<'_> {
     /// One unit of a frame, from `start` along to `end`, with `openings` in it (in order): its
     /// plates, the bottom ones stopping at the doors, its end studs, and between them each
     /// opening between its king studs, filled between. A member stands `back` in from its start
-    /// or from its end where a board's edge needs one, with a pocket between it and the end stud.
-    fn unit(&mut self, framing: Framing, start: f64, end: f64, openings: &[&Opening], back: [Option<f64>; 2]) -> Result<(), Refusal> {
+    /// or from its end where a board's edge needs one, with a pocket between it and the end stud;
+    /// and one either side of each of the stretches `posts` that the boards leave open, the pocket
+    /// between the two filled as any bay.
+    #[allow(clippy::too_many_arguments)]
+    fn unit(&mut self, framing: Framing, start: f64, end: f64, openings: &[&Opening], posts: &[(f64, f64)], back: [Option<f64>; 2]) -> Result<(), Refusal> {
         let w = self.size.x;
         let height = self.line.height;
         let (bottom, top) = (f64::from(framing.bottom_plates) * w, height - f64::from(framing.top_plates) * w);
@@ -562,8 +703,19 @@ impl Frame<'_> {
             frame.stud(start + d + w / 2.0, bottom, top)?;
             from = start + d + w;
         }
-        for o in openings {
-            let (a, b, head) = (o.along, o.along + o.width, o.sill + o.height);
+        // the openings and the stretches the boards leave open, in order along
+        let mut stops: Vec<(f64, f64, Option<&Opening>)> = openings.iter().map(|o| (o.along, o.along + o.width, Some(*o))).chain(posts.iter().map(|&(a, b)| (a, b, None))).collect();
+        stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (a, b, opening) in stops {
+            let Some(o) = opening else {
+                frame.fill(from, a - w, bottom, top)?;
+                frame.stud(a - w / 2.0, bottom, top)?;
+                frame.fill(a, b, bottom, top)?;
+                frame.stud(b + w / 2.0, bottom, top)?;
+                from = b + w;
+                continue;
+            };
+            let head = o.sill + o.height;
             frame.fill(from, a - 2.0 * w, bottom, top)?;
             frame.stud(a - 1.5 * w, bottom, top)?;
             frame.stud(a - 0.5 * w, bottom, head)?;
@@ -597,10 +749,10 @@ impl Line {
         let (bays, rows, bay, row) = f.division(self.length, self.height);
         let w = f.width();
         // a panel between the lines `w` apart, up to the face's end and head (where boards are
-        // cut), and cut around the openings
+        // cut), cut around the openings and left out of the face's gaps
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<Vec<PartSolid>, Refusal> {
             let r = [u + w / 2.0, v + w / 2.0, u + du.min(self.length - u) - w / 2.0, v + dv.min(self.height - v) - w / 2.0];
-            split(around(r, openings), joints).into_iter().map(|r| self.panel(f, r[0], r[1], r[2] - r[0], r[3] - r[1])).collect()
+            outside(split(around(r, openings), joints), &self.gaps).into_iter().map(|r| self.panel(f, r[0], r[1], r[2] - r[0], r[3] - r[1])).collect()
         };
         let mut pieces: Vec<Piece> = Vec::new();
         // the joins between members: their kind, the member that runs through (or the first of a
@@ -730,10 +882,11 @@ fn is_door(o: &Opening) -> bool {
     o.sill <= LINEAR_TOLERANCE
 }
 
-/// Checks openings against a frame `length` by `height` framed as `framing`, its members `w` wide:
-/// each with its king studs inside the end studs and the members `margins` in from either end, its
-/// header under the top plates and, a window, its sill over the bottom plates; their framing apart.
-fn framed_openings(length: f64, height: f64, framing: Framing, w: f64, openings: &[Opening], margins: [f64; 2]) -> Result<(), Refusal> {
+/// Checks openings against a frame `height` high framed as `framing`, its members `w` wide: each
+/// with its king studs in one of the frame's `stretches`, inside its end studs and the members in
+/// from them, and clear of the members either side of `posts`; its header under the top plates
+/// and, a window, its sill over the bottom plates; their framing apart.
+fn framed_openings(stretches: &[Stretch], height: f64, framing: Framing, w: f64, openings: &[Opening], posts: &[(f64, f64)]) -> Result<(), Refusal> {
     let tol = LINEAR_TOLERANCE;
     let (bottom, top) = (f64::from(framing.bottom_plates) * w, height - f64::from(framing.top_plates) * w);
     let mut spans = Vec::with_capacity(openings.len());
@@ -741,7 +894,8 @@ fn framed_openings(length: f64, height: f64, framing: Framing, w: f64, openings:
         if !positive(o.width) || !positive(o.height) || !o.along.is_finite() || !o.sill.is_finite() {
             return Err(Refusal::NotPositive);
         }
-        let along = o.along - 3.0 * w >= margins[0] - tol && o.along + o.width + 3.0 * w <= length - margins[1] + tol;
+        let (from, to) = (o.along - 2.0 * w, o.along + o.width + 2.0 * w);
+        let along = stretches.iter().any(|s| from - w >= s.lo + s.margin(0) - tol && to + w <= s.hi - s.margin(1) + tol) && posts.iter().all(|&(a, b)| to <= a - w + tol || from >= b + w - tol);
         let foot = if is_door(o) { o.sill >= -tol } else { o.sill - w >= bottom - tol };
         if !along || !foot || o.sill + o.height + framing.header > top + tol {
             return Err(Refusal::OpeningOutside);

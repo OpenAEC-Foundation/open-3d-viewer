@@ -235,10 +235,16 @@ come later. A type is named by rule, after its members when it is framed ("Vlies
 types by what they make, as build-ups. In IFCX a type is a node of its group's type class with
 `openaec::systemtype`.
 
-**In the kernel** (agreed with the kernel's owner, next):
-- `SystemDef` gets an optional `system_type`, copied from the library as a build-up is, so the
-  element is whole without the library. `system_parts` generates from it: the running bond, the
-  layers across the face, and the material of every member and panel.
+**In the kernel** (agreed with the kernel's owner; the first two points are built):
+- `SystemDef` gets an optional `system_type` (`bim_core::system::SystemTypeDef`), copied from the
+  library as a build-up is, so the element is whole without the library; `SystemDef::typed` sets
+  the spacing, members and panels to the type's. `system_parts` generates from it
+  (`bim_core::system`): the running bond (the rows' lines run through, the joints between the
+  units stop against them, so they do not run through), the layers across the face, and the
+  material of every member and panel. A system of more than 50 000 parts is refused rather than
+  generated. In the app, the Library tab draws a type's face from the kernel's own parts, and
+  **Assign to selection** gives the selected systems the picked type; a typed system's member and
+  panel sizes are its type's, shown and not typed, its spacing still its own.
 - Members stay parts of their system, with one join rule per pair of roles (the mullion runs
   through, the transom stops against it), not a join element per crossing. Their ends are square
   at first. The join geometry the kernel's owner is making public (`bim_core::join`) then trims

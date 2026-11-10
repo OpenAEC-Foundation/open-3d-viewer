@@ -1,16 +1,17 @@
 //! The model: elements by id over a tile grid, and their evaluation to solids.
 //!
-//! Elements hold definitions; [`Model::evaluate`] derives their solids. A connection has no body:
-//! it changes the end planes of the linear elements it joins, so a member is evaluated with the
-//! connections that name it. A connection that cannot be made is refused by its own evaluation and
+//! Elements hold definitions; [`Model::evaluate`] derives their solids. A connection joins linear
+//! elements ([`crate::join`]): it trims their ends, takes material out of them and adds to them, so
+//! a member is evaluated with the connections that name it; the connection's own parts (plates,
+//! bolts) are its body. A connection that cannot be made is refused by its own evaluation and
 //! leaves its members as they are.
 
-use crate::element::{linear_axes, linear_solid, planar_parts, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::element::{planar_parts, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::join::{self, JoinKind, JoinResult, Member, MemberEnd};
 use crate::solid::{Plane, Solid};
 use crate::tile::{TileGrid, TileKey};
 use crate::boolean::{boolean, BooleanOp};
 use crate::Refusal;
-use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -34,13 +35,6 @@ pub struct Model {
     pub grid: TileGrid,
     elements: BTreeMap<ElementId, Element>,
     next: u64,
-}
-
-/// Which end of a linear element.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum End {
-    Start,
-    End,
 }
 
 impl Model {
@@ -123,7 +117,10 @@ impl Model {
     fn evaluate_element(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
         if let Shape::Connection(c) = &element.shape {
             self.check_connection(c)?;
-            return Ok(Vec::new());
+            // its own parts (plates, bolts), from the frame of tile (0, 0) to its own
+            let Ok((_, result)) = self.join(c) else { return Ok(Vec::new()) };
+            let offset = self.grid.offset(TileKey::default(), element.tile);
+            return Ok(result.parts.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid.translated(offset), material: p.material }).collect());
         }
         let mut parts = self.body(element)?;
         // the cuts made in it, in id order; a cut that cannot be made leaves it as it is
@@ -158,8 +155,14 @@ impl Model {
             }
             Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
             Shape::Linear(l) => {
-                let (start, end) = self.end_planes(element.id, element.tile);
-                Ok(vec![part(linear_solid(l, start, end)?)])
+                let joined = self.joined(element.id, element.tile);
+                let body = join::finish(&Member::of(l)?, joined.start, joined.end, &joined.additions, &joined.removals);
+                // additions or removals that cannot be made leave the member with its trims only
+                let body = match body {
+                    Ok(body) => body,
+                    Err(_) => join::finish(&Member::of(l)?, joined.start, joined.end, &[], &[])?,
+                };
+                Ok(vec![part(body)])
             }
             Shape::Connection(_) => Err(Refusal::NoBody),
         }
@@ -213,28 +216,31 @@ impl Model {
         }
     }
 
-    /// The end planes the connections joining member `id` give it (in its tile's frame), where
-    /// they can be made.
-    fn end_planes(&self, id: ElementId, tile: TileKey) -> (Option<Plane>, Option<Plane>) {
-        let (mut start, mut end) = (None, None);
+    /// What the connections joining member `id` do to it (in its tile's frame), where they can be
+    /// made: its end planes, and what they add to it and take out of it.
+    fn joined(&self, id: ElementId, tile: TileKey) -> Joined {
+        let mut joined = Joined::default();
+        let offset = self.grid.offset(TileKey::default(), tile);
         for e in self.elements.values() {
             let Shape::Connection(c) = &e.shape else { continue };
             if c.primary != id && c.secondary != id {
                 continue;
             }
-            let Ok(cuts) = self.join(c) else { continue };
-            for (member, which, plane) in cuts {
-                if member != id {
-                    continue;
-                }
-                let plane = Plane { point: self.grid.transfer(plane.point, TileKey::default(), tile), normal: plane.normal };
-                match which {
-                    End::Start => start = Some(plane),
-                    End::End => end = Some(plane),
+            let Ok((members, result)) = self.join(c) else { continue };
+            let mine = |k: usize| members.get(k) == Some(&id);
+            for (k, which, plane) in result.trims {
+                if mine(k) {
+                    let plane = Plane { point: plane.point + offset, normal: plane.normal };
+                    match which {
+                        MemberEnd::Start => joined.start = Some(plane),
+                        MemberEnd::End => joined.end = Some(plane),
+                    }
                 }
             }
+            joined.additions.extend(result.additions.into_iter().filter(|(k, _)| mine(*k)).map(|(_, s)| s.translated(offset)));
+            joined.removals.extend(result.removals.into_iter().filter(|(k, _)| mine(*k)).map(|(_, s)| s.translated(offset)));
         }
-        (start, end)
+        joined
     }
 
     /// A member of a connection: its definition in the frame of tile (0, 0), so both members
@@ -246,28 +252,29 @@ impl Model {
         Ok(LinearDef { start: l.start + offset, end: l.end + offset, ..l.clone() })
     }
 
-    /// The cuts a connection makes: per member, which end and the plane there (in the frame of
-    /// tile (0, 0)).
-    fn join(&self, c: &ConnectionDef) -> Result<Vec<(ElementId, End, Plane)>, Refusal> {
+    /// What a connection does to its members (their ids, in order) in the frame of tile (0, 0);
+    /// nothing for a cut, which [`Model::cut`] makes.
+    fn join(&self, c: &ConnectionDef) -> Result<(Vec<ElementId>, JoinResult), Refusal> {
         if c.primary == c.secondary {
             return Err(Refusal::SameMember);
         }
-        if c.kind == ConnectionKind::Cut {
-            return Ok(Vec::new());
-        }
-        let (p, s) = (self.member(c.primary)?, self.member(c.secondary)?);
-        match c.kind {
-            ConnectionKind::Cut => Ok(Vec::new()),
-            ConnectionKind::Butt => {
-                let (end, plane) = butt(&p, &s)?;
-                Ok(vec![(c.secondary, end, plane)])
-            }
-            ConnectionKind::Mitre => {
-                let ((pe, se), plane) = mitre(&p, &s)?;
-                Ok(vec![(c.primary, pe, Plane { point: plane.point, normal: -plane.normal }), (c.secondary, se, plane)])
-            }
-        }
+        let kind = match c.kind {
+            ConnectionKind::Cut => return Ok((Vec::new(), JoinResult::default())),
+            ConnectionKind::Butt => JoinKind::Butt,
+            ConnectionKind::Mitre => JoinKind::Mitre,
+        };
+        let members = [Member::of(&self.member(c.primary)?)?, Member::of(&self.member(c.secondary)?)?];
+        Ok((vec![c.primary, c.secondary], join::cuts(kind, &members)?))
     }
+}
+
+/// What the connections joining a member do to it, in its tile's frame.
+#[derive(Debug, Default)]
+struct Joined {
+    start: Option<Plane>,
+    end: Option<Plane>,
+    additions: Vec<Solid>,
+    removals: Vec<Solid>,
 }
 
 /// A wall's layers reaching past its ends, cut back to its footprint at its corners.
@@ -279,69 +286,10 @@ fn joined_parts(p: &crate::element::PlanarDef, join: &crate::joins::WallJoin) ->
         .collect()
 }
 
-/// An end of a member and the direction from it into the member.
-fn end_of(l: &LinearDef, which: End) -> (DVec3, DVec3) {
-    match which {
-        End::Start => (l.start, (l.end - l.start).normalize_or_zero()),
-        End::End => (l.end, (l.start - l.end).normalize_or_zero()),
-    }
-}
-
-/// The distance from `q` to the segment `a`–`b`.
-fn to_segment(q: DVec3, a: DVec3, b: DVec3) -> f64 {
-    let ab = b - a;
-    let t = if ab.length_squared() > 0.0 { ((q - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-    (a + ab * t - q).length()
-}
-
-/// A butt joint: the secondary's end nearest the primary stops at the primary's face, the plane
-/// along the primary at the reach of its profile towards the secondary.
-fn butt(primary: &LinearDef, secondary: &LinearDef) -> Result<(End, Plane), Refusal> {
-    let (axes, length) = linear_axes(primary)?;
-    let profile = primary.profile.profile()?;
-    let (a, b) = (axes.origin, axes.origin + axes.z * length);
-    let which = if to_segment(secondary.start, a, b) <= to_segment(secondary.end, a, b) { End::Start } else { End::End };
-    let (q, into) = end_of(secondary, which);
-    // the direction from the primary's axis towards the secondary, square to the primary
-    let n = (into - axes.z * into.dot(axes.z)).try_normalize().ok_or(Refusal::Parallel)?;
-    if into.cross(axes.z).length() < 1e-6 {
-        return Err(Refusal::Parallel);
-    }
-    let reach = profile.support(DVec2::new(n.dot(axes.x), n.dot(axes.y)));
-    let radius = profile.outer().iter().map(|p| p.length()).fold(0.0, f64::max);
-    if to_segment(q, a - axes.z * radius, b + axes.z * radius) > radius + JOIN_TOLERANCE {
-        return Err(Refusal::NotTouching);
-    }
-    // the face: through the point of the axis nearest q, moved out by the reach
-    let foot = a + axes.z * (q - a).dot(axes.z);
-    Ok((which, Plane { point: foot + n * reach, normal: -n }))
-}
-
-/// A mitre: the nearest ends of the two members meet (within [`JOIN_TOLERANCE`]); both are cut by
-/// the plane through their meeting point that halves the angle between them. The plane's normal
-/// points out of the secondary.
-fn mitre(primary: &LinearDef, secondary: &LinearDef) -> Result<((End, End), Plane), Refusal> {
-    let ends = [End::Start, End::End];
-    let (pe, se) = ends
-        .iter()
-        .flat_map(|&p| ends.iter().map(move |&s| (p, s)))
-        .min_by(|&(p1, s1), &(p2, s2)| {
-            let d = |p, s| (end_of(primary, p).0 - end_of(secondary, s).0).length();
-            d(p1, s1).total_cmp(&d(p2, s2))
-        })
-        .unwrap();
-    let ((qp, into_p), (qs, into_s)) = (end_of(primary, pe), end_of(secondary, se));
-    if (qp - qs).length() > JOIN_TOLERANCE {
-        return Err(Refusal::NotTouching);
-    }
-    let n = (into_p - into_s).try_normalize().ok_or(Refusal::Parallel)?;
-    // n points into the primary and away from the secondary
-    Ok(((pe, se), Plane { point: (qp + qs) / 2.0, normal: n }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::{DVec2, DVec3};
     use crate::element::{PlanarDef, PlanarForm, PointDef, SystemDef};
     use crate::mesh::Mesh;
     use crate::profile::ProfileDef;

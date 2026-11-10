@@ -8,11 +8,15 @@ mod ifc;
 mod layers;
 mod edit;
 mod element_props;
+mod grips;
+mod openings;
 mod levels;
 pub mod library;
 mod marks;
 pub mod modeller;
 mod paper;
+mod placement;
+mod placing;
 mod schedules;
 mod view_props;
 mod views;
@@ -567,6 +571,8 @@ pub enum Message {
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
     ElementFieldDone,
+    /// Something the placement strip over the view sends.
+    Place(placement::PlaceMessage),
     /// Add a door (`true`) or a window to the selected wall.
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
@@ -1339,6 +1345,7 @@ impl App {
             Message::EditKey(key) => self.edit_key(key),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
+            Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::SaveDialog => {
@@ -1498,6 +1505,7 @@ impl App {
                     }
                 }
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
+                Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -1506,6 +1514,8 @@ impl App {
                     }
                 }
                 Navigate::HoverOff => {
+                    self.modeller.cursor = None;
+                    self.modeller.aim = None;
                     self.hover_request = None;
                     self.measure.hover = None;
                     self.structural_hover_off();
@@ -1551,7 +1561,11 @@ impl App {
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
-            Message::NewLevel(word) => self.new_level(word),
+            Message::NewLevel(word) => {
+                // the form is in the Levels tab
+                self.explorer_tab = ExplorerTab::Levels;
+                self.new_level(word);
+            }
             Message::LevelName(name) => {
                 if let Some(form) = &mut self.level_form {
                     form.name = name;
@@ -1569,7 +1583,13 @@ impl App {
             }
             Message::NewPlan(level) => self.new_plan(&level),
             Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
-            Message::PickLevelFor(kind) => self.views_picker = kind,
+            Message::PickLevelFor(kind) => {
+                // the levels to pick from are listed in the Views tab
+                if kind.is_some() {
+                    self.explorer_tab = ExplorerTab::Views;
+                }
+                self.views_picker = kind;
+            }
             Message::OpenPlan(plan) => self.open_plan(&plan),
             Message::RemovePlan(plan) => {
                 self.close_plan(&plan);
@@ -3045,7 +3065,7 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor()) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some()) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3200,10 +3220,14 @@ impl App {
         // the dimensions and texts of the view shown in its tab
         let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
-        let editing = self.edit_overlay(p.accent, p.surface).map(|o| canvas(o).width(Fill).height(Fill));
+        // edit mode's points, else the selected element's grips: one slot, so a drag that begins on
+        // a grip keeps its overlay
+        let editing = self.edit_overlay(p.accent, p.surface).or_else(|| self.grip_overlay(p.accent, p.surface)).map(|o| canvas(o).width(Fill).height(Fill));
+        let placing = self.placing_overlay(p.accent).filter(|_| overlay.is_none()).map(|o| canvas(o).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(view_labels)
+            .push(placing)
             .push(editing)
             .push(section)
             .push(plane)

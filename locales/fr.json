@@ -446,6 +446,25 @@
     "T junction at start": "Jonction en T au début",
     "T junction at end": "Jonction en T à la fin",
     "Stands against the other": "Bute contre l'autre",
-    "Frames against it": "Murs en butée"
+    "Frames against it": "Murs en butée",
+    "Annotate": "Annoter",
+    "Openings": "Ouvertures",
+    "Click a wall where the door goes · Esc: stop": "Cliquez sur un mur à l'endroit de la porte · Échap : arrêter",
+    "Click a wall where the window goes · Esc: stop": "Cliquez sur un mur à l'endroit de la fenêtre · Échap : arrêter",
+    "Centre line": "Axe",
+    "Exterior face": "Face extérieure",
+    "Interior face": "Face intérieure",
+    "Thickness": "Épaisseur",
+    "Width": "Largeur",
+    "Depth": "Profondeur",
+    "Height": "Hauteur",
+    "Base": "Base",
+    "Profile height": "Hauteur du profil",
+    "Sill": "Allège",
+    "to level": "jusqu'au niveau",
+    "Location line": "Ligne de référence",
+    "Chain": "Chaîne",
+    "Generic": "Générique",
+    "Top height": "Hauteur du dessus"
   }
 }

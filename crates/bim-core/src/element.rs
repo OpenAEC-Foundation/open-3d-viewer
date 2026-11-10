@@ -413,17 +413,30 @@ pub fn planar_solid(p: &PlanarDef) -> Result<Solid, Refusal> {
     if let Some(b) = &p.build_up {
         b.check()?;
     }
-    let (profile, axes) = planar_base(p, thickness)?;
+    let (profile, axes) = planar_base(p, thickness, [0.0; 2])?;
     Solid::extrude(&profile, &axes, thickness)
 }
 
 /// The solids of a planar element with their materials: one per layer of its build-up (none for a
 /// cavity), or its one solid without a material.
 pub fn planar_parts(p: &PlanarDef) -> Result<Vec<(Option<String>, Solid)>, Refusal> {
-    let Some(b) = &p.build_up else { return Ok(vec![(None, planar_solid(p)?)]) };
+    planar_parts_extended(p, [0.0; 2])
+}
+
+/// The solids of a planar element as [`planar_parts`] makes them, a wall reaching `extend` metres
+/// past its start and its end (to be cut back to its corners, see `joins`); a slab as it is.
+pub fn planar_parts_extended(p: &PlanarDef, extend: [f64; 2]) -> Result<Vec<(Option<String>, Solid)>, Refusal> {
+    let Some(b) = &p.build_up else {
+        let thickness = p.total_thickness();
+        if !positive(thickness) {
+            return Err(Refusal::NotPositive);
+        }
+        let (profile, axes) = planar_base(p, thickness, extend)?;
+        return Ok(vec![(None, Solid::extrude(&profile, &axes, thickness)?)]);
+    };
     b.check()?;
     let thickness = b.thickness();
-    let (profile, axes) = planar_base(p, thickness)?;
+    let (profile, axes) = planar_base(p, thickness, extend)?;
     let mut parts = Vec::new();
     let mut from = 0.0;
     for layer in &b.layers {
@@ -440,15 +453,23 @@ pub fn planar_parts(p: &PlanarDef) -> Result<Vec<(Option<String>, Solid)>, Refus
 }
 
 /// What a planar element `thickness` thick extrudes, and the frame it extrudes in along its z: a
-/// wall's elevation from its left face, a slab's outline from its underside.
-fn planar_base(p: &PlanarDef, thickness: f64) -> Result<(Profile, Axes), Refusal> {
+/// wall's elevation from its left face (reaching `extend` past its start and end), a slab's outline
+/// from its underside.
+fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Profile, Axes), Refusal> {
     match &p.form {
         PlanarForm::Wall { start, end, base, height } => {
             let (axes, length) = wall_axes(*start, *end, *base, thickness)?;
             if !positive(*height) {
                 return Err(Refusal::NotPositive);
             }
-            Ok((wall_elevation(length, *height, &p.openings)?, axes))
+            // the openings must fit the wall itself, not only its reach past its ends
+            let elevation = wall_elevation(length, *height, &p.openings)?;
+            if extend == [0.0; 2] {
+                return Ok((elevation, axes));
+            }
+            let shifted: Vec<Opening> = p.openings.iter().map(|o| Opening { along: o.along + extend[0], ..*o }).collect();
+            let reach = Axes::new(axes.origin - axes.x * extend[0], axes.x, axes.z)?;
+            Ok((wall_elevation(length + extend[0] + extend[1], *height, &shifted)?, reach))
         }
         PlanarForm::Slab { outline, holes, top } => {
             let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;

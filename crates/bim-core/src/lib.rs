@@ -17,6 +17,7 @@
 
 pub mod boolean;
 pub mod element;
+mod joins;
 pub mod mesh;
 pub mod model;
 pub mod predicates;

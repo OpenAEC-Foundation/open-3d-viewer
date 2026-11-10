@@ -196,3 +196,24 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
 - A value is used as soon as it is valid and the kernel can make the element with it. Until then
   the field keeps what was typed and the banner says why. Enter shows the value in use again, as
   the View section does.
+
+## Fifth slice: wall corners (2026-11-10)
+
+- **Corners.** Walls whose axis ends meet (within 1 mm) and whose heights overlap get a corner.
+  Both are cut along the vertical plane through their inner and their outer corner, where their
+  faces cross. For one thickness that is the mitre; for two thicknesses the walls still meet face
+  to face. It does not matter which way either wall was drawn.
+- **T-junctions.** A wall whose end lies on another wall's axis, away from its ends and within its
+  half thickness, stops at that wall's face; the other runs through.
+- **Left as they are:**
+  - three or more walls at one point;
+  - walls at heights that do not overlap;
+  - corners so sharp that the cut would reach more than eight wall thicknesses from the joint.
+- **How it is made.** A joined wall is made with its ends reaching past its corners. It is then cut
+  back by a boolean intersection with its footprint in plan, a prism through its whole height,
+  layer by layer, so a layered wall's layers meet along the same cut.
+- **Fallback.** When the cut cannot be made, the wall is made as it is.
+- **Calls made:**
+  - Joins are found from the walls' definitions every time a wall is evaluated (no join elements
+    to keep up to date). Moving a wall in edit mode re-cuts its neighbours.
+  - Cross junctions and joins with slabs or roofs are follow-ups.

@@ -146,7 +146,16 @@ impl Model {
         let part = |solid: Solid| Part { class, tile: element.tile, solid, material: None };
         match &element.shape {
             Shape::Point(p) => Ok(vec![part(point_solid(p)?)]),
-            Shape::Planar(p) => Ok(planar_parts(p)?.into_iter().map(|(material, solid)| Part { material, ..part(solid) }).collect()),
+            Shape::Planar(p) => {
+                // a wall meeting other walls is cut to its corners; when that cannot be made, it is
+                // made as it is
+                let joined = crate::joins::wall_join(self, element).and_then(|join| joined_parts(p, &join).ok());
+                let parts = match joined {
+                    Some(parts) => parts,
+                    None => planar_parts(p)?,
+                };
+                Ok(parts.into_iter().map(|(material, solid)| Part { material, ..part(solid) }).collect())
+            }
             Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
             Shape::Linear(l) => {
                 let (start, end) = self.end_planes(element.id, element.tile);
@@ -259,6 +268,15 @@ impl Model {
             }
         }
     }
+}
+
+/// A wall's layers reaching past its ends, cut back to its footprint at its corners.
+fn joined_parts(p: &crate::element::PlanarDef, join: &crate::joins::WallJoin) -> Result<Vec<(Option<String>, Solid)>, Refusal> {
+    let prism = join.prism()?;
+    crate::element::planar_parts_extended(p, join.extend)?
+        .into_iter()
+        .map(|(material, solid)| Ok((material, boolean(&solid, &prism, BooleanOp::Intersection)?)))
+        .collect()
 }
 
 /// An end of a member and the direction from it into the member.

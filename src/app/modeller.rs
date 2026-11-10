@@ -134,6 +134,8 @@ pub struct Modeller {
     pub shown: Option<u64>,
     /// Why the last step was refused.
     pub refusal: Option<Refusal>,
+    /// What joins made automatically are called, in the interface language.
+    pub join_word: &'static str,
     /// Edit mode (Tab) on an element.
     pub edit: Option<super::edit::Edit>,
     /// A value being typed in the Definition section: the element, the field, the text.
@@ -337,8 +339,16 @@ impl App {
         let number = self.modeller.model.iter().filter(|e| e.class() == element.class()).count() + 1;
         element.name = format!("{name} {number}");
         let id = self.modeller.model.add(element)?;
+        self.joins_follow(&[id]);
         self.show_modelled();
         Ok(id)
+    }
+
+    /// The joins follow a change of elements `changed`: joins whose members parted go, and their
+    /// ends that meet another linear element get one (see `bim_core::Model::update_joins`).
+    pub(super) fn joins_follow(&mut self, changed: &[ElementId]) {
+        let word = if self.modeller.join_word.is_empty() { "Connection" } else { self.modeller.join_word };
+        self.modeller.model.update_joins(word, Some(changed));
     }
 
     /// The modelled elements among the selection, in pick order.
@@ -383,6 +393,17 @@ impl App {
             self.modeller.refusal = Some(if kind == ConnectionKind::Cut { Refusal::NoBody } else { Refusal::NotLinear });
             return;
         };
+        // two members joined already: their join takes the new kind (and this order)
+        let pair = |c: &ConnectionDef| c.kind != ConnectionKind::Cut && ((c.primary, c.secondary) == (primary, secondary) || (c.primary, c.secondary) == (secondary, primary));
+        let existing = self.modeller.model.iter().find(|e| matches!(&e.shape, Shape::Connection(c) if pair(c))).cloned();
+        if let Some(mut joined) = existing.filter(|_| kind != ConnectionKind::Cut) {
+            joined.shape = Shape::Connection(ConnectionDef { kind, primary, secondary });
+            match self.modeller.model.replace(joined) {
+                Ok(()) => self.show_modelled(),
+                Err(refusal) => self.modeller.refusal = Some(refusal),
+            }
+            return;
+        }
         let level = self.modeller.model.get(primary).and_then(|e| e.level.clone());
         if let Err(refusal) = self.add_element(name, level, Shape::Connection(ConnectionDef { kind, primary, secondary })) {
             self.modeller.refusal = Some(refusal);
@@ -487,16 +508,21 @@ impl App {
         let side = add(self, "Wall", wall(p(10.0, 0.0), p(10.0, 6.0), Vec::new()));
         add(self, "Wall", wall(p(0.0, 6.0), p(0.0, 0.0), Vec::new()));
         add(self, "Curtain wall", Shape::System(SystemDef { start: p(10.0, 6.0), end: p(0.0, 6.0), base: 0.0, height: 3.0, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL }));
-        // a pergola beside it: columns, a beam stopping at a column, two beams in a mitre
+        // a pergola beside it: two columns and three beams in a U; the joins come by themselves
+        // (butts at the columns, mitres at the far corners), and one butt becomes an end plate
         let column = |at: DVec2| Shape::Linear(LinearDef { start: at.extend(0.0), end: at.extend(3.0), profile: ProfileDef::Rectangle { width: COLUMN, height: COLUMN }, roll: 0.0 });
         let c1 = add(self, "Column", column(p(13.0, 0.0)));
         add(self, "Column", column(p(13.0, 6.0)));
         let beam = |a: DVec2, b: DVec2| Shape::Linear(LinearDef { start: a.extend(2.6), end: b.extend(2.6), profile: ProfileDef::Rectangle { width: BEAM.0, height: BEAM.1 }, roll: 0.0 });
-        let b1 = add(self, "Beam", beam(p(13.0, 6.0), p(13.0, 0.0)));
-        let b2 = add(self, "Beam", beam(p(13.0, 6.0), p(17.0, 6.0)));
+        add(self, "Beam", beam(p(13.0, 6.0), p(17.0, 6.0)));
         let b3 = add(self, "Beam", beam(p(13.0, 0.0), p(17.0, 0.0)));
-        add(self, "Connection", Shape::Connection(ConnectionDef { kind: ConnectionKind::Mitre, primary: b1, secondary: b2 }));
-        add(self, "End plate", Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), primary: c1, secondary: b3 }));
+        add(self, "Beam", beam(p(17.0, 0.0), p(17.0, 6.0)));
+        let butt = self.modeller.model.iter().find(|e| matches!(&e.shape, Shape::Connection(c) if c.primary == c1 && c.secondary == b3)).cloned();
+        if let Some(mut joint) = butt {
+            joint.shape = Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), primary: c1, secondary: b3 });
+            self.modeller.model.replace(joint).expect("the demo's end plate");
+            self.show_modelled();
+        }
         add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT }));
         // a beam through the side wall, cutting its way
         let through = add(self, "Beam", beam(p(8.5, 3.0), p(13.0, 3.0)));
@@ -697,10 +723,15 @@ mod tests {
         app.set_model_tool(Some((ModelTool::Column, "Column")));
         // 0.4 m off the beam's end is 4 px on screen: it snaps
         click(&mut app, 6.3, 0.2);
-        let column = app.modeller.model.iter().last().unwrap().shape_in_project(&app.modeller.model.grid);
-        let Shape::Linear(c) = column else { panic!() };
+        let column = app.modeller.model.iter().find(|e| e.class() == "IfcColumn").expect("a column");
+        let Shape::Linear(c) = column.shape_in_project(&app.modeller.model.grid) else { panic!() };
         assert_eq!(c.start.truncate(), DVec2::new(6.0, 0.0));
-        assert_eq!(app.modeller.model.iter().last().unwrap().class(), "IfcColumn");
+        // the beam's end on the column's side: joined, the column running through
+        let join = app.modeller.model.iter().find_map(|e| match &e.shape {
+            Shape::Connection(j) => Some(j.clone()),
+            _ => None,
+        });
+        assert!(join.is_some_and(|j| j.kind == ConnectionKind::Butt && j.primary == column.id));
     }
 
     #[test]
@@ -792,6 +823,38 @@ mod tests {
         assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
         let after = app.modeller.model.evaluate(wall).unwrap()[0].solid.volume();
         assert!((before - after - 0.2 * 0.4 * 0.2).abs() < 1e-9, "the beam's section through the wall: {before} - {after}");
+    }
+
+    #[test]
+    fn beams_drawn_corner_to_corner_are_joined_and_picked_by_their_mark() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Beam, "Beam")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        click(&mut app, 4.0, 3.0);
+        app.set_model_tool(None);
+        let joins: Vec<&Element> = app.modeller.model.iter().filter(|e| e.base() == bim_core::BaseKind::Connection).collect();
+        assert_eq!(joins.len(), 1, "the chained beams meet at a corner");
+        let joint = joins[0].id;
+        assert!(matches!(&joins[0].shape, Shape::Connection(c) if c.kind == ConnectionKind::Mitre));
+        // its mark at the corner, at the beams' height
+        let marks = app.join_marks(iced::Color::BLACK, iced::Color::WHITE).expect("a mark");
+        assert_eq!(marks.marks.len(), 1);
+        assert!((marks.marks[0].1 - Vec3::new(4.0, 0.0, 2.8)).length() < 1e-4, "{}", marks.marks[0].1);
+        // a click on the mark picks the join; its kind can then change
+        let _ = app.update(Message::PickJoin(joint));
+        assert_eq!(app.selected_modelled(), vec![joint]);
+        // the end plate on the same two beams changes that join, it adds none
+        let scene = app.model.clone().unwrap();
+        app.sel.clear();
+        for id in [ElementId(1), ElementId(2)] {
+            let shown = scene.element_with_key(crate::model::ElementKey { model: 0, source: id.0 }).unwrap();
+            app.sel.toggle(Pickable::Element(shown));
+        }
+        app.connect_selected(ConnectionKind::Butt, "Joint");
+        let joins: Vec<&Element> = app.modeller.model.iter().filter(|e| e.base() == bim_core::BaseKind::Connection).collect();
+        assert_eq!(joins.len(), 1);
+        assert!(matches!(&joins[0].shape, Shape::Connection(c) if c.kind == ConnectionKind::Butt));
     }
 
     #[test]

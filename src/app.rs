@@ -8,6 +8,7 @@ mod ifc;
 mod layers;
 mod edit;
 mod element_props;
+mod join_marks;
 mod levels;
 pub mod library;
 mod marks;
@@ -570,6 +571,8 @@ pub enum Message {
     RemoveOpening(usize),
     /// Give the selected join another kind.
     JoinKind(bim_core::ConnectionKind),
+    /// A click on a join's mark: it is selected.
+    PickJoin(bim_core::ElementId),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -1341,6 +1344,7 @@ impl App {
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::JoinKind(kind) => self.set_join_kind(kind),
+            Message::PickJoin(id) => self.select_modelled(id),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -3196,9 +3200,11 @@ impl App {
         let marks = self.marks_layer(p, l).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let menu = self.context_menu.filter(|_| overlay.is_none()).map(|at| self.context_menu_view(p, l, at));
         let editing = self.edit_overlay(p.accent, p.surface).map(|o| canvas(o).width(Fill).height(Fill));
+        let joins = self.join_marks(p.accent, p.surface).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(view_labels)
+            .push(joins)
             .push(editing)
             .push(section)
             .push(plane)

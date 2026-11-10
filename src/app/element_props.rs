@@ -263,6 +263,7 @@ impl App {
         let id = changed.id;
         match self.modeller.model.replace(changed) {
             Ok(()) => {
+                self.joins_follow(&[id]);
                 self.show_modelled();
                 self.select_modelled(id);
             }

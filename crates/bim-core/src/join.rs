@@ -228,7 +228,7 @@ pub fn finish(member: &Member, start: Option<Plane>, end: Option<Plane>, additio
 }
 
 /// The distance from `q` to the segment `a`–`b`.
-fn to_segment(q: DVec3, a: DVec3, b: DVec3) -> f64 {
+pub(crate) fn to_segment(q: DVec3, a: DVec3, b: DVec3) -> f64 {
     let ab = b - a;
     let t = if ab.length_squared() > 0.0 { ((q - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
     (a + ab * t - q).length()

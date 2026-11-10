@@ -859,6 +859,8 @@ impl Studio {
     fn handle(&mut self, message: Msg) -> Task<Msg> {
         match message {
             Msg::App(message) => {
+                // joins made automatically are named in the interface language
+                self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,

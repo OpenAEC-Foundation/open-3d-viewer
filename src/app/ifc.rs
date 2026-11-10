@@ -182,7 +182,7 @@ impl App {
         }
         let stem = model.path.file_stem().map_or_else(|| "model".to_string(), |s| s.to_string_lossy().into_owned());
         let file = format!("{stem}.ifcx");
-        let bytes = crate::export::to_bytes(model, &self.document, &file)?;
+        let bytes = crate::export::to_bytes(model, &self.document_now(), &file)?;
         let mut links = Vec::new();
         for (li, layer) in model.layers.iter().enumerate().filter(|(_, l)| !l.points) {
             if layer.elements.is_empty() {

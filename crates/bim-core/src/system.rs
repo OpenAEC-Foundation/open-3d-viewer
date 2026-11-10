@@ -6,17 +6,21 @@
 //! of its members and of its panels, and layers across the face, each with a grid of its own (the
 //! boards on a timber frame). Without a type a system is a plain curtain wall.
 //!
-//! Members are centred on the grid's lines, the edges included, and their ends are square. In a
-//! stacked grid the vertical members run through and the horizontal ones stop against them; in a
-//! running bond the horizontal ones run through between the edges and the vertical ones stop
-//! against them, so a bond's joints do not run through. Panels fill the bays between the members,
-//! centred on their face; a layer without members lays its panels edge to edge.
+//! Members are centred on the grid's lines, the edges included, and meet as join elements do,
+//! through the kernel's join geometry ([`crate::join`]). In a stacked grid the vertical members
+//! run through and the horizontal ones stop against them; in a running bond the rows' lines run
+//! through between the edges and the joints between the units stop against them, so a bond's
+//! joints do not run through. At the face's corners the edge members meet as the type says: one
+//! stopping against the other, which reaches the corner, or both mitred. Panels fill the bays
+//! between the members, centred on their face; a layer without members lays its panels edge to
+//! edge.
 
 use crate::element::{PartSolid, SystemDef};
+use crate::join::{self, JoinKind, Member, MemberEnd};
 use crate::profile::Profile;
-use crate::solid::{Axes, Solid};
+use crate::solid::{Axes, Plane, Solid};
 use crate::{positive, Refusal, LINEAR_TOLERANCE};
-use bim_library::system::{Pattern, SystemLayer, SystemType};
+use bim_library::system::{Corner, Pattern, SystemLayer, SystemType};
 use bim_library::Library;
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -37,6 +41,12 @@ pub struct SystemTypeDef {
     pub panel_material: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<SystemLayer>,
+    #[serde(default, skip_serializing_if = "is_butt")]
+    pub corners: Corner,
+}
+
+fn is_butt(c: &Corner) -> bool {
+    *c == Corner::Butt
 }
 
 fn is_stack(p: &Pattern) -> bool {
@@ -59,6 +69,7 @@ impl SystemDef {
             member_material: t.members.material.clone(),
             panel_material: t.panels.material.clone(),
             layers: t.layers.clone(),
+            corners: t.corners,
         });
         Some(self)
     }
@@ -70,12 +81,13 @@ impl SystemDef {
 }
 
 /// One face of a system: its offset across the system's face (to the right of its line, its
-/// exterior, positive), its grid, its members (size in the face and across it, material) and its
-/// panels (thickness, material).
+/// exterior, positive), its grid, its members (size in the face and across it, material), how they
+/// meet at its corners, and its panels (thickness, material).
 struct Face<'a> {
     offset: f64,
     spacing: DVec2,
     pattern: Pattern,
+    corners: Corner,
     member: Option<(DVec2, Option<&'a str>)>,
     panel: (f64, Option<&'a str>),
 }
@@ -128,6 +140,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         offset: 0.0,
         spacing: s.spacing,
         pattern: t.map_or(Pattern::Stack, |t| t.pattern),
+        corners: t.map_or(Corner::Butt, |t| t.corners),
         member: Some((s.member, t.map(|t| t.member_material.as_str()))),
         panel: (s.panel, t.map(|t| t.panel_material.as_str())),
     };
@@ -135,6 +148,7 @@ fn faces(s: &SystemDef) -> Vec<Face<'_>> {
         offset: l.offset,
         spacing: DVec2::new(l.grid.bay, l.grid.row),
         pattern: l.grid.pattern,
+        corners: Corner::Butt,
         member: l.members.as_ref().map(|m| (DVec2::new(m.width, m.depth), Some(m.material.as_str()))),
         panel: (l.panels.thickness, Some(l.panels.material.as_str())),
     });
@@ -176,38 +190,75 @@ struct Line {
     height: f64,
 }
 
+/// A member being generated: its centre line as a join member, and the planes its joins trim its
+/// ends to, with what they add to it and take out of it.
+struct Piece {
+    member: Member,
+    start: Option<Plane>,
+    end: Option<Plane>,
+    additions: Vec<Solid>,
+    removals: Vec<Solid>,
+}
+
 impl Line {
+    /// A point of face `f`: `u` along the line, `v` up it.
+    fn at(&self, f: &Face, u: f64, v: f64) -> DVec3 {
+        self.origin + self.dir * u + DVec3::Z * v + self.right * f.offset
+    }
+
+    /// A vertical member of `f` at `u`, its centre line from `from` up to `to`.
+    fn vertical(&self, f: &Face, size: DVec2, u: f64, from: f64, to: f64) -> Result<Piece, Refusal> {
+        let member = Member { axes: Axes::new(self.at(f, u, from), self.dir, DVec3::Z)?, length: to - from, profile: Profile::rectangle(size.x, size.y)? };
+        Ok(Piece { member, start: None, end: None, additions: Vec::new(), removals: Vec::new() })
+    }
+
+    /// A horizontal member of `f` at `v`, its centre line from `from` along to `to`.
+    fn horizontal(&self, f: &Face, size: DVec2, v: f64, from: f64, to: f64) -> Result<Piece, Refusal> {
+        let member = Member { axes: Axes::new(self.at(f, from, v), self.right, self.dir)?, length: to - from, profile: Profile::rectangle(size.y, size.x)? };
+        Ok(Piece { member, start: None, end: None, additions: Vec::new(), removals: Vec::new() })
+    }
+
     fn generate(&self, f: &Face, parts: &mut Vec<PartSolid>) -> Result<(), Refusal> {
         let (bays, rows, bay, row) = f.division(self.length, self.height);
         let w = f.width();
-        let at = |u: f64, v: f64| self.origin + self.dir * u + DVec3::Z * v + self.right * f.offset;
-        let member = |solid| PartSolid { class: "IfcMember", solid, material: f.member.and_then(|(_, m)| m).map(str::to_string) };
         let (thickness, panel_material) = f.panel;
         // a panel `du` by `dv` from (u, v), centred on the face
         let panel = |u: f64, v: f64, du: f64, dv: f64| -> Result<PartSolid, Refusal> {
-            let axes = Axes::new(at(u, v) - self.right * (thickness / 2.0), self.dir, self.right)?;
+            let axes = Axes::new(self.at(f, u, v) - self.right * (thickness / 2.0), self.dir, self.right)?;
             let p = DVec2::new;
             let face = Profile::new(vec![p(0.0, 0.0), p(du, 0.0), p(du, dv), p(0.0, dv)], Vec::new())?;
             Ok(PartSolid { class: "IfcPlate", solid: Solid::extrude(&face, &axes, thickness)?, material: panel_material.map(str::to_string) })
         };
-        // a vertical member at `u` from `v` up `rise`, and a horizontal one at `v` from `u` along `run`
-        let vertical = |u: f64, v: f64, rise: f64, (size, _): (DVec2, Option<&str>)| -> Result<Solid, Refusal> {
-            Solid::extrude(&Profile::rectangle(size.x, size.y)?, &Axes::new(at(u, v), self.dir, DVec3::Z)?, rise)
+        let mut pieces: Vec<Piece> = Vec::new();
+        // the joins between members: their kind, the member that runs through (or the first of a
+        // mitre) and the one that stops
+        let mut joins: Vec<(JoinKind, usize, usize)> = Vec::new();
+        let corner = match f.corners {
+            Corner::Butt => JoinKind::Butt,
+            Corner::Mitre => JoinKind::Mitre,
         };
-        let horizontal = |u: f64, v: f64, run: f64, (size, _): (DVec2, Option<&str>)| -> Result<Solid, Refusal> {
-            Solid::extrude(&Profile::rectangle(size.y, size.x)?, &Axes::new(at(u, v), self.right, self.dir)?, run)
-        };
+        let mitred = f.corners == Corner::Mitre;
+        // an edge's vertical member reaches the outer faces of the rows' lines at the bottom and the
+        // top, unless the corners are mitred, where both members meet on their centre lines
+        let span = |edge: bool| if edge && mitred { (0.0, self.height) } else { (-w / 2.0, self.height + w / 2.0) };
         match f.pattern {
             Pattern::Stack => {
-                if let Some(m) = f.member {
-                    // the vertical members on every division along, the whole height
+                if let Some((size, _)) = f.member {
+                    // the vertical members on every division along run through; the horizontal
+                    // ones on every division up stop against them, a mitre at the corners
+                    let mut verticals = Vec::with_capacity(bays + 1);
                     for i in 0..=bays {
-                        parts.push(member(vertical(i as f64 * bay, 0.0, self.height, m)?));
+                        let (from, to) = span(i == 0 || i == bays);
+                        pieces.push(self.vertical(f, size, i as f64 * bay, from, to)?);
+                        verticals.push(pieces.len() - 1);
                     }
-                    // the horizontal ones on every division up, between them
                     for i in 0..bays {
                         for j in 0..=rows {
-                            parts.push(member(horizontal(i as f64 * bay + w / 2.0, j as f64 * row, bay - w, m)?));
+                            pieces.push(self.horizontal(f, size, j as f64 * row, i as f64 * bay, (i + 1) as f64 * bay)?);
+                            let h = pieces.len() - 1;
+                            let edge_row = j == 0 || j == rows;
+                            joins.push((if edge_row && i == 0 { corner } else { JoinKind::Butt }, verticals[i], h));
+                            joins.push((if edge_row && i + 1 == bays { corner } else { JoinKind::Butt }, verticals[i + 1], h));
                         }
                     }
                 }
@@ -218,13 +269,22 @@ impl Line {
                 }
             }
             Pattern::RunningBond => {
-                if let Some(m) = f.member {
-                    // the edges the whole height, the rows' lines through between them
-                    for u in [0.0, self.length] {
-                        parts.push(member(vertical(u, 0.0, self.height, m)?));
-                    }
+                // the edges and the rows' lines; the rows' lines stop against the edges, a mitre
+                // at the corners
+                let mut lines_up: Vec<usize> = Vec::new();
+                if let Some((size, _)) = f.member {
+                    let (from, to) = span(true);
+                    pieces.push(self.vertical(f, size, 0.0, from, to)?);
+                    let first = pieces.len() - 1;
+                    pieces.push(self.vertical(f, size, self.length, from, to)?);
+                    let last = pieces.len() - 1;
                     for j in 0..=rows {
-                        parts.push(member(horizontal(w / 2.0, j as f64 * row, self.length - w, m)?));
+                        pieces.push(self.horizontal(f, size, j as f64 * row, 0.0, self.length)?);
+                        let h = pieces.len() - 1;
+                        let kind = if j == 0 || j == rows { corner } else { JoinKind::Butt };
+                        joins.push((kind, first, h));
+                        joins.push((kind, last, h));
+                        lines_up.push(h);
                     }
                 }
                 for j in 0..rows {
@@ -240,9 +300,14 @@ impl Line {
                         }
                     }
                     lines.push(self.length);
-                    if let Some(m) = f.member {
+                    if let Some((size, _)) = f.member {
+                        // the joints between the units stop against the rows' lines, so they do
+                        // not run through
                         for &u in &lines[1..lines.len() - 1] {
-                            parts.push(member(vertical(u, v, row - w, m)?));
+                            pieces.push(self.vertical(f, size, u, j as f64 * row, (j + 1) as f64 * row)?);
+                            let joint = pieces.len() - 1;
+                            joins.push((JoinKind::Butt, lines_up[j], joint));
+                            joins.push((JoinKind::Butt, lines_up[j + 1], joint));
                         }
                     }
                     for pair in lines.windows(2) {
@@ -250,6 +315,30 @@ impl Line {
                     }
                 }
             }
+        }
+        // the joins, as a join element's, through the kernel's join geometry
+        for (kind, a, b) in joins {
+            let done = join::cuts(kind, &[pieces[a].member.clone(), pieces[b].member.clone()])?;
+            let piece = |k: usize| if k == 0 { a } else { b };
+            for (k, end, plane) in done.trims {
+                let p = &mut pieces[piece(k)];
+                match end {
+                    MemberEnd::Start => p.start = Some(plane),
+                    MemberEnd::End => p.end = Some(plane),
+                }
+            }
+            for (k, solid) in done.additions {
+                pieces[piece(k)].additions.push(solid);
+            }
+            for (k, solid) in done.removals {
+                pieces[piece(k)].removals.push(solid);
+            }
+            parts.extend(done.parts);
+        }
+        let material = f.member.and_then(|(_, m)| m).map(str::to_string);
+        for p in pieces {
+            let solid = join::finish(&p.member, p.start, p.end, &p.additions, &p.removals)?;
+            parts.push(PartSolid { class: "IfcMember", solid, material: material.clone() });
         }
         Ok(())
     }
@@ -321,6 +410,47 @@ mod tests {
         assert!(near(across("osb"), (-0.088, -0.07)), "{:?}", across("osb"));
         assert!(near(across("gypsum-board"), (0.07, 0.0825)), "{:?}", across("gypsum-board"));
         assert_eq!((of(&parts, "osb").len(), of(&parts, "gypsum-board").len()), (2, 2), "boards of 1200, edge to edge");
+    }
+
+    /// The volume of a ring of members `w` wide and `depth` deep on the edges of a face `length`
+    /// by `height`, centred on them.
+    fn ring(length: f64, height: f64, w: f64, depth: f64) -> f64 {
+        ((length + w) * (height + w) - (length - w) * (height - w)) * depth
+    }
+
+    #[test]
+    fn a_frame_is_closed_at_its_corners_butted_or_mitred() {
+        // one bay and one row each: four members around one pane
+        for (id, length, height, w, depth) in [("system.frame-timber-67x114", 0.9, 1.2, 0.067, 0.114), ("system.frame-aluminium-75", 1.0, 1.4, 0.05, 0.075)] {
+            let s = typed(length, height, id);
+            let parts = parts(&s).unwrap();
+            let members: Vec<_> = parts.iter().filter(|p| p.class == "IfcMember").collect();
+            assert_eq!(members.len(), 4, "{id}");
+            let volume: f64 = members.iter().map(|p| p.solid.volume()).sum();
+            assert!((volume - ring(length, height, w, depth)).abs() < 1e-9, "{id}: {volume} vs {}", ring(length, height, w, depth));
+            // the left member reaches the outer corner, below the frame's line
+            let left = members.iter().map(|p| p.solid.bounds()).find(|(_, hi)| hi.x < w && hi.z > height / 2.0).unwrap();
+            assert!((left.0.z + w / 2.0).abs() < 1e-9, "{id}: {left:?}");
+        }
+        // the aluminium frame's left member is cut on the diagonal at both ends: as long as the
+        // frame is high on its centre line, where the butted timber one reaches past both rails
+        let left = |id: &str, length: f64, height: f64, w: f64| {
+            let parts = parts(&typed(length, height, id)).unwrap();
+            parts.iter().filter(|p| p.class == "IfcMember").find(|p| p.solid.bounds().1.x < w && p.solid.bounds().1.z > height / 2.0).unwrap().solid.volume()
+        };
+        assert!((left("system.frame-aluminium-75", 1.0, 1.4, 0.05) - 1.4 * 0.05 * 0.075).abs() < 1e-9);
+        assert!((left("system.frame-timber-67x114", 0.9, 1.2, 0.067) - (1.2 + 0.067) * 0.067 * 0.114).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_curtain_wall_is_closed_where_its_members_meet() {
+        // two bays and one row: the rows' lines stop against the mullions, which reach their faces
+        let s = SystemDef { spacing: DVec2::new(1.5, 3.0), ..system(3.0, 3.0) };
+        let parts = parts(&s).unwrap();
+        let (w, depth) = (0.05, 0.15);
+        let volume: f64 = parts.iter().filter(|p| p.class == "IfcMember").map(|p| p.solid.volume()).sum();
+        let middle = (3.0 - w) * w * depth;
+        assert!((volume - (ring(3.0, 3.0, w, depth) + middle)).abs() < 1e-9, "{volume}");
     }
 
     #[test]

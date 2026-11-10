@@ -12,7 +12,7 @@ use crate::theme::Palette;
 use bim_library::profile::{self, LinearRole, Series};
 use bim_core::element::PlanarForm;
 use bim_core::{BuildUpDef, ElementId, Shape, SystemDef};
-use bim_library::{BuildUp, DrawingStandard, HatchKind, Lang, Library, Material, ProfileShape, Role, SystemGroup, SystemType};
+use bim_library::{BuildUp, Corner, DrawingStandard, HatchKind, Lang, Library, Material, ProfileShape, Role, SystemGroup, SystemType};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::text::Wrapping;
@@ -475,6 +475,9 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
             mm(layer.grid.row, l)
         );
         list = list.push(line(&layer.panels.material, what));
+    }
+    if t.corners == Corner::Mitre {
+        list = list.push(small(l.text("Hoeken in verstek", "Mitred corners").to_string(), p));
     }
     if let Some(height) = t.lying {
         list = list.push(small(format!("{} {} mm", l.text("Liggend op", "Lying at"), mm(height, l)), p));

@@ -98,6 +98,20 @@ impl Pattern {
     }
 }
 
+/// How the members on a face's edges meet at its four corners: one stopping against the other, or
+/// both cut on the diagonal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Corner {
+    #[default]
+    Butt,
+    Mitre,
+}
+
+fn is_butt(c: &Corner) -> bool {
+    *c == Corner::Butt
+}
+
 /// A division of a face: bays `bay` wide along it and rows `row` high up it (or across it, when
 /// it lies), centre to centre of the lines between them.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -168,6 +182,9 @@ pub struct SystemType {
     pub panels: Panels,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<SystemLayer>,
+    /// How the members on its face's edges meet at the corners.
+    #[serde(default, skip_serializing_if = "is_butt")]
+    pub corners: Corner,
     /// A lying system's face, this high above its level (metres).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lying: Option<f64>,
@@ -273,7 +290,9 @@ pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
     let glass = || Panels::new("glass", 0.024);
-    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), lying: None };
+    let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None };
+    // aluminium and PVC frames are mitred at their corners
+    let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
     // a timber frame: studs `depth` deep at 600 with mineral wool between them, OSB on the
     // exterior face and gypsum board on the interior one
     let timber_frame = |id: &str, depth: f64| {
@@ -292,8 +311,8 @@ pub fn starter() -> Vec<SystemType> {
         upright("system.curtain-wall-structural-glazing", CurtainWall, Grid::new(1.5, 3.0, Stack), Members::new(0.02, 0.18, "aluminium"), glass()),
         upright("system.curtain-wall-timber-aluminium-1200", CurtainWall, Grid::new(1.2, 1.5, Stack), Members::new(0.06, 0.16, "timber"), glass()),
         upright("system.frame-timber-67x114", Frame, Grid::new(0.9, 1.2, Stack), Members::new(0.067, 0.114, "timber"), glass()),
-        upright("system.frame-aluminium-75", Frame, Grid::new(1.0, 1.4, Stack), Members::new(0.05, 0.075, "aluminium"), glass()),
-        upright("system.frame-pvc-70", Frame, Grid::new(1.0, 1.4, Stack), Members::new(0.064, 0.07, "pvc"), glass()),
+        mitred(upright("system.frame-aluminium-75", Frame, Grid::new(1.0, 1.4, Stack), Members::new(0.05, 0.075, "aluminium"), glass())),
+        mitred(upright("system.frame-pvc-70", Frame, Grid::new(1.0, 1.4, Stack), Members::new(0.064, 0.07, "pvc"), glass())),
         timber_frame("system.timber-frame-140", 0.14),
         timber_frame("system.timber-frame-184", 0.184),
         // bricks as panels, the mortar as members set back 5 mm from either face
@@ -384,6 +403,8 @@ mod tests {
             assert_eq!(serde_json::from_str::<SystemType>(&text).unwrap(), t);
         }
         let curtain = serde_json::to_value(&starter()[0]).unwrap();
-        assert!(curtain.get("layers").is_none() && curtain.get("lying").is_none() && curtain["grid"].get("pattern").is_none(), "{curtain}");
+        assert!(curtain.get("layers").is_none() && curtain.get("lying").is_none() && curtain.get("corners").is_none() && curtain["grid"].get("pattern").is_none(), "{curtain}");
+        let aluminium = starter().into_iter().find(|t| t.id == "system.frame-aluminium-75").unwrap();
+        assert_eq!(serde_json::to_value(&aluminium).unwrap()["corners"], "mitre");
     }
 }

@@ -75,6 +75,12 @@ pub fn press(index: usize) -> EditEvent {
     EditEvent::Press { index, add: false }
 }
 
+/// The button coming up after a press (for renders and tests outside the app module).
+#[cfg(test)]
+pub fn release() -> EditEvent {
+    EditEvent::Release
+}
+
 impl From<EditEvent> for Message {
     fn from(e: EditEvent) -> Self {
         Message::Edit(e)

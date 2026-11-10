@@ -9,6 +9,8 @@ mod layers;
 mod edit;
 mod element_props;
 mod grips;
+#[cfg(test)]
+pub(crate) use take_over::{across_mesh, house as revit_house};
 mod levels;
 pub mod library;
 mod marks;
@@ -16,6 +18,7 @@ pub mod modeller;
 mod paper;
 mod placing;
 mod schedules;
+mod take_over;
 mod view_props;
 mod views;
 mod sheets;
@@ -25,7 +28,7 @@ mod views_in_3d;
 
 pub use ifc::{IfcTab, IfcView};
 #[cfg(test)]
-pub use edit::press as edit_press;
+pub use edit::{press as edit_press, release as edit_release};
 pub use layers::SideTab;
 pub use view_props::ViewField;
 pub use levels::{ExplorerTab, LevelForm};

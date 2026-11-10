@@ -848,7 +848,10 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
+        // the app knows whether the Modeller is shown: there an opened file's walls have grips
+        self.app.modeller.in_modeller = self.product() == Product::Modeller;
         let task = self.handle(message);
+        self.app.modeller.in_modeller = self.product() == Product::Modeller;
         self.keep_dev_session();
         task
     }
@@ -1970,6 +1973,22 @@ mod tests {
         studio.app.modeller.points = vec![glam::DVec3::new(10.0, 0.0, 0.0)];
         studio.app.modeller.cursor = Some(glam::DVec3::new(10.0, -4.0, 0.0));
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-placing-nl.png")).expect("snapshot");
+        // a wall of an opened Revit file: its grips in the Modeller, then taken over by a drag of
+        // its end, the project now an IFCX document
+        let mut app = App::default();
+        app.set_model(crate::app::revit_house());
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Modeller);
+        studio.app.modeller.in_modeller = true;
+        studio.app.click(Some(crate::selection::Pickable::Element(7)), false);
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-revit-wall-nl.png")).expect("snapshot");
+        let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(1))));
+        if let Some(g) = studio.app.modeller.edit.as_mut().and_then(|e| e.grab.as_mut()) {
+            g.delta = glam::DVec3::new(2.0, 0.0, 0.0);
+        }
+        let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_release())));
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-revit-taken-nl.png")).expect("snapshot");
     }
 
     /// The Library tab with a build-up and a steel profile picked, in every language:

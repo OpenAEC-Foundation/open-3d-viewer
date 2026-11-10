@@ -75,7 +75,7 @@ Cargo features say which products a build holds; binaries say which product a bu
 
 | | Viewer | Modeller | BIM Collaborator |
 | --- | --- | --- | --- |
-| Ribbon | **Start**: file, display, show, IFC, camera, selection, section, measure, more | **Model**: new, open, save; planar, linear, system, point, connection, modify. **View**: the Viewer's display, camera, section and measure groups | **Collaborate**: file (open, add), issues, check, comments, share. **View** |
+| Ribbon | **Start**: file, display, show, IFC, camera, selection, section, measure, more | **Model**: planar, linear, system, point, openings (door, window), connection, modify. **Project**: levels, views, sheets, library. **Annotate**: dimensions and texts in the plan or sheet shown. **View**: the Viewer's display, camera, section and measure groups (see `docs/superpowers/specs/2026-11-10-modeller-ribbon-design.md`) | **Collaborate**: file (open, add), issues, check, comments, share. **View** |
 | Left panel | Explorer: Model, Levels, Views | Explorer: Model, Levels, Views | Collaboration: the open models, issues, checks |
 | Right panel | Properties, Layers | Properties (the element's definition), Layers | Properties, Layers |
 | Start screen | Open a model | New model, or open one | Open the project's models |

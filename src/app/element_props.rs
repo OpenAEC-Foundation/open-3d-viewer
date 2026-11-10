@@ -47,8 +47,8 @@ pub enum ElementField {
 }
 
 /// A door's and a window's size and sill when added (metres).
-const DOOR: (f64, f64, f64) = (0.9, 2.1, 0.0);
-const WINDOW: (f64, f64, f64) = (1.2, 1.2, 0.9);
+pub(super) const DOOR: (f64, f64, f64) = (0.9, 2.1, 0.0);
+pub(super) const WINDOW: (f64, f64, f64) = (1.2, 1.2, 0.9);
 
 /// A number typed: metres (a comma or a point, `m` after it allowed), or degrees (`°` allowed).
 fn number(typed: &str) -> Option<f64> {

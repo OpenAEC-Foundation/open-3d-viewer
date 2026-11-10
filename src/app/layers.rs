@@ -412,7 +412,7 @@ pub(super) mod tests {
     }
 
     pub(in crate::app) fn shows(app: &App, wording: &str) -> bool {
-        let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view());
+        let mut ui = crate::app::test_ui(app, iced::Size::new(1400.0, 900.0));
         ui.find(wording).is_ok()
     }
 

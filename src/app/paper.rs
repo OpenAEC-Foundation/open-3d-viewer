@@ -1379,7 +1379,7 @@ mod tests {
         assert!(hi0[0] < lo1[0], "{hi0:?} {lo1:?}");
         assert!(lo0[0] >= 0.02 && hi1[0] <= 0.41 && lo0[1] >= 0.01 && hi0[1] <= 0.287, "{lo0:?} {hi1:?}");
         // the bar offers it while nothing is picked
-        let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1600.0, 900.0), app.view());
+        let mut ui = crate::app::test_ui(&app, iced::Size::new(1600.0, 900.0));
         assert!(ui.find("Arrange").is_ok());
     }
 

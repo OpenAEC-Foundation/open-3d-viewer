@@ -189,7 +189,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn simulator(app: &App) -> iced_test::Simulator<'_, Message> {
-        iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view())
+        crate::app::test_ui(app, iced::Size::new(1400.0, 900.0))
     }
 
     fn model(levels: &[(&str, f32)]) -> Arc<Model> {

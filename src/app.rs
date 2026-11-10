@@ -3827,9 +3827,39 @@ impl Palette {
     }
 }
 
+/// The interface of `app` at `size` in a test, laid out and drawn on the CPU (tiny-skia).
+///
+/// iced_test tries its wgpu renderer first. Then every test that builds the interface opened a
+/// device on the graphics card, dozens in parallel, and brought the graphics drivers, hundreds of
+/// threads of theirs and the overlays that hook into them into the test process; now and then
+/// the suite died on Windows with an access violation on a thread without a name, as theirs are.
+/// On the CPU no driver is loaded and the suite runs three times as fast. The GPU stays for the
+/// window and `--screenshot`.
+#[cfg(test)]
+pub(crate) fn test_ui(app: &App, size: iced::Size) -> iced_test::Simulator<'_, Message> {
+    static CPU: std::sync::Once = std::sync::Once::new();
+    // iced_test reads the variable for each simulator; all of them are made here
+    CPU.call_once(|| std::env::set_var("ICED_TEST_BACKEND", "tiny-skia"));
+    iced_test::Simulator::with_size(iced::Settings::default(), size, app.view())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_interface_in_tests_is_drawn_on_the_cpu() {
+        let dir = std::env::temp_dir().join(format!("o3v-test-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let app = App::default();
+        let mut ui = test_ui(&app, iced::Size::new(320.0, 200.0));
+        let snapshot = ui.snapshot(&iced::Theme::Light).expect("a snapshot");
+        // iced_test names the hash file after the renderer that drew it
+        snapshot.matches_hash(dir.join("ui")).expect("the hash is written");
+        let drawn_by: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.file_name()).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(drawn_by, [std::ffi::OsString::from("ui-tiny-skia.sha256")]);
+    }
 
     #[test]
     fn layer_groups_split_on_the_arrow() {
@@ -3840,7 +3870,7 @@ mod tests {
     }
 
     fn simulator(app: &App) -> iced_test::Simulator<'_, Message> {
-        iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view())
+        crate::app::test_ui(app, iced::Size::new(1400.0, 900.0))
     }
 
     #[test]

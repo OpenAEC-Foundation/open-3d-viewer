@@ -60,8 +60,12 @@ pub fn cad_document(d: &Drawing2d) -> Document {
             Align::Right => Some(TextHorizontalAlignment::Right),
         };
         if let Some(align) = align {
+            // aligned on `at`; the insertion point is where it starts, for a reader that does not
+            // align it again
+            let shift = if align == TextHorizontalAlignment::Center { t.width() / 2.0 } else { t.width() };
             text.horizontal_alignment = align;
             text.alignment_point = Some(mm(t.at));
+            text.insertion_point = mm([t.at[0] - shift, t.at[1]]);
         }
         let _ = doc.add_entity(EntityType::Text(text));
     }
@@ -72,7 +76,9 @@ pub fn cad_document(d: &Drawing2d) -> Document {
         let base = &mut aligned.base;
         base.style_name = STYLE.into();
         base.common.layer = Pen::Dimension.name().into();
-        base.text_middle_point = mm(dim.label().at);
+        // the middle of its text
+        let label = dim.label();
+        base.text_middle_point = mm([label.at[0], label.at[1] + label.height / 2.0]);
         // on paper a dimension measures the model, not the paper
         if d.space == Space::Paper {
             base.set_text_override(Some(dim.label().text));
@@ -159,6 +165,46 @@ mod tests {
             assert_eq!(layer.line_weight, LineWeight::Value(50), "{}", format.name());
             assert!(read.entities().any(|e| matches!(e, EntityType::Dimension(_))), "{}", format.name());
         }
+    }
+
+    #[test]
+    fn a_sheet_dimension_shows_the_model_length() {
+        let d = Drawing2d {
+            name: "A01".into(),
+            space: Space::Paper,
+            paper: Some([0.42, 0.297]),
+            lines: Vec::new(),
+            texts: Vec::new(),
+            dimensions: vec![Dim2d { from: [0.1, 0.1], to: [0.18, 0.1], value: 8.0, offset: 0.006, text_height: 0.0025 }],
+        };
+        for (bytes, format) in [(dwg(&d).unwrap(), &opencaddocument::Dwg as &dyn Format), (dxf(&d).unwrap(), &opencaddocument::Dxf)] {
+            let (read, _) = format.read(&bytes).unwrap();
+            let shown = read.entities().find_map(|e| match e {
+                EntityType::Dimension(dim) => Some(dim.base().text.clone()),
+                _ => None,
+            });
+            assert_eq!(shown.as_deref(), Some("8000"), "{}", format.name());
+        }
+    }
+
+    #[test]
+    fn texts_and_dimension_texts_stand_where_they_are_drawn() {
+        let mut d = drawing();
+        d.texts.push(Text2d { pen: Pen::Text, at: [8.0, 6.0], height: 0.25, text: "Noord".into(), align: Align::Right });
+        let doc = cad_document(&d);
+        let right = doc.entities().find_map(|e| match e {
+            EntityType::Text(t) if t.value == "Noord" => Some(t.clone()),
+            _ => None,
+        }).unwrap();
+        // aligned on its right end; its insertion point at its left end, about a text's width before
+        assert_eq!(right.alignment_point.map(|p| (p.x, p.y)), Some((8000.0, 6000.0)));
+        assert!(right.insertion_point.x < 8000.0 - 500.0 && right.insertion_point.x > 8000.0 - 2000.0, "{:?}", right.insertion_point);
+        let label = d.dimensions[0].label();
+        let middle = doc.entities().find_map(|e| match e {
+            EntityType::Dimension(dim) => Some(dim.base().text_middle_point),
+            _ => None,
+        }).unwrap();
+        assert!((middle.y - (label.at[1] + label.height / 2.0) * 1000.0).abs() < 1e-6, "{middle:?}");
     }
 
     #[test]

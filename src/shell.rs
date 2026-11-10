@@ -7,6 +7,7 @@
 use crate::app::{App, DocTab, Message, Status};
 use crate::b2::{large, small};
 use crate::measure::Tool;
+use crate::product::{Edition, Product, RibbonPage, PLANNED};
 use crate::theme::{Palette, ThemeKind};
 use crate::viewport::camera::ViewPreset;
 use crate::viewport::render::RenderMode;
@@ -27,10 +28,6 @@ use web_time::{Duration, Instant};
 
 /// Version: OpenAEC calendar versioning (year.ISO week.patch).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-const NAME: &str = "Open 3D Viewer Studio";
-/// The id of this app in the installer's catalogue, for the update notice (desktop only).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-const APP_ID: &str = "open-3d-viewer";
 const PANEL_MIN: f32 = 190.0;
 const PANEL_MAX: f32 = 520.0;
 const RECENT: usize = 8;
@@ -170,6 +167,8 @@ struct Prefs {
     left_width: f32,
     right_width: f32,
     recent: Vec<PathBuf>,
+    /// The product shown last.
+    product: Product,
 }
 
 impl Default for Prefs {
@@ -185,6 +184,7 @@ impl Default for Prefs {
             left_width: 260.0,
             right_width: 280.0,
             recent: Vec::new(),
+            product: Product::Viewer,
         }
     }
 }
@@ -279,6 +279,8 @@ pub enum Msg {
     /// The project tabs: show or close tab `i`.
     SelectProject(usize),
     CloseProject(usize),
+    /// The switch at the top right: show this product.
+    Product(Product),
     RibbonTab(usize),
     Backstage(bool),
     OpenRecent(PathBuf),
@@ -337,7 +339,11 @@ pub struct Studio {
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
-    /// The ribbon's tab shown: 0 Home, 1 Model.
+    /// What this build is (its name, its installer id), and the products it offers, in the order of
+    /// the switch; the switch shows with two or more.
+    edition: Edition,
+    products: Vec<Product>,
+    /// The ribbon's tab shown, of the product's [`Product::pages`].
     ribbon_tab: usize,
     /// A dev build started by `scripts/dev.ps1`: the open projects kept for its next start.
     dev: Option<DevSession>,
@@ -396,6 +402,8 @@ impl Studio {
             width: 1280.0,
             compact_panel: None,
             ribbon_folded: false,
+            edition: Edition::Studio,
+            products: Edition::Studio.products(),
             ribbon_tab: 0,
             dev: None,
         }
@@ -471,6 +479,51 @@ impl Studio {
             (false, Side::Left) => self.prefs.left,
             (false, Side::Right) => self.prefs.right,
         }
+    }
+
+    /// The product shown: the one chosen last, when this build offers it.
+    pub fn product(&self) -> Product {
+        if self.products.contains(&self.prefs.product) {
+            self.prefs.product
+        } else {
+            self.products.first().copied().unwrap_or_default()
+        }
+    }
+
+    /// Shows `product` (when this build offers it): its ribbon from its first tab, its panels and
+    /// its start screen, over the same projects. A modelling tool that was on goes off outside the
+    /// Modeller, in every project.
+    pub fn set_product(&mut self, product: Product) {
+        if !self.products.contains(&product) {
+            return;
+        }
+        if product != self.product() {
+            self.ribbon_tab = 0;
+        }
+        if product != Product::Modeller {
+            for app in std::iter::once(&mut self.app).chain(self.parked.iter_mut().map(|(_, a)| a)) {
+                if app.modeller.tool.is_some() {
+                    let _ = app.update(Message::ModelTool(None));
+                }
+            }
+        }
+        self.prefs.product = product;
+        self.backstage = false;
+        self.ribbon_folded = false;
+        self.save_prefs();
+    }
+
+    /// The ribbon tab shown.
+    fn ribbon_page(&self) -> RibbonPage {
+        let pages = self.product().pages();
+        pages[self.ribbon_tab.min(pages.len() - 1)]
+    }
+
+    /// A build of `edition`: the Studio, or one product alone.
+    pub fn with_edition(mut self, edition: Edition) -> Self {
+        self.edition = edition;
+        self.products = edition.products();
+        self
     }
 
     /// Reads the preferences and own shortcuts in `dir`, and keeps them there.
@@ -700,6 +753,17 @@ impl Studio {
             };
             list.push(Command::new(id, tool.label(l), go(Message::Measure(tool))).icon(small(icon), large(icon)).mode(app.measure.tool == Some(tool)).enabled(loaded));
         }
+        // the switch at the top right; no shortcuts of their own until one is set
+        let shown = self.product();
+        for &product in &self.products {
+            list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
+        }
+        // the Collaborator's commands to come: in its ribbon, not working yet (the message is
+        // never sent)
+        for planned in PLANNED {
+            let detail = format!("{} ({})", planned.label(l), l.text("volgt", "to come"));
+            list.push(Command::new(planned.id, planned.label(l), Msg::Dialog(None)).icon(small(planned.icon), large(planned.icon)).enabled(false).detail(&detail));
+        }
         list
     }
 
@@ -836,6 +900,7 @@ impl Studio {
                 }
             }
             Msg::CloseProject(i) => self.close_project(i),
+            Msg::Product(product) => self.set_product(product),
             // choosing a ribbon tab closes Bestand; in the compact layout choosing the tab shown
             // folds the ribbon away and back
             Msg::RibbonTab(tab) => {
@@ -1041,8 +1106,8 @@ impl Studio {
 
     pub fn title(&self) -> String {
         let title = match &self.app.model {
-            Some(m) => format!("{} · {NAME}", m.file_name()),
-            None => NAME.into(),
+            Some(m) => format!("{} · {}", m.file_name(), self.edition.name()),
+            None => self.edition.name().into(),
         };
         match self.dev.as_ref().and_then(|d| d.label.as_deref()) {
             Some(label) => format!("{title} · {label}"),
@@ -1074,7 +1139,8 @@ impl Studio {
         let look = self.look();
         let l = self.l();
         let c = look.color;
-        let tabs = [l.text("Start", "Home"), l.text("Modelleren", "Model")];
+        // the ribbon's tabs are the product's
+        let tabs: Vec<&str> = self.product().pages().iter().map(|p| p.label(l)).collect();
         let mut left = vec![self.status_text()];
         let selected = self.app.selection.len() + self.app.structural.selected.len();
         if selected > 0 {
@@ -1084,10 +1150,10 @@ impl Studio {
         let folded = compact && self.ribbon_folded;
         let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
         // a phone has no room for the version, and the web app has no remote control
-        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{NAME} {VERSION}")]), self.mcp_lamp(look)].into() };
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{} {VERSION}", self.edition.name())]), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
-            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { self.ribbon_tab }, Msg::RibbonTab),
+            w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { self.ribbon_tab.min(tabs.len() - 1) }, Msg::RibbonTab),
             // Bestand takes the place of the ribbon and the documents until it closes
             if self.backstage { self.backstage_view(look) } else { column![ribbon, self.document_area(look)].into() },
             status,
@@ -1141,6 +1207,10 @@ impl Studio {
             extra.push(cm::icon_button(look, &self.command("view.left"), 28.0));
             extra.push(cm::icon_button(look, &self.command("view.right"), 28.0));
         }
+        // the products, at the top right
+        if self.products.len() > 1 {
+            extra.push(self.product_switch(look));
+        }
         extra.push(cm::icon_button(look, &self.command("app.settings"), 28.0));
         let name = self.title();
         #[cfg(not(target_arch = "wasm32"))]
@@ -1164,6 +1234,47 @@ impl Studio {
         }
     }
 
+    /// The switch between the products of this build: a segment per product, the one shown marked.
+    /// A phone has room for one button: the product shown, which moves on to the next.
+    fn product_switch(&self, look: Look) -> Element<'_, Msg> {
+        use iced::widget::{button, text};
+        use openaec_ui::design::a11y::{self, Node, Role};
+        use openaec_ui::design::tokens::{font, radius};
+        let l = self.l();
+        let c = look.color;
+        let shown = self.product();
+        let segment = move |product: Product, on: bool, message: Msg| -> Element<'_, Msg> {
+            let label = text(product.label()).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(if on { c.text } else { c.text_secondary });
+            let control = button(container(label).height(Length::Fill).align_y(iced::alignment::Vertical::Center))
+                .height(22)
+                .padding([0, 10])
+                .on_press(message)
+                .style(move |_, status| button::Style {
+                    snap: false,
+                    background: if on {
+                        Some(c.selected.into())
+                    } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                        Some(c.hover.into())
+                    } else {
+                        None
+                    },
+                    text_color: c.text,
+                    border: iced::Border { color: if on { c.accent } else { iced::Color::TRANSPARENT }, width: if on { 1.0 } else { 0.0 }, radius: (radius::MEDIUM - 2.0).into() },
+                    shadow: iced::Shadow::default(),
+                });
+            a11y::node(focus::focusable(look, control, true, radius::MEDIUM - 2.0), Node::new(Role::Tab, product.label()).selected(on))
+        };
+        if self.compact() {
+            let next = self.products[(self.products.iter().position(|&p| p == shown).unwrap_or(0) + 1) % self.products.len()];
+            return w::with_tooltip(look, segment(shown, true, Msg::Product(next)), next.purpose(l), None);
+        }
+        let segments = self.products.iter().map(|&p| w::with_tooltip(look, segment(p, p == shown, Msg::Product(p)), p.purpose(l), None));
+        container(row(segments).spacing(2).align_y(iced::Alignment::Center))
+            .padding(2)
+            .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
+            .into()
+    }
+
     fn ribbon(&self, look: Look) -> Element<'_, Msg> {
         let l = self.l();
         let large = |id: &str| cm::ribbon_large(look, &self.command(id));
@@ -1171,35 +1282,50 @@ impl Studio {
         // One tab: the main command of a group large, the rest small in columns of three
         let tools: Vec<&str> = Tool::ALL.iter().map(|t| Self::tool_id(*t)).collect();
         let (first_tools, more_tools) = tools.split_at(3.min(tools.len()));
-        let mut measure = vec![smalls(first_tools)];
-        if !more_tools.is_empty() {
-            measure.push(smalls(more_tools));
-        }
-        measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
-        let groups = if self.ribbon_tab == 1 {
+        // the Viewer's tools, also the View tab of the Modeller and the Collaborator
+        let view_groups = || {
+            let mut measure = vec![smalls(first_tools)];
+            if !more_tools.is_empty() {
+                measure.push(smalls(more_tools));
+            }
+            measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
+            vec![
+                w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
+                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
+                w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
+                w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+                w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
+                w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
+                w::ribbon_group(look, l.text("Meten", "Measure"), measure),
+                w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
+            ]
+        };
+        let groups = match self.ribbon_page() {
+            RibbonPage::Home => {
+                let mut groups = vec![w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                groups.extend(view_groups());
+                groups
+            }
+            RibbonPage::View => view_groups(),
             // the five base elements: planar (wall, slab), linear (column, beam), system, point;
             // connection joins two selected linear elements
-            vec![
-                w::ribbon_group(look, l.text("Model", "Model"), vec![large("model.new"), smalls(&["file.save-as"])]),
+            RibbonPage::Model => vec![
+                w::ribbon_group(look, l.text("Model", "Model"), vec![large("model.new"), smalls(&["file.open", "file.save-as"])]),
                 w::ribbon_group(look, l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
                 w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
-            ]
-        } else {
-            vec![
-            w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])]),
-            w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
-            w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.flip-up"])]),
-            w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
-            w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
-            w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
-            w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
-            w::ribbon_group(look, l.text("Meten", "Measure"), measure),
-            w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
-            ]
+            ],
+            // the project's models together; issues, checks, comments and sharing to come
+            RibbonPage::Collaborate => vec![
+                w::ribbon_group(look, l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                w::ribbon_group(look, l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
+                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids"])]),
+                w::ribbon_group(look, l.text("Opmerkingen", "Comments"), vec![large("collaborate.comment")]),
+                w::ribbon_group(look, l.text("Delen", "Share"), vec![large("collaborate.share")]),
+            ],
         };
         if self.compact() {
             // narrower than the ribbon: it scrolls sideways (a finger drags it)
@@ -1258,7 +1384,7 @@ impl Studio {
         };
         let about = t::info_card(
             look,
-            NAME,
+            self.edition.name(),
             vec![
                 (l.text("Versie", "Version"), VERSION.to_string()),
                 (l.text("Licentie", "License"), "LGPL-3.0".to_string()),
@@ -1284,16 +1410,33 @@ impl Studio {
         let p = palette(look);
         let app = &self.app;
         let workspace: Element<'_, Msg> = if app.model.is_none() && !matches!(app.status, Status::Loading { .. }) {
-            // open a model, or start an empty project to model in
-            let open = cm::button(look, &self.command("file.open"), K::Primary, D::Regular);
-            let new = cm::button(look, &self.command("file.new"), K::Secondary, D::Regular);
-            container(w::empty_state(
-                look,
-                large("project.folder"),
-                l.text("Geen model geopend", "No model open"),
-                formats_hint(l),
-                Some(row![open, new].spacing(8).into()),
-            ))
+            // each product starts its own way: open a model, make one, or open the project's
+            let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
+            let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
+                Product::Viewer => (
+                    "project.folder",
+                    l.text("Geen model geopend", "No model open"),
+                    formats_hint(l),
+                    // open a model, or start an empty project to model in
+                    row![open(K::Primary), cm::button(look, &self.command("file.new"), K::Secondary, D::Regular)].spacing(8).into(),
+                ),
+                Product::Modeller => (
+                    "object.add",
+                    l.text("Nog geen model", "No model yet"),
+                    l.text("Begin een nieuw model, of open een IFCX-bestand om verder te modelleren.", "Start a new model, or open an IFCX file to model on."),
+                    row![cm::button(look, &self.command("model.new"), K::Primary, D::Regular), open(K::Secondary)].spacing(8).into(),
+                ),
+                Product::Collaborator => (
+                    "team.add",
+                    l.text("Geen modellen geopend", "No models open"),
+                    l.text(
+                        "Open de modellen van het project om ze samen te bekijken, te controleren en issues af te spreken.",
+                        "Open the project's models to look at them together, check them and agree on issues.",
+                    ),
+                    open(K::Primary),
+                ),
+            };
+            container(w::empty_state(look, large(icon), title, explanation, Some(action)))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(move |_| container::Style { background: Some(look.color.workspace.into()), ..Default::default() })
@@ -1332,7 +1475,8 @@ impl Studio {
                 Some(Side::Left) => {
                     let hide = l.text("Verkenner verbergen", "Hide explorer");
                     let actions = vec![w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft))];
-                    w::panel(look, l.text("Verkenner", "Explorer"), width, actions, Self::pane(app.explorer_body(p, l)))
+                    let (title, body) = self.left_panel(look);
+                    w::panel(look, title, width, actions, body)
                 }
                 Some(Side::Right) => {
                     let hide = l.text("Eigenschappen verbergen", "Hide properties");
@@ -1347,8 +1491,9 @@ impl Studio {
         if self.prefs.left {
             let hide = l.text("Verkenner verbergen", "Hide explorer");
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft)), hide, Some(self.command("view.left").shortcut_label().unwrap_or("")))];
+            let (title, content) = self.left_panel(look);
             body = body
-                .push(w::panel(look, l.text("Verkenner", "Explorer"), self.prefs.left_width, actions, Self::pane(app.explorer_body(p, l))))
+                .push(w::panel(look, title, self.prefs.left_width, actions, content))
                 .push(ch::splitter(look, dragging(Side::Left), Msg::SplitterPress(Side::Left)));
         }
         body = body.push(middle);
@@ -1360,6 +1505,20 @@ impl Studio {
                 .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, Self::pane(app.properties_body(p, l))));
         }
         body.into()
+    }
+
+    /// The left panel of the product shown, with its title: the explorer, or in the Collaborator
+    /// the project's models, issues and checks.
+    fn left_panel(&self, look: Look) -> (&'static str, Element<'_, Msg>) {
+        let l = self.l();
+        match self.product() {
+            Product::Collaborator => {
+                let models: Vec<&str> = self.app.models.iter().map(|m| m.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D")).collect();
+                let body = container(crate::product::collaboration_panel(look, l, models)).padding([4, 8]).width(Length::Fill).height(Length::Fill);
+                (l.text("Samenwerken", "Collaboration"), body.into())
+            }
+            Product::Viewer | Product::Modeller => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+        }
     }
 
     /// The viewer's content of a side panel, clear of the panel's edges.
@@ -1498,7 +1657,7 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool)
     fonts::install_fallback();
     // the installer reports updates; the app only shows them, and not in managed mode
     #[cfg(not(target_arch = "wasm32"))]
-    let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(APP_ID, VERSION) }, ..studio };
+    let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(studio.edition.app_id(), VERSION) }, ..studio };
     let initial = std::sync::Mutex::new(Some(studio));
     let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
         .title(Studio::title)
@@ -1780,7 +1939,7 @@ mod tests {
             app.select_modelled(bim_core::ElementId(2));
             let mut studio = Studio::new(app);
             studio.prefs.language = l;
-            studio.ribbon_tab = 1;
+            studio.set_product(Product::Modeller);
             let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Wall, "Wall")))));
             studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("modeller-{}.png", l.code()))).expect("snapshot");
         }
@@ -1824,6 +1983,27 @@ mod tests {
         }
     }
 
+    /// The three products, empty and with the demo building: target/shell-renders/product-*.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_product_renders() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        for product in Product::ALL {
+            for model in [false, true] {
+                let mut app = App::default();
+                if model {
+                    app.add_demo_building();
+                }
+                let mut studio = Studio::new(app);
+                studio.prefs.language = Language::Dutch;
+                studio.set_product(product);
+                let name = format!("product-{}{}.png", product.key(), if model { "" } else { "-leeg" });
+                studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(name)).expect("snapshot");
+            }
+        }
+    }
+
     #[test]
     fn every_setting_has_a_name_in_every_language() {
         for i in 0..LANGUAGES {
@@ -1853,7 +2033,7 @@ mod tests {
     #[test]
     fn every_control_has_a_name_in_every_view() {
         let mut studio = Studio::new(App::default());
-        studio.update = Some(Available { app: APP_ID.into(), current: VERSION.into(), latest: "2099.1.0".into(), page_url: None, installer: None });
+        studio.update = Some(Available { app: studio.edition.app_id().into(), current: VERSION.into(), latest: "2099.1.0".into(), page_url: None, installer: None });
         for (backstage, dialog, page) in [(false, None, SettingsPage::General), (true, None, SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::General), (false, Some(Dialog::Settings), SettingsPage::Shortcuts), (false, Some(Dialog::DesktopOnly("Revit")), SettingsPage::General)] {
             studio.backstage = backstage;
             studio.dialog = dialog;
@@ -1861,6 +2041,99 @@ mod tests {
             let unnamed = accessibility(&studio).unnamed;
             assert!(unnamed.is_empty(), "unnamed controls with backstage {backstage}, dialog {dialog:?}, {page:?}: {unnamed:?}");
         }
+        // every product's ribbon tabs and panels, also in the compact layout
+        studio.dialog = None;
+        studio.backstage = false;
+        for width in [1280.0, 400.0] {
+            studio.width = width;
+            for product in Product::ALL {
+                studio.set_product(product);
+                for tab in 0..product.pages().len() {
+                    studio.ribbon_tab = tab;
+                    let unnamed = accessibility(&studio).unnamed;
+                    assert!(unnamed.is_empty(), "unnamed controls in {product:?}, tab {tab}, width {width}: {unnamed:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_switch_at_the_top_right_shows_each_product_with_its_own_ribbon() {
+        let mut studio = Studio::new(App::default());
+        assert_eq!(studio.product(), Product::Viewer);
+        let tabs = |studio: &Studio| -> Vec<String> { accessibility(studio).summary().into_iter().filter(|n| n.starts_with("Tab: ")).collect() };
+        // the switch names the three products; the Viewer's ribbon has one tab, without modelling
+        let shown = tabs(&studio);
+        for product in Product::ALL {
+            assert!(shown.contains(&format!("Tab: {}", product.label())), "{shown:?}");
+        }
+        assert!(shown.contains(&"Tab: Home".to_string()) && !shown.contains(&"Tab: Model".to_string()), "{shown:?}");
+        let _ = studio.update(Msg::Product(Product::Modeller));
+        assert_eq!((studio.product(), studio.ribbon_page()), (Product::Modeller, RibbonPage::Model));
+        assert!(tabs(&studio).contains(&"Tab: View".to_string()));
+        let _ = studio.update(Msg::RibbonTab(1));
+        assert_eq!(studio.ribbon_page(), RibbonPage::View);
+        // another product opens on its first tab
+        let _ = studio.update(Msg::Product(Product::Collaborator));
+        assert_eq!(studio.ribbon_page(), RibbonPage::Collaborate);
+        assert_eq!(studio.left_panel(studio.look()).0, "Collaboration");
+        // the commands to come are there but do nothing yet; the switch marks the product shown
+        let commands = studio.default_commands();
+        for planned in PLANNED {
+            assert!(commands.iter().any(|c| c.id == planned.id && !c.enabled), "{}", planned.id);
+        }
+        assert!(commands.iter().any(|c| c.id == Product::Collaborator.command() && c.kind == openaec_ui::design::command::CommandKind::Mode(true)));
+    }
+
+    #[test]
+    fn leaving_the_modeller_ends_its_tool_in_every_project() {
+        use crate::app::modeller::ModelTool;
+        let mut studio = Studio::new(App::default());
+        let _ = studio.update(Msg::Product(Product::Modeller));
+        let _ = studio.update(Msg::App(Message::NewModel("Level 0")));
+        let _ = studio.update(Msg::App(Message::ModelTool(Some((ModelTool::Wall, "Wall")))));
+        // a second project with a tool on, then back to the first
+        let _ = studio.update(Msg::App(Message::NewModel("Level 0")));
+        let _ = studio.update(Msg::App(Message::ModelTool(Some((ModelTool::Beam, "Beam")))));
+        assert_eq!(studio.tabs.len(), 2);
+        let _ = studio.update(Msg::SelectProject(0));
+        assert!(studio.app.modeller.tool.is_some());
+        let _ = studio.update(Msg::Product(Product::Viewer));
+        assert!(studio.app.modeller.tool.is_none());
+        assert!(studio.parked.iter().all(|(_, a)| a.modeller.tool.is_none()));
+        // the project and its model stay
+        assert!(studio.app.model.is_some());
+    }
+
+    #[test]
+    fn the_product_chosen_last_shows_at_the_next_start() {
+        let dir = std::env::temp_dir().join(format!("o3v-products-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut studio = Studio::new(App::default()).with_settings_in(dir.clone());
+        studio.set_product(Product::Collaborator);
+        let again = Studio::new(App::default()).with_settings_in(dir.clone());
+        assert_eq!(again.product(), Product::Collaborator);
+        let _ = std::fs::remove_dir_all(&dir);
+        // older preferences have no product: the Viewer
+        let prefs: Prefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert_eq!(prefs.product, Product::Viewer);
+    }
+
+    #[test]
+    fn a_build_of_one_product_shows_it_without_the_switch() {
+        let mut studio = Studio::new(App::default());
+        studio.products = vec![Product::Modeller];
+        // what the preferences say does not count when the build lacks it
+        assert_eq!(studio.product(), Product::Modeller);
+        studio.set_product(Product::Viewer);
+        assert_eq!(studio.product(), Product::Modeller);
+        let names = accessibility(&studio).summary();
+        assert!(!names.iter().any(|n| n == "Tab: Viewer" || n == "Tab: BIM Collaborator"), "{names:?}");
+        assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
+        // a product binary: its own name in the title and About
+        let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
+        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, "Open BIM Collaborator".to_string()));
+        assert_eq!(Studio::new(App::default()).title(), "Open 3D Viewer Studio");
     }
 
     #[test]

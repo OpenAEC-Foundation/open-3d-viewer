@@ -460,6 +460,9 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
         SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
     };
     list = list.push(line(&t.members.material, format!("{members}: {} {}", material(&t.members.material), size(t.members.width, t.members.depth))));
+    if let Some(framing) = t.members.framing {
+        list = list.push(small(format!("{} {} · {} {}", l.text("Onderregels", "Bottom plates"), framing.bottom_plates, l.text("bovenregels", "top plates"), framing.top_plates), p));
+    }
     list = list.push(line(&t.panels.material, format!("{}: {} {}", l.text("Panelen", "Panels"), material(&t.panels.material), mm(t.panels.thickness, l))));
     for layer in &t.layers {
         let sign = if layer.offset < 0.0 { "−" } else { "+" };
@@ -878,11 +881,21 @@ mod tests {
         let face = elevation(app.library.system_type("system.masonry-waal-stretcher").unwrap(), &app.library, Color::BLACK);
         let bricks = face.rects.iter().filter(|(_, c)| *c == [205, 140, 115]).count();
         assert_eq!(bricks, 4 * 6 + 4 * 7);
-        // a timber frame's section: OSB, mineral wool, gypsum board, from the exterior in
-        let frame = app.library.system_type("system.timber-frame-140").unwrap();
-        let section = system_section(frame, &app.library, Color::BLACK);
+        // a timber frame's section from the exterior in: the breather membrane, the frame, plywood,
+        // the vapour control layer, the service zone, gypsum board
+        let frame = app.library.system_type("system.timber-frame-140").unwrap().clone();
+        let section = system_section(&frame, &app.library, Color::BLACK);
         let thick: Vec<String> = section.bands.iter().map(|b| format!("{:.4}", b.0)).collect();
-        assert_eq!(thick, ["0.0180", "0.1400", "0.0125"]);
+        assert_eq!(thick, ["0.0005", "0.1400", "0.0180", "0.0002", "0.0450", "0.0125"]);
+        drop(ui);
+        click(&mut app, "Timber frames");
+        click(&mut app, "Timber frame 38×140 c/c 600");
+        let mut ui = simulator(&app);
+        assert!(ui.find("Bottom plates 1 · top plates 1").is_ok());
+        // its face: the plates through, studs between them
+        let face = elevation(&frame, &app.library, Color::BLACK);
+        let timber = face.rects.iter().filter(|(_, c)| *c == [205, 165, 115]).map(|(r, _)| r[2] - r[0]).fold(0.0, f64::max);
+        assert!((timber - face.size[0]).abs() < 1e-9, "a plate as long as the face");
     }
 
     #[test]
@@ -897,13 +910,15 @@ mod tests {
         assert!(app.assignable_systems("system.ceiling-600x600").is_empty(), "a lying type does not fit an upright system");
         assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
         assert_eq!(app.selected_modelled(), vec![id], "it stays selected");
-        // studs at 600 with the plates between them, mineral wool, OSB and gypsum boards of 1200
+        // the frame's plates and studs at 600 and the service zone's battens, mineral wool in both,
+        // plywood and gypsum boards of 1200, the membranes in courses of 1.5 m
         let parts = app.modeller.model.evaluate(id).unwrap();
         let count = |m: &str| parts.iter().filter(|p| p.material.as_deref() == Some(m)).count();
-        assert_eq!((count("timber"), count("mineral-wool"), count("osb"), count("gypsum-board")), (13, 4, 2, 2));
+        assert_eq!((count("timber"), count("mineral-wool"), count("plywood"), count("gypsum-board")), (2 * 7, 2 * 4, 2, 2));
+        assert_eq!((count("breather-membrane"), count("vapour-control-membrane")), (2, 2));
         let scene = super::super::modeller::viewer_model(&app.modeller.model, &[], &app.library);
         let colours: HashSet<[u8; 4]> = scene.layers[0].colors.as_ref().unwrap().iter().copied().collect();
-        assert!(colours.contains(&[214, 182, 128, 255]) && colours.contains(&[240, 240, 236, 255]), "{colours:?}");
+        assert!(colours.contains(&[222, 196, 150, 255]) && colours.contains(&[240, 240, 236, 255]), "{colours:?}");
         let props = scene.element_props(id.0);
         let prop = |k: &str| props.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
         assert_eq!(prop("Type").as_deref(), Some("Timber frame 38×140 c/c 600"));

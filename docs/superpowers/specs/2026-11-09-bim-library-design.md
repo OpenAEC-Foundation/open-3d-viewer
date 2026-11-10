@@ -225,8 +225,8 @@ There are two kinds of system in Open BIM Studio, and both are asked for:
   members or none, and panels;
 - for a floor or a ceiling, how high above its level it lies.
 
-The 21 starter types are Open BIM Studio's recipes with generic names: three curtain walls, three
-frames, two timber frames with OSB outside and gypsum board inside, three brick bonds, sand-lime
+The 26 starter types are Open BIM Studio's recipes with generic names: three curtain walls, three
+frames, seven timber frames from its catalogue (below), three brick bonds, sand-lime
 elements, zinc, timber and HPL cladding, five hollow-core floors and a 600×600 ceiling. Its window
 layouts (casement, tilt-turn, sliding) need a frame hosted in a wall opening with its leaves, and
 come later. A type is named by rule, after its members when it is framed ("Vliesgevel aluminium
@@ -256,9 +256,35 @@ types by what they make, as build-ups. In IFCX a type is a node of its group's t
   ordinary join element.
 - Lying systems need a domain that lies (an outline and a height), and come after upright ones.
 
-What the first vertical slice of the systems should be is still a decision for the project
-owner. Open BIM Studio's design proposes a suspended ceiling first, then a timber-frame wall with a
-window.
+### The first full system: the timber frame
+
+The project owner chose the timber frame (houtskeletbouw) as the first system to work out fully.
+It follows the HSB family of Open BIM Studio's building-systems catalogue, which goes beyond its
+live recipes (studs at 600 with OSB outside and gypsum board inside):
+
+- **The frame** (built). A type's members can be *framed* (`bim_library::Framing`): the plates
+  along the foot and the head run through, the studs stand between them, one at either end and
+  one at every bay's centre from the start, and noggins stand between the studs at every row up
+  from the foot. The frame lies inside the system's face, square cut. A line on an edge member
+  needs no member of its own; a stud or noggin that would overlap an edge member stands against
+  it. Mineral wool fills the cells.
+- **The layers** (built), from the outside in: a breather membrane, the frame with its insulation,
+  plywood, a vapour control layer, a service zone (45×45 battens framed at the studs' centres,
+  mineral wool between them) and gypsum board. A layer without members lays whole boards (or
+  courses of a roll) from the face's start and foot, the last ones cut, rather than dividing the
+  face equally. The boards are two bays wide and as high as the frame's rows, so every seam has
+  timber behind it (Open BIM Studio's "supported board edges" rule).
+- **The types** (built): studs 38 wide and 140, 184 or 235 deep at 600 or 610 centres, and an
+  interior wall 38×89 at 600 with gypsum board on either face, as in the catalogue.
+- **Openings** (next): a system gets openings, as a wall has. A framed face frames each one: king
+  studs either side, trimmers carrying a header, a sill under a window, cripple studs at the
+  regular centres above and below; the insulation stops, the boards are cut around it into
+  rectangles. The right pane adds a door or a window to a system.
+- **Prefab units** (then): a type's largest unit (3300 in the catalogue); a system is split into
+  units with their joints outside the openings, an end stud on either side of each joint, and
+  boards that do not cross one.
+- **Later**: membrane laps and returns, a layer left out on one system (no interior lining), a
+  stock list (stud lengths, boards, rolls), and corners where two timber-frame systems meet.
 
 ## Delivery
 
@@ -276,8 +302,9 @@ Small PRs, each with tests, each visible where it can be:
 5. **System types** in the library: the generator's recipes, the starter types, their IFCX form.
 6. **The system generator in the kernel and the Library tab**: typed systems with running bonds,
    layers and materials, drawn in the tab and assigned to selected systems.
-7. **Joints in systems** with `bim_core::join`, then lying systems, frames in openings and the
-   first full slice the project owner chooses.
+7. **Joints in systems** with `bim_core::join`, then lying systems and frames in openings.
+8. **The timber frame worked out** ([above](#the-first-full-system-the-timber-frame)): the frame
+   and its layers, then openings, then prefab units, each its own PR.
 
 ## Calls made in writing this design
 
@@ -304,6 +331,12 @@ The author made these calls, not the project owner. They are open to correction.
   zinc is 0.8 mm, as its recipe's name says.
 - A frame (kozijn) type is an IfcWindowType and a timber frame or masonry type an IfcWallType;
   the exchange's owner may choose other classes.
+- The timber frames take the catalogue's build-up (plywood inside, a breather membrane outside)
+  rather than the live recipes' OSB outside, under the same ids. The catalogue gives the membranes
+  no thickness: they are 0.5 mm (breather) and 0.2 mm (vapour control), in rolls 1.5 m wide and
+  50 m long, laps left out. Boards are 1200×3000 at 600 centres and 1220×2440 at 610; the service
+  battens are 45×45; one bottom and one top plate; the interior wall has mineral wool too. All are
+  authoring examples, as the catalogue says, not checked structural or building-physics values.
 
 ## Questions for the project owner
 

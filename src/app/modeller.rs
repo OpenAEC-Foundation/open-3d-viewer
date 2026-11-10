@@ -339,6 +339,7 @@ impl App {
         if let Some((last, start)) = joined {
             self.move_wall_end(last, start);
         }
+        let name = self.placed_name(tool, name);
         match self.add_element(name, level, shape) {
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];

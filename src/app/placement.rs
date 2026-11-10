@@ -262,6 +262,19 @@ impl App {
         placement.set(tool, s);
     }
 
+    /// The name of what `tool`, named `name`, places next. A system drawn with a type is named
+    /// after the type's group (a timber frame, masonry, cladding), in the language the tool is
+    /// named in; anything else after its tool.
+    pub(super) fn placed_name(&self, tool: ModelTool, name: &'static str) -> &'static str {
+        let kind = self.modeller.placement.of(tool).kind;
+        let group = kind.as_deref().and_then(|id| self.library.system_type(id)).map(|t| t.group);
+        let language = Language::ALL.into_iter().find(|&l| tool.label(l) == name);
+        match (tool, group, language) {
+            (ModelTool::System, Some(group), Some(l)) => group.name(super::library::lang(l)),
+            _ => name,
+        }
+    }
+
     /// The axis of the wall the Wall tool places on the line from `a` to `b` (scene coordinates):
     /// moved to its location line, and, chained to a wall placed on a face before, starting
     /// where the two axes cross.
@@ -299,7 +312,10 @@ impl App {
         let mut bar = Row::new().spacing(8).align_y(Center).push(text(tool.label(l)).size(12).color(p.text));
         if let Some(choices) = self.kinds(tool, l) {
             let picked = choices.iter().find(|c| c.id == s.kind).cloned();
-            let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Kind(c.id))).text_size(12).padding([2, 6]).width(180);
+            let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Kind(c.id))).text_size(12).padding([2, 6]);
+            // a system type's name ends with what tells it from the next (its centres, its
+            // bond), so its list is as wide as its longest name
+            let pick = if tool == ModelTool::System { pick } else { pick.width(180) };
             bar = bar.push(label(l.text("Type", "Type"))).push(pick);
         }
         let typing = self.modeller.placement.typing.clone();
@@ -485,6 +501,105 @@ mod tests {
         let o = wall(&app, 2).openings;
         assert_eq!(o.len(), 1);
         assert_eq!((o[0].sill, o[0].width), (0.6, 1.5));
+    }
+
+    fn system(app: &App, id: u64) -> bim_core::SystemDef {
+        let Shape::System(s) = app.modeller.model.get(ElementId(id)).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
+        s
+    }
+
+    #[test]
+    fn a_system_type_picked_in_the_strip_is_what_the_tool_draws() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::System, "Curtain wall")));
+        // generic first, then the upright types under their own names: a ceiling is not drawn as a wall
+        let kinds = app.kinds(ModelTool::System, Language::English).unwrap();
+        assert!(kinds[0].id.is_none());
+        let timber = kinds.iter().find(|k| k.id.as_deref() == Some("system.timber-frame-140")).expect("a timber frame");
+        assert!(timber.name.starts_with("Timber frame") && timber.name.ends_with("600"), "{}", timber.name);
+        assert!(app.library.system_type("system.ceiling-600x600").is_some());
+        assert!(kinds.iter().all(|k| k.id.as_deref() != Some("system.ceiling-600x600")));
+        let names: std::collections::HashSet<&str> = kinds.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names.len(), kinds.len(), "each type is told from the others by its name");
+        // the type picked is what the cursor shows and what the second click places
+        place(&mut app, PlaceMessage::Kind(Some("system.timber-frame-140".into())));
+        click(&mut app, 0.0, 0.0);
+        let (sx, sy) = app.on_screen(DVec3::new(4.8, 0.0, 0.0), 1000.0, 800.0).unwrap();
+        let _ = app.update(Message::Navigate(Navigate::Hover { x: sx, y: sy, width: 1000.0, height: 800.0 }));
+        let Some(Shape::System(preview)) = app.placing() else { panic!() };
+        assert_eq!(preview.system_type.as_ref().map(|t| t.id.as_str()), Some("system.timber-frame-140"));
+        click(&mut app, 4.8, 0.0);
+        let frame = system(&app, 1);
+        assert_eq!(frame.system_type.as_ref().map(|t| t.id.as_str()), Some("system.timber-frame-140"));
+        assert_eq!((frame.start, frame.end), (DVec2::ZERO, DVec2::new(4.8, 0.0)));
+        // it is named after what it is, the generic one after its tool
+        assert_eq!(app.modeller.model.get(ElementId(1)).unwrap().name, "Timber frame 1");
+        place(&mut app, PlaceMessage::Chain(false));
+        place(&mut app, PlaceMessage::Kind(None));
+        click(&mut app, 0.0, 6.0);
+        click(&mut app, 4.8, 6.0);
+        assert!(system(&app, 2).system_type.is_none());
+        assert_eq!(app.modeller.model.get(ElementId(2)).unwrap().name, "Curtain wall 2");
+        // the frame's studs, plates and layers are its type's: far more than a generic grid as long
+        let parts = |id| app.modeller.model.evaluate(ElementId(id)).unwrap().len();
+        assert!(parts(1) > parts(2), "{} {}", parts(1), parts(2));
+    }
+
+    #[test]
+    fn timber_frames_drawn_with_the_tool_make_their_corners_and_t_junctions() {
+        use bim_core::system::{corners, tees};
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::System, "Vliesgevel")));
+        place(&mut app, PlaceMessage::Kind(Some("system.timber-frame-140".into())));
+        // chained: the second starts where the first ends, and there they make a corner
+        for (x, y) in [(0.0, 0.0), (4.8, 0.0), (4.8, 3.6)] {
+            click(&mut app, x, y);
+        }
+        let model = &app.modeller.model;
+        assert_eq!(model.len(), 2);
+        assert_eq!(corners(model, model.get(ElementId(1)).unwrap())[1].map(|m| m.with), Some(ElementId(2)));
+        assert_eq!(corners(model, model.get(ElementId(2)).unwrap())[0].map(|m| m.with), Some(ElementId(1)));
+        // named in the language the tool is named in
+        assert_eq!(model.get(ElementId(2)).unwrap().name, "Houtskeletbouw 2");
+        // an inner wall of another type, drawn from the first one's side, stands against it
+        place(&mut app, PlaceMessage::Chain(false));
+        place(&mut app, PlaceMessage::Kind(Some("system.timber-frame-internal-89".into())));
+        click(&mut app, 2.4, 0.0);
+        click(&mut app, 2.4, 3.0);
+        let model = &app.modeller.model;
+        assert_eq!(system(&app, 3).system_type.map(|t| t.id), Some("system.timber-frame-internal-89".to_string()));
+        assert_eq!(tees(model, model.get(ElementId(3)).unwrap()).ends, [Some(ElementId(1)), None]);
+        let against: Vec<ElementId> = tees(model, model.get(ElementId(1)).unwrap()).sides.iter().map(|a| a.with).collect();
+        assert_eq!(against, [ElementId(3)]);
+    }
+
+    #[test]
+    fn a_placed_element_is_named_after_its_tool_unless_a_system_type_says_what_it_is() {
+        let mut app = modelling();
+        // no type: the tool's name, in whatever language it is given
+        assert_eq!(app.placed_name(ModelTool::System, "Vliesgevel"), "Vliesgevel");
+        // a wall's type does not rename it
+        app.set_model_tool(Some((ModelTool::Wall, "Wand")));
+        let wall_type = app.kinds(ModelTool::Wall, Language::Dutch).unwrap()[1].id.clone();
+        place(&mut app, PlaceMessage::Kind(wall_type));
+        assert_eq!(app.placed_name(ModelTool::Wall, "Wand"), "Wand");
+        // a system type names it after its group, in the tool's language
+        app.set_model_tool(Some((ModelTool::System, "Vliesgevel")));
+        for (id, nl, en) in [
+            ("system.timber-frame-140", "Houtskeletbouw", "Timber frame"),
+            ("system.masonry-waal-stretcher", "Metselwerk", "Masonry"),
+            ("system.curtain-wall-aluminium-1500", "Vliesgevel", "Curtain wall"),
+        ] {
+            place(&mut app, PlaceMessage::Kind(Some(id.into())));
+            assert_eq!(app.placed_name(ModelTool::System, ModelTool::System.label(Language::Dutch)), nl);
+            assert_eq!(app.placed_name(ModelTool::System, ModelTool::System.label(Language::English)), en);
+            for l in [Language::German, Language::French] {
+                let group = app.library.system_type(id).unwrap().group;
+                assert_eq!(app.placed_name(ModelTool::System, ModelTool::System.label(l)), group.name(crate::app::library::lang(l)));
+            }
+        }
+        // a name that is no language's name of the tool is kept
+        assert_eq!(app.placed_name(ModelTool::System, "E"), "E");
     }
 
     #[test]

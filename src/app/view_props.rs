@@ -111,6 +111,12 @@ impl App {
                 .push(row(l.text("Soort", "Kind"), if s.kind == crate::document::SectionKind::Elevation { l.text("Aanzicht", "Elevation view") } else { l.text("Doorsnede", "Section") }.into()))
                 .push(row(l.text("Lengte", "Length"), format!("{length:.3} m")))
                 .push(field(l.text("Diepte (m)", "Depth (m)"), ViewField::Depth));
+        } else if let Some(v) = self.document.view_3d(&path) {
+            // the projection shown now in its tab, else as it was left
+            let perspective = if self.active_plan.as_deref() == Some(path.as_str()) { !self.camera.ortho } else { v.camera.perspective };
+            rows = rows
+                .push(row(l.text("Soort", "Kind"), l.text("3D-weergave", "3D view").into()))
+                .push(row(l.text("Projectie", "Projection"), if perspective { l.text("Perspectief", "Perspective") } else { l.text("Parallel", "Parallel") }.into()));
         }
         let own = self.document.view_layers(&path).map_or(0, |o| o.len());
         let own = if own == 0 { l.text("zoals het model", "as the model").to_string() } else { own.to_string() };

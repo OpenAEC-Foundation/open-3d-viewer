@@ -66,7 +66,7 @@ impl App {
     }
 
     /// Every layer's own switch in the viewport (the models' switches aside).
-    fn viewport_switches(&self) -> Vec<bool> {
+    pub(super) fn viewport_switches(&self) -> Vec<bool> {
         let mut on = self.visible.clone();
         for entry in &self.models {
             for (i, &v) in entry.layers.clone().zip(&entry.layer_visibility) {
@@ -79,7 +79,7 @@ impl App {
     }
 
     /// Layer switches as a view keeps them: by name, those otherwise than the model has them.
-    fn own_switches(&self, on: &[bool]) -> LayerSwitches {
+    pub(super) fn own_switches(&self, on: &[bool]) -> LayerSwitches {
         let Some(model) = &self.model else { return LayerSwitches::new() };
         model.layers.iter().zip(on).filter(|(l, &on)| on == l.hidden).map(|(l, &on)| (l.name.clone(), on)).collect()
     }
@@ -238,7 +238,7 @@ impl App {
             LayersOf::Viewport => self.active_plan.as_deref(),
             LayersOf::Placed(path) => Some(path.as_str()),
         };
-        let name = path.and_then(|p| self.document.plan(p).map(|v| v.name.clone()).or_else(|| self.document.section(p).map(|s| s.name.clone())));
+        let name = path.and_then(|p| self.document.view_name(p)).map(str::to_string);
         name.unwrap_or_else(|| l.text("3D-weergave", "3D view").to_string())
     }
 

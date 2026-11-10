@@ -453,7 +453,13 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     let mut list = Column::new().spacing(2);
     let pattern = t.grid.pattern.name(t.group, lang(l)).map_or(String::new(), |n| format!(" · {n}"));
     list = list.push(small(format!("{} {} × {} mm{pattern}", l.text("Raster", "Grid"), mm(t.grid.bay, l), mm(t.grid.row, l)), p));
-    list = list.push(line(&t.members.material, format!("{}: {} {}", l.text("Stijlen en regels", "Members"), material(&t.members.material), size(t.members.width, t.members.depth))));
+    // what the members are: a frame's mullions and transoms, a ceiling's profiles, or joints
+    let members = match t.group {
+        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame => l.text("Stijlen en regels", "Members"),
+        SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
+        SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
+    };
+    list = list.push(line(&t.members.material, format!("{members}: {} {}", material(&t.members.material), size(t.members.width, t.members.depth))));
     list = list.push(line(&t.panels.material, format!("{}: {} {}", l.text("Panelen", "Panels"), material(&t.panels.material), mm(t.panels.thickness, l))));
     for layer in &t.layers {
         let sign = if layer.offset < 0.0 { "−" } else { "+" };
@@ -475,7 +481,10 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     }
     let (class, predefined) = t.group.ifc_type();
     list = list.push(small(format!("{class} {predefined}"), p));
-    let mut drawn = column![canvas_widget(elevation(t, lib, p.text)).width(Fill).height(150)].spacing(6);
+    let face = elevation(t, lib, p.text);
+    // as high as the face's shape asks, in a canvas about 240 wide
+    let tall = (240.0 * face.size[1] / face.size[0]).clamp(40.0, 170.0) as f32;
+    let mut drawn = column![canvas_widget(face).width(Fill).height(tall)].spacing(6);
     if !t.layers.is_empty() {
         let section = system_section(t, lib, p.text);
         let height = (section.depth * 400.0).clamp(24.0, 150.0) as f32;
@@ -484,11 +493,11 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     drawn.push(list).into()
 }
 
-/// The face of system type `t` as the kernel generates it, a few bays wide and rows high (a lying
-/// type as if it stood, without its layers): its panels, then its members, as rectangles along and
-/// up the face in their materials' colours.
+/// The face of system type `t` as the kernel generates it, a few bays wide (as wide as a row is
+/// high, at least 1.2 m) and rows high (a lying type as if it stood, without its layers): its
+/// panels, then its members, as rectangles along and up the face in their materials' colours.
 fn elevation(t: &SystemType, lib: &Library, line: Color) -> Elevation {
-    let bays = (1.2 / t.grid.bay).ceil().clamp(2.0, 8.0);
+    let bays = (t.grid.row.max(1.2) / t.grid.bay).ceil().clamp(2.0, 8.0);
     let rows = (0.9 / t.grid.row).ceil().clamp(1.0, 8.0);
     let (length, height) = (bays * t.grid.bay, rows * t.grid.row);
     let upright = SystemType { lying: None, layers: Vec::new(), ..t.clone() };
@@ -859,7 +868,7 @@ mod tests {
         click(&mut app, "Brickwork 100 220×62.5 stretcher bond");
         assert_eq!(app.library_view.picked, Some(Pick::System("system.masonry-waal-stretcher".into())));
         let mut ui = simulator(&app);
-        assert!(ui.find("Members: mortar 10×90").is_ok());
+        assert!(ui.find("Joints: mortar 10×90").is_ok());
         assert!(ui.find("Panels: brickwork 100").is_ok());
         // its face as the kernel makes it: six bays, eight courses, each shifted course with half
         // a brick at either end

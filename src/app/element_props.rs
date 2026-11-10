@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
         {
             // 5 m in prefab units of at most 3300, on the stud lines
-            let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(1400.0, 900.0), app.view());
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
             assert!(ui.find("Prefab units").is_ok() && ui.find("2400 + 2600").is_ok());
         }
         let _ = app.update(Message::AddOpening(false));

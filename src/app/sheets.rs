@@ -119,7 +119,9 @@ impl App {
                 (None, None) => Placed::Frame,
             })
             .collect();
-        let drawing = SheetDrawing { model, sheet: index, placed, styles: self.document.dimension_styles().to_vec(), palette: p, empty };
+        // the schedules on it, with what the computed ones add to what the file stores
+        let tables = sheet.tables.iter().map(|t| t.filled(self.schedules.iter().find(|s| s.name == t.schedule))).collect();
+        let drawing = SheetDrawing { model, sheet: index, placed, tables, styles: self.document.dimension_styles().to_vec(), palette: p, empty };
         container(canvas_widget(drawing).width(Fill).height(Fill)).width(Fill).height(Fill).style(move |_| p.panel()).into()
     }
 }
@@ -210,6 +212,8 @@ struct SheetDrawing {
     sheet: usize,
     /// What each of its viewports shows.
     placed: Vec<Placed>,
+    /// The schedules placed on it.
+    tables: Vec<crate::model::SheetTable>,
     /// The document's dimension styles: a dimension names one by its place.
     styles: Vec<DimensionStyle>,
     palette: Palette,
@@ -421,6 +425,40 @@ impl canvas::Program<Message> for SheetDrawing {
         for t in &sheet.texts {
             draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, ink, bounds.size());
         }
+        // the schedules: the borders of their cells and the texts in them
+        for table in &self.tables {
+            let rect = table.rect();
+            if !seen(fit.point(rect.min), fit.point(rect.max)) {
+                continue;
+            }
+            let lefts: Vec<f32> = std::iter::once(0.0).chain(table.columns.iter().scan(0.0, |x, w| { *x += w; Some(*x) })).collect();
+            let at = |k: usize| table.origin[0] + lefts[k.min(lefts.len() - 1)];
+            let mut top = table.origin[1];
+            let mut texts = Vec::new();
+            let grid = Path::new(|path| {
+                for row in &table.rows {
+                    let foot = top - row.height;
+                    for cell in &row.cells {
+                        let (left, right) = if row.title { (at(0), at(usize::MAX)) } else { (at(cell.column as usize), at(cell.column as usize + cell.span.max(1) as usize)) };
+                        path.rectangle(fit.point([left, top]), Size::new((right - left) * fit.scale, row.height * fit.scale));
+                        if cell.text.is_empty() {
+                            continue;
+                        }
+                        // its text, clear of the borders
+                        let pad = (cell.size * 0.4).min((right - left) / 4.0);
+                        let height = cell.text.lines().count().max(1) as f32 * cell.size * 1.3;
+                        let room = (row.height - height).max(0.0);
+                        let lift = [room - pad.min(room / 2.0), room / 2.0, pad.min(room / 2.0)][cell.vertical.min(2) as usize];
+                        texts.push(crate::model::DraftText { element: 0, at: [left + pad, foot + lift], width: (right - left - 2.0 * pad).max(0.0), height, size: cell.size, align: cell.align, angle: 0.0, text: cell.text.clone() });
+                    }
+                    top = foot;
+                }
+            });
+            frame.stroke(&grid, Stroke::default().with_color(ink).with_width(0.7));
+            for t in &texts {
+                draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, ink, bounds.size());
+            }
+        }
 
         // the placed views: what they show, their frame, then the view title under it (number,
         // name, scale)
@@ -509,6 +547,8 @@ impl canvas::Program<Message> for SheetDrawing {
                         };
                         let wide = |s: &[[f32; 2]; 2]| (s[0].map(f64::from), s[1].map(f64::from));
                         if let Some(cut) = cut {
+                            // the cut faces in their hatch, under the lines
+                            super::hatch::draw_fills(&mut frame, cut, *crop, &|q| Some(on(q)), (ratio * f64::from(fit.scale)) as f32);
                             // what is seen beyond the cut, thin and grey, then the cut itself
                             stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
                             stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
@@ -608,7 +648,7 @@ mod tests {
     #[test]
     fn a_click_on_a_view_finds_it() {
         let app = app_with_sheet();
-        let d = SheetDrawing { model: app.model.clone().unwrap(), sheet: 0, placed: Vec::new(), styles: Vec::new(), palette: app.theme.palette(), empty: String::new() };
+        let d = SheetDrawing { model: app.model.clone().unwrap(), sheet: 0, placed: Vec::new(), tables: Vec::new(), styles: Vec::new(), palette: app.theme.palette(), empty: String::new() };
         let state = DrawingState::default();
         let size = Size::new(1189.0 + 2.0 * MARGIN, 841.0 + 2.0 * MARGIN);
         let fit = d.fit(&state, size).unwrap();

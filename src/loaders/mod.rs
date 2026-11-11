@@ -17,6 +17,8 @@ mod rvt_drawings;
 mod rvt_drafts;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_tags;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_schedules;
 mod ifc;
 
 mod skp;

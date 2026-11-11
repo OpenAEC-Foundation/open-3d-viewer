@@ -305,17 +305,92 @@ pub struct Sheet {
     pub lines: Vec<[[f32; 2]; 2]>,
     /// The texts of its title block: its fixed ones and its labels, filled in.
     pub texts: Vec<DraftText>,
+    /// The schedules placed on it.
+    pub tables: Vec<SheetTable>,
 }
 
 impl Sheet {
     pub fn new(number: String, name: String, paper: Option<SheetRect>, viewports: Vec<SheetViewport>) -> Self {
         let title = [number.as_str(), name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new() }
+        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new(), tables: Vec::new() }
     }
 
-    /// What the sheet covers: the paper and every viewport.
+    /// What the sheet covers: the paper, every viewport and every schedule.
     pub fn extent(&self) -> Option<SheetRect> {
-        self.paper.iter().chain(self.viewports.iter().map(|v| &v.rect)).copied().reduce(SheetRect::union)
+        let tables = self.tables.iter().map(SheetTable::rect);
+        self.paper.iter().copied().chain(self.viewports.iter().map(|v| v.rect)).chain(tables).reduce(SheetRect::union)
+    }
+}
+
+/// A schedule placed on a sheet, as the table the file stores for it (sheet metres).
+#[derive(Debug, Clone, Default)]
+pub struct SheetTable {
+    /// The name of its schedule.
+    pub schedule: String,
+    /// Its upper left corner.
+    pub origin: [f32; 2],
+    /// The widths of its columns.
+    pub columns: Vec<f32>,
+    /// Its rows, from the top.
+    pub rows: Vec<TableRow>,
+}
+
+/// A row of a [`SheetTable`].
+#[derive(Debug, Clone, Default)]
+pub struct TableRow {
+    pub height: f32,
+    /// Its cells, from the left; a cell another one covers is left out.
+    pub cells: Vec<TableCell>,
+    /// The title above the columns: its cell runs over the full width.
+    pub title: bool,
+}
+
+/// A cell of a [`SheetTable`].
+#[derive(Debug, Clone, Default)]
+pub struct TableCell {
+    /// The column it starts in, and how many it covers.
+    pub column: u16,
+    pub span: u16,
+    pub text: String,
+    /// The height of its letters (metres on paper).
+    pub size: f32,
+    /// 0 left, 1 centre, 2 right.
+    pub align: u8,
+    /// 0 top, 1 middle, 2 foot.
+    pub vertical: u8,
+    /// It shows a value of the row's elements that the file does not store.
+    pub open: bool,
+}
+
+impl SheetTable {
+    pub fn width(&self) -> f32 {
+        self.columns.iter().sum()
+    }
+
+    /// What it covers on the sheet.
+    pub fn rect(&self) -> SheetRect {
+        let height: f32 = self.rows.iter().map(|r| r.height).sum();
+        SheetRect { min: [self.origin[0], self.origin[1] - height], max: [self.origin[0] + self.width(), self.origin[1]] }
+    }
+
+    /// The table with its open cells filled from the computed schedule, when that has a row for
+    /// each of its rows with open cells and as many columns.
+    pub fn filled(&self, computed: Option<&Schedule>) -> SheetTable {
+        let mut table = self.clone();
+        let Some(s) = computed.filter(|s| s.computed && s.columns.len() == self.columns.len()) else { return table };
+        let values: Vec<&ScheduleRow> = s.rows.iter().filter(|r| !r.total).collect();
+        let open = |r: &TableRow| !r.title && r.cells.iter().any(|c| c.open);
+        if table.rows.iter().filter(|r| open(r)).count() != values.len() {
+            return table;
+        }
+        for (row, value) in table.rows.iter_mut().filter(|r| open(r)).zip(values) {
+            for cell in row.cells.iter_mut().filter(|c| c.open) {
+                if let Some(Some(text)) = value.cells.get(cell.column as usize) {
+                    cell.text.clone_from(text);
+                }
+            }
+        }
+        table
     }
 }
 

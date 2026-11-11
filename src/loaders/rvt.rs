@@ -363,6 +363,8 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
 /// size of the building as its view sees it (`estimated`, centred on its position).
 fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo]) -> Vec<Sheet> {
     let mut types = super::rvt_drawings::Types::new(doc);
+    // the schedules placed on the sheets, as tables
+    let mut tables = super::rvt_schedules::placed(doc);
     let anchors: HashMap<u64, [f64; 2]> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
     // the views the document draws, and the legends and drafting views, by their element
     let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
@@ -447,6 +449,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
             if let Some((lines, texts)) = block {
                 (sheet.lines, sheet.texts) = (lines, texts);
             }
+            sheet.tables = tables.remove(&s.id).unwrap_or_default();
             sheet
         })
         .collect()

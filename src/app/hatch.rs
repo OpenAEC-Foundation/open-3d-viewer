@@ -13,8 +13,9 @@ fn rgb(c: [u8; 3]) -> Color {
 }
 
 /// Draws the cut faces of `cut` within `crop`: `to` gives a drawing point on the canvas (`None`
-/// when it cannot be shown), `per_metre` how many pixels a metre of the drawing is.
-pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [f64; 2])>, to: &dyn Fn([f64; 2]) -> Option<Point>, per_metre: f32) {
+/// when it cannot be shown), `per_metre` how many pixels a metre of the drawing is, `outline`
+/// the colour of the faces' outlines where the drawing's own lines do not draw them.
+pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [f64; 2])>, to: &dyn Fn([f64; 2]) -> Option<Point>, per_metre: f32, outline: Option<Color>) {
     for fill in &cut.fills {
         let Some((behind, line)) = fill.look else { continue };
         let face = Path::new(|path| {
@@ -29,6 +30,9 @@ pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [
             }
         });
         frame.fill(&face, Fill { rule: Rule::EvenOdd, ..Fill::from(rgb(behind)) });
+        if let Some(color) = outline {
+            frame.stroke(&face, Stroke::default().with_color(color).with_width(1.2));
+        }
         if fill.rows.is_empty() {
             continue;
         }

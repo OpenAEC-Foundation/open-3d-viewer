@@ -113,7 +113,7 @@ impl App {
     pub(super) fn marks_layer(&self, p: Palette, l: Language) -> Option<ViewMarks> {
         let view = self.shown_view()?;
         let frame = self.drawing_frame(view)?;
-        let (dimensions, _) = self.document.view_marks(view)?;
+        let (dimensions, crop) = self.document.view_marks(view)?;
         // sections are drawn on floor plans, and shown there
         let is_plan = self.document.plan(view).is_some();
         Some(ViewMarks {
@@ -126,6 +126,7 @@ impl App {
             notes: self.document.view_notes(view)?.to_vec(),
             lines: self.document.view_lines(view).to_vec(),
             cut: self.cuts.get(view).cloned(),
+            crop,
             measuring: self.dimension_tool,
             noting: self.note_tool.then(|| self.note_to_place(l)),
             cutting: self.section_tool && is_plan,
@@ -389,6 +390,8 @@ pub(super) struct ViewMarks {
     lines: Vec<[[f64; 2]; 2]>,
     /// The view's lines, to snap to.
     cut: Option<Arc<Cut>>,
+    /// The view's crop: its cut faces are drawn within it.
+    crop: Option<([f64; 2], [f64; 2])>,
     /// The dimension tool is on.
     measuring: bool,
     /// The text tool is on, with the text a click places.
@@ -634,7 +637,7 @@ impl canvas::Program<Message> for ViewMarks {
         // the cut faces in their hatch, over the model's own cut fill
         if let Some(cut) = &self.cut {
             let per_metre = cut.extent.map_or(0.0, |(lo, _)| self.paper(&screen, lo.map(f64::from)) / self.scale as f32);
-            super::hatch::draw_fills(&mut frame, cut, None, &|q| self.px(&screen, q), per_metre);
+            super::hatch::draw_fills(&mut frame, cut, self.crop, &|q| self.px(&screen, q), per_metre, Some(ink));
         }
         for (name, from, to) in &self.sections {
             let letter = name.rsplit(' ').next().unwrap_or(name).to_string();

@@ -896,7 +896,7 @@ impl canvas::Program<Message> for PaperDrawing {
                         }
                     };
                     let per_metre = (fit.scale / self.sheet.views[i].scale) as f32;
-                    super::hatch::draw_fills(&mut frame, &cut, crop, &|q| Some(fit.point(self.to_paper(i, q))), per_metre);
+                    super::hatch::draw_fills(&mut frame, &cut, crop, &|q| Some(fit.point(self.to_paper(i, q))), per_metre, None);
                     let below = Path::new(|b| {
                         for (a, z) in cut.below.iter().filter_map(|[a, z]| piece(a, z)) {
                             b.move_to(fit.point(self.to_paper(i, a)));

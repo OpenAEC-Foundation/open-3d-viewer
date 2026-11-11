@@ -547,8 +547,6 @@ impl canvas::Program<Message> for SheetDrawing {
                         };
                         let wide = |s: &[[f32; 2]; 2]| (s[0].map(f64::from), s[1].map(f64::from));
                         if let Some(cut) = cut {
-                            // the cut faces in their hatch, under the lines
-                            super::hatch::draw_fills(&mut frame, cut, *crop, &|q| Some(on(q)), (ratio * f64::from(fit.scale)) as f32);
                             // what is seen beyond the cut, thin and grey, then the cut itself
                             stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
                             stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);

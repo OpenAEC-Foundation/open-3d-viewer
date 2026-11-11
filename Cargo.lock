@@ -3623,6 +3623,7 @@ dependencies = [
  "resvg",
  "rfd",
  "roxmltree 0.20.0",
+ "rvt-core",
  "rvt-export",
  "rvt-model",
  "rvt-read",

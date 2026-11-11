@@ -75,7 +75,7 @@ impl App {
     pub(super) fn show_schedule(&mut self, i: Option<usize>) -> Task<Message> {
         // a schedule's tab replaces a shown sheet, under the 3D view
         if i.is_some() {
-            self.active_sheet = None;
+            self.active_sheet = None; self.active_draft = None;
             self.active_doc_sheet = None;
             self.ifc.shown = false;
             self.load_view(None);
@@ -147,6 +147,9 @@ impl App {
     pub fn workspace_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
         if let Some(sheet) = self.doc_sheet_workspace(p, l) {
             return sheet;
+        }
+        if let Some(draft) = self.active_draft.and_then(|i| self.drafts().get(i)) {
+            return self.draft_view_element(p, l, draft);
         }
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i)) {
             return self.sheet_view_element(p, l, sheet);

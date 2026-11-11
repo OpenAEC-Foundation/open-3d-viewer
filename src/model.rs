@@ -192,6 +192,9 @@ pub const ALIGN_LIMIT: f64 = 10_000.0;
 pub struct ProjectData {
     /// Sheets (Revit, beta): the paper and the views placed on it.
     pub sheets: Vec<Sheet>,
+    /// Drawings without a model (Revit, beta): legends and drafting views, with their lines,
+    /// texts and dimensions.
+    pub drafts: Vec<Draft>,
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,
@@ -352,6 +355,73 @@ pub struct SheetViewport {
     pub detail: Option<String>,
 }
 
+/// The kinds of drawing without a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftKind {
+    Legend,
+    Drafting,
+}
+
+/// A drawing without a model (Revit, beta: a legend or a drafting view): what is drawn in it, in
+/// its own plane (metres at full size, x right, y up). On paper it is `scale` times smaller.
+#[derive(Debug, Clone)]
+pub struct Draft {
+    pub name: String,
+    pub kind: DraftKind,
+    /// 1 : `scale`.
+    pub scale: f32,
+    pub lines: Vec<DraftLine>,
+    pub texts: Vec<DraftText>,
+    pub dimensions: Vec<DraftDimension>,
+}
+
+impl Draft {
+    /// What it covers: lower left and upper right, `None` when it is empty.
+    pub fn extent(&self) -> Option<SheetRect> {
+        let lines = self.lines.iter().flat_map(|l| [l.a, l.b]);
+        let texts = self.texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]]);
+        let dimensions = self.dimensions.iter().flat_map(|d| [d.from, d.to, d.measured[0], d.measured[1]]);
+        lines.chain(texts).chain(dimensions).map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union)
+    }
+}
+
+/// A line of a drawing: a detail line, or a piece of a curved one. `element` is the element of
+/// the file it belongs to, which a click picks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DraftLine {
+    pub element: u64,
+    pub a: [f32; 2],
+    pub b: [f32; 2],
+}
+
+/// A text of a drawing: its box from its lower left corner, and the size of its letters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftText {
+    pub element: u64,
+    pub at: [f32; 2],
+    pub width: f32,
+    pub height: f32,
+    /// The height of a line of letters (the font size).
+    pub size: f32,
+    /// Where its lines start in its box: 0 left, 1 middle, 2 right.
+    pub align: u8,
+    /// How it is turned about the foot of its box where its lines start (radians,
+    /// counter-clockwise).
+    pub angle: f32,
+    pub text: String,
+}
+
+/// A dimension of a drawing: its line from `from` to `to`, and the two points it measures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftDimension {
+    pub element: u64,
+    pub from: [f32; 2],
+    pub to: [f32; 2],
+    pub measured: [[f32; 2]; 2],
+    /// How it looks: the style of its type (sizes on paper).
+    pub style: std::sync::Arc<crate::document::DimensionStyle>,
+}
+
 /// The kind of a saved view.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -503,6 +573,7 @@ impl Model {
             }));
             project.rooms.extend(model.project.rooms.iter().cloned());
             project.drawings.extend(model.project.drawings.iter().cloned());
+            project.drafts.extend(model.project.drafts.iter().cloned());
         }
         project.levels.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
         project.levels.dedup();

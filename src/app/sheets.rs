@@ -38,6 +38,7 @@ impl App {
             self.active_schedule = None;
             self.ifc.shown = false;
             self.active_doc_sheet = None;
+            self.active_draft = None;
         }
         Task::none()
     }
@@ -55,7 +56,7 @@ impl App {
 
     /// A view on a sheet clicked: the 3D view shows it.
     pub(super) fn sheet_view(&mut self, view: usize) -> Task<Message> {
-        self.active_sheet = None;
+        self.active_sheet = None; self.active_draft = None;
         self.apply_view(view);
         Task::none()
     }

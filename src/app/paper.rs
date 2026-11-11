@@ -55,7 +55,7 @@ impl App {
         if !self.open_doc_sheets.iter().any(|s| s == path) {
             self.open_doc_sheets.push(path.to_string());
         }
-        self.active_sheet = None;
+        self.active_sheet = None; self.active_draft = None;
         self.active_schedule = None;
         self.ifc.shown = false;
         if self.active_doc_sheet.as_deref() != Some(path) {
@@ -339,6 +339,7 @@ impl App {
                     cut: self.cuts.get(&v.plan).cloned(),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
                     notes: self.document.view_notes(&v.plan).map_or(Vec::new(), <[_]>::to_vec),
+                    lines: self.document.view_lines(&v.plan).to_vec(),
                     crop: marks.and_then(|(_, c)| c),
                     is_plan: self.document.plan(&v.plan).is_some(),
                 }
@@ -478,6 +479,8 @@ struct Placed {
     cut: Option<Arc<Cut>>,
     dimensions: Vec<Dimension>,
     notes: Vec<crate::document::Note>,
+    /// The lines of the view's tags: their shapes and leaders.
+    lines: Vec<[[f64; 2]; 2]>,
     crop: Option<([f64; 2], [f64; 2])>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
@@ -917,9 +920,18 @@ impl canvas::Program<Message> for PaperDrawing {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
                 draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color);
             }
+            if !placed.lines.is_empty() {
+                let lines = Path::new(|path| {
+                    for line in &placed.lines {
+                        path.move_to(fit.point(self.to_paper(i, line[0])));
+                        path.line_to(fit.point(self.to_paper(i, line[1])));
+                    }
+                });
+                frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.8));
+            }
             for (k, note) in placed.notes.iter().enumerate() {
                 let picked = self.pick == Some(SheetPick::Note(i, k));
-                super::marks::draw_note(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink });
+                super::marks::draw_note(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32);
                 if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
                 }
@@ -971,7 +983,7 @@ impl canvas::Program<Message> for PaperDrawing {
                     if self.section_tool {
                         draw_section_mark(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), String::new(), p.accent);
                     } else {
-                        let length = Dimension { from, to: q }.length();
+                        let length = Dimension { from, to: q, style: 0 }.length();
                         draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
                     }
                 }
@@ -1040,7 +1052,8 @@ fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2],
 /// length in millimetres over the middle.
 fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color) {
     let px = |m: f64| (m * fit.scale) as f32;
-    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), tick: px(0.0012), gap: px(0.0015), size: 10.0 };
+    let style = crate::document::DimensionStyle::standard();
+    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: 10.0, style: &style };
     super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, look);
 }
 

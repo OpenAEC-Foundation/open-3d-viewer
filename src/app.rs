@@ -6,6 +6,7 @@ mod export_drawing;
 mod grids;
 mod ifc;
 mod layers;
+mod drafts;
 mod edit;
 mod element_props;
 mod levels;
@@ -169,7 +170,7 @@ pub struct App {
     /// The grid line picked with a click (index into the model's grids), shown in the properties.
     pub picked_grid: Option<usize>,
     /// Explorer groups opened: views, rooms, layers, schedules, sheets.
-    pub explorer_open: [bool; 5],
+    pub explorer_open: [bool; 7],
     /// The explorer's tab shown.
     pub explorer_tab: ExplorerTab,
     /// The project's library: materials, layered build-ups and linear types.
@@ -228,6 +229,10 @@ pub struct App {
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
     pub open_sheets: Vec<usize>,
     pub active_sheet: Option<usize>,
+    /// The legends and drafting views open in tabs, the one shown and what is picked in it.
+    pub open_drafts: Vec<usize>,
+    pub active_draft: Option<usize>,
+    pub draft_pick: Option<(u64, drafts::DraftPick)>,
     /// Schedules open in a document tab, in tab order, and the one shown under the viewport.
     pub open_schedules: Vec<usize>,
     pub active_schedule: Option<usize>,
@@ -414,6 +419,8 @@ pub enum Message {
     RemoveMark,
     /// Put the picked dimension on the other side of what it measures.
     FlipDimension,
+    /// The picked dimension looks otherwise: another style, or its style changed.
+    DimensionLook(marks::LookEdit),
     /// Give a view (its path) its standard dimensions.
     StandardDimensions(Arc<str>),
     /// Lay a drawing on a level (its path): asks for the file.
@@ -463,6 +470,9 @@ pub enum Message {
     SectionTool(bool),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
+    /// A legend or drafting view opened in its tab; what a click picked in the one shown.
+    OpenDraft(usize),
+    PickDraft(Option<(u64, drafts::DraftPick)>),
     /// Show a sheet's tab (`None`: not a sheet).
     ShowSheet(Option<usize>),
     CloseSheet(usize),
@@ -655,7 +665,7 @@ impl Default for App {
             active_view: None,
             show_grids: true,
             picked_grid: None,
-            explorer_open: [false, false, true, false, false],
+            explorer_open: [false, false, true, false, false, false, false],
             explorer_tab: ExplorerTab::Model,
             library: bim_library::Library::starter(),
             library_view: library::LibraryView::default(),
@@ -686,6 +696,9 @@ impl Default for App {
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
+            open_drafts: Vec::new(),
+            active_draft: None,
+            draft_pick: None,
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
@@ -1172,7 +1185,9 @@ impl App {
         self.schedules.clear();
         self.schedules_pending = false;
         self.open_sheets.clear();
-        self.active_sheet = None;
+        self.open_drafts.clear();
+        self.draft_pick = None;
+        self.active_sheet = None; self.active_draft = None;
         self.explorer_open[0] = false;
         self.sel.clear();
         self.selected = None;
@@ -1628,6 +1643,7 @@ impl App {
             Message::PickMark(pick) => self.pick_mark(pick),
             Message::RemoveMark => self.remove_mark(),
             Message::FlipDimension => self.flip_dimension(),
+            Message::DimensionLook(edit) => self.edit_dimension_look(edit),
             Message::StandardDimensions(view) => {
                 self.standard_dimensions(&view);
             }
@@ -1721,6 +1737,8 @@ impl App {
             }
             Message::CloseTab(i) => return self.close_tab(i),
             Message::OpenSheet(i) => return self.open_sheet(i),
+            Message::OpenDraft(i) => return self.open_draft(i),
+            Message::PickDraft(pick) => self.draft_pick = pick,
             Message::ShowSheet(i) => return self.show_sheet(i),
             Message::CloseSheet(i) => return self.close_sheet(i),
             Message::SheetView(view) => return self.sheet_view(view),
@@ -2631,6 +2649,7 @@ impl App {
 
         body = self.schedules_group(p, l, &query, body);
         body = self.sheets_group(p, l, &query, body);
+        body = self.drafts_groups(p, l, &query, body);
 
         // rooms, by level (low to high, then rooms without a level)
         let rooms = &model.project.rooms;

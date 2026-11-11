@@ -11,6 +11,12 @@ mod obj;
 mod stl;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_drawings;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_drafts;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_tags;
 mod ifc;
 
 mod skp;

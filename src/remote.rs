@@ -389,7 +389,7 @@ impl App {
         Task::none()
     }
 
-    fn finish_animation(&mut self) {
+    pub(crate) fn finish_animation(&mut self) {
         if let Some((_, to, _)) = self.anim.take() {
             self.camera = to;
         }

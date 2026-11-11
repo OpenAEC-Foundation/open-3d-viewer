@@ -558,7 +558,7 @@ impl Studio {
     /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
     pub fn viewport_in(&self, width: f32, height: f32) -> (f32, f32) {
         use openaec_ui::design::shell::{DOCUMENT_TABS, RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
-        let panels = [(self.prefs.left, self.prefs.left_width), (self.prefs.right, self.prefs.right_width)];
+        let panels = [(self.prefs.left, self.left_width()), (self.prefs.right, self.prefs.right_width)];
         let side: f32 = panels.iter().filter(|(shown, _)| *shown).map(|(_, w)| w + 4.0).sum();
         let bars = TITLEBAR + RIBBON_TABS + RIBBON + DOCUMENT_TABS + STATUSBAR;
         ((width - side).max(1.0), (height - bars).max(1.0))
@@ -590,6 +590,11 @@ impl Studio {
 
     fn look(&self) -> Look {
         Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar())
+    }
+
+    /// The width of the left panel: the Collaborator's lists need more than the explorer's tree.
+    fn left_width(&self) -> f32 {
+        if self.product() == Product::Collaborator { self.prefs.left_width.max(340.0) } else { self.prefs.left_width }
     }
 
     fn l(&self) -> Language {
@@ -762,11 +767,13 @@ impl Studio {
         for &product in &self.products {
             list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
-        // the Collaborator's commands to come: in its ribbon, not working yet (the message is
-        // never sent)
+        // the Collaborator's commands: issues, checks, clashes and the rule set
         for planned in PLANNED {
-            let detail = format!("{} ({})", planned.label(l), l.text("volgt", "to come"));
-            list.push(Command::new(planned.id, planned.label(l), Msg::Dialog(None)).icon(small(planned.icon), large(planned.icon)).enabled(false).detail(&detail));
+            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            let message = planned.event().map(|e| go(Message::Collab(e)));
+            #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+            let message: Option<Msg> = None;
+            list.push(Command::new(planned.id, planned.label(l), message.clone().unwrap_or(Msg::Dialog(None))).icon(small(planned.icon), large(planned.icon)).enabled(message.is_some()).detail(planned.detail(l)));
         }
         list
     }
@@ -848,6 +855,11 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        {
+            self.app.collab.language = self.l();
+            self.app.collab.refresh();
+        }
         let task = self.handle(message);
         self.keep_dev_session();
         task
@@ -1326,9 +1338,9 @@ impl Studio {
             RibbonPage::Collaborate => vec![
                 w::ribbon_group(look, l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
                 w::ribbon_group(look, l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
-                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids"])]),
-                w::ribbon_group(look, l.text("Opmerkingen", "Comments"), vec![large("collaborate.comment")]),
-                w::ribbon_group(look, l.text("Delen", "Share"), vec![large("collaborate.share")]),
+                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
+                w::ribbon_group(look, l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
+                w::ribbon_group(look, l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
             ],
         };
         if self.compact() {
@@ -1497,7 +1509,7 @@ impl Studio {
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft)), hide, Some(self.command("view.left").shortcut_label().unwrap_or("")))];
             let (title, content) = self.left_panel(look);
             body = body
-                .push(w::panel(look, title, self.prefs.left_width, actions, content))
+                .push(w::panel(look, title, self.left_width(), actions, content))
                 .push(ch::splitter(look, dragging(Side::Left), Msg::SplitterPress(Side::Left)));
         }
         body = body.push(middle);
@@ -1517,8 +1529,13 @@ impl Studio {
         let l = self.l();
         match self.product() {
             Product::Collaborator => {
-                let models: Vec<&str> = self.app.models.iter().map(|m| m.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D")).collect();
-                let body = container(crate::product::collaboration_panel(look, l, models)).padding([4, 8]).width(Length::Fill).height(Length::Fill);
+                #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+                let body = container(Self::pane(self.app.collab_body(look, l))).padding([4, 8]).width(Length::Fill).height(Length::Fill);
+                #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+                let body = {
+                    let models: Vec<&str> = self.app.models.iter().map(|m| m.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D")).collect();
+                    container(crate::product::collaboration_panel(look, l, models)).padding([4, 8]).width(Length::Fill).height(Length::Fill)
+                };
                 (l.text("Samenwerken", "Collaboration"), body.into())
             }
             Product::Viewer | Product::Modeller => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
@@ -2092,7 +2109,7 @@ mod tests {
         // the commands to come are there but do nothing yet; the switch marks the product shown
         let commands = studio.default_commands();
         for planned in PLANNED {
-            assert!(commands.iter().any(|c| c.id == planned.id && !c.enabled), "{}", planned.id);
+            assert!(commands.iter().any(|c| c.id == planned.id && c.enabled), "{}", planned.id);
         }
         assert!(commands.iter().any(|c| c.id == Product::Collaborator.command() && c.kind == openaec_ui::design::command::CommandKind::Mode(true)));
     }

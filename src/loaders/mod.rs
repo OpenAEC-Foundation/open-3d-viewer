@@ -11,6 +11,14 @@ mod obj;
 mod stl;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_drawings;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_drafts;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_tags;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_schedules;
 mod ifc;
 
 mod skp;
@@ -46,6 +54,8 @@ mod ifcx;
 mod step;
 mod sam;
 mod rhino;
+mod blend;
+mod fcstd;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -259,7 +269,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &rhino::RhinoLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &rhino::RhinoLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,

@@ -18,6 +18,25 @@ pub struct Cut {
     pub below: Vec<Segment>,
     /// Lower left and upper right of the segments; `None` when nothing is cut.
     pub extent: Option<([f32; 2], [f32; 2])>,
+    /// The cut faces: what each element shows where the plane goes through it.
+    pub fills: Vec<Fill>,
+}
+
+/// A cut face: the outlines one element (or a layer outside its elements) shows where the plane
+/// goes through it, and how it is hatched once [`crate::hatching::hatch`] has looked up what it
+/// is made of.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Fill {
+    /// The layer (index in `Model::layers`) and the element cut; no element for what a layer
+    /// draws outside its elements.
+    pub layer: usize,
+    pub element: Option<u64>,
+    /// Closed outlines; a point is in the face when an odd number of them goes round it.
+    pub loops: Vec<Vec<[f32; 2]>>,
+    /// The colour behind the hatch and that of its lines; `None` before it is hatched.
+    pub look: Option<([u8; 3], [u8; 3])>,
+    /// The hatch lines, each with its row: every n-th row draws a coarser hatch.
+    pub rows: Vec<(i32, Segment)>,
 }
 
 /// Two faces meeting at a sharper angle than this (degrees) make a visible edge.
@@ -55,21 +74,32 @@ impl<'a> Shown<'a> {
 }
 
 /// A floor plan's drawing: the cut at `high` and the edges seen from above between `low` and
-/// `high`, of what is `shown`.
+/// `high`, of what is `shown`, left out where something nearer the cut covers them.
 pub fn plan_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, high);
-    cut.below = edges_between(model, shown, low, high);
+    cut.below = seen_between(model, shown, high - low, move |p| [p[0], p[1], high - p[2]]);
     cut.extent = extent(cut.segments.iter().chain(&cut.below));
     cut
 }
 
 /// A reflected ceiling plan's drawing: the cut at `low` and the edges seen from below between
-/// `low` and `high`, of what is `shown`, laid out as a floor plan (x, y as seen from above).
+/// `low` and `high`, of what is `shown`, left out where something nearer the cut covers them,
+/// laid out as a floor plan (x, y as seen from above).
 pub fn ceiling_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, low);
-    cut.below = edges_between(model, shown, low, high);
+    cut.below = seen_between(model, shown, high - low, move |p| [p[0], p[1], p[2] - low]);
     cut.extent = extent(cut.segments.iter().chain(&cut.below));
     cut
+}
+
+/// The outlines and creases of what is shown, in the frame `map` gives (its third coordinate the
+/// depth from the cut), between the cut and `depth`: the parts no triangle nearer the cut covers.
+fn seen_between(model: &Model, shown: Shown, depth: f32, map: impl Fn([f32; 3]) -> [f32; 3] + Copy) -> Vec<Segment> {
+    let faces: Vec<[[f32; 3]; 3]> = triangles(model, shown)
+        .map(|t| t.map(map))
+        .filter(|c| c[0][2].max(c[1][2]).max(c[2][2]) > 0.0 && c[0][2].min(c[1][2]).min(c[2][2]) < depth)
+        .collect();
+    visible(&faces, &feature_edges(model, shown, map, 0.0, depth))
 }
 
 /// The outlines and creases of the triangles between `low` and `high`, clipped to that range and
@@ -163,10 +193,12 @@ pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], dep
     };
     let mut segments = Vec::new();
     let mut beyond = Vec::new();
-    for t in triangles(model, shown) {
+    let mut faces = Faces::default();
+    for (key, t) in keyed(model, shown) {
         let c = t.map(map);
         if let Some(segment) = cross(c, 0.0) {
             segments.push(segment);
+            faces.add(key, segment);
         }
         let (near, far) = (c[0][2].min(c[1][2]).min(c[2][2]), c[0][2].max(c[1][2]).max(c[2][2]));
         if far > 0.0 && near < depth as f32 {
@@ -176,7 +208,7 @@ pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], dep
     let edges = feature_edges(model, shown, map, 0.0, depth as f32);
     let below = visible(&beyond, &edges);
     let extent = extent(segments.iter().chain(&below));
-    Cut { segments, below, extent }
+    Cut { segments, below, extent, fills: faces.fills() }
 }
 
 /// How many pixels the longer side of a section's depth image has.
@@ -299,27 +331,92 @@ fn extent<'a>(segments: impl Iterator<Item = &'a Segment>) -> Option<([f32; 2], 
 /// Cuts what is `shown` at height `z`. Point layers are left out.
 pub fn cut_at(model: &Model, shown: Shown, z: f32) -> Cut {
     let mut segments = Vec::new();
-    for (i, layer) in model.layers.iter().enumerate() {
-        if layer.points || !shown.on(i) {
-            continue;
-        }
-        let p = &layer.positions;
-        let vertex = |k: u32| {
-            let k = k as usize * 3;
-            [p[k], p[k + 1], p[k + 2]]
-        };
-        for t in layer.indices.chunks_exact(3) {
-            if t.iter().any(|&k| (k as usize * 3 + 2) >= p.len()) || (shown.hidden)(i, t[0]) {
-                continue;
-            }
-            let corners = [vertex(t[0]), vertex(t[1]), vertex(t[2])];
-            if let Some(segment) = cross(corners, z) {
-                segments.push(segment);
-            }
+    let mut faces = Faces::default();
+    for (key, corners) in keyed(model, shown) {
+        if let Some(segment) = cross(corners, z) {
+            segments.push(segment);
+            faces.add(key, segment);
         }
     }
     let extent = extent(segments.iter());
-    Cut { segments, below: Vec::new(), extent }
+    Cut { segments, below: Vec::new(), extent, fills: faces.fills() }
+}
+
+/// The corners of each triangle that is shown, with its layer and the element it draws.
+fn keyed<'a>(model: &'a Model, shown: Shown<'a>) -> impl Iterator<Item = ((usize, Option<u64>), [[f32; 3]; 3])> + 'a {
+    model.layers.iter().enumerate().filter(move |(i, l)| !l.points && shown.on(*i)).flat_map(move |(i, layer)| {
+        let p = &layer.positions;
+        layer.indices.chunks_exact(3).enumerate().filter(move |(_, t)| !(shown.hidden)(i, t[0])).filter_map(move |(k, t)| {
+            let corner = |k: u32| p.get(k as usize * 3..k as usize * 3 + 3).map(|v| [v[0], v[1], v[2]]);
+            Some(((i, layer.element_at(k)), [corner(t[0])?, corner(t[1])?, corner(t[2])?]))
+        })
+    })
+}
+
+/// The cut segments per element, to close into its cut faces.
+#[derive(Default)]
+struct Faces {
+    of: HashMap<(usize, Option<u64>), Vec<Segment>>,
+}
+
+/// Points nearer than this (metres) are one point of an outline.
+const WELD: f32 = 5e-5;
+/// An outline enclosing less than this (square metres) is left out.
+const SLIVER: f32 = 1e-6;
+
+impl Faces {
+    fn add(&mut self, key: (usize, Option<u64>), segment: Segment) {
+        self.of.entry(key).or_default().push(segment);
+    }
+
+    /// The faces whose segments close into outlines, in the order of their layers and elements.
+    fn fills(self) -> Vec<Fill> {
+        let mut fills: Vec<Fill> = self
+            .of
+            .into_iter()
+            .map(|((layer, element), segments)| Fill { layer, element, loops: outlines(&segments), ..Fill::default() })
+            .filter(|f| !f.loops.is_empty())
+            .collect();
+        fills.sort_by_key(|f| (f.layer, f.element));
+        fills
+    }
+}
+
+/// The closed outlines the segments make end to end; segments that close nothing are left out.
+fn outlines(segments: &[Segment]) -> Vec<Vec<[f32; 2]>> {
+    let key = |p: [f32; 2]| ((p[0] / WELD).round() as i64, (p[1] / WELD).round() as i64);
+    let mut at: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in segments.iter().enumerate() {
+        at.entry(key(s[0])).or_default().push(i);
+        at.entry(key(s[1])).or_default().push(i);
+    }
+    let mut used = vec![false; segments.len()];
+    let mut loops = Vec::new();
+    for first in 0..segments.len() {
+        if used[first] {
+            continue;
+        }
+        used[first] = true;
+        let (start, mut end) = (key(segments[first][0]), segments[first][1]);
+        let mut points = vec![segments[first][0]];
+        let closed = loop {
+            if key(end) == start {
+                break true;
+            }
+            points.push(end);
+            let Some(next) = at.get(&key(end)).and_then(|l| l.iter().copied().find(|&i| !used[i])) else { break false };
+            used[next] = true;
+            end = if key(segments[next][0]) == key(end) { segments[next][1] } else { segments[next][0] };
+        };
+        let area: f32 = (0..points.len()).map(|k| {
+            let (a, b) = (points[k], points[(k + 1) % points.len()]);
+            a[0] * b[1] - b[0] * a[1]
+        }).sum();
+        if closed && points.len() >= 3 && area.abs() / 2.0 > SLIVER {
+            loops.push(points);
+        }
+    }
+    loops
 }
 
 /// Where a triangle crosses the plane at height `z`: a corner on the plane counts as above it,
@@ -334,6 +431,9 @@ fn cross(corners: [[f32; 3]; 3], z: f32) -> Option<Segment> {
     for k in 0..3 {
         let (a, b) = (corners[k], corners[(k + 1) % 3]);
         if above[k] != above[(k + 1) % 3] {
+            // from the same end whichever way the edge runs, so two triangles sharing it meet
+            // in the very same point
+            let (a, b) = if a[2] <= b[2] { (a, b) } else { (b, a) };
             let t = (z - a[2]) / (b[2] - a[2]);
             points.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
         }
@@ -395,9 +495,9 @@ mod tests {
         // from above), not the diagonals of its faces, not its vertical edges
         assert_eq!(plan.segments.len(), 8);
         let table: Vec<&Segment> = plan.below.iter().filter(|[a, b]| a[0] >= 5.0 && b[0] >= 5.0).collect();
-        assert_eq!(table.len(), 8, "{table:?}");
+        // its top's four edges; those of its foot lie right under them
         let length: f32 = table.iter().map(|[a, b]| (b[0] - a[0]).hypot(b[1] - a[1])).sum();
-        assert!((length - 8.0).abs() < 1e-4, "{length}");
+        assert!((4.0 - 0.05..=8.0 + 1e-3).contains(&length), "{length}: {table:?}");
         assert_eq!(plan.extent, Some(([0.0, 0.0], [6.0, 2.0])));
         // above the table's top, the range shows nothing of it
         assert!(edges_between(&model, Shown::all(), 1.0, 1.2).iter().all(|[a, b]| a[0] < 5.0 && b[0] < 5.0));
@@ -437,6 +537,24 @@ mod tests {
             indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
         }
         Layer { name: name.into(), positions, indices, ..Layer::default() }
+    }
+
+    #[test]
+    fn a_plan_hides_what_lies_under_a_floor() {
+        // a floor over a table, both under the cut
+        let layers = vec![block("Floor", [0.0, 0.0, 2.0], [4.0, 4.0, 2.2]), block("Under", [1.0, 1.0, 0.0], [2.0, 2.0, 0.8]), block("Beside", [6.0, 0.0, 0.0], [7.0, 1.0, 0.8])];
+        let model = Model::new(PathBuf::from("house.obj"), "OBJ", layers);
+        let plan = plan_at(&model, Shown::all(), -0.5, 3.0);
+        let inside = |[a, b]: &&Segment| [a, b].iter().all(|p| (0.9..=2.1).contains(&p[0]) && (0.9..=2.1).contains(&p[1]));
+        let under: Vec<&Segment> = plan.below.iter().filter(inside).collect();
+        assert!(under.is_empty(), "{under:?}");
+        assert!(plan.below.iter().any(|[a, b]| a[0] >= 6.0 && b[0] >= 6.0), "the table beside the floor shows");
+        // a ceiling plan under the floor sees the floor, not what stands on it
+        let on = block("On", [1.0, 1.0, 2.2], [2.0, 2.0, 2.9]);
+        let model = Model::new(PathBuf::from("house.obj"), "OBJ", vec![block("Floor", [0.0, 0.0, 2.0], [4.0, 4.0, 2.2]), on]);
+        let ceiling = ceiling_at(&model, Shown::all(), 1.5, 3.0);
+        assert!(ceiling.below.iter().filter(inside).count() == 0, "{:?}", ceiling.below);
+        assert!(!ceiling.below.is_empty());
     }
 
     #[test]

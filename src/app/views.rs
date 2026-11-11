@@ -42,6 +42,8 @@ pub enum DocTab {
     Schedule(usize),
     /// Index in the model's sheets (read from the file).
     Sheet(usize),
+    /// Index in the model's legends and drafting views (read from the file).
+    Draft(usize),
     /// Index in `App::open_doc_sheets`: a sheet of the document.
     DocSheet(usize),
     /// How the model's IFCX file is built up.
@@ -124,7 +126,7 @@ impl App {
             };
             self.open_plans.push(OpenPlan { path: path.to_string(), slot });
         }
-        self.active_sheet = None;
+        self.active_sheet = None; self.active_draft = None;
         self.active_schedule = None;
         self.ifc.shown = false;
         self.load_view(Some(path.to_string()));
@@ -318,9 +320,10 @@ impl App {
         let plans = (0..self.open_plans.len()).map(DocTab::Plan);
         let schedules = self.open_schedules.iter().copied().filter(|&i| i < self.schedules.len()).map(DocTab::Schedule);
         let sheets = self.open_sheets.iter().copied().filter(|&i| i < self.sheets().len()).map(DocTab::Sheet);
+        let drafts = self.open_drafts.iter().copied().filter(|&i| i < self.drafts().len()).map(DocTab::Draft);
         let own = (0..self.open_doc_sheets.len()).map(DocTab::DocSheet);
         let ifc = self.ifc.open.then_some(DocTab::Ifc);
-        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(own).chain(ifc).collect()
+        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(drafts).chain(own).chain(ifc).collect()
     }
 
     /// The tab that shows: a sheet, else a floor plan, else a schedule (under the 3D view), else
@@ -332,6 +335,7 @@ impl App {
         let own = self.active_doc_sheet.as_ref().and_then(|p| self.open_doc_sheets.iter().position(|s| s == p));
         own.and_then(|k| at(DocTab::DocSheet(k)))
             .or_else(|| self.active_sheet.and_then(|s| at(DocTab::Sheet(s))))
+            .or_else(|| self.active_draft.and_then(|d| at(DocTab::Draft(d))))
             .or_else(|| plan.and_then(|k| at(DocTab::Plan(k))))
             .or_else(|| self.active_schedule.and_then(|s| at(DocTab::Schedule(s))))
             .or_else(|| self.ifc.shown.then(|| at(DocTab::Ifc)).flatten())
@@ -345,6 +349,7 @@ impl App {
             DocTab::Plan(k) => self.open_plans.get(k).and_then(|o| self.document.view_name(&o.path)).unwrap_or(""),
             DocTab::Schedule(i) => self.schedules.get(i).map_or("", |s| s.name.as_str()),
             DocTab::Sheet(i) => self.sheets().get(i).map_or("", |s| s.title.as_str()),
+            DocTab::Draft(i) => self.drafts().get(i).map_or("", |d| d.name.as_str()),
             DocTab::DocSheet(k) => self.open_doc_sheets.get(k).and_then(|p| self.document.sheet(p)).map_or("", |s| s.title.as_str()),
             DocTab::Ifc => "IFC",
         }
@@ -353,7 +358,7 @@ impl App {
     pub(super) fn select_tab(&mut self, i: usize) -> Task<Message> {
         match self.doc_tabs().get(i).copied() {
             Some(DocTab::Model) => {
-                self.active_sheet = None;
+                self.active_sheet = None; self.active_draft = None;
                 self.active_doc_sheet = None;
                 self.ifc.shown = false;
                 self.load_view(None);
@@ -366,6 +371,7 @@ impl App {
             }
             Some(DocTab::Schedule(s)) => self.show_schedule(Some(s)),
             Some(DocTab::Sheet(s)) => self.show_sheet(Some(s)),
+            Some(DocTab::Draft(d)) => self.show_draft(Some(d)),
             Some(DocTab::DocSheet(k)) => {
                 let path = self.open_doc_sheets[k].clone();
                 self.open_doc_sheet(&path);
@@ -388,6 +394,7 @@ impl App {
             }
             Some(DocTab::Schedule(s)) => self.close_schedule(s),
             Some(DocTab::Sheet(s)) => self.close_sheet(s),
+            Some(DocTab::Draft(d)) => self.close_draft(d),
             Some(DocTab::DocSheet(k)) => {
                 let path = self.open_doc_sheets[k].clone();
                 self.close_doc_sheet(&path);

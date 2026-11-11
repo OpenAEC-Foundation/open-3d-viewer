@@ -4,8 +4,12 @@
 
 mod export_drawing;
 mod grids;
+mod hatch;
 mod ifc;
 mod layers;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+pub mod collab;
+mod drafts;
 mod edit;
 mod element_props;
 mod levels;
@@ -169,13 +173,16 @@ pub struct App {
     /// The grid line picked with a click (index into the model's grids), shown in the properties.
     pub picked_grid: Option<usize>,
     /// Explorer groups opened: views, rooms, layers, schedules, sheets.
-    pub explorer_open: [bool; 5],
+    pub explorer_open: [bool; 7],
     /// The explorer's tab shown.
     pub explorer_tab: ExplorerTab,
     /// The project's library: materials, layered build-ups and linear types.
     pub library: bim_library::Library,
     /// The Library tab's open groups and pick.
     pub library_view: library::LibraryView,
+    /// The BIM Collaborator's issues, checks and clashes of this project.
+    #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+    pub collab: collab::State,
     /// The project document (IfcX): the levels of the model and those added.
     pub document: Document,
     /// The form of a new level, while it is open.
@@ -228,6 +235,10 @@ pub struct App {
     /// Sheets open in a document tab, in tab order, and the one shown in the workspace.
     pub open_sheets: Vec<usize>,
     pub active_sheet: Option<usize>,
+    /// The legends and drafting views open in tabs, the one shown and what is picked in it.
+    pub open_drafts: Vec<usize>,
+    pub active_draft: Option<usize>,
+    pub draft_pick: Option<(u64, drafts::DraftPick)>,
     /// Schedules open in a document tab, in tab order, and the one shown under the viewport.
     pub open_schedules: Vec<usize>,
     pub active_schedule: Option<usize>,
@@ -351,6 +362,8 @@ pub enum Message {
     ExplorerTab(ExplorerTab),
     /// The Library tab.
     Library(library::LibraryMessage),
+    #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+    Collab(collab::Event),
     /// Open the form of a new level, named after this word ("Level") and a number.
     NewLevel(&'static str),
     LevelName(String),
@@ -414,6 +427,8 @@ pub enum Message {
     RemoveMark,
     /// Put the picked dimension on the other side of what it measures.
     FlipDimension,
+    /// The picked dimension looks otherwise: another style, or its style changed.
+    DimensionLook(marks::LookEdit),
     /// Give a view (its path) its standard dimensions.
     StandardDimensions(Arc<str>),
     /// Lay a drawing on a level (its path): asks for the file.
@@ -463,6 +478,9 @@ pub enum Message {
     SectionTool(bool),
     /// Open a sheet in its document tab.
     OpenSheet(usize),
+    /// A legend or drafting view opened in its tab; what a click picked in the one shown.
+    OpenDraft(usize),
+    PickDraft(Option<(u64, drafts::DraftPick)>),
     /// Show a sheet's tab (`None`: not a sheet).
     ShowSheet(Option<usize>),
     CloseSheet(usize),
@@ -473,6 +491,8 @@ pub enum Message {
     /// Show a schedule's tab (`None`: the 3D view alone).
     ShowSchedule(Option<usize>),
     CloseSchedule(usize),
+    /// Writes the schedules to an Excel workbook, asked where.
+    ExportSchedules,
     /// Select the elements of a schedule row: schedule, row.
     ScheduleRow(usize, usize),
     ScheduleScroll(scrollable::Viewport),
@@ -655,10 +675,12 @@ impl Default for App {
             active_view: None,
             show_grids: true,
             picked_grid: None,
-            explorer_open: [false, false, true, false, false],
+            explorer_open: [false, false, true, false, false, false, false],
             explorer_tab: ExplorerTab::Model,
             library: bim_library::Library::starter(),
             library_view: library::LibraryView::default(),
+            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            collab: collab::State::default(),
             document: Document::default(),
             level_form: None,
             active_plan: None,
@@ -686,6 +708,9 @@ impl Default for App {
             open_layer_groups: HashSet::new(),
             open_sheets: Vec::new(),
             active_sheet: None,
+            open_drafts: Vec::new(),
+            active_draft: None,
+            draft_pick: None,
             open_schedules: Vec::new(),
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
@@ -1172,7 +1197,9 @@ impl App {
         self.schedules.clear();
         self.schedules_pending = false;
         self.open_sheets.clear();
-        self.active_sheet = None;
+        self.open_drafts.clear();
+        self.draft_pick = None;
+        self.active_sheet = None; self.active_draft = None;
         self.explorer_open[0] = false;
         self.sel.clear();
         self.selected = None;
@@ -1243,6 +1270,10 @@ impl App {
             self.keep_view_layers();
         }
         self.keep_views_in_3d();
+        // the view in its tab is cut, to show its cut faces in their hatch
+        if let Some(view) = self.shown_view().filter(|v| !self.cuts.contains_key(*v)).map(str::to_string) {
+            self.cut_view(&view);
+        }
         self.refresh_hover();
         // the structural hover goes when the camera moves (it no longer lies under the cursor) and
         // while measuring or placing a section plane
@@ -1551,6 +1582,8 @@ impl App {
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
+            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            Message::Collab(event) => return self.collab_update(event),
             Message::NewLevel(word) => self.new_level(word),
             Message::LevelName(name) => {
                 if let Some(form) = &mut self.level_form {
@@ -1628,6 +1661,7 @@ impl App {
             Message::PickMark(pick) => self.pick_mark(pick),
             Message::RemoveMark => self.remove_mark(),
             Message::FlipDimension => self.flip_dimension(),
+            Message::DimensionLook(edit) => self.edit_dimension_look(edit),
             Message::StandardDimensions(view) => {
                 self.standard_dimensions(&view);
             }
@@ -1721,12 +1755,15 @@ impl App {
             }
             Message::CloseTab(i) => return self.close_tab(i),
             Message::OpenSheet(i) => return self.open_sheet(i),
+            Message::OpenDraft(i) => return self.open_draft(i),
+            Message::PickDraft(pick) => self.draft_pick = pick,
             Message::ShowSheet(i) => return self.show_sheet(i),
             Message::CloseSheet(i) => return self.close_sheet(i),
             Message::SheetView(view) => return self.sheet_view(view),
             Message::OpenSchedule(i) => return self.open_schedule(i),
             Message::ShowSchedule(i) => return self.show_schedule(i),
             Message::CloseSchedule(i) => return self.close_schedule(i),
+            Message::ExportSchedules => return self.export_schedules(),
             Message::ScheduleRow(s, r) => self.select_row(s, r),
             Message::ScheduleScroll(v) => return self.scrolled(v),
             Message::OpenIfc => return self.open_ifc(),
@@ -2631,6 +2668,7 @@ impl App {
 
         body = self.schedules_group(p, l, &query, body);
         body = self.sheets_group(p, l, &query, body);
+        body = self.drafts_groups(p, l, &query, body);
 
         // rooms, by level (low to high, then rooms without a level)
         let rooms = &model.project.rooms;

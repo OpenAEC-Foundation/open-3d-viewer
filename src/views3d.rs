@@ -144,7 +144,7 @@ mod tests {
     /// The walls of a room of 8 x 5 m as a plan's cut.
     fn room() -> Cut {
         let segments = vec![[[0.0, 0.0], [8.0, 0.0]], [[8.0, 0.0], [8.0, 5.0]], [[8.0, 5.0], [0.0, 5.0]], [[0.0, 5.0], [0.0, 0.0]]];
-        Cut { segments, below: Vec::new(), extent: Some(([0.0, 0.0], [8.0, 5.0])) }
+        Cut { segments, below: Vec::new(), extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new() }
     }
 
     fn of(v: &Views3d, color: [u8; 4]) -> Vec<[[f32; 3]; 2]> {
@@ -177,7 +177,7 @@ mod tests {
         let mut doc = Document::default();
         let section = doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
         // its drawing: u along the line from (0, 2), v up; a wall cut at u = 3 from 0 to 3 m
-        let cut = Arc::new(Cut { segments: vec![[[3.0, 0.0], [3.0, 3.0]]], below: Vec::new(), extent: Some(([3.0, 0.0], [3.0, 3.0])) });
+        let cut = Arc::new(Cut { segments: vec![[[3.0, 0.0], [3.0, 3.0]]], below: Vec::new(), extent: Some(([3.0, 0.0], [3.0, 3.0])), fills: Vec::new() });
         let v = document_views(&doc, &|p| (p == section).then(|| cut.clone()), Some(&bounds()));
         let lines = of(&v, CUT);
         assert_eq!(lines, vec![[[3.0, 2.0, 0.0], [3.0, 2.0, 3.0]]]);

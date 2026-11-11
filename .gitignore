@@ -32,3 +32,4 @@ temp/
 
 # Claude Code
 .claude/
+PROMPTS.md

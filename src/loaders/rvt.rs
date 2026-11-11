@@ -42,7 +42,8 @@ impl Loader for RvtLoader {
         progress.set(Phase::Convert);
         // `scene` returns view coordinates: metres, Y up (x, z, -y)
         let scene = rvt_export::mesh::scene(&doc);
-        let (view_ids, views): (Vec<u64>, Vec<SavedView>) = saved_views(&doc).into_iter().unzip();
+        let infos = rvt_export::views::views(&doc);
+        let (view_ids, views): (Vec<u64>, Vec<SavedView>) = saved_views(&infos).into_iter().unzip();
         let mut project = project_data(&doc, &scene.levels);
         let layers = scene
             .batches
@@ -69,7 +70,18 @@ impl Loader for RvtLoader {
                 }
             })
             .collect::<Vec<Layer>>();
-        project.sheets = sheets(&doc, &view_ids, &views, &layers);
+        // the plans, sections and elevations with their texts and dimensions: the project's drawings
+        let file = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        // the tags of its views, with the labels and lines of their types
+        let mut types = super::rvt_drawings::Types::new(&doc);
+        let tags = super::rvt_tags::tags(&doc, &mut types);
+        // the detail components of its views, as the lines of their families
+        let details = super::rvt_tags::details(&doc, &mut types);
+        drop(types);
+        project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags, &details);
+        // the legends and drafting views: drawings without a model
+        project.drafts = super::rvt_drafts::drafts(&doc, &tags, &details);
+        project.sheets = sheets(&doc, &view_ids, &views, &layers, &file, &project, &infos);
         // the schedules take seconds on a large project: computed once the model shows
         project.schedules = Later::new(move || schedules(&doc));
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
@@ -286,14 +298,14 @@ fn natural_key(s: &str) -> (u64, String) {
 
 /// The model views of the file (beta) in world coordinates: the mesh is in Revit's model
 /// coordinates scaled from feet to metres, Z up, so the views convert the same way.
-fn saved_views(doc: &rvt_read::Document) -> Vec<(u64, SavedView)> {
+fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
     use rvt_export::views::{OrientedBox, ViewKind as K};
     const FT: f32 = 0.3048;
     let v3 = |p: [f64; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
     let frame = |b: &OrientedBox| SectionBox::from_frame(v3(b.origin) * FT, b.basis.map(v3), v3(b.min) * FT, v3(b.max) * FT);
     // ±1e9 ft means unlimited
     let limited = |v: Option<f64>| v.filter(|v| v.abs() < 1e8);
-    rvt_export::views::views(doc)
+    infos
         .into_iter()
         .filter_map(|v| {
             let kind = match &v.kind {
@@ -349,7 +361,14 @@ fn saved_views(doc: &rvt_read::Document) -> Vec<(u64, SavedView)> {
 /// insertion point is the paper's lower right corner (3077 R26), else another corner or the
 /// centre, whichever holds the most viewports. A viewport without an active crop region gets the
 /// size of the building as its view sees it (`estimated`, centred on its position).
-fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer]) -> Vec<Sheet> {
+fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo]) -> Vec<Sheet> {
+    let mut types = super::rvt_drawings::Types::new(doc);
+    // the schedules placed on the sheets, as tables
+    let mut tables = super::rvt_schedules::placed(doc);
+    let anchors: HashMap<u64, [f64; 2]> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
+    // the views the document draws, and the legends and drafting views, by their element
+    let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
+    let drafts: HashMap<u64, usize> = project.drafts.iter().enumerate().map(|(k, d)| (d.id, k)).collect();
     use rvt_export::views::ViewKind as K;
     const FT: f32 = 0.3048;
     let index: HashMap<u64, usize> = view_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
@@ -369,9 +388,12 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                     let view = index.get(&v.view).copied();
                     let position = [v.position[0] as f32 * FT, v.position[1] as f32 * FT];
                     let scale = v.scale as f32;
-                    let (rect, estimated) = match v.rect {
-                        Some([lo, hi]) => (SheetRect { min: lo.map(|x| x as f32 * FT), max: hi.map(|x| x as f32 * FT) }, false),
-                        None => {
+                    // a legend or drafting view covers what is drawn in it
+                    let drawn = drafts.get(&v.view).and_then(|&k| project.drafts[k].extent()).map(|e| SheetRect { min: [position[0] + e.min[0] * scale, position[1] + e.min[1] * scale], max: [position[0] + e.max[0] * scale, position[1] + e.max[1] * scale] });
+                    let (rect, estimated) = match (v.rect, drawn) {
+                        (Some([lo, hi]), _) => (SheetRect { min: lo.map(|x| x as f32 * FT), max: hi.map(|x| x as f32 * FT) }, false),
+                        (None, Some(drawn)) => (drawn, false),
+                        (None, None) => {
                             // the model as the view sees it: from above for a plan, across the view
                             // direction (and the full height) for the others
                             let seen = match (&v.view_kind, view.and_then(|i| views[i].camera.as_ref())) {
@@ -391,6 +413,12 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                         estimated,
                         scale: format!("1:{}", (1.0 / v.scale).round()),
                         detail: v.detail_number.clone(),
+                        label: v.label_origin.map(|p| p.map(|x| x as f32 * FT)),
+                        origin: position,
+                        ratio: scale,
+                        drawing: Some(crate::document::uuid(&format!("rvt/{file}/view/{}", v.view))).filter(|path| drawings.contains(path.as_str())),
+                        anchor: anchors.get(&v.view).copied(),
+                        draft: drafts.get(&v.view).copied(),
                     }
                 })
                 .collect();
@@ -406,13 +434,70 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 let min = corners.into_iter().rev().max_by_key(|&c| held(c))?;
                 Some(SheetRect { min, max: [min[0] + w, min[1] + h] })
             });
-            Sheet::new(s.number, s.name, paper, viewports)
+            // the title block as its family draws it, from where it is placed
+            let block = s.title_block.as_ref().and_then(|t| Some((t, t.symbol?))).map(|(t, kind)| {
+                let (lines, texts) = super::rvt_tags::title_block(doc, &mut types, kind, s.id, &s.number, &s.name);
+                let on = |p: [f64; 2]| [(t.origin[0] * 0.3048 + p[0]) as f32, (t.origin[1] * 0.3048 + p[1]) as f32];
+                let texts = texts.into_iter().map(|x| {
+                    let align = x.align.clamp(0, 2) as usize;
+                    let at = on([x.at[0] - [0.0, x.width / 2.0, x.width][align], x.at[1]]);
+                    crate::model::DraftText { element: t.id, at, width: x.width as f32, height: x.height() as f32, size: x.em as f32, align: align as u8, angle: x.angle as f32, text: x.wording }
+                });
+                (lines.into_iter().map(|l| [on(l[0]), on(l[1])]).collect(), texts.collect())
+            });
+            let mut sheet = Sheet::new(s.number, s.name, paper, viewports);
+            if let Some((lines, texts)) = block {
+                (sheet.lines, sheet.texts) = (lines, texts);
+            }
+            sheet.tables = tables.remove(&s.id).unwrap_or_default();
+            sheet
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    /// A project with drawings (`RVT_DRAWINGS`, read-only; skipped when absent): its plans and
+    /// sections become views of the document, with the texts and dimensions drawn in them.
+    #[test]
+    fn views_become_drawings_of_the_document() {
+        let Some(path) = std::env::var_os("RVT_DRAWINGS").map(std::path::PathBuf::from).filter(|p| p.exists()) else {
+            eprintln!("skipped: set RVT_DRAWINGS to a Revit project with annotated views");
+            return;
+        };
+        let t = std::time::Instant::now();
+        let model = crate::loaders::load(&path).expect("rvt");
+        eprintln!("loaded in {:?}, {} drawing nodes", t.elapsed(), model.project.drawings.len());
+        let document = crate::document::Document::from_model(&model);
+        let (plans, sections) = (document.plans(), document.sections());
+        eprintln!("{} plans, {} sections and elevations", plans.len(), sections.len());
+        for p in plans {
+            eprintln!("plan {:?} {:?} cut {:.2} depth {:.2} crop {:?}: {} notes, {} dimensions", p.name, p.kind, p.cut, p.depth, p.crop, p.notes.len(), p.dimensions.len());
+            for n in p.notes.iter().take(3) {
+                eprintln!("    note {:?} {:?}", n.at, n.text);
+            }
+            for d in p.dimensions.iter().take(3) {
+                eprintln!("    dimension {:?} -> {:?} = {:.0} mm", d.from, d.to, d.length() * 1000.0);
+            }
+        }
+        for s in sections {
+            eprintln!("section {:?} {:?} {:?} -> {:?} depth {:.2} crop {:?}: {} notes, {} dimensions", s.name, s.kind, s.from, s.to, s.depth, s.crop, s.notes.len(), s.dimensions.len());
+            for n in s.notes.iter().take(3) {
+                eprintln!("    note {:?} {:?}", n.at, n.text);
+            }
+            for d in s.dimensions.iter().take(3) {
+                eprintln!("    dimension {:?} -> {:?} = {:.0} mm", d.from, d.to, d.length() * 1000.0);
+            }
+        }
+        assert!(!plans.is_empty() && !sections.is_empty());
+        let marks = |n: usize, d: usize| n > 0 && d > 0;
+        assert!(plans.iter().any(|p| marks(p.notes.len(), p.dimensions.len())) || sections.iter().any(|s| marks(s.notes.len(), s.dimensions.len())));
+        // marks lie in or near the model: a wrong frame would put them far away
+        let b = &model.bounds;
+        let near = |p: [f64; 2]| p[0] > b.min[0] as f64 - 50.0 && p[0] < b.max[0] as f64 + 50.0 && p[1] > b.min[1] as f64 - 50.0 && p[1] < b.max[1] as f64 + 50.0;
+        assert!(plans.iter().flat_map(|p| &p.notes).all(|n| near(n.at)), "bounds {b:?}");
+    }
+
     /// Autodesk's racbasicsampleproject_2026.rvt, read-only from `RVT_SAMPLE`; skipped when absent.
     #[test]
     fn loads_revit_sample() {

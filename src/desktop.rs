@@ -7,7 +7,7 @@
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...]
-//!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER]
+//!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
@@ -41,6 +41,15 @@ struct Args {
     page: shell::Page,
     schedule: Option<String>,
     sheet: Option<String>,
+    /// For `--screenshot`: a plan, section or elevation of the document (by name) to show in its tab.
+    drawing: Option<String>,
+    /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
+    draft: Option<String>,
+    /// For `--screenshot` of the Collaborator: a BCF file to open, an IDS to check on, and what
+    /// to run and show (`issues`, `check`, `clash`).
+    bcf: Option<PathBuf>,
+    ids: Option<PathBuf>,
+    collab: Option<String>,
     /// For `--screenshot`: recent files, besides FILE.
     recent: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
@@ -80,6 +89,11 @@ fn parse_args() -> Result<Args, String> {
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
+            "--drawing" => args.drawing = Some(value()?),
+            "--draft" => args.draft = Some(value()?),
+            "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
+            "--ids" => args.ids = Some(PathBuf::from(value()?)),
+            "--collab" => args.collab = Some(value()?),
             "--recent" => args.recent.push(PathBuf::from(value()?)),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
@@ -358,7 +372,25 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let i = model.project.sheets.iter().position(|s| &s.number == number).ok_or(format!("no sheet {number} in the file"))?;
             let _ = app.update(Message::OpenSheet(i));
         }
+        if let Some(name) = &args.draft {
+            let model = app.model.clone().ok_or("no model")?;
+            let i = model.project.drafts.iter().position(|d| &d.name == name).ok_or(format!("no legend or drafting view {name} in the file"))?;
+            let _ = app.update(Message::OpenDraft(i));
+        }
+        if let Some(name) = &args.drawing {
+            let document = app.document_now();
+            let plan = document.plans().iter().find(|p| &p.name == name).map(|p| p.path.clone());
+            let path = plan.or_else(|| document.sections().iter().find(|s| &s.name == name).map(|s| s.path.clone())).ok_or(format!("no drawing {name} in the file"))?;
+            let _ = app.update(Message::OpenPlan(Arc::from(path.as_str())));
+            app.finish_animation();
+        }
     }
+    #[cfg(feature = "collaborator")]
+    if let Some(language) = args.language {
+        studio.app.collab.language = language;
+    }
+    #[cfg(feature = "collaborator")]
+    studio.app.collab_now(args.bcf.as_deref(), args.ids.as_deref(), args.collab.as_deref())?;
     studio.snapshot(iced::Size::new(w, h), out)?;
     eprintln!("wrote {}", out.display());
     Ok(())

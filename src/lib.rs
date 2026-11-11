@@ -16,9 +16,12 @@ pub mod app;
 mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+pub mod collab;
 pub mod document;
 pub mod drawing;
 pub mod drawing2d;
+pub mod hatching;
 pub mod element_class;
 mod explode;
 pub mod export;

@@ -4,7 +4,7 @@
 //! To add a format: implement [`Writer`] in a new module and add it to [`registry`].
 //!
 //! The drawings of views and sheets ([`crate::drawing2d`]) are exported apart from the model:
-//! [`cad`] (DWG, DXF, IFCCAD), [`pdf`] and [`svg`] (SVG, PNG).
+//! [`cad`] (DWG, DXF, IFCCAD), [`pdf`] and [`svg`] (SVG, PNG). Schedules go to a workbook ([`xlsx`]).
 
 pub mod cad;
 pub mod drawing;
@@ -12,6 +12,7 @@ pub(crate) mod ifc;
 pub(crate) mod ifcx;
 pub mod pdf;
 pub mod svg;
+pub mod xlsx;
 
 use crate::document::Document;
 use crate::model::Model;

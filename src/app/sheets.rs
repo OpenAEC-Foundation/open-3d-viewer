@@ -3,19 +3,24 @@
 //! detail number. A click on a view shows it in 3D.
 
 use super::{group_header, App, Message};
-use crate::model::{Sheet, SheetRect};
+use crate::document::{Dimension, DimensionStyle, Note, Tick};
+use crate::drawing::Cut;
+use crate::model::{Model, Sheet, SheetRect};
+use std::sync::Arc;
 use crate::theme::Palette;
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, canvas as canvas_widget, container, text, Column};
-use iced::{Color, Element, Fill, Padding, Point, Rectangle, Size, Task};
+use iced::{Color, Element, Fill, Padding, Point, Rectangle, Size, Task, Vector};
 use openaec_ui::Language;
 use serde_json::{json, Value};
 
 /// Margin around the sheet in the workspace (logical pixels).
 const MARGIN: f32 = 24.0;
+/// The smallest letters worth drawing (logical pixels).
+const SMALLEST: f32 = 1.5;
 
 impl App {
     /// The sheets of the model.
@@ -38,6 +43,12 @@ impl App {
             self.active_schedule = None;
             self.ifc.shown = false;
             self.active_doc_sheet = None;
+            self.active_draft = None;
+        }
+        // the plans and sections on it are cut once, to be drawn in their viewports
+        let views: Vec<String> = i.and_then(|i| self.sheets().get(i)).into_iter().flat_map(|s| s.viewports.iter().filter_map(|v| v.drawing.clone())).collect();
+        for view in views {
+            self.cut_view(&view);
         }
         Task::none()
     }
@@ -55,7 +66,7 @@ impl App {
 
     /// A view on a sheet clicked: the 3D view shows it.
     pub(super) fn sheet_view(&mut self, view: usize) -> Task<Message> {
-        self.active_sheet = None;
+        self.active_sheet = None; self.active_draft = None;
         self.apply_view(view);
         Task::none()
     }
@@ -88,7 +99,29 @@ impl App {
 
     /// The shown sheet, drawn to fit the workspace.
     pub(super) fn sheet_view_element(&self, p: Palette, l: Language, sheet: &Sheet) -> Element<'_, Message> {
-        let drawing = SheetDrawing { sheet: sheet.clone(), palette: p, empty: l.text("Geen geplaatste views", "No placed views").to_string() };
+        let empty = l.text("Geen geplaatste views", "No placed views").to_string();
+        let (Some(model), Some(index)) = (self.model.clone(), self.active_sheet) else {
+            return container(text(empty).size(13).color(p.text_muted)).center(Fill).style(move |_| p.panel()).into();
+        };
+        // what each viewport shows: a legend or drafting view, or a view of the document
+        let placed = sheet
+            .viewports
+            .iter()
+            .map(|v| match (v.draft, v.drawing.as_deref().and_then(|path| Some((path, self.document.view_marks(path)?)))) {
+                (Some(k), _) => Placed::Draft(k),
+                (None, Some((path, (dimensions, crop)))) => Placed::View {
+                    cut: self.cuts.get(path).cloned(),
+                    crop,
+                    dimensions: dimensions.to_vec(),
+                    notes: self.document.view_notes(path).map_or(Vec::new(), <[_]>::to_vec),
+                    lines: self.document.view_lines(path).to_vec(),
+                },
+                (None, None) => Placed::Frame,
+            })
+            .collect();
+        // the schedules on it, with what the computed ones add to what the file stores
+        let tables = sheet.tables.iter().map(|t| t.filled(self.schedules.iter().find(|s| s.name == t.schedule))).collect();
+        let drawing = SheetDrawing { model, sheet: index, placed, tables, styles: self.document.dimension_styles().to_vec(), palette: p, empty };
         container(canvas_widget(drawing).width(Fill).height(Fill)).width(Fill).height(Fill).style(move |_| p.panel()).into()
     }
 }
@@ -162,9 +195,27 @@ impl App {
     }
 }
 
+/// What a placed view shows on its sheet.
+enum Placed {
+    /// Its frame only: a view the viewer cannot draw.
+    Frame,
+    /// A legend or drafting view of the model.
+    Draft(usize),
+    /// A plan, section or elevation of the document: what it cuts and sees, its dimensions, texts
+    /// and the lines of its tags, and what it shows of its drawing (lower left, upper right).
+    View { cut: Option<Arc<Cut>>, crop: Option<([f64; 2], [f64; 2])>, dimensions: Vec<Dimension>, notes: Vec<Note>, lines: Vec<[[f64; 2]; 2]> },
+}
+
 /// A sheet on a canvas.
 struct SheetDrawing {
-    sheet: Sheet,
+    model: Arc<Model>,
+    sheet: usize,
+    /// What each of its viewports shows.
+    placed: Vec<Placed>,
+    /// The schedules placed on it.
+    tables: Vec<crate::model::SheetTable>,
+    /// The document's dimension styles: a dimension names one by its place.
+    styles: Vec<DimensionStyle>,
     palette: Palette,
     empty: String,
 }
@@ -176,25 +227,49 @@ struct Fit {
     top: f32,
 }
 
+/// The hovered viewport, and how the pointer moved the sheet: zoomed in by `zoom` about the fit,
+/// moved by `pan`.
+struct DrawingState {
+    hover: Option<usize>,
+    zoom: f32,
+    pan: Vector,
+    /// Where a drag started, the pan then and whether the pointer has moved since.
+    drag: Option<(Point, Vector, bool)>,
+}
+
+impl Default for DrawingState {
+    fn default() -> Self {
+        Self { hover: None, zoom: 1.0, pan: Vector::ZERO, drag: None }
+    }
+}
+
 impl SheetDrawing {
-    /// Sheet metres to canvas pixels: the sheet's extent centred, y up.
-    fn fit(&self, size: Size) -> Option<Fit> {
-        let e = self.sheet.extent()?;
+    fn sheet(&self) -> Option<&Sheet> {
+        self.model.project.sheets.get(self.sheet)
+    }
+
+    /// Sheet metres to canvas pixels: the sheet's extent centred, y up, then zoomed and moved as
+    /// `state` says.
+    fn fit(&self, state: &DrawingState, size: Size) -> Option<Fit> {
+        let e = self.sheet()?.extent()?;
         let (w, h) = (e.max[0] - e.min[0], e.max[1] - e.min[1]);
         if w <= 0.0 || h <= 0.0 {
             return None;
         }
-        let scale = ((size.width - 2.0 * MARGIN) / w).min((size.height - 2.0 * MARGIN) / h).max(1e-3);
-        let origin = Point::new((size.width - w * scale) / 2.0 - e.min[0] * scale, 0.0);
-        let top = (size.height - h * scale) / 2.0 + e.max[1] * scale;
+        let fitted = ((size.width - 2.0 * MARGIN) / w).min((size.height - 2.0 * MARGIN) / h).max(1e-3);
+        let scale = fitted * state.zoom;
+        // the middle of the sheet, at the middle of the canvas moved by the pan
+        let (cx, cy) = ((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0);
+        let origin = Point::new(size.width / 2.0 + state.pan.x - cx * scale, 0.0);
+        let top = size.height / 2.0 + state.pan.y + cy * scale;
         Some(Fit { scale, origin, top })
     }
 
     /// The viewport under a canvas point, the topmost (last placed) first.
-    fn viewport_at(&self, size: Size, at: Point) -> Option<usize> {
-        let fit = self.fit(size)?;
+    fn viewport_at(&self, state: &DrawingState, size: Size, at: Point) -> Option<usize> {
+        let fit = self.fit(state, size)?;
         let sheet = [(at.x - fit.origin.x) / fit.scale, (fit.top - at.y) / fit.scale];
-        self.sheet.viewports.iter().rposition(|v| v.view.is_some() && v.rect.contains(sheet))
+        self.sheet()?.viewports.iter().rposition(|v| v.view.is_some() && v.rect.contains(sheet))
     }
 }
 
@@ -209,10 +284,37 @@ impl Fit {
     }
 }
 
-/// The hovered viewport.
-#[derive(Default)]
-struct DrawingState {
-    hover: Option<usize>,
+/// A text of a drawing on the canvas: `on` places its points, `scale` is what a metre of the
+/// drawing is on screen. Left out when its letters are too small to see or it lies off the canvas.
+fn draw_text(frame: &mut Frame, t: &crate::model::DraftText, on: &dyn Fn([f32; 2]) -> Point, scale: f32, color: Color, canvas: Size) {
+    let size = t.size * scale;
+    let x = [t.at[0], t.at[0] + t.width / 2.0, t.at[0] + t.width][t.align.min(2) as usize];
+    let (top, foot) = (on([x, t.at[1] + t.height]), on([x, t.at[1]]));
+    let reach = size * 60.0;
+    if size < SMALLEST || top.x < -reach || top.x > canvas.width + reach || top.y < -reach || top.y > canvas.height + reach {
+        return;
+    }
+    let text = |position: Point| canvas::Text {
+        content: t.text.clone(),
+        position,
+        align_x: [alignment::Horizontal::Left, alignment::Horizontal::Center, alignment::Horizontal::Right][t.align.min(2) as usize].into(),
+        align_y: alignment::Vertical::Top,
+        size: iced::Pixels(size),
+        line_height: iced::widget::text::LineHeight::Relative(1.3),
+        color,
+        font: openaec_ui::fonts::MEDIUM,
+        ..canvas::Text::default()
+    };
+    if t.angle == 0.0 {
+        frame.fill_text(text(top));
+    } else {
+        // turned about the foot of its box, under where its lines start
+        frame.with_save(|frame| {
+            frame.translate(Vector::new(foot.x, foot.y));
+            frame.rotate(-t.angle);
+            frame.fill_text(text(Point::new(0.0, -(foot.y - top.y).abs())));
+        });
+    }
 }
 
 impl canvas::Program<Message> for SheetDrawing {
@@ -220,16 +322,50 @@ impl canvas::Program<Message> for SheetDrawing {
 
     fn update(&self, state: &mut DrawingState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
         match event {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let p = cursor.position_in(bounds)?;
+                let steps = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    mouse::ScrollDelta::Pixels { y, .. } => *y / 50.0,
+                };
+                let zoom = (state.zoom * 1.2f32.powf(steps).clamp(0.2, 5.0)).clamp(0.2, 400.0);
+                // the point under the pointer stays under it
+                let factor = zoom / state.zoom;
+                let centre = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+                let from = Vector::new(p.x - centre.x - state.pan.x, p.y - centre.y - state.pan.y);
+                state.pan = Vector::new(p.x - centre.x - from.x * factor, p.y - centre.y - from.y * factor);
+                state.zoom = zoom;
+                Some(canvas::Action::request_redraw().and_capture())
+            }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left | mouse::Button::Middle)) => {
+                let p = cursor.position_in(bounds)?;
+                state.drag = Some((p, state.pan, false));
+                Some(canvas::Action::capture())
+            }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let hover = cursor.position_in(bounds).and_then(|p| self.viewport_at(bounds.size(), p));
+                let p = cursor.position_in(bounds);
+                if let (Some((from, pan, moved)), Some(p)) = (state.drag.as_mut(), p) {
+                    if *moved || from.distance(p) > 4.0 {
+                        *moved = true;
+                        state.pan = Vector::new(pan.x + p.x - from.x, pan.y + p.y - from.y);
+                        return Some(canvas::Action::request_redraw());
+                    }
+                    return None;
+                }
+                let hover = p.and_then(|p| self.viewport_at(state, bounds.size(), p));
                 (hover != state.hover).then(|| {
                     state.hover = hover;
                     canvas::Action::request_redraw()
                 })
             }
-            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let i = self.viewport_at(bounds.size(), cursor.position_in(bounds)?)?;
-                let view = self.sheet.viewports[i].view?;
+            iced::Event::Mouse(mouse::Event::ButtonReleased(button @ (mouse::Button::Left | mouse::Button::Middle))) => {
+                let (_, _, moved) = state.drag.take()?;
+                // a click, not a drag: the view under it shows in 3D
+                if moved || *button != mouse::Button::Left {
+                    return None;
+                }
+                let i = self.viewport_at(state, bounds.size(), cursor.position_in(bounds)?)?;
+                let view = self.sheet()?.viewports[i].view?;
                 Some(canvas::Action::publish(Message::SheetView(view)).and_capture())
             }
             _ => None,
@@ -239,68 +375,231 @@ impl canvas::Program<Message> for SheetDrawing {
     fn draw(&self, state: &DrawingState, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
         let p = self.palette;
         let mut frame = Frame::new(renderer, bounds.size());
-        let label = |frame: &mut Frame, content: String, position: Point, size: f32, color: Color, align: alignment::Horizontal| {
+        let label = |frame: &mut Frame, content: String, position: Point, size: f32, color: Color, align: alignment::Horizontal, vertical: alignment::Vertical| {
             frame.fill_text(canvas::Text {
                 content,
                 position,
                 align_x: align.into(),
-                align_y: alignment::Vertical::Bottom,
+                align_y: vertical,
                 size: iced::Pixels(size),
+                line_height: iced::widget::text::LineHeight::Relative(1.3),
                 color,
                 font: openaec_ui::fonts::MEDIUM,
                 ..canvas::Text::default()
             });
         };
-        let Some(fit) = self.fit(bounds.size()) else {
+        let (Some(sheet), Some(fit)) = (self.sheet(), self.fit(state, bounds.size())) else {
             let centre = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-            label(&mut frame, self.empty.clone(), centre, 13.0, p.text_muted, alignment::Horizontal::Center);
+            label(&mut frame, self.empty.clone(), centre, 13.0, p.text_muted, alignment::Horizontal::Center, alignment::Vertical::Bottom);
             return vec![frame.into_geometry()];
         };
         let paper = if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE };
         let ink = p.text;
         let faint = Color { a: 0.35, ..p.text_secondary };
+        // what lies outside the canvas is not worth its lines
+        let seen = |a: Point, b: Point| a.x.max(b.x) >= 0.0 && a.x.min(b.x) <= bounds.width && a.y.max(b.y) >= 0.0 && a.y.min(b.y) <= bounds.height;
 
         // the paper, with the title block's usual 10 mm frame (20 mm on the binding side)
-        if let Some(r) = &self.sheet.paper {
+        if let Some(r) = &sheet.paper {
             let (at, size) = fit.rect(r);
             frame.fill_rectangle(Point::new(at.x + 3.0, at.y + 3.0), size, Color { a: 0.12, ..Color::BLACK });
             frame.fill_rectangle(at, size, paper);
             frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(1.0));
             let inner = SheetRect { min: [r.min[0] + 0.02, r.min[1] + 0.01], max: [r.max[0] - 0.01, r.max[1] - 0.01] };
-            let (at, size) = fit.rect(&inner);
-            frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(ink).with_width(1.4));
-            let title = Point::new(at.x + size.width - 6.0, at.y + size.height - 6.0);
-            label(&mut frame, self.sheet.title.clone(), title, 14.0, ink, alignment::Horizontal::Right);
+            // a sheet without a title block of its own gets a frame and its name
+            if sheet.lines.is_empty() {
+                let (at, size) = fit.rect(&inner);
+                frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(ink).with_width(1.4));
+                let title = Point::new(at.x + size.width - 6.0, at.y + size.height - 6.0);
+                label(&mut frame, sheet.title.clone(), title, 14.0, ink, alignment::Horizontal::Right, alignment::Vertical::Bottom);
+            }
+        }
+        // the title block: its lines and its texts
+        let block = Path::new(|path| {
+            for (a, b) in sheet.lines.iter().map(|l| (fit.point(l[0]), fit.point(l[1]))).filter(|(a, b)| seen(*a, *b)) {
+                path.move_to(a);
+                path.line_to(b);
+            }
+        });
+        frame.stroke(&block, Stroke::default().with_color(ink).with_width(0.9));
+        for t in &sheet.texts {
+            draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, ink, bounds.size());
+        }
+        // the schedules: the borders of their cells and the texts in them
+        for table in &self.tables {
+            let rect = table.rect();
+            if !seen(fit.point(rect.min), fit.point(rect.max)) {
+                continue;
+            }
+            let lefts: Vec<f32> = std::iter::once(0.0).chain(table.columns.iter().scan(0.0, |x, w| { *x += w; Some(*x) })).collect();
+            let at = |k: usize| table.origin[0] + lefts[k.min(lefts.len() - 1)];
+            let mut top = table.origin[1];
+            let mut texts = Vec::new();
+            let grid = Path::new(|path| {
+                for row in &table.rows {
+                    let foot = top - row.height;
+                    for cell in &row.cells {
+                        let (left, right) = if row.title { (at(0), at(usize::MAX)) } else { (at(cell.column as usize), at(cell.column as usize + cell.span.max(1) as usize)) };
+                        path.rectangle(fit.point([left, top]), Size::new((right - left) * fit.scale, row.height * fit.scale));
+                        if cell.text.is_empty() {
+                            continue;
+                        }
+                        // its text, clear of the borders
+                        let pad = (cell.size * 0.4).min((right - left) / 4.0);
+                        let height = cell.text.lines().count().max(1) as f32 * cell.size * 1.3;
+                        let room = (row.height - height).max(0.0);
+                        let lift = [room - pad.min(room / 2.0), room / 2.0, pad.min(room / 2.0)][cell.vertical.min(2) as usize];
+                        texts.push(crate::model::DraftText { element: 0, at: [left + pad, foot + lift], width: (right - left - 2.0 * pad).max(0.0), height, size: cell.size, align: cell.align, angle: 0.0, text: cell.text.clone() });
+                    }
+                    top = foot;
+                }
+            });
+            frame.stroke(&grid, Stroke::default().with_color(ink).with_width(0.7));
+            for t in &texts {
+                draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, ink, bounds.size());
+            }
         }
 
-        // the placed views: frame, then the view title under it (Revit's style: number, name, scale)
-        for (i, v) in self.sheet.viewports.iter().enumerate() {
+        // the placed views: what they show, their frame, then the view title under it (number,
+        // name, scale)
+        for (i, v) in sheet.viewports.iter().enumerate() {
             let (at, size) = fit.rect(&v.rect);
             let hot = state.hover == Some(i);
             let color = if hot { p.accent } else if v.view.is_some() { ink } else { p.text_muted };
             if hot {
                 frame.fill_rectangle(at, size, Color { a: 0.08, ..p.accent });
             }
-            let mut stroke = Stroke::default().with_color(color).with_width(if hot { 2.0 } else { 1.0 });
+            let drawn = match self.placed.get(i) {
+                Some(Placed::Draft(k)) => self.model.project.drafts.get(*k).is_some_and(|d| {
+                    // a drawing's point on the sheet: its origin where the viewport has it
+                    let on = |q: [f32; 2]| fit.point([v.origin[0] + q[0] * v.ratio, v.origin[1] + q[1] * v.ratio]);
+                    let lines = Path::new(|path| {
+                        for (a, b) in d.lines.iter().map(|l| (on(l.a), on(l.b))).filter(|(a, b)| seen(*a, *b)) {
+                            path.move_to(a);
+                            path.line_to(b);
+                        }
+                    });
+                    frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.8));
+                    // what a metre of paper is on screen
+                    let paper = fit.scale;
+                    for m in &d.dimensions {
+                        let (a, b) = (on(m.from), on(m.to));
+                        let run = a.distance(b);
+                        if run <= 0.0 || !seen(a, b) {
+                            continue;
+                        }
+                        let (ux, uy) = ((b.x - a.x) / run, (b.y - a.y) / run);
+                        let tick = (m.style.tick_size as f32 * paper).max(1.0);
+                        let lines = Path::new(|path| {
+                            path.move_to(a);
+                            path.line_to(b);
+                            for (q, from) in [(a, on(m.measured[0])), (b, on(m.measured[1]))] {
+                                path.move_to(from);
+                                path.line_to(q);
+                                if m.style.tick != Tick::None {
+                                    path.move_to(Point::new(q.x - (ux + uy) * tick, q.y - (uy - ux) * tick));
+                                    path.line_to(Point::new(q.x + (ux + uy) * tick, q.y + (uy - ux) * tick));
+                                }
+                            }
+                        });
+                        frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.6));
+                        let size = m.style.size as f32 * paper;
+                        if size >= SMALLEST {
+                            let length = (m.to[0] - m.from[0]).hypot(m.to[1] - m.from[1]) as f64;
+                            let (nx, ny) = if uy.abs() > ux.abs() { (-1.0, 0.0) } else { (0.0, -1.0) };
+                            let content = m.style.figure(length);
+                            let clear = if nx != 0.0 { content.chars().count() as f32 * size * 0.3 + 2.0 } else { size * 0.7 };
+                            let at = Point::new((a.x + b.x) / 2.0 + nx * clear, (a.y + b.y) / 2.0 + ny * clear);
+                            label(&mut frame, content, at, size, ink, alignment::Horizontal::Center, alignment::Vertical::Center);
+                        }
+                    }
+                    for t in &d.texts {
+                        draw_text(&mut frame, t, &on, v.ratio * fit.scale, ink, bounds.size());
+                    }
+                    true
+                }),
+                Some(Placed::View { cut, crop, dimensions, notes, lines }) => {
+                    // a drawing's point on the sheet: its own origin where the viewport has it, else
+                    // its crop in the viewport's box, else the middle of what it cuts in the middle
+                    // of that
+                    let extent = cut.as_ref().and_then(|c| c.extent).map(|(lo, hi)| (lo.map(f64::from), hi.map(f64::from)));
+                    let anchor = match (v.anchor, crop, extent) {
+                        (Some(anchor), ..) => Some((anchor, v.origin)),
+                        (None, Some((lo, _)), _) => Some((*lo, v.rect.min)),
+                        (None, None, Some((lo, hi))) => Some(([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], v.rect.center())),
+                        (None, None, None) => None,
+                    };
+                    anchor.is_some_and(|(from, to)| {
+                        let ratio = f64::from(v.ratio);
+                        let on = |q: [f64; 2]| fit.point([to[0] + ((q[0] - from[0]) * ratio) as f32, to[1] + ((q[1] - from[1]) * ratio) as f32]);
+                        let piece = |a: [f64; 2], z: [f64; 2]| match crop {
+                            Some((lo, hi)) => super::paper::clip(a, z, *lo, *hi),
+                            None => Some((a, z)),
+                        };
+                        let stroke = |frame: &mut Frame, segments: &mut dyn Iterator<Item = ([f64; 2], [f64; 2])>, color: Color, width: f32| {
+                            let path = Path::new(|path| {
+                                for (a, b) in segments.filter_map(|(a, z)| piece(a, z)).map(|(a, z)| (on(a), on(z))).filter(|(a, b)| seen(*a, *b)) {
+                                    path.move_to(a);
+                                    path.line_to(b);
+                                }
+                            });
+                            frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
+                        };
+                        let wide = |s: &[[f32; 2]; 2]| (s[0].map(f64::from), s[1].map(f64::from));
+                        if let Some(cut) = cut {
+                            // the cut faces in their hatch, under the lines
+                            super::hatch::draw_fills(&mut frame, cut, *crop, &|q| Some(on(q)), (ratio * f64::from(fit.scale)) as f32);
+                            // what is seen beyond the cut, thin and grey, then the cut itself
+                            stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
+                            stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
+                        }
+                        stroke(&mut frame, &mut lines.iter().map(|l| (l[0], l[1])), ink, 0.7);
+                        let paper = fit.scale;
+                        for d in dimensions {
+                            let (a, b) = (on(d.from), on(d.to));
+                            let style = self.styles.get(d.style).or(self.styles.first());
+                            let Some(style) = style.filter(|_| seen(a, b)) else { continue };
+                            let look = super::marks::DimensionLook { offset: paper * super::marks::OFFSET as f32, paper, size: (paper * style.size as f32).max(SMALLEST), style };
+                            super::marks::draw_dimension_px(&mut frame, a, b, d.length(), ink, look);
+                        }
+                        for note in notes {
+                            let (at, size) = (on(note.at), note.size as f32 * paper);
+                            if size >= SMALLEST && at.x > -size * 60.0 && at.x < bounds.width + size * 60.0 && at.y > -size * 8.0 && at.y < bounds.height + size * 8.0 {
+                                super::marks::draw_note(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32);
+                            }
+                        }
+                        true
+                    })
+                }
+                _ => false,
+            };
+            // a view that shows what it holds needs no frame, unless the pointer is on it
+            let mut stroke = Stroke::default().with_color(if drawn && !hot { faint } else { color }).with_width(if hot { 2.0 } else if drawn { 0.5 } else { 1.0 });
             if v.estimated {
                 stroke.line_dash = canvas::LineDash { segments: &[6.0, 4.0], offset: 0 };
             }
-            frame.stroke(&Path::rectangle(at, size), stroke);
-            let under = Point::new(at.x, at.y + size.height + 16.0);
+            // a guessed box says nothing once the view itself is drawn
+            if !(v.estimated && drawn) {
+                frame.stroke(&Path::rectangle(at, size), stroke);
+            }
+            // the title where the sheet has it, else under the box
+            let under = v.label.map_or(Point::new(at.x, at.y + size.height + 16.0), |l| fit.point(l));
             let mut title = String::new();
             if let Some(d) = &v.detail {
                 title.push_str(d);
                 title.push_str("  ");
             }
             title.push_str(&v.title);
-            label(&mut frame, title, under, 12.0, color, alignment::Horizontal::Left);
-            label(&mut frame, v.scale.clone(), Point::new(at.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left);
+            label(&mut frame, title, under, 12.0, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+            label(&mut frame, v.scale.clone(), Point::new(under.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left, alignment::Vertical::Bottom);
         }
         vec![frame.into_geometry()]
     }
 
     fn mouse_interaction(&self, state: &DrawingState, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
-        if state.hover.is_some() {
+        if state.drag.is_some_and(|(_, _, moved)| moved) {
+            mouse::Interaction::Grabbing
+        } else if state.hover.is_some() {
             mouse::Interaction::Pointer
         } else {
             mouse::Interaction::default()
@@ -312,8 +611,7 @@ impl canvas::Program<Message> for SheetDrawing {
 mod tests {
     use super::*;
     use crate::model::{Layer, Model, SavedView, SheetViewport, ViewKind};
-    use std::sync::Arc;
-
+    
     fn app_with_sheet() -> App {
         let layer = Layer {
             name: "Walls".into(),
@@ -331,6 +629,12 @@ mod tests {
             estimated: false,
             scale: "1:50".into(),
             detail: Some("1".into()),
+            origin: [-0.6, 0.4],
+            ratio: 0.02,
+            label: None,
+            drawing: None,
+            anchor: None,
+            draft: None,
         };
         model.project.sheets = vec![
             Sheet::new("A-1".into(), "Plans".into(), Some(SheetRect { min: [-1.189, 0.0], max: [0.0, 0.841] }), vec![viewport(Some(0))]),
@@ -344,15 +648,16 @@ mod tests {
     #[test]
     fn a_click_on_a_view_finds_it() {
         let app = app_with_sheet();
-        let d = SheetDrawing { sheet: app.sheets()[0].clone(), palette: app.theme.palette(), empty: String::new() };
+        let d = SheetDrawing { model: app.model.clone().unwrap(), sheet: 0, placed: Vec::new(), tables: Vec::new(), styles: Vec::new(), palette: app.theme.palette(), empty: String::new() };
+        let state = DrawingState::default();
         let size = Size::new(1189.0 + 2.0 * MARGIN, 841.0 + 2.0 * MARGIN);
-        let fit = d.fit(size).unwrap();
+        let fit = d.fit(&state, size).unwrap();
         assert!((fit.scale - 1000.0).abs() < 1.0);
-        assert_eq!(d.viewport_at(size, fit.point([-0.6, 0.4])), Some(0));
-        assert_eq!(d.viewport_at(size, fit.point([-0.1, 0.1])), None);
+        assert_eq!(d.viewport_at(&state, size, fit.point([-0.6, 0.4])), Some(0));
+        assert_eq!(d.viewport_at(&state, size, fit.point([-0.1, 0.1])), None);
         // a legend (no view the viewer shows) is not clickable
-        let legend = SheetDrawing { sheet: app.sheets()[1].clone(), ..d };
-        assert_eq!(legend.viewport_at(size, legend.fit(size).unwrap().point([-0.6, 0.4])), None);
+        let legend = SheetDrawing { sheet: 1, ..d };
+        assert_eq!(legend.viewport_at(&state, size, legend.fit(&state, size).unwrap().point([-0.6, 0.4])), None);
     }
 
     #[test]

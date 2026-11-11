@@ -98,10 +98,14 @@ pub struct PlanView {
     /// How far it looks below the level (metres); a ceiling plan: how far it looks up from its
     /// cut.
     pub depth: f64,
+    /// The scale its texts and dimensions are sized for (1 : this), as in its own tab.
+    pub scale: f64,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
     /// Its texts, shown wherever it is placed.
     pub notes: Vec<Note>,
+    /// The lines drawn on it that are no model: the shapes and leaders of its tags (x, y, metres).
+    pub lines: Vec<[[f64; 2]; 2]>,
     /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
     /// all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
@@ -150,10 +154,14 @@ pub struct SectionView {
     pub to: [f64; 2],
     /// How far it looks beyond its line (metres).
     pub depth: f64,
+    /// The scale its texts and dimensions are sized for (1 : this), as in its own tab.
+    pub scale: f64,
     /// Its dimensions, in its drawing's (u, v).
     pub dimensions: Vec<Dimension>,
     /// Its texts, in its drawing's (u, v).
     pub notes: Vec<Note>,
+    /// The lines drawn on it that are no model: the shapes and leaders of its tags (u, v).
+    pub lines: Vec<[[f64; 2]; 2]>,
     /// What it shows, in its drawing's (u, v); `None`: all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
     /// Its own layers: those it shows otherwise than the model.
@@ -209,12 +217,162 @@ pub struct View3d {
     pub hidden: Arc<UnitKeySet>,
 }
 
+/// How the ends of a dimension line are marked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tick {
+    /// A diagonal stroke.
+    #[default]
+    Slash,
+    /// A filled arrow head.
+    Arrow,
+    /// A filled dot.
+    Dot,
+    /// Nothing.
+    None,
+}
+
+impl Tick {
+    pub const ALL: [Tick; 4] = [Tick::Slash, Tick::Arrow, Tick::Dot, Tick::None];
+
+    /// Its name in IFCX (`tick` of a dimension style).
+    pub fn key(self) -> &'static str {
+        match self {
+            Tick::Slash => "slash",
+            Tick::Arrow => "arrow",
+            Tick::Dot => "dot",
+            Tick::None => "none",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.key() == key)
+    }
+}
+
+/// The unit a dimension's figure is written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DimensionUnit {
+    #[default]
+    Millimetres,
+    Metres,
+}
+
+impl DimensionUnit {
+    /// Its name in IFCX (`unit` of a dimension style).
+    pub fn key(self) -> &'static str {
+        match self {
+            DimensionUnit::Millimetres => "mm",
+            DimensionUnit::Metres => "m",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [DimensionUnit::Millimetres, DimensionUnit::Metres].into_iter().find(|u| u.key() == key)
+    }
+}
+
+/// How dimensions look: a dimension names one of the document's styles. Sizes are on paper
+/// (metres); a view's scale makes them that much larger on its drawing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimensionStyle {
+    pub name: String,
+    /// The height of the figure's letters.
+    pub size: f64,
+    pub tick: Tick,
+    /// Half the length of a slash, the length of an arrow, the diameter of a dot.
+    pub tick_size: f64,
+    /// How far an extension line runs past the dimension line.
+    pub extension: f64,
+    /// How far an extension line starts from the point it measures.
+    pub gap: f64,
+    pub unit: DimensionUnit,
+    /// The decimals of the figure, in its unit.
+    pub decimals: u8,
+}
+
+impl DimensionStyle {
+    /// The name of the style every document has.
+    pub const STANDARD: &'static str = "Standard";
+
+    /// The style of a dimension that names none.
+    pub fn standard() -> Self {
+        Self { name: Self::STANDARD.to_string(), size: NOTE_HEIGHT, tick: Tick::Slash, tick_size: 0.0012, extension: 0.0015, gap: 0.0015, unit: DimensionUnit::Millimetres, decimals: 0 }
+    }
+
+    /// The figure of a length (metres) in this style.
+    pub fn figure(&self, length: f64) -> String {
+        let decimals = self.decimals.min(6) as usize;
+        match self.unit {
+            DimensionUnit::Millimetres => format!("{:.*}", decimals, length * 1000.0),
+            DimensionUnit::Metres => format!("{:.*}", decimals, length),
+        }
+    }
+
+    fn to_ifcx(&self) -> Value {
+        json!({"name": self.name, "size": self.size, "tick": self.tick.key(), "tick_size": self.tick_size, "extension": self.extension, "gap": self.gap, "unit": self.unit.key(), "decimals": self.decimals})
+    }
+
+    /// A style of an IFCX file; a missing or senseless value is the standard style's.
+    pub fn from_ifcx(v: &Value) -> Option<Self> {
+        let standard = Self::standard();
+        let name = v.get("name")?.as_str()?.trim();
+        let size = |key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|s| s.is_finite() && (0.0..=0.1).contains(s)).unwrap_or(or);
+        (!name.is_empty()).then(|| Self {
+            name: name.to_string(),
+            size: Some(size("size", standard.size)).filter(|s| *s > 0.0).unwrap_or(standard.size),
+            tick: v.get("tick").and_then(Value::as_str).and_then(Tick::from_key).unwrap_or_default(),
+            tick_size: size("tick_size", standard.tick_size),
+            extension: size("extension", standard.extension),
+            gap: size("gap", standard.gap),
+            unit: v.get("unit").and_then(Value::as_str).and_then(DimensionUnit::from_key).unwrap_or_default(),
+            decimals: v.get("decimals").and_then(Value::as_u64).map_or(0, |d| d.min(6) as u8),
+        })
+    }
+}
+
+/// The dimension styles of a document: the standard one first, always.
+#[derive(Debug, Clone, PartialEq)]
+struct DimensionStyles(Vec<DimensionStyle>);
+
+impl Default for DimensionStyles {
+    fn default() -> Self {
+        Self(vec![DimensionStyle::standard()])
+    }
+}
+
+/// Where a text stands on its point: its lower left, the middle of its foot, or its lower right;
+/// its lines are set the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Align {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+impl Align {
+    /// Its name in IFCX (`align` of a text).
+    pub fn key(self) -> &'static str {
+        match self {
+            Align::Left => "left",
+            Align::Center => "center",
+            Align::Right => "right",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Align::Left, Align::Center, Align::Right].into_iter().find(|a| a.key() == key)
+    }
+}
+
 /// A dimension on a drawing: the distance between two of its points (a floor plan's x, y in the
 /// model's frame, a section's u, v; metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Dimension {
     pub from: [f64; 2],
     pub to: [f64; 2],
+    /// Which of the document's dimension styles it has (0: the standard one).
+    pub style: usize,
 }
 
 impl Dimension {
@@ -224,13 +382,22 @@ impl Dimension {
     }
 }
 
-/// A text on a drawing, standing on a point of it (its lower left; a floor plan's x, y, a
+/// A text on a drawing, standing on a point of it (see [`Align`]; a floor plan's x, y, a
 /// section's u, v; metres).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     pub at: [f64; 2],
     pub text: String,
+    /// The height of its letters on paper (metres): the view's scale makes it that much larger
+    /// on the drawing.
+    pub size: f64,
+    pub align: Align,
+    /// How its lines are turned about that point (radians, counter-clockwise).
+    pub angle: f64,
 }
+
+/// The height of the letters of a new text on paper (metres).
+pub const NOTE_HEIGHT: f64 = 0.0025;
 
 /// A3 landscape, the paper of a new sheet (metres).
 pub const A3_LANDSCAPE: [f64; 2] = [0.420, 0.297];
@@ -290,6 +457,8 @@ pub struct Document {
     views_3d: Vec<View3d>,
     /// Sheets, in the order they were made.
     sheets: Vec<Sheet>,
+    /// How dimensions look; a dimension names one by its place here.
+    dimension_styles: DimensionStyles,
     /// Levels and views made so far, for the paths of new ones.
     added: u64,
 }
@@ -350,22 +519,34 @@ impl Document {
             view
         };
         let rect = |c: Option<([f64; 2], [f64; 2])>| c.map_or(Value::Null, |(lo, hi)| json!([lo, hi]));
-        let dims = |d: &[Dimension]| d.iter().map(|d| json!([d.from, d.to])).collect::<Vec<_>>();
-        let notes = |n: &[Note]| n.iter().map(|n| json!({"at": n.at, "text": n.text})).collect::<Vec<_>>();
+        let dims = |d: &[Dimension]| d.iter().map(|d| if d.style == 0 { json!([d.from, d.to]) } else { json!([d.from, d.to, self.dimension_style(d.style).name]) }).collect::<Vec<_>>();
+        let notes = |n: &[Note]| {
+            let note = |n: &Note| {
+                let mut note = json!({"at": n.at, "text": n.text, "size": n.size});
+                if n.align != Align::Left {
+                    note["align"] = n.align.key().into();
+                }
+                if n.angle != 0.0 {
+                    note["angle"] = n.angle.into();
+                }
+                note
+            };
+            n.iter().map(note).collect::<Vec<_>>()
+        };
         let mut nodes = Vec::new();
         let mut children = serde_json::Map::new();
         for (i, p) in self.plans.iter().enumerate() {
             let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
             let view = json!({
-                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "layers": p.layers,
+                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "layers": p.layers,
             });
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(view, &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
             let view = json!({
-                "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "layers": s.layers,
+                "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "layers": s.layers,
             });
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
         }
@@ -384,7 +565,7 @@ impl Document {
             nodes.push(json!({"path": s.path, "attributes": {"o3v::sheet": {"number": s.number, "name": s.name, "paper": s.paper, "views": views}}}));
         }
         if !nodes.is_empty() {
-            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1}}}));
+            nodes.push(json!({"path": uuid("o3v/drawings"), "children": children, "attributes": {"o3v::drawings": {"version": 1, "dimension_styles": self.dimension_styles.0.iter().map(DimensionStyle::to_ifcx).collect::<Vec<_>>()}}}));
         }
         nodes
     }
@@ -399,17 +580,27 @@ impl Document {
     /// [`Self::adopt_ifcx`], with `hidden` giving the elements a view hides from its attribute.
     pub fn adopt_ifcx_with(&mut self, nodes: &[(String, Value)], hidden: &dyn Fn(&Value) -> UnitKeySet) {
         let hidden = |v: &Value| Arc::new(hidden(v));
+        // the styles first: the dimensions name them
+        for style in nodes.iter().filter_map(|(_, a)| a.get("o3v::drawings")?.get("dimension_styles")?.as_array()).flatten().filter_map(DimensionStyle::from_ifcx) {
+            self.set_dimension_style(style);
+        }
+        let styles: Vec<String> = self.dimension_styles.0.iter().map(|s| s.name.clone()).collect();
+        let style = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|name| styles.iter().position(|s| s == name)).unwrap_or(0);
         let pair = |v: &Value| -> Option<[f64; 2]> { Some([v.get(0)?.as_f64()?, v.get(1)?.as_f64()?]) };
         let rect = |v: Option<&Value>| -> Option<([f64; 2], [f64; 2])> {
             let v = v?;
             Some((pair(v.get(0)?)?, pair(v.get(1)?)?))
         };
         let dims = |v: Option<&Value>| -> Vec<Dimension> {
-            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)? })).collect()
+            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)?, style: style(d.get(2)) })).collect()
         };
         let notes = |v: Option<&Value>| -> Vec<Note> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
-            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string() })).filter(|n| !n.text.trim().is_empty()).collect()
+            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0) })).filter(|n| !n.text.trim().is_empty()).collect()
+        };
+        let lines = |v: Option<&Value>| -> Vec<[[f64; 2]; 2]> {
+            let all = v.and_then(Value::as_array).into_iter().flatten();
+            all.filter_map(|l| Some([pair(l.get(0)?)?, pair(l.get(1)?)?])).filter(|l| l.iter().flatten().all(|x| x.is_finite())).collect()
         };
         let layers = |v: Option<&Value>| -> LayerSwitches {
             let all = v.and_then(Value::as_object).into_iter().flatten();
@@ -417,6 +608,7 @@ impl Document {
         };
         let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
         let number = |v: &Value, key: &str, or: f64| v.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
+        let scale = |v: &Value| Some(number(v, "scale", SHEET_SCALE)).filter(|s| *s >= 1.0).unwrap_or(SHEET_SCALE);
         let triple = |v: Option<&Value>| -> Option<[f64; 3]> {
             let v = v?;
             let xyz = [v.get(0)?.as_f64()?, v.get(1)?.as_f64()?, v.get(2)?.as_f64()?];
@@ -438,8 +630,10 @@ impl Document {
                     kind,
                     cut: number(p, "cut", cut),
                     depth: number(p, "depth", depth),
+                    scale: scale(p),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
+                    lines: lines(p.get("lines")),
                     crop: rect(p.get("crop")),
                     layers: layers(p.get("layers")),
                     hidden: hidden(p),
@@ -453,8 +647,10 @@ impl Document {
                     from,
                     to,
                     depth: number(s, "depth", 100.0),
+                    scale: scale(s),
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
+                    lines: lines(s.get("lines")),
                     crop: rect(s.get("crop")),
                     layers: layers(s.get("layers")),
                     hidden: hidden(s),
@@ -559,7 +755,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -610,7 +806,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, dimensions: Vec::new(), notes: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -717,6 +913,11 @@ impl Document {
         self.own(path).map(|(name, _, _)| name)
     }
 
+    /// The scale a view's texts and dimensions are sized for (1 : this).
+    pub fn view_scale(&self, path: &str) -> Option<f64> {
+        self.plan(path).map(|p| p.scale).or_else(|| self.section(path).map(|s| s.scale))
+    }
+
     /// The dimensions and the crop of a view (floor plan, section or elevation).
     pub fn view_marks(&self, path: &str) -> Option<(&[Dimension], Option<([f64; 2], [f64; 2])>)> {
         if let Some(p) = self.plan(path) {
@@ -736,12 +937,55 @@ impl Document {
     /// Adds a dimension between two points to a view's drawing; two points less than a
     /// millimetre apart, or not finite, measure nothing.
     pub fn add_dimension(&mut self, view: &str, from: [f64; 2], to: [f64; 2]) -> bool {
-        let dimension = Dimension { from, to };
+        let dimension = Dimension { from, to, style: 0 };
         if !(from.iter().chain(&to).all(|v| v.is_finite()) && dimension.length() >= 0.001) {
             return false;
         }
         let Some((dimensions, _)) = self.marks_mut(view) else { return false };
         dimensions.push(dimension);
+        true
+    }
+
+    /// The document's dimension styles, the standard one first.
+    pub fn dimension_styles(&self) -> &[DimensionStyle] {
+        &self.dimension_styles.0
+    }
+
+    /// The style a dimension names (the standard one when there is none such).
+    pub fn dimension_style(&self, index: usize) -> &DimensionStyle {
+        self.dimension_styles.0.get(index).unwrap_or(&self.dimension_styles.0[0])
+    }
+
+    /// Takes a style: in place of the one of its name, else as a new one. Gives its place.
+    pub fn set_dimension_style(&mut self, style: DimensionStyle) -> usize {
+        match self.dimension_styles.0.iter().position(|s| s.name == style.name) {
+            Some(k) => {
+                self.dimension_styles.0[k] = style;
+                k
+            }
+            None => {
+                self.dimension_styles.0.push(style);
+                self.dimension_styles.0.len() - 1
+            }
+        }
+    }
+
+    /// Changes a style where it is; false when there is none such.
+    pub fn edit_dimension_style(&mut self, index: usize, edit: impl FnOnce(&mut DimensionStyle)) -> bool {
+        let Some(style) = self.dimension_styles.0.get_mut(index) else { return false };
+        let name = style.name.clone();
+        edit(style);
+        style.name = name;
+        true
+    }
+
+    /// Gives a view's dimension another of the document's styles.
+    pub fn set_dimension_style_of(&mut self, view: &str, index: usize, style: usize) -> bool {
+        if style >= self.dimension_styles.0.len() {
+            return false;
+        }
+        let Some(d) = self.marks_mut(view).and_then(|(d, _)| d.get_mut(index)) else { return false };
+        d.style = style;
         true
     }
 
@@ -801,6 +1045,14 @@ impl Document {
         self.section(path).map(|s| &s.notes[..])
     }
 
+    /// The lines of a view that are no model: the shapes and leaders of its tags.
+    pub fn view_lines(&self, path: &str) -> &[[[f64; 2]; 2]] {
+        if let Some(p) = self.plan(path) {
+            return &p.lines;
+        }
+        self.section(path).map_or(&[], |s| &s.lines[..])
+    }
+
     fn notes_mut(&mut self, path: &str) -> Option<&mut Vec<Note>> {
         if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
             return Some(&mut p.notes);
@@ -816,7 +1068,7 @@ impl Document {
             return false;
         }
         let Some(notes) = self.notes_mut(view) else { return false };
-        notes.push(Note { at, text: text.to_string() });
+        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 });
         true
     }
 
@@ -1436,7 +1688,7 @@ mod tests {
         let lengths: Vec<f64> = document.plan(&plan).unwrap().dimensions.iter().map(Dimension::length).collect();
         assert_eq!(lengths, [3.6, 5.0]);
         assert!(document.flip_dimension(&plan, 1));
-        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0] });
+        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0], style: 0 });
         assert!(!document.flip_dimension(&plan, 9));
         assert!(document.remove_dimension(&plan, 0));
         assert!(!document.remove_dimension(&plan, 5));
@@ -1460,7 +1712,7 @@ mod tests {
         assert!(!document.set_note_text(&plan, 1, ""), "a note keeps a text");
         assert!(!document.move_note(&plan, 7, [0.0, 0.0]));
         let notes = document.view_notes(&plan).unwrap();
-        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into() }, Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
+        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }]);
         assert!(document.remove_note(&plan, 0));
         assert!(!document.remove_note(&plan, 3));
         // saved with the drawings and taken over again
@@ -1468,8 +1720,8 @@ mod tests {
             document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
         let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
         again.adopt_ifcx(&nodes);
-        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into() }]);
-        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into() }]);
+        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }]);
+        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }]);
     }
 
     #[test]

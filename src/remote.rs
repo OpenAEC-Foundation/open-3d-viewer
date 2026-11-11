@@ -389,7 +389,7 @@ impl App {
         Task::none()
     }
 
-    fn finish_animation(&mut self) {
+    pub(crate) fn finish_animation(&mut self) {
         if let Some((_, to, _)) = self.anim.take() {
             self.camera = to;
         }
@@ -1724,7 +1724,7 @@ fn downscale(rgba: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> Vec<u8> {
     out
 }
 
-fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let mut png = Vec::new();
     let mut encoder = png::Encoder::new(&mut png, w, h);
     encoder.set_color(png::ColorType::Rgba);

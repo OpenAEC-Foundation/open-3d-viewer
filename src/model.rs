@@ -192,6 +192,9 @@ pub const ALIGN_LIMIT: f64 = 10_000.0;
 pub struct ProjectData {
     /// Sheets (Revit, beta): the paper and the views placed on it.
     pub sheets: Vec<Sheet>,
+    /// Drawings without a model (Revit, beta): legends and drafting views, with their lines,
+    /// texts and dimensions.
+    pub drafts: Vec<Draft>,
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,
@@ -298,17 +301,96 @@ pub struct Sheet {
     /// The paper, when the title block tells its size.
     pub paper: Option<SheetRect>,
     pub viewports: Vec<SheetViewport>,
+    /// The lines of its title block.
+    pub lines: Vec<[[f32; 2]; 2]>,
+    /// The texts of its title block: its fixed ones and its labels, filled in.
+    pub texts: Vec<DraftText>,
+    /// The schedules placed on it.
+    pub tables: Vec<SheetTable>,
 }
 
 impl Sheet {
     pub fn new(number: String, name: String, paper: Option<SheetRect>, viewports: Vec<SheetViewport>) -> Self {
         let title = [number.as_str(), name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-        Self { number, name, title, paper, viewports }
+        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new(), tables: Vec::new() }
     }
 
-    /// What the sheet covers: the paper and every viewport.
+    /// What the sheet covers: the paper, every viewport and every schedule.
     pub fn extent(&self) -> Option<SheetRect> {
-        self.paper.iter().chain(self.viewports.iter().map(|v| &v.rect)).copied().reduce(SheetRect::union)
+        let tables = self.tables.iter().map(SheetTable::rect);
+        self.paper.iter().copied().chain(self.viewports.iter().map(|v| v.rect)).chain(tables).reduce(SheetRect::union)
+    }
+}
+
+/// A schedule placed on a sheet, as the table the file stores for it (sheet metres).
+#[derive(Debug, Clone, Default)]
+pub struct SheetTable {
+    /// The name of its schedule.
+    pub schedule: String,
+    /// Its upper left corner.
+    pub origin: [f32; 2],
+    /// The widths of its columns.
+    pub columns: Vec<f32>,
+    /// Its rows, from the top.
+    pub rows: Vec<TableRow>,
+}
+
+/// A row of a [`SheetTable`].
+#[derive(Debug, Clone, Default)]
+pub struct TableRow {
+    pub height: f32,
+    /// Its cells, from the left; a cell another one covers is left out.
+    pub cells: Vec<TableCell>,
+    /// The title above the columns: its cell runs over the full width.
+    pub title: bool,
+}
+
+/// A cell of a [`SheetTable`].
+#[derive(Debug, Clone, Default)]
+pub struct TableCell {
+    /// The column it starts in, and how many it covers.
+    pub column: u16,
+    pub span: u16,
+    pub text: String,
+    /// The height of its letters (metres on paper).
+    pub size: f32,
+    /// 0 left, 1 centre, 2 right.
+    pub align: u8,
+    /// 0 top, 1 middle, 2 foot.
+    pub vertical: u8,
+    /// It shows a value of the row's elements that the file does not store.
+    pub open: bool,
+}
+
+impl SheetTable {
+    pub fn width(&self) -> f32 {
+        self.columns.iter().sum()
+    }
+
+    /// What it covers on the sheet.
+    pub fn rect(&self) -> SheetRect {
+        let height: f32 = self.rows.iter().map(|r| r.height).sum();
+        SheetRect { min: [self.origin[0], self.origin[1] - height], max: [self.origin[0] + self.width(), self.origin[1]] }
+    }
+
+    /// The table with its open cells filled from the computed schedule, when that has a row for
+    /// each of its rows with open cells and as many columns.
+    pub fn filled(&self, computed: Option<&Schedule>) -> SheetTable {
+        let mut table = self.clone();
+        let Some(s) = computed.filter(|s| s.computed && s.columns.len() == self.columns.len()) else { return table };
+        let values: Vec<&ScheduleRow> = s.rows.iter().filter(|r| !r.total).collect();
+        let open = |r: &TableRow| !r.title && r.cells.iter().any(|c| c.open);
+        if table.rows.iter().filter(|r| open(r)).count() != values.len() {
+            return table;
+        }
+        for (row, value) in table.rows.iter_mut().filter(|r| open(r)).zip(values) {
+            for cell in row.cells.iter_mut().filter(|c| c.open) {
+                if let Some(Some(text)) = value.cells.get(cell.column as usize) {
+                    cell.text.clone_from(text);
+                }
+            }
+        }
+        table
     }
 }
 
@@ -350,6 +432,87 @@ pub struct SheetViewport {
     /// "1:50".
     pub scale: String,
     pub detail: Option<String>,
+    /// Where its title stands on the sheet (metres), when the sheet tells.
+    pub label: Option<[f32; 2]>,
+    /// Where the origin of the view's own drawing lies on the sheet (metres).
+    pub origin: [f32; 2],
+    /// What a metre of the view is on the sheet: 0.02 at 1:50.
+    pub ratio: f32,
+    /// The path of the document's view (plan, section or elevation) it shows, when it is one.
+    pub drawing: Option<String>,
+    /// The point of that view's drawing that lies at `origin` (metres), when the view tells.
+    pub anchor: Option<[f64; 2]>,
+    /// The legend or drafting view in [`ProjectData::drafts`] it shows, when it is one.
+    pub draft: Option<usize>,
+}
+
+/// The kinds of drawing without a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftKind {
+    Legend,
+    Drafting,
+}
+
+/// A drawing without a model (Revit, beta: a legend or a drafting view): what is drawn in it, in
+/// its own plane (metres at full size, x right, y up). On paper it is `scale` times smaller.
+#[derive(Debug, Clone)]
+pub struct Draft {
+    /// The view's element in its file.
+    pub id: u64,
+    pub name: String,
+    pub kind: DraftKind,
+    /// 1 : `scale`.
+    pub scale: f32,
+    pub lines: Vec<DraftLine>,
+    pub texts: Vec<DraftText>,
+    pub dimensions: Vec<DraftDimension>,
+}
+
+impl Draft {
+    /// What it covers: lower left and upper right, `None` when it is empty.
+    pub fn extent(&self) -> Option<SheetRect> {
+        let lines = self.lines.iter().flat_map(|l| [l.a, l.b]);
+        let texts = self.texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]]);
+        let dimensions = self.dimensions.iter().flat_map(|d| [d.from, d.to, d.measured[0], d.measured[1]]);
+        lines.chain(texts).chain(dimensions).map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union)
+    }
+}
+
+/// A line of a drawing: a detail line, or a piece of a curved one. `element` is the element of
+/// the file it belongs to, which a click picks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DraftLine {
+    pub element: u64,
+    pub a: [f32; 2],
+    pub b: [f32; 2],
+}
+
+/// A text of a drawing: its box from its lower left corner, and the size of its letters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftText {
+    pub element: u64,
+    pub at: [f32; 2],
+    pub width: f32,
+    pub height: f32,
+    /// The height of a line of letters (the font size).
+    pub size: f32,
+    /// Where its lines start in its box: 0 left, 1 middle, 2 right.
+    pub align: u8,
+    /// How it is turned about the foot of its box where its lines start (radians,
+    /// counter-clockwise).
+    pub angle: f32,
+    pub text: String,
+}
+
+/// A dimension of a drawing: its line from `from` to `to`, and the two points it measures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftDimension {
+    pub element: u64,
+    pub from: [f32; 2],
+    pub to: [f32; 2],
+    pub measured: [[f32; 2]; 2],
+    /// How it looks: the style of its type (sizes on paper).
+    pub style: std::sync::Arc<crate::document::DimensionStyle>,
 }
 
 /// The kind of a saved view.
@@ -503,6 +666,7 @@ impl Model {
             }));
             project.rooms.extend(model.project.rooms.iter().cloned());
             project.drawings.extend(model.project.drawings.iter().cloned());
+            project.drafts.extend(model.project.drafts.iter().cloned());
         }
         project.levels.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
         project.levels.dedup();

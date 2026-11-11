@@ -194,6 +194,79 @@ struct Label {
     parts: Vec<Part>,
 }
 
+impl Label {
+    /// The label with what `value` gives for each of its parameters, standing on the foot of its
+    /// lines; none when it writes nothing.
+    fn write(&self, value: &mut dyn FnMut(&Part) -> Option<String>) -> Option<TagText> {
+        let mut wording = String::new();
+        for (k, part) in self.parts.iter().enumerate() {
+            let value = value(part).unwrap_or_default();
+            if part.line_break {
+                wording.push('\n');
+            } else if k > 0 {
+                wording.extend(std::iter::repeat_n(' ', part.spaces));
+            }
+            wording.push_str(&part.prefix);
+            wording.push_str(&value);
+            wording.push_str(&part.suffix);
+        }
+        if wording.trim().is_empty() {
+            return None;
+        }
+        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: 0.0 };
+        // from where the label stands to the foot of its lines
+        text.at[1] -= [text.height(), text.height() / 2.0, 0.0][self.vertical as usize];
+        Some(text)
+    }
+}
+
+/// Which of a text box's heights its origin is, as its flags say: 0 the top, 1 the middle, 2 the
+/// foot.
+fn vertical(flags: i64) -> u8 {
+    if flags & 0x800 != 0 {
+        2
+    } else if flags & 0x400 != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// The title block of a sheet, from its origin on the sheet (on paper, metres): the lines of its
+/// family, its fixed texts (`m_textNoteData`) and its labels with what the sheet (its `number` and
+/// `name` among it) and the project information store for them.
+pub(super) fn title_block(doc: &rvt_read::Document, types: &mut Types, kind: u64, sheet: u64, number: &str, name: &str) -> (Vec<[[f64; 2]; 2]>, Vec<TagText>) {
+    let Some(o) = doc.object(kind) else { return Default::default() };
+    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
+    let project = doc.object_ids_of_class("ProjectInfo").first().copied();
+    let mut texts = Vec::new();
+    let of = |field: &str| o.get(field).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v));
+    for label in of("m_tagNoteData").filter_map(|l| label(l, types)) {
+        texts.extend(label.write(&mut |part| match part.parameter {
+            -1007401 => Some(number.to_string()),
+            -1007400 => Some(name.to_string()),
+            _ => value(doc, &mut sources, &mut specs, &units, sheet, part).or_else(|| value(doc, &mut sources, &mut specs, &units, project?, part)),
+        }));
+    }
+    for fixed in of("m_textNoteData") {
+        let stream = fixed.get("m_oRtfData").and_then(|v| o.deref(v)).and_then(|r| r.get("m_arrRtfStream")?.as_list());
+        let bytes: Vec<u8> = stream.unwrap_or(&[]).iter().filter_map(|b| b.as_i64().and_then(|b| u8::try_from(b).ok())).collect();
+        let wording = super::rvt_drawings::rtf_text(&bytes);
+        let Some(orig) = vec3(fixed.get("m_orig")).filter(|_| !wording.trim().is_empty()) else { continue };
+        let flags = fixed.get("m_flags").and_then(FieldValue::as_i64).unwrap_or(0);
+        let em = fixed.get("m_attrId").and_then(FieldValue::element).and_then(|k| types.text_em(k)).unwrap_or(crate::document::NOTE_HEIGHT);
+        let width = fixed.get("m_lineWidth").and_then(FieldValue::as_f64).filter(|w| w.is_finite() && *w > 0.0).map_or(0.0, |w| w * FT);
+        let base = vec3(fixed.get("m_baseVec")).unwrap_or([1.0, 0.0, 0.0]);
+        let angle = Some(base[1].atan2(base[0])).filter(|a| a.abs() > 1e-6).unwrap_or(0.0);
+        let mut text = TagText { at: [orig[0] * FT, orig[1] * FT], wording, em, align: (flags & 3).clamp(0, 2), width, angle };
+        // down its own up to the foot of its lines
+        let drop = [text.height(), text.height() / 2.0, 0.0][vertical(flags) as usize];
+        text.at = [text.at[0] + angle.sin() * drop, text.at[1] - angle.cos() * drop];
+        texts.push(text);
+    }
+    (family_lines(doc, kind), texts)
+}
+
 /// What a tag type draws: its labels and the lines of its family (on paper, metres).
 #[derive(Default)]
 struct Shape {
@@ -245,25 +318,9 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
         let turn = |p: [f64; 2]| [p[0] * cos - p[1] * sin, p[0] * sin + p[1] * cos];
         let mut texts = Vec::new();
         for label in &shape.labels {
-            let mut wording = String::new();
-            for (k, part) in label.parts.iter().enumerate() {
-                let value = tagged.and_then(|e| value(doc, &mut sources, &mut specs, &units, e, part)).unwrap_or_default();
-                if part.line_break {
-                    wording.push('\n');
-                } else if k > 0 {
-                    wording.extend(std::iter::repeat_n(' ', part.spaces));
-                }
-                wording.push_str(&part.prefix);
-                wording.push_str(&value);
-                wording.push_str(&part.suffix);
-            }
-            if wording.trim().is_empty() {
-                continue;
-            }
-            let mut text = TagText { at: label.at, wording, em: label.em, align: label.align, width: label.width, angle };
-            // from where the label stands to the foot of its lines
-            text.at[1] -= [text.height(), text.height() / 2.0, 0.0][label.vertical as usize];
+            let Some(mut text) = label.write(&mut |part| tagged.and_then(|e| value(doc, &mut sources, &mut specs, &units, e, part))) else { continue };
             text.at = turn(text.at);
+            text.angle = angle;
             texts.push(text);
         }
         let lines = shape.lines.iter().map(|l| [turn(l[0]), turn(l[1])]).collect();
@@ -283,6 +340,42 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
             }
         }
         out.push(Tag { element: id, view, head, texts, lines, leader, arrow: shape.arrow });
+    }
+    out
+}
+
+/// A detail component in a view: the lines of its family where it is placed (feet, in the
+/// view's coordinates).
+pub(super) struct Detail {
+    pub element: u64,
+    pub view: u64,
+    pub lines: Vec<[[f64; 3]; 2]>,
+}
+
+/// The detail components of the file that show in a view: a `FamilyInstance` of the category
+/// detail items that names its view. Its type's saved graphics hold the lines of its family, at
+/// full size; `InstanceInfo::m_Trf` places them.
+pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail> {
+    const DETAIL_ITEMS: i32 = -2002000;
+    let mut families: HashMap<u64, Arc<Vec<[[f64; 2]; 2]>>> = HashMap::new();
+    let mut out = Vec::new();
+    for id in doc.object_ids_of_class("FamilyInstance") {
+        let Some(view) = doc.element(id).filter(|e| e.category == DETAIL_ITEMS).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
+        let Some(o) = doc.object(id) else { continue };
+        let Some(kind) = o.get("m_masterSymbolId").and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok()) else { continue };
+        let family = families.entry(kind).or_insert_with(|| Arc::new(family_lines(doc, kind))).clone();
+        if family.is_empty() {
+            continue;
+        }
+        // where it is placed: its origin and the directions of its family's x and y
+        let placed = o.path(&["m_pInstanceInfo", "m_Trf"]).and_then(FieldValue::as_object);
+        let Some(origin) = vec3(placed.and_then(|t| t.get("m_or"))).or_else(|| vec3(o.get("m_instOrigin"))) else { continue };
+        let axes = placed.and_then(|t| t.get("m_3x3")?.as_list());
+        let axis = |k: usize, or: [f64; 3]| axes.and_then(|a| vec3(a.get(k))).unwrap_or(or);
+        let (x, y) = (axis(0, [1.0, 0.0, 0.0]), axis(1, [0.0, 1.0, 0.0]));
+        // the family's lines are metres here: back to feet
+        let at = |p: [f64; 2]| std::array::from_fn(|k| origin[k] + (p[0] * x[k] + p[1] * y[k]) / FT);
+        out.push(Detail { element: id, view, lines: family.iter().map(|l| [at(l[0]), at(l[1])]).collect() });
     }
     out
 }
@@ -334,9 +427,7 @@ fn label(l: &NestedObject, types: &mut Types) -> Option<Label> {
     if parts.is_empty() {
         return None;
     }
-    // where its box hangs from its origin: bits of its flags
-    let vertical = if flags & 0x800 != 0 { 2 } else if flags & 0x400 != 0 { 1 } else { 0 };
-    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical, align: (flags & 3).clamp(0, 2), em, width, parts })
+    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, width, parts })
 }
 
 /// The lines of a tag type's family, from its saved graphics (on paper, metres): straight ones as
@@ -355,8 +446,13 @@ fn family_lines(doc: &rvt_read::Document, kind: u64) -> Vec<[[f64; 2]; 2]> {
         if name == "GFilter" && o.get("m_oConditions").and_then(|c| c.as_list()).is_some_and(|c| !c.is_empty()) {
             continue;
         }
-        open.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_ptr()));
         let styled = o.get("m_GInfo").and_then(|g| g.as_obj()).and_then(|g| g.get("m_categoryId")?.element_id()).is_some_and(|c| c != -1);
+        // a group with a category is a family nested in this one: its lines are in its own
+        // coordinates, and where it is placed is not in these graphics
+        if name == "GGroup" && styled {
+            continue;
+        }
+        open.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_ptr()));
         if !styled {
             continue;
         }

@@ -496,7 +496,7 @@ enum Side {
 }
 
 /// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky).
-fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
+pub(super) fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
     let d = [b[0] - a[0], b[1] - a[1]];
     let (mut t0, mut t1) = (0.0f64, 1.0f64);
     for (p, q) in [(-d[0], a[0] - lo[0]), (d[0], hi[0] - a[0]), (-d[1], a[1] - lo[1]), (d[1], hi[1] - a[1])] {

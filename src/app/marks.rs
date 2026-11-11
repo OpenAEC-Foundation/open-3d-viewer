@@ -23,7 +23,7 @@ const SNAP: f32 = 8.0;
 const PICK: f32 = 5.0;
 /// How far a dimension line stands off what it measures, on paper (metres): a view's tab draws
 /// its marks at its scale, so they keep their size on the drawing as the view zooms.
-const OFFSET: f64 = 0.006;
+pub(super) const OFFSET: f64 = 0.006;
 /// The height of a dimension's figures, and of a text being placed, on paper (metres).
 const NOTE_SIZE: f64 = crate::document::NOTE_HEIGHT;
 /// The smallest a text is drawn (logical pixels).

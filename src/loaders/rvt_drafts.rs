@@ -25,14 +25,14 @@ const FT: f64 = 0.3048;
 const DIMENSIONS: i64 = -2000260;
 
 /// The legends and drafting views of the file, each kind by name.
-pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag]) -> Vec<Draft> {
+pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], details: &[super::rvt_tags::Detail]) -> Vec<Draft> {
     let mut drafts: Vec<Draft> = Vec::new();
     let mut index: HashMap<u64, usize> = HashMap::new();
     for v in rvt_export::views::all_views(doc) {
         let Some(kind) = draft_kind(&v) else { continue };
         index.insert(v.id, drafts.len());
         let scale = v.scale.filter(|s| s.is_finite() && *s >= 1.0).unwrap_or(1.0) as f32;
-        drafts.push(Draft { name: v.name, kind, scale, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() });
+        drafts.push(Draft { id: v.id, name: v.name, kind, scale, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() });
     }
     if drafts.is_empty() {
         return drafts;
@@ -78,6 +78,11 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag]) ->
         drafts[k].lines.extend(tag.lines.iter().map(|l| DraftLine { element: tag.element, a: on(l[0]), b: on(l[1]) }));
         let leader = tag.leader_lines(&|p| [p[0] * FT, p[1] * FT], scale);
         drafts[k].lines.extend(leader.iter().map(|l| DraftLine { element: tag.element, a: l[0].map(|v| v as f32), b: l[1].map(|v| v as f32) }));
+    }
+    // a detail component: the lines of its family
+    for detail in details {
+        let Some(&k) = index.get(&detail.view) else { continue };
+        drafts[k].lines.extend(detail.lines.iter().map(|l| DraftLine { element: detail.element, a: point(l[0]), b: point(l[1]) }));
     }
     drafts.sort_by(|a, b| (a.kind as u8).cmp(&(b.kind as u8)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     drafts
@@ -195,7 +200,9 @@ mod tests {
         };
         let doc = rvt_read::Document::open(&path).expect("rvt");
         let t = std::time::Instant::now();
-        let drafts = drafts(&doc, &super::super::rvt_tags::tags(&doc, &mut Types::new(&doc)));
+        let mut types = Types::new(&doc);
+        let (tags, details) = (super::super::rvt_tags::tags(&doc, &mut types), super::super::rvt_tags::details(&doc, &mut types));
+        let drafts = drafts(&doc, &tags, &details);
         eprintln!("{} drafts in {:?}", drafts.len(), t.elapsed());
         for d in &drafts {
             eprintln!("{:?} {:?} 1:{}: {} lines, {} texts, {} dimensions, extent {:?}", d.kind, d.name, d.scale, d.lines.len(), d.texts.len(), d.dimensions.len(), d.extent());

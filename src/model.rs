@@ -301,12 +301,16 @@ pub struct Sheet {
     /// The paper, when the title block tells its size.
     pub paper: Option<SheetRect>,
     pub viewports: Vec<SheetViewport>,
+    /// The lines of its title block.
+    pub lines: Vec<[[f32; 2]; 2]>,
+    /// The texts of its title block: its fixed ones and its labels, filled in.
+    pub texts: Vec<DraftText>,
 }
 
 impl Sheet {
     pub fn new(number: String, name: String, paper: Option<SheetRect>, viewports: Vec<SheetViewport>) -> Self {
         let title = [number.as_str(), name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-        Self { number, name, title, paper, viewports }
+        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new() }
     }
 
     /// What the sheet covers: the paper and every viewport.
@@ -353,6 +357,18 @@ pub struct SheetViewport {
     /// "1:50".
     pub scale: String,
     pub detail: Option<String>,
+    /// Where its title stands on the sheet (metres), when the sheet tells.
+    pub label: Option<[f32; 2]>,
+    /// Where the origin of the view's own drawing lies on the sheet (metres).
+    pub origin: [f32; 2],
+    /// What a metre of the view is on the sheet: 0.02 at 1:50.
+    pub ratio: f32,
+    /// The path of the document's view (plan, section or elevation) it shows, when it is one.
+    pub drawing: Option<String>,
+    /// The point of that view's drawing that lies at `origin` (metres), when the view tells.
+    pub anchor: Option<[f64; 2]>,
+    /// The legend or drafting view in [`ProjectData::drafts`] it shows, when it is one.
+    pub draft: Option<usize>,
 }
 
 /// The kinds of drawing without a model.
@@ -366,6 +382,8 @@ pub enum DraftKind {
 /// its own plane (metres at full size, x right, y up). On paper it is `scale` times smaller.
 #[derive(Debug, Clone)]
 pub struct Draft {
+    /// The view's element in its file.
+    pub id: u64,
     pub name: String,
     pub kind: DraftKind,
     /// 1 : `scale`.

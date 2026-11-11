@@ -70,14 +70,18 @@ impl Loader for RvtLoader {
                 }
             })
             .collect::<Vec<Layer>>();
-        project.sheets = sheets(&doc, &view_ids, &views, &layers);
         // the plans, sections and elevations with their texts and dimensions: the project's drawings
         let file = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         // the tags of its views, with the labels and lines of their types
-        let tags = super::rvt_tags::tags(&doc, &mut super::rvt_drawings::Types::new(&doc));
-        project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags);
+        let mut types = super::rvt_drawings::Types::new(&doc);
+        let tags = super::rvt_tags::tags(&doc, &mut types);
+        // the detail components of its views, as the lines of their families
+        let details = super::rvt_tags::details(&doc, &mut types);
+        drop(types);
+        project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags, &details);
         // the legends and drafting views: drawings without a model
-        project.drafts = super::rvt_drafts::drafts(&doc, &tags);
+        project.drafts = super::rvt_drafts::drafts(&doc, &tags, &details);
+        project.sheets = sheets(&doc, &view_ids, &views, &layers, &file, &project, &infos);
         // the schedules take seconds on a large project: computed once the model shows
         project.schedules = Later::new(move || schedules(&doc));
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
@@ -357,7 +361,12 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
 /// insertion point is the paper's lower right corner (3077 R26), else another corner or the
 /// centre, whichever holds the most viewports. A viewport without an active crop region gets the
 /// size of the building as its view sees it (`estimated`, centred on its position).
-fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer]) -> Vec<Sheet> {
+fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo]) -> Vec<Sheet> {
+    let mut types = super::rvt_drawings::Types::new(doc);
+    let anchors: HashMap<u64, [f64; 2]> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
+    // the views the document draws, and the legends and drafting views, by their element
+    let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
+    let drafts: HashMap<u64, usize> = project.drafts.iter().enumerate().map(|(k, d)| (d.id, k)).collect();
     use rvt_export::views::ViewKind as K;
     const FT: f32 = 0.3048;
     let index: HashMap<u64, usize> = view_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
@@ -377,9 +386,12 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                     let view = index.get(&v.view).copied();
                     let position = [v.position[0] as f32 * FT, v.position[1] as f32 * FT];
                     let scale = v.scale as f32;
-                    let (rect, estimated) = match v.rect {
-                        Some([lo, hi]) => (SheetRect { min: lo.map(|x| x as f32 * FT), max: hi.map(|x| x as f32 * FT) }, false),
-                        None => {
+                    // a legend or drafting view covers what is drawn in it
+                    let drawn = drafts.get(&v.view).and_then(|&k| project.drafts[k].extent()).map(|e| SheetRect { min: [position[0] + e.min[0] * scale, position[1] + e.min[1] * scale], max: [position[0] + e.max[0] * scale, position[1] + e.max[1] * scale] });
+                    let (rect, estimated) = match (v.rect, drawn) {
+                        (Some([lo, hi]), _) => (SheetRect { min: lo.map(|x| x as f32 * FT), max: hi.map(|x| x as f32 * FT) }, false),
+                        (None, Some(drawn)) => (drawn, false),
+                        (None, None) => {
                             // the model as the view sees it: from above for a plan, across the view
                             // direction (and the full height) for the others
                             let seen = match (&v.view_kind, view.and_then(|i| views[i].camera.as_ref())) {
@@ -399,6 +411,12 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                         estimated,
                         scale: format!("1:{}", (1.0 / v.scale).round()),
                         detail: v.detail_number.clone(),
+                        label: v.label_origin.map(|p| p.map(|x| x as f32 * FT)),
+                        origin: position,
+                        ratio: scale,
+                        drawing: Some(crate::document::uuid(&format!("rvt/{file}/view/{}", v.view))).filter(|path| drawings.contains(path.as_str())),
+                        anchor: anchors.get(&v.view).copied(),
+                        draft: drafts.get(&v.view).copied(),
                     }
                 })
                 .collect();
@@ -414,7 +432,22 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 let min = corners.into_iter().rev().max_by_key(|&c| held(c))?;
                 Some(SheetRect { min, max: [min[0] + w, min[1] + h] })
             });
-            Sheet::new(s.number, s.name, paper, viewports)
+            // the title block as its family draws it, from where it is placed
+            let block = s.title_block.as_ref().and_then(|t| Some((t, t.symbol?))).map(|(t, kind)| {
+                let (lines, texts) = super::rvt_tags::title_block(doc, &mut types, kind, s.id, &s.number, &s.name);
+                let on = |p: [f64; 2]| [(t.origin[0] * 0.3048 + p[0]) as f32, (t.origin[1] * 0.3048 + p[1]) as f32];
+                let texts = texts.into_iter().map(|x| {
+                    let align = x.align.clamp(0, 2) as usize;
+                    let at = on([x.at[0] - [0.0, x.width / 2.0, x.width][align], x.at[1]]);
+                    crate::model::DraftText { element: t.id, at, width: x.width as f32, height: x.height() as f32, size: x.em as f32, align: align as u8, angle: x.angle as f32, text: x.wording }
+                });
+                (lines.into_iter().map(|l| [on(l[0]), on(l[1])]).collect(), texts.collect())
+            });
+            let mut sheet = Sheet::new(s.number, s.name, paper, viewports);
+            if let Some((lines, texts)) = block {
+                (sheet.lines, sheet.texts) = (lines, texts);
+            }
+            sheet
         })
         .collect()
 }

@@ -252,7 +252,7 @@ struct Marks {
 
 /// The views of `views` the document can hold, as its nodes (path, attributes), and before them
 /// the dimension styles they use; `file` tells the views of two files apart.
-pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str, tags: &[super::rvt_tags::Tag]) -> Vec<(String, Value)> {
+pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str, tags: &[super::rvt_tags::Tag], details: &[super::rvt_tags::Detail]) -> Vec<(String, Value)> {
     let frames: HashMap<u64, (Frame, Value, &'static str)> = views.iter().filter_map(|v| Some((v.id, view_node(v)?))).collect();
     let scales: HashMap<u64, f64> = views.iter().map(|v| (v.id, scale_of(v))).collect();
     let mut marks: HashMap<u64, Marks> = HashMap::new();
@@ -289,6 +289,11 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         }
         marks.lines.extend(tag.lines.iter().map(|l| json!([on(l[0]), on(l[1])])));
         marks.lines.extend(tag.leader_lines(&|p| frame.project(p), scale).into_iter().map(|l| json!(l)));
+    }
+    // a detail component: the lines of its family
+    for detail in details {
+        let Some((frame, ..)) = frames.get(&detail.view) else { continue };
+        marks.entry(detail.view).or_default().lines.extend(detail.lines.iter().map(|l| json!([frame.project(l[0]), frame.project(l[1])])));
     }
     let styles = types.styles_node().map(|node| (uuid(&format!("rvt/{file}/drawings")), node));
     // in the order of the views, so the document lists them as the file does
@@ -361,6 +366,12 @@ fn view_node(v: &ViewInfo) -> Option<(Frame, Value, &'static str)> {
         node["crop"] = rect([0.0, b.origin[2] + b.min[1]], [b.max[0] - b.min[0], b.origin[2] + b.max[1]]);
     }
     Some((Frame::Section { from, along }, node, "o3v::view::section"))
+}
+
+/// The origin of a view's own frame on its drawing (metres): the point a sheet places.
+pub(super) fn view_origin(v: &ViewInfo) -> Option<[f64; 2]> {
+    let (frame, ..) = view_node(v)?;
+    Some(frame.project(v.crop_box.as_ref()?.origin))
 }
 
 pub(super) fn vec3(v: Option<&FieldValue>) -> Option<[f64; 3]> {

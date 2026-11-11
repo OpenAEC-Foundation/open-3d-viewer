@@ -51,7 +51,7 @@ collaborator = []
 
 [dependencies]
 # GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
-iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "advanced", "svg", "canvas"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "advanced", "svg", "canvas", "image"] }
 # Shared OpenAEC window shell, tokens, widgets and icons (LGPL-3.0-only; fonts OFL, icons CC BY-SA,
 # see vendor/openaec-ui/NOTICE.md): snapshot of the OpenAEC Style Repo, see vendor/UPSTREAM.md
 openaec-ui = { path = "vendor/openaec-ui", features = ["gpu-renderer"] }
@@ -120,6 +120,8 @@ ifc-lite-core = "=25.0.1"
 ifc-lite-geometry = "=25.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# decodes the images of Revit title blocks
+image = "0.25"
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.

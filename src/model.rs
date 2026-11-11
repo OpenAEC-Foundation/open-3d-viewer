@@ -307,18 +307,35 @@ pub struct Sheet {
     pub texts: Vec<DraftText>,
     /// The schedules placed on it.
     pub tables: Vec<SheetTable>,
+    /// The images of its title block, such as a logo.
+    pub images: Vec<SheetImage>,
+}
+
+/// An image on a sheet (sheet metres).
+#[derive(Debug, Clone)]
+pub struct SheetImage {
+    pub center: [f32; 2],
+    /// Its width and height.
+    pub size: [f32; 2],
+    /// How it is turned (radians, counterclockwise).
+    pub angle: f32,
+    pub image: iced::widget::image::Handle,
 }
 
 impl Sheet {
     pub fn new(number: String, name: String, paper: Option<SheetRect>, viewports: Vec<SheetViewport>) -> Self {
         let title = [number.as_str(), name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new(), tables: Vec::new() }
+        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new(), tables: Vec::new(), images: Vec::new() }
     }
 
-    /// What the sheet covers: the paper, every viewport and every schedule.
+    /// What the sheet covers: the paper, every viewport and every schedule, and what its title
+    /// block draws.
     pub fn extent(&self) -> Option<SheetRect> {
         let tables = self.tables.iter().map(SheetTable::rect);
-        self.paper.iter().copied().chain(self.viewports.iter().map(|v| v.rect)).chain(tables).reduce(SheetRect::union)
+        let images = self.images.iter().map(|i| SheetRect::around(i.center, i.size));
+        let points = self.lines.iter().flatten().copied().chain(self.texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]]));
+        let block = points.map(|p| SheetRect { min: p, max: p });
+        self.paper.iter().copied().chain(self.viewports.iter().map(|v| v.rect)).chain(tables).chain(images).chain(block).reduce(SheetRect::union)
     }
 }
 

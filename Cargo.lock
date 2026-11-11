@@ -3608,6 +3608,7 @@ dependencies = [
  "ifc-lite-core",
  "ifc-lite-geometry",
  "ifc-lite-processing",
+ "image",
  "js-sys",
  "las",
  "libloading",

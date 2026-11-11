@@ -21,6 +21,9 @@ use serde_json::{json, Value};
 const MARGIN: f32 = 24.0;
 /// The smallest letters worth drawing (logical pixels).
 const SMALLEST: f32 = 1.5;
+/// The letters of a view's title on the sheet, and of the scale under it (metres on paper).
+const TITLE: f32 = 0.0035;
+const TITLE_SCALE: f32 = 0.0025;
 
 impl App {
     /// The sheets of the model.
@@ -414,6 +417,14 @@ impl canvas::Program<Message> for SheetDrawing {
                 label(&mut frame, sheet.title.clone(), title, 14.0, ink, alignment::Horizontal::Right, alignment::Vertical::Bottom);
             }
         }
+        // the images of the title block, under its lines
+        for i in &sheet.images {
+            let (centre, size) = (fit.point(i.center), Size::new(i.size[0] * fit.scale, i.size[1] * fit.scale));
+            let at = Point::new(centre.x - size.width / 2.0, centre.y - size.height / 2.0);
+            if seen(at, Point::new(at.x + size.width, at.y + size.height)) {
+                frame.draw_image(Rectangle::new(at, size), canvas::Image::new(i.image.clone()).rotation(iced::Radians(-i.angle)));
+            }
+        }
         // the title block: its lines and its texts
         let block = Path::new(|path| {
             for (a, b) in sheet.lines.iter().map(|l| (fit.point(l[0]), fit.point(l[1]))).filter(|(a, b)| seen(*a, *b)) {
@@ -581,15 +592,19 @@ impl canvas::Program<Message> for SheetDrawing {
                 frame.stroke(&Path::rectangle(at, size), stroke);
             }
             // the title where the sheet has it, else under the box
-            let under = v.label.map_or(Point::new(at.x, at.y + size.height + 16.0), |l| fit.point(l));
+            let under = v.label.map_or(Point::new(at.x, at.y + size.height + TITLE * fit.scale * 1.4), |l| fit.point(l));
             let mut title = String::new();
             if let Some(d) = &v.detail {
                 title.push_str(d);
                 title.push_str("  ");
             }
             title.push_str(&v.title);
-            label(&mut frame, title, under, 12.0, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
-            label(&mut frame, v.scale.clone(), Point::new(under.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+            // on paper: it grows and shrinks with the sheet
+            let (name, scale) = (TITLE * fit.scale, TITLE_SCALE * fit.scale);
+            if name >= SMALLEST {
+                label(&mut frame, title, under, name, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+                label(&mut frame, v.scale.clone(), Point::new(under.x, under.y + scale * 1.4), scale, p.text_secondary, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+            }
         }
         vec![frame.into_geometry()]
     }

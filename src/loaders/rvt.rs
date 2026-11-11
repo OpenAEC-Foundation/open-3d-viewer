@@ -450,6 +450,20 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 (sheet.lines, sheet.texts) = (lines, texts);
             }
             sheet.tables = tables.remove(&s.id).unwrap_or_default();
+            // the images of its title block
+            if let Some((t, kind)) = s.title_block.as_ref().and_then(|t| Some((t, t.symbol?))) {
+                // decoded here: an image that cannot be read is left out, the others show at once
+                let images = super::rvt_images::images(doc, kind).into_iter().filter_map(|i| {
+                    let pixels = image::load_from_memory(&i.file).ok()?.to_rgba8();
+                    Some(crate::model::SheetImage {
+                        center: [(t.origin[0] * 0.3048 + i.center[0]) as f32, (t.origin[1] * 0.3048 + i.center[1]) as f32],
+                        size: i.size.map(|x| x as f32),
+                        angle: i.angle as f32,
+                        image: iced::widget::image::Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw()),
+                    })
+                });
+                sheet.images = images.collect();
+            }
             sheet
         })
         .collect()

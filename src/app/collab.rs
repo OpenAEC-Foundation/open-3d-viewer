@@ -750,6 +750,17 @@ impl App {
     /// the structure and the services, each model, each layer and each class of the model.
     pub(crate) fn collab_refresh_sides(&mut self) {
         let l = self.collab.language;
+        // a coordination file brought its issues: they come in, unless issues are being worked on
+        if self.collab.issues.topics.is_empty() && !self.collab.issues_changed {
+            if let Some((path, issues)) = crate::loaders::take_file_issues() {
+                let count = issues.topics.len();
+                self.collab.issues = issues;
+                self.collab.issues_path = None;
+                self.collab.topic = None;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.collab_note(Tone::Success, format!("{count} {} {name}", l.text("issues uit", "issues from")));
+            }
+        }
         let key = self.model.as_ref().map(|m| (m.id, l));
         if self.collab.sides_for == key && !self.collab.sides.is_empty() && self.collab.model_names.len() == self.models.len() {
             return;

@@ -621,6 +621,7 @@
     "Click a point to turn from · Esc: start again": "Cliquez sur un point de départ de la rotation · Échap : recommencer",
     "Click where that point turns to · Esc: start again": "Cliquez où ce point doit arriver · Échap : recommencer",
     "Click a point of the mirror axis · Esc: stop": "Cliquez sur un point de l'axe de symétrie · Échap : arrêter",
-    "Click a second point of the mirror axis · Esc: start again": "Cliquez sur un second point de l'axe de symétrie · Échap : recommencer"
+    "Click a second point of the mirror axis · Esc: start again": "Cliquez sur un second point de l'axe de symétrie · Échap : recommencer",
+    "Metal stud walls": "Cloisons à ossature métallique"
   }
 }

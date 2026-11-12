@@ -26,7 +26,7 @@ const MEET: f64 = 1e-3;
 fn half_width(shape: &Shape) -> Option<f64> {
     match shape {
         Shape::Planar(p @ PlanarDef { form: PlanarForm::Wall { .. }, .. }) => Some(p.total_thickness() / 2.0),
-        Shape::System(s) => Some(s.member.max_element() / 2.0),
+        Shape::System(s) if !s.lies() => Some(s.member.max_element() / 2.0),
         _ => None,
     }
 }

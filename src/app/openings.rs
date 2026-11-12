@@ -229,6 +229,35 @@ mod tests {
     }
 
     #[test]
+    fn a_metal_stud_partition_is_built_and_takes_a_door() {
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        app.viewport_size = (1000.0, 800.0);
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Top);
+        app.camera.ortho = true;
+        app.camera.target = Vec3::ZERO;
+        app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
+        app.select_modelled(id);
+        for (kind, boards) in [("system.metal-stud-75-1", 2), ("system.metal-stud-100-2", 4)] {
+            app.select_modelled(id);
+            assert_eq!(app.assign_system_type(kind), 1, "{kind}");
+            let parts = app.modeller.model.evaluate(id).unwrap();
+            // studs at 600 over 6 m, between a bottom and a top track
+            assert!(parts.len() > 12, "{kind}: {} parts", parts.len());
+            let Shape::System(typed) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
+            let t = typed.system_type.as_ref().unwrap();
+            assert_eq!((t.member_material.as_str(), t.layers.len()), ("steel", boards), "{kind}");
+        }
+        app.set_model_tool(Some((ModelTool::Door, "Door")));
+        click(&mut app, 3.0, 0.0);
+        let Shape::System(with_door) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
+        assert_eq!((app.modeller.refusal.clone(), with_door.openings.len()), (None, 1));
+    }
+
+    #[test]
     fn near_the_end_the_opening_stays_inside_the_wall_and_shows_before_the_click() {
         let mut app = a_wall();
         app.set_model_tool(Some((ModelTool::Window, "Window")));

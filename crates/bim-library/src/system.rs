@@ -26,6 +26,8 @@ pub enum SystemGroup {
     CurtainWall,
     Frame,
     TimberFrame,
+    /// A partition of steel studs between tracks, lined with boards.
+    MetalStud,
     Masonry,
     Cladding,
     Floor,
@@ -33,7 +35,7 @@ pub enum SystemGroup {
 }
 
 impl SystemGroup {
-    pub const ALL: [SystemGroup; 7] = [SystemGroup::CurtainWall, SystemGroup::Frame, SystemGroup::TimberFrame, SystemGroup::Masonry, SystemGroup::Cladding, SystemGroup::Floor, SystemGroup::Ceiling];
+    pub const ALL: [SystemGroup; 8] = [SystemGroup::CurtainWall, SystemGroup::Frame, SystemGroup::TimberFrame, SystemGroup::MetalStud, SystemGroup::Masonry, SystemGroup::Cladding, SystemGroup::Floor, SystemGroup::Ceiling];
 
     /// Its name in `lang`, as a type's name starts.
     pub fn name(self, lang: Lang) -> &'static str {
@@ -41,6 +43,7 @@ impl SystemGroup {
             SystemGroup::CurtainWall => ["Vliesgevel", "Curtain wall", "Vorhangfassade", "Mur-rideau"],
             SystemGroup::Frame => ["Kozijn", "Frame", "Rahmen", "Châssis"],
             SystemGroup::TimberFrame => ["Houtskeletbouw", "Timber frame", "Holzrahmenbau", "Ossature bois"],
+            SystemGroup::MetalStud => ["Metal stud", "Metal stud", "Metallständerwand", "Cloison à ossature métallique"],
             SystemGroup::Masonry => ["Metselwerk", "Masonry", "Mauerwerk", "Maçonnerie"],
             SystemGroup::Cladding => ["Gevelbekleding", "Cladding", "Fassadenbekleidung", "Bardage"],
             SystemGroup::Floor => ["Vloer", "Floor", "Decke", "Plancher"],
@@ -57,7 +60,7 @@ impl SystemGroup {
     /// Whether a type of it is named after its members (a curtain wall's mullions, a timber
     /// frame's studs) rather than its panels (bricks, boards, slabs, tiles).
     pub fn framed(self) -> bool {
-        matches!(self, SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame)
+        matches!(self, SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud)
     }
 
     /// The IFC class of its type and its predefined type.
@@ -65,7 +68,7 @@ impl SystemGroup {
         match self {
             SystemGroup::CurtainWall => ("IfcCurtainWallType", "NOTDEFINED"),
             SystemGroup::Frame => ("IfcWindowType", "WINDOW"),
-            SystemGroup::TimberFrame | SystemGroup::Masonry => ("IfcWallType", "STANDARD"),
+            SystemGroup::TimberFrame | SystemGroup::MetalStud | SystemGroup::Masonry => ("IfcWallType", "STANDARD"),
             SystemGroup::Cladding => ("IfcCoveringType", "CLADDING"),
             SystemGroup::Floor => ("IfcSlabType", "FLOOR"),
             SystemGroup::Ceiling => ("IfcCoveringType", "CEILING"),
@@ -330,6 +333,13 @@ impl SystemType {
             let capitalised: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
             format!("{capitalised} {} {}×{}", mm(self.panels.thickness), mm(self.grid.bay), mm(self.grid.row))
         };
+        // a metal stud partition also by its lining: the boards on one face ("2×12.5")
+        if self.group == SystemGroup::MetalStud {
+            let face: Vec<&SystemLayer> = self.layers.iter().filter(|l| l.offset > 0.0).collect();
+            if let Some(board) = face.first() {
+                name = format!("{name} {}×{}", face.len(), mm(board.panels.thickness));
+            }
+        }
         if let Some(pattern) = self.grid.pattern.name(self.group, lang) {
             name = format!("{name} {pattern}");
         }
@@ -339,7 +349,7 @@ impl SystemType {
 
 /// The starter system types: Open BIM Studio's recipes for curtain walls, frames, masonry,
 /// sand-lime elements, cladding, hollow-core floors and a suspended ceiling, and its catalogue's
-/// timber frames. Glass is 24 mm, as there.
+/// timber frames and metal stud partitions. Glass is 24 mm, as there.
 pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
@@ -382,6 +392,26 @@ pub fn starter() -> Vec<SystemType> {
         layers: [1.0, -1.0].map(|side| boards(side * (0.089 / 2.0 + 0.00625), "gypsum-board", 0.0125, 1.2, 3.0)).to_vec(),
         ..upright("system.timber-frame-internal-89", TimberFrame, Grid::new(0.6, 3.0, Stack), Members::new(0.038, 0.089, "timber").framed(Framing::PLATES.with_header(0.038)), Panels::new("mineral-wool", 0.089))
     };
+    // a metal stud partition as Open BIM Studio's catalogue has it: steel studs `depth` deep at 600
+    // between a bottom and a top track, mineral wool between them, and `linings` gypsum boards of
+    // 12.5 on either face. The catalogue gives the studs no width: 50, the flange of a C stud.
+    let metal_stud = |depth: f64, linings: usize| {
+        let board = 0.0125;
+        let layers = [1.0, -1.0]
+            .into_iter()
+            .flat_map(|side| (0..linings).map(move |k| boards(side * (depth / 2.0 + board * (k as f64 + 0.5)), "gypsum-board", board, 1.2, 3.0)))
+            .collect();
+        SystemType {
+            layers,
+            ..upright(
+                &format!("system.metal-stud-{}-{linings}", (depth * 1000.0).round()),
+                MetalStud,
+                Grid::new(0.6, 3.0, Stack),
+                Members::new(0.05, depth, "steel").framed(Framing::PLATES.with_header(0.05)),
+                Panels::new("mineral-wool", depth),
+            )
+        }
+    };
     let hollow_core = |depth: f64| SystemType {
         lying: Some(3.0),
         ..upright(&format!("system.hollow-core-{}", (depth * 1000.0).round()), Floor, Grid::new(1.2, 6.0, Stack), Members::new(0.02, depth, "grout"), Panels::new("hollow-core-concrete", depth))
@@ -400,6 +430,10 @@ pub fn starter() -> Vec<SystemType> {
         timber_frame("system.timber-frame-184-610", 0.184, 0.61),
         timber_frame("system.timber-frame-235-610", 0.235, 0.61),
         internal,
+        metal_stud(0.075, 1),
+        metal_stud(0.075, 2),
+        metal_stud(0.1, 1),
+        metal_stud(0.1, 2),
         // bricks as panels, the mortar as members set back 5 mm from either face
         upright("system.masonry-waal-stretcher", Masonry, Grid::new(0.22, 0.0625, RunningBond), Members::new(0.01, 0.09, "mortar"), Panels::new("brick", 0.1)),
         upright("system.masonry-dik-stretcher", Masonry, Grid::new(0.22, 0.075, RunningBond), Members::new(0.01, 0.09, "mortar"), Panels::new("brick", 0.1)),
@@ -425,7 +459,7 @@ mod tests {
     #[test]
     fn the_starter_types_check_and_have_names_of_their_own() {
         let types = starter();
-        assert_eq!(types.len(), 26);
+        assert_eq!(types.len(), 30);
         for t in &types {
             t.check(&materials()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }

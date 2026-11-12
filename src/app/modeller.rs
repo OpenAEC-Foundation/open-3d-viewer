@@ -624,6 +624,16 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
                 system_type: None,
                 openings: Vec::new(),
             };
+            // a lying type (a floor, a ceiling) is laid in the rectangle between the two clicks, as a
+            // slab is: its line along the rectangle's near side, its width to the far one, its top
+            // at the height its type lies above the level
+            if let Some((t, above)) = s.kind.as_deref().and_then(|id| library.system_type(id)).and_then(|t| Some((t, t.lying?))) {
+                let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
+                let rectangle = SystemDef { start: lo, end: DVec2::new(hi.x, lo.y), base: base + above, height: hi.y - lo.y, ..generic.clone() };
+                if let Some(laid) = rectangle.laid(t) {
+                    return Shape::System(laid);
+                }
+            }
             let typed = s.kind.as_deref().and_then(|id| generic.clone().typed_from(library, id));
             Shape::System(typed.unwrap_or(generic))
         }

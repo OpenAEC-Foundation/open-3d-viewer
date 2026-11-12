@@ -83,7 +83,7 @@ impl App {
         }
         let shown: Vec<usize> = of.filter(|&i| query.is_empty() || sheets[i].title.to_lowercase().contains(query)).collect();
         let open = self.explorer_open[4] || !query.is_empty();
-        body = body.push(group_header(p, l.text("Bladen", "Sheets"), Some("beta"), shown.len(), open, Message::ToggleExplorer(4)));
+        body = body.push(group_header(p, l.text("Tekeningen", "Drawings"), Some("beta"), shown.len(), open, Message::ToggleExplorer(4)));
         if !open {
             return body;
         }

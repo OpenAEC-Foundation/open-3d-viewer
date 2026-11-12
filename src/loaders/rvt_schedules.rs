@@ -120,6 +120,135 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
     (!rows.is_empty()).then_some(SheetTable { schedule: name, origin: [0.0; 2], columns, rows })
 }
 
+/// Completes a computed schedule where it left cells open:
+/// - a parameter the elements of a row do not store themselves is read from their types
+///   (`m_pParams.m_params` of the symbol: its text, or its number as the schedule's cell for
+///   that parameter formats it), when all of the row have it alike;
+/// - what is still open takes the text the file stores for the cell (`m_text` of the rows of
+///   the elements, as they showed when the file was saved): a computed row takes the first
+///   stored row not taken yet that agrees with every text they both have, or the row in its
+///   place when there are as many of each;
+/// - a total row shows nothing where it totals nothing.
+pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::Schedule) {
+    let Some(o) = doc.object(s.id) else { return };
+    let Some(data) = o.get("m_pData").and_then(|v| o.deref(v)) else { return };
+    let list = |of: &NestedObject, field: &str| -> Vec<&NestedObject> { of.get(field).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).collect() };
+    let number = |of: &NestedObject, field: &str| of.get(field).and_then(FieldValue::as_i64).unwrap_or(0);
+    let comma = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1);
+    // the rows of the elements as the file stores them, and how a parameter's cells are formatted
+    let mut stored: Vec<Vec<String>> = Vec::new();
+    let mut formats: HashMap<i64, &NestedObject> = HashMap::new();
+    for section in list(data, "m_SectionData").into_iter().skip(1) {
+        if section.get("m_hideSection").and_then(FieldValue::as_i64) == Some(1) {
+            continue;
+        }
+        for row in list(section, "m_tableCells") {
+            let cells = list(row, "m_arrCells");
+            for cell in cells.iter().filter(|c| number(c, "m_cellType") == 2) {
+                if let (Some(parameter), Some(format)) = (cell.get("m_paramId").and_then(FieldValue::element), cell.get("m_formatOptions").and_then(FieldValue::as_object)) {
+                    formats.entry(parameter).or_insert(format);
+                }
+            }
+            if cells.iter().any(|c| matches!(number(c, "m_cellType"), 2 | 6)) {
+                stored.push(cells.iter().map(|c| c.get("m_text").and_then(FieldValue::as_str).unwrap_or_default().replace("\r\n", "\n")).collect());
+            }
+        }
+    }
+    let open = |cell: &Option<String>| cell.as_deref().is_none_or(|t| t.trim().is_empty());
+    // how the project writes what a parameter measures (`UnitsElem`, by the parameter's spec),
+    // for a cell that leaves its format to the project
+    let units = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id));
+    let of_project = |parameter: i64| -> Option<&NestedObject> {
+        let p = doc.object(u64::try_from(parameter).ok()?)?;
+        let spec = p.get("m_pParamDef").and_then(|v| p.deref(v))?.get("m_specTypeId")?.as_object()?.get("m_typeId")?.as_str()?.rsplit_once('-')?.0.to_string();
+        let all = units.as_ref()?.get("m_units")?.as_object()?.get("m_formatOptionsMap")?.as_list()?;
+        all.iter().filter_map(FieldValue::as_object).find(|pair| pair.get("first").and_then(FieldValue::as_object).and_then(|t| t.get("m_typeId")?.as_str()).and_then(|t| t.rsplit_once('-')).is_some_and(|t| t.0 == spec))?.get("second")?.as_object()
+    };
+    // what the type of an element says for a parameter: a text, or a number
+    let mut types: HashMap<u64, Vec<(i64, String, Option<f64>)>> = HashMap::new();
+    let mut of_type = |element: u64, parameter: i64| -> Option<(String, Option<f64>)> {
+        let e = doc.object(element)?;
+        let own = e.path(&["m_pInstanceInfo", "m_symbolId"]).and_then(FieldValue::element);
+        let kind = own.or_else(|| ["m_masterSymbolId", "m_symbolId"].into_iter().find_map(|f| e.get(f)?.element())).and_then(|k| u64::try_from(k).ok())?;
+        let all = types.entry(kind).or_insert_with(|| {
+            let Some(t) = doc.object(kind) else { return Vec::new() };
+            let params = t.path(&["m_pParams", "m_params"]).and_then(FieldValue::as_list).unwrap_or(&[]);
+            params.iter().filter_map(FieldValue::as_object).filter_map(|p| Some((p.get("m_paramId")?.element()?, p.get("m_str").and_then(FieldValue::as_str).unwrap_or_default().to_string(), p.get("m_value").and_then(FieldValue::as_f64).filter(|v| v.is_finite())))).collect()
+        });
+        all.iter().find(|p| p.0 == parameter).map(|p| (p.1.clone(), p.2))
+    };
+    for (i, column) in s.columns.iter().enumerate() {
+        if column.parameter == -1 {
+            continue;
+        }
+        for row in s.rows.iter_mut().filter(|r| !r.total && r.cells.get(i).is_some_and(&open)) {
+            let mut said = row.elements.iter().map(|&e| of_type(e, column.parameter));
+            let Some(Some(first)) = said.next() else { continue };
+            if !said.all(|other| other.as_ref() == Some(&first)) {
+                continue;
+            }
+            let text = match first {
+                (text, _) if !text.is_empty() => Some(text),
+                (_, Some(value)) => formats.get(&column.parameter).and_then(|format| written(format, value, comma)).or_else(|| written(of_project(column.parameter)?, value, comma)),
+                _ => None,
+            };
+            if let Some(text) = text {
+                row.cells[i] = Some(text);
+            }
+        }
+    }
+    // the texts the file stores, by the columns that are shown
+    let shown: Vec<usize> = (0..s.columns.len()).filter(|&i| !s.columns[i].hidden).collect();
+    let rows: Vec<usize> = (0..s.rows.len()).filter(|&r| !s.rows[r].total).collect();
+    // the stored row each computed row took
+    let mut took: Vec<Option<usize>> = vec![None; rows.len()];
+    let mut taken = vec![false; stored.len()];
+    for (n, &r) in rows.iter().enumerate() {
+        let agrees = |(_, texts): &(usize, &Vec<String>)| {
+            let both = shown.iter().enumerate().filter_map(|(k, &i)| Some((texts.get(k)?.trim(), s.rows[r].cells.get(i)?.as_deref()?.trim()))).filter(|(a, b)| !a.is_empty() && !b.is_empty());
+            let (mut compared, mut same) = (0, true);
+            for (a, b) in both {
+                compared += 1;
+                same &= a == b;
+            }
+            compared > 0 && same
+        };
+        // the first that agrees and is not taken yet: rows that read alike come in their order
+        let at = stored.iter().enumerate().filter(|(k, _)| !taken[*k]).find(agrees).map(|(k, _)| k).or((stored.len() == rows.len() && !taken[n]).then_some(n));
+        if let Some(k) = at {
+            taken[k] = true;
+        }
+        took[n] = at;
+        let Some(texts) = at.map(|k| stored[k].clone()) else { continue };
+        for (k, &i) in shown.iter().enumerate() {
+            if let (Some(cell), Some(text)) = (s.rows[r].cells.get_mut(i), texts.get(k).filter(|t| !t.trim().is_empty())) {
+                if open(cell) {
+                    *cell = Some(text.clone());
+                }
+            }
+        }
+    }
+    // rows the file did not show: where it stores fewer rows than were computed and each of
+    // those was taken by one computed row, the others were left out by a filter that could not
+    // be computed (one on a parameter of the type)
+    let mut used: Vec<usize> = took.iter().flatten().copied().collect();
+    used.sort_unstable();
+    used.dedup();
+    if !stored.is_empty() && stored.len() < rows.len() && used.len() == stored.len() && took.iter().flatten().count() == stored.len() {
+        let left_out: std::collections::HashSet<usize> = rows.iter().zip(&took).filter(|(_, t)| t.is_none()).map(|(&r, _)| r).collect();
+        let mut k = 0;
+        s.rows.retain(|_| {
+            k += 1;
+            !left_out.contains(&(k - 1))
+        });
+    }
+    for row in s.rows.iter_mut().filter(|r| r.total) {
+        for cell in row.cells.iter_mut().filter(|c| c.is_none()) {
+            *cell = Some(String::new());
+        }
+    }
+}
+
 /// The number every element of a category stores alike for a parameter (internal units), on the
 /// element itself or on its type; none when they differ or none stores one.
 fn uniform(doc: &rvt_read::Document, category: i64, parameter: i64) -> Option<f64> {
@@ -167,6 +296,9 @@ fn written(format: &NestedObject, feet: f64, comma: bool) -> Option<String> {
     let decimals = (-accuracy.log10()).round().clamp(0.0, 9.0) as usize;
     let value = feet * per_foot;
     let mut figure = format!("{value:.decimals$}");
+    if decimals > 0 && format.get("m_bSuppressTrailingZeros").and_then(FieldValue::as_i64) == Some(1) {
+        figure = figure.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
     if comma {
         figure = figure.replace('.', ",");
     }
@@ -202,5 +334,29 @@ mod tests {
         // a length every pile has alike, written as its cell formats it
         let texts: Vec<&str> = tables.iter().flat_map(|t| &t.rows).flat_map(|r| &r.cells).map(|c| c.text.as_str()).collect();
         eprintln!("signed lengths: {:?}", texts.iter().filter(|t| t.starts_with('+')).collect::<Vec<_>>());
+    }
+    /// The computed schedules of a project, completed: fewer open cells than before, none in a
+    /// total row (`RVT_DRAWINGS`, read-only; skipped when absent).
+    #[test]
+    fn completing_a_schedule_fills_open_cells() {
+        let Some(path) = std::env::var_os("RVT_DRAWINGS").map(std::path::PathBuf::from).filter(|p| p.exists()) else {
+            eprintln!("skipped: set RVT_DRAWINGS to a Revit project with schedules");
+            return;
+        };
+        let doc = rvt_read::Document::open(&path).expect("rvt");
+        let open = |s: &rvt_export::schedules::Schedule| s.rows.iter().flat_map(|r| r.cells.iter().enumerate()).filter(|(i, c)| !s.columns[*i].hidden && c.is_none()).count();
+        let (mut before, mut after) = (0, 0);
+        for mut s in rvt_export::schedules::schedules(&doc).into_iter().filter(|s| !s.is_template) {
+            let was = open(&s);
+            super::complete(&doc, &mut s);
+            eprintln!("{:?}: {} open cells, {} after", s.name, was, open(&s));
+            for r in s.rows.iter().take(7) {
+                eprintln!("    {:?}", r.cells.iter().enumerate().filter(|(i, _)| !s.columns[*i].hidden).map(|(_, c)| c.as_deref().unwrap_or("?")).collect::<Vec<_>>());
+            }
+            assert!(s.rows.iter().filter(|r| r.total).all(|r| r.cells.iter().all(Option::is_some)));
+            before += was;
+            after += open(&s);
+        }
+        assert!(after <= before);
     }
 }

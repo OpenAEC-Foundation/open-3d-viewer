@@ -1132,8 +1132,8 @@ impl App {
         json!({
             "hidden_count": self.hidden.len(),
             "selection_count": self.sel.len(),
-            "can_undo": self.history.can_undo(),
-            "can_redo": self.history.can_redo(),
+            "can_undo": self.can_undo(),
+            "can_redo": self.can_redo(),
         })
     }
 

@@ -762,8 +762,7 @@ const MOST_HATCH_LINES: usize = 4000;
 /// `m_placer`; a drafting pattern is sized on paper, so `view_scale` times as large in a view),
 /// cut to the region; a solid fill as the region in its colour. Left out: what has no line style (a family's reference
 /// planes), what its style does not print (invisible lines, reference lines), what a visibility
-/// parameter of the type switches off, what shows from another side than the front and the
-/// lines of a family nested in it (where that is placed is not in these graphics).
+/// parameter of the type switches off and what shows from another side than the front.
 fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_scale: f64, seen_as: Seen) -> Graphics {
     /// The flags of a piece of graphics that shows at no level of detail (coarse, medium, fine).
     const SWITCHED_OFF: i64 = 0xE0;
@@ -806,10 +805,13 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
         };
         met != matches!(condition.get("m_negateDirCondition"), Some(Value::Bool(true)))
     };
-    // a solid: a region with a face that has no fill
+    // a solid: a region with a face that has no fill, with a face that is not flat, or with
+    // four faces or more (a solid of a material has a fill on every face too; a filled region
+    // is one flat face, or a few)
     let solid = |o: &Object| {
         let faces: Vec<&Object> = o.get("m_pFaces").and_then(|f| f.as_list()).unwrap_or(&[]).iter().filter_map(|p| graph.objects.get(p.as_ptr()?)).collect();
-        !faces.is_empty() && faces.iter().any(|f| target(f.get("m_pGFilling")).is_none())
+        let flat = |f: &&Object| target(f.get("m_pSurf")).is_some_and(|(_, s)| class(s) == "Plane");
+        !faces.is_empty() && (faces.len() >= 4 || !faces.iter().all(|f| target(f.get("m_pGFilling")).is_some() && flat(f)))
     };
     // how many it has of its own (not of a family nested in it), whatever shows
     let mut solids = 0usize;
@@ -849,8 +851,8 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
                 open.push((at, nested, placed.of(&inner)));
             }
         }
-        // a group with a category is a nested family: its regions lie where they are placed, its
-        // lines are in its own coordinates, and where it is placed is not in these graphics
+        // a group with a category is a nested family: its regions and lines lie where it is
+        // placed; its reference lines are in its own coordinates and never show
         let nested = nested || name == "GGroup" && style(o).is_some();
         // what a parameter of the type switches off stays in its graphics, marked as showing at
         // none of the three levels of detail
@@ -1024,9 +1026,9 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
             }
             continue;
         }
-        // the lines of a nested family are in its own coordinates in the graphics of a type; in
-        // those of an element of the model they lie where it stands
-        let Some(shown) = style(o).filter(|s| (seen_as.model || !nested) && types.line_shows(*s)) else { continue };
+        // the lines of a nested family lie where it is placed, as its regions do (the leader of a
+        // row of bars); what it has in its own coordinates are reference lines, which never show
+        let Some(shown) = style(o).filter(|s| types.line_shows(*s)) else { continue };
         let color = types.line_color(shown);
         let Some(ends) = floats(o, "m_endParams") else { continue };
         let (from, to) = (ends[0], ends[1]);

@@ -1117,7 +1117,7 @@ pub(super) fn sheets_list<'a>(app: &'a App, p: Palette, l: Language, mut body: i
             .padding([4, 8])
             .width(Fill)
             .style(move |_, s| p.row_button(s))
-            .on_press(Message::NewSheet(l.text("Blad", "Sheet"))),
+            .on_press(Message::NewSheet(l.text("Tekening", "Drawing"))),
     );
     // the views on no sheet yet, on new sheets
     let (plans, sections) = app.unplaced_views();

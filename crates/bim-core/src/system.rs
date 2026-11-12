@@ -85,6 +85,14 @@ pub struct SystemTypeDef {
     pub corners: Corner,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framing: Option<Framing>,
+    /// The system lies (a floor, a ceiling): its face is level, its `height` the width it reaches
+    /// to the left of its line, its `base` the height of its top.
+    #[serde(default, skip_serializing_if = "is_upright")]
+    pub lying: bool,
+}
+
+fn is_upright(lying: &bool) -> bool {
+    !*lying
 }
 
 fn is_butt(c: &Corner) -> bool {
@@ -96,12 +104,26 @@ fn is_stack(p: &Pattern) -> bool {
 }
 
 impl SystemDef {
+    /// Whether the system lies (a floor, a ceiling) rather than stands.
+    pub fn lies(&self) -> bool {
+        self.system_type.as_ref().is_some_and(|t| t.lying)
+    }
+
     /// This system made by type `t`: its spacing, members and panels the type's, and the type kept
-    /// with it. `None` when `t` lies (a floor, a ceiling), which an upright system cannot be.
-    pub fn typed(mut self, t: &SystemType) -> Option<Self> {
-        if t.lying.is_some() {
-            return None;
-        }
+    /// with it. `None` when `t` lies (a floor, a ceiling) and the system stands, or the other way
+    /// round: a system keeps the way it was laid out (see [`Self::laid`]).
+    pub fn typed(self, t: &SystemType) -> Option<Self> {
+        (t.lying.is_some() == self.lies()).then(|| self.of_type(t))
+    }
+
+    /// This system laid down as lying type `t` (a floor, a ceiling): its line one side of it, its
+    /// `height` the width it reaches to the left of that line, its `base` the height of its top.
+    /// `None` when `t` does not lie.
+    pub fn laid(self, t: &SystemType) -> Option<Self> {
+        t.lying.is_some().then(|| self.of_type(t))
+    }
+
+    fn of_type(mut self, t: &SystemType) -> Self {
         self.spacing = DVec2::new(t.grid.bay, t.grid.row);
         self.member = DVec2::new(t.members.width, t.members.depth);
         self.panel = t.panels.thickness;
@@ -113,8 +135,9 @@ impl SystemDef {
             layers: t.layers.clone(),
             corners: t.corners,
             framing: t.members.framing,
+            lying: t.lying.is_some(),
         });
-        Some(self)
+        self
     }
 
     /// This system made by type `id` of `library`; `None` when the library lacks it or it lies.
@@ -385,11 +408,14 @@ pub fn parts(s: &SystemDef) -> Result<Vec<PartSolid>, Refusal> {
 /// The members and panels of system `s`, its faces ending as `ends` say.
 fn build(s: &SystemDef, ends: &Ends) -> Result<Vec<PartSolid>, Refusal> {
     let plan = plan(s, ends)?;
-    let right = plan.dir.cross(DVec3::Z);
+    // a standing face runs up; a lying one runs level to the left of its line, its layers stacked
+    // upwards, its top at the system's base
+    let (up, sunk) = if s.lies() { (DVec3::Z.cross(plan.dir), s.member.y.max(s.panel) / 2.0) } else { (DVec3::Z, 0.0) };
+    let right = plan.dir.cross(up);
     let mut parts = Vec::new();
     for (f, span) in plan.faces.iter().zip(&plan.spans) {
-        let origin = s.start.extend(s.base) + plan.dir * span.lo;
-        let line = Line { origin, dir: plan.dir, right, length: span.hi - span.lo, height: s.height, phase: span.phase, lead: span.lead, back: span.back, gaps: span.gaps.clone(), posts: span.posts.clone() };
+        let origin = s.start.extend(s.base - sunk) + plan.dir * span.lo;
+        let line = Line { origin, dir: plan.dir, up, right, length: span.hi - span.lo, height: s.height, phase: span.phase, lead: span.lead, back: span.back, gaps: span.gaps.clone(), posts: span.posts.clone() };
         line.generate(f, &span.openings, &span.joints, &mut parts)?;
     }
     Ok(parts)
@@ -584,6 +610,8 @@ fn outside(rects: Vec<[f64; 4]>, gaps: &[Gap]) -> Vec<[f64; 4]> {
 struct Line {
     origin: DVec3,
     dir: DVec3,
+    /// Up the face: the vertical for a standing face, level for a lying one.
+    up: DVec3,
     right: DVec3,
     length: f64,
     height: f64,
@@ -607,12 +635,12 @@ struct Piece {
 impl Line {
     /// A point of face `f`: `u` along the line, `v` up it.
     fn at(&self, f: &Face, u: f64, v: f64) -> DVec3 {
-        self.origin + self.dir * u + DVec3::Z * v + self.right * f.offset
+        self.origin + self.dir * u + self.up * v + self.right * f.offset
     }
 
     /// A vertical member of `f` at `u`, its centre line from `from` up to `to`.
     fn vertical(&self, f: &Face, size: DVec2, u: f64, from: f64, to: f64) -> Result<Piece, Refusal> {
-        let member = Member { axes: Axes::new(self.at(f, u, from), self.dir, DVec3::Z)?, length: to - from, profile: Profile::rectangle(size.x, size.y)? };
+        let member = Member { axes: Axes::new(self.at(f, u, from), self.dir, self.up)?, length: to - from, profile: Profile::rectangle(size.x, size.y)? };
         Ok(Piece { member, start: None, end: None, additions: Vec::new(), removals: Vec::new() })
     }
 
@@ -1416,8 +1444,39 @@ mod tests {
     }
 
     #[test]
+    fn a_lying_system_is_laid_level_to_the_left_of_its_line_under_its_base() {
+        let library = Library::starter();
+        // 3.6 m of line, 6 m wide, its top at 3.0: three hollow-core slabs 1200 wide spanning 6 m
+        let floor = SystemDef { base: 3.0, ..system(3.6, 6.0) }.laid(library.system_type("system.hollow-core-200").unwrap()).unwrap();
+        let parts = parts(&floor).unwrap();
+        let slabs = of(&parts, "hollow-core-concrete");
+        assert_eq!(slabs.len(), 3, "{} parts", parts.len());
+        let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        for p in &parts {
+            let (a, b) = p.solid.bounds();
+            (lo, hi) = (lo.min(a), hi.max(b));
+        }
+        // the joints round its edge are centred on it: half a joint (10) outside
+        assert!((lo - DVec3::new(-0.01, -0.01, 2.8)).length() < 1e-6 && (hi - DVec3::new(3.61, 6.01, 3.0)).length() < 1e-6, "{lo} {hi}");
+        let volume: f64 = parts.iter().map(|p| p.solid.volume()).sum();
+        assert!(volume > 3.6 * 6.0 * 0.2 - 1e-6 && volume < 3.62 * 6.02 * 0.2 + 1e-6, "slabs and grout fill it: {volume}");
+        // a ceiling: tiles 600 square in a grid of profiles
+        let ceiling = SystemDef { base: 2.6, ..system(3.0, 2.4) }.laid(library.system_type("system.ceiling-600x600").unwrap()).unwrap();
+        let parts = super::parts(&ceiling).unwrap();
+        assert_eq!(of(&parts, "mineral-fibre").len(), 20, "5 by 4 tiles");
+        assert!(parts.iter().all(|p| p.solid.bounds().1.z <= 2.6 + 1e-9 && p.solid.bounds().0.z >= 2.6 - 0.038 - 1e-9));
+    }
+
+    #[test]
     fn a_lying_type_does_not_make_an_upright_system() {
         assert_eq!(system(3.0, 3.0).typed_from(&Library::starter(), "system.ceiling-600x600"), None);
+        // nor an upright type a lying one
+        let library = Library::starter();
+        let floor = system(3.0, 3.0).laid(library.system_type("system.hollow-core-200").unwrap()).unwrap();
+        assert!(floor.lies());
+        assert_eq!(floor.clone().typed_from(&library, "system.timber-frame-140"), None);
+        assert!(floor.typed_from(&library, "system.hollow-core-260").is_some_and(|s| s.lies()), "another lying type fits");
+        assert_eq!(system(3.0, 3.0).laid(library.system_type("system.timber-frame-140").unwrap()), None);
         assert_eq!(system(3.0, 3.0).typed_from(&Library::starter(), "system.unknown"), None);
     }
 

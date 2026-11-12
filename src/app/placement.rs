@@ -360,7 +360,7 @@ impl App {
             }
             ModelTool::System => {
                 for group in bim_library::SystemGroup::ALL {
-                    for t in self.library.system_types_of(group).filter(|t| t.lying.is_none()) {
+                    for t in self.library.system_types_of(group) {
                         let name = self.library.system_name(&t.id, lang).unwrap_or_else(|| t.id.clone());
                         choices.push(Choice { id: Some(t.id.clone()), name });
                     }
@@ -518,7 +518,7 @@ mod tests {
         let timber = kinds.iter().find(|k| k.id.as_deref() == Some("system.timber-frame-140")).expect("a timber frame");
         assert!(timber.name.starts_with("Timber frame") && timber.name.ends_with("600"), "{}", timber.name);
         assert!(app.library.system_type("system.ceiling-600x600").is_some());
-        assert!(kinds.iter().all(|k| k.id.as_deref() != Some("system.ceiling-600x600")));
+        assert!(kinds.iter().any(|k| k.id.as_deref() == Some("system.ceiling-600x600")), "a lying type is laid in a rectangle, so it is offered too");
         let names: std::collections::HashSet<&str> = kinds.iter().map(|k| k.name.as_str()).collect();
         assert_eq!(names.len(), kinds.len(), "each type is told from the others by its name");
         // the type picked is what the cursor shows and what the second click places
@@ -543,6 +543,33 @@ mod tests {
         // the frame's studs, plates and layers are its type's: far more than a generic grid as long
         let parts = |id| app.modeller.model.evaluate(ElementId(id)).unwrap().len();
         assert!(parts(1) > parts(2), "{} {}", parts(1), parts(2));
+    }
+
+    #[test]
+    fn a_lying_type_is_laid_in_the_rectangle_between_two_clicks() {
+        use bim_core::Shape;
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::System, "Systeem")));
+        // the floors and ceilings are among the types to choose
+        let choices = app.kinds(ModelTool::System, openaec_ui::Language::English).unwrap();
+        assert!(choices.iter().any(|c| c.id.as_deref() == Some("system.hollow-core-200")) && choices.iter().any(|c| c.id.as_deref() == Some("system.ceiling-600x600")));
+        place(&mut app, PlaceMessage::Kind(Some("system.hollow-core-200".into())));
+        place(&mut app, PlaceMessage::Chain(false));
+        click(&mut app, 3.6, 6.0);
+        click(&mut app, 0.0, 0.0);
+        let model = &app.modeller.model;
+        assert_eq!(model.len(), 1);
+        let Shape::System(floor) = model.get(ElementId(1)).unwrap().shape_in_project(&model.grid) else { panic!() };
+        // whichever corner is clicked first: its line along the near side, 6 m wide, its top 3 m up
+        assert!(floor.lies());
+        assert_eq!((floor.start, floor.end, floor.height, floor.base), (DVec2::ZERO, DVec2::new(3.6, 0.0), 6.0, 3.0));
+        let parts = model.evaluate(ElementId(1)).unwrap();
+        assert_eq!(parts.iter().filter(|p| p.material.as_deref() == Some("hollow-core-concrete")).count(), 3, "three slabs 1200 wide");
+        // another lying type fits it, an upright one does not
+        app.select_modelled(ElementId(1));
+        assert_eq!(app.assignable_systems("system.hollow-core-260"), [ElementId(1)]);
+        assert!(app.assignable_systems("system.timber-frame-140").is_empty());
+        assert_eq!(app.assign_system_type("system.hollow-core-260"), 1);
     }
 
     #[test]

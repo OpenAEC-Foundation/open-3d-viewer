@@ -402,6 +402,14 @@ pub fn composes(source: &Source) -> bool {
 /// Loads files that layer over each other as one model, the later ones stronger (see
 /// [`Loader::load_stack`]); one file loads as [`load_with`]. The model is named after the first.
 pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, String> {
+    let mut model = load_first(sources, progress)?;
+    model.complete();
+    Ok(model)
+}
+
+/// As [`load_stack`], without what the loader leaves for after the model shows (the drawings of
+/// a Revit project, see [`Model::complete`]): the window shows the model first.
+pub fn load_first(sources: &[Source], progress: &Progress) -> Result<Model, String> {
     let source = sources.first().ok_or("no file to open")?;
     let loader = loader_for(sources.last().unwrap_or(source))?;
     let start = Instant::now();

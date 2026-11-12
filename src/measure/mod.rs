@@ -1,5 +1,6 @@
 //! Measuring in the viewport, as Trimble Connect: distances (perpendicular between points, edges
-//! and faces), angles, the area of a face, the volume of an element and the area of a polygon.
+//! and faces), angles, the area of a face, the volume of an element and the area of a polygon;
+//! and remarks, texts that stand at a point of the model.
 //!
 //! The cursor snaps to what is under it, within a few pixels on screen: a corner or the middle of
 //! an edge, else an edge (the real model edges from `geometry`), else the face. That is
@@ -30,10 +31,12 @@ pub enum Tool {
     Area,
     Volume,
     Polygon,
+    /// A remark standing at a point of the model.
+    Note,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 5] = [Tool::Distance, Tool::Angle, Tool::Area, Tool::Volume, Tool::Polygon];
+    pub const ALL: [Tool; 6] = [Tool::Distance, Tool::Angle, Tool::Area, Tool::Volume, Tool::Polygon, Tool::Note];
 
     pub fn label(self, l: Language) -> &'static str {
         match self {
@@ -42,6 +45,7 @@ impl Tool {
             Tool::Area => l.text("Oppervlak", "Area"),
             Tool::Volume => l.text("Volume", "Volume"),
             Tool::Polygon => l.text("Polygoon", "Polygon"),
+            Tool::Note => l.text("Opmerking", "Note"),
         }
     }
 
@@ -56,6 +60,7 @@ impl Tool {
             ),
             (Tool::Angle, _) => l.text("Klik op de tweede rand, vlak of punt", "Click the second edge, face or point"),
             (Tool::Area, _) => l.text("Klik op een vlak", "Click a face"),
+            (Tool::Note, _) => l.text("Typ de tekst rechts en klik waar hij moet staan", "Type the text at the right and click where it goes"),
             (Tool::Volume, _) => l.text("Klik op een element", "Click an element"),
             (Tool::Polygon, n) if n < 3 => l.text("Klik op de hoekpunten", "Click the corners"),
             (Tool::Polygon, _) => l.text(
@@ -80,6 +85,8 @@ pub enum Measurement {
     Area(FaceRegion),
     Volume { result: VolumeResult, name: String },
     Polygon { points: Vec<Vec3>, polygon: Polygon },
+    /// A remark at a point: no measure, a text that stands in the model.
+    Note { at: Vec3, text: String },
 }
 
 impl Measurement {
@@ -91,6 +98,8 @@ impl Measurement {
             Measurement::Area(r) => (Category::Area, r.area),
             Measurement::Volume { result, .. } => (Category::Volume, result.volume),
             Measurement::Polygon { polygon, .. } => (Category::Area, polygon.area),
+            // nothing to add up
+            Measurement::Note { .. } => (Category::Angle, 0.0),
         }
     }
 
@@ -102,11 +111,15 @@ impl Measurement {
             Measurement::Area(_) => l.text("Oppervlak", "Area").into(),
             Measurement::Volume { name, .. } => format!("{} · {name}", l.text("Volume", "Volume")),
             Measurement::Polygon { .. } => l.text("Polygoon", "Polygon").into(),
+            Measurement::Note { .. } => l.text("Opmerking", "Note").into(),
         }
     }
 
     /// The value as shown on the label in the viewport.
     pub fn label(&self, units: &UnitSettings, l: Language) -> String {
+        if let Measurement::Note { text, .. } = self {
+            return text.clone();
+        }
         let (category, value) = self.value();
         units.format(l, category, value)
     }
@@ -119,7 +132,7 @@ impl Measurement {
                 let delta = (d.p2 - d.p1).abs();
                 vec![("ΔX", len(delta.x as f64)), ("ΔY", len(delta.y as f64)), ("ΔZ", len(delta.z as f64))]
             }
-            Measurement::Angle(_) => Vec::new(),
+            Measurement::Angle(_) | Measurement::Note { .. } => Vec::new(),
             Measurement::Area(r) => vec![(l.text("Omtrek", "Perimeter"), len(r.perimeter))],
             Measurement::Volume { result, .. } => {
                 let mut out = vec![(l.text("Buitenoppervlak", "Surface area"), units.format(l, Category::Area, result.surface_area))];
@@ -149,6 +162,7 @@ impl Measurement {
             Measurement::Area(r) => r.anchor,
             Measurement::Volume { result, .. } => result.center,
             Measurement::Polygon { polygon, .. } => polygon.centroid,
+            Measurement::Note { at, .. } => *at,
         }
     }
 }
@@ -165,6 +179,8 @@ pub struct MeasureState {
     /// Picks of the measurement in progress.
     pub picks: Vec<Snap>,
     pub results: Vec<Measurement>,
+    /// The text the next remark gets ([`Tool::Note`]).
+    pub note: String,
     pub units: UnitSettings,
     /// What the cursor is over, as the next click will take it.
     pub hover: Option<Hover>,
@@ -310,6 +326,12 @@ impl MeasureState {
                     .unwrap_or_else(|| layer.name.clone());
                 self.results.push(Measurement::Volume { result: geometry::volume(&parts, mm), name });
             }
+            Tool::Note => {
+                let text = self.note.trim();
+                if !text.is_empty() {
+                    self.results.push(Measurement::Note { at: hover.snap.entity.pick(), text: text.to_string() });
+                }
+            }
             Tool::Distance | Tool::Angle | Tool::Polygon => self.add_pick(tool, hover.snap, SNAP_PX * hover.pixel),
         }
     }
@@ -352,7 +374,7 @@ impl MeasureState {
                     self.picks.push(s);
                 }
             }
-            Tool::Area | Tool::Volume => {}
+            Tool::Area | Tool::Volume | Tool::Note => {}
         }
     }
 
@@ -371,7 +393,7 @@ impl MeasureState {
         let mut out: Vec<(Category, f64, usize)> = Vec::new();
         for m in &self.results {
             let (c, v) = m.value();
-            if !c.summable() {
+            if !c.summable() || matches!(m, Measurement::Note { .. }) {
                 continue;
             }
             match out.iter_mut().find(|t| t.0 == c) {

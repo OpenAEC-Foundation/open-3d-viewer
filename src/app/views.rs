@@ -308,6 +308,9 @@ impl App {
         self.anim = None;
         self.swap_view_layers(target.as_deref());
         let structural = self.is_structural_plan(self.active_plan.as_deref()) || self.is_structural_plan(target.as_deref());
+        // a view that leaves elements out because their family shows none of their solids there
+        let leaves_out = |path: &Option<String>| path.as_ref().zip(self.model.as_ref()).is_some_and(|(p, m)| m.project.switched_off.contains_key(p));
+        let structural = structural || leaves_out(&self.active_plan) || leaves_out(&target);
         self.active_plan = target;
         self.mark_pick = None;
         // into or out of a structural plan: what carries nothing goes or comes back
@@ -542,7 +545,7 @@ impl App {
         }
 
         // the sheets, then a new one
-        body = body.push(subheader(l.text("Bladen", "Sheets")));
+        body = body.push(subheader(l.text("Tekeningen", "Drawings")));
         body = super::paper::sheets_list(self, p, l, body);
         scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
     }

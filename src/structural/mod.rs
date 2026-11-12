@@ -207,7 +207,7 @@ struct Entry {
 }
 
 /// Element id → structural object, over every part of a model.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StructuralIndex {
     by_element: HashMap<u64, Entry>,
 }

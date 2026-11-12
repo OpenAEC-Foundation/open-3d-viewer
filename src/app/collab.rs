@@ -877,6 +877,12 @@ impl App {
             }
         }
         self.collab_select(ids(&view.selection));
+        // its dimensions and remarks come back in place of what was measured
+        if !(view.lines.is_empty() && view.notes.is_empty()) {
+            let lines = view.lines.iter().map(|(from, to)| crate::measure::Measurement::Distance(crate::measure::geometry::Distance { p1: self.collab_to_display(*from), p2: self.collab_to_display(*to), extensions: Vec::new() }));
+            let notes = view.notes.iter().map(|(at, text)| crate::measure::Measurement::Note { at: self.collab_to_display(*at), text: text.clone() });
+            self.measure.results = lines.chain(notes).collect();
+        }
         // the first plane cuts; the side its direction points to is left out
         self.plane = view.clipping_planes.first().and_then(|plane| {
             let normal = Vec3::new(plane.direction[0] as f32, plane.direction[1] as f32, plane.direction[2] as f32).try_normalize()?;
@@ -938,6 +944,14 @@ impl App {
         }
         if let Some(plane) = self.plane {
             view.clipping_planes.push(ClippingPlane { location: self.collab_to_world(plane.normal * plane.offset), direction: plane.normal.as_dvec3().to_array() });
+        }
+        // what is measured and remarked in the view goes with it
+        for result in &self.measure.results {
+            match result {
+                crate::measure::Measurement::Distance(d) => view.lines.push((self.collab_to_world(d.p1), self.collab_to_world(d.p2))),
+                crate::measure::Measurement::Note { at, text } => view.notes.push((self.collab_to_world(*at), text.clone())),
+                _ => {}
+            }
         }
         view
     }
@@ -2610,6 +2624,35 @@ mod tests {
         // nothing selected: the panel says so and runs nothing
         let _ = app.collab_update(Event::ClashSelection);
         assert!(!app.collab.running && app.collab.notice.is_some());
+    }
+
+    #[test]
+    fn what_is_measured_and_remarked_goes_with_an_issue_and_comes_back() {
+        use crate::measure::{geometry::Distance, Measurement};
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        app.measure.results = vec![
+            Measurement::Distance(Distance { p1: Vec3::new(0.0, 0.0, 0.0), p2: Vec3::new(3.0, 4.0, 0.0), extensions: Vec::new() }),
+            Measurement::Note { at: Vec3::new(1.0, 1.0, 2.0), text: "Te laag".into() },
+        ];
+        let view = app.collab_viewpoint_now();
+        assert_eq!((view.lines.len(), view.notes.len()), (1, 1));
+        assert_eq!(view.notes[0].1, "Te laag");
+        let mut topic = Topic::new("Maat", "an");
+        topic.viewpoints.push(view);
+        app.collab.issues.topics.push(topic.clone());
+        // measured away, and the issue shown again: both stand where they stood
+        app.measure.results.clear();
+        let _ = app.collab_update(Event::Topic(Some(topic.guid.clone())));
+        let back = &app.measure.results;
+        assert_eq!(back.len(), 2);
+        assert!(matches!(&back[0], Measurement::Distance(d) if d.p1.distance(Vec3::ZERO) < 1e-4 && d.p2.distance(Vec3::new(3.0, 4.0, 0.0)) < 1e-4), "{back:?}");
+        assert!(matches!(&back[1], Measurement::Note { at, text } if at.distance(Vec3::new(1.0, 1.0, 2.0)) < 1e-4 && text == "Te laag"), "{back:?}");
+        // an issue without any leaves what is measured alone
+        let plain = Topic::new("Zonder", "an");
+        app.collab.issues.topics.push(plain.clone());
+        let _ = app.collab_update(Event::Topic(Some(plain.guid.clone())));
+        assert_eq!(app.measure.results.len(), 2);
     }
 
     #[test]

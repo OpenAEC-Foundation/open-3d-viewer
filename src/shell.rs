@@ -834,8 +834,8 @@ impl Studio {
                 .toggle(app.plane.is_some() || app.plane_picking)
                 .enabled(loaded),
             Command::new("section.flip", l.text("Omdraaien", "Flip"), go(Message::FlipPlane)).icon(small("transform.mirror"), large("transform.mirror")).enabled(app.plane.is_some()),
-            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.history.can_undo()),
-            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.history.can_redo()),
+            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.can_undo()),
+            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.can_redo()),
             Command::new("selection.layer", l.text("Laag selecteren", "Select layer"), go(Message::SelectLayerOfSelection))
                 .icon(small("view.fit-selection"), large("view.fit-selection"))
                 .enabled(!app.sel.is_empty()),
@@ -897,6 +897,13 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // move, copy, turn and mirror what is selected
+        list.extend(crate::app::transform::TransformKind::ALL.map(|kind| {
+            Command::new(kind.id(), kind.label(l), go(Message::Transform(kind)))
+                .icon(small(kind.icon()), large(kind.icon()))
+                .toggle(app.modeller.transform.as_ref().is_some_and(|t| t.kind == kind))
+                .enabled(!app.selected_modelled().is_empty() || app.modeller.transform.is_some())
+        }));
         // the project's levels, views, sheets and library
         use crate::document::PlanKind;
         let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
@@ -906,7 +913,7 @@ impl Studio {
         list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
         list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
         list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
-        list.push(Command::new("project.sheet", l.text("Blad", "Sheet"), go(Message::NewSheet(l.text("Blad", "Sheet")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
+        list.push(Command::new("project.sheet", l.text("Tekening", "Drawing"), go(Message::NewSheet(l.text("Tekening", "Drawing")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
         list.push(
             Command::new("project.library", l.text("Bibliotheek", "Library"), go(Message::ExplorerTab(crate::app::ExplorerTab::Library)))
                 .icon(small("construction.library"), large("construction.library"))
@@ -954,6 +961,7 @@ impl Studio {
                 Tool::Area => ("measure.area", "measure.area"),
                 Tool::Volume => ("measure.volume", "measure.takeoff"),
                 Tool::Polygon => ("measure.polygon", "measure.perimeter"),
+                Tool::Note => ("measure.note", "draw.text"),
             };
             list.push(Command::new(id, tool.label(l), go(Message::Measure(tool))).icon(small(icon), large(icon)).mode(app.measure.tool == Some(tool)).enabled(loaded));
         }
@@ -1553,13 +1561,13 @@ impl Studio {
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
-                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
+                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![
                 w::ribbon_group(look, l.text("Niveaus", "Levels"), vec![large("project.level")]),
                 w::ribbon_group(look, l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
-                w::ribbon_group(look, l.text("Bladen", "Sheets"), vec![large("project.sheet")]),
+                w::ribbon_group(look, l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
                 w::ribbon_group(look, l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
             // in the floor plan, section or sheet shown
@@ -1598,6 +1606,7 @@ impl Studio {
             Tool::Area => "measure.area",
             Tool::Volume => "measure.volume",
             Tool::Polygon => "measure.polygon",
+            Tool::Note => "measure.note",
         }
     }
 

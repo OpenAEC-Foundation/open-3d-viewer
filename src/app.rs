@@ -19,6 +19,7 @@ mod openings;
 #[cfg(test)]
 pub(crate) use take_over::{across_mesh, house as revit_house};
 mod join_marks;
+mod later;
 mod levels;
 pub mod library;
 mod marks;
@@ -30,6 +31,8 @@ mod placement;
 mod placing;
 mod schedules;
 mod take_over;
+pub mod transform;
+mod undo;
 mod view_props;
 mod views;
 mod sheets;
@@ -283,6 +286,8 @@ pub struct App {
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
     pub schedules_pending: bool,
+    /// The models (by id) whose drawings are still being read (see `later`).
+    pub drawings_pending: std::collections::HashSet<u64>,
     /// Measurements shown in the viewport (made through remote control).
     pub measurements: Vec<crate::annotations::Measurement>,
     /// Where the viewport sits in the window (logical pixels), to cut it out of screenshots.
@@ -306,6 +311,10 @@ pub struct App {
     pub hidden: Arc<UnitKeySet>,
     /// Undo and redo of what is shown: hidden elements and layer and model switches.
     pub history: History<ViewState>,
+    /// Which history each step went into, in the order they were made (true: the modelled
+    /// elements', false: the view's), and the same for the steps taken back.
+    undo_trail: Vec<bool>,
+    redo_trail: Vec<bool>,
     /// The selection box while it is dragged: from, to (viewport pixels).
     pub box_select: Option<(Vec2, Vec2)>,
     /// The right-click menu, open at this viewport point (logical pixels).
@@ -541,6 +550,8 @@ pub enum Message {
     ScheduleScroll(scrollable::Viewport),
     /// The schedules of a model (by id), computed.
     Schedules(u64, Vec<crate::model::Schedule>),
+    /// The drawings of a model (by its id) are read: they were left for after the model showed.
+    Drawings(u64, Box<crate::model::Drawings>),
     /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
     OpenIfc,
     CloseIfc,
@@ -588,6 +599,8 @@ pub enum Message {
     /// A structural hover grid built off the UI thread (`None`: the build was dropped).
     StructuralGrid(Option<structural::BuiltGrid>),
     MeasureDelete(usize),
+    /// The text the next remark in the model gets.
+    MeasureNote(String),
     MeasureClear,
     MeasureLength(LengthUnit),
     MeasureArea(AreaUnit),
@@ -620,6 +633,8 @@ pub enum Message {
     ModelTool(Option<(modeller::ModelTool, &'static str)>),
     /// Join the two linear elements selected (the first is the primary), the joint named so.
     Connect(bim_core::ConnectionKind, &'static str),
+    /// Move, copy, turn or mirror the selected modelled elements with the next clicks.
+    Transform(transform::TransformKind),
     /// Tab: into edit mode on the selected modelled element, or out of it.
     EditMode,
     /// What the edit overlay reports: a point pressed, dragged, let go.
@@ -775,6 +790,7 @@ impl Default for App {
             ifc: IfcTab::default(),
             schedules: Vec::new(),
             schedules_pending: false,
+            drawings_pending: Default::default(),
             measurements: Vec::new(),
             viewport_origin: (0.0, 0.0),
             remote: Default::default(),
@@ -786,6 +802,8 @@ impl Default for App {
             units: Arc::default(),
             hidden: Arc::default(),
             history: History::new(),
+            undo_trail: Vec::new(),
+            redo_trail: Vec::new(),
             box_select: None,
             context_menu: None,
             explode_bounds: None,
@@ -807,7 +825,8 @@ pub fn load_task(sources: Vec<loaders::Source>, progress: Arc<loaders::Progress>
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(loaders::load_stack(&sources, &progress).map(Arc::new));
+                // the model first: its drawings are read while it shows (`later`)
+                let _ = tx.send(loaders::load_first(&sources, &progress).map(Arc::new));
             });
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
@@ -1374,10 +1393,13 @@ impl App {
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);
+            self.note_step(false);
         }
         if shown {
             self.keep_view_layers();
         }
+        // a step that changed the modelled elements can be taken back
+        self.keep_model_history();
         self.keep_views_in_3d();
         self.keep_cut_faces();
         self.follow_selection();
@@ -1454,6 +1476,7 @@ impl App {
             }
             Message::Open(path) => return self.open(loaders::Source::File(path), false),
             Message::Loaded(Ok(model)) => {
+                let drawings = self.read_drawings(&model);
                 let (mut stack, restack) = std::mem::take(&mut self.loading_stack);
                 if !stack.last().is_some_and(loaders::composes) {
                     stack.clear();
@@ -1465,7 +1488,7 @@ impl App {
                     self.add_model_later(model);
                     let next = self.add_queue.remove(0);
                     self.status = Status::Loaded(String::new());
-                    return self.open(next, true);
+                    return Task::batch([drawings, self.open(next, true)]);
                 }
                 self.scene_stale = false;
                 if restack {
@@ -1480,10 +1503,10 @@ impl App {
                 // the first of several is in: the others are added after it
                 if !self.add_queue.is_empty() {
                     let next = self.add_queue.remove(0);
-                    return self.open(next, true);
+                    return Task::batch([drawings, self.open(next, true)]);
                 }
                 self.remote_loaded();
-                return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
+                return Task::batch([drawings, self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
                 // one of several files does not read: the others still come
@@ -1508,6 +1531,7 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
+            Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
@@ -1956,6 +1980,7 @@ impl App {
             Message::IfcRelation(relation) => return self.ifc_relation(relation),
             Message::IfcQuery(query) => return self.ifc_query(query),
             Message::IfcNext(forward) => return self.ifc_next(forward),
+            Message::Drawings(id, drawings) => return self.take_drawings(id, *drawings),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;
@@ -2100,6 +2125,7 @@ impl App {
                     }
                 }
             }
+            Message::MeasureNote(text) => self.measure.note = text,
             Message::MeasureDelete(i) => {
                 if i < self.measure.results.len() {
                     self.measure.results.remove(i);
@@ -2123,16 +2149,8 @@ impl App {
                     Category::Angle => u.angle_decimals = n,
                 }
             }
-            Message::Undo => {
-                if let Some(state) = self.history.undo(self.view_state()) {
-                    self.restore_view_state(state);
-                }
-            }
-            Message::Redo => {
-                if let Some(state) = self.history.redo(self.view_state()) {
-                    self.restore_view_state(state);
-                }
-            }
+            Message::Undo => self.undo_step(),
+            Message::Redo => self.redo_step(),
             Message::SelectWhere(key, value) => {
                 if let Some(model) = self.model.clone() {
                     self.sel.clear();
@@ -2147,6 +2165,9 @@ impl App {
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape if self.modeller.edit.is_some() => {
                 self.edit_escape();
+            }
+            Message::Escape if self.modeller.transform.is_some() => {
+                self.escape_transform();
             }
             Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
                 if !self.escape_model_tool() {
@@ -2265,6 +2286,9 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        if self.modeller.transform.is_some() {
+            return self.transform_click(x, y, width, height);
+        }
         if self.modeller.tool.is_some() {
             return self.model_click(x, y, width, height);
         }
@@ -2402,6 +2426,15 @@ impl App {
             let left_out = self.non_structural_units();
             for (f, _) in flags.iter_mut().zip(left_out.iter()).filter(|(_, out)| **out) {
                 *f |= UNIT_HIDDEN;
+            }
+        }
+        // the open view leaves out the elements whose family shows none of their solids as it
+        // looks at them (a pile it draws as a symbol)
+        if let Some(off) = self.active_plan.as_ref().zip(self.model.as_ref()).and_then(|(p, m)| m.project.switched_off.get(p)) {
+            for (u, f) in flags.iter_mut().enumerate().skip(1) {
+                if matches!(index.owner(u), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    *f |= UNIT_HIDDEN;
+                }
             }
         }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
@@ -2912,6 +2945,11 @@ impl App {
             if i == with_schedules {
                 inner = self.schedules_group(p, l, &query, inner);
             }
+            // (the sheets are listed at once; the header alone stands in for a file without any yet)
+            if self.reads_drawings(own) && sheets.is_empty() {
+                let tag = l.text("leest…", "reading…");
+                inner = inner.push(group_header(p, l.text("Tekeningen", "Drawings"), Some(tag), 0, false, Message::ToggleExplorer(4)));
+            }
             inner = self.sheets_group(p, l, &query, sheets, inner);
             inner = self.drafts_groups(p, l, &query, drafts, inner);
 
@@ -3243,6 +3281,10 @@ impl App {
             button(text(label).size(11)).padding([2, 6]).style(move |_, s| p.ribbon_button(active, s)).on_press_maybe(msg)
         };
         let mut body = column![heading(l.text("Metingen", "Measurements"))].spacing(5);
+        // the remark tool: its text first, then a click in the model
+        if m.tool == Some(Tool::Note) {
+            body = body.push(text_input(l.text("Tekst van de opmerking", "Text of the note"), &m.note).on_input(Message::MeasureNote).size(12).padding(5));
+        }
         if m.results.is_empty() {
             body = body.push(
                 text(l.text("Nog geen metingen", "No measurements yet")).size(12).color(p.text_muted),
@@ -3418,6 +3460,12 @@ impl App {
             })
         } else if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
+        } else if let Some(t) = &self.modeller.transform {
+            let hint = t.kind.hint(l, t.points.len());
+            Some(match self.modeller.refusal {
+                Some(refusal) => format!("{}: {} · {}", t.kind.label(l), l.translate(refusal.reason()), hint),
+                None => format!("{}: {}", t.kind.label(l), hint),
+            })
         } else if let Some((tool, _)) = self.modeller.tool {
             let hint = tool.hint(l, self.modeller.points.len());
             Some(match self.modeller.refusal {
@@ -3558,7 +3606,7 @@ impl App {
             item(l.text("Laag selecteren", "Select layer"), "", MenuItem::SelectLayer, !self.sel.is_empty()),
             item(l.text("Selectie opheffen", "Clear selection"), "Esc", MenuItem::ClearSelection, selected),
             rule::horizontal(1),
-            item(l.text("Ongedaan maken", "Undo"), Shortcut::ctrl('z').label(), MenuItem::Undo, self.history.can_undo()),
+            item(l.text("Ongedaan maken", "Undo"), Shortcut::ctrl('z').label(), MenuItem::Undo, self.can_undo()),
         ]
         .width(MENU_WIDTH);
         let menu = container(items).padding(4).style(move |_| container::Style { background: Some(Background::Color(p.surface)), ..p.overlay() });

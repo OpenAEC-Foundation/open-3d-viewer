@@ -120,7 +120,7 @@ pub struct ElementKey {
 }
 
 /// A loaded model.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Model {
     /// Unique id, used by the GPU cache to know when to upload.
     pub id: u64,
@@ -228,6 +228,44 @@ pub struct ProjectData {
     pub walls: HashMap<u64, SourceWall>,
     /// Schedules: computed after the model shows, as they take seconds on a large project.
     pub schedules: Later<Vec<Schedule>>,
+    /// The drawings of the file (Revit), read after the model shows: on a large project they
+    /// take far longer than the model itself. [`ProjectData::take_over`] puts them in.
+    pub later: Later<Drawings>,
+}
+
+/// What the drawings of a file add to its project: the parts of [`ProjectData`] a loader may
+/// leave for after the model shows.
+#[derive(Debug, Clone, Default)]
+pub struct Drawings {
+    pub sheets: Vec<Sheet>,
+    pub drafts: Vec<Draft>,
+    pub phasing: crate::phasing::Phasing,
+    pub switched_off: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+    pub joins: std::collections::HashSet<(u64, u64)>,
+    pub drawn: crate::app::drawn_props::Drawn,
+    pub drawings: Vec<(String, serde_json::Value)>,
+}
+
+impl ProjectData {
+    /// Puts in the drawings that were read after the model.
+    pub fn take_over(&mut self, drawings: Drawings) {
+        self.sheets = drawings.sheets;
+        self.drafts = drawings.drafts;
+        self.phasing = drawings.phasing;
+        self.switched_off = drawings.switched_off;
+        self.joins = drawings.joins;
+        self.drawn = drawings.drawn;
+        self.drawings = drawings.drawings;
+    }
+}
+
+impl Model {
+    /// Reads now what the loader left for after the model shows (its drawings), if anything.
+    pub fn complete(&mut self) {
+        if let Some(work) = self.project.later.take() {
+            self.project.take_over(work());
+        }
+    }
 }
 
 /// A wall of an opened file that the Modeller can take over as an editable wall (Revit), in the

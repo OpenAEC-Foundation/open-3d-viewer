@@ -176,6 +176,7 @@ pub fn main_as(edition: crate::product::Edition) {
             std::process::exit(2);
         }
     };
+    keep_crashes();
     let code = if let Some(file) = &args.bench {
         bench::run(file, args.frames.unwrap_or(300), args.throughput)
     } else if let Some(out) = &args.save_as {
@@ -191,6 +192,26 @@ pub fn main_as(edition: crate::product::Edition) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Writes what stops the app (a panic: its message, its place in the code and the thread) to
+/// `crash.log` in the settings folder, after the lines of earlier runs, and then to stderr as
+/// before: a window has no console, so without it nothing tells why the app went.
+fn keep_crashes() {
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(dir) = crate::remote_link::settings_dir() {
+            use std::io::Write;
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+                let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs());
+                let thread = std::thread::current();
+                let _ = writeln!(log, "[{at}] {} {}: thread {:?}: {info}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"), thread.name().unwrap_or("unnamed"));
+                let _ = writeln!(log, "{}", std::backtrace::Backtrace::force_capture());
+            }
+        }
+        before(info);
+    }));
 }
 
 /// `--save-as`: loads the file and writes it in the format of `out`'s extension.
@@ -385,7 +406,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let i = app.schedules.iter().position(|s| &s.name == name).ok_or(format!("no schedule {name} in the file"))?;
             let _ = app.update(Message::OpenSchedule(i));
         }
-        if let Some(number) = &args.sheet {
+        if let Some(number) = args.sheet.as_ref().filter(|n| n.as_str() != "all") {
             let model = app.model.clone().ok_or("no model")?;
             let i = model.project.sheets.iter().position(|s| &s.number == number).ok_or(format!("no sheet {number} in the file"))?;
             let _ = app.update(Message::OpenSheet(i));
@@ -398,7 +419,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
                 app.pick_drawn(element);
             }
         }
-        if let Some(name) = &args.drawing {
+        if let Some(name) = args.drawing.as_ref().filter(|n| n.as_str() != "all") {
             let document = app.document_now();
             let plan = document.plans().iter().find(|p| &p.name == name).map(|p| p.path.clone());
             let path = plan.or_else(|| document.sections().iter().find(|s| &s.name == name).map(|s| s.path.clone())).ok_or(format!("no drawing {name} in the file"))?;
@@ -412,6 +433,34 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     }
     #[cfg(feature = "collaborator")]
     studio.app.collab_now(args.bcf.as_deref(), args.ids.as_deref(), args.collab.as_deref())?;
+    // `--sheet all` and `--drawing all`: every sheet and every plan, section and elevation of the
+    // file, each in an image of its own (OUT-sheet-03.png); the one being drawn is named first,
+    // so a drawing that stops the app is known
+    let stem = out.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut every = false;
+    if args.sheet.as_deref() == Some("all") {
+        every = true;
+        let sheets = studio.app.model.as_ref().map_or(0, |m| m.project.sheets.len());
+        for i in 0..sheets {
+            eprintln!("sheet {i}: {}", studio.app.model.as_ref().map(|m| format!("{} {}", m.project.sheets[i].number, m.project.sheets[i].name)).unwrap_or_default());
+            let _ = studio.app.update(Message::OpenSheet(i));
+            studio.snapshot(iced::Size::new(w, h), &out.with_file_name(format!("{stem}-sheet-{i:02}.png")))?;
+        }
+    }
+    if args.drawing.as_deref() == Some("all") {
+        every = true;
+        let document = studio.app.document_now();
+        let paths: Vec<(String, String)> = document.plans().iter().map(|p| (p.name.clone(), p.path.clone())).chain(document.sections().iter().map(|s| (s.name.clone(), s.path.clone()))).collect();
+        for (i, (name, path)) in paths.iter().enumerate() {
+            eprintln!("drawing {i}: {name}");
+            let _ = studio.app.update(Message::OpenPlan(Arc::from(path.as_str())));
+            studio.app.finish_animation();
+            studio.snapshot(iced::Size::new(w, h), &out.with_file_name(format!("{stem}-drawing-{i:03}.png")))?;
+        }
+    }
+    if every {
+        return Ok(());
+    }
     studio.snapshot(iced::Size::new(w, h), out)?;
     eprintln!("wrote {}", out.display());
     Ok(())

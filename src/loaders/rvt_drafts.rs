@@ -13,7 +13,7 @@
 //!
 //! A view's coordinates are feet in its own plane, at full size.
 
-use super::rvt_drawings::{dimension_marks, text_of, vec3, Types};
+use super::rvt_drawings::{text_of, vec3, Types, DIMENSION_MAKERS};
 use crate::model::{Draft, DraftKind, DraftLine, DraftText};
 use rvt_export::views::{ViewInfo, ViewKind as K};
 use rvt_model::{FieldValue, ObjectView};
@@ -58,12 +58,12 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], de
         }
     }
     let mut dimensioned: Vec<u64> = Vec::new();
-    for id in doc.object_ids_of_class("LinearConstraint") {
+    for (id, make) in DIMENSION_MAKERS.iter().flat_map(|(class, make)| doc.object_ids_of_class(class).into_iter().map(move |id| (id, *make))) {
         let Some((_, k)) = owner(id).filter(|(v, _)| !types.hidden(*v, id)) else { continue };
         let Some(o) = doc.object(id).filter(|o| o.category == Some(DIMENSIONS)) else { continue };
         // as the file draws it: its lines and its figures
         let scale = drafts[k].scale as f64;
-        let Some(drawn) = dimension_marks(&o, &|p| [p[0] * FT, p[1] * FT], scale, &mut types) else { continue };
+        let Some(drawn) = make(&o, &|p| [p[0] * FT, p[1] * FT], scale, &mut types) else { continue };
         dimensioned.push(id);
         drafts[k].lines.extend(drawn.lines.iter().map(|l| DraftLine { element: id, a: l[0].map(|v| v as f32), b: l[1].map(|v| v as f32) }));
         drafts[k].texts.extend(drawn.texts.into_iter().map(|t| {

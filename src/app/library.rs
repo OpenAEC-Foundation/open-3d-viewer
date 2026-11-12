@@ -92,6 +92,7 @@ fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
         SystemGroup::CurtainWall => l.text("Vliesgevels", "Curtain walls"),
         SystemGroup::Frame => l.text("Kozijnen", "Frames"),
         SystemGroup::TimberFrame => l.text("Houtskeletbouw", "Timber frames"),
+        SystemGroup::MetalStud => l.text("Metal stud", "Metal stud walls"),
         SystemGroup::Masonry => l.text("Metselwerk", "Masonry"),
         SystemGroup::Cladding => l.text("Gevelbekleding", "Cladding"),
         SystemGroup::Floor => l.text("Vloeren", "Floors"),
@@ -185,13 +186,12 @@ impl App {
         assigned
     }
 
-    /// The selected modelled systems system type `id` fits: every selected system for an upright
-    /// type, none for a lying one (a floor, a ceiling), which an upright system cannot be.
+    /// The selected modelled systems system type `id` fits: the standing ones for an upright
+    /// type, the lying ones (floors, ceilings) for a lying type. A system keeps the way it was
+    /// laid out.
     pub(super) fn assignable_systems(&self, id: &str) -> Vec<ElementId> {
-        if self.library.system_type(id).is_none_or(|t| t.lying.is_some()) {
-            return Vec::new();
-        }
-        let fits = |e: &ElementId| matches!(self.modeller.model.get(*e).map(|e| &e.shape), Some(Shape::System(_)));
+        let Some(lying) = self.library.system_type(id).map(|t| t.lying.is_some()) else { return Vec::new() };
+        let fits = |e: &ElementId| matches!(self.modeller.model.get(*e).map(|e| &e.shape), Some(Shape::System(s)) if s.lies() == lying);
         self.selected_modelled().into_iter().filter(fits).collect()
     }
 
@@ -455,7 +455,7 @@ fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> 
     list = list.push(small(format!("{} {} × {} mm{pattern}", l.text("Raster", "Grid"), mm(t.grid.bay, l), mm(t.grid.row, l)), p));
     // what the members are: a frame's mullions and transoms, a ceiling's profiles, or joints
     let members = match t.group {
-        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame => l.text("Stijlen en regels", "Members"),
+        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud => l.text("Stijlen en regels", "Members"),
         SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
         SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
     };

@@ -42,6 +42,8 @@ pub enum DocTab {
     Schedule(usize),
     /// Index in the model's sheets (read from the file).
     Sheet(usize),
+    /// Index in the model's legends and drafting views (read from the file).
+    Draft(usize),
     /// Index in `App::open_doc_sheets`: a sheet of the document.
     DocSheet(usize),
     /// How the model's IFCX file is built up.
@@ -124,7 +126,7 @@ impl App {
             };
             self.open_plans.push(OpenPlan { path: path.to_string(), slot });
         }
-        self.active_sheet = None;
+        self.active_sheet = None; self.active_draft = None;
         self.active_schedule = None;
         self.ifc.shown = false;
         self.load_view(Some(path.to_string()));
@@ -196,6 +198,7 @@ impl App {
         if let Some(plan) = self.document.plan(path) {
             let (low, high) = self.document.plan_range(plan)?;
             return Some(SavedView {
+                folder: Vec::new(),
                 name: plan.name.clone(),
                 kind: ViewKind::Plan,
                 camera: None,
@@ -214,7 +217,7 @@ impl App {
             perspective: false,
             fov_y: None,
         };
-        Some(SavedView { name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
+        Some(SavedView { folder: Vec::new(), name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
     }
 
     /// The box a section or elevation shows: beyond its line up to its depth, within its crop
@@ -318,9 +321,10 @@ impl App {
         let plans = (0..self.open_plans.len()).map(DocTab::Plan);
         let schedules = self.open_schedules.iter().copied().filter(|&i| i < self.schedules.len()).map(DocTab::Schedule);
         let sheets = self.open_sheets.iter().copied().filter(|&i| i < self.sheets().len()).map(DocTab::Sheet);
+        let drafts = self.open_drafts.iter().copied().filter(|&i| i < self.drafts().len()).map(DocTab::Draft);
         let own = (0..self.open_doc_sheets.len()).map(DocTab::DocSheet);
         let ifc = self.ifc.open.then_some(DocTab::Ifc);
-        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(own).chain(ifc).collect()
+        std::iter::once(DocTab::Model).chain(plans).chain(schedules).chain(sheets).chain(drafts).chain(own).chain(ifc).collect()
     }
 
     /// The tab that shows: a sheet, else a floor plan, else a schedule (under the 3D view), else
@@ -332,6 +336,7 @@ impl App {
         let own = self.active_doc_sheet.as_ref().and_then(|p| self.open_doc_sheets.iter().position(|s| s == p));
         own.and_then(|k| at(DocTab::DocSheet(k)))
             .or_else(|| self.active_sheet.and_then(|s| at(DocTab::Sheet(s))))
+            .or_else(|| self.active_draft.and_then(|d| at(DocTab::Draft(d))))
             .or_else(|| plan.and_then(|k| at(DocTab::Plan(k))))
             .or_else(|| self.active_schedule.and_then(|s| at(DocTab::Schedule(s))))
             .or_else(|| self.ifc.shown.then(|| at(DocTab::Ifc)).flatten())
@@ -345,6 +350,7 @@ impl App {
             DocTab::Plan(k) => self.open_plans.get(k).and_then(|o| self.document.view_name(&o.path)).unwrap_or(""),
             DocTab::Schedule(i) => self.schedules.get(i).map_or("", |s| s.name.as_str()),
             DocTab::Sheet(i) => self.sheets().get(i).map_or("", |s| s.title.as_str()),
+            DocTab::Draft(i) => self.drafts().get(i).map_or("", |d| d.name.as_str()),
             DocTab::DocSheet(k) => self.open_doc_sheets.get(k).and_then(|p| self.document.sheet(p)).map_or("", |s| s.title.as_str()),
             DocTab::Ifc => "IFC",
         }
@@ -353,7 +359,7 @@ impl App {
     pub(super) fn select_tab(&mut self, i: usize) -> Task<Message> {
         match self.doc_tabs().get(i).copied() {
             Some(DocTab::Model) => {
-                self.active_sheet = None;
+                self.active_sheet = None; self.active_draft = None;
                 self.active_doc_sheet = None;
                 self.ifc.shown = false;
                 self.load_view(None);
@@ -366,6 +372,7 @@ impl App {
             }
             Some(DocTab::Schedule(s)) => self.show_schedule(Some(s)),
             Some(DocTab::Sheet(s)) => self.show_sheet(Some(s)),
+            Some(DocTab::Draft(d)) => self.show_draft(Some(d)),
             Some(DocTab::DocSheet(k)) => {
                 let path = self.open_doc_sheets[k].clone();
                 self.open_doc_sheet(&path);
@@ -388,6 +395,7 @@ impl App {
             }
             Some(DocTab::Schedule(s)) => self.close_schedule(s),
             Some(DocTab::Sheet(s)) => self.close_sheet(s),
+            Some(DocTab::Draft(d)) => self.close_draft(d),
             Some(DocTab::DocSheet(k)) => {
                 let path = self.open_doc_sheets[k].clone();
                 self.close_doc_sheet(&path);
@@ -463,7 +471,13 @@ impl App {
                         .height(12)
                         .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
                     let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemovePlan(Arc::from(plan.path.as_str())));
-                    body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+                    // laid in the 3D view in full, or not
+                    let laid = self.projected.contains(plan.path.as_str());
+                    let project = button(text("3D").size(10).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
+                        .padding([2, 4])
+                        .style(move |_, s| if laid { p.ribbon_button(true, s) } else { p.row_button(s) })
+                        .on_press(Message::ProjectView(Arc::from(plan.path.as_str())));
+                    body = body.push(container(row![open, project, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
                 }
             }
             if !any && !picking {
@@ -548,7 +562,13 @@ impl App {
                 .height(12)
                 .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
             let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSection(Arc::from(section.path.as_str())));
-            body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+            // laid in the 3D view in full, or not
+            let laid = self.projected.contains(section.path.as_str());
+            let project = button(text("3D").size(10).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
+                .padding([2, 4])
+                .style(move |_, s| if laid { p.ribbon_button(true, s) } else { p.row_button(s) })
+                .on_press(Message::ProjectView(Arc::from(section.path.as_str())));
+            body = body.push(container(row![open, project, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
         }
         body
     }

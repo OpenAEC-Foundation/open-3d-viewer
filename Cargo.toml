@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf"]
 
 [lib]
 name = "open_3d_viewer"
@@ -51,7 +51,7 @@ collaborator = []
 
 [dependencies]
 # GUI: iced (MIT) with the wgpu renderer (MIT OR Apache-2.0); `advanced` gives the custom shader widget.
-iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "advanced", "svg", "canvas"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "advanced", "svg", "canvas", "image"] }
 # Shared OpenAEC window shell, tokens, widgets and icons (LGPL-3.0-only; fonts OFL, icons CC BY-SA,
 # see vendor/openaec-ui/NOTICE.md): snapshot of the OpenAEC Style Repo, see vendor/UPSTREAM.md
 openaec-ui = { path = "vendor/openaec-ui", features = ["gpu-renderer"] }
@@ -87,6 +87,8 @@ tobj = { version = "4", default-features = false }
 stl_io = "0.11"
 # Polygon triangulation, LandXML surfaces and native CAD mesh import.
 earcutr = "0.5"
+# Zstandard, as Blender compresses its files from 3.0 on (MIT)
+ruzstd = "0.9"
 roxmltree = "0.20"
 # The shared OpenCAD drawing model (MPL-2.0): DWG and DXF through its acadrust codec (also the DWG/DXF
 # reader of src/loaders/cad.rs), IFCCAD (the open 2D drawing profile on IFCX) through ifccad (MPL-2.0).
@@ -120,12 +122,21 @@ ifc-lite-core = "=25.0.1"
 ifc-lite-geometry = "=25.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# decodes the images of Revit title blocks
+image = "0.25"
+# fetches the map tiles of a georeferenced model (MIT OR Apache-2.0)
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef" }
+# The saved graphics of a tag type are read with the library's own graph decoder.
+rvt-core = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef" }
+# The BIM Collaborator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
+bim-bcf = { path = "crates/bim-bcf" }
+bim-validator-core = { path = "crates/bim-validator-core" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
 log = "0.4"

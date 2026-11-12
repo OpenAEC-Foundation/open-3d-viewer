@@ -6,7 +6,7 @@
 
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
-use crate::drawing::{ceiling_at, plan_at, section_at, Cut, Shown};
+use crate::drawing::{ceiling_at, plan_at, section_at, structural_at, Cut, Shown};
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -55,7 +55,7 @@ impl App {
         if !self.open_doc_sheets.iter().any(|s| s == path) {
             self.open_doc_sheets.push(path.to_string());
         }
-        self.active_sheet = None;
+        self.active_sheet = None; self.active_draft = None;
         self.active_schedule = None;
         self.ifc.shown = false;
         if self.active_doc_sheet.as_deref() != Some(path) {
@@ -193,17 +193,23 @@ impl App {
         let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
         let shown = Shown { layers: &layers, hidden: &hidden };
-        let cut = if let Some(s) = self.document.section(path) {
+        let mut cut = if let Some(s) = self.document.section(path) {
             section_at(&model, shown, s.from, s.to, s.depth)
         } else {
             let Some(view) = self.document.plan(path) else { return };
             let Some((low, high)) = self.document.plan_range(view) else { return };
             if view.kind.looks_up() {
                 ceiling_at(&model, shown, low as f32, high as f32)
+            } else if view.kind == crate::document::PlanKind::Structural {
+                // a structural plan looks through the floor: what lies under it is drawn dashed
+                structural_at(&model, shown, low as f32, high as f32)
             } else {
                 plan_at(&model, shown, low as f32, high as f32)
             }
         };
+        // the cut faces in the hatch of what they are made of
+        let scale = self.document.view_scale(path).unwrap_or(crate::document::SHEET_SCALE);
+        crate::hatching::hatch(&mut cut, &model, bim_library::DrawingStandard::Nen47, scale);
         self.cuts.insert(path.to_string(), Arc::new(cut));
     }
 
@@ -339,6 +345,7 @@ impl App {
                     cut: self.cuts.get(&v.plan).cloned(),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
                     notes: self.document.view_notes(&v.plan).map_or(Vec::new(), <[_]>::to_vec),
+                    lines: self.document.view_lines(&v.plan).to_vec(),
                     crop: marks.and_then(|(_, c)| c),
                     is_plan: self.document.plan(&v.plan).is_some(),
                 }
@@ -478,6 +485,8 @@ struct Placed {
     cut: Option<Arc<Cut>>,
     dimensions: Vec<Dimension>,
     notes: Vec<crate::document::Note>,
+    /// The lines of the view's tags: their shapes and leaders.
+    lines: Vec<[[f64; 2]; 2]>,
     crop: Option<([f64; 2], [f64; 2])>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
@@ -493,7 +502,7 @@ enum Side {
 }
 
 /// The part of segment `a`–`b` inside the rectangle `lo`–`hi` (Liang–Barsky).
-fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
+pub(super) fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
     let d = [b[0] - a[0], b[1] - a[1]];
     let (mut t0, mut t1) = (0.0f64, 1.0f64);
     for (p, q) in [(-d[0], a[0] - lo[0]), (d[0], hi[0] - a[0]), (-d[1], a[1] - lo[1]), (d[1], hi[1] - a[1])] {
@@ -890,6 +899,8 @@ impl canvas::Program<Message> for PaperDrawing {
                             None => Some((a, z)),
                         }
                     };
+                    let per_metre = (fit.scale / self.sheet.views[i].scale) as f32;
+                    super::hatch::draw_fills(&mut frame, &cut, crop, &|q| Some(fit.point(self.to_paper(i, q))), per_metre, None);
                     let below = Path::new(|b| {
                         for (a, z) in cut.below.iter().filter_map(|[a, z]| piece(a, z)) {
                             b.move_to(fit.point(self.to_paper(i, a)));
@@ -917,9 +928,18 @@ impl canvas::Program<Message> for PaperDrawing {
                 let color = if self.pick == Some(SheetPick::Dimension(i, k)) { p.accent } else { ink };
                 draw_dimension(&mut frame, &fit, self.to_paper(i, d.from), self.to_paper(i, d.to), d.length(), color);
             }
+            if !placed.lines.is_empty() {
+                let lines = Path::new(|path| {
+                    for line in &placed.lines {
+                        path.move_to(fit.point(self.to_paper(i, line[0])));
+                        path.line_to(fit.point(self.to_paper(i, line[1])));
+                    }
+                });
+                frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.8));
+            }
             for (k, note) in placed.notes.iter().enumerate() {
                 let picked = self.pick == Some(SheetPick::Note(i, k));
-                super::marks::draw_note(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink });
+                super::marks::draw_note_in(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
                 if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
                 }
@@ -971,7 +991,7 @@ impl canvas::Program<Message> for PaperDrawing {
                     if self.section_tool {
                         draw_section_mark(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), String::new(), p.accent);
                     } else {
-                        let length = Dimension { from, to: q }.length();
+                        let length = Dimension { from, to: q, style: 0 }.length();
                         draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
                     }
                 }
@@ -1040,7 +1060,8 @@ fn draw_section_mark(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2],
 /// length in millimetres over the middle.
 fn draw_dimension(frame: &mut Frame, fit: &Fit, from: [f64; 2], to: [f64; 2], length: f64, color: Color) {
     let px = |m: f64| (m * fit.scale) as f32;
-    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), tick: px(0.0012), gap: px(0.0015), size: 10.0 };
+    let style = crate::document::DimensionStyle::standard();
+    let look = super::marks::DimensionLook { offset: px(DIMENSION_OFFSET), paper: fit.scale as f32, size: 10.0, style: &style };
     super::marks::draw_dimension_px(frame, fit.point(from), fit.point(to), length, color, look);
 }
 

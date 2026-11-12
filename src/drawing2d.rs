@@ -30,6 +30,8 @@ pub enum Pen {
     Cut,
     /// Seen beyond the cut: thin.
     Beyond,
+    /// The hatch of a cut face: thin.
+    Hatch,
     Dimension,
     Text,
     /// The sheet's border, the marks of sections.
@@ -39,13 +41,14 @@ pub enum Pen {
 }
 
 impl Pen {
-    pub const ALL: [Pen; 6] = [Pen::Cut, Pen::Beyond, Pen::Dimension, Pen::Text, Pen::Frame, Pen::Grids];
+    pub const ALL: [Pen; 7] = [Pen::Cut, Pen::Beyond, Pen::Hatch, Pen::Dimension, Pen::Text, Pen::Frame, Pen::Grids];
 
     /// The CAD layer name.
     pub fn name(self) -> &'static str {
         match self {
             Pen::Cut => "O3V-Cut",
             Pen::Beyond => "O3V-Beyond",
+            Pen::Hatch => "O3V-Hatch",
             Pen::Dimension => "O3V-Dimensions",
             Pen::Text => "O3V-Text",
             Pen::Frame => "O3V-Frame",
@@ -58,6 +61,7 @@ impl Pen {
         match self {
             Pen::Cut => 0.50,
             Pen::Beyond | Pen::Dimension | Pen::Grids => 0.18,
+            Pen::Hatch => 0.13,
             Pen::Text => 0.25,
             Pen::Frame => 0.35,
         }
@@ -300,9 +304,40 @@ impl Drawing2d {
     }
 
     /// A view's lines (cut back to its crop), dimensions and texts, through `to` (a point of the
-    /// view's drawing to this drawing), `unit` drawing metres per paper metre.
-    fn view(&mut self, cut: Option<&Cut>, crop: Option<([f64; 2], [f64; 2])>, marks: (&[Dimension], &[Note]), to: &dyn Fn([f64; 2]) -> [f64; 2], unit: f64) {
+    /// view's drawing to this drawing), `unit` drawing metres per paper metre, `per_metre` metres
+    /// of the view's drawing per paper metre (its scale).
+    fn view(&mut self, cut: Option<&Cut>, crop: Option<([f64; 2], [f64; 2])>, marks: (&[Dimension], &[Note]), to: &dyn Fn([f64; 2]) -> [f64; 2], unit: f64, per_metre: f64) {
         if let Some(cut) = cut {
+            // the hatch lines of the cut faces, at least 0.7 mm apart on paper
+            for fill in &cut.fills {
+                for [a, b] in fill.lines(fill.spacing() / per_metre as f32, 0.0007) {
+                    let (a, b) = (a.map(f64::from), b.map(f64::from));
+                    let piece = match crop {
+                        Some((lo, hi)) => clip(a, b, lo, hi),
+                        None => Some((a, b)),
+                    };
+                    if let Some((a, b)) = piece {
+                        self.line(Pen::Hatch, to(a), to(b));
+                    }
+                }
+            }
+            // what a structural plan sees through the floor: dashes of 2 mm, 1 mm apart, on paper
+            for [a, b] in &cut.hidden {
+                let (a, b) = ([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]);
+                let piece = match crop {
+                    Some((lo, hi)) => clip(a, b, lo, hi),
+                    None => Some((a, b)),
+                };
+                let Some((a, b)) = piece else { continue };
+                let (dash, gap) = (0.002 * per_metre, 0.001 * per_metre);
+                let run = (b[0] - a[0]).hypot(b[1] - a[1]);
+                let at = |d: f64| [a[0] + (b[0] - a[0]) * d / run, a[1] + (b[1] - a[1]) * d / run];
+                let mut d = 0.0;
+                while d < run {
+                    self.line(Pen::Beyond, to(at(d)), to(at((d + dash).min(run))));
+                    d += dash + gap;
+                }
+            }
             for (pen, segments) in [(Pen::Beyond, &cut.below), (Pen::Cut, &cut.segments)] {
                 for [a, b] in segments {
                     let (a, b) = ([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]);
@@ -365,7 +400,7 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut) -> Option<Drawing2d> 
     let scale = doc.sheets().iter().flat_map(|s| &s.views).find(|v| v.plan == path).map_or(SHEET_SCALE, |v| v.scale);
     let (dimensions, notes, crop) = marks(doc, path);
     let mut d = Drawing2d { name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
-    d.view(Some(cut), crop, (dimensions, notes), &|q| q, scale);
+    d.view(Some(cut), crop, (dimensions, notes), &|q| q, scale, scale);
     Some(d)
 }
 
@@ -396,7 +431,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
             (None, None) => ([v.at[0] - 0.02, v.at[1] - 0.015], [v.at[0] + 0.02, v.at[1] + 0.015]),
         };
         let drawn = c.as_ref().is_some_and(|c| !c.segments.is_empty() || !c.below.is_empty());
-        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, notes), &to, 1.0);
+        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, notes), &to, 1.0, v.scale);
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);
         }
@@ -444,7 +479,7 @@ mod tests {
             [[8.0, 5.0], [0.0, 5.0]],
             [[0.0, 5.0], [0.0, 0.0]],
         ];
-        Cut { segments, below: vec![[[1.0, 1.0], [7.0, 1.0]]], extent: Some(([0.0, 0.0], [8.0, 5.0])) }
+        Cut { segments, below: vec![[[1.0, 1.0], [7.0, 1.0]]], extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new(), hidden: Vec::new() }
     }
 
     /// A document with a floor plan of the ground floor, an 8 m dimension and a text on it.
@@ -566,8 +601,8 @@ mod tests {
 
     #[test]
     fn pens_have_their_layer_and_weight() {
-        assert_eq!(Pen::ALL.map(Pen::name), ["O3V-Cut", "O3V-Beyond", "O3V-Dimensions", "O3V-Text", "O3V-Frame", "O3V-Grids"]);
-        assert_eq!(Pen::ALL.map(Pen::weight_mm), [0.50, 0.18, 0.18, 0.25, 0.35, 0.18]);
+        assert_eq!(Pen::ALL.map(Pen::name), ["O3V-Cut", "O3V-Beyond", "O3V-Hatch", "O3V-Dimensions", "O3V-Text", "O3V-Frame", "O3V-Grids"]);
+        assert_eq!(Pen::ALL.map(Pen::weight_mm), [0.50, 0.18, 0.13, 0.18, 0.25, 0.35, 0.18]);
     }
 
     #[test]

@@ -93,6 +93,48 @@ pub fn document_views(doc: &Document, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, bo
     out
 }
 
+/// The lines a view draws itself (its tags, details and dimensions), and what it sees beyond its
+/// cut, when it is laid in 3D.
+pub const INK: [u8; 4] = [36, 38, 46, 255];
+pub const BEYOND: [u8; 4] = [128, 130, 138, 255];
+
+/// One of the project's views laid in 3D in full: a floor plan on its level, a section or
+/// elevation upright on its line, with the lines of its cut, what it sees beyond it, the lines
+/// it draws itself and its texts where they stand. Nothing for a path that is no such view.
+pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
+    let mut out = Views3d::default();
+    let mut lay = |crop: Option<([f64; 2], [f64; 2])>, lines: &[[[f64; 2]; 2]], notes: &[crate::document::Note], place: &dyn Fn([f64; 2]) -> [f32; 3]| {
+        let mut line = |a: [f64; 2], b: [f64; 2], color: [u8; 4]| {
+            let piece = match crop {
+                Some((lo, hi)) => clip(a, b, lo, hi),
+                None => Some((a, b)),
+            };
+            if let Some((a, b)) = piece {
+                out.lines.push(([place(a), place(b)], color));
+            }
+        };
+        let wide = |p: [f32; 2]| [f64::from(p[0]), f64::from(p[1])];
+        for (segments, color) in cut.iter().flat_map(|c| [(&c.below, BEYOND), (&c.segments, CUT)]) {
+            for [a, b] in segments {
+                line(wide(*a), wide(*b), color);
+            }
+        }
+        for [a, b] in lines {
+            line(*a, *b, INK);
+        }
+        let inside = |p: [f64; 2]| crop.is_none_or(|(lo, hi)| p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]);
+        out.labels.extend(notes.iter().filter(|n| inside(n.at) && !n.text.trim().is_empty()).map(|n| (n.text.clone(), place(n.at))));
+    };
+    if let Some(plan) = doc.plans().iter().find(|p| p.path == path) {
+        let Some(z) = doc.level(&plan.level).map(|l| l.elevation) else { return out };
+        lay(plan.crop, &plan.lines, &plan.notes, &|p| world([p[0], p[1], z]));
+    } else if let Some(section) = doc.sections().iter().find(|s| s.path == path) {
+        let (along, _) = section.axes();
+        lay(section.crop, &section.lines, &section.notes, &|p| world([section.from[0] + along[0] * p[0], section.from[1] + along[1] * p[0], p[1]]));
+    }
+    out
+}
+
 /// The views read from the model (Revit's) in 3D: their frames and names.
 pub fn saved_views(views: &[SavedView], bounds: Option<&Bounds>) -> Views3d {
     let mut out = Views3d::default();
@@ -144,7 +186,7 @@ mod tests {
     /// The walls of a room of 8 x 5 m as a plan's cut.
     fn room() -> Cut {
         let segments = vec![[[0.0, 0.0], [8.0, 0.0]], [[8.0, 0.0], [8.0, 5.0]], [[8.0, 5.0], [0.0, 5.0]], [[0.0, 5.0], [0.0, 0.0]]];
-        Cut { segments, below: Vec::new(), extent: Some(([0.0, 0.0], [8.0, 5.0])) }
+        Cut { segments, below: Vec::new(), extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new(), hidden: Vec::new() }
     }
 
     fn of(v: &Views3d, color: [u8; 4]) -> Vec<[[f32; 3]; 2]> {
@@ -177,7 +219,7 @@ mod tests {
         let mut doc = Document::default();
         let section = doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
         // its drawing: u along the line from (0, 2), v up; a wall cut at u = 3 from 0 to 3 m
-        let cut = Arc::new(Cut { segments: vec![[[3.0, 0.0], [3.0, 3.0]]], below: Vec::new(), extent: Some(([3.0, 0.0], [3.0, 3.0])) });
+        let cut = Arc::new(Cut { segments: vec![[[3.0, 0.0], [3.0, 3.0]]], below: Vec::new(), extent: Some(([3.0, 0.0], [3.0, 3.0])), fills: Vec::new(), hidden: Vec::new() });
         let v = document_views(&doc, &|p| (p == section).then(|| cut.clone()), Some(&bounds()));
         let lines = of(&v, CUT);
         assert_eq!(lines, vec![[[3.0, 2.0, 0.0], [3.0, 2.0, 3.0]]]);
@@ -204,6 +246,7 @@ mod tests {
     #[test]
     fn revit_views_show_their_frames() {
         let plan = SavedView {
+            folder: Vec::new(),
             name: "Level 1".into(),
             kind: ViewKind::Plan,
             camera: None,
@@ -213,8 +256,8 @@ mod tests {
         };
         // a section looking north (+y) from y = -1, 8 m wide and 3 m high
         let crop = SectionBox::from_frame(Vec3::new(0.0, -1.0, 0.0), [Vec3::X, Vec3::Z, Vec3::Y], Vec3::new(0.0, 0.0, 0.0), Vec3::new(8.0, 3.0, 6.0)).unwrap();
-        let section = SavedView { name: "Section 1".into(), kind: ViewKind::Section, camera: None, clip: Some(crop), plan: None, level: None };
-        let three_d = SavedView { name: "{3D}".into(), kind: ViewKind::ThreeD, camera: None, clip: None, plan: None, level: None };
+        let section = SavedView { folder: Vec::new(), name: "Section 1".into(), kind: ViewKind::Section, camera: None, clip: Some(crop), plan: None, level: None };
+        let three_d = SavedView { folder: Vec::new(), name: "{3D}".into(), kind: ViewKind::ThreeD, camera: None, clip: None, plan: None, level: None };
         let v = saved_views(&[plan, section, three_d], Some(&bounds()));
         let frame = of(&v, FRAME);
         assert_eq!(frame.len(), 8, "two frames: {frame:?}");

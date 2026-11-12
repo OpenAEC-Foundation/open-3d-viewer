@@ -120,6 +120,9 @@ pub struct ScenePrimitive {
     /// The lines drawn over the model with their colours (world), solid: the underlays', the
     /// views' in 3D.
     pub overlay: Arc<Vec<crate::views3d::Colored>>,
+    /// The cut faces of the section box and plane in their hatches (`crate::caps`), drawn over
+    /// the model's own cut fill.
+    pub caps: Arc<crate::caps::CutFaces>,
 }
 
 /// A datum line (a grid line or a level) as drawn: its two ends (world).
@@ -183,6 +186,9 @@ pub struct ScenePipeline {
     face_count: wgpu::RenderPipeline,
     cap: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    /// Flat coloured triangles, not cut by the section: the cut faces in their hatches.
+    flat: wgpu::RenderPipeline,
+    flat_lines: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
@@ -211,6 +217,10 @@ pub struct ScenePipeline {
     /// The lines drawn over the model and what they were built from.
     overlay: Option<(wgpu::Buffer, u32)>,
     overlay_source: Arc<Vec<crate::views3d::Colored>>,
+    /// The cut faces in their hatches: their triangles, their lines, and what they were built from.
+    cut_faces: Option<(wgpu::Buffer, u32)>,
+    cut_lines: Option<(wgpu::Buffer, u32)>,
+    cut_source: Arc<crate::caps::CutFaces>,
     /// Viewport rectangle in target pixels, from the last `prepare`.
     rect: (u32, u32, u32, u32),
     /// Member axes and node glyphs (`super::structural`), made with the first model that has
@@ -415,6 +425,9 @@ impl ScenePipeline {
             wgpu::DepthBiasState::default(),
             true,
         );
+        // The cut faces in their hatches: unlit, and not cut away by the section they stand on.
+        let flat = make_pipeline("o3v.flat", wgpu::PrimitiveTopology::TriangleList, "fs_point", None, wgpu::DepthBiasState::default(), true);
+        let flat_lines = make_pipeline("o3v.flat_lines", wgpu::PrimitiveTopology::LineList, "fs_point", None, wgpu::DepthBiasState::default(), true);
         // Point clouds: a square per point (instance), unlit.
         let point_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
         let points = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -521,6 +534,8 @@ impl ScenePipeline {
             face_count,
             cap,
             lines,
+            flat,
+            flat_lines,
             points,
             blit,
             blit_layout,
@@ -543,6 +558,9 @@ impl ScenePipeline {
             datum: None,
             overlay: None,
             overlay_source: Default::default(),
+            cut_faces: None,
+            cut_lines: None,
+            cut_source: Default::default(),
             datum_source: Vec::new(),
             rect: (0, 0, 1, 1),
             structural: None,
@@ -754,6 +772,23 @@ impl ScenePipeline {
         self.overlay_source = primitive.overlay.clone();
     }
 
+    /// The cut faces in their hatches, built again when they change.
+    fn upload_cut_faces(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
+        if Arc::ptr_eq(&primitive.caps, &self.cut_source) {
+            return;
+        }
+        let vertex = |p: [f32; 3], color: [u8; 4]| Vertex { position: p, normal: [0.0, 0.0, 1.0], color, unit: 0 };
+        let buffer = |label, vertices: Vec<Vertex>| {
+            (!vertices.is_empty()).then(|| {
+                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
+                (buffer, vertices.len() as u32)
+            })
+        };
+        self.cut_faces = buffer("o3v.cut_faces", primitive.caps.triangles.iter().flat_map(|(t, color)| t.map(|p| vertex(p, *color))).collect());
+        self.cut_lines = buffer("o3v.cut_lines", overlay_lines(&primitive.caps.lines));
+        self.cut_source = primitive.caps.clone();
+    }
+
     fn ensure_grid(&mut self, device: &wgpu::Device, bounds: &Bounds, settings: &RenderSettings) {
         let (center, extent, spacing, z) = grid_layout(bounds);
         let colour_key = |c: [f32; 4]| c.iter().fold(0i64, |k, v| k * 1000 + (v * 999.0) as i64);
@@ -822,6 +857,7 @@ impl ScenePipeline {
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
         self.upload_datum(device, primitive);
         self.upload_overlay(device, primitive);
+        self.upload_cut_faces(device, primitive);
         self.gather_structural_marks(device, primitive);
         if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
             let n = primitive.offsets.len().min(self.offsets_len);
@@ -975,6 +1011,15 @@ impl ScenePipeline {
                     }
                     pass.set_pipeline(&self.cap);
                     pass.draw(0..6, face..face + 1);
+                }
+                // the cut faces in their hatches, over that fill
+                for (pipeline, drawn) in [(&self.flat, &self.cut_faces), (&self.flat_lines, &self.cut_lines)] {
+                    if let Some((vertices, count)) = drawn {
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(0, &self.world_group, &[]);
+                        pass.set_vertex_buffer(0, vertices.slice(..));
+                        pass.draw(0..*count, 0..1);
+                    }
                 }
             }
             if mode != RenderMode::Wireframe {

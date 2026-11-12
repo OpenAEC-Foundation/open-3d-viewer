@@ -51,6 +51,7 @@ icons! {
     "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut", "object.edit",
     // the BIM Collaborator
     "git.issue", "bcf.import", "bcf.export", "validation.select-specification", "validation.workspace", "note.reply", "team.add",
+    "ifc.compare-files", "export.ifc-report", "page.next", "page.previous", "validation.highlight-failures", "validation.clear-highlights",
 }
 
 /// The SVG text of an icon, unpacked once. Panics for an id that is not in the list, like

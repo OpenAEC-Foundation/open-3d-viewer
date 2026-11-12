@@ -16,9 +16,13 @@ pub mod app;
 mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+pub mod collab;
 pub mod document;
 pub mod drawing;
 pub mod drawing2d;
+pub mod caps;
+pub mod hatching;
 pub mod element_class;
 mod explode;
 pub mod export;
@@ -45,6 +49,9 @@ pub mod sheet_layout;
 pub mod structural;
 mod swipe;
 mod theme;
+pub mod typeface;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ui_control;
 pub mod underlay;
 pub mod views3d;
 mod units;

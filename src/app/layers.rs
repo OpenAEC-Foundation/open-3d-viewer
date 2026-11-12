@@ -44,7 +44,7 @@ impl App {
             return Some(if self.active_plan.as_deref() == Some(path.as_str()) { LayersOf::Viewport } else { LayersOf::Placed(path) });
         }
         let schedule = self.active_plan.is_none() && self.active_schedule.is_some();
-        (self.active_sheet.is_none() && !schedule).then_some(LayersOf::Viewport)
+        (self.active_sheet.is_none() && self.active_draft.is_none() && !schedule).then_some(LayersOf::Viewport)
     }
 
     /// Whether the model of layer `layer` is switched on.

@@ -59,6 +59,8 @@ impl Loader for RvtLoader {
         project.walls = walls;
         // how a cut through each material is hatched
         project.cut_patterns = super::rvt_materials::cut_patterns(&doc);
+        // down to where a section fills the earth under the terrain, and as what material
+        project.earth = doc.site_poche_base().map(|(base, material)| ((base * FT) as f32, material.and_then(|m| super::rvt_materials::name(&doc, m))));
         let layers = scene
             .batches
             .into_iter()

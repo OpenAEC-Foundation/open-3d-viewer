@@ -198,6 +198,9 @@ pub struct ProjectData {
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
+    /// The earth under the terrain a section cuts (Revit, the settings of the site): the height
+    /// down to which it is filled (metres) and the name of the material it is hatched as.
+    pub earth: Option<(f32, Option<String>)>,
     /// The phases of the elements and of the views (Revit): what a view leaves out or draws in
     /// halftone.
     pub phasing: crate::phasing::Phasing,

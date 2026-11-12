@@ -544,28 +544,29 @@ pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], dep
     let below = visible(&beyond, &edges);
     let extent = extent(segments.iter().chain(&below));
     let mut cut = Cut { segments, below, extent, fills: faces.fills(), ..Cut::default() };
-    cut.fills.extend(earth(ground, &cut.fills));
+    cut.fills.extend(earth(ground, &cut.fills, model.project.earth.as_ref().map(|e| e.0)));
     cut.fills.sort_by_key(|f| (f.layer, f.element));
     part(&mut cut, model, shown, map, depth as f32, Some([of_faint, of_plain]));
     cut
 }
 
-/// How far under its lowest cut point the earth of a cut terrain is drawn (metres).
+/// How far under its lowest cut point the earth of a cut terrain is drawn (metres), where the
+/// file does not say down to what height.
 const EARTH: f32 = 3.0;
 
 /// The earth under the terrain a section cuts: per piece of terrain the face between its cut line
-/// and a base `EARTH` under the lowest point of that line, to be hatched as what the terrain is
-/// made of. A terrain with a thickness closes a face of its own (it is among `closed`) and gets
+/// and its base (`base`: the height the file gives; else `EARTH` under the lowest point of that
+/// line), to be hatched as what the terrain is made of. A terrain with a thickness closes a face of its own (it is among `closed`) and gets
 /// none here.
-fn earth(ground: HashMap<(usize, Option<u64>), Vec<Segment>>, closed: &[Fill]) -> Vec<Fill> {
+fn earth(ground: HashMap<(usize, Option<u64>), Vec<Segment>>, closed: &[Fill], base: Option<f32>) -> Vec<Fill> {
     let mut fills = Vec::new();
     for ((layer, element), segments) in ground {
         if closed.iter().any(|f| f.layer == layer && f.element == element) {
             continue;
         }
-        let base = segments.iter().flatten().map(|p| p[1]).fold(f32::INFINITY, f32::min) - EARTH;
+        let base = base.unwrap_or_else(|| segments.iter().flatten().map(|p| p[1]).fold(f32::INFINITY, f32::min) - EARTH);
         // under each piece of the line a strip down to the base; a piece seen end on has none
-        let loops: Vec<Vec<[f32; 2]>> = segments.iter().filter(|[a, b]| (a[0] - b[0]).abs() > 1e-5).map(|&[a, b]| vec![a, b, [b[0], base], [a[0], base]]).collect();
+        let loops: Vec<Vec<[f32; 2]>> = segments.iter().filter(|[a, b]| (a[0] - b[0]).abs() > 1e-5 && a[1].min(b[1]) > base).map(|&[a, b]| vec![a, b, [b[0], base], [a[0], base]]).collect();
         if !loops.is_empty() {
             fills.push(Fill { layer, element, loops, ..Fill::default() });
         }

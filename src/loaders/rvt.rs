@@ -365,7 +365,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
     let mut types = super::rvt_drawings::Types::new(doc);
     // the schedules placed on the sheets, as tables
     let mut tables = super::rvt_schedules::placed(doc);
-    let anchors: HashMap<u64, [f64; 2]> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
+    let anchors: HashMap<u64, ([f64; 2], [f64; 2])> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
     // the views the document draws, and the legends and drafting views, by their element
     let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
     let drafts: HashMap<u64, usize> = project.drafts.iter().enumerate().map(|(k, d)| (d.id, k)).collect();
@@ -417,7 +417,8 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                         origin: position,
                         ratio: scale,
                         drawing: Some(crate::document::uuid(&format!("rvt/{file}/view/{}", v.view))).filter(|path| drawings.contains(path.as_str())),
-                        anchor: anchors.get(&v.view).copied(),
+                        anchor: anchors.get(&v.view).map(|a| a.0),
+                        turn: anchors.get(&v.view).map_or([1.0, 0.0], |a| a.1),
                         draft: drafts.get(&v.view).copied(),
                     }
                 })

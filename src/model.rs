@@ -459,6 +459,9 @@ pub struct SheetViewport {
     pub drawing: Option<String>,
     /// The point of that view's drawing that lies at `origin` (metres), when the view tells.
     pub anchor: Option<[f64; 2]>,
+    /// The direction of the view's own x on its drawing (unit): `[1, 0]` unless the view is turned
+    /// on the sheet, as a plan whose crop is turned a quarter.
+    pub turn: [f64; 2],
     /// The legend or drafting view in [`ProjectData::drafts`] it shows, when it is one.
     pub draft: Option<usize>,
 }

@@ -542,7 +542,13 @@ impl canvas::Program<Message> for SheetDrawing {
                     };
                     anchor.is_some_and(|(from, to)| {
                         let ratio = f64::from(v.ratio);
-                        let on = |q: [f64; 2]| fit.point([to[0] + ((q[0] - from[0]) * ratio) as f32, to[1] + ((q[1] - from[1]) * ratio) as f32]);
+                        // along the view's own axes: a turned view lies turned on the sheet
+                        let [cx, cy] = v.turn;
+                        let on = |q: [f64; 2]| {
+                            let (dx, dy) = (q[0] - from[0], q[1] - from[1]);
+                            fit.point([to[0] + ((dx * cx + dy * cy) * ratio) as f32, to[1] + ((dy * cx - dx * cy) * ratio) as f32])
+                        };
+                        let turned = cy.atan2(cx) as f32;
                         let piece = |a: [f64; 2], z: [f64; 2]| match crop {
                             Some((lo, hi)) => super::paper::clip(a, z, *lo, *hi),
                             None => Some((a, z)),
@@ -574,7 +580,7 @@ impl canvas::Program<Message> for SheetDrawing {
                         for note in notes {
                             let (at, size) = (on(note.at), note.size as f32 * paper);
                             if size >= SMALLEST && at.x > -size * 60.0 && at.x < bounds.width + size * 60.0 && at.y > -size * 8.0 && at.y < bounds.height + size * 8.0 {
-                                super::marks::draw_note(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32);
+                                super::marks::draw_note(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32 - turned);
                             }
                         }
                         true
@@ -647,6 +653,7 @@ mod tests {
             label: None,
             drawing: None,
             anchor: None,
+            turn: [1.0, 0.0],
             draft: None,
         };
         model.project.sheets = vec![

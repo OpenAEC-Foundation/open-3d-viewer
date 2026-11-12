@@ -368,10 +368,21 @@ fn view_node(v: &ViewInfo) -> Option<(Frame, Value, &'static str)> {
     Some((Frame::Section { from, along }, node, "o3v::view::section"))
 }
 
-/// The origin of a view's own frame on its drawing (metres): the point a sheet places.
-pub(super) fn view_origin(v: &ViewInfo) -> Option<[f64; 2]> {
+/// The origin of a view's own frame on its drawing (metres), the point a sheet places, and the
+/// direction of the frame's x on the drawing: a plan's crop may be turned (its `basis`), and the
+/// sheet shows the view along its crop, not along the model's x and y.
+pub(super) fn view_origin(v: &ViewInfo) -> Option<([f64; 2], [f64; 2])> {
     let (frame, ..) = view_node(v)?;
-    Some(frame.project(v.crop_box.as_ref()?.origin))
+    let b = v.crop_box.as_ref()?;
+    let turn = match frame {
+        Frame::Plan => {
+            let [x, y, _] = b.basis[0];
+            let run = x.hypot(y);
+            if run > 1e-9 { [x / run, y / run] } else { [1.0, 0.0] }
+        }
+        Frame::Section { .. } => [1.0, 0.0],
+    };
+    Some((frame.project(b.origin), turn))
 }
 
 pub(super) fn vec3(v: Option<&FieldValue>) -> Option<[f64; 3]> {

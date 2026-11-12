@@ -125,11 +125,11 @@ image = "0.25"
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
-rvt-core = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "5717fe06fa51e08e7a7a1434c04d2048fbd2cbb5" }
+rvt-core = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "642ea5f078b86fb1b4ee456da5179cad0b2083ef" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }
 # `gpu.log`: what iced and wgpu report about the graphics card (MIT OR Apache-2.0)
 log = "0.4"

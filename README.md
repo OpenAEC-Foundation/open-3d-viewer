@@ -82,7 +82,7 @@ What works and what does not on Android:
 | | |
 |---|---|
 | ![The house model in the four themes Light, Dark, Blueprint and High contrast dark](docs/images/readme/themes.png) **Light, Dark, Blueprint and High contrast dark** | ![The plot from above in wireframe with an orthographic camera, theme Dark](docs/images/readme/plan.png) **Top view, wireframe and orthographic** |
-| ![A bathroom model pulled apart per element](docs/images/readme/explode.png) **Exploded view per element** | ![The File page with New, Open, Add, Save as, Settings and the recent files](docs/images/readme/file.png) **The File page with recent files** |
+| ![A bathroom model pulled apart per element](docs/images/readme/explode.png) **Exploded view per element** | ![The File page with Open, Add, Save as, Settings and the recent files](docs/images/readme/file.png) **The File page with recent files** |
 | ![The settings dialog with theme, workspace, status bar, interface size and language, theme Blueprint](docs/images/readme/settings.png) **Settings, theme Blueprint** | ![The shortcuts page in the settings, where every command can get its own key](docs/images/readme/shortcuts.png) **Your own shortcuts for every command** |
 
 ## Viewing and navigating

@@ -165,8 +165,9 @@ naga = { version = "27.0.3", features = ["wgsl-in", "glsl-out"] }
 signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-# Which GPU the window gets, before wgpu starts (`gpu`); the version wgpu-hal uses (MIT OR Apache-2.0)
-windows = { version = "0.58", features = ["Win32_Graphics_Dxgi"] }
+# Which GPU the window gets, before wgpu starts (`gpu`), and the window's rectangle when its
+# display scale changes (`dpi_drag`); the version wgpu-hal uses (MIT OR Apache-2.0)
+windows = { version = "0.58", features = ["Win32_Graphics_Dxgi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(windows)'.build-dependencies]
 # The app icon and version info in the .exe (MIT)

@@ -311,6 +311,12 @@ pub enum Msg {
     Resized(f32),
     Minimize,
     Maximize,
+    /// A press on an edge or corner of the window: the system resizes it from there.
+    ResizeEdge(iced::window::Direction),
+    /// The window opened: its native handle is asked for.
+    WindowOpened(iced::window::Id),
+    /// The window's native id (its `HWND` on Windows).
+    NativeWindow(u64),
     CloseWindow,
     Update,
     /// Opens the desktop app's download page (from [`Dialog::DesktopOnly`]).
@@ -1284,6 +1290,13 @@ impl Studio {
                 self.maximized = !self.maximized;
                 return iced::window::latest().and_then(iced::window::toggle_maximize);
             }
+            Msg::ResizeEdge(direction) => return iced::window::latest().and_then(move |id| iced::window::drag_resize(id, direction)),
+            Msg::WindowOpened(id) => return iced::window::raw_id::<Msg>(id).map(Msg::NativeWindow),
+            Msg::NativeWindow(_raw) => {
+                // between displays with a different scale the window keeps its size (`dpi_drag`)
+                #[cfg(windows)]
+                crate::dpi_drag::install(_raw);
+            }
             // the viewer changes no files, so closing needs no questions
             Msg::CloseWindow => return iced::exit(),
             Msg::Update => {
@@ -1327,9 +1340,14 @@ impl Studio {
             iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Sized(size)),
             _ => None,
         });
+        let opened = iced::event::listen_with(|event, _, id| match event {
+            iced::Event::Window(iced::window::Event::Opened { .. }) => Some(Msg::WindowOpened(id)),
+            _ => None,
+        });
         Subscription::batch([
             self.app.subscription().map(Msg::App),
             resized,
+            opened,
             open.map(Msg::App),
             drag,
             openaec_ui::keyboard::presses().map(Msg::Key),
@@ -1397,7 +1415,8 @@ impl Studio {
         if let Some(dialog) = self.dialog {
             layers.push(mouse_area(w::overlay(look, self.dialog_card(look, dialog))).into());
         }
-        iced::widget::Stack::with_children(layers).into()
+        // the window has no system frame (the shell draws the title bar), so its edges resize it here
+        crate::resize_frame::resize_frame(iced::widget::Stack::with_children(layers), !self.maximized && cfg!(not(target_arch = "wasm32")), Msg::ResizeEdge)
     }
 
     /// The lamp at the right of the status bar: grey when remote control is off, amber when the

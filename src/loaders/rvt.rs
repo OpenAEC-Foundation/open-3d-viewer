@@ -526,7 +526,7 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
                         let low = limited(range.and_then(|r| r.depth)).or(limited(range.and_then(|r| r.bottom))).or(level).unwrap_or(cut - 10.0);
                         (low - 0.01, cut)
                     };
-                    out.plan = Some(PlanRange { low: low as f32 * FT, high: high as f32 * FT, from_below: ceiling || above.is_some() });
+                    out.plan = Some(PlanRange { low: low as f32 * FT, high: high as f32 * FT, from_below: ceiling });
                 }
                 _ => {
                     let crop = v.crop_box.as_ref()?;

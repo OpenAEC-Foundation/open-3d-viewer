@@ -65,6 +65,12 @@ pub struct Clash {
 /// The clashes of the elements of `first` with those of `second`; with `within`, the two are the
 /// same set and each pair is tested once. Stops early, with what it found, when `cancel` is set.
 pub fn clashes(first: &[Solid], second: &[Solid], within: bool, test: Test, cancel: &AtomicBool) -> Vec<Clash> {
+    clashes_but(first, second, within, test, &|_, _| false, cancel)
+}
+
+/// As [`clashes`], leaving out the pairs `skip` names (by their places in `first` and `second`)
+/// before they are tested: elements of one model, say, in a test between models.
+pub fn clashes_but(first: &[Solid], second: &[Solid], within: bool, test: Test, skip: &dyn Fn(usize, usize) -> bool, cancel: &AtomicBool) -> Vec<Clash> {
     let reach = match test {
         Test::Hard { .. } => 0.0,
         Test::Clearance { distance } => distance.max(0.0),
@@ -86,7 +92,7 @@ pub fn clashes(first: &[Solid], second: &[Solid], within: bool, test: Test, canc
             }
             let b = &second[j];
             let apart = (a.min - b.max).max(b.min - a.max);
-            if apart.max_element() > reach {
+            if apart.max_element() > reach || skip(i, j) {
                 continue;
             }
             let found = match test {
@@ -395,6 +401,16 @@ mod tests {
         assert!(run(pipe(), wall(), Test::Clearance { distance: 0.02 }).is_empty());
         // far apart: no hard clash either
         assert!(run(pipe(), wall(), Test::Hard { tolerance: 0.002 }).is_empty());
+    }
+
+    #[test]
+    fn pairs_left_out_are_not_found() {
+        let set = [block([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]), block([0.5, 0.5, 0.5], [1.5, 1.5, 1.5]), block([0.8, 0.8, 0.8], [2.0, 2.0, 2.0])];
+        let test = Test::Hard { tolerance: 0.002 };
+        assert_eq!(clashes(&set, &set, true, test, &AtomicBool::new(false)).len(), 3);
+        // the first two are of one model
+        let found = clashes_but(&set, &set, true, test, &|i, j| i.max(j) < 2, &AtomicBool::new(false));
+        assert_eq!(found.iter().map(|c| (c.a, c.b)).collect::<Vec<_>>(), [(0, 2), (1, 2)]);
     }
 
     #[test]

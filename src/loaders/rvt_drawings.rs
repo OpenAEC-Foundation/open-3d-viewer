@@ -465,6 +465,16 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         marks.lines.extend(drawn.lines.iter().map(|l| json!(l)));
         marks.notes.extend(drawn.texts.iter().map(dimension_note));
     }
+    // a spot elevation: its symbol, its leader and the height it writes
+    for id in doc.object_ids_of_class("SpotElevation") {
+        let Some(view) = owner(id).filter(|v| !types.hidden(*v, id)) else { continue };
+        let Some(o) = doc.object(id) else { continue };
+        let frame = frames[&view].0;
+        let Some(drawn) = spot_marks(doc, &o, &|p| frame.project(p), scales[&view], &mut types) else { continue };
+        let marks = marks.entry(view).or_default();
+        marks.lines.extend(drawn.lines.iter().map(|l| json!(l)));
+        marks.notes.extend(drawn.texts.iter().map(dimension_note));
+    }
     // a tag: its labels as texts, the lines of its family and its leader, all hanging from its head
     for tag in tags {
         let Some((frame, ..)) = frames.get(&tag.view) else { continue };
@@ -490,14 +500,30 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         marks.lines.extend(tag.lines.iter().map(|l| json!([on(l[0]), on(l[1])])));
         marks.lines.extend(tag.leader_lines(&|p| frame.project(p), scale).into_iter().map(|l| json!(l)));
     }
+    // what covers what lies under it in a view: its masking regions (drawn as paper) and its
+    // regions filled in one colour, each where the view's draw order has its element
+    let mut orders: HashMap<u64, HashMap<u64, usize>> = HashMap::new();
+    let mut covers: HashMap<u64, Vec<Cover>> = HashMap::new();
+    for detail in details {
+        let Some((frame, ..)) = frames.get(&detail.view) else { continue };
+        let order = orders.entry(detail.view).or_insert_with(|| draw_order(doc, detail.view));
+        let rank = rank_of(order, detail.element);
+        let on = |loops: &Vec<Vec<[f64; 3]>>| -> Vec<Vec<[f64; 2]>> { loops.iter().map(|l| l.iter().map(|&p| frame.project(p)).collect()).collect() };
+        let masks = detail.masks.iter().map(|m| Cover { rank, loops: on(m), color: PAPER });
+        let fills = detail.fills.iter().map(|f| Cover { rank, loops: on(&f.loops), color: f.color });
+        covers.entry(detail.view).or_default().extend(masks.chain(fills));
+    }
+    // from the back to the front, as they are drawn
+    for (view, all) in &mut covers {
+        all.sort_by_key(|c| c.rank);
+        marks.entry(*view).or_default().fills.extend(all.iter().map(|c| json!({"loops": c.loops, "color": c.color})));
+    }
+    let none: Vec<Cover> = Vec::new();
     // a detail component: the lines of its family, within the view's crop as the model is
     for detail in details {
         let Some((frame, node, _)) = frames.get(&detail.view) else { continue };
-        // its regions filled in one colour
-        for fill in &detail.fills {
-            let loops: Vec<Vec<[f64; 2]>> = fill.loops.iter().map(|l| l.iter().map(|&p| frame.project(p)).collect()).collect();
-            marks.entry(detail.view).or_default().fills.push(json!({"loops": loops, "color": fill.color}));
-        }
+        let over = covers.get(&detail.view).unwrap_or(&none);
+        let rank = orders.get(&detail.view).map_or((0, detail.element), |order| rank_of(order, detail.element));
         // its texts and labels
         for (foot, text) in &detail.texts {
             let mut note = json!({"at": frame.project(*foot), "text": text.wording, "size": text.em});
@@ -515,7 +541,7 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
             marks.entry(detail.view).or_default().notes.push(note);
         }
         let crop = crop_of(node);
-        let lines = detail.lines.iter().filter_map(|l| within(frame.project(l[0]), frame.project(l[1]), crop));
+        let lines = detail.lines.iter().filter_map(|l| within(frame.project(l[0]), frame.project(l[1]), crop)).flat_map(|l| uncovered(l, rank, over));
         marks.entry(detail.view).or_default().lines.extend(lines.map(|l| json!(l)));
     }
     // a detail line: a straight one as it is, an arc or circle in pieces, within the view's crop
@@ -536,7 +562,9 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
             Some(pattern) => dashed(&points, &pattern, scales[&view]),
             None => points.windows(2).map(|w| [w[0], w[1]]).collect(),
         };
-        let lines = strokes.iter().filter_map(|w| within(frame.project(w[0]), frame.project(w[1]), crop));
+        let over = covers.get(&view).unwrap_or(&none);
+        let rank = orders.get(&view).map_or((0, id), |order| rank_of(order, id));
+        let lines = strokes.iter().filter_map(|w| within(frame.project(w[0]), frame.project(w[1]), crop)).flat_map(|l| uncovered(l, rank, over));
         marks.entry(view).or_default().lines.extend(lines.map(|l| json!(l)));
     }
     let styles = types.styles_node().map(|node| (uuid(&format!("rvt/{file}/drawings")), node));
@@ -557,6 +585,81 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
 
 /// The category of detail lines.
 const LINES: i64 = -2000051;
+
+/// The colour a masking region is drawn in: that of the paper.
+const PAPER: [u8; 3] = [255, 255, 255];
+
+/// A region of a view that covers what lies under it: where it lies in the view's draw order, its
+/// outlines on the drawing (metres) and its colour.
+struct Cover {
+    rank: (u8, u64),
+    loops: Vec<Vec<[f64; 2]>>,
+    color: [u8; 3],
+}
+
+/// Where a view's draw order has each element it names, from the back to the front
+/// (`DrawOrderMgr::m_aDrawOrder`).
+fn draw_order(doc: &rvt_read::Document, view: u64) -> HashMap<u64, usize> {
+    let o = doc.object(view);
+    let listed = o.as_ref().and_then(|o| o.get("m_pDetailDrawOrderMgr").and_then(|v| o.deref(v))?.get("m_aDrawOrder")?.as_list());
+    listed.unwrap_or(&[]).iter().filter_map(|e| u64::try_from(e.element()?).ok()).enumerate().map(|(k, e)| (e, k)).collect()
+}
+
+/// Where an element lies: as the draw order says; one it does not name lies under those, in the
+/// order they were made.
+fn rank_of(order: &HashMap<u64, usize>, element: u64) -> (u8, u64) {
+    order.get(&element).map_or((0, element), |k| (1, *k as u64))
+}
+
+/// The pieces of a line that the regions lying over it (a higher rank than `own`) leave to see.
+fn uncovered(line: [[f64; 2]; 2], own: (u8, u64), covers: &[Cover]) -> Vec<[[f64; 2]; 2]> {
+    let inside = |loops: &Vec<Vec<[f64; 2]>>, p: [f64; 2]| {
+        let mut odd = false;
+        for outline in loops {
+            for (a, b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+                if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                    odd = !odd;
+                }
+            }
+        }
+        odd
+    };
+    let mut pieces = vec![line];
+    for cover in covers.iter().filter(|c| c.rank > own) {
+        let mut kept = Vec::new();
+        for [p, q] in pieces {
+            let d = [q[0] - p[0], q[1] - p[1]];
+            // where it crosses the outlines, along it
+            let mut cuts = vec![0.0f64, 1.0];
+            for outline in &cover.loops {
+                for (a, c) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+                    let e = [c[0] - a[0], c[1] - a[1]];
+                    let det = d[0] * e[1] - d[1] * e[0];
+                    if det.abs() < 1e-15 {
+                        continue;
+                    }
+                    let t = ((a[0] - p[0]) * e[1] - (a[1] - p[1]) * e[0]) / det;
+                    let s = ((a[0] - p[0]) * d[1] - (a[1] - p[1]) * d[0]) / det;
+                    if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&s) {
+                        cuts.push(t);
+                    }
+                }
+            }
+            cuts.sort_by(f64::total_cmp);
+            for w in cuts.windows(2).filter(|w| w[1] - w[0] > 1e-9) {
+                let at = |t: f64| [p[0] + t * d[0], p[1] + t * d[1]];
+                if !inside(&cover.loops, at((w[0] + w[1]) / 2.0)) {
+                    kept.push([at(w[0]), at(w[1])]);
+                }
+            }
+        }
+        pieces = kept;
+        if pieces.is_empty() {
+            break;
+        }
+    }
+    pieces
+}
 
 /// The crop of a view's node (lower left, upper right; metres), when it has one.
 fn crop_of(node: &Value) -> Option<([f64; 2], [f64; 2])> {
@@ -636,11 +739,12 @@ fn view_node(v: &ViewInfo) -> Option<(Frame, Value, &'static str)> {
         let name = v.level_name.as_ref()?;
         let range = v.view_range.as_ref();
         // a structural plan whose view depth lies above its cut looks up (a pile plan, cut under
-        // the foundation): it is drawn as a ceiling plan is, from its cut up to that depth
+        // the foundation): it is drawn from its cut up to that depth, laid out as from above
         let above = range.and_then(|r| r.depth).zip(v.cut_offset).filter(|(depth, cut)| v.kind == K::StructuralPlan && depth.is_finite() && *depth > level + cut + 1e-6).map(|(depth, _)| depth);
-        let ceiling = v.kind == K::CeilingPlan || above.is_some();
+        let ceiling = v.kind == K::CeilingPlan;
         let kind = match v.kind {
-            _ if ceiling => "ceiling",
+            _ if above.is_some() => "structural-up",
+            K::CeilingPlan => "ceiling",
             K::StructuralPlan => "structural",
             _ => "floor",
         };
@@ -761,6 +865,52 @@ pub(super) struct DimensionText {
 
 /// How far a figure stands off its dimension line, on paper (metres).
 const FIGURE_OFF: f64 = 0.0008;
+
+/// A spot elevation as it is drawn in a view of `scale`: the symbol of its type (its value
+/// -1006436, an annotation symbol) on the point it measures (`m_refPnts`), its leader to where it
+/// bends (`m_bendOrPosPtOffset`), and beside that the height it stores (`DimSegValue::m_value`,
+/// feet) in millimetres with the mark of its type (`m_seIndElevation`, before or after it). Where
+/// exactly the file sets the figure is not read: it stands beside the symbol.
+fn spot_marks(doc: &rvt_read::Document, o: &ObjectView, project: &dyn Fn([f64; 3]) -> [f64; 2], scale: f64, types: &mut Types) -> Option<DimensionMarks> {
+    let at = vec3(o.get("m_refPnts")?.as_list()?.first())?;
+    let kind = o.get("m_styleSymbolId")?.element()?;
+    let style = doc.object(u64::try_from(kind).ok()?)?;
+    let q = project(at);
+    let mut marks = DimensionMarks::default();
+    let named = style.path(&["m_pParamValueSetElementId", "m_paramSet"]).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_object);
+    let symbol = named.filter(|p| p.get("m_paramId").and_then(FieldValue::element) == Some(-1006436)).find_map(|p| u64::try_from(p.get("m_value")?.element()?).ok());
+    if let Some(symbol) = symbol {
+        let lines = super::rvt_tags::symbol_lines(doc, types, symbol);
+        marks.lines.extend(lines.iter().map(|l| l.map(|p| [q[0] + p[0] * scale, q[1] + p[1] * scale])));
+    }
+    let bend = vec3(o.get("m_bendOrPosPtOffset")).filter(|b| b.iter().any(|v| v.abs() > 1e-9));
+    let end = match bend.filter(|_| o.get("m_leaderLine") == Some(&FieldValue::Bool(true))) {
+        Some(b) => {
+            let end = project([at[0] + b[0], at[1] + b[1], at[2] + b[2]]);
+            marks.lines.push([q, end]);
+            end
+        }
+        None => q,
+    };
+    let stored = o.get("m_ArrSegInfo").and_then(FieldValue::as_list).and_then(|s| s.first()?.as_object()?.get("m_values")?.as_list()?.first()?.as_object()?.get("m_value")?.as_f64());
+    let height = stored.filter(|v| v.is_finite()).unwrap_or(at[2]);
+    let mut figure = format!("{:.0}", height * FT * 1000.0);
+    if figure == "-0" {
+        figure = "0".into();
+    }
+    let mark = style.get("m_seIndElevation").and_then(FieldValue::as_str).unwrap_or_default().trim().to_string();
+    let wording = match (mark.is_empty(), style.get("m_seIndType").and_then(FieldValue::as_i64)) {
+        (true, _) => figure,
+        (false, Some(0)) => format!("{mark} {figure}"),
+        (false, _) => format!("{figure} {mark}"),
+    };
+    let em = style.path(&["m_pLineAndTextAttr", "m_fontId"]).and_then(FieldValue::element).and_then(|f| types.em(f)).unwrap_or(crate::document::NOTE_HEIGHT);
+    let face = types.text_face(kind);
+    // beside the symbol, over where the leader ends: the figure is set about its middle
+    let half = wording.chars().count() as f64 * em * 0.3 * scale;
+    marks.texts.push(DimensionText { at: [end[0] + 0.003 * scale + half, end[1] + 0.001 * scale], angle: 0.0, wording, em, face });
+    Some(marks)
+}
 
 /// A dimension string as it is drawn in a view of `scale`, where `project` puts a point of the
 /// model (feet) on the drawing (metres):

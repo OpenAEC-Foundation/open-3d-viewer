@@ -58,10 +58,13 @@ pub enum PlanKind {
     /// A reflected ceiling plan: cut [`CEILING_CUT`] above its level, looking up to the next
     /// level (else [`CEILING_DEPTH`] beyond its cut), drawn as the floor plan is oriented.
     Ceiling,
+    /// The structure seen from under it but drawn as from above (a pile plan): cut under the
+    /// foundation, looking up to its view depth; elements that carry nothing are left out.
+    StructuralUp,
 }
 
 impl PlanKind {
-    pub const ALL: [PlanKind; 3] = [PlanKind::Floor, PlanKind::Structural, PlanKind::Ceiling];
+    pub const ALL: [PlanKind; 4] = [PlanKind::Floor, PlanKind::Structural, PlanKind::Ceiling, PlanKind::StructuralUp];
 
     /// Its name in IFCX (`kind` of an `o3v::view::plan` node).
     pub fn key(self) -> &'static str {
@@ -69,6 +72,7 @@ impl PlanKind {
             PlanKind::Floor => "floor",
             PlanKind::Structural => "structural",
             PlanKind::Ceiling => "ceiling",
+            PlanKind::StructuralUp => "structural-up",
         }
     }
 
@@ -77,9 +81,20 @@ impl PlanKind {
         Self::ALL.into_iter().find(|k| k.key() == key).unwrap_or_default()
     }
 
-    /// Whether it looks up from its cut (a ceiling plan), not down.
+    /// Whether it looks up from its cut, not down.
     pub fn looks_up(self) -> bool {
+        matches!(self, PlanKind::Ceiling | PlanKind::StructuralUp)
+    }
+
+    /// Whether its tab shows the model from below (a ceiling plan). A structural plan that looks
+    /// up stays a view from above, as it is drawn.
+    pub fn seen_from_below(self) -> bool {
         self == PlanKind::Ceiling
+    }
+
+    /// Whether it shows the structure only.
+    pub fn structural(self) -> bool {
+        matches!(self, PlanKind::Structural | PlanKind::StructuralUp)
     }
 }
 
@@ -806,6 +821,8 @@ impl Document {
         match kind {
             PlanKind::Floor => (PLAN_CUT, PLAN_DEPTH),
             PlanKind::Structural => (PLAN_CUT, STRUCTURAL_DEPTH),
+            // cut as far under the level as a structural plan looks, up to the level
+            PlanKind::StructuralUp => (-STRUCTURAL_DEPTH, STRUCTURAL_DEPTH),
             PlanKind::Ceiling => {
                 let z = self.level(level).map_or(0.0, |l| l.elevation);
                 let next = self.levels.iter().map(|l| l.elevation).filter(|&e| e > z + CEILING_CUT + 0.05).fold(f64::INFINITY, f64::min);

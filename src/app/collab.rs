@@ -415,6 +415,8 @@ pub enum Event {
     Export(Report),
     ExportTo(Report, Option<PathBuf>),
     ClashOn(usize, bool),
+    /// Whether a clash test is only between models.
+    ClashBetween(usize, bool),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
     /// The first (true) or second side of a clash test.
@@ -543,7 +545,10 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         let (a, b) = (side(&rule.a), side(&rule.b));
         let solids = |side: &[usize]| side.iter().map(|&k| items[k].solid.clone()).collect::<Vec<_>>();
         let (sa, sb) = (solids(&a), if rule.within() { Vec::new() } else { solids(&b) });
-        let found = clash::clashes(&sa, if rule.within() { &sa } else { &sb }, rule.within(), rule.test(), cancel);
+        // a test between models leaves the pairs of one model out, when there is more than one
+        let apart = rule.between_models && models.len() > 1;
+        let skip = |i: usize, j: usize| apart && items[a[i]].model == items[b[j]].model;
+        let found = clash::clashes_but(&sa, if rule.within() { &sa } else { &sb }, rule.within(), rule.test(), &skip, cancel);
         for c in found {
             let (ia, ib) = (&items[a[c.a]], &items[b[c.b]]);
             if ia.id == ib.id || !seen.insert((rule.name.clone(), ia.id.min(ib.id), ia.id.max(ib.id))) {
@@ -559,6 +564,28 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         }
     }
     rows
+}
+
+/// Checks the files of the models open on a rule set, several at a time: each file is read and
+/// checked on its own, so they share the processor's cores. The answers come in the files' order.
+fn check_files(files: Vec<(usize, String, PathBuf)>, rules: &RuleSet, cancel: &AtomicBool) -> Vec<Checked> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<(usize, Checked)>> = std::sync::Mutex::new(Vec::new());
+    let workers = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 8).min(files.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                let Some((model, name, path)) = files.get(k) else { break };
+                let report = std::panic::catch_unwind(|| check_file(path, rules, cancel)).unwrap_or_else(|_| Err("The check stopped unexpectedly".into()));
+                let checked = Checked { model: *model, name: name.clone(), report: report.map(Arc::new) };
+                done.lock().unwrap_or_else(|e| e.into_inner()).push((k, checked));
+            });
+        }
+    });
+    let mut done = done.into_inner().unwrap_or_else(|e| e.into_inner());
+    done.sort_by_key(|(k, _)| *k);
+    done.into_iter().map(|(_, checked)| checked).collect()
 }
 
 /// Checks one IFC file on a rule set: each IDS in turn, the built-in checks with the first.
@@ -1250,14 +1277,7 @@ impl App {
                 self.collab.notice = None;
                 let (run, cancel) = (self.collab.run, self.collab.cancel.clone());
                 return job(move || {
-                    let checked = files
-                        .into_iter()
-                        .map(|(model, name, path)| {
-                            let report = std::panic::catch_unwind(|| check_file(&path, &rules, &cancel)).unwrap_or_else(|_| Err("The check stopped unexpectedly".into()));
-                            Checked { model, name, report: report.map(Arc::new) }
-                        })
-                        .collect();
-                    Event::Checked(run, checked)
+                    Event::Checked(run, check_files(files, &rules, &cancel))
                 });
             }
             Event::Checked(run, checked) => {
@@ -1345,6 +1365,11 @@ impl App {
             Event::ClashOn(k, on) => {
                 if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
                     rule.on = on;
+                }
+            }
+            Event::ClashBetween(k, on) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.between_models = on;
                 }
             }
             Event::ClashKindOf(k, kind) => {
@@ -1498,8 +1523,8 @@ impl App {
                 let rules = self.collab.rules().cloned().ok_or("no rule set")?;
                 let cancel = AtomicBool::new(false);
                 let files = self.models.iter().enumerate().filter(|(_, e)| e.model.path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc")));
-                self.collab.checked = files
-                    .map(|(model, e)| Checked { model, name: e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), report: check_file(&e.model.path, &rules, &cancel).map(Arc::new) })
+                self.collab.checked = check_files(files.map(|(model, e)| (model, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone())).collect(), &rules, &cancel)
+                    .into_iter()
                     .collect();
                 let failed = self.collab.checked.first().and_then(|c| c.report.as_ref().ok()).and_then(|r| r.specifications.iter().position(|s| s.status == ValidationStatus::Failed));
                 self.collab.open_spec = failed.map(|s| (0, s));
@@ -1918,6 +1943,10 @@ impl App {
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
+                        named(
+                            w::checkbox(look, l.text("Alleen tussen modellen", "Only between models"), rule.between_models, Some(move |on| go(Event::ClashBetween(k, on)))),
+                            Node::new(Role::CheckBox, format!("{} {}", rule.name, l.text("Alleen tussen modellen", "Only between models"))).checked(rule.between_models),
+                        ),
                     ]
                     .spacing(3),
                 );
@@ -2232,7 +2261,7 @@ impl App {
                     "rule_sets": self.collab.rule_sets.iter().map(|r| json!({
                         "name": r.name, "description": r.description, "model_checks": r.model_checks, "ils": r.ils,
                         "ids": r.ids.iter().map(|p| crate::collab::rules::ids_name(p)).collect::<Vec<_>>(),
-                        "clash_tests": r.clashes.iter().map(|c| json!({ "name": c.name, "on": c.on, "kind": format!("{:?}", c.kind), "tolerance_mm": c.tolerance_mm, "clearance_mm": c.clearance_mm })).collect::<Vec<_>>(),
+                        "clash_tests": r.clashes.iter().map(|c| json!({ "name": c.name, "on": c.on, "kind": format!("{:?}", c.kind), "tolerance_mm": c.tolerance_mm, "clearance_mm": c.clearance_mm, "between_models": c.between_models })).collect::<Vec<_>>(),
                     })).collect::<Vec<_>>(),
                 })),
                 "select" => {
@@ -2290,7 +2319,12 @@ impl App {
                         return Ok(json!({ "started": true, "note": "the selection's clash test runs in the background; ask again with action list" }));
                     }
                     self.collab_now(None, None, Some("clash"))?;
-                    Ok(json!({ "clashes": self.collab.clashes.len(), "seconds": started.elapsed().as_secs_f32() }))
+                    let mut by_rule = std::collections::BTreeMap::<&str, usize>::new();
+                    for c in &self.collab.clashes {
+                        *by_rule.entry(c.rule.as_str()).or_default() += 1;
+                    }
+                    // at the most kept, the tests after it did not run
+                    Ok(json!({ "clashes": self.collab.clashes.len(), "by_rule": by_rule, "capped": self.collab.clashes.len() >= MOST_CLASHES, "seconds": started.elapsed().as_secs_f32() }))
                 }
                 "list" => {
                     let offset = a.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -2501,6 +2535,13 @@ mod tests {
         // all against all: the pair once; walls against walls: nothing
         assert_eq!(run_clashes(&model, &models, &[rule(&[], &[])], &AtomicBool::new(false)).len(), 1);
         assert!(run_clashes(&model, &models, &[rule(&["IfcWall*"], &["IfcWall*"])], &AtomicBool::new(false)).is_empty());
+        // only between models: in one model the test is as it was; with the wall and the pipe in
+        // one of two models, they are left alone
+        let between = ClashRule { between_models: true, ..rule(&[], &[]) };
+        assert_eq!(run_clashes(&model, &models, std::slice::from_ref(&between), &AtomicBool::new(false)).len(), 1);
+        let two = vec![("house.ifc".to_string(), 0..model.layers.len()), ("pipes.ifc".to_string(), model.layers.len()..model.layers.len() + 1)];
+        assert!(run_clashes(&model, &two, &[between], &AtomicBool::new(false)).is_empty());
+        assert_eq!(run_clashes(&model, &two, &[rule(&[], &[])], &AtomicBool::new(false)).len(), 1);
     }
 
     #[test]

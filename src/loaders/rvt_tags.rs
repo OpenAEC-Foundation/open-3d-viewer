@@ -312,6 +312,11 @@ pub(super) fn title_block_line_colors(doc: &rvt_read::Document, types: &mut Type
     graphics_lines(doc, kind, types, 1.0, Seen::PLAIN).colors
 }
 
+/// The lines of an annotation symbol type, on paper (metres).
+pub(super) fn symbol_lines(doc: &rvt_read::Document, types: &mut Types, kind: u64) -> Vec<[[f64; 2]; 2]> {
+    family_lines(doc, kind, types, 1.0)
+}
+
 /// The title of a view placed on a sheet, as the type of its viewport writes it
 /// (`ViewportAttributes`: `m_showLabel`, and `m_familyTagId`, the type of its title family, whose
 /// labels write the view's name and scale): empty when its type shows no title, none when the
@@ -795,9 +800,16 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
             }
         }
         open.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| Some((p.as_ptr()?, nested, placed))));
-        // of an element of the model only what its nested symbols draw
+        // of an element of the model only what its symbols draw: what lies in a family nested in
+        // it, and a region of its own that is filled (its solids have faces without a fill)
         if seen_as.model && !nested {
-            continue;
+            let filled = name == "Geometry" && {
+                let faces: Vec<&Object> = o.get("m_pFaces").and_then(|f| f.as_list()).unwrap_or(&[]).iter().filter_map(|p| graph.objects.get(p.as_ptr()?)).collect();
+                !faces.is_empty() && faces.iter().all(|f| target(f.get("m_pGFilling")).is_some())
+            };
+            if !filled {
+                continue;
+            }
         }
         // regions: their edges, each a run of points on the plane of its face, and their fills
         if name == "Geometry" {

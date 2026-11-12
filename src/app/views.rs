@@ -67,7 +67,7 @@ impl App {
 
     /// Whether the view at `path` is a structural plan, which leaves out what carries nothing.
     pub(super) fn is_structural_plan(&self, path: Option<&str>) -> bool {
-        path.and_then(|p| self.document.plan(p)).is_some_and(|p| p.kind == PlanKind::Structural)
+        path.and_then(|p| self.document.plan(p)).is_some_and(|p| p.kind.structural())
     }
 
     /// Per unit of the shown model, whether a structural plan leaves it out: an element whose
@@ -203,7 +203,7 @@ impl App {
                 kind: ViewKind::Plan,
                 camera: None,
                 clip: None,
-                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: plan.kind.looks_up() }),
+                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: plan.kind.seen_from_below() }),
                 level: self.document.level(&plan.level).map(|l| l.name.clone()),
             });
         }
@@ -440,6 +440,7 @@ impl App {
                 PlanKind::Floor => (l.text("Plattegronden", "Floor plans"), ""),
                 PlanKind::Structural => (l.text("Constructieve plattegronden", "Structural plans"), l.text("constructie", "structure")),
                 PlanKind::Ceiling => (l.text("Plafondplannen", "Ceiling plans"), l.text("plafond", "ceiling")),
+                PlanKind::StructuralUp => (l.text("Constructieve plattegronden, omhoog gezien", "Structural plans, looking up"), l.text("constructie omhoog", "structure up")),
             };
             let picking = self.views_picker == Some(kind);
             let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });

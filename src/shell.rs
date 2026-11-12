@@ -2498,7 +2498,7 @@ mod tests {
         // a product binary: its own name in the title and About
         let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
         assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, "Open BIM Collaborator".to_string()));
-        assert_eq!(Studio::new(App::default()).title(), "Open 3D Viewer Studio");
+        assert_eq!(Studio::new(App::default()).title(), "Open BIM Suite");
     }
 
     #[test]

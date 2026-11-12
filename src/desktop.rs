@@ -1,4 +1,4 @@
-//! Open 3D Viewer Studio, desktop app (iced + wgpu).
+//! Open BIM Suite, desktop app (iced + wgpu).
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
@@ -240,7 +240,7 @@ fn initial_state(args: &Args) -> App {
 }
 
 /// The application window: the viewer inside the OpenAEC Blueprint shell (`shell`), with the
-/// preferences and own shortcuts in %APPDATA%\OpenAEC\Open 3D Viewer Studio (on Linux and macOS
+/// preferences and own shortcuts in %APPDATA%\OpenAEC\Open BIM Suite (on Linux and macOS
 /// under ~/.config, see `remote_link::settings_dir`).
 fn run_app(args: Args) -> iced::Result {
     let dir = crate::remote_link::settings_dir();

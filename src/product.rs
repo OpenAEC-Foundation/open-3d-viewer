@@ -83,7 +83,7 @@ impl Product {
     /// Its name on its own: the window title and About of a build of this product alone.
     pub fn name(self) -> &'static str {
         match self {
-            Product::Viewer => "Open 3D Viewer Studio",
+            Product::Viewer => "Open BIM Suite",
             Product::Modeller => "Open BIM Modeller",
             Product::Collaborator => "Open BIM Collaborator",
         }
@@ -325,7 +325,7 @@ mod tests {
         ids.dedup();
         assert_eq!((names.len(), ids.len()), (3, 3));
         // the Studio is what was released as the viewer: same name, same installer id
-        assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open 3D Viewer Studio", "open-3d-viewer"));
+        assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);
     }
 

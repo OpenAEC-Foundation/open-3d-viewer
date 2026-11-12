@@ -972,8 +972,8 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace:
 impl App {
     pub fn title(&self) -> String {
         match &self.model {
-            Some(m) => format!("{} - Open 3D Viewer Studio", m.file_name()),
-            None => "Open 3D Viewer Studio".to_string(),
+            Some(m) => format!("{} - Open BIM Suite", m.file_name()),
+            None => "Open BIM Suite".to_string(),
         }
     }
 
@@ -2669,7 +2669,7 @@ impl App {
             tab("Home", RibbonTab::Home),
             tab("View", RibbonTab::View),
             Space::new().width(Fill),
-            text("Open 3D Viewer Studio").size(12).font(FONT_BOLD).color(p.accent),
+            text("Open BIM Suite").size(12).font(FONT_BOLD).color(p.accent),
             text(" · iced").size(12).color(p.text_muted),
         ]
         .spacing(4)
@@ -3625,7 +3625,7 @@ impl App {
         exts.sort();
         container(
             column![
-                text("Open 3D Viewer Studio").size(24).font(FONT_BOLD).color(p.text),
+                text("Open BIM Suite").size(24).font(FONT_BOLD).color(p.text),
                 text("Rust + iced edition").size(13).color(p.accent),
                 Space::new().height(8),
                 text("Open a model or drop a file on the window.").size(13).color(p.text_secondary),

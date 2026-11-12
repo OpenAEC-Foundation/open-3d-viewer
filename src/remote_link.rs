@@ -17,14 +17,20 @@ pub struct Announcement {
     pub pid: u32,
 }
 
-/// The user's settings folder: `%APPDATA%\OpenAEC\Open 3D Viewer Studio`, or the same under
+/// The user's settings folder: `%APPDATA%\OpenAEC\Open BIM Suite`, or the same under
 /// `$XDG_CONFIG_HOME` / `~/.config` elsewhere.
 pub fn settings_dir() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("OpenAEC").join("Open 3D Viewer Studio"))
+    let dir = base.join("OpenAEC").join("Open BIM Suite");
+    // the folder of before the app was renamed is taken along once, with its preferences
+    let before = base.join("OpenAEC").join("Open 3D Viewer Studio");
+    if !dir.exists() && before.is_dir() && std::fs::rename(&before, &dir).is_err() {
+        return Some(before);
+    }
+    Some(dir)
 }
 
 /// `remote.json` in the settings folder, next to the preferences.

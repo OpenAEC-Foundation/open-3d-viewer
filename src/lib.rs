@@ -1,4 +1,4 @@
-//! Open 3D Viewer Studio: a 3D model viewer for AEC files, in Rust (iced + wgpu).
+//! Open BIM Suite: a 3D model viewer for AEC files, in Rust (iced + wgpu).
 //!
 //! One code base for two targets:
 //! - the desktop app (`src/main.rs`, [`desktop`]): command line, native window, file dialogs,

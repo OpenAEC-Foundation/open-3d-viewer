@@ -774,7 +774,7 @@ fn import_task() -> Task<Message> {
 
 /// The library file's bytes: IFCX of the library's types alone.
 pub fn library_bytes(library: &Library, name: &str) -> Vec<u8> {
-    let file = bim_library::ifcx::file(library, name, &format!("Open 3D Viewer Studio {}", env!("CARGO_PKG_VERSION")), &crate::export::ifcx::timestamp());
+    let file = bim_library::ifcx::file(library, name, &format!("Open BIM Suite {}", env!("CARGO_PKG_VERSION")), &crate::export::ifcx::timestamp());
     serde_json::to_vec(&file).unwrap_or_default()
 }
 

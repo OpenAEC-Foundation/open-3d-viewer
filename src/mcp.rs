@@ -34,7 +34,7 @@ pub const PREFIX: &str = "viewer3d_";
 /// `<tool>_opslaan` and `<tool>_stand`.
 const CONTRACT_NAMES: [(&str, &str); 3] = [("open_file", "viewer3d_open"), ("save_file", "viewer3d_opslaan"), ("get_state", "viewer3d_stand")];
 
-const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
+const INSTRUCTIONS: &str = "Open BIM Suite shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
 The scene is Z up, in metres for Revit, SketchUp and glTF. Start with open_file (or get_state to see what is open), \
 then screenshot to look at the viewport. Pixel coordinates (pick, screen points in measure_* and section_plane) are \
 pixels of the last viewport screenshot. Elements (BIM) have ids and properties: find them with find_elements, \
@@ -389,7 +389,7 @@ pub fn handle(msg: &Value, prefixed: bool, call: &mut Call) -> Option<Value> {
             json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "open-3d-viewer", "title": "Open 3D Viewer Studio", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "open-3d-viewer", "title": "Open BIM Suite", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": instructions,
             })
         }

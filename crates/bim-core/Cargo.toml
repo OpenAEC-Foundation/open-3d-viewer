@@ -2,7 +2,7 @@
 name = "bim-core"
 version = "0.1.0"
 description = "Headless BIM kernel: f64 geometry in tile frames, exact predicates, planar solids and the five base elements (point, linear, planar, system, connection)"
-authors = ["Open 3D Viewer Studio Contributors"]
+authors = ["Open BIM Suite Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.96"

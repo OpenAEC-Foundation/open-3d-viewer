@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# Open 3D Viewer Studio
+# Open BIM Suite
 
 **A free 3D viewer for building models: it opens IFC, Revit, SketchUp, Tekla, Allplan, Archicad, Vertex BD, BTL, DWG/DXF, MicroStation DGN, STEP, IFC5 (IFCX), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino, COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL and PLY models, structural analysis models (sam-json), and LAS, LAZ, E57, PTS, PTX, PCD and ASCII XYZ point clouds, measures and sections them, saves them as IFC, and exports their floor plans, sections and sheets as DWG, DXF, IFCCAD, PDF, PNG and SVG, on the desktop and in the browser.**
 
@@ -13,13 +13,13 @@
 
 ### [Try in your browser](https://open-3d-viewer.open-aec.com) &nbsp;·&nbsp; [Download](https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest) &nbsp;·&nbsp; [Watch the video](https://www.youtube.com/watch?v=cxHO8M8W2Ow)
 
-[![The product video of Open 3D Viewer Studio on YouTube: a model is opened, turned, cut open, pulled apart, measured and saved as IFC](https://img.youtube.com/vi/cxHO8M8W2Ow/maxresdefault.jpg)](https://www.youtube.com/watch?v=cxHO8M8W2Ow)
+[![The product video of Open BIM Suite on YouTube: a model is opened, turned, cut open, pulled apart, measured and saved as IFC](https://img.youtube.com/vi/cxHO8M8W2Ow/maxresdefault.jpg)](https://www.youtube.com/watch?v=cxHO8M8W2Ow)
 
 *▶ The product video (73 s) on the [OpenAEC Foundation channel](https://www.youtube.com/@OpenAECFoundation).*
 
 </div>
 
-**Open 3D Viewer Studio** is the 3D viewer of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation). Architects, engineers and builders send each other models in many formats; with this viewer you open any of them without the program that made it. You walk around the model, pick an element and read its properties, measure, cut it open, pull it apart per storey or per element, and save it as IFC.
+**Open BIM Suite** is the 3D viewer of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation). Architects, engineers and builders send each other models in many formats; with this viewer you open any of them without the program that made it. You walk around the model, pick an element and read its properties, measure, cut it open, pull it apart per storey or per element, and save it as IFC.
 
 One Rust code base gives three things: the **desktop app** for Windows, macOS and Linux, the **browser version** at [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com), and the **MCP server** through which AI agents drive the desktop app. The repository also holds what turns that code into signed installers and a live website.
 
@@ -139,7 +139,7 @@ The images on this page are made by [`scripts/build_readme_images.py`](scripts/b
 
 ## Graphics
 
-The window draws with wgpu. On Windows it uses DirectX 12 when the graphics card is an Intel one, because Intel's Vulkan driver can flash the whole window white while you orbit ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)), and OpenGL on Intel chips too old for wgpu's DirectX 12 (Haswell, Broadwell); other cards keep wgpu's choice. Each start writes what the window got (card, driver, backend, surface format) to `gpu.log` in the settings folder: `%APPDATA%\OpenAEC\Open 3D Viewer Studio` on Windows, `~/.config/OpenAEC/Open 3D Viewer Studio` on Linux and macOS.
+The window draws with wgpu. On Windows it uses DirectX 12 when the graphics card is an Intel one, because Intel's Vulkan driver can flash the whole window white while you orbit ([#28](https://github.com/OpenAEC-Foundation/open-3d-viewer/issues/28)), and OpenGL on Intel chips too old for wgpu's DirectX 12 (Haswell, Broadwell); other cards keep wgpu's choice. Each start writes what the window got (card, driver, backend, surface format) to `gpu.log` in the settings folder: `%APPDATA%\OpenAEC\Open BIM Suite` on Windows, `~/.config/OpenAEC/Open BIM Suite` on Linux and macOS.
 
 If the window flickers, stays black or is slow, try another backend or present mode, and mention which one helps in an issue together with `gpu.log`:
 
@@ -164,7 +164,7 @@ The Linux release also runs in **OpenAEC Linux**, the environment of the OpenAEC
 | `OPENAEC_THEMA` | The theme: `light`, `dark`, `blueprint`, `high-contrast-dark` or `high-contrast-light`. `--theme` wins. |
 | `OPENAEC_OPEN` | A file to open at the start when the command line names none. |
 | `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` | The MCP server over HTTP for the SuperCloud's assistant, see [MCP](#mcp). |
-| `XDG_CONFIG_HOME` | Settings (preferences, own shortcuts, the MCP link) in `$XDG_CONFIG_HOME/OpenAEC/Open 3D Viewer Studio`, by default under `~/.config`. |
+| `XDG_CONFIG_HOME` | Settings (preferences, own shortcuts, the MCP link) in `$XDG_CONFIG_HOME/OpenAEC/Open BIM Suite`, by default under `~/.config`. |
 | `O3V_REMOTE=0` | No control port for the MCP server (and no MCP over HTTP). `O3V_REMOTE_PORT` fixes its port (otherwise a free one). |
 | `WGPU_BACKEND` | `vulkan` or `gl` to choose the graphics backend; by default the first that works. |
 
@@ -265,7 +265,7 @@ New formats: implement `loaders::Loader` and add it to `loaders::registry()`; ne
 `open-3d-viewer-mcp` is an [MCP](https://modelcontextprotocol.io) server through which an AI agent (Claude Code, Claude Desktop or any MCP client) drives the desktop viewer as a person does: open files, take screenshots, set the camera and the standard and saved views, show, hide and isolate layers and elements, find elements by property, select, read properties, set a section box or plane, pull the model apart, change the render mode, read Revit schedules, measure, read structural analysis models (`list_structural`, `get_structural_issues`, `get_structural_element`, `find_structural`), undo and redo what is shown, and save the model as IFC.
 
 - **You see what it does.** Commands go through the same path as your clicks, in the window on your screen. Measurements stay in the view.
-- **It stays on your computer.** The window listens on `127.0.0.1` only, with a random token in `%APPDATA%\OpenAEC\Open 3D Viewer Studio\remote.json`. `--no-remote` or `O3V_REMOTE=0` switches it off.
+- **It stays on your computer.** The window listens on `127.0.0.1` only, with a random token in `%APPDATA%\OpenAEC\Open BIM Suite\remote.json`. `--no-remote` or `O3V_REMOTE=0` switches it off.
 - **Install:** keep `open-3d-viewer-mcp` next to the viewer (the installers do) and register it, for example `claude mcp add open-3d-viewer -- "C:\path\to\open-3d-viewer-mcp.exe"`. `open-3d-viewer-mcp --print-config` prints the JSON for other clients, and `--list-tools` the tool definitions.
 - **In the OpenAEC SuperCloud** the assistant uses the same tools, named with the prefix `viewer3d_` so they do not clash with other tools' (contract: [`docs/supercloud-koppeling.md`](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint/blob/main/docs/supercloud-koppeling.md), route B). `viewer3d_open` opens a file by its path in the work folder (where the SuperCloud puts the file from Docs), `viewer3d_opslaan` saves the model next to it as IFCX, or as IFC with a `.ifc` path (the SuperCloud keeps it as a new version in Docs; an existing file is only replaced with `overwrite: true`, also not one that appeared while saving; an open IFCX is not replaced by the viewer's export but saved beside it as `<name>-viewer.ifcx`), and `viewer3d_stand` says what is open; the others are `viewer3d_` plus the names above. With `OPENAEC_MCP_POORT` and `OPENAEC_MCP_GEHEIM` (16 characters or more) the viewer serves them itself over HTTP at `http://<OPENAEC_MCP_ADRES>:<port>/mcp` (address `0.0.0.0` in managed mode, else `127.0.0.1`): every request sends `Authorization: Bearer <secret>` (compared in constant time), requests with an `Origin` header are refused, at most 32 connections at a time with 30 seconds for a request, and the secret is removed from the viewer's environment at the start. `open-3d-viewer-mcp --prefixed` (or `OPENAEC_BEHEERD=1`) gives the same names over stdio. Calls under the names without the prefix keep working everywhere.
 
@@ -331,7 +331,7 @@ open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300] [--thr
 
 Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.11`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
 
-Open 3D Viewer Studio is part of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation) family of apps.
+Open BIM Suite is part of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation) family of apps.
 
 ## License
 
@@ -339,4 +339,4 @@ The viewer's own source is LGPL-3.0-or-later. See [LICENSE](LICENSE). The Inter 
 
 ## Trademarks
 
-SketchUp is a trademark of Trimble Inc., Revit and DWG of Autodesk, Inc., Tekla Structures of Trimble Solutions Corporation, Allplan of ALLPLAN GmbH (Nemetschek Group), MicroStation of Bentley Systems, Inc., Archicad of Graphisoft SE, and Rhinoceros and openNURBS of Robert McNeel & Associates. Open 3D Viewer Studio is an independent project and is not affiliated with, endorsed by or sponsored by them.
+SketchUp is a trademark of Trimble Inc., Revit and DWG of Autodesk, Inc., Tekla Structures of Trimble Solutions Corporation, Allplan of ALLPLAN GmbH (Nemetschek Group), MicroStation of Bentley Systems, Inc., Archicad of Graphisoft SE, and Rhinoceros and openNURBS of Robert McNeel & Associates. Open BIM Suite is an independent project and is not affiliated with, endorsed by or sponsored by them.

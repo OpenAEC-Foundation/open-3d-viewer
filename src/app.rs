@@ -1149,15 +1149,13 @@ impl App {
         self.model.is_some() || matches!(self.status, Status::Loading { .. })
     }
 
-    /// The right pane follows what is picked: the properties of a selection, the layers again
-    /// when nothing is selected and no model is picked.
+    /// The right pane follows what is picked: a selection shows its properties, and a model picked
+    /// in the explorer gives way to it.
     fn follow_selection(&mut self) {
         let selected = self.selected.is_some() || !self.structural.selected.is_empty() || self.picked_grid.is_some();
         if selected && !self.had_selection {
             self.picked_model = None;
             self.side_tab = SideTab::Properties;
-        } else if !selected && self.had_selection && self.picked_model.is_none() {
-            self.side_tab = SideTab::Layers;
         }
         self.had_selection = selected;
     }
@@ -1167,7 +1165,6 @@ impl App {
         self.folded.clear();
         self.projected.clear();
         self.closed_models.clear();
-        self.side_tab = SideTab::Layers;
         self.hidden = Arc::default();
         self.history.clear();
         self.parked_layers = None;
@@ -1523,6 +1520,7 @@ impl App {
                     self.picked_model = Some(i);
                 }
                 self.side_tab = SideTab::Properties;
+                return self.load_map();
             }
             Message::ModelVisible(i, shown) => {
                 if let Some(entry) = self.models.get_mut(i) {

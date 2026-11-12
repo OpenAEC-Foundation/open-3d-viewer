@@ -116,9 +116,7 @@ fn layers(data: &Data) -> Vec<Layer> {
     let mut weight = vec![0usize; data.models.len()];
     let mut scratch = mesh::Mesh::default();
     for e in data.elems.iter().filter(|e| !is_void(data, e)) {
-        scratch.positions.clear();
-        scratch.normals.clear();
-        scratch.colors.clear();
+        scratch.clear();
         shapes.element(e, &mut scratch);
         weight[e.model as usize] += scratch.triangles();
     }
@@ -160,14 +158,14 @@ fn layers(data: &Data) -> Vec<Layer> {
         let layer = &mut out[at];
         let first = layer.indices.len() as u32;
         let base = layer.vertex_count() as u32;
-        let count = (mesh.positions.len() / 3) as u32;
+        let count = mesh.indices.len() as u32;
         layer.positions.extend(&mesh.positions);
         layer.normals.extend(&mesh.normals);
         if let Some(colors) = &mut layer.colors {
             // a shape without a colour of its own takes the layer's
             colors.extend(mesh.colors.iter().map(|c| if c[..3] == [184, 184, 189] { [grey[0], grey[1], grey[2], c[3]] } else { *c }));
         }
-        layer.indices.extend(base..base + count);
+        layer.indices.extend(mesh.indices.iter().map(|i| base + i));
         let id = k as u64 + 1;
         layer.elements.push((id, first, count));
         layer.props.push((id, props(data, e, &model_name(data, model))));

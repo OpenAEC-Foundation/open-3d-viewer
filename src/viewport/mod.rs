@@ -13,6 +13,7 @@
 
 pub mod box_select;
 pub mod camera;
+pub mod chunks;
 pub mod render;
 pub mod structural;
 
@@ -104,6 +105,10 @@ pub struct State {
     bounds: Rectangle,
     /// Where the cursor moved to since the last frame, reported on the next frame.
     hover: Option<Point>,
+    /// The camera of the frame before, and whether this frame's is another: a moving view is
+    /// drawn without what is too small to show, and once more in full when it stops.
+    seen: Option<Camera>,
+    moving: bool,
     /// A hover was reported and not yet switched off.
     hovering: bool,
     /// The fingers on the viewport: id, position (in the viewport) and time of the last report.
@@ -153,6 +158,13 @@ where
 
         match event {
             Event::Window(iced::window::Event::RedrawRequested(_)) => {
+                let moved = state.seen.is_some_and(|seen| seen != self.camera);
+                state.seen = Some(self.camera);
+                state.moving = moved;
+                if moved && state.bounds == bounds && (state.hover.is_none() || !self.hover || state.drag.is_some()) {
+                    // one more frame after this one: the next while it moves, the full one after
+                    return Some(shader::Action::request_redraw());
+                }
                 if state.bounds == bounds {
                     // at most one hover a frame, however fast the mouse reports
                     let at = state.hover.take().filter(|_| self.hover && state.drag.is_none())?;
@@ -281,7 +293,7 @@ where
         }
     }
 
-    fn draw(&self, _state: &State, _cursor: mouse::Cursor, _bounds: Rectangle) -> ScenePrimitive {
+    fn draw(&self, state: &State, _cursor: mouse::Cursor, _bounds: Rectangle) -> ScenePrimitive {
         ScenePrimitive {
             model: self.model.cloned(),
             visible: self.visible.to_vec(),
@@ -295,6 +307,7 @@ where
             datum: self.datum.clone(),
             overlay: self.overlay.clone(),
             caps: self.caps.clone(),
+            moving: state.moving,
         }
     }
 

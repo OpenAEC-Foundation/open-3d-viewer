@@ -11,25 +11,36 @@ use super::stream::{Data, Elem, GeoKind, V};
 use glam::{DMat4, DVec2, DVec3};
 use std::collections::HashMap;
 
-/// Triangles, three corners each, flat shaded.
+/// Triangles, flat shaded: the corners of each face once, with the face's normal.
 #[derive(Default)]
 pub struct Mesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub colors: Vec<[u8; 4]>,
+    pub indices: Vec<u32>,
 }
 
 impl Mesh {
     pub fn triangles(&self) -> usize {
-        self.positions.len() / 9
+        self.indices.len() / 3
     }
 
-    fn triangle(&mut self, corners: [DVec3; 3], normal: DVec3, color: [u8; 4]) {
-        for p in corners {
+    pub fn clear(&mut self) {
+        self.positions.clear();
+        self.normals.clear();
+        self.colors.clear();
+        self.indices.clear();
+    }
+
+    /// The corners of a face; gives the number of the first.
+    fn corners(&mut self, points: &[DVec3], normal: DVec3, color: [u8; 4]) -> u32 {
+        let first = (self.positions.len() / 3) as u32;
+        for p in points {
             self.positions.extend([(p.x * 0.001) as f32, (p.y * 0.001) as f32, (p.z * 0.001) as f32]);
             self.normals.extend([normal.x as f32, normal.y as f32, normal.z as f32]);
             self.colors.push(color);
         }
+        first
     }
 }
 
@@ -275,7 +286,8 @@ fn polygon(loops: &[Vec<DVec3>], color: [u8; 4], out: &mut Mesh) {
     }
     let Some(normal) = normal.try_normalize() else { return };
     if outline.len() == 3 && loops.len() == 1 {
-        out.triangle([outline[0], outline[1], outline[2]], normal, color);
+        let first = out.corners(outline, normal, color);
+        out.indices.extend([first, first + 1, first + 2]);
         return;
     }
     // flat: the two axes the face lies along most
@@ -290,14 +302,13 @@ fn polygon(loops: &[Vec<DVec3>], color: [u8; 4], out: &mut Mesh) {
         holes.push(at);
     }
     let Ok(triangles) = earcutr::earcut(&flat, &holes, 2) else { return };
+    let first = out.corners(&points, normal, color);
     for t in triangles.chunks_exact(3) {
         let (a, b, c) = (points[t[0]], points[t[1]], points[t[2]]);
         // the corners turn as the face's normal says
-        if (b - a).cross(c - a).dot(normal) >= 0.0 {
-            out.triangle([a, b, c], normal, color);
-        } else {
-            out.triangle([a, c, b], normal, color);
-        }
+        let turned = (b - a).cross(c - a).dot(normal) < 0.0;
+        let (second, third) = if turned { (t[2], t[1]) } else { (t[1], t[2]) };
+        out.indices.extend([first + t[0] as u32, first + second as u32, first + third as u32]);
     }
 }
 
@@ -312,7 +323,10 @@ mod tests {
         polygon(&[square(2000.0), square(1000.0)], GREY, &mut out);
         assert_eq!(out.triangles(), 8);
         // 16 m2 less the 4 m2 of the hole, every triangle facing up
-        let area: f32 = out.positions.chunks_exact(9).map(|t| ((t[3] - t[0]) * (t[7] - t[1]) - (t[6] - t[0]) * (t[4] - t[1])) / 2.0).sum();
+        // the eight corners once, shared by the triangles
+        assert_eq!(out.positions.len(), 8 * 3);
+        let at = |i: u32| [out.positions[i as usize * 3], out.positions[i as usize * 3 + 1]];
+        let area: f32 = out.indices.chunks_exact(3).map(|t| (at(t[0]), at(t[1]), at(t[2]))).map(|(a, b, c)| ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2.0).sum();
         assert!((area - 12.0).abs() < 1e-3, "{area}");
         assert!(out.normals.chunks_exact(3).all(|n| n == [0.0, 0.0, 1.0]));
     }

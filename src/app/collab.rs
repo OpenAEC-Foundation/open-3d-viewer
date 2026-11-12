@@ -174,6 +174,10 @@ pub struct Checked {
 pub struct State {
     pub tab: Tab,
     pub issues: Issues,
+    /// The pictures of the viewpoints, read once: by the viewpoint's guid and the picture's size
+    /// in bytes, the picture small (for the list) and whole. Drawing a list must not unpack its
+    /// pictures again every frame.
+    pub pictures: HashMap<(String, usize), (iced::widget::image::Handle, iced::widget::image::Handle)>,
     /// Where the issues were read from or last saved.
     pub issues_path: Option<PathBuf>,
     pub issues_changed: bool,
@@ -239,6 +243,7 @@ impl Default for State {
         let kept = user_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let author = kept.unwrap_or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "user".into()));
         State {
+            pictures: HashMap::new(),
             tab: Tab::default(),
             issues: Issues::new(),
             issues_path: None,
@@ -291,11 +296,37 @@ impl State {
         self.rule_sets.get_mut(self.rule_set)
     }
 
+    /// Reads the pictures of the viewpoints that were not read yet, and forgets those of
+    /// viewpoints that are gone.
+    fn refresh_pictures(&mut self) {
+        let wanted = || self.issues.topics.iter().flat_map(|t| &t.viewpoints).filter_map(|v| v.snapshot.as_ref().map(|(_, bytes)| ((v.guid.clone(), bytes.len()), bytes)));
+        let count = wanted().count();
+        if count == self.pictures.len() && wanted().all(|(key, _)| self.pictures.contains_key(&key)) {
+            return;
+        }
+        let mut pictures = HashMap::with_capacity(count);
+        for (key, bytes) in wanted() {
+            let kept = self.pictures.get(&key).cloned();
+            let picture = kept.unwrap_or_else(|| {
+                let whole = iced::widget::image::Handle::from_bytes(bytes.clone());
+                // small for the list: a few thousand pixels instead of the whole screenshot
+                let small = image::load_from_memory(bytes).ok().map(|picture| {
+                    let small = picture.thumbnail(168, 126).to_rgba8();
+                    iced::widget::image::Handle::from_rgba(small.width(), small.height(), small.into_raw())
+                });
+                (small.unwrap_or_else(|| whole.clone()), whole)
+            });
+            pictures.insert(key, picture);
+        }
+        self.pictures = pictures;
+    }
+
     /// Brings what the panel chooses from up to date: the rule sets the app comes with, their
     /// names, the statuses and priorities in the language of the interface, the amounts of the
     /// clash tests.
     pub fn refresh(&mut self) {
         let l = self.language;
+        self.refresh_pictures();
         if self.rule_sets.is_empty() {
             self.rule_sets = RuleSet::built_in(l == Language::Dutch);
         }
@@ -1692,7 +1723,7 @@ impl App {
         );
         for topic in shown.into_iter().take(SHOWN) {
             let picked = state.topic.as_deref() == Some(topic.guid.as_str());
-            let mut about = vec![topic.kind.clone()];
+            let mut about = vec![kind_label(&topic.kind, l)];
             if !topic.priority.is_empty() {
                 about.push(priority_label(&topic.priority, l));
             }
@@ -1710,8 +1741,9 @@ impl App {
             .width(Length::Fill);
             let mut line = row![].spacing(8).align_y(Alignment::Center);
             // the picture of its first viewpoint, small
-            if let Some((_, bytes)) = topic.viewpoints.first().and_then(|v| v.snapshot.as_ref()).filter(|_| !picked) {
-                line = line.push(iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone())).width(56).height(42).content_fit(iced::ContentFit::Cover));
+            let small = topic.viewpoints.first().filter(|_| !picked).and_then(|v| state.pictures.get(&(v.guid.clone(), v.snapshot.as_ref()?.1.len())));
+            if let Some((small, _)) = small {
+                line = line.push(iced::widget::image(small.clone()).width(56).height(42).content_fit(iced::ContentFit::Cover));
             }
             list = list.push(named(button(line.push(words)).width(Length::Fill).padding([5, 6]).style(move |_, s| p.ribbon_button(picked, s)).on_press(go(Event::Topic((!picked).then(|| topic.guid.clone())))), Node::new(Role::Row, format!("{}: {}", l.text("Issue", "Issue"), topic.title)).selected(picked).value(topic.status.clone())));
             if picked {
@@ -1773,8 +1805,8 @@ impl App {
                 facts.push(l.text("kleuren (niet getoond)", "colours (not shown)").to_string());
             }
             detail = detail.push(w::secondary(look, facts.join(" · ")));
-            if let Some((_, bytes)) = &first.snapshot {
-                detail = detail.push(iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone())).width(Length::Fill));
+            if let Some((_, whole)) = first.snapshot.as_ref().and_then(|(_, bytes)| self.collab.pictures.get(&(first.guid.clone(), bytes.len()))) {
+                detail = detail.push(iced::widget::image(whole.clone()).width(Length::Fill));
             }
         }
         let day = |date: &str| date.get(..10).unwrap_or(date).to_string();
@@ -2065,7 +2097,9 @@ fn kind_label(kind: &str, l: Language) -> String {
         "Clash" => l.text("Clash", "Clash").to_string(),
         "Remark" => l.text("Opmerking", "Remark").to_string(),
         "Request" => l.text("Verzoek", "Request").to_string(),
-        "Fault" => l.text("Fout", "Fault").to_string(),
+        // as other tools name a fault
+        "Fault" | "Error" => l.text("Fout", "Fault").to_string(),
+        "Warning" => l.text("Waarschuwing", "Warning").to_string(),
         other => other.to_string(),
     }
 }

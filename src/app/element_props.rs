@@ -393,7 +393,6 @@ impl App {
                     .push(field(l.text("Bouten per rij", "Bolts per row"), F::BoltRows));
             }
         }
-        if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) = &shape {
         if let Some((openings, _)) = openings_of(&shape) {
             for i in 0..openings.len() {
                 let kind = if openings[i].sill <= bim_core::LINEAR_TOLERANCE { l.text("Deur", "Door") } else { l.text("Raam", "Window") };
@@ -543,6 +542,9 @@ mod tests {
         // and back to a mitre
         let _ = app.update(Message::JoinKind(ConnectionKind::Butt));
         assert_eq!(kind(&app), ConnectionKind::Butt);
+    }
+
+    #[test]
     fn a_timber_frame_takes_a_door_and_a_window_and_a_curtain_wall_none() {
         use bim_core::SystemDef;
         let mut app = App::default();

@@ -395,6 +395,7 @@ impl App {
         element.id = id;
         match self.modeller.model.replace(element) {
             Ok(()) => {
+                self.joins_follow(&[id]);
                 self.show_modelled();
                 self.select_modelled(id);
                 true

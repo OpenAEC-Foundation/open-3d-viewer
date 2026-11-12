@@ -18,6 +18,7 @@ mod grips;
 mod openings;
 #[cfg(test)]
 pub(crate) use take_over::{across_mesh, house as revit_house};
+mod join_marks;
 mod levels;
 pub mod library;
 mod marks;
@@ -628,6 +629,10 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// Give the selected join another kind.
+    JoinKind(bim_core::ConnectionKind),
+    /// A click on a join's mark: it is selected.
+    PickJoin(bim_core::ElementId),
     /// A finger (`true`) or a mouse button (`false`) went down.
     Pressed(bool),
     /// A frame while loading (animates the loading card).
@@ -1437,6 +1442,8 @@ impl App {
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
+            Message::JoinKind(kind) => self.set_join_kind(kind),
+            Message::PickJoin(id) => self.select_modelled(id),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };
                 if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
@@ -3430,11 +3437,13 @@ impl App {
         // a grip keeps its overlay
         let editing = self.edit_overlay(p.accent, p.surface).or_else(|| self.grip_overlay(p.accent, p.surface)).map(|o| canvas(o).width(Fill).height(Fill));
         let placing = self.placing_overlay(p.accent).filter(|_| overlay.is_none()).map(|o| canvas(o).width(Fill).height(Fill));
+        let joins = self.join_marks(p.accent, p.surface).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(view_labels)
             .push(zero_points)
             .push(placing)
+            .push(joins)
             .push(editing)
             .push(section)
             .push(plane)

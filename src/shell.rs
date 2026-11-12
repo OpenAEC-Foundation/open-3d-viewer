@@ -880,6 +880,9 @@ impl Studio {
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.end-plate", l.text("Kopplaat", "End plate"), go(Message::Connect(bim_core::ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), l.text("Kopplaat", "End plate"))))
+                .icon(small("frame.combination"), large("frame.combination"))
+                .enabled(app.selected_linear() == 2),
             Command::new("model.cut", l.text("Uitsparen", "Cut"), go(Message::Connect(bim_core::ConnectionKind::Cut, l.text("Uitsparing", "Cut-out"))))
                 .icon(small("edit.cut"), large("edit.cut"))
                 .enabled(app.selected_bodies() == 2),
@@ -1071,6 +1074,8 @@ impl Studio {
                     self.prefs.left = true;
                     self.save_prefs();
                 }
+                // joins made automatically are named in the interface language
+                self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
@@ -1546,7 +1551,7 @@ impl Studio {
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
-                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
+                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
                 w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
@@ -2197,7 +2202,7 @@ mod tests {
         app.select_modelled(bim_core::ElementId(1));
         let mut studio = Studio::new(app);
         studio.prefs.language = Language::Dutch;
-        studio.ribbon_tab = 1;
+        studio.set_product(Product::Modeller);
         let _ = studio.update(Msg::App(Message::EditMode));
         let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(2))));
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-edit-nl.png")).expect("snapshot");
@@ -2246,6 +2251,19 @@ mod tests {
         }
         let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_release())));
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-revit-taken-nl.png")).expect("snapshot");
+        // the end plate joining the pergola's beam to its column, selected, seen close up
+        let mut app = App::default();
+        app.add_demo_building();
+        let plate = app.modeller.model.iter().find(|e| e.class() == "IfcElementAssembly").map(|e| e.id).expect("the demo's end plate");
+        app.select_modelled(plate);
+        app.camera.target = glam::Vec3::new(13.3, 0.0, 2.6);
+        app.camera.distance = 3.5;
+        app.camera.yaw = -0.9;
+        app.camera.pitch = 0.35;
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Modeller);
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-end-plate-nl.png")).expect("snapshot");
     }
 
     /// The Library tab with a build-up and a steel profile picked, in every language:

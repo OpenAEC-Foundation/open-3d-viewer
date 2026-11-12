@@ -11,7 +11,7 @@ use super::{prop_row, App, Message};
 use crate::document::parse_elevation;
 use crate::theme::Palette;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, Opening, PlanarDef, ProfileDef, Shape};
+use bim_core::{ConnectionDef, ConnectionKind, Element, Opening, PlanarDef, ProfileDef, Shape};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, row, text, text_input};
 use iced::{Center, Element as Widget, Length};
@@ -44,6 +44,13 @@ pub enum ElementField {
     Sill(usize),
     OpeningWidth(usize),
     OpeningHeight(usize),
+    /// An end plate's thickness, its margin past the profile, its bolts' and holes' diameter, and
+    /// how many bolts in each row.
+    PlateThickness,
+    PlateMargin,
+    Bolt,
+    Hole,
+    BoltRows,
 }
 
 /// A door's and a window's size and sill when added (metres).
@@ -97,6 +104,14 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::System(s), F::Sill(i)) => opening(&s.openings, i).map(|o| o.sill),
         (Shape::System(s), F::OpeningWidth(i)) => opening(&s.openings, i).map(|o| o.width),
         (Shape::System(s), F::OpeningHeight(i)) => opening(&s.openings, i).map(|o| o.height),
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
+            F::PlateThickness => Some(e.thickness),
+            F::PlateMargin => Some(e.margin),
+            F::Bolt => Some(e.bolt),
+            F::Hole => Some(e.hole),
+            F::BoltRows => Some(f64::from(e.rows)),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -165,6 +180,15 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::System(s), F::Sill(i)) => set(&mut s.openings.get_mut(i)?.sill),
         (Shape::System(s), F::OpeningWidth(i)) => set(&mut s.openings.get_mut(i)?.width),
         (Shape::System(s), F::OpeningHeight(i)) => set(&mut s.openings.get_mut(i)?.height),
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
+            F::PlateThickness => set(&mut e.thickness),
+            F::PlateMargin => set(&mut e.margin),
+            F::Bolt => set(&mut e.bolt),
+            F::Hole => set(&mut e.hole),
+            // a whole number of bolts, at least one
+            F::BoltRows if v >= 1.0 && v.fract() == 0.0 && v <= 64.0 => e.rows = v as u32,
+            _ => return None,
+        },
         _ => return None,
     }
     Some(shape)
@@ -187,7 +211,11 @@ impl App {
         if field == ElementField::Name {
             return e.name.clone();
         }
-        let digits = if field == ElementField::Turn { 1 } else { 3 };
+        let digits = match field {
+            ElementField::Turn => 1,
+            ElementField::BoltRows => 0,
+            _ => 3,
+        };
         value(&e.shape_in_project(&self.modeller.model.grid), field).map_or(String::new(), |v| format!("{v:.digits$}"))
     }
 
@@ -223,6 +251,20 @@ impl App {
         self.change_shape(&e, shape);
     }
 
+    /// Gives the selected join another kind (a cut stays a cut). An end plate starts with its
+    /// default sizes.
+    pub(super) fn set_join_kind(&mut self, kind: ConnectionKind) {
+        let Some(e) = self.defined().cloned() else { return };
+        let Shape::Connection(c) = &e.shape else { return };
+        if c.kind == ConnectionKind::Cut || std::mem::discriminant(&c.kind) == std::mem::discriminant(&kind) {
+            return;
+        }
+        let mut changed = e.clone();
+        changed.shape = Shape::Connection(ConnectionDef { kind, ..c.clone() });
+        self.modeller.refusal = None;
+        self.change_element(changed);
+    }
+
     /// Removes opening `index` of the selected wall or timber frame.
     pub(super) fn remove_opening(&mut self, index: usize) {
         let Some(e) = self.defined().cloned() else { return };
@@ -247,6 +289,7 @@ impl App {
         let id = changed.id;
         match self.modeller.model.replace(changed) {
             Ok(()) => {
+                self.joins_follow(&[id]);
                 self.show_modelled();
                 self.select_modelled(id);
             }
@@ -322,6 +365,35 @@ impl App {
             };
             rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
+        // a join: its kind to choose, and an end plate's sizes
+        if let Shape::Connection(c) = &shape {
+            if c.kind != ConnectionKind::Cut {
+                let choice = |label: &str, kind: ConnectionKind| {
+                    let on = std::mem::discriminant(&c.kind) == std::mem::discriminant(&kind);
+                    button(text(label.to_string()).size(12))
+                        .padding([3, 10])
+                        .style(move |_, s| if on { p.primary_button(s) } else { p.row_button(s) })
+                        .on_press(Message::JoinKind(kind))
+                };
+                rows = rows.push(
+                    row![
+                        choice(l.text("Verstek", "Mitre"), ConnectionKind::Mitre),
+                        choice(l.text("Stomp", "Butt"), ConnectionKind::Butt),
+                        choice(l.text("Kopplaat", "End plate"), ConnectionKind::EndPlate(bim_core::join::EndPlate::default())),
+                    ]
+                    .spacing(6),
+                );
+            }
+            if matches!(c.kind, ConnectionKind::EndPlate(_)) {
+                rows = rows
+                    .push(field(l.text("Plaatdikte (m)", "Plate thickness (m)"), F::PlateThickness))
+                    .push(field(l.text("Plaat voorbij profiel (m)", "Plate past profile (m)"), F::PlateMargin))
+                    .push(field(l.text("Bout (m)", "Bolt (m)"), F::Bolt))
+                    .push(field(l.text("Gat (m)", "Hole (m)"), F::Hole))
+                    .push(field(l.text("Bouten per rij", "Bolts per row"), F::BoltRows));
+            }
+        }
+        if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) = &shape {
         if let Some((openings, _)) = openings_of(&shape) {
             for i in 0..openings.len() {
                 let kind = if openings[i].sill <= bim_core::LINEAR_TOLERANCE { l.text("Deur", "Door") } else { l.text("Raam", "Window") };
@@ -441,6 +513,36 @@ mod tests {
     }
 
     #[test]
+    fn a_join_changes_kind_and_its_end_plate_takes_typed_sizes() {
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let column = app
+            .add_element("Column", None, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }))
+            .unwrap();
+        let beam = app
+            .add_element("Beam", None, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 }))
+            .unwrap();
+        let joint = app.add_element("Joint", None, Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: column, secondary: beam })).unwrap();
+        let kind = |app: &App| match &app.modeller.model.get(joint).unwrap().shape {
+            Shape::Connection(c) => c.kind,
+            _ => unreachable!(),
+        };
+        // a butt to an end plate, in the Definition section: the join gets a body of its own
+        app.select_modelled(joint);
+        let _ = app.update(Message::JoinKind(ConnectionKind::EndPlate(bim_core::join::EndPlate::default())));
+        assert!(matches!(kind(&app), ConnectionKind::EndPlate(_)));
+        assert_eq!(app.modeller.model.evaluate(joint).unwrap().len(), 5, "a plate and four bolts");
+        assert_eq!(app.defined().map(|e| e.id), Some(joint), "still selected");
+        type_in(&mut app, ElementField::PlateThickness, "0,02");
+        type_in(&mut app, ElementField::BoltRows, "3");
+        let ConnectionKind::EndPlate(plate) = kind(&app) else { panic!() };
+        assert_eq!((plate.thickness, plate.rows), (0.02, 3));
+        type_in(&mut app, ElementField::BoltRows, "2,5");
+        let ConnectionKind::EndPlate(plate) = kind(&app) else { panic!() };
+        assert_eq!(plate.rows, 3, "not a whole number of bolts: kept");
+        // and back to a mitre
+        let _ = app.update(Message::JoinKind(ConnectionKind::Butt));
+        assert_eq!(kind(&app), ConnectionKind::Butt);
     fn a_timber_frame_takes_a_door_and_a_window_and_a_curtain_wall_none() {
         use bim_core::SystemDef;
         let mut app = App::default();

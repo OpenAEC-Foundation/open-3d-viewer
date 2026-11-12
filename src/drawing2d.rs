@@ -338,7 +338,7 @@ impl Drawing2d {
                     d += dash + gap;
                 }
             }
-            for (pen, segments) in [(Pen::Beyond, &cut.below), (Pen::Cut, &cut.segments)] {
+            for (pen, segments) in [(Pen::Beyond, &cut.faint_below), (Pen::Beyond, &cut.faint_segments), (Pen::Beyond, &cut.below), (Pen::Cut, &cut.segments)] {
                 for [a, b] in segments {
                     let (a, b) = ([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]);
                     let piece = match crop {
@@ -479,7 +479,7 @@ mod tests {
             [[8.0, 5.0], [0.0, 5.0]],
             [[0.0, 5.0], [0.0, 0.0]],
         ];
-        Cut { segments, below: vec![[[1.0, 1.0], [7.0, 1.0]]], extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new(), hidden: Vec::new() }
+        Cut { segments, below: vec![[[1.0, 1.0], [7.0, 1.0]]], extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new(), ..Cut::default() }
     }
 
     /// A document with a floor plan of the ground floor, an 8 m dimension and a text on it.

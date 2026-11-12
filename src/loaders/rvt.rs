@@ -38,7 +38,7 @@ impl Loader for RvtLoader {
         progress.set(Phase::Read);
         // the Revit reader opens the file itself (a compound file, read in parts)
         let path = source.path().ok_or("Revit files open in the desktop app only")?;
-        let doc = rvt_read::Document::open(path).map_err(|e| format!("Cannot read Revit file: {e}"))?;
+        let doc = std::sync::Arc::new(rvt_read::Document::open(path).map_err(|e| format!("Cannot read Revit file: {e}"))?);
         progress.set(Phase::Convert);
         // `scene` returns view coordinates: metres, Y up (x, z, -y); the walls the Modeller can
         // take over are read beside it (a second or so on a large project)
@@ -84,22 +84,60 @@ impl Loader for RvtLoader {
                 }
             })
             .collect::<Vec<Layer>>();
-        // the plans, sections and elevations with their texts and dimensions: the project's drawings
+        // the drawings (the annotated views, the legends and drafting views, the sheets) take far
+        // longer than the model on a large project: read once the model shows
         let file = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        // the tags of its views, with the labels and lines of their types
-        let mut types = super::rvt_drawings::Types::new(&doc);
-        let tags = super::rvt_tags::tags(&doc, &mut types);
-        // the detail components of its views, as the lines of their families
-        let details = super::rvt_tags::details(&doc, &mut types);
-        drop(types);
-        project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags, &details);
-        // the legends and drafting views: drawings without a model
-        project.drafts = super::rvt_drafts::drafts(&doc, &tags, &details);
-        project.drawn = super::rvt_props::drawn(&doc, &project.drafts);
-        project.sheets = sheets(&doc, &view_ids, &views, &layers, &file, &project, &infos);
+        let elements: Vec<u64> = layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        // the building without its site: the terrain reaches far beyond what a view shows
+        let mut building = crate::model::Bounds::empty();
+        for p in layers.iter().filter(|l| !l.name.contains("Topograph")).flat_map(|l| l.positions.chunks_exact(3)) {
+            building.extend([p[0], p[1], p[2]]);
+        }
+        let size = if building.is_valid() { building.size() } else { [10.0; 3] };
+        // the sheets at once, as their list and frames (their number, name, paper and placed
+        // views); their title blocks, tables and view titles come with the drawings
+        project.sheets = sheets(&doc, &view_ids, &views, size, &file, &project, &infos, true);
+        let (later, placed) = (doc.clone(), views.clone());
+        project.later = Later::new(move || drawings(&later, &infos, &view_ids, &placed, &elements, size, &file));
         // the schedules take seconds on a large project: computed once the model shows
         project.schedules = Later::new(move || schedules(&doc));
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
+    }
+}
+
+/// The drawings of the project: its plans, sections and elevations with their tags, texts,
+/// dimensions and detail components, its legends and drafting views, and its sheets. `elements`
+/// are the elements the model draws, `size` the extent of the building.
+fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], view_ids: &[u64], views: &[SavedView], elements: &[u64], size: [f32; 3], file: &str) -> crate::model::Drawings {
+    let mut project = ProjectData::default();
+    // the tags of its views, with the labels and lines of their types
+    let mut types = super::rvt_drawings::Types::new(doc);
+    let tags = super::rvt_tags::tags(doc, &mut types);
+    // the detail components of its views, as the lines of their families
+    let details = super::rvt_tags::details(doc, &mut types);
+    // what a view leaves out because the element's family shows none of its solids there
+    for &(view, element) in types.switched_off() {
+        project.switched_off.entry(crate::document::uuid(&format!("rvt/{file}/view/{view}"))).or_default().insert(element);
+    }
+    drop(types);
+    project.drawings = super::rvt_drawings::drawings(doc, infos, file, &tags, &details);
+    // the phase and phase filter of every view, and the phases of the elements
+    let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
+    project.phasing = super::rvt_phases::phasing(doc, &ids, &|view| crate::document::uuid(&format!("rvt/{file}/view/{view}")));
+    // which of the drawn elements are joined with which
+    project.joins = super::rvt_joins::joins(doc, elements.iter().copied());
+    // the legends and drafting views: drawings without a model
+    project.drafts = super::rvt_drafts::drafts(doc, &tags, &details);
+    project.drawn = super::rvt_props::drawn(doc, &project.drafts);
+    project.sheets = sheets(doc, view_ids, views, size, file, &project, infos, false);
+    crate::model::Drawings {
+        sheets: project.sheets,
+        drafts: project.drafts,
+        phasing: project.phasing,
+        switched_off: project.switched_off,
+        joins: project.joins,
+        drawn: project.drawn,
+        drawings: project.drawings,
     }
 }
 
@@ -261,7 +299,9 @@ fn schedules(doc: &rvt_read::Document) -> Vec<Schedule> {
     rvt_export::schedules::schedules(doc)
         .into_iter()
         .filter(|s| !s.is_template)
-        .map(|s| {
+        .map(|mut s| {
+            // what the computation left open: from the types and from the texts the file stores
+            super::rvt_schedules::complete(doc, &mut s);
             let shown: Vec<usize> = (0..s.columns.len()).filter(|&i| !s.columns[i].hidden).collect();
             // the image a cell shows: what the column's parameter names for the row's first element
             let parameters: Vec<i64> = shown.iter().map(|&i| s.columns[i].parameter).collect();
@@ -512,7 +552,11 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
                     let range = v.view_range.as_ref();
                     let cut = limited(range.and_then(|r| r.cut)).or(level.zip(v.cut_offset).map(|(l, c)| l + c)).or(level.map(|l| l + 4.0))?;
                     let ceiling = v.kind == K::CeilingPlan;
-                    let (low, high) = if ceiling {
+                    // a structural plan can look up too: its view depth then lies above its cut
+                    let above = limited(range.and_then(|r| r.depth)).filter(|depth| !ceiling && *depth > cut + 1e-6);
+                    let (low, high) = if let Some(depth) = above {
+                        (cut, depth + 0.01)
+                    } else if ceiling {
                         (cut, limited(range.and_then(|r| r.top)).unwrap_or(cut + 10.0))
                     } else {
                         // down to the view depth, so the floor below the cut shows
@@ -539,12 +583,13 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
 
 /// The sheets (beta) in sheet metres. The paper comes from the title block's size: its
 /// insertion point is the paper's lower right corner (3077 R26), else another corner or the
-/// centre, whichever holds the most viewports. A viewport without an active crop region gets the
+/// centre, whichever holds the most viewports. `bare` leaves out what takes long to read (the title
+/// blocks, the placed schedules and the titles of the views): the list of sheets right after opening. A viewport without an active crop region gets the
 /// size of the building as its view sees it (`estimated`, centred on its position).
-fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo]) -> Vec<Sheet> {
+fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size: [f32; 3], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo], bare: bool) -> Vec<Sheet> {
     let mut types = super::rvt_drawings::Types::new(doc);
     // the schedules placed on the sheets, as tables
-    let mut tables = super::rvt_schedules::placed(doc);
+    let mut tables = if bare { HashMap::new() } else { super::rvt_schedules::placed(doc) };
     let anchors: HashMap<u64, ([f64; 2], [f64; 2])> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
     // the views the document draws, and the legends and drafting views, by their element
     let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
@@ -552,12 +597,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
     use rvt_export::views::ViewKind as K;
     const FT: f32 = 0.3048;
     let index: HashMap<u64, usize> = view_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
-    // the building without its site: the terrain reaches far beyond what a view shows
-    let mut model = crate::model::Bounds::empty();
-    for p in layers.iter().filter(|l| !l.name.contains("Topograph")).flat_map(|l| l.positions.chunks_exact(3)) {
-        model.extend([p[0], p[1], p[2]]);
-    }
-    let [dx, dy, dz] = if model.is_valid() { model.size() } else { [10.0; 3] };
+    let [dx, dy, dz] = size;
     // a placed title block draws its own variant of its type, with what is switched on for it
     let block_kind = |t: &rvt_export::sheets::TitleBlock| {
         let own = doc.object(t.id).and_then(|o| u64::try_from(o.path(&["m_pInstanceInfo", "m_symbolId"])?.element()?).ok());
@@ -593,7 +633,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                     };
                     // the title as the type of the viewport writes it: its name and scale in one, or none
                     let ratio_text = format!("1:{}", (1.0 / v.scale).round());
-                    let written = super::rvt_tags::viewport_title(doc, &mut types, v.id, v.view, &v.view_name, &format!("1 : {}", (1.0 / v.scale).round()), v.detail_number.as_deref());
+                    let written = if bare { None } else { super::rvt_tags::viewport_title(doc, &mut types, v.id, v.view, &v.view_name, &format!("1 : {}", (1.0 / v.scale).round()), v.detail_number.as_deref()) };
                     SheetViewport {
                         title: v.view_name.clone(),
                         written,
@@ -625,7 +665,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 Some(SheetRect { min, max: [min[0] + w, min[1] + h] })
             });
             // the title block as its family draws it, from where it is placed
-            let block = s.title_block.as_ref().and_then(|t| Some((t, block_kind(t)?))).map(|(t, kind)| {
+            let block = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))).map(|(t, kind)| {
                 let (lines, texts) = super::rvt_tags::title_block(doc, &mut types, kind, s.id, &s.number, &s.name);
                 let on = |p: [f64; 2]| [(t.origin[0] * 0.3048 + p[0]) as f32, (t.origin[1] * 0.3048 + p[1]) as f32];
                 let texts = texts.into_iter().map(|x| {
@@ -635,12 +675,32 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 });
                 (lines.into_iter().map(|l| [on(l[0]), on(l[1])]).collect(), texts.collect())
             });
+            // the paper where the title block draws its border, when its lines span the paper's
+            // size: a family has its origin at the lower right or at the lower left corner
+            let paper = paper.map(|chosen| {
+                let Some((lines, _)) = block.as_ref() else { return chosen };
+                let lines: &Vec<[[f32; 2]; 2]> = lines;
+                let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+                for p in lines.iter().flatten() {
+                    lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                    hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+                }
+                let (w, h) = (chosen.max[0] - chosen.min[0], chosen.max[1] - chosen.min[1]);
+                let spans = |got: f32, want: f32| got <= want * 1.001 && got >= want * 0.9;
+                if lo[0].is_finite() && spans(hi[0] - lo[0], w) && spans(hi[1] - lo[1], h) {
+                    // centred on the border the block draws
+                    let min = [(lo[0] + hi[0] - w) / 2.0, (lo[1] + hi[1] - h) / 2.0];
+                    SheetRect { min, max: [min[0] + w, min[1] + h] }
+                } else {
+                    chosen
+                }
+            });
             let mut sheet = Sheet::new(s.number, s.name, paper, viewports);
             if let Some((lines, texts)) = block {
                 (sheet.lines, sheet.texts) = (lines, texts);
             }
             // the regions of its title block filled in one colour
-            if let Some((t, kind)) = s.title_block.as_ref().and_then(|t| Some((t, block_kind(t)?))) {
+            if let Some((t, kind)) = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))) {
                 let on = |p: [f64; 2]| [(t.origin[0] * 0.3048 + p[0]) as f32, (t.origin[1] * 0.3048 + p[1]) as f32];
                 let fills = super::rvt_tags::title_block_fills(doc, &mut types, kind).into_iter();
                 sheet.line_colors = super::rvt_tags::title_block_line_colors(doc, &mut types, kind);
@@ -648,7 +708,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
             }
             sheet.tables = tables.remove(&s.id).unwrap_or_default();
             // the images of its title block
-            if let Some((t, kind)) = s.title_block.as_ref().and_then(|t| Some((t, block_kind(t)?))) {
+            if let Some((t, kind)) = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))) {
                 // decoded here: an image that cannot be read is left out, the others show at once
                 let images = super::rvt_images::images(doc, kind).into_iter().filter_map(|i| {
                     let pixels = image::load_from_memory(&i.file).ok()?.to_rgba8();

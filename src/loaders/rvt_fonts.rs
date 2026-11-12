@@ -48,7 +48,18 @@ fn face_of(doc: &rvt_read::Document, o: &ObjectView) -> Option<Face> {
     // the stops of its tabs lie a length on paper apart: in ems of its letters
     let size = font.path(&["m_pFont", "m_size"]).or_else(|| font.get("m_size")).and_then(FieldValue::as_f64).filter(|s| s.is_finite() && *s > 0.0);
     let tab = value(TAB).zip(size).map_or(0.0, |(tab, size)| tab / (size * EM)).clamp(0.0, 1000.0);
-    Some(Face { family: family.into(), bold: on("m_bBold"), italic: on("m_bItalic"), underline: on("m_bUnderline"), width: width as f32, tab: tab as f32 })
+    // the colour of its letters, when it is not black: that of the line style of the type's own
+    // category (`m_categoryId`, a `CategoryElem` with its `GStyleElem`), else its font's. Blue,
+    // green, red from the high byte down; what lies above those three bytes is no colour.
+    let rgb = |stored: i64| Some(stored & 0xFF_FFFF).filter(|c| *c != 0).map(|c| [(c & 0xFF) as u8, (c >> 8 & 0xFF) as u8, (c >> 16 & 0xFF) as u8]);
+    let own = attr("m_categoryId").and_then(FieldValue::element).and_then(|c| doc.object(u64::try_from(c).ok()?)).and_then(|category| {
+        let style = category.get("m_gstyleIds")?.as_list()?.first()?.element()?;
+        let style = doc.object(u64::try_from(style).ok()?)?;
+        style.get("m_pGStyle").and_then(|v| style.deref(v))?.get("m_color")?.as_i64()
+    });
+    let stored = font.path(&["m_pFont", "m_color"]).or_else(|| font.get("m_color")).and_then(FieldValue::as_i64);
+    let color = own.and_then(rgb).or_else(|| stored.and_then(rgb));
+    Some(Face { family: family.into(), bold: on("m_bBold"), italic: on("m_bItalic"), underline: on("m_bUnderline"), width: width as f32, tab: tab as f32, color })
 }
 
 /// What the RTF of a text switches on for all of its letters: bold, italic, underline.

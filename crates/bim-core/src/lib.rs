@@ -1,4 +1,4 @@
-//! The BIM kernel of Open 3D Viewer Studio: geometry in f64 tile frames, and the five base
+//! The BIM kernel of Open BIM Suite: geometry in f64 tile frames, and the five base
 //! elements from which every BIM object is built: **point**, **linear**, **planar**, **system** and
 //! **connection**.
 //!

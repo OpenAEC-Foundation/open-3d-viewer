@@ -190,9 +190,37 @@ impl App {
                 *u |= *out;
             }
         }
-        let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
+        // the view's phase and phase filter: what it leaves out, and what it draws in halftone
+        let mut halftone: Vec<bool> = Vec::new();
+        let phasing = &model.project.phasing;
+        if let (true, Some(index)) = (phasing.applies(path), self.explode_index.as_deref()) {
+            units.resize(index.len().max(units.len()), false);
+            halftone.resize(index.len(), false);
+            for unit in 1..index.len() {
+                let Some(crate::explode::UnitOwner::Element(id)) = index.owner(unit) else { continue };
+                match phasing.look(path, id) {
+                    crate::phasing::Look::Hidden => units[unit] = true,
+                    crate::phasing::Look::Halftone => halftone[unit] = true,
+                    crate::phasing::Look::Normal => {}
+                }
+            }
+        }
+        // what the view leaves out because the element's family shows none of its solids as the
+        // view looks at it
+        if let (Some(off), Some(index)) = (model.project.switched_off.get(path), self.explode_index.as_deref()) {
+            units.resize(index.len().max(units.len()), false);
+            for unit in 1..index.len() {
+                if matches!(index.owner(unit), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    units[unit] = true;
+                }
+            }
+        }
+        let index = self.explode_index.clone().filter(|_| units.iter().chain(&halftone).any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
-        let shown = Shown { layers: &layers, hidden: &hidden };
+        let faint = |l: usize, v: u32| index.as_ref().is_some_and(|ix| halftone.get(ix.unit(l, v)).copied().unwrap_or(false));
+        // the pieces joined elements of one material make: the seams within one are not drawn
+        let pieces = crate::hatching::pieces(&model, bim_library::DrawingStandard::Nen47);
+        let shown = Shown { layers: &layers, hidden: &hidden, faint: halftone.iter().any(|h| *h).then_some(&faint as &dyn Fn(usize, u32) -> bool), pieces: (!pieces.is_empty()).then_some(&pieces) };
         let mut cut = if let Some(s) = self.document.section(path) {
             section_at(&model, shown, s.from, s.to, s.depth)
         } else {
@@ -1089,7 +1117,7 @@ pub(super) fn sheets_list<'a>(app: &'a App, p: Palette, l: Language, mut body: i
             .padding([4, 8])
             .width(Fill)
             .style(move |_, s| p.row_button(s))
-            .on_press(Message::NewSheet(l.text("Blad", "Sheet"))),
+            .on_press(Message::NewSheet(l.text("Tekening", "Drawing"))),
     );
     // the views on no sheet yet, on new sheets
     let (plans, sections) = app.unplaced_views();

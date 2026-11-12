@@ -171,6 +171,7 @@ impl MeasureOverlay<'_> {
                 }
             }
             Measurement::Volume { .. } => {}
+            Measurement::Note { at, .. } => self.dot(frame, pr, *at),
             Measurement::Polygon { points, .. } => {
                 if let Some(path) = pr.path(points, true) {
                     frame.fill(&path, self.fill());

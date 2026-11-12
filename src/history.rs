@@ -50,6 +50,11 @@ impl<T> History<T> {
         self.undo.clear();
         self.redo.clear();
     }
+
+    /// Forgets what was undone: after a change elsewhere it can no longer be made again.
+    pub fn clear_redo(&mut self) {
+        self.redo.clear();
+    }
 }
 
 #[cfg(test)]

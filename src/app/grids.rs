@@ -36,7 +36,14 @@ impl App {
         if let Some(plan) = self.document.plan(view) {
             // in front of the cut as the plan looks: above it, or below it in a ceiling plan
             let Some(cut) = self.document.cut_height(plan) else { return Vec::new() };
-            let z = cut as f32 + if plan.kind.looks_up() { -IN_FRONT } else { IN_FRONT };
+            let z = if plan.kind.seen_from_below() {
+                cut as f32 - IN_FRONT
+            } else if plan.kind.looks_up() {
+                // seen from above while it looks up: over the top of what it shows
+                (cut + plan.depth) as f32 + IN_FRONT
+            } else {
+                cut as f32 + IN_FRONT
+            };
             return grids.map(as_is).map(|mut d| {
                 (d.line.a[2], d.line.b[2]) = (z, z);
                 d

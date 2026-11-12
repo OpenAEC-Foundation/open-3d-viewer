@@ -15,12 +15,22 @@ fn rgb(c: [u8; 3]) -> Color {
     Color::from_rgb8(c[0], c[1], c[2])
 }
 
+/// A colour in halftone: half way to white.
+fn halftone(c: [u8; 3]) -> [u8; 3] {
+    c.map(|v| ((u16::from(v) + 255) / 2) as u8)
+}
+
+/// The lines of what a view draws faint (existing work, in halftone): mid grey.
+const FAINT: [u8; 3] = [150, 150, 150];
+
 /// Draws the cut faces of `cut` within `crop`: `to` gives a drawing point on the canvas (`None`
 /// when it cannot be shown), `per_metre` how many pixels a metre of the drawing is, `outline`
 /// the colour of the faces' outlines where the drawing's own lines do not draw them.
 pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [f64; 2])>, to: &dyn Fn([f64; 2]) -> Option<Point>, per_metre: f32, outline: Option<Color>) {
     for fill in &cut.fills {
         let Some((behind, line)) = fill.look else { continue };
+        // a face drawn faint: its colours half way to the paper's white
+        let (behind, line) = if fill.faint { (halftone(behind), halftone(line)) } else { (behind, line) };
         let face = Path::new(|path| {
             for outline in fill.cropped(crop) {
                 let Some(points) = outline.iter().map(|q| to(*q)).collect::<Option<Vec<Point>>>() else { continue };
@@ -67,6 +77,26 @@ pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [
             }
         });
         frame.stroke(&lines, Stroke::default().with_color(color).with_width(1.2));
+    }
+    // what the view draws faint: its edges beyond the cut thin, its cut lines bolder
+    for (lines, width) in [(&cut.faint_below, 0.5), (&cut.faint_segments, 1.0)] {
+        if lines.is_empty() {
+            continue;
+        }
+        let path = Path::new(|path| {
+            for [a, b] in lines {
+                let (a, b) = (a.map(f64::from), b.map(f64::from));
+                let piece = match crop {
+                    Some((lo, hi)) => crate::drawing2d::clip(a, b, lo, hi),
+                    None => Some((a, b)),
+                };
+                if let Some((Some(a), Some(b))) = piece.map(|(a, b)| (to(a), to(b))) {
+                    path.move_to(a);
+                    path.line_to(b);
+                }
+            }
+        });
+        frame.stroke(&path, Stroke::default().with_color(rgb(FAINT)).with_width(width));
     }
     // what a structural plan sees through the floor: dashed
     if !cut.hidden.is_empty() {

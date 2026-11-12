@@ -99,6 +99,7 @@ impl App {
                 crate::document::PlanKind::Floor => l.text("Plattegrond", "Floor plan"),
                 crate::document::PlanKind::Structural => l.text("Constructieve plattegrond", "Structural plan"),
                 crate::document::PlanKind::Ceiling => l.text("Plafondplan", "Ceiling plan"),
+                crate::document::PlanKind::StructuralUp => l.text("Constructieve plattegrond, omhoog gezien", "Structural plan, looking up"),
             };
             rows = rows
                 .push(row(l.text("Soort", "Kind"), kind.into()))

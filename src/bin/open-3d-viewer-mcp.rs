@@ -1,4 +1,4 @@
-//! MCP server for Open 3D Viewer Studio: lets an AI agent (Claude Code, Claude Desktop or any MCP
+//! MCP server for Open BIM Suite: lets an AI agent (Claude Code, Claude Desktop or any MCP
 //! client) drive the viewer as a person would: open files, look around, show and hide layers,
 //! find and select elements, cut with a section box or plane, measure and take screenshots.
 //!
@@ -52,7 +52,7 @@ impl Viewer {
             return Ok(());
         }
         let exe = viewer_exe().ok_or(
-            "Open 3D Viewer Studio is not running and was not found next to this MCP server. Start the viewer, or set O3V_VIEWER to its .exe.",
+            "Open BIM Suite is not running and was not found next to this MCP server. Start the viewer, or set O3V_VIEWER to its .exe.",
         )?;
         let mut cmd = std::process::Command::new(&exe);
         cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());

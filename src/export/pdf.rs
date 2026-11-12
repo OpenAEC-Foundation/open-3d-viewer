@@ -145,7 +145,7 @@ pub fn pdf(d: &Drawing2d) -> Vec<u8> {
         format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"),
         format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
-        format!("<< /Title {} /Producer (Open 3D Viewer Studio) >>", utf16(&d.name)),
+        format!("<< /Title {} /Producer (Open BIM Suite) >>", utf16(&d.name)),
     ];
     let mut out = String::from("%PDF-1.4\n");
     let mut offsets = Vec::new();

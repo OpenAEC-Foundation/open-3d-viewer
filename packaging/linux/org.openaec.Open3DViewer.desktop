@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Open 3D Viewer Studio
+Name=Open BIM Suite
 GenericName=3D model viewer
 Comment=View, measure and section 3D models of buildings
 Exec=open-3d-viewer %f

@@ -174,6 +174,10 @@ pub struct Checked {
 pub struct State {
     pub tab: Tab,
     pub issues: Issues,
+    /// The pictures of the viewpoints, read once: by the viewpoint's guid and the picture's size
+    /// in bytes, the picture small (for the list) and whole. Drawing a list must not unpack its
+    /// pictures again every frame.
+    pub pictures: HashMap<(String, usize), (iced::widget::image::Handle, iced::widget::image::Handle)>,
     /// Where the issues were read from or last saved.
     pub issues_path: Option<PathBuf>,
     pub issues_changed: bool,
@@ -220,6 +224,9 @@ pub struct State {
     amounts: Vec<String>,
     labelled: Option<Language>,
     pub notice: Option<(Tone, String)>,
+    /// A file dialog was asked for and has not answered: Windows can take seconds to show the
+    /// first one, so the panel says it is coming.
+    pub dialog_open: bool,
     /// The language of the interface: what the panel reports is said in it.
     pub language: Language,
     cancel: Arc<AtomicBool>,
@@ -236,6 +243,7 @@ impl Default for State {
         let kept = user_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let author = kept.unwrap_or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "user".into()));
         State {
+            pictures: HashMap::new(),
             tab: Tab::default(),
             issues: Issues::new(),
             issues_path: None,
@@ -268,6 +276,7 @@ impl Default for State {
             amounts: Vec::new(),
             labelled: None,
             notice: None,
+            dialog_open: false,
             language: Language::English,
             cancel: Arc::default(),
             run: 0,
@@ -287,11 +296,37 @@ impl State {
         self.rule_sets.get_mut(self.rule_set)
     }
 
+    /// Reads the pictures of the viewpoints that were not read yet, and forgets those of
+    /// viewpoints that are gone.
+    fn refresh_pictures(&mut self) {
+        let wanted = || self.issues.topics.iter().flat_map(|t| &t.viewpoints).filter_map(|v| v.snapshot.as_ref().map(|(_, bytes)| ((v.guid.clone(), bytes.len()), bytes)));
+        let count = wanted().count();
+        if count == self.pictures.len() && wanted().all(|(key, _)| self.pictures.contains_key(&key)) {
+            return;
+        }
+        let mut pictures = HashMap::with_capacity(count);
+        for (key, bytes) in wanted() {
+            let kept = self.pictures.get(&key).cloned();
+            let picture = kept.unwrap_or_else(|| {
+                let whole = iced::widget::image::Handle::from_bytes(bytes.clone());
+                // small for the list: a few thousand pixels instead of the whole screenshot
+                let small = image::load_from_memory(bytes).ok().map(|picture| {
+                    let small = picture.thumbnail(168, 126).to_rgba8();
+                    iced::widget::image::Handle::from_rgba(small.width(), small.height(), small.into_raw())
+                });
+                (small.unwrap_or_else(|| whole.clone()), whole)
+            });
+            pictures.insert(key, picture);
+        }
+        self.pictures = pictures;
+    }
+
     /// Brings what the panel chooses from up to date: the rule sets the app comes with, their
     /// names, the statuses and priorities in the language of the interface, the amounts of the
     /// clash tests.
     pub fn refresh(&mut self) {
         let l = self.language;
+        self.refresh_pictures();
         if self.rule_sets.is_empty() {
             self.rule_sets = RuleSet::built_in(l == Language::Dutch);
         }
@@ -411,6 +446,8 @@ pub enum Event {
     Export(Report),
     ExportTo(Report, Option<PathBuf>),
     ClashOn(usize, bool),
+    /// Whether a clash test is only between models.
+    ClashBetween(usize, bool),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
     /// The first (true) or second side of a clash test.
@@ -539,7 +576,10 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         let (a, b) = (side(&rule.a), side(&rule.b));
         let solids = |side: &[usize]| side.iter().map(|&k| items[k].solid.clone()).collect::<Vec<_>>();
         let (sa, sb) = (solids(&a), if rule.within() { Vec::new() } else { solids(&b) });
-        let found = clash::clashes(&sa, if rule.within() { &sa } else { &sb }, rule.within(), rule.test(), cancel);
+        // a test between models leaves the pairs of one model out, when there is more than one
+        let apart = rule.between_models && models.len() > 1;
+        let skip = |i: usize, j: usize| apart && items[a[i]].model == items[b[j]].model;
+        let found = clash::clashes_but(&sa, if rule.within() { &sa } else { &sb }, rule.within(), rule.test(), &skip, cancel);
         for c in found {
             let (ia, ib) = (&items[a[c.a]], &items[b[c.b]]);
             if ia.id == ib.id || !seen.insert((rule.name.clone(), ia.id.min(ib.id), ia.id.max(ib.id))) {
@@ -555,6 +595,28 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         }
     }
     rows
+}
+
+/// Checks the files of the models open on a rule set, several at a time: each file is read and
+/// checked on its own, so they share the processor's cores. The answers come in the files' order.
+fn check_files(files: Vec<(usize, String, PathBuf)>, rules: &RuleSet, cancel: &AtomicBool) -> Vec<Checked> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<(usize, Checked)>> = std::sync::Mutex::new(Vec::new());
+    let workers = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 8).min(files.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                let Some((model, name, path)) = files.get(k) else { break };
+                let report = std::panic::catch_unwind(|| check_file(path, rules, cancel)).unwrap_or_else(|_| Err("The check stopped unexpectedly".into()));
+                let checked = Checked { model: *model, name: name.clone(), report: report.map(Arc::new) };
+                done.lock().unwrap_or_else(|e| e.into_inner()).push((k, checked));
+            });
+        }
+    });
+    let mut done = done.into_inner().unwrap_or_else(|e| e.into_inner());
+    done.sort_by_key(|(k, _)| *k);
+    done.into_iter().map(|(_, checked)| checked).collect()
 }
 
 /// Checks one IFC file on a rule set: each IDS in turn, the built-in checks with the first.
@@ -719,6 +781,17 @@ impl App {
     /// the structure and the services, each model, each layer and each class of the model.
     pub(crate) fn collab_refresh_sides(&mut self) {
         let l = self.collab.language;
+        // a coordination file brought its issues: they come in, unless issues are being worked on
+        if self.collab.issues.topics.is_empty() && !self.collab.issues_changed {
+            if let Some((path, issues)) = crate::loaders::take_file_issues() {
+                let count = issues.topics.len();
+                self.collab.issues = issues;
+                self.collab.issues_path = None;
+                self.collab.topic = None;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.collab_note(Tone::Success, format!("{count} {} {name}", l.text("issues uit", "issues from")));
+            }
+        }
         let key = self.model.as_ref().map(|m| (m.id, l));
         if self.collab.sides_for == key && !self.collab.sides.is_empty() && self.collab.model_names.len() == self.models.len() {
             return;
@@ -804,6 +877,12 @@ impl App {
             }
         }
         self.collab_select(ids(&view.selection));
+        // its dimensions and remarks come back in place of what was measured
+        if !(view.lines.is_empty() && view.notes.is_empty()) {
+            let lines = view.lines.iter().map(|(from, to)| crate::measure::Measurement::Distance(crate::measure::geometry::Distance { p1: self.collab_to_display(*from), p2: self.collab_to_display(*to), extensions: Vec::new() }));
+            let notes = view.notes.iter().map(|(at, text)| crate::measure::Measurement::Note { at: self.collab_to_display(*at), text: text.clone() });
+            self.measure.results = lines.chain(notes).collect();
+        }
         // the first plane cuts; the side its direction points to is left out
         self.plane = view.clipping_planes.first().and_then(|plane| {
             let normal = Vec3::new(plane.direction[0] as f32, plane.direction[1] as f32, plane.direction[2] as f32).try_normalize()?;
@@ -866,6 +945,14 @@ impl App {
         if let Some(plane) = self.plane {
             view.clipping_planes.push(ClippingPlane { location: self.collab_to_world(plane.normal * plane.offset), direction: plane.normal.as_dvec3().to_array() });
         }
+        // what is measured and remarked in the view goes with it
+        for result in &self.measure.results {
+            match result {
+                crate::measure::Measurement::Distance(d) => view.lines.push((self.collab_to_world(d.p1), self.collab_to_world(d.p2))),
+                crate::measure::Measurement::Note { at, text } => view.notes.push((self.collab_to_world(*at), text.clone())),
+                _ => {}
+            }
+        }
         view
     }
 
@@ -924,6 +1011,23 @@ impl App {
         if self.collab.rule_sets.is_empty() {
             self.collab.rule_sets = RuleSet::built_in(l == Language::Dutch);
         }
+        // a file dialog answered: its notice goes
+        if matches!(event, Event::Opened(..) | Event::SaveIssuesTo(_) | Event::SaveRulesTo(_) | Event::ExportTo(..)) && self.collab.dialog_open {
+            self.collab.dialog_open = false;
+            self.collab.notice = None;
+        }
+        let asks = matches!(event, Event::Open(_) | Event::SaveIssues | Event::SaveRules | Event::Export(_));
+        let task = self.collab_dispatch(event);
+        // a file dialog asked for: say it is coming until it answers
+        if asks {
+            self.collab.dialog_open = true;
+            self.collab_note(Tone::Info, l.text("Het bestandsvenster wordt geopend; de eerste keer kan dat even duren.", "The file dialog is opening; the first time it can take a moment."));
+        }
+        task
+    }
+
+    fn collab_dispatch(&mut self, event: Event) -> Task<Message> {
+        let l = self.collab.language;
         match event {
             Event::Tab(tab) => self.collab.tab = tab,
             Event::Dismiss => self.collab.notice = None,
@@ -1229,14 +1333,7 @@ impl App {
                 self.collab.notice = None;
                 let (run, cancel) = (self.collab.run, self.collab.cancel.clone());
                 return job(move || {
-                    let checked = files
-                        .into_iter()
-                        .map(|(model, name, path)| {
-                            let report = std::panic::catch_unwind(|| check_file(&path, &rules, &cancel)).unwrap_or_else(|_| Err("The check stopped unexpectedly".into()));
-                            Checked { model, name, report: report.map(Arc::new) }
-                        })
-                        .collect();
-                    Event::Checked(run, checked)
+                    Event::Checked(run, check_files(files, &rules, &cancel))
                 });
             }
             Event::Checked(run, checked) => {
@@ -1324,6 +1421,11 @@ impl App {
             Event::ClashOn(k, on) => {
                 if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
                     rule.on = on;
+                }
+            }
+            Event::ClashBetween(k, on) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.between_models = on;
                 }
             }
             Event::ClashKindOf(k, kind) => {
@@ -1477,8 +1579,8 @@ impl App {
                 let rules = self.collab.rules().cloned().ok_or("no rule set")?;
                 let cancel = AtomicBool::new(false);
                 let files = self.models.iter().enumerate().filter(|(_, e)| e.model.path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc")));
-                self.collab.checked = files
-                    .map(|(model, e)| Checked { model, name: e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), report: check_file(&e.model.path, &rules, &cancel).map(Arc::new) })
+                self.collab.checked = check_files(files.map(|(model, e)| (model, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone())).collect(), &rules, &cancel)
+                    .into_iter()
                     .collect();
                 let failed = self.collab.checked.first().and_then(|c| c.report.as_ref().ok()).and_then(|r| r.specifications.iter().position(|s| s.status == ValidationStatus::Failed));
                 self.collab.open_spec = failed.map(|s| (0, s));
@@ -1528,17 +1630,19 @@ impl App {
         .spacing(6)
         .align_y(Alignment::Center)]
         .spacing(2);
+        let mut rows = column![].spacing(2);
         for (i, entry) in self.models.iter().enumerate() {
-
             let line = row![
-                w::checkbox(look, state.model_names.get(i).map_or("", |c| c.1.as_str()), entry.visible, Some(move |on| Message::ModelVisible(i, on))),
+                w::checkbox(look, entry.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D"), entry.visible, Some(move |on| Message::ModelVisible(i, on))),
                 Space::new().width(Length::Fill),
                 w::secondary(look, entry.model.format.clone()),
             ]
             .spacing(6)
             .align_y(Alignment::Center);
-            models = models.push(line);
+            rows = rows.push(line);
         }
+        // many models: their list scrolls in a few rows, so the tabs under it stay in view
+        models = if self.models.len() > 6 { models.push(scrollable(container(rows).padding(iced::Padding { right: 10.0, ..iced::Padding::ZERO })).height(128)) } else { models.push(rows) };
         let mut body = column![
             models,
             w::divider(look),
@@ -1633,7 +1737,7 @@ impl App {
         );
         for topic in shown.into_iter().take(SHOWN) {
             let picked = state.topic.as_deref() == Some(topic.guid.as_str());
-            let mut about = vec![topic.kind.clone()];
+            let mut about = vec![kind_label(&topic.kind, l)];
             if !topic.priority.is_empty() {
                 about.push(priority_label(&topic.priority, l));
             }
@@ -1651,8 +1755,9 @@ impl App {
             .width(Length::Fill);
             let mut line = row![].spacing(8).align_y(Alignment::Center);
             // the picture of its first viewpoint, small
-            if let Some((_, bytes)) = topic.viewpoints.first().and_then(|v| v.snapshot.as_ref()).filter(|_| !picked) {
-                line = line.push(iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone())).width(56).height(42).content_fit(iced::ContentFit::Cover));
+            let small = topic.viewpoints.first().filter(|_| !picked).and_then(|v| state.pictures.get(&(v.guid.clone(), v.snapshot.as_ref()?.1.len())));
+            if let Some((small, _)) = small {
+                line = line.push(iced::widget::image(small.clone()).width(56).height(42).content_fit(iced::ContentFit::Cover));
             }
             list = list.push(named(button(line.push(words)).width(Length::Fill).padding([5, 6]).style(move |_, s| p.ribbon_button(picked, s)).on_press(go(Event::Topic((!picked).then(|| topic.guid.clone())))), Node::new(Role::Row, format!("{}: {}", l.text("Issue", "Issue"), topic.title)).selected(picked).value(topic.status.clone())));
             if picked {
@@ -1714,8 +1819,8 @@ impl App {
                 facts.push(l.text("kleuren (niet getoond)", "colours (not shown)").to_string());
             }
             detail = detail.push(w::secondary(look, facts.join(" · ")));
-            if let Some((_, bytes)) = &first.snapshot {
-                detail = detail.push(iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone())).width(Length::Fill));
+            if let Some((_, whole)) = first.snapshot.as_ref().and_then(|(_, bytes)| self.collab.pictures.get(&(first.guid.clone(), bytes.len()))) {
+                detail = detail.push(iced::widget::image(whole.clone()).width(Length::Fill));
             }
         }
         let day = |date: &str| date.get(..10).unwrap_or(date).to_string();
@@ -1895,6 +2000,10 @@ impl App {
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
+                        named(
+                            w::checkbox(look, l.text("Alleen tussen modellen", "Only between models"), rule.between_models, Some(move |on| go(Event::ClashBetween(k, on)))),
+                            Node::new(Role::CheckBox, format!("{} {}", rule.name, l.text("Alleen tussen modellen", "Only between models"))).checked(rule.between_models),
+                        ),
                     ]
                     .spacing(3),
                 );
@@ -2002,7 +2111,9 @@ fn kind_label(kind: &str, l: Language) -> String {
         "Clash" => l.text("Clash", "Clash").to_string(),
         "Remark" => l.text("Opmerking", "Remark").to_string(),
         "Request" => l.text("Verzoek", "Request").to_string(),
-        "Fault" => l.text("Fout", "Fault").to_string(),
+        // as other tools name a fault
+        "Fault" | "Error" => l.text("Fout", "Fault").to_string(),
+        "Warning" => l.text("Waarschuwing", "Warning").to_string(),
         other => other.to_string(),
     }
 }
@@ -2209,7 +2320,7 @@ impl App {
                     "rule_sets": self.collab.rule_sets.iter().map(|r| json!({
                         "name": r.name, "description": r.description, "model_checks": r.model_checks, "ils": r.ils,
                         "ids": r.ids.iter().map(|p| crate::collab::rules::ids_name(p)).collect::<Vec<_>>(),
-                        "clash_tests": r.clashes.iter().map(|c| json!({ "name": c.name, "on": c.on, "kind": format!("{:?}", c.kind), "tolerance_mm": c.tolerance_mm, "clearance_mm": c.clearance_mm })).collect::<Vec<_>>(),
+                        "clash_tests": r.clashes.iter().map(|c| json!({ "name": c.name, "on": c.on, "kind": format!("{:?}", c.kind), "tolerance_mm": c.tolerance_mm, "clearance_mm": c.clearance_mm, "between_models": c.between_models })).collect::<Vec<_>>(),
                     })).collect::<Vec<_>>(),
                 })),
                 "select" => {
@@ -2267,7 +2378,12 @@ impl App {
                         return Ok(json!({ "started": true, "note": "the selection's clash test runs in the background; ask again with action list" }));
                     }
                     self.collab_now(None, None, Some("clash"))?;
-                    Ok(json!({ "clashes": self.collab.clashes.len(), "seconds": started.elapsed().as_secs_f32() }))
+                    let mut by_rule = std::collections::BTreeMap::<&str, usize>::new();
+                    for c in &self.collab.clashes {
+                        *by_rule.entry(c.rule.as_str()).or_default() += 1;
+                    }
+                    // at the most kept, the tests after it did not run
+                    Ok(json!({ "clashes": self.collab.clashes.len(), "by_rule": by_rule, "capped": self.collab.clashes.len() >= MOST_CLASHES, "seconds": started.elapsed().as_secs_f32() }))
                 }
                 "list" => {
                     let offset = a.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -2478,6 +2594,13 @@ mod tests {
         // all against all: the pair once; walls against walls: nothing
         assert_eq!(run_clashes(&model, &models, &[rule(&[], &[])], &AtomicBool::new(false)).len(), 1);
         assert!(run_clashes(&model, &models, &[rule(&["IfcWall*"], &["IfcWall*"])], &AtomicBool::new(false)).is_empty());
+        // only between models: in one model the test is as it was; with the wall and the pipe in
+        // one of two models, they are left alone
+        let between = ClashRule { between_models: true, ..rule(&[], &[]) };
+        assert_eq!(run_clashes(&model, &models, std::slice::from_ref(&between), &AtomicBool::new(false)).len(), 1);
+        let two = vec![("house.ifc".to_string(), 0..model.layers.len()), ("pipes.ifc".to_string(), model.layers.len()..model.layers.len() + 1)];
+        assert!(run_clashes(&model, &two, &[between], &AtomicBool::new(false)).is_empty());
+        assert_eq!(run_clashes(&model, &two, &[rule(&[], &[])], &AtomicBool::new(false)).len(), 1);
     }
 
     #[test]
@@ -2501,6 +2624,35 @@ mod tests {
         // nothing selected: the panel says so and runs nothing
         let _ = app.collab_update(Event::ClashSelection);
         assert!(!app.collab.running && app.collab.notice.is_some());
+    }
+
+    #[test]
+    fn what_is_measured_and_remarked_goes_with_an_issue_and_comes_back() {
+        use crate::measure::{geometry::Distance, Measurement};
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        app.measure.results = vec![
+            Measurement::Distance(Distance { p1: Vec3::new(0.0, 0.0, 0.0), p2: Vec3::new(3.0, 4.0, 0.0), extensions: Vec::new() }),
+            Measurement::Note { at: Vec3::new(1.0, 1.0, 2.0), text: "Te laag".into() },
+        ];
+        let view = app.collab_viewpoint_now();
+        assert_eq!((view.lines.len(), view.notes.len()), (1, 1));
+        assert_eq!(view.notes[0].1, "Te laag");
+        let mut topic = Topic::new("Maat", "an");
+        topic.viewpoints.push(view);
+        app.collab.issues.topics.push(topic.clone());
+        // measured away, and the issue shown again: both stand where they stood
+        app.measure.results.clear();
+        let _ = app.collab_update(Event::Topic(Some(topic.guid.clone())));
+        let back = &app.measure.results;
+        assert_eq!(back.len(), 2);
+        assert!(matches!(&back[0], Measurement::Distance(d) if d.p1.distance(Vec3::ZERO) < 1e-4 && d.p2.distance(Vec3::new(3.0, 4.0, 0.0)) < 1e-4), "{back:?}");
+        assert!(matches!(&back[1], Measurement::Note { at, text } if at.distance(Vec3::new(1.0, 1.0, 2.0)) < 1e-4 && text == "Te laag"), "{back:?}");
+        // an issue without any leaves what is measured alone
+        let plain = Topic::new("Zonder", "an");
+        app.collab.issues.topics.push(plain.clone());
+        let _ = app.collab_update(Event::Topic(Some(plain.guid.clone())));
+        assert_eq!(app.measure.results.len(), 2);
     }
 
     #[test]
@@ -2548,5 +2700,59 @@ mod tests {
         // written and read again: the same issue
         let again = Issues::read(&app.collab.issues.write().unwrap()).unwrap();
         assert_eq!(again.topics[0].viewpoints, topic.viewpoints);
+    }
+}
+
+#[cfg(test)]
+mod timing {
+    use super::*;
+
+    /// Where the time goes when models are added one after the other (`O3V_MODELS_DIR`: a folder
+    /// of IFC files; skipped without it): `cargo test --lib timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads a folder of models"]
+    fn adding_models_one_after_the_other() {
+        let Some(dir) = std::env::var_os("O3V_MODELS_DIR").map(PathBuf::from) else { return };
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().filter_map(|e| Some(e.ok()?.path())).filter(|p| p.to_string_lossy().ends_with("-IFC4.ifc")).collect();
+        files.sort();
+        files.truncate(std::env::var("O3V_MODELS").ok().and_then(|n| n.parse().ok()).unwrap_or(10));
+        let mut app = App::default();
+        let mut total = std::time::Duration::ZERO;
+        for file in &files {
+            let t = Instant::now();
+            let model = Arc::new(crate::loaders::load(file).unwrap());
+            let read = t.elapsed();
+            let mut sources: Vec<Arc<Model>> = app.models.iter().map(|e| e.model.clone()).collect();
+            if sources.is_empty() {
+                sources.extend(app.model.clone());
+            }
+            sources.push(model.clone());
+            let t = Instant::now();
+            let combined = Model::combine(&sources);
+            let combine = t.elapsed();
+            let t = Instant::now();
+            let _ = crate::explode::ExplodeIndex::new(&combined);
+            let index = t.elapsed();
+            let t = Instant::now();
+            app.add_model(model);
+            let add = t.elapsed();
+            total += read + add;
+            eprintln!("{:>5.2} read {:>5.2} combine {:>5.2} explode index {:>5.2} add_model (all)  {} triangles  {}", read.as_secs_f32(), combine.as_secs_f32(), index.as_secs_f32(), add.as_secs_f32(), combined.triangle_count(), file.file_name().unwrap().to_string_lossy());
+        }
+        // the same files added at once: read one after the other, the scene built once
+        let mut at_once = App::default();
+        let t = Instant::now();
+        let sources: Vec<crate::loaders::Source> = files.iter().cloned().map(crate::loaders::Source::File).collect();
+        let mut message = Some(Message::AddSeveral(sources[1..].to_vec()));
+        at_once.set_model(Arc::new(crate::loaders::load(&files[0]).unwrap()));
+        let _ = at_once.update(message.take().unwrap());
+        while at_once.adding_model {
+            let next = at_once.loading_stack.0.last().cloned().unwrap();
+            let crate::loaders::Source::File(path) = next else { break };
+            let _ = at_once.update(Message::Loaded(crate::loaders::load(&path).map(Arc::new)));
+        }
+        eprintln!("one after the other: {:.1} s; at once: {:.1} s, {} models, {} triangles", total.as_secs_f32(), t.elapsed().as_secs_f32(), at_once.models.len(), at_once.model.as_ref().map_or(0, |m| m.triangle_count()));
+        assert_eq!(at_once.models.len(), files.len());
+        assert_eq!(at_once.model.as_ref().map(|m| m.triangle_count()), app.model.as_ref().map(|m| m.triangle_count()));
     }
 }

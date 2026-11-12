@@ -29,9 +29,15 @@ mod rvt_props;
 mod rvt_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_materials;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_phases;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_joins;
 mod ifc;
 
 mod skp;
+#[cfg(not(target_arch = "wasm32"))]
+mod smc;
 mod tekla;
 mod ply;
 mod cityjson;
@@ -287,11 +293,19 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &vertex::VertexLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &vertex::BtlLoader,
+        #[cfg(not(target_arch = "wasm32"))]
+        &smc::SmcLoader,
         &ifc::IfcLoader,
         // last: `.txt` and `.csv` are only point clouds when nothing else claims them
         &xyz::XyzLoader,
     ];
     EXTRA.get().into_iter().flatten().copied().chain(builtin).collect()
+}
+
+/// The issues a coordination file brought along when it was loaded, once.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn take_file_issues() -> Option<(std::path::PathBuf, bim_bcf::issues::Issues)> {
+    smc::take_issues()
 }
 
 /// All supported extensions, for the file dialog filter.
@@ -319,7 +333,7 @@ pub const DESKTOP_DOWNLOAD: &str = "https://github.com/OpenAEC-Foundation/open-3
 
 /// Formats the desktop app opens but the browser build cannot (their readers open the file in
 /// parts from disk or load a native library): the format name and its extensions.
-const DESKTOP_ONLY: &[(&str, &[&str])] = &[("Revit", &["rvt", "rfa"]), ("Vertex BD", &["vxz", "vxm"]), ("BTL", &["btl"])];
+const DESKTOP_ONLY: &[(&str, &[&str])] = &[("Revit", &["rvt", "rfa"]), ("Vertex BD", &["vxz", "vxm"]), ("BTL", &["btl"]), ("Coordination model (SMC)", &["smc"])];
 
 /// The desktop-only format of files with extension `ext` (lower case) when none of `loaders`
 /// (this build's registry) opens them.
@@ -388,6 +402,14 @@ pub fn composes(source: &Source) -> bool {
 /// Loads files that layer over each other as one model, the later ones stronger (see
 /// [`Loader::load_stack`]); one file loads as [`load_with`]. The model is named after the first.
 pub fn load_stack(sources: &[Source], progress: &Progress) -> Result<Model, String> {
+    let mut model = load_first(sources, progress)?;
+    model.complete();
+    Ok(model)
+}
+
+/// As [`load_stack`], without what the loader leaves for after the model shows (the drawings of
+/// a Revit project, see [`Model::complete`]): the window shows the model first.
+pub fn load_first(sources: &[Source], progress: &Progress) -> Result<Model, String> {
     let source = sources.first().ok_or("no file to open")?;
     let loader = loader_for(sources.last().unwrap_or(source))?;
     let start = Instant::now();

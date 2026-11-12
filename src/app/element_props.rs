@@ -127,7 +127,7 @@ fn openings_of(shape: &Shape) -> Option<(&[Opening], f64)> {
 }
 
 /// The openings of `shape` to change, if it can have openings.
-fn openings_mut(shape: &mut Shape) -> Option<&mut Vec<Opening>> {
+pub(super) fn openings_mut(shape: &mut Shape) -> Option<&mut Vec<Opening>> {
     match shape {
         Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) => Some(openings),
         Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some(&mut s.openings),

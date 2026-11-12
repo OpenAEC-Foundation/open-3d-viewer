@@ -23,6 +23,10 @@ pub struct Cut {
     pub extent: Option<([f32; 2], [f32; 2])>,
     /// The cut faces: what each element shows where the plane goes through it.
     pub fills: Vec<Fill>,
+    /// The cut lines and the edges beyond the cut of the elements the view draws faint (existing
+    /// work in a view of a later phase, in halftone); they are not in `segments` and `below`.
+    pub faint_segments: Vec<Segment>,
+    pub faint_below: Vec<Segment>,
 }
 
 /// A cut face: the outlines one element (or a layer outside its elements) shows where the plane
@@ -42,6 +46,8 @@ pub struct Fill {
     pub rows: Vec<(i32, Segment)>,
     /// How far apart the rows are (metres of the drawing); 0 without lines.
     pub apart: f32,
+    /// The view draws its element faint (in halftone).
+    pub faint: bool,
 }
 
 /// Two faces meeting at a sharper angle than this (degrees) make a visible edge.
@@ -54,6 +60,12 @@ const CREASE_DEGREES: f32 = 20.0;
 pub struct Shown<'a> {
     pub layers: &'a [bool],
     pub hidden: &'a dyn Fn(usize, u32) -> bool,
+    /// The triangles drawn faint (in halftone), by their layer and first vertex; `None`: none.
+    pub faint: Option<&'a dyn Fn(usize, u32) -> bool>,
+    /// The pieces joined elements make (an element to its piece): the edges on the seam between
+    /// two elements of one piece are left out where the faces round it lie in one plane. `None`:
+    /// no elements are joined.
+    pub pieces: Option<&'a HashMap<u64, u32>>,
 }
 
 /// Hides no triangle.
@@ -64,7 +76,7 @@ fn none_hidden(_: usize, _: u32) -> bool {
 impl<'a> Shown<'a> {
     /// The layers that are on, with no element hidden.
     pub fn layers(layers: &'a [bool]) -> Self {
-        Shown { layers, hidden: &none_hidden }
+        Shown { layers, hidden: &none_hidden, faint: None, pieces: None }
     }
 
     /// Every layer, with no element hidden.
@@ -83,7 +95,8 @@ impl<'a> Shown<'a> {
 pub fn plan_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, high);
     cut.below = seen_between(model, shown, high - low, move |p| [p[0], p[1], high - p[2]]);
-    cut.extent = extent(cut.segments.iter().chain(&cut.below));
+    part(&mut cut, model, shown, move |p| [p[0], p[1], high - p[2]], high - low);
+    cut.extent = extent(cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below));
     cut
 }
 
@@ -111,8 +124,49 @@ pub fn structural_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
             cut.hidden.push(s);
         }
     }
-    cut.extent = extent(cut.segments.iter().chain(&cut.below));
+    part(&mut cut, model, shown, map, depth);
+    cut.extent = extent(cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below));
     cut
+}
+
+/// Sets apart what the view draws faint: the lines of `cut` (in the frame `map` gives, its third
+/// coordinate the depth from the cut, down to `depth`) that lie on an edge or a cut of a faint
+/// element and on none of another, and the cut faces of the faint elements. A faint element's
+/// covered edges are not drawn dashed.
+fn part(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3] + Copy, depth: f32) {
+    let Some(faint) = shown.faint else { return };
+    let (only_faint, only_plain) = (|l: usize, v: u32| (shown.hidden)(l, v) || !faint(l, v), |l: usize, v: u32| (shown.hidden)(l, v) || faint(l, v));
+    let lines = |hidden: &dyn Fn(usize, u32) -> bool| {
+        let of = Shown { layers: shown.layers, hidden, faint: None, pieces: shown.pieces };
+        let (mut edges, mut cuts) = (Lines::default(), Lines::default());
+        for e in feature_edges(model, of, map, 0.0, depth).into_iter().filter_map(flat) {
+            edges.add(e);
+        }
+        for (_, t) in keyed(model, of) {
+            if let Some(s) = cross(t.map(map), 0.0) {
+                cuts.add(s);
+            }
+        }
+        (edges, cuts)
+    };
+    let ((faint_edges, faint_cuts), (plain_edges, plain_cuts)) = (lines(&only_faint), lines(&only_plain));
+    let apart = |all: &mut Vec<Segment>, on: &Lines, off: &Lines| {
+        let (faint, plain): (Vec<Segment>, Vec<Segment>) = std::mem::take(all).into_iter().partition(|s| on.has(s) && !off.has(s));
+        *all = plain;
+        faint
+    };
+    cut.faint_segments = apart(&mut cut.segments, &faint_cuts, &plain_cuts);
+    cut.faint_below = apart(&mut cut.below, &faint_edges, &plain_edges);
+    apart(&mut cut.hidden, &faint_edges, &plain_edges);
+    for fill in &mut cut.fills {
+        // by the first vertex of the element
+        let first = fill.element.and_then(|id| {
+            let layer = model.layers.get(fill.layer)?;
+            let &(_, first, _) = layer.elements.iter().find(|e| e.0 == id)?;
+            layer.indices.get(first as usize).copied()
+        });
+        fill.faint = first.is_some_and(|v| faint(fill.layer, v));
+    }
 }
 
 /// Lines by the square metre they pass through, to find the ones a line lies on.
@@ -161,7 +215,8 @@ impl Lines {
 pub fn ceiling_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, low);
     cut.below = seen_between(model, shown, high - low, move |p| [p[0], p[1], p[2] - low]);
-    cut.extent = extent(cut.segments.iter().chain(&cut.below));
+    part(&mut cut, model, shown, move |p| [p[0], p[1], p[2] - low], high - low);
+    cut.extent = extent(cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below));
     cut
 }
 
@@ -250,8 +305,143 @@ fn feature_edges(model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3]
         let at = |t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])];
         out.push([at(t0), at(t1)]);
     }
+    // the seams between joined elements are no edges
+    without_seams(out, &seams(model, shown, &map))
+}
+
+/// A straight line in space, to find the edges that lie on one line: its direction (turned one
+/// way) and its point nearest the origin, both rounded to a millimetre.
+type LineKey = ([i32; 3], [i32; 3]);
+
+/// The line an edge lies on, its direction, and where along it the edge starts and ends.
+fn line_of(a: [f32; 3], b: [f32; 3]) -> Option<(LineKey, [f32; 3], f32, f32)> {
+    let d = sub(b, a);
+    let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if length < 1e-4 {
+        return None;
+    }
+    let mut d = d.map(|v| v / length);
+    // one way round, whichever way the edge runs
+    if d.iter().find(|v| v.abs() > 1e-4).is_some_and(|v| *v < 0.0) {
+        d = d.map(|v| -v);
+    }
+    let dot = |p: [f32; 3]| p[0] * d[0] + p[1] * d[1] + p[2] * d[2];
+    let (s, e) = (dot(a), dot(b));
+    let foot = [a[0] - d[0] * s, a[1] - d[1] * s, a[2] - d[2] * s];
+    let round = |p: [f32; 3]| p.map(|v| (v * 1e3).round() as i32);
+    Some(((round(d), round(foot)), d, s.min(e), s.max(e)))
+}
+
+/// The seams between joined elements: the stretches of line where an edge of one element lies on
+/// an edge of another of the same piece and, their faces against each other left aside, the
+/// faces round it lie in one plane: a wall standing flush on a floor, two beams of one height
+/// side by side. Per line, the stretches along it. In the frame `map` gives.
+fn seams(model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3]) -> HashMap<LineKey, Vec<(f32, f32)>> {
+    let Some(pieces) = shown.pieces else { return HashMap::new() };
+    let flat = CREASE_DEGREES.to_radians().cos();
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // per line: the edges on it, each with its piece, its element, its stretch and its faces
+    let mut on: HashMap<LineKey, Vec<(u32, u64, f32, f32, Vec<[f32; 3]>)>> = HashMap::new();
+    let key = |p: [f32; 3]| p.map(|v| (v * 1e4).round() as i64);
+    for (i, layer) in model.layers.iter().enumerate().filter(|(i, l)| !l.points && shown.on(*i)) {
+        let p = &layer.positions;
+        for &(id, first, count) in &layer.elements {
+            let Some(&piece) = pieces.get(&id) else { continue };
+            let Some(indices) = layer.indices.get(first as usize..(first + count) as usize) else { continue };
+            if indices.first().is_some_and(|v| (shown.hidden)(i, *v)) {
+                continue;
+            }
+            // the element's own edges with the normals of their faces
+            let mut edges: HashMap<([i64; 3], [i64; 3]), ([f32; 3], [f32; 3], Vec<[f32; 3]>)> = HashMap::new();
+            for t in indices.chunks_exact(3) {
+                let corner = |k: u32| p.get(k as usize * 3..k as usize * 3 + 3).map(|v| map([v[0], v[1], v[2]]));
+                let (Some(a), Some(b), Some(c)) = (corner(t[0]), corner(t[1]), corner(t[2])) else { continue };
+                let (u, v) = (sub(b, a), sub(c, a));
+                let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                let len = dot(n, n).sqrt();
+                if len <= 1e-12 {
+                    continue;
+                }
+                let n = n.map(|x| x / len);
+                for (a, b) in [(a, b), (b, c), (c, a)] {
+                    let (ka, kb) = (key(a), key(b));
+                    edges.entry(if ka <= kb { (ka, kb) } else { (kb, ka) }).or_insert_with(|| (a, b, Vec::new())).2.push(n);
+                }
+            }
+            for (a, b, normals) in edges.into_values() {
+                // an edge within a flat face is none
+                if normals.len() == 2 && dot(normals[0], normals[1]) >= flat {
+                    continue;
+                }
+                if let Some((line, _, from, to)) = line_of(a, b) {
+                    on.entry(line).or_default().push((piece, id, from, to, normals));
+                }
+            }
+        }
+    }
+    let mut out: HashMap<LineKey, Vec<(f32, f32)>> = HashMap::new();
+    for (line, edges) in on {
+        for (k, (piece, id, from, to, normals)) in edges.iter().enumerate() {
+            for (other_piece, other, other_from, other_to, other_normals) in &edges[k + 1..] {
+                let (start, end) = (from.max(*other_from), to.min(*other_to));
+                if piece != other_piece || id == other || end - start < 1e-3 {
+                    continue;
+                }
+                // the faces that lie against each other fall away; what is left must be one plane
+                let mut left: Vec<[f32; 3]> = normals.clone();
+                let mut theirs: Vec<[f32; 3]> = other_normals.clone();
+                left.retain(|n| match theirs.iter().position(|m| dot(*n, *m) <= -flat) {
+                    Some(at) => {
+                        theirs.swap_remove(at);
+                        false
+                    }
+                    None => true,
+                });
+                left.extend(theirs);
+                if left.len() < normals.len() + other_normals.len() && left.iter().all(|n| dot(*n, left[0]) >= flat) {
+                    out.entry(line).or_default().push((start, end));
+                }
+            }
+        }
+    }
     out
 }
+
+/// The edges without their stretches along the seams.
+fn without_seams(edges: Vec<[[f32; 3]; 2]>, seams: &HashMap<LineKey, Vec<(f32, f32)>>) -> Vec<[[f32; 3]; 2]> {
+    if seams.is_empty() {
+        return edges;
+    }
+    let mut out = Vec::with_capacity(edges.len());
+    for [a, b] in edges {
+        let Some((line, d, from, to)) = line_of(a, b) else { continue };
+        let Some(gaps) = seams.get(&line) else {
+            out.push([a, b]);
+            continue;
+        };
+        let mut gaps: Vec<(f32, f32)> = gaps.iter().copied().filter(|(s, e)| *e > from && *s < to).collect();
+        gaps.sort_by(|x, y| x.0.total_cmp(&y.0));
+        // a point of the line by its place along it
+        let s0 = a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        let at = |s: f32| {
+            let t = s - s0;
+            [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t]
+        };
+        let mut start = from;
+        for (s, e) in gaps {
+            if s - start > 1e-3 {
+                out.push([at(start), at(s)]);
+            }
+            start = start.max(e);
+        }
+        if to - start > 1e-3 {
+            out.push([at(start), at(to)]);
+        }
+    }
+    out
+}
+
+
 
 /// A section's or elevation's drawing, in (u along the line `from` → `to`, v up): the cut where
 /// the upright plane through the line meets what is shown, and the edges seen beyond it up to
@@ -281,7 +471,9 @@ pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], dep
     let edges = feature_edges(model, shown, map, 0.0, depth as f32);
     let below = visible(&beyond, &edges);
     let extent = extent(segments.iter().chain(&below));
-    Cut { segments, below, extent, fills: faces.fills(), hidden: Vec::new() }
+    let mut cut = Cut { segments, below, extent, fills: faces.fills(), ..Cut::default() };
+    part(&mut cut, model, shown, map, depth as f32);
+    cut
 }
 
 /// How many pixels the longer side of a section's depth image has.
@@ -419,7 +611,7 @@ pub fn cut_at(model: &Model, shown: Shown, z: f32) -> Cut {
         }
     }
     let extent = extent(segments.iter());
-    Cut { segments, below: Vec::new(), extent, fills: faces.fills(), hidden: Vec::new() }
+    Cut { segments, extent, fills: faces.fills(), ..Cut::default() }
 }
 
 /// Lines nearer than this (metres) lie on each other: where two cut faces meet.
@@ -522,27 +714,30 @@ pub fn join(cut: &mut Cut, same: &dyn Fn(usize, usize) -> bool) {
         return;
     }
     let near = Near::of(met.iter());
-    let mut kept = Vec::with_capacity(cut.segments.len());
-    for s in &cut.segments {
-        let mut gaps: Vec<(f32, f32)> = near.to(s).into_iter().filter_map(|o| lies_on(s, &met[o])).collect();
-        if gaps.is_empty() {
-            kept.push(*s);
-            continue;
-        }
-        gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let length = (s[1][0] - s[0][0]).hypot(s[1][1] - s[0][1]);
-        let mut from = 0.0f32;
-        for (start, end) in gaps {
-            if (start - from) * length > MEET {
-                kept.push([at(s, from), at(s, start)]);
+    // the cut lines, and those of what the view draws faint
+    for lines in [&mut cut.segments, &mut cut.faint_segments] {
+        let mut kept = Vec::with_capacity(lines.len());
+        for s in lines.iter() {
+            let mut gaps: Vec<(f32, f32)> = near.to(s).into_iter().filter_map(|o| lies_on(s, &met[o])).collect();
+            if gaps.is_empty() {
+                kept.push(*s);
+                continue;
             }
-            from = from.max(end);
+            gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let length = (s[1][0] - s[0][0]).hypot(s[1][1] - s[0][1]);
+            let mut from = 0.0f32;
+            for (start, end) in gaps {
+                if (start - from) * length > MEET {
+                    kept.push([at(s, from), at(s, start)]);
+                }
+                from = from.max(end);
+            }
+            if (1.0 - from) * length > MEET {
+                kept.push([at(s, from), at(s, 1.0)]);
+            }
         }
-        if (1.0 - from) * length > MEET {
-            kept.push([at(s, from), at(s, 1.0)]);
-        }
+        *lines = kept;
     }
-    cut.segments = kept;
 }
 
 /// The cut faces of what is `shown` on the plane where the third coordinate `map` gives is 0, in
@@ -773,6 +968,52 @@ mod tests {
     }
 
     #[test]
+    fn the_seam_between_joined_elements_is_not_drawn() {
+        // a floor and a beam beside it, their tops level, seen from above
+        let part = |name: &str, id: u64, lo: [f32; 3], hi: [f32; 3]| {
+            let mut layer = block(name, lo, hi);
+            layer.elements = vec![(id, 0, layer.indices.len() as u32)];
+            layer
+        };
+        let between = |cut: &Cut| cut.below.iter().filter(|[a, b]| (a[0] - 4.0).abs() < 1e-3 && (b[0] - 4.0).abs() < 1e-3).map(|[a, b]| (b[1] - a[1]).abs()).sum::<f32>();
+        let level = Model::new(PathBuf::from("house.obj"), "OBJ", vec![part("Floor", 1, [0.0, 0.0, 0.0], [4.0, 3.0, 0.3]), part("Beam", 2, [4.0, 0.0, -0.2], [4.5, 3.0, 0.3])]);
+        let pieces: HashMap<u64, u32> = HashMap::from([(1, 1), (2, 1)]);
+        let joined = Shown { pieces: Some(&pieces), ..Shown::all() };
+        assert!(between(&plan_at(&level, Shown::all(), -1.0, 1.2)) > 2.9, "not joined: the line between them is drawn");
+        let plan = plan_at(&level, joined, -1.0, 1.2);
+        assert!(between(&plan) < 1e-3, "joined, their tops in one plane: {:?}", plan.below);
+        assert!(plan.below.iter().any(|[a, b]| a[0] < 1e-3 && b[0] < 1e-3) && plan.below.iter().any(|[a, b]| a[0] > 4.49 && b[0] > 4.49), "their outline stays");
+        // the beam higher than the floor: a real step, drawn though they are joined
+        let step = Model::new(PathBuf::from("house.obj"), "OBJ", vec![part("Floor", 1, [0.0, 0.0, 0.0], [4.0, 3.0, 0.3]), part("Beam", 2, [4.0, 0.0, -0.2], [4.5, 3.0, 0.6])]);
+        assert!(between(&plan_at(&step, joined, -1.0, 1.2)) > 2.9, "a step between them stays");
+        // of two pieces nothing is left out
+        let apart: HashMap<u64, u32> = HashMap::from([(1, 1), (2, 2)]);
+        assert!(between(&plan_at(&level, Shown { pieces: Some(&apart), ..Shown::all() }, -1.0, 1.2)) > 2.9);
+    }
+
+    #[test]
+    fn what_a_view_draws_faint_is_set_apart() {
+        // an existing wall cut by the plan, an existing block and a new one under the cut
+        let layers = vec![block("Old wall", [0.0, 0.0, 0.0], [4.0, 0.3, 3.0]), block("Old", [0.0, 2.0, 0.0], [1.0, 3.0, 0.5]), block("New", [2.0, 2.0, 0.0], [3.0, 3.0, 0.5])];
+        let model = Model::new(PathBuf::from("house.obj"), "OBJ", layers);
+        let old = |layer: usize, _: u32| layer < 2;
+        let shown = Shown { faint: Some(&old), ..Shown::all() };
+        let plan = plan_at(&model, shown, -0.5, 1.2);
+        let length = |s: &[Segment]| s.iter().map(|[a, b]| (b[0] - a[0]).hypot(b[1] - a[1])).sum::<f32>();
+        assert!(plan.segments.is_empty(), "the only wall cut is faint: {:?}", plan.segments);
+        assert!((length(&plan.faint_segments) - 8.6).abs() < 0.05, "the wall's outline, 4 by 0.3: {}", length(&plan.faint_segments));
+        assert!((3.8..=8.2).contains(&length(&plan.below)), "the new block's outline, where its foot lies under its top maybe twice: {}", length(&plan.below));
+        assert!(plan.below.iter().all(|[a, b]| a[0] >= 1.9 && b[0] >= 1.9), "{:?}", plan.below);
+        let old_block: Vec<Segment> = plan.faint_below.iter().copied().filter(|[a, b]| a[1] >= 1.9 && b[1] >= 1.9).collect();
+        assert!((3.8..=8.2).contains(&length(&old_block)) && old_block.iter().all(|[a, b]| a[0] <= 1.1 && b[0] <= 1.1), "the old block's outline: {old_block:?}");
+        assert_eq!(plan.fills.iter().map(|f| f.faint).collect::<Vec<_>>(), [false], "the wall's face: of a layer without elements, so by none");
+        assert_eq!(plan.extent.map(|(lo, hi)| (lo[0], hi[0])), Some((0.0, 4.0)), "the faint lines count for its extent");
+        // without faint elements nothing is set apart
+        let plain = plan_at(&model, Shown::all(), -0.5, 1.2);
+        assert!(plain.faint_segments.is_empty() && plain.faint_below.is_empty() && !plain.segments.is_empty());
+    }
+
+    #[test]
     fn a_structural_plan_keeps_what_lies_under_a_floor_to_draw_dashed() {
         let layers = vec![block("Floor", [0.0, 0.0, 2.0], [4.0, 4.0, 2.2]), block("Pile", [1.0, 1.0, 0.0], [2.0, 2.0, 2.0]), block("Beside", [6.0, 0.0, 0.0], [7.0, 1.0, 0.8])];
         let model = Model::new(PathBuf::from("house.obj"), "OBJ", layers);
@@ -832,7 +1073,7 @@ mod tests {
         room.positions.extend(&table.positions);
         let model = Model::new(PathBuf::from("room.obj"), "OBJ", vec![room]);
         let table_hidden = |_: usize, v: u32| v >= 24;
-        let shown = Shown { layers: &[], hidden: &table_hidden };
+        let shown = Shown { layers: &[], hidden: &table_hidden, faint: None, pieces: None };
         let all = plan_at(&model, Shown::all(), 0.0, 0.5);
         let without = plan_at(&model, shown, 0.0, 0.5);
         assert!(without.segments.len() < all.segments.len());

@@ -1,4 +1,4 @@
-; Per-user installer of Open 3D Viewer Studio; no administrator rights needed.
+; Per-user installer of Open BIM Suite; no administrator rights needed.
 ; makensis /DNUMBER=2026.44.0 /DSOURCE=<folder with open-3d-viewer.exe and open-3d-viewer-mcp.exe> [/DSIGN=<windows-sign.ps1>] installer.nsi
 Unicode true
 !include "MUI2.nsh"
@@ -13,8 +13,10 @@ Unicode true
   !uninstfinalize 'pwsh -NoProfile -NonInteractive -File "${SIGN}" -Files "%1"' = 0
 !endif
 
-Name "Open 3D Viewer Studio ${NUMBER}"
+Name "Open BIM Suite ${NUMBER}"
 OutFile "open-3d-viewer_${NUMBER}_x64-setup.exe"
+; the folder and the uninstall key keep the name the app had before, so a new version
+; replaces the installed one instead of standing beside it
 InstallDir "$LOCALAPPDATA\Programs\Open 3D Viewer Studio"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -32,11 +34,11 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "English"
 
 VIProductVersion "${NUMBER}.0"
-VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductName" "Open 3D Viewer Studio"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductName" "Open BIM Suite"
 VIAddVersionKey /LANG=${LANG_ENGLISH} "CompanyName" "OpenAEC Foundation"
 VIAddVersionKey /LANG=${LANG_ENGLISH} "FileVersion" "${NUMBER}"
 VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductVersion" "${NUMBER}"
-VIAddVersionKey /LANG=${LANG_ENGLISH} "FileDescription" "Open 3D Viewer Studio installer"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "FileDescription" "Open BIM Suite installer"
 VIAddVersionKey /LANG=${LANG_ENGLISH} "LegalCopyright" "OpenAEC Foundation"
 
 Section "Install"
@@ -46,8 +48,9 @@ Section "Install"
   File "${SOURCE}\vertex.dll"
   File "icon.ico"
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  CreateShortcut "$SMPROGRAMS\Open 3D Viewer Studio.lnk" "$INSTDIR\open-3d-viewer.exe" "" "$INSTDIR\icon.ico"
-  WriteRegStr HKCU "${UNINST}" "DisplayName" "Open 3D Viewer Studio"
+  Delete "$SMPROGRAMS\Open 3D Viewer Studio.lnk"
+  CreateShortcut "$SMPROGRAMS\Open BIM Suite.lnk" "$INSTDIR\open-3d-viewer.exe" "" "$INSTDIR\icon.ico"
+  WriteRegStr HKCU "${UNINST}" "DisplayName" "Open BIM Suite"
   WriteRegStr HKCU "${UNINST}" "DisplayVersion" "${NUMBER}"
   WriteRegStr HKCU "${UNINST}" "Publisher" "OpenAEC Foundation"
   WriteRegStr HKCU "${UNINST}" "DisplayIcon" "$INSTDIR\icon.ico"
@@ -57,7 +60,7 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
-  Delete "$SMPROGRAMS\Open 3D Viewer Studio.lnk"
+  Delete "$SMPROGRAMS\Open BIM Suite.lnk"
   Delete "$INSTDIR\open-3d-viewer.exe"
   Delete "$INSTDIR\open-3d-viewer-mcp.exe"
   Delete "$INSTDIR\vertex.dll"

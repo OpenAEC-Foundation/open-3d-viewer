@@ -34,7 +34,7 @@ pub const PREFIX: &str = "viewer3d_";
 /// `<tool>_opslaan` and `<tool>_stand`.
 const CONTRACT_NAMES: [(&str, &str); 3] = [("open_file", "viewer3d_open"), ("save_file", "viewer3d_opslaan"), ("get_state", "viewer3d_stand")];
 
-const INSTRUCTIONS: &str = "Open 3D Viewer Studio shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
+const INSTRUCTIONS: &str = "Open BIM Suite shows 3D and BIM models (IFC, Revit, SketchUp, glTF, OBJ, STL, PLY). \
 The scene is Z up, in metres for Revit, SketchUp and glTF. Start with open_file (or get_state to see what is open), \
 then screenshot to look at the viewport. Pixel coordinates (pick, screen points in measure_* and section_plane) are \
 pixels of the last viewport screenshot. Elements (BIM) have ids and properties: find them with find_elements, \
@@ -104,8 +104,8 @@ pub fn tools() -> Vec<Value> {
     };
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Blender (.blend), FreeCAD (.fcstd), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), structural analysis models in sam-json (.samjson), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
-            json!({ "path": { "type": "string", "description": "Path of the file: absolute, or relative to the work folder (OPENAEC_MAP) when there is one" }, "add": { "type": "boolean", "description": "Add it beside the models open (as Add does), instead of opening it in their place" } }), &["path"], false),
+        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Blender (.blend), FreeCAD (.fcstd), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), coordination files of a model checker with their issues (.smc), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), structural analysis models in sam-json (.samjson), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
+            json!({ "path": { "type": "string", "description": "Path of the file: absolute, or relative to the work folder (OPENAEC_MAP) when there is one" }, "paths": { "type": "array", "items": { "type": "string" }, "description": "Several files at once, instead of path: all are read and shown together (much faster than one call per file)" }, "add": { "type": "boolean", "description": "Add beside the models open (as Add does), instead of opening in their place" } }), &[], false),
         save,
         screenshot,
         tool("list_layers", "The model's layers (Revit categories, SketchUp tags, glTF materials, OBJ groups) with index, visibility, triangle and element counts and colour, a page at a time (total and truncated tell whether there are more).",
@@ -389,7 +389,7 @@ pub fn handle(msg: &Value, prefixed: bool, call: &mut Call) -> Option<Value> {
             json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "open-3d-viewer", "title": "Open 3D Viewer Studio", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "open-3d-viewer", "title": "Open BIM Suite", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": instructions,
             })
         }

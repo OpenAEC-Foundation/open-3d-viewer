@@ -39,7 +39,7 @@ impl App {
                 let units = self.hidden_units(&self.hidden);
                 let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
                 let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
-                cut_faces(&model, Shown { layers, hidden: &hidden }, section.as_ref(), plane.as_ref(), bim_library::DrawingStandard::Nen47)
+                cut_faces(&model, Shown { layers, hidden: &hidden, faint: None, pieces: None }, section.as_ref(), plane.as_ref(), bim_library::DrawingStandard::Nen47)
             }
             _ => CutFaces::default(),
         };

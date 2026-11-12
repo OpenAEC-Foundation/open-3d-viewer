@@ -291,3 +291,36 @@ fn integer_values_are_compared_exactly() {
     )
     .unwrap());
 }
+
+#[test]
+fn a_project_with_several_units_of_its_own_is_checked_and_one_with_two_length_units_is_not() {
+    let units = |more: &str| {
+        model(&format!(
+            "#1=IFCPROJECT('2O2Fr$t4X7Zf8NOew3FLOH',$,'P',$,$,$,$,$,#2);\n#2=IFCUNITASSIGNMENT((#3,#4,#5{more}));\n#3=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n#4=IFCDERIVEDUNIT((#6),.USERDEFINED.,'a');\n#5=IFCDERIVEDUNIT((#6),.USERDEFINED.,'b');\n#6=IFCDERIVEDUNITELEMENT(#3,1);\n#7=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);"
+        ))
+    };
+    let project = ids("<entity><name><simpleValue>IFCPROJECT</simpleValue></name></entity>", "", 1, "unbounded");
+    assert_eq!(validate(&units(""), &project).unwrap().status, ValidationStatus::Passed);
+    assert_eq!(validate(&units(",#7"), &project).unwrap_err(), "Duplicate project unit types");
+}
+
+/// How long each specification of an IDS takes on a file: `O3V_IFC` and `O3V_IDS` name them.
+#[test]
+#[ignore]
+fn timing_of_each_specification() {
+    let (Ok(ifc), Ok(ids)) = (std::env::var("O3V_IFC"), std::env::var("O3V_IDS")) else { return };
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let bytes = std::fs::read(&ifc).unwrap();
+    let started = std::time::Instant::now();
+    let graph = crate::graph::Graph::parse(&bytes, &cancel).unwrap();
+    println!("parse {:.2} s, {} nodes", started.elapsed().as_secs_f32(), graph.nodes.len());
+    let ids = crate::parse_ids(&std::fs::read_to_string(&ids).unwrap()).unwrap();
+    for spec in &ids.specifications {
+        let mut one = ids.clone();
+        one.specifications = vec![spec.clone()];
+        let started = std::time::Instant::now();
+        let report = crate::evaluator::validate(&graph, &one, &cancel).unwrap();
+        let r = &report.specifications[0];
+        println!("{:7.2} s  {} ({} applicable, {} findings)", started.elapsed().as_secs_f32(), spec.name, r.applicable_count, r.findings.len());
+    }
+}

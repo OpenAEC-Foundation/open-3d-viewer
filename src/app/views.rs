@@ -67,7 +67,7 @@ impl App {
 
     /// Whether the view at `path` is a structural plan, which leaves out what carries nothing.
     pub(super) fn is_structural_plan(&self, path: Option<&str>) -> bool {
-        path.and_then(|p| self.document.plan(p)).is_some_and(|p| p.kind == PlanKind::Structural)
+        path.and_then(|p| self.document.plan(p)).is_some_and(|p| p.kind.structural())
     }
 
     /// Per unit of the shown model, whether a structural plan leaves it out: an element whose
@@ -203,7 +203,7 @@ impl App {
                 kind: ViewKind::Plan,
                 camera: None,
                 clip: None,
-                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: plan.kind.looks_up() }),
+                plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: plan.kind.seen_from_below() }),
                 level: self.document.level(&plan.level).map(|l| l.name.clone()),
             });
         }
@@ -308,6 +308,9 @@ impl App {
         self.anim = None;
         self.swap_view_layers(target.as_deref());
         let structural = self.is_structural_plan(self.active_plan.as_deref()) || self.is_structural_plan(target.as_deref());
+        // a view that leaves elements out because their family shows none of their solids there
+        let leaves_out = |path: &Option<String>| path.as_ref().zip(self.model.as_ref()).is_some_and(|(p, m)| m.project.switched_off.contains_key(p));
+        let structural = structural || leaves_out(&self.active_plan) || leaves_out(&target);
         self.active_plan = target;
         self.mark_pick = None;
         // into or out of a structural plan: what carries nothing goes or comes back
@@ -440,6 +443,7 @@ impl App {
                 PlanKind::Floor => (l.text("Plattegronden", "Floor plans"), ""),
                 PlanKind::Structural => (l.text("Constructieve plattegronden", "Structural plans"), l.text("constructie", "structure")),
                 PlanKind::Ceiling => (l.text("Plafondplannen", "Ceiling plans"), l.text("plafond", "ceiling")),
+                PlanKind::StructuralUp => (l.text("Constructieve plattegronden, omhoog gezien", "Structural plans, looking up"), l.text("constructie omhoog", "structure up")),
             };
             let picking = self.views_picker == Some(kind);
             let plus = svg(crate::icons::handle(crate::icons::ADD)).width(12).height(12).style(move |_, _| svg::Style { color: Some(p.accent) });
@@ -541,7 +545,7 @@ impl App {
         }
 
         // the sheets, then a new one
-        body = body.push(subheader(l.text("Bladen", "Sheets")));
+        body = body.push(subheader(l.text("Tekeningen", "Drawings")));
         body = super::paper::sheets_list(self, p, l, body);
         scrollable(body.padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
     }

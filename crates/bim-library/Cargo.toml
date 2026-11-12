@@ -2,7 +2,7 @@
 name = "bim-library"
 version = "0.1.0"
 description = "Headless BIM libraries: materials with their hatches, layered build-ups of walls, floors, roofs and ceilings, profiles and linear types, and their IFCX form"
-authors = ["Open 3D Viewer Studio Contributors"]
+authors = ["Open BIM Suite Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.96"

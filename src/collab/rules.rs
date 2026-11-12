@@ -120,11 +120,14 @@ pub struct ClashRule {
     pub clearance_mm: f32,
     /// Whether the test runs with the rule set.
     pub on: bool,
+    /// Only between models: with several models open, the elements of one model are not tested
+    /// against each other (the parts of one supplier's assembly touch by design).
+    pub between_models: bool,
 }
 
 impl Default for ClashRule {
     fn default() -> Self {
-        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true }
+        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false }
     }
 }
 
@@ -174,6 +177,8 @@ impl RuleSet {
     pub fn built_in(dutch: bool) -> Vec<RuleSet> {
         let t = |nl: &str, en: &str| if dutch { nl.to_string() } else { en.to_string() };
         let rule = |name: String, a: &[&str], b: &[&str], kind: ClashKind| ClashRule { name, a: Selector::classes(a), b: Selector::classes(b), kind, ..ClashRule::default() };
+        // coordination is between the models of the disciplines
+        let between = |rule: ClashRule| ClashRule { between_models: true, ..rule };
         vec![
             RuleSet {
                 name: t("Basiscontrole", "Basic check"),
@@ -204,9 +209,9 @@ impl RuleSet {
                 description: t("Installaties door de constructie, constructie onderling en vrije ruimte rond leidingen.", "Services through the structure, the structure with itself, and clearance around pipes and ducts."),
                 model_checks: false,
                 clashes: vec![
-                    rule(t("Constructie tegen installaties", "Structure against services"), &STRUCTURE, &SERVICES, ClashKind::Hard),
-                    rule(t("Constructie onderling", "Structure with itself"), &STRUCTURE, &STRUCTURE, ClashKind::Hard),
-                    rule(t("Installaties onderling", "Services with each other"), &SERVICES, &SERVICES, ClashKind::Hard),
+                    between(rule(t("Constructie tegen installaties", "Structure against services"), &STRUCTURE, &SERVICES, ClashKind::Hard)),
+                    between(rule(t("Constructie onderling", "Structure with itself"), &STRUCTURE, &STRUCTURE, ClashKind::Hard)),
+                    between(rule(t("Installaties onderling", "Services with each other"), &SERVICES, &SERVICES, ClashKind::Hard)),
                     ClashRule { on: false, ..rule(t("Vrije ruimte rond installaties", "Clearance around services"), &SERVICES, &STRUCTURE, ClashKind::Clearance) },
                 ],
                 ..RuleSet::default()
@@ -301,6 +306,6 @@ mod tests {
         let (nl, en) = (RuleSet::built_in(true), RuleSet::built_in(false));
         assert_eq!(nl.len(), en.len());
         assert!(nl.iter().chain(&en).all(|s| !s.name.is_empty() && !s.description.is_empty()));
-        assert!(en[3].clashes.iter().all(|c| !c.name.is_empty()) && en[3].clashes[1].within());
+        assert!(en[3].clashes.iter().all(|c| !c.name.is_empty()) && en[3].clashes[1].within() && en[3].clashes[1].between_models && !en[0].clashes[0].between_models);
     }
 }

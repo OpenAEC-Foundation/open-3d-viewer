@@ -1,4 +1,4 @@
-# Release of Open 3D Viewer Studio for Windows, macOS and Linux, after OpenAEC Blueprint
+# Release of Open BIM Suite for Windows, macOS and Linux, after OpenAEC Blueprint
 # 2026.44.1: tested first, then built and signed per platform, then published.
 #
 # A tag vYYYY.W.N starts it; Cargo.toml must carry YYYY.W.N. The signing keys are the secrets
@@ -396,7 +396,7 @@ jobs:
       - name: Make the application bundle
         run: |
           set -euo pipefail
-          app="build/Open 3D Viewer Studio.app"
+          app="build/Open BIM Suite.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp build/open-3d-viewer build/open-3d-viewer-mcp vendor/vertex/libvertex.dylib "$app/Contents/MacOS/"
           sed "s/@NUMBER@/$NUMBER/g" packaging/macos/Info.plist.in > "$app/Contents/Info.plist"
@@ -436,7 +436,7 @@ jobs:
         id: sign
         run: |
           set -euo pipefail
-          app="build/Open 3D Viewer Studio.app"
+          app="build/Open BIM Suite.app"
           dmg="build/open-3d-viewer_${NUMBER}_macos-universal.dmg"
           # hdiutil guesses the size of the image from the folder and on the GitHub runners that
           # guess is sometimes too small; give it the size of the folder plus room, and retry.
@@ -444,7 +444,7 @@ jobs:
             local mb=$(( $(du -sm "$1" | cut -f1) * 2 + 64 ))
             for attempt in 1 2 3; do
               rm -f "$2"
-              if hdiutil create -volname "Open 3D Viewer Studio" -srcfolder "$1" -size "${mb}m" -fs HFS+ -ov -format UDZO "$2"; then return; fi
+              if hdiutil create -volname "Open BIM Suite" -srcfolder "$1" -size "${mb}m" -fs HFS+ -ov -format UDZO "$2"; then return; fi
               echo "hdiutil failed (attempt $attempt), trying again"; sleep 10
             done
             return 1
@@ -571,7 +571,7 @@ jobs:
           set -euo pipefail
           yes() { [[ "$1" == true ]] && echo "ja" || echo "**nee**"; }
           cat > notes.md <<EOF
-          **Open 3D Viewer Studio** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Bekijk wat hij doet in de [productvideo](https://www.youtube.com/watch?v=cxHO8M8W2Ow) (73 s). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
+          **Open BIM Suite** ${NUMBER}: de 3D-viewer voor bouwmodellen, met de MCP-server \`open-3d-viewer-mcp\` voor AI-agents. Zonder installatie: [open-3d-viewer.open-aec.com](https://open-3d-viewer.open-aec.com). Bekijk wat hij doet in de [productvideo](https://www.youtube.com/watch?v=cxHO8M8W2Ow) (73 s). Versie \`${NUMBER}\` volgt het schema jaar.week (\`JJJJ.W.N\`).
 
           | Systeem | Bestand |
           | --- | --- |
@@ -603,4 +603,4 @@ jobs:
           if [[ "$PRERELEASE" == true ]]; then
             pre=(--prerelease)
           fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Open 3D Viewer Studio ${NUMBER}" --notes-file notes.md "${pre[@]}" assets/*
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Open BIM Suite ${NUMBER}" --notes-file notes.md "${pre[@]}" assets/*

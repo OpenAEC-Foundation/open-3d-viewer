@@ -5,7 +5,7 @@ product builds on its own; per module the owner decides where it belongs (the qu
 
 ## Intent
 
-Open 3D Viewer Studio is turning from a viewer into a modeller. The owner wants one code base
+Open BIM Suite is turning from a viewer into a modeller. The owner wants one code base
 that is three products, each with its own build and its own interface:
 
 - **Viewer**: open any BIM or CAD file, look at it, measure it, cut it, read its properties.
@@ -108,7 +108,7 @@ but not yet working, and a panel that says what comes.
 
 1. **Collaborator**: are these the right parts, and which comes first? Proposal: IDS checking and
    BCF issues, from the draft validator branch.
-2. **Names**: working names are *Open 3D Viewer Studio* (the Studio and the Viewer), *Open BIM
+2. **Names**: working names are *Open BIM Suite* (the Studio and the Viewer), *Open BIM
    Modeller* and *Open BIM Collaborator*. Other names?
 3. **Drawings**: sheets, dimensions and drawing export: Viewer, Modeller, or both?
 4. **Installers**: publish the Modeller and the Collaborator as installers of their own now, or

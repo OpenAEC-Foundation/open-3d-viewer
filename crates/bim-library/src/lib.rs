@@ -1,4 +1,4 @@
-//! The libraries of the BIM modeller of Open 3D Viewer Studio: the materials things are made of,
+//! The libraries of the BIM modeller of Open BIM Suite: the materials things are made of,
 //! the layered build-ups of walls, floors, roofs and ceilings (planar types), the profiles and
 //! linear types of columns, beams and other members, and the system types systems are generated
 //! by: curtain walls, frames, timber frames, masonry, cladding, floors and ceilings.

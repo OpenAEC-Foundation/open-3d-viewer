@@ -1,4 +1,4 @@
-//! The Door and Window tools: a click on a wall puts an opening there, as Revit's and Archicad's
+//! The Door and Window tools: a click on a wall or a timber frame wall puts an opening there, as Revit's and Archicad's
 //! door and window tools do. The opening is centred on the point clicked along the wall, kept
 //! [`JAMB`] inside the wall's ends and rounded to 10 mm; a door stands on the wall's base, a window on its sill.
 //! While the cursor is over a wall, the opening shows there as a box through the wall.
@@ -65,14 +65,18 @@ impl App {
         let grid = self.modeller.model.grid;
         let mut best: Option<(f64, Aim)> = None;
         for e in self.modeller.model.iter() {
-            let Shape::Planar(p @ PlanarDef { form: PlanarForm::Wall { start, end, base, height }, .. }) = e.shape_in_project(&grid) else { continue };
+            // a wall, or a framed system (a timber frame wall): what can take an opening
+            let (start, end, base, height, thickness) = match e.shape_in_project(&grid) {
+                Shape::Planar(p @ PlanarDef { form: PlanarForm::Wall { start, end, base, height }, .. }) => (start, end, base, height, p.total_thickness()),
+                Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => (s.start, s.end, s.base, s.height, s.member.max_element()),
+                _ => continue,
+            };
             let length = start.distance(end);
             if length <= 0.0 {
                 continue;
             }
             let along = (end - start) / length;
             let across = along.perp();
-            let thickness = p.total_thickness();
             // the ray in the wall's frame: s along it, c across it, z up from its base
             let local = |q: DVec3| DVec3::new((q.truncate() - start).dot(along), (q.truncate() - start).dot(across), q.z - base);
             let (o, dir) = (local(a), DVec3::new(d.truncate().dot(along), d.truncate().dot(across), d.z));
@@ -95,8 +99,8 @@ impl App {
         let Some(e) = self.modeller.model.get(aim.wall).cloned() else { return };
         let grid = self.modeller.model.grid;
         let mut shape = e.shape_in_project(&grid);
-        if let Shape::Planar(p) = &mut shape {
-            p.openings.push(aim.opening);
+        if let Some(openings) = super::element_props::openings_mut(&mut shape) {
+            openings.push(aim.opening);
         }
         let mut changed = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
         changed.id = e.id;
@@ -183,6 +187,74 @@ mod tests {
         // beside the wall: nothing
         click(&mut app, 3.0, 2.0);
         assert_eq!(openings(&app).len(), 2);
+    }
+
+    #[test]
+    fn a_click_on_a_timber_frame_wall_frames_a_door_and_a_window_and_a_curtain_wall_takes_none() {
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        app.viewport_size = (1000.0, 800.0);
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Top);
+        app.camera.ortho = true;
+        app.camera.target = Vec3::ZERO;
+        app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
+        let framed = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
+            Shape::System(s) => s.openings,
+            _ => panic!(),
+        };
+        // a curtain wall is no wall to put a door in
+        app.set_model_tool(Some((ModelTool::Door, "Door")));
+        click(&mut app, 2.0, 0.0);
+        assert!(framed(&app).is_empty());
+        // as a timber frame it takes the door and the window where they are clicked
+        app.select_modelled(id);
+        assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
+        // the Door tool is still on
+        click(&mut app, 2.0, 0.0);
+        assert_eq!((app.modeller.refusal.clone(), framed(&app).len()), (None, 1), "the door is framed");
+        app.set_model_tool(Some((ModelTool::Window, "Window")));
+        click(&mut app, 4.5, 0.0);
+        let placed = framed(&app);
+        let expected = [Opening { along: 1.55, sill: DOOR.2, width: DOOR.0, height: DOOR.1 }, Opening { along: 3.9, sill: WINDOW.2, width: WINDOW.0, height: WINDOW.1 }];
+        assert_eq!(placed.len(), 2, "{placed:?}");
+        for (o, e) in placed.iter().zip(&expected) {
+            assert!((o.along - e.along).abs() < 1e-9 && (o.sill, o.width, o.height) == (e.sill, e.width, e.height), "{o:?}");
+        }
+        // and one step back takes the window out again
+        let _ = app.update(Message::Undo);
+        assert_eq!(framed(&app).len(), 1);
+    }
+
+    #[test]
+    fn a_metal_stud_partition_is_built_and_takes_a_door() {
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        app.viewport_size = (1000.0, 800.0);
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Top);
+        app.camera.ortho = true;
+        app.camera.target = Vec3::ZERO;
+        app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
+        app.select_modelled(id);
+        for (kind, boards) in [("system.metal-stud-75-1", 2), ("system.metal-stud-100-2", 4)] {
+            app.select_modelled(id);
+            assert_eq!(app.assign_system_type(kind), 1, "{kind}");
+            let parts = app.modeller.model.evaluate(id).unwrap();
+            // studs at 600 over 6 m, between a bottom and a top track
+            assert!(parts.len() > 12, "{kind}: {} parts", parts.len());
+            let Shape::System(typed) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
+            let t = typed.system_type.as_ref().unwrap();
+            assert_eq!((t.member_material.as_str(), t.layers.len()), ("steel", boards), "{kind}");
+        }
+        app.set_model_tool(Some((ModelTool::Door, "Door")));
+        click(&mut app, 3.0, 0.0);
+        let Shape::System(with_door) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
+        assert_eq!((app.modeller.refusal.clone(), with_door.openings.len()), (None, 1));
     }
 
     #[test]

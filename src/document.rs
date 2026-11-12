@@ -535,7 +535,9 @@ impl Document {
             .filter(|(_, z)| z.is_finite())
             .map(|(name, z)| {
                 let elevation = micrometres(*z as f64);
-                Level { path: uuid(&format!("level/{name}/{elevation}")), name: name.clone(), elevation, added: false }
+                // the path the file names the level by, so its elements and plans still find it
+                let named = model.project.level_paths.iter().find(|(n, _)| n == name).map(|(_, path)| path.clone());
+                Level { path: named.unwrap_or_else(|| uuid(&format!("level/{name}/{elevation}"))), name: name.clone(), elevation, added: false }
             })
             .collect();
         let taken = |name: &str, levels: &[Level]| levels.iter().any(|l| same_name(&l.name, name));

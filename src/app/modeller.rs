@@ -937,6 +937,28 @@ mod tests {
         assert!(id.0 > written.iter().map(|e| e.id.0).max().unwrap());
     }
 
+    /// A wall of a level made in the app still belongs to that level after the project is saved
+    /// and opened again.
+    #[test]
+    fn a_wall_keeps_its_level_when_the_project_is_opened_again() {
+        let mut app = modelling();
+        let _ = app.document.add_level("Level 1", 3.0);
+        let level = app.document.levels().iter().find(|l| l.name == "Level 1").unwrap().path.clone();
+        let wall = Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 3.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None });
+        let id = app.add_element("Wall", Some(level), wall).unwrap();
+        let scene = app.model.clone().unwrap();
+        let bytes = crate::export::to_bytes(&scene, &app.document, "house.ifcx").expect("IFCX");
+        let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: Arc::new(bytes) };
+        let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        let mut back = App::default();
+        back.set_model(Arc::new(loaded));
+        let names: Vec<&str> = back.document.levels().iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Level 0", "Level 1"]);
+        let kept = back.modeller.model.get(id).and_then(|e| e.level.clone()).expect("the wall names a level");
+        let of = back.document.level(&kept).map(|l| l.name.as_str());
+        assert_eq!(of, Some("Level 1"), "the wall's level is one of the project's");
+    }
+
     #[test]
     fn the_first_selected_element_cuts_the_second() {
         let mut app = modelling();

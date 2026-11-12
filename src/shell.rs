@@ -834,8 +834,8 @@ impl Studio {
                 .toggle(app.plane.is_some() || app.plane_picking)
                 .enabled(loaded),
             Command::new("section.flip", l.text("Omdraaien", "Flip"), go(Message::FlipPlane)).icon(small("transform.mirror"), large("transform.mirror")).enabled(app.plane.is_some()),
-            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.history.can_undo()),
-            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.history.can_redo()),
+            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.can_undo()),
+            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.can_redo()),
             Command::new("selection.layer", l.text("Laag selecteren", "Select layer"), go(Message::SelectLayerOfSelection))
                 .icon(small("view.fit-selection"), large("view.fit-selection"))
                 .enabled(!app.sel.is_empty()),
@@ -897,6 +897,13 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // move, copy, turn and mirror what is selected
+        list.extend(crate::app::transform::TransformKind::ALL.map(|kind| {
+            Command::new(kind.id(), kind.label(l), go(Message::Transform(kind)))
+                .icon(small(kind.icon()), large(kind.icon()))
+                .toggle(app.modeller.transform.as_ref().is_some_and(|t| t.kind == kind))
+                .enabled(!app.selected_modelled().is_empty() || app.modeller.transform.is_some())
+        }));
         // the project's levels, views, sheets and library
         use crate::document::PlanKind;
         let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
@@ -1552,7 +1559,7 @@ impl Studio {
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
-                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
+                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![

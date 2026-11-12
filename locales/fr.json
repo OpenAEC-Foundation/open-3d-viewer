@@ -612,6 +612,15 @@
     "No properties are read of this element": "Aucune propriété n'est lue pour cet élément",
     "X, Y, Z in metres; Enter applies.": "X, Y, Z en mètres ; Entrée applique.",
     "Zero point": "Point zéro",
-    "Zero point in model (m)": "Point zéro dans le modèle (m)"
+    "Zero point in model (m)": "Point zéro dans le modèle (m)",
+    "Move": "Déplacer",
+    "Copy": "Copier",
+    "Rotate": "Faire pivoter",
+    "Mirror": "Symétrie",
+    "Click the centre to turn about · Esc: stop": "Cliquez sur le centre de rotation · Échap : arrêter",
+    "Click a point to turn from · Esc: start again": "Cliquez sur un point de départ de la rotation · Échap : recommencer",
+    "Click where that point turns to · Esc: start again": "Cliquez où ce point doit arriver · Échap : recommencer",
+    "Click a point of the mirror axis · Esc: stop": "Cliquez sur un point de l'axe de symétrie · Échap : arrêter",
+    "Click a second point of the mirror axis · Esc: start again": "Cliquez sur un second point de l'axe de symétrie · Échap : recommencer"
   }
 }

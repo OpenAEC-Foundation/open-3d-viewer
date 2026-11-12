@@ -30,6 +30,8 @@ mod placement;
 mod placing;
 mod schedules;
 mod take_over;
+pub mod transform;
+mod undo;
 mod view_props;
 mod views;
 mod sheets;
@@ -301,6 +303,10 @@ pub struct App {
     pub hidden: Arc<UnitKeySet>,
     /// Undo and redo of what is shown: hidden elements and layer and model switches.
     pub history: History<ViewState>,
+    /// Which history each step went into, in the order they were made (true: the modelled
+    /// elements', false: the view's), and the same for the steps taken back.
+    undo_trail: Vec<bool>,
+    redo_trail: Vec<bool>,
     /// The selection box while it is dragged: from, to (viewport pixels).
     pub box_select: Option<(Vec2, Vec2)>,
     /// The right-click menu, open at this viewport point (logical pixels).
@@ -613,6 +619,8 @@ pub enum Message {
     ModelTool(Option<(modeller::ModelTool, &'static str)>),
     /// Join the two linear elements selected (the first is the primary), the joint named so.
     Connect(bim_core::ConnectionKind, &'static str),
+    /// Move, copy, turn or mirror the selected modelled elements with the next clicks.
+    Transform(transform::TransformKind),
     /// Tab: into edit mode on the selected modelled element, or out of it.
     EditMode,
     /// What the edit overlay reports: a point pressed, dragged, let go.
@@ -777,6 +785,8 @@ impl Default for App {
             units: Arc::default(),
             hidden: Arc::default(),
             history: History::new(),
+            undo_trail: Vec::new(),
+            redo_trail: Vec::new(),
             box_select: None,
             context_menu: None,
             explode_bounds: None,
@@ -1329,10 +1339,13 @@ impl App {
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);
+            self.note_step(false);
         }
         if shown {
             self.keep_view_layers();
         }
+        // a step that changed the modelled elements can be taken back
+        self.keep_model_history();
         self.keep_views_in_3d();
         self.keep_cut_faces();
         self.follow_selection();
@@ -1431,6 +1444,7 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
+            Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
@@ -2046,16 +2060,8 @@ impl App {
                     Category::Angle => u.angle_decimals = n,
                 }
             }
-            Message::Undo => {
-                if let Some(state) = self.history.undo(self.view_state()) {
-                    self.restore_view_state(state);
-                }
-            }
-            Message::Redo => {
-                if let Some(state) = self.history.redo(self.view_state()) {
-                    self.restore_view_state(state);
-                }
-            }
+            Message::Undo => self.undo_step(),
+            Message::Redo => self.redo_step(),
             Message::SelectWhere(key, value) => {
                 if let Some(model) = self.model.clone() {
                     self.sel.clear();
@@ -2070,6 +2076,9 @@ impl App {
             Message::Escape if self.plane_picking => self.plane_picking = false,
             Message::Escape if self.modeller.edit.is_some() => {
                 self.edit_escape();
+            }
+            Message::Escape if self.modeller.transform.is_some() => {
+                self.escape_transform();
             }
             Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
                 if !self.escape_model_tool() {
@@ -2188,6 +2197,9 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        if self.modeller.transform.is_some() {
+            return self.transform_click(x, y, width, height);
+        }
         if self.modeller.tool.is_some() {
             return self.model_click(x, y, width, height);
         }
@@ -3341,6 +3353,12 @@ impl App {
             })
         } else if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
+        } else if let Some(t) = &self.modeller.transform {
+            let hint = t.kind.hint(l, t.points.len());
+            Some(match self.modeller.refusal {
+                Some(refusal) => format!("{}: {} · {}", t.kind.label(l), l.translate(refusal.reason()), hint),
+                None => format!("{}: {}", t.kind.label(l), hint),
+            })
         } else if let Some((tool, _)) = self.modeller.tool {
             let hint = tool.hint(l, self.modeller.points.len());
             Some(match self.modeller.refusal {
@@ -3481,7 +3499,7 @@ impl App {
             item(l.text("Laag selecteren", "Select layer"), "", MenuItem::SelectLayer, !self.sel.is_empty()),
             item(l.text("Selectie opheffen", "Clear selection"), "Esc", MenuItem::ClearSelection, selected),
             rule::horizontal(1),
-            item(l.text("Ongedaan maken", "Undo"), Shortcut::ctrl('z').label(), MenuItem::Undo, self.history.can_undo()),
+            item(l.text("Ongedaan maken", "Undo"), Shortcut::ctrl('z').label(), MenuItem::Undo, self.can_undo()),
         ]
         .width(MENU_WIDTH);
         let menu = container(items).padding(4).style(move |_| container::Style { background: Some(Background::Color(p.surface)), ..p.overlay() });

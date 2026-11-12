@@ -612,6 +612,15 @@
     "No properties are read of this element": "Von diesem Element werden keine Eigenschaften gelesen",
     "X, Y, Z in metres; Enter applies.": "X, Y, Z in Metern; Enter übernimmt.",
     "Zero point": "Nullpunkt",
-    "Zero point in model (m)": "Nullpunkt im Modell (m)"
+    "Zero point in model (m)": "Nullpunkt im Modell (m)",
+    "Move": "Verschieben",
+    "Copy": "Kopieren",
+    "Rotate": "Drehen",
+    "Mirror": "Spiegeln",
+    "Click the centre to turn about · Esc: stop": "Klicken Sie auf den Drehpunkt · Esc: beenden",
+    "Click a point to turn from · Esc: start again": "Klicken Sie auf einen Punkt, von dem aus gedreht wird · Esc: neu beginnen",
+    "Click where that point turns to · Esc: start again": "Klicken Sie, wohin dieser Punkt gedreht wird · Esc: neu beginnen",
+    "Click a point of the mirror axis · Esc: stop": "Klicken Sie auf einen Punkt der Spiegelachse · Esc: beenden",
+    "Click a second point of the mirror axis · Esc: start again": "Klicken Sie auf einen zweiten Punkt der Spiegelachse · Esc: neu beginnen"
   }
 }

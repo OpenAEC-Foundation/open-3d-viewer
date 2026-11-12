@@ -174,6 +174,14 @@ pub struct Modeller {
     pub project_file: Option<PathBuf>,
     /// A value being typed in the Definition section: the element, the field, the text.
     pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
+    /// The model before each step that changed it, to take the step back (`super::undo`).
+    /// A move, copy, turn or mirror of the selected elements under way (`super::transform`).
+    pub transform: Option<super::transform::Transform>,
+    pub history: crate::history::History<Arc<bim_core::Model>>,
+    /// The model as its last step left it: what a change is measured against.
+    pub base: Arc<bim_core::Model>,
+    /// The elements were shown again since the history last looked: they may have changed.
+    pub touched: bool,
 }
 
 impl App {
@@ -189,6 +197,8 @@ impl App {
             }
         }
         self.show_modelled();
+        // what a file gives is where its history starts
+        self.settle_modelled();
         self.fit();
     }
 
@@ -457,6 +467,7 @@ impl App {
     /// Shows the modelled elements again after a change: their viewer model takes the place of
     /// the one shown before, and the scene is put together again without moving the camera.
     pub(super) fn show_modelled(&mut self) {
+        self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
         let built = Arc::new(viewer_model(&self.modeller.model, &levels, &self.library));
         let before = self.modeller.shown.replace(built.id);

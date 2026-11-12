@@ -164,6 +164,12 @@ pub struct Modeller {
     pub aim: Option<super::openings::Aim>,
     /// The type and sizes each tool places with, typed in the strip over the view.
     pub placement: super::placement::Placement,
+    /// The Modeller product is shown: there a selected wall of an opened file has grips, and a
+    /// drag takes it over (see `take_over`).
+    pub in_modeller: bool,
+    /// The IFCX document the project became when it took over an opened file's first wall: the
+    /// file's name with `.ifcx`, in its folder.
+    pub project_file: Option<PathBuf>,
     /// A value being typed in the Definition section: the element, the field, the text.
     pub typing: Option<(ElementId, super::element_props::ElementField, String)>,
 }
@@ -462,7 +468,13 @@ impl App {
             self.models[0].model.clone()
         } else {
             let sources: Vec<Arc<Model>> = self.models.iter().map(|e| e.model.clone()).collect();
-            Arc::new(Model::combine(&sources))
+            let mut combined = Model::combine(&sources);
+            // a project that took over an opened file's walls is an IFCX document of its own
+            if let Some(file) = &self.modeller.project_file {
+                combined.path = file.clone();
+                combined.format = "IFCX".into();
+            }
+            Arc::new(combined)
         };
         self.replace_scene(scene);
     }

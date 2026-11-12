@@ -411,8 +411,9 @@ pub fn point_solid(p: &PointDef) -> Result<Solid, Refusal> {
     Solid::extrude(&Profile::rectangle(p.size.x, p.size.y)?, &axes, p.size.z)
 }
 
-/// The solid of a planar element, as one body through all its layers.
-pub fn planar_solid(p: &PlanarDef) -> Result<Solid, Refusal> {
+/// The solids of a planar element, each through all its layers: one, or one per piece of a wall
+/// that openings through its whole height (or width) split.
+pub fn planar_solids(p: &PlanarDef) -> Result<Vec<Solid>, Refusal> {
     let thickness = p.total_thickness();
     if !positive(thickness) {
         return Err(Refusal::NotPositive);
@@ -420,8 +421,8 @@ pub fn planar_solid(p: &PlanarDef) -> Result<Solid, Refusal> {
     if let Some(b) = &p.build_up {
         b.check()?;
     }
-    let (profile, axes) = planar_base(p, thickness, [0.0; 2])?;
-    Solid::extrude(&profile, &axes, thickness)
+    let (profiles, axes) = planar_base(p, thickness, [0.0; 2])?;
+    profiles.iter().map(|profile| Solid::extrude(profile, &axes, thickness)).collect()
 }
 
 /// The solids of a planar element with their materials: one per layer of its build-up (none for a
@@ -438,12 +439,12 @@ pub fn planar_parts_extended(p: &PlanarDef, extend: [f64; 2]) -> Result<Vec<(Opt
         if !positive(thickness) {
             return Err(Refusal::NotPositive);
         }
-        let (profile, axes) = planar_base(p, thickness, extend)?;
-        return Ok(vec![(None, Solid::extrude(&profile, &axes, thickness)?)]);
+        let (profiles, axes) = planar_base(p, thickness, extend)?;
+        return profiles.iter().map(|profile| Ok((None, Solid::extrude(profile, &axes, thickness)?))).collect();
     };
     b.check()?;
     let thickness = b.thickness();
-    let (profile, axes) = planar_base(p, thickness, extend)?;
+    let (profiles, axes) = planar_base(p, thickness, extend)?;
     let mut parts = Vec::new();
     let mut from = 0.0;
     for layer in &b.layers {
@@ -452,7 +453,9 @@ pub fn planar_parts_extended(p: &PlanarDef, extend: [f64; 2]) -> Result<Vec<(Opt
             // a wall's layers from its exterior (its right face, at z = thickness) in; a slab's
             // from its top (at z = thickness) down
             let at = Axes::new(axes.origin + axes.z * (thickness - to), axes.x, axes.z)?;
-            parts.push((Some(layer.material.clone()), Solid::extrude(&profile, &at, layer.thickness)?));
+            for profile in &profiles {
+                parts.push((Some(layer.material.clone()), Solid::extrude(profile, &at, layer.thickness)?));
+            }
         }
         from = to;
     }
@@ -460,9 +463,9 @@ pub fn planar_parts_extended(p: &PlanarDef, extend: [f64; 2]) -> Result<Vec<(Opt
 }
 
 /// What a planar element `thickness` thick extrudes, and the frame it extrudes in along its z: a
-/// wall's elevation from its left face (reaching `extend` past its start and end), a slab's outline
-/// from its underside.
-fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Profile, Axes), Refusal> {
+/// wall's elevation from its left face (reaching `extend` past its start and end), a profile per
+/// piece of wall; a slab's outline from its underside.
+fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Vec<Profile>, Axes), Refusal> {
     match &p.form {
         PlanarForm::Wall { start, end, base, height } => {
             let (axes, length) = wall_axes(*start, *end, *base, thickness)?;
@@ -474,13 +477,24 @@ fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Profi
             if extend == [0.0; 2] {
                 return Ok((elevation, axes));
             }
-            let shifted: Vec<Opening> = p.openings.iter().map(|o| Opening { along: o.along + extend[0], ..*o }).collect();
+            // an opening that reaches an end goes on through the reach past it
+            let tol = LINEAR_TOLERANCE;
+            let reach_length = length + extend[0] + extend[1];
+            let shifted: Vec<Opening> = p
+                .openings
+                .iter()
+                .map(|o| {
+                    let from = if o.along <= tol { 0.0 } else { o.along + extend[0] };
+                    let to = if o.along + o.width >= length - tol { reach_length } else { o.along + o.width + extend[0] };
+                    Opening { along: from, width: to - from, ..*o }
+                })
+                .collect();
             let reach = Axes::new(axes.origin - axes.x * extend[0], axes.x, axes.z)?;
-            Ok((wall_elevation(length + extend[0] + extend[1], *height, &shifted)?, reach))
+            Ok((wall_elevation(reach_length, *height, &shifted)?, reach))
         }
         PlanarForm::Slab { outline, holes, top } => {
             let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
-            Ok((Profile::new(outline.clone(), holes.clone())?, axes))
+            Ok((vec![Profile::new(outline.clone(), holes.clone())?], axes))
         }
     }
 }
@@ -498,15 +512,24 @@ fn wall_axes(start: DVec2, end: DVec2, base: f64, thickness: f64) -> Result<(Axe
     Ok((Axes::new(start.extend(base) - right * (thickness / 2.0), dir, right)?, length))
 }
 
-/// A wall's elevation, `length` × `height`, with its openings: those without a sill cut the bottom
-/// edge, the others are holes. Openings must keep wall on both sides and above, and not touch.
-fn wall_elevation(length: f64, height: f64, openings: &[Opening]) -> Result<Profile, Refusal> {
+/// A wall's elevation, `length` × `height`, less its openings: a profile per piece of wall that is
+/// left (from the start, bottom up), each outline with the holes in it.
+///
+/// An opening may reach the base (a door), the top or an end, and an opening through the wall's
+/// whole height (or length) splits it; what lies past the wall's edges takes nothing. An opening
+/// must take something from the wall, openings must not touch, and some wall must be left.
+///
+/// The elevation is cut on the grid of the wall's and the openings' edges (an edge within the
+/// linear tolerance of another taken onto it): each cell is wall or opening, the cells of wall that
+/// share a side are one piece, and a piece's outline and holes are the sides between wall and the
+/// rest, run with the wall on their left.
+fn wall_elevation(length: f64, height: f64, openings: &[Opening]) -> Result<Vec<Profile>, Refusal> {
     let tol = LINEAR_TOLERANCE;
     for o in openings {
         if !positive(o.width) || !positive(o.height) || !o.along.is_finite() || !o.sill.is_finite() {
             return Err(Refusal::NotPositive);
         }
-        if o.along <= tol || o.along + o.width >= length - tol || o.sill < -tol || o.sill + o.height >= height - tol {
+        if o.along >= length - tol || o.along + o.width <= tol || o.sill >= height - tol || o.sill + o.height <= tol {
             return Err(Refusal::OpeningOutside);
         }
     }
@@ -519,21 +542,92 @@ fn wall_elevation(length: f64, height: f64, openings: &[Opening]) -> Result<Prof
             }
         }
     }
-    let door = |o: &&Opening| o.sill <= tol;
-    let mut doors: Vec<&Opening> = openings.iter().filter(door).collect();
-    doors.sort_by(|a, b| a.along.total_cmp(&b.along));
-    let p = DVec2::new;
-    let mut outer = vec![p(0.0, 0.0)];
-    for d in doors {
-        outer.extend([p(d.along, 0.0), p(d.along, d.height), p(d.along + d.width, d.height), p(d.along + d.width, 0.0)]);
+    // the grid lines: the wall's edges and the openings' within it, near ones taken as one
+    let lines = |ends: Vec<f64>, max: f64| -> Vec<f64> {
+        let mut values: Vec<f64> = ends.into_iter().map(|v| v.clamp(0.0, max)).chain([0.0, max]).collect();
+        values.sort_by(f64::total_cmp);
+        let mut kept: Vec<f64> = Vec::new();
+        for v in values {
+            if kept.last().is_none_or(|k| v - k > tol) {
+                kept.push(v);
+            }
+        }
+        // the far edge is the wall's own
+        if let Some(last) = kept.last_mut() {
+            *last = max;
+        }
+        kept
+    };
+    let xs = lines(openings.iter().flat_map(|o| [o.along, o.along + o.width]).collect(), length);
+    let ys = lines(openings.iter().flat_map(|o| [o.sill, o.sill + o.height]).collect(), height);
+    let (nx, ny) = (xs.len() - 1, ys.len() - 1);
+    // a cell is wall unless its middle lies in an opening
+    let wall = |i: usize, j: usize| {
+        let (x, y) = ((xs[i] + xs[i + 1]) / 2.0, (ys[j] + ys[j + 1]) / 2.0);
+        !openings.iter().any(|o| o.along < x && x < o.along + o.width && o.sill < y && y < o.sill + o.height)
+    };
+    let solid: Vec<Vec<bool>> = (0..nx).map(|i| (0..ny).map(|j| wall(i, j)).collect()).collect();
+    let mut piece = vec![vec![usize::MAX; ny]; nx];
+    let mut pieces = Vec::new();
+    for i0 in 0..nx {
+        for j0 in 0..ny {
+            if !solid[i0][j0] || piece[i0][j0] != usize::MAX {
+                continue;
+            }
+            // the cells of this piece, and the sides it shares with the rest, wall on their left
+            let k = pieces.len();
+            // ordered, so every ring starts at its lowest corner and the result is the same every time
+            let mut edges: std::collections::BTreeMap<(usize, usize), (usize, usize)> = std::collections::BTreeMap::new();
+            let mut stack = vec![(i0, j0)];
+            piece[i0][j0] = k;
+            while let Some((i, j)) = stack.pop() {
+                let neighbours = [(i.checked_sub(1), Some(j)), ((i + 1 < nx).then_some(i + 1), Some(j)), (Some(i), j.checked_sub(1)), (Some(i), (j + 1 < ny).then_some(j + 1))];
+                for (a, b) in neighbours {
+                    if let (Some(a), Some(b)) = (a, b) {
+                        if solid[a][b] && piece[a][b] == usize::MAX {
+                            piece[a][b] = k;
+                            stack.push((a, b));
+                        }
+                    }
+                }
+                let open = |a: Option<usize>, b: Option<usize>| !matches!((a, b), (Some(a), Some(b)) if solid[a][b]);
+                let sides = [
+                    (open(Some(i), j.checked_sub(1)), (i, j), (i + 1, j)),
+                    (open((i + 1 < nx).then_some(i + 1), Some(j)), (i + 1, j), (i + 1, j + 1)),
+                    (open(Some(i), (j + 1 < ny).then_some(j + 1)), (i + 1, j + 1), (i, j + 1)),
+                    (open(i.checked_sub(1), Some(j)), (i, j + 1), (i, j)),
+                ];
+                for (bounds, from, to) in sides {
+                    // a corner two sides leave is a pinch, which only touching openings make
+                    if bounds && edges.insert(from, to).is_some() {
+                        return Err(Refusal::OpeningsOverlap);
+                    }
+                }
+            }
+            // the sides run into rings: the outline counter-clockwise, holes clockwise
+            let mut outer = None;
+            let mut holes = Vec::new();
+            while let Some((&start, _)) = edges.first_key_value() {
+                let mut ring = Vec::new();
+                let mut at = start;
+                while let Some(next) = edges.remove(&at) {
+                    ring.push(DVec2::new(xs[at.0], ys[at.1]));
+                    at = next;
+                }
+                let area: f64 = (0..ring.len()).map(|n| ring[n].perp_dot(ring[(n + 1) % ring.len()])).sum();
+                if area > 0.0 {
+                    outer = Some(ring);
+                } else {
+                    holes.push(ring);
+                }
+            }
+            pieces.push(Profile::new(outer.ok_or(Refusal::Degenerate)?, holes)?);
+        }
     }
-    outer.extend([p(length, 0.0), p(length, height), p(0.0, height)]);
-    let holes = openings
-        .iter()
-        .filter(|o| !door(o))
-        .map(|o| vec![p(o.along, o.sill), p(o.along, o.sill + o.height), p(o.along + o.width, o.sill + o.height), p(o.along + o.width, o.sill)])
-        .collect();
-    Profile::new(outer, holes)
+    if pieces.is_empty() {
+        return Err(Refusal::Empty);
+    }
+    Ok(pieces)
 }
 
 /// The members and panels of a system, by its type when it has one ([`crate::system`]).
@@ -549,6 +643,23 @@ mod tests {
         PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings, build_up: None }
     }
 
+    /// The solid of a planar element in one piece.
+    fn planar_solid(p: &PlanarDef) -> Result<Solid, Refusal> {
+        planar_solids(p).map(|mut pieces| {
+            assert_eq!(pieces.len(), 1, "one piece");
+            pieces.remove(0)
+        })
+    }
+
+    fn at(along: f64, sill: f64, width: f64, height: f64) -> Opening {
+        Opening { along, sill, width, height }
+    }
+
+    /// The volume of a 5 × 3 m wall 0.2 thick with `area` square metres of its elevation taken out.
+    fn less(area: f64) -> f64 {
+        (5.0 * 3.0 - area) * 0.2
+    }
+
     #[test]
     fn a_wall_is_its_elevation_extruded_through_its_thickness() {
         let s = planar_solid(&wall(Vec::new())).unwrap();
@@ -559,7 +670,7 @@ mod tests {
 
     #[test]
     fn openings_cut_the_wall_without_booleans() {
-        let door = Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1 };
+        let door = at(0.5, 0.0, 0.9, 2.1);
         let window = Opening { along: 2.0, sill: 0.9, width: 1.5, height: 1.2 };
         let s = planar_solid(&wall(vec![door, window])).unwrap();
         let expected = (5.0 * 3.0 - 0.9 * 2.1 - 1.5 * 1.2) * 0.2;
@@ -567,15 +678,69 @@ mod tests {
     }
 
     #[test]
-    fn openings_that_do_not_fit_are_refused() {
-        let at = |along, sill, width, height| Opening { along, sill, width, height };
-        assert_eq!(planar_solid(&wall(vec![at(0.0, 0.9, 1.0, 1.0)])), Err(Refusal::OpeningOutside), "at the start");
-        assert_eq!(planar_solid(&wall(vec![at(4.5, 0.9, 0.5, 1.0)])), Err(Refusal::OpeningOutside), "at the end");
-        assert_eq!(planar_solid(&wall(vec![at(1.0, 2.0, 1.0, 1.0)])), Err(Refusal::OpeningOutside), "through the top");
-        assert_eq!(planar_solid(&wall(vec![at(1.0, -0.1, 1.0, 1.0)])), Err(Refusal::OpeningOutside), "below the base");
-        assert_eq!(planar_solid(&wall(vec![at(1.0, 0.9, 1.0, 1.0), at(1.5, 1.5, 1.0, 1.0)])), Err(Refusal::OpeningsOverlap));
-        assert_eq!(planar_solid(&wall(vec![at(1.0, 0.9, 1.0, 1.0), at(2.0, 0.9, 1.0, 1.0)])), Err(Refusal::OpeningsOverlap), "touching");
-        assert_eq!(planar_solid(&wall(vec![at(1.0, 0.9, 0.0, 1.0)])), Err(Refusal::NotPositive));
+    fn openings_that_take_nothing_touch_or_take_everything_are_refused() {
+        assert_eq!(planar_solids(&wall(vec![at(5.5, 0.9, 1.0, 1.0)])), Err(Refusal::OpeningOutside), "past the end");
+        assert_eq!(planar_solids(&wall(vec![at(1.0, 3.2, 1.0, 1.0)])), Err(Refusal::OpeningOutside), "above the top");
+        assert_eq!(planar_solids(&wall(vec![at(-2.0, 0.9, 2.0, 1.0)])), Err(Refusal::OpeningOutside), "before the start");
+        assert_eq!(planar_solids(&wall(vec![at(1.0, 0.9, 1.0, 1.0), at(1.5, 1.5, 1.0, 1.0)])), Err(Refusal::OpeningsOverlap));
+        assert_eq!(planar_solids(&wall(vec![at(1.0, 0.9, 1.0, 1.0), at(2.0, 0.9, 1.0, 1.0)])), Err(Refusal::OpeningsOverlap), "touching");
+        assert_eq!(planar_solids(&wall(vec![at(1.0, 0.9, 0.0, 1.0)])), Err(Refusal::NotPositive));
+        assert_eq!(planar_solids(&wall(vec![at(-0.1, -0.1, 5.2, 3.2)])), Err(Refusal::Empty), "the whole wall");
+    }
+
+    #[test]
+    fn an_opening_may_reach_the_top_or_an_end() {
+        let volume = |o: Opening| planar_solid(&wall(vec![o])).unwrap().volume();
+        let cases = [
+            (at(0.0, 0.9, 1.0, 1.0), 1.0, "at the start"),
+            (at(4.5, 0.9, 0.5, 1.0), 0.5, "at the end"),
+            (at(1.0, 2.0, 1.0, 1.0), 1.0, "to the top"),
+            (at(1.0, 2.5, 1.0, 1.0), 0.5, "past the top: what lies in the wall"),
+            (at(1.0, -0.1, 1.0, 1.0), 0.9, "from below the base: a door"),
+            (at(4.0, 2.0, 1.5, 1.5), 1.0, "in the top corner at the end"),
+            (at(-0.3, 0.0, 1.3, 2.1), 2.1, "a door at the start, past it"),
+        ];
+        for (o, area, what) in cases {
+            assert!((volume(o) - less(area)).abs() < 1e-12, "{what}: {} vs {}", volume(o), less(area));
+        }
+    }
+
+    #[test]
+    fn an_opening_through_the_whole_height_or_length_splits_the_wall() {
+        // a door to the top: two pieces, from the start
+        let pieces = planar_solids(&wall(vec![at(2.0, 0.0, 1.0, 3.0)])).unwrap();
+        assert_eq!(pieces.len(), 2);
+        let (lo, hi) = pieces[0].bounds();
+        assert!(lo.x.abs() < 1e-12 && (hi.x - 2.0).abs() < 1e-12, "{lo} {hi}");
+        let (lo, hi) = pieces[1].bounds();
+        assert!((lo.x - 3.0).abs() < 1e-12 && (hi.x - 5.0).abs() < 1e-12, "{lo} {hi}");
+        assert!(pieces.iter().all(|p| (p.volume() - 2.0 * 3.0 * 0.2).abs() < 1e-12));
+        // a band through the whole length: below and above it, bottom up
+        let pieces = planar_solids(&wall(vec![at(-0.5, 1.0, 6.0, 1.0)])).unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert!((pieces[0].bounds().1.z - 1.0).abs() < 1e-12 && (pieces[1].bounds().0.z - 2.0).abs() < 1e-12);
+        // with a window in one piece and a door to the top beside it
+        let pieces = planar_solids(&wall(vec![at(0.5, 0.9, 1.0, 1.2), at(2.0, 0.0, 1.0, 3.0), at(3.5, 0.0, 0.9, 2.1)])).unwrap();
+        let volume: f64 = pieces.iter().map(Solid::volume).sum();
+        assert_eq!(pieces.len(), 2);
+        assert!((volume - less(1.2 + 3.0 + 0.9 * 2.1)).abs() < 1e-12, "{volume}");
+        // every layer of a layered wall is split alike
+        let mut w = cavity_wall();
+        w.openings = vec![at(2.0, 0.0, 1.0, 3.0)];
+        let parts = planar_parts(&w).unwrap();
+        assert_eq!(parts.len(), 3 * 2);
+        let volume: f64 = parts.iter().map(|(_, s)| s.volume()).sum();
+        assert!((volume - 4.0 * 3.0 * 0.32).abs() < 1e-9, "{volume}");
+    }
+
+    #[test]
+    fn edges_within_the_tolerance_of_the_wall_or_each_other_are_taken_as_one() {
+        // a window a micrometre from the start and one whose edge lies a nanometre beside the first's
+        let near = 1e-7;
+        let s = planar_solid(&wall(vec![at(near, 0.9, 1.0, 1.0), at(2.0, 0.9 + 1e-9, 1.0, 1.0)])).unwrap();
+        // the first taken onto the start, so it is that much wider; the second onto the first's lines
+        assert!((s.volume() - less(2.0 + near)).abs() < 1e-12, "{}", s.volume());
+        assert_eq!(s.positions.len(), 2 * (8 + 4), "an outline of eight corners and a hole of four on either face: no slivers");
     }
 
     #[test]

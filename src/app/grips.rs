@@ -52,10 +52,14 @@ impl App {
         half_width(&self.modeller.model.get(id)?.shape).map(|_| id)
     }
 
-    /// The grips of the selected element over the viewport: its ends, then its middle.
+    /// The grips of the selected element over the viewport: its ends, then its middle. A wall of
+    /// an opened file that the Modeller can take over has them too (see `take_over`).
     pub(super) fn grip_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
-        let id = self.gripped()?;
-        let (mut points, _) = edit_points(&self.modeller.model.get(id)?.shape_in_project(&self.modeller.model.grid));
+        let shape = match self.gripped() {
+            Some(id) => self.modeller.model.get(id)?.shape_in_project(&self.modeller.model.grid),
+            None => Shape::Planar(self.source_gripped()?.wall),
+        };
+        let (mut points, _) = edit_points(&shape);
         points.push((points[0] + points[1]) / 2.0);
         Some(EditOverlay {
             picked: vec![false; points.len()],
@@ -70,6 +74,13 @@ impl App {
     /// A press on grip `index` of the selected element: an end, or (past them) the middle, which
     /// moves both.
     pub(super) fn grip_press(&mut self, index: usize) {
+        if self.gripped().is_none() {
+            // a wall of an opened file: taken over first, then dragged as a modelled wall
+            let Some(source) = self.source_gripped() else { return };
+            if self.take_over(source).is_none() {
+                return;
+            }
+        }
         let Some(element) = self.gripped() else { return };
         let picked = if index < 2 { vec![index] } else { vec![0, 1] };
         self.modeller.edit = Some(Edit { element, picked, grab: None, grips: true });

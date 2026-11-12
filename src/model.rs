@@ -215,8 +215,25 @@ pub struct ProjectData {
     /// The definitions of elements this viewer modelled, as an IFCX file it wrote holds them
     /// (`openaec::element`); the modeller takes them over.
     pub elements: Vec<serde_json::Value>,
+    /// The walls of the file the Modeller can take over as editable walls (Revit), by element id.
+    pub walls: HashMap<u64, SourceWall>,
     /// Schedules: computed after the model shows, as they take seconds on a large project.
     pub schedules: Later<Vec<Schedule>>,
+}
+
+/// A wall of an opened file that the Modeller can take over as an editable wall (Revit), in the
+/// model's display coordinates (metres, Z up): the file's location line as its axis, its base and
+/// height, its type's total thickness, the doors and windows in it as openings, and the name of
+/// its base level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceWall {
+    pub start: glam::DVec2,
+    pub end: glam::DVec2,
+    pub base: f64,
+    pub height: f64,
+    pub thickness: f64,
+    pub openings: Vec<bim_core::Opening>,
+    pub level: Option<String>,
 }
 
 /// Work a loader leaves for after the model shows; whoever takes it runs it (once).
@@ -931,6 +948,61 @@ impl Model {
             return (key.model == 0).then_some(key.source);
         }
         self.ids.get(&key).copied()
+    }
+
+    /// This model without the elements `gone`: their triangles, properties and walls left out, and
+    /// a layer left empty by them too; the rest as it was. It is a model of its own (a new id).
+    pub fn without_elements(&self, gone: &std::collections::HashSet<u64>) -> Self {
+        let layers: Vec<Layer> = self
+            .layers
+            .iter()
+            .map(|layer| {
+                let mut layer = layer.clone();
+                if layer.elements.iter().any(|e| gone.contains(&e.0)) {
+                    let mut indices = Vec::with_capacity(layer.indices.len());
+                    let mut elements = Vec::with_capacity(layer.elements.len());
+                    // the triangles of no element stay where they are among the others
+                    let mut at = 0usize;
+                    for &(id, first, count) in &layer.elements {
+                        let (first, end) = (first as usize, (first + count) as usize);
+                        indices.extend_from_slice(&layer.indices[at.min(first)..first]);
+                        if !gone.contains(&id) {
+                            elements.push((id, indices.len() as u32, count));
+                            indices.extend_from_slice(&layer.indices[first..end]);
+                        }
+                        at = at.max(end);
+                    }
+                    indices.extend_from_slice(&layer.indices[at.min(layer.indices.len())..]);
+                    layer.indices = indices;
+                    layer.elements = elements;
+                }
+                layer
+            })
+            .filter(|l| l.points || !l.indices.is_empty())
+            .collect();
+        let mut project = self.project.clone();
+        project.walls.retain(|id, _| !gone.contains(id));
+        let mut model = Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            path: self.path.clone(),
+            format: self.format.clone(),
+            file_size: self.file_size,
+            load_time: self.load_time,
+            layers,
+            bounds: self.bounds,
+            source_y_up: self.source_y_up,
+            props: self.props.iter().filter(|(id, _)| !gone.contains(id)).map(|(id, p)| (*id, p.clone())).collect(),
+            keys: self.keys.clone(),
+            ids: self.ids.clone(),
+            views: self.views.clone(),
+            project,
+            structural: Vec::new(),
+            structural_index: StructuralIndex::default(),
+            structural_display: None,
+            origins: self.origins.clone(),
+        };
+        model.set_structural(self.structural.clone());
+        model
     }
 
     /// Where an element is drawn: (layer, first index, index count) per range.

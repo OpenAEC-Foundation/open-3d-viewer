@@ -405,6 +405,8 @@ struct Scene {
     elements: usize,
     /// The storeys (`IfcBuildingStorey`): name and elevation.
     levels: Vec<(String, f32)>,
+    /// The path of each storey's node, by the storey's name.
+    level_paths: Vec<(String, String)>,
     /// The definitions of elements this viewer modelled (`openaec::element`).
     definitions: Vec<Value>,
 }
@@ -430,7 +432,11 @@ impl Scene {
         let element = match class(node) {
             Some(class) => {
                 if class.eq_ignore_ascii_case(crate::document::STOREY_CLASS) {
-                    self.levels.push(storey(node, name, world));
+                    let level = storey(node, name, world);
+                    if let Some(path) = &node.source {
+                        self.level_paths.push((level.0.clone(), path.clone()));
+                    }
+                    self.levels.push(level);
                 }
                 self.next_id += 1;
                 self.elements += 1;
@@ -594,7 +600,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         return Err("IFCX: every node is held by another (a cycle); nothing to draw".into());
     }
     let mut composer = Composer { flat: &flat, deep, memo: HashMap::new(), busy: HashSet::new() };
-    let mut scene = Scene { layers: BTreeMap::new(), clouds: BTreeMap::new(), written: HashSet::new(), next_id: 0, elements: 0, levels: Vec::new(), definitions: Vec::new() };
+    let mut scene = Scene { layers: BTreeMap::new(), clouds: BTreeMap::new(), written: HashSet::new(), next_id: 0, elements: 0, levels: Vec::new(), level_paths: Vec::new(), definitions: Vec::new() };
     for root in roots {
         let node = composer.compose(root);
         scene.walk(&node, root, root, DMat4::IDENTITY, None, None, 0);
@@ -633,6 +639,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     if layers.is_empty() && definitions.is_empty() {
         return Err("IFCX: no meshes found".into());
     }
+    let level_paths = scene.level_paths;
     let mut levels = scene.levels;
     levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     levels.dedup();
@@ -649,7 +656,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
             None => drawings.push((node.path.clone(), Value::Object(own))),
         }
     }
-    let project = ProjectData { info, levels, drawings, elements: definitions, ..ProjectData::default() };
+    let project = ProjectData { info, levels, level_paths, drawings, elements: definitions, ..ProjectData::default() };
     Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
 

@@ -186,7 +186,8 @@ pub struct ScenePipeline {
     lit: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
     stencil_clear: wgpu::RenderPipeline,
-    face_count: wgpu::RenderPipeline,
+    /// Counts the surfaces behind a cut, one layer to a bit of the stencil: eight layers a pass.
+    face_count: [wgpu::RenderPipeline; 8],
     cap: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     /// Flat coloured triangles, not cut by the section: the cut faces in their hatches.
@@ -408,15 +409,19 @@ impl ScenePipeline {
             stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Zero),
             wgpu::ColorWrites::empty(),
         );
-        let face_count = special(
-            "o3v.face_count",
-            "vs_face",
-            "fs_face_count",
-            true,
-            (wgpu::CompareFunction::Always, false),
-            stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Invert),
-            wgpu::ColorWrites::empty(),
-        );
+        // each layer turns a bit of its own: two models that lie in each other (a supplier's
+        // slabs in the engineer's floor) then do not cancel each other out
+        let face_count = std::array::from_fn(|bit| {
+            special(
+                "o3v.face_count",
+                "vs_face",
+                "fs_face_count",
+                true,
+                (wgpu::CompareFunction::Always, false),
+                wgpu::StencilState { write_mask: 1 << bit, ..stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Invert) },
+                wgpu::ColorWrites::empty(),
+            )
+        });
         let cap = special(
             "o3v.cap",
             "vs_cap",
@@ -1038,21 +1043,23 @@ impl ScenePipeline {
                 if primitive.settings.plane.is_some_and(|p| plane_cap_visible(p[0], &primitive.camera)) {
                     faces.push(6);
                 }
+                // the layers with solids, eight at a time: each counts in a bit of its own, and
+                // the face is filled where any of them is cut
+                let solids: Vec<&GpuLayer> = self.layers.iter().enumerate().filter(|(i, layer)| visible(*i) && layer.solid.as_ref().is_some_and(|(_, count)| *count > 0)).map(|(_, layer)| layer).collect();
                 for face in faces {
-                    pass.set_pipeline(&self.stencil_clear);
-                    pass.draw(0..3, 0..1);
-                    pass.set_pipeline(&self.face_count);
-                    for (i, layer) in self.layers.iter().enumerate() {
-                        if let (true, Some((solid, count))) = (visible(i), &layer.solid) {
-                            if *count > 0 {
-                                pass.set_vertex_buffer(0, layer.vertices.slice(..));
-                                pass.set_index_buffer(solid.slice(..), wgpu::IndexFormat::Uint32);
-                                pass.draw_indexed(0..*count, 0, face..face + 1);
-                            }
+                    for group in solids.chunks(self.face_count.len()) {
+                        pass.set_pipeline(&self.stencil_clear);
+                        pass.draw(0..3, 0..1);
+                        for (layer, count_bit) in group.iter().zip(&self.face_count) {
+                            let Some((solid, count)) = &layer.solid else { continue };
+                            pass.set_pipeline(count_bit);
+                            pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                            pass.set_index_buffer(solid.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..*count, 0, face..face + 1);
                         }
+                        pass.set_pipeline(&self.cap);
+                        pass.draw(0..6, face..face + 1);
                     }
-                    pass.set_pipeline(&self.cap);
-                    pass.draw(0..6, face..face + 1);
                 }
                 // the cut faces in their hatches, over that fill
                 for (pipeline, drawn) in [(&self.flat, &self.cut_faces), (&self.flat_lines, &self.cut_lines)] {

@@ -57,10 +57,12 @@ impl Loader for SmcLoader {
         std::thread::Builder::new()
             .stack_size(1 << 30)
             .spawn(move || {
+                let started = std::time::Instant::now();
                 let data = match &source {
                     Source::File(path) => read(std::io::BufReader::new(std::fs::File::open(path).map_err(|e| format!("Cannot read {}: {e}", source.name()))?)),
                     Source::Bytes { data, .. } => read(std::io::Cursor::new(data.as_slice())),
                 }?;
+                eprintln!("TIMING smc read {:?}", started.elapsed());
                 let found = issues(&data);
                 if !found.topics.is_empty() {
                     if let Ok(mut kept) = ISSUES.lock() {
@@ -109,50 +111,77 @@ fn is_space(data: &Data, e: &Elem) -> bool {
 }
 
 /// One layer per model (and one, switched off, for its spaces), from the lightest model up
-/// while the triangles fit.
+/// while the triangles fit. The models are made on all the processor's cores at once.
 fn layers(data: &Data) -> Vec<Layer> {
-    let mut shapes = mesh::Shapes::new(data);
-    // how heavy each model is
+    let started = std::time::Instant::now();
+    let source = mesh::sources(data);
+    // the elements of each model, and about how heavy each model is
+    let mut of_model: Vec<Vec<u32>> = vec![Vec::new(); data.models.len()];
     let mut weight = vec![0usize; data.models.len()];
-    let mut scratch = mesh::Mesh::default();
-    for e in data.elems.iter().filter(|e| !is_void(data, e)) {
-        scratch.clear();
-        shapes.element(e, &mut scratch);
-        weight[e.model as usize] += scratch.triangles();
+    let mut weigher = mesh::Shapes::new(data, &source);
+    for (k, e) in data.elems.iter().enumerate().filter(|(_, e)| !is_void(data, e)) {
+        let heavy = weigher.weight(e);
+        if heavy > 0 {
+            of_model[e.model as usize].push(k as u32);
+            weight[e.model as usize] += heavy;
+        }
     }
     let most = std::env::var("O3V_SMC_TRIANGLES").ok().and_then(|v| v.parse().ok()).unwrap_or(MOST_TRIANGLES);
     let wanted: Vec<String> = std::env::var("O3V_SMC_MODELS").map(|v| v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
     let mut order: Vec<usize> = (0..data.models.len()).filter(|&k| weight[k] > 0).collect();
     order.sort_by_key(|&k| weight[k]);
-    let mut taken = vec![false; data.models.len()];
+    let mut taken: Vec<usize> = Vec::new();
     let mut total = 0;
     for &k in &order {
         let named = wanted.iter().any(|w| model_name(data, k).to_lowercase().contains(w));
         if (wanted.is_empty() && total + weight[k] <= most) || named {
-            taken[k] = true;
+            taken.push(k);
             total += weight[k];
         } else if wanted.is_empty() {
-            eprintln!("left out, too heavy to show with the rest: {} ({} triangles)", model_name(data, k), weight[k]);
+            eprintln!("left out, too heavy to show with the rest: {} (about {} triangles)", model_name(data, k), weight[k]);
         }
     }
-    let grey = DEFAULT_COLOR.map(|c| (c * 255.0).round() as u8);
-    let mut out: Vec<Layer> = Vec::new();
-    // the layer of each model, and of its spaces
-    let mut place: Vec<[Option<usize>; 2]> = vec![[None; 2]; data.models.len()];
-    for (k, e) in data.elems.iter().enumerate() {
-        let model = e.model as usize;
-        if !taken[model] || is_void(data, e) {
-            continue;
+    eprintln!("TIMING smc weighed {:?}", started.elapsed());
+    // the heaviest first, so the threads end together; each takes the next model
+    taken.sort_by_key(|&k| std::cmp::Reverse(weight[k]));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let made: Mutex<Vec<(usize, Vec<Layer>)>> = Mutex::new(Vec::new());
+    let workers = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 12).min(taken.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                let mut shapes = mesh::Shapes::new(data, &source);
+                loop {
+                    let Some(&model) = taken.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) else { break };
+                    let layers = model_layers(data, &mut shapes, model, &of_model[model]);
+                    made.lock().unwrap_or_else(|e| e.into_inner()).push((model, layers));
+                }
+            });
         }
-        let mut mesh = mesh::Mesh::default();
+    });
+    let mut made = made.into_inner().unwrap_or_else(|e| e.into_inner());
+    made.sort_by_key(|(model, _)| *model);
+    eprintln!("TIMING smc shapes {:?}", started.elapsed());
+    made.into_iter().flat_map(|(_, layers)| layers).collect()
+}
+
+/// The layer of a model and the one of its spaces, from its elements.
+fn model_layers(data: &Data, shapes: &mut mesh::Shapes, model: usize, elements: &[u32]) -> Vec<Layer> {
+    let grey = DEFAULT_COLOR.map(|c| (c * 255.0).round() as u8);
+    let name = model_name(data, model);
+    let mut out: Vec<Layer> = Vec::new();
+    let mut place: [Option<usize>; 2] = [None; 2];
+    let mut mesh = mesh::Mesh::default();
+    for &k in elements {
+        let e = &data.elems[k as usize];
+        mesh.clear();
         shapes.element(e, &mut mesh);
         if mesh.triangles() == 0 {
             continue;
         }
         let space = is_space(data, e);
-        let at = *place[model][space as usize].get_or_insert_with(|| {
-            let name = model_name(data, model);
-            out.push(Layer { name: if space { format!("{name} (IfcSpace)") } else { name }, color: DEFAULT_COLOR, colors: Some(Vec::new()), hidden: space, ..Layer::default() });
+        let at = *place[space as usize].get_or_insert_with(|| {
+            out.push(Layer { name: if space { format!("{name} (IfcSpace)") } else { name.clone() }, color: DEFAULT_COLOR, colors: Some(Vec::new()), hidden: space, ..Layer::default() });
             out.len() - 1
         });
         let layer = &mut out[at];
@@ -168,7 +197,7 @@ fn layers(data: &Data) -> Vec<Layer> {
         layer.indices.extend(mesh.indices.iter().map(|i| base + i));
         let id = k as u64 + 1;
         layer.elements.push((id, first, count));
-        layer.props.push((id, props(data, e, &model_name(data, model))));
+        layer.props.push((id, props(data, e, &name)));
     }
     out
 }
@@ -384,7 +413,8 @@ mod tests {
         let Ok(path) = std::env::var("O3V_SMC") else { return };
         let run = move || {
             let data = read(std::io::BufReader::new(std::fs::File::open(path).unwrap())).unwrap();
-            let mut shapes = mesh::Shapes::new(&data);
+            let source = mesh::sources(&data);
+            let mut shapes = mesh::Shapes::new(&data, &source);
             let bounds = |m: &mesh::Mesh| m.positions.chunks_exact(3).fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|a| lo[a].min(p[a])), std::array::from_fn(|a| hi[a].max(p[a]))));
             let (mut all, mut agree) = (0, 0);
             for k in 0..data.geos.len() as u32 {
@@ -398,5 +428,46 @@ mod tests {
             assert!(all > 1000 && agree * 10 > all * 9, "{agree} of {all}");
         };
         std::thread::Builder::new().stack_size(1 << 30).spawn(run).unwrap().join().unwrap();
+    }
+    /// What a cut through one slab of the project's file gives: `O3V_SMC` names the file,
+    /// `O3V_SMC_MODELS` the slab's model, `O3V_SMC_ELEMENT` its number and
+    /// `O3V_SMC_CUT` the x of the cut.
+    #[test]
+    #[ignore]
+    fn a_cut_through_a_slab_of_the_file() {
+        let (Ok(path), Ok(guid), Ok(x)) = (std::env::var("O3V_SMC"), std::env::var("O3V_SMC_ELEMENT"), std::env::var("O3V_SMC_CUT")) else { return };
+        let x: f32 = x.parse().unwrap();
+        let layers = SmcLoader.load(&Source::File(path.clone().into())).unwrap();
+        let model = crate::model::Model::new(path.into(), "SMC", layers);
+        let (l, id) = model.layers.iter().enumerate().find_map(|(l, layer)| layer.elements.iter().find(|e| e.0.to_string() == guid).map(|e| (l, e.0))).expect("the element");
+        let layer = &model.layers[l];
+        let (_, first, count) = *layer.elements.iter().find(|e| e.0 == id).unwrap();
+        let indices = &layer.indices[first as usize..(first + count) as usize];
+        println!("element {id}: {} triangles, encloses volume {}, openness {:.4}", indices.len() / 3, crate::model::encloses_volume(&layer.positions, indices), crate::model::openness(&layer.positions, indices));
+        let fills = crate::drawing::faces_at(&model, crate::drawing::Shown::all(), |p| [p[1], p[2], p[0] - x]);
+        for fill in fills.iter().filter(|f| f.element == Some(id)) {
+            for outline in &fill.loops {
+                let area: f32 = (0..outline.len()).map(|k| { let (a, b) = (outline[k], outline[(k + 1) % outline.len()]); a[0] * b[1] - b[0] * a[1] }).sum::<f32>() / 2.0;
+                let (lo, hi) = outline.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+                println!("   outline of {} points, {area:.4} m2, y {:.3}..{:.3} z {:.3}..{:.3}", outline.len(), lo[0], hi[0], lo[1], hi[1]);
+            }
+        }
+        // what else is cut where this element is
+        for fill in &fills {
+            let Some(other) = fill.element.filter(|e| *e != id) else { continue };
+            for outline in fill.loops.iter().filter(|o| o.iter().all(|p| p[0] > -2.75 && p[0] < -1.95 && p[1] > 14.55 && p[1] < 14.9)) {
+                let area: f32 = (0..outline.len()).map(|k| { let (a, b) = (outline[k], outline[(k + 1) % outline.len()]); a[0] * b[1] - b[0] * a[1] }).sum::<f32>() / 2.0;
+                let (lo, hi) = outline.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+                println!("   also cut: {other} in {} {:.4} m2 y {:.3}..{:.3} z {:.3}..{:.3} {}", model.layers[fill.layer].name, area, lo[0], hi[0], lo[1], hi[1], model.props.get(&other).map_or("", |p| &p[..p.len().min(150)]));
+            }
+        }
+        let plane = crate::section::SectionPlane { normal: glam::Vec3::X, offset: x };
+        let faces = crate::caps::cut_faces(&model, crate::drawing::Shown::all(), None, Some(&plane), bim_library::DrawingStandard::Nen47);
+        let area: f32 = faces.triangles.iter().map(|(t, _)| (glam::Vec3::from(t[1]) - glam::Vec3::from(t[0])).cross(glam::Vec3::from(t[2]) - glam::Vec3::from(t[0])).length() / 2.0).sum();
+        let here: f32 = faces.triangles.iter().filter(|(t, _)| t.iter().all(|p| p[1] > -2.65 && p[1] < -2.19 && p[2] > 14.63 && p[2] < 14.84)).map(|(t, _)| (glam::Vec3::from(t[1]) - glam::Vec3::from(t[0])).cross(glam::Vec3::from(t[2]) - glam::Vec3::from(t[0])).length() / 2.0).sum();
+        let colours: std::collections::BTreeSet<[u8; 4]> = faces.triangles.iter().filter(|(t, _)| t.iter().all(|p| p[1] > -2.65 && p[1] < -2.19 && p[2] > 14.63 && p[2] < 14.84)).map(|(_, c)| *c).collect();
+        let in_core = faces.triangles.iter().filter(|(t, _)| { let c = (glam::Vec3::from(t[0]) + glam::Vec3::from(t[1]) + glam::Vec3::from(t[2])) / 3.0; c.y > -2.52 && c.y < -2.45 && c.z > 14.70 && c.z < 14.77 }).count();
+        println!("cut faces where the slab is: {here:.4} m2 (outline less cores is 0.0551), colours {colours:?}, triangles in the middle of a core: {in_core}");
+        println!("cut faces of the whole model: {} triangles, {area:.3} m2", faces.triangles.len());
     }
 }

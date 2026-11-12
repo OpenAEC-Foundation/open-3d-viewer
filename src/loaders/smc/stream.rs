@@ -137,6 +137,14 @@ pub struct Class {
     role: Role,
 }
 
+impl Class {
+    /// A class written by hand, for tests: the first of a file, with these fields.
+    #[cfg(test)]
+    pub fn plain(name: &str, fields: Vec<Field>) -> Class {
+        Class { full: name.into(), short: name.into(), flags: 0x02, fields, parent: None, chain: vec![0], role: Role::Rec }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
     Skip,

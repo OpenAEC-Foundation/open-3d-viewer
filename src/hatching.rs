@@ -6,19 +6,41 @@ use crate::drawing::{Cut, Fill, Segment};
 use crate::model::Model;
 use bim_library::{DrawingStandard, HatchKind, HatchPattern};
 
-/// A face takes at most this many hatch lines per direction; a larger one keeps its fill only.
-const MOST_ROWS: i32 = 4000;
+/// A face takes about this many hatch lines at most; a larger one gets a coarser hatch.
+const MOST_LINES: f64 = 20_000.0;
 /// Insulation's zigzag, which wants the layer's own direction, is drawn in a free outline as
 /// crossed lines this far apart (metres), at 60° and 120°.
 const INSULATION_SPACING: f64 = 0.06;
 
-/// Hatches the cut faces of `cut` by what the model says its elements are made of.
-pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard) {
+/// Hatches the cut faces of `cut`, a drawing at 1 : `scale`, by what the model says its elements
+/// are made of.
+pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64) {
+    let mut patterns = Vec::with_capacity(cut.fills.len());
     for fill in &mut cut.fills {
-        let pattern = kind_of(model, fill.layer, fill.element).pattern(standard);
-        fill.look = Some((pattern.fill, pattern.line));
-        fill.rows = rows(&fill.loops, pattern);
+        let pattern = pattern_of(model, fill.layer, fill.element, standard);
+        fill.look = Some(pattern.look());
+        (fill.rows, fill.apart) = rows(&fill.loops, &pattern, scale);
+        patterns.push((fill.layer, pattern));
     }
+    // elements of one category and one material that meet are of one piece: joined walls
+    crate::drawing::join(cut, &|a, b| patterns[a] == patterns[b]);
+}
+
+/// The hatch of an element's cut: the cut pattern of its material where the file brought one (a
+/// Revit model), else the hatch `standard` gives what it is made of.
+pub fn pattern_of(model: &Model, layer: usize, element: Option<u64>, standard: DrawingStandard) -> Pattern {
+    material_pattern(model, element).unwrap_or_else(|| kind_of(model, layer, element).pattern(standard).into())
+}
+
+/// The cut pattern of the first of an element's materials that has one.
+fn material_pattern(model: &Model, element: Option<u64>) -> Option<Pattern> {
+    let patterns = &model.project.cut_patterns;
+    if patterns.is_empty() {
+        return None;
+    }
+    let props = model.element_props(element?);
+    let (_, named) = props.iter().find(|(k, _)| k.eq_ignore_ascii_case("materials") || k.eq_ignore_ascii_case("material"))?;
+    patterns.get(named.as_str()).or_else(|| named.split(", ").find_map(|name| patterns.get(name))).cloned()
 }
 
 /// What an element is made of: its material property, else what its other properties and its
@@ -60,46 +82,121 @@ pub fn kind_in(text: &str) -> Option<HatchKind> {
     WORDS.iter().find(|(_, words)| words.iter().any(|w| has(w))).map(|(kind, _)| *kind)
 }
 
-/// The lines of `pattern` inside `loops`, each with its row.
-pub fn rows(loops: &[Vec<[f32; 2]>], pattern: HatchPattern) -> Vec<(i32, Segment)> {
-    let (angles, spacing): (Vec<f64>, f64) = if pattern.zigzag {
-        (vec![60.0, 120.0], INSULATION_SPACING)
-    } else if pattern.crossed {
-        (vec![pattern.angle, pattern.angle + 90.0], pattern.spacing)
-    } else {
-        (vec![pattern.angle], pattern.spacing)
-    };
-    if spacing <= 0.0 {
-        return Vec::new();
-    }
-    angles.into_iter().flat_map(|angle| lines(loops, angle, spacing)).collect()
+/// A hatch as it is drawn: what lies behind its lines, their colour, and the lines themselves as
+/// grids of parallel rows. Open BIM Studio's hatches and the cut patterns of a Revit material
+/// both come to this.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Pattern {
+    /// The colour behind the lines; paper white without one.
+    pub fill: Option<[u8; 3]>,
+    pub line: [u8; 3],
+    /// Filled in the line colour, without lines.
+    pub solid: bool,
+    pub grids: Vec<Grid>,
+    /// The grids are sized on paper (a drafting pattern), so they grow with the drawing's scale;
+    /// else in the model.
+    pub on_paper: bool,
 }
 
-/// The lines at `angle` (degrees, anticlockwise from x), `spacing` apart, inside `loops` by the
-/// even-odd rule. Rows count from the drawing's origin, so the hatches of faces side by side
-/// run on.
-fn lines(loops: &[Vec<[f32; 2]>], angle: f64, spacing: f64) -> Vec<(i32, Segment)> {
-    let (sin, cos) = angle.to_radians().sin_cos();
+/// Parallel rows of a hatch: lines at `angle` (radians, anticlockwise from x), the first through
+/// `origin`, each next one `offset` across and `shift` along; `dashes` are the lengths drawn and
+/// left open in turn from the row's start (none: a full line). Metres.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Grid {
+    pub angle: f64,
+    pub origin: [f64; 2],
+    pub shift: f64,
+    pub offset: f64,
+    pub dashes: Vec<f64>,
+}
+
+impl From<HatchPattern> for Pattern {
+    fn from(p: HatchPattern) -> Self {
+        let grid = |degrees: f64, offset: f64| Grid { angle: degrees.to_radians(), offset, ..Grid::default() };
+        let grids = if p.zigzag {
+            vec![grid(60.0, INSULATION_SPACING), grid(120.0, INSULATION_SPACING)]
+        } else if p.spacing <= 0.0 {
+            Vec::new()
+        } else if p.crossed {
+            vec![grid(p.angle, p.spacing), grid(p.angle + 90.0, p.spacing)]
+        } else {
+            vec![grid(p.angle, p.spacing)]
+        };
+        Pattern { fill: Some(p.fill), line: p.line, solid: false, grids, on_paper: false }
+    }
+}
+
+impl Pattern {
+    /// The colours a face takes: behind its lines, and its lines.
+    pub fn look(&self) -> ([u8; 3], [u8; 3]) {
+        (if self.solid { self.line } else { self.fill.unwrap_or([255; 3]) }, self.line)
+    }
+
+    /// How far apart its closest rows are (metres) on a drawing at 1 : `scale`; 0 without lines.
+    pub fn apart(&self, scale: f64) -> f64 {
+        if self.solid {
+            return 0.0;
+        }
+        let unit = if self.on_paper { scale } else { 1.0 };
+        let closest = self.grids.iter().map(|g| g.offset.abs() * unit).filter(|o| *o > 0.0).fold(f64::INFINITY, f64::min);
+        if closest.is_finite() { closest } else { 0.0 }
+    }
+}
+
+/// The lines of `pattern` inside `loops` on a drawing at 1 : `scale`, each with its row, and how
+/// far apart its rows came to be: a face that would take more than [`MOST_LINES`] lines gets a
+/// coarser hatch, twice as wide each time, until it fits.
+pub fn rows(loops: &[Vec<[f32; 2]>], pattern: &Pattern, scale: f64) -> (Vec<(i32, Segment)>, f32) {
+    if pattern.apart(scale) <= 0.0 {
+        return (Vec::new(), 0.0);
+    }
+    let (lo, hi) = loops.iter().flatten().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+    let across = f64::from((hi[0] - lo[0]).hypot(hi[1] - lo[1]));
+    if !(across > 0.0) {
+        return (Vec::new(), 0.0);
+    }
+    let unit = if pattern.on_paper { scale } else { 1.0 };
+    // about how many lines a grid draws across the face
+    let lines = |g: &Grid, unit: f64| {
+        let rows = across / (g.offset.abs() * unit).max(1e-9);
+        let period: f64 = g.dashes.iter().map(|d| d.abs()).sum::<f64>() * unit;
+        let pieces = if period > 0.0 { (across / period).max(1.0) * (g.dashes.len() as f64 / 2.0).max(1.0) } else { 1.0 };
+        rows * pieces
+    };
+    let mut coarse = 1.0;
+    while pattern.grids.iter().filter(|g| g.offset != 0.0).map(|g| lines(g, unit * coarse)).sum::<f64>() > MOST_LINES {
+        coarse *= 2.0;
+    }
+    let out = pattern.grids.iter().filter(|g| g.offset != 0.0).flat_map(|g| grid_lines(loops, g, unit * coarse)).collect();
+    (out, (pattern.apart(scale) * coarse) as f32)
+}
+
+/// The lines of one grid, its sizes times `unit`, inside `loops` by the even-odd rule. Rows count
+/// from the drawing's origin, so the hatches of faces side by side run on.
+fn grid_lines(loops: &[Vec<[f32; 2]>], grid: &Grid, unit: f64) -> Vec<(i32, Segment)> {
+    let (sin, cos) = grid.angle.sin_cos();
     // along the lines and across them
-    let turned = |p: [f32; 2]| [p[0] as f64 * cos + p[1] as f64 * sin, -(p[0] as f64) * sin + p[1] as f64 * cos];
+    let turned = |p: [f64; 2]| [p[0] * cos + p[1] * sin, -p[0] * sin + p[1] * cos];
     let back = |q: [f64; 2]| [(q[0] * cos - q[1] * sin) as f32, (q[0] * sin + q[1] * cos) as f32];
     let edges: Vec<[[f64; 2]; 2]> = loops
         .iter()
         .flat_map(|l| (0..l.len()).map(move |k| [l[k], l[(k + 1) % l.len()]]))
-        .map(|[a, b]| [turned(a), turned(b)])
+        .map(|[a, b]| [turned(a.map(f64::from)), turned(b.map(f64::from))])
         .collect();
     let (low, high) = edges.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[1]), hi.max(p[1])));
     if !(high > low) {
         return Vec::new();
     }
-    let (first, last) = ((low / spacing).ceil() as i64, (high / spacing).floor() as i64);
-    if last - first >= i64::from(MOST_ROWS) {
-        return Vec::new();
-    }
+    let start = turned([grid.origin[0] * unit, grid.origin[1] * unit]);
+    let (offset, shift) = (grid.offset * unit, grid.shift * unit);
+    let dashes: Vec<f64> = grid.dashes.iter().map(|d| d.abs() * unit).collect();
+    let period: f64 = dashes.iter().sum();
+    let (a, b) = ((low - start[1]) / offset, (high - start[1]) / offset);
+    let (first, last) = (a.min(b).ceil() as i64, a.max(b).floor() as i64);
     let mut out = Vec::new();
     for row in first..=last {
         // half a hair off the row, so a line never runs along an edge or through a corner
-        let v = row as f64 * spacing + spacing * 1e-4;
+        let v = start[1] + row as f64 * offset + offset.abs() * 1e-4;
         let mut crossings: Vec<f64> = edges
             .iter()
             .filter(|[a, b]| (a[1] > v) != (b[1] > v))
@@ -107,8 +204,30 @@ fn lines(loops: &[Vec<[f32; 2]>], angle: f64, spacing: f64) -> Vec<(i32, Segment
             .collect();
         crossings.sort_by(f64::total_cmp);
         for pair in crossings.chunks_exact(2) {
-            if pair[1] - pair[0] > 1e-6 {
-                out.push((row as i32, [back([pair[0], v]), back([pair[1], v])]));
+            let (from, to) = (pair[0], pair[1]);
+            if to - from <= 1e-6 {
+                continue;
+            }
+            if period <= 0.0 {
+                out.push((row as i32, [back([from, v]), back([to, v])]));
+                continue;
+            }
+            // the dashes of this row, from where it starts
+            let zero = start[0] + row as f64 * shift;
+            let mut at = zero + ((from - zero) / period).floor() * period;
+            while at < to {
+                let mut x = at;
+                for (k, d) in dashes.iter().enumerate() {
+                    if k % 2 == 0 {
+                        // a dot is drawn as a dash a hair long
+                        let (p, q) = (x.max(from), (x + d.max(period * 1e-3)).min(to));
+                        if q > p {
+                            out.push((row as i32, [back([p, v]), back([q, v])]));
+                        }
+                    }
+                    x += d;
+                }
+                at += period;
             }
         }
     }
@@ -155,13 +274,7 @@ impl Fill {
 
     /// How far apart its rows are (metres of the drawing); 0 without lines.
     pub fn spacing(&self) -> f32 {
-        let mut rows = self.rows.iter();
-        let Some((row, [a, b])) = rows.next() else { return 0.0 };
-        // the next row of the same direction: its distance across the lines
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let run = dx.hypot(dy).max(1e-9);
-        rows.find(|(r, [c, d])| r != row && ((d[0] - c[0]) * dy - (d[1] - c[1]) * dx).abs() < 1e-3 * run)
-            .map_or(0.0, |(r, [c, _])| (((c[0] - a[0]) * dy - (c[1] - a[1]) * dx) / run).abs() / (r - row).unsigned_abs() as f32)
+        self.apart
     }
 }
 
@@ -207,7 +320,7 @@ mod tests {
         let mut cut = cut_at(&model, Shown::all(), 1.5);
         assert_eq!(cut.fills.len(), 1);
         assert_eq!((cut.fills[0].loops.len(), cut.fills[0].loops[0].len()), (1, 8), "its corners and where the diagonals of its sides cross: {:?}", cut.fills[0].loops);
-        hatch(&mut cut, &model, DrawingStandard::Nen47);
+        hatch(&mut cut, &model, DrawingStandard::Nen47, 100.0);
         let fill = &cut.fills[0];
         assert_eq!(fill.look, Some(([212, 144, 143], [0, 0, 0])), "brick under NEN 47");
         // 45° lines 0.08 apart across 4 × 2: the box is (4 + 2) / √2 wide across them
@@ -228,11 +341,11 @@ mod tests {
     fn concrete_is_filled_without_lines_and_a_section_has_its_face_too() {
         let model = model(vec![box_layer("Beton")]);
         let mut cut = section_at(&model, Shown::all(), [-1.0, 1.0], [5.0, 1.0], 1.0);
-        hatch(&mut cut, &model, DrawingStandard::Nen47);
+        hatch(&mut cut, &model, DrawingStandard::Nen47, 100.0);
         assert_eq!(cut.fills.len(), 1);
         assert_eq!(cut.fills[0].look, Some(([192, 192, 192], [192, 192, 192])));
         assert!(cut.fills[0].rows.is_empty());
-        hatch(&mut cut, &model, DrawingStandard::Din1356);
+        hatch(&mut cut, &model, DrawingStandard::Din1356, 100.0);
         assert!(!cut.fills[0].rows.is_empty(), "crossed in DIN 1356");
     }
 
@@ -241,7 +354,7 @@ mod tests {
         // a square ring: 4 × 4 with a 2 × 2 hole
         let outer = vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
         let inner = vec![[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]];
-        let rows = lines(&[outer, inner], 0.0, 0.5);
+        let rows = grid_lines(&[outer, inner], &Grid { offset: 0.5, ..Grid::default() }, 1.0);
         let through: Vec<_> = rows.iter().filter(|(_, [a, _])| (a[1] - 2.0).abs() < 0.01).collect();
         assert_eq!(through.len(), 2, "a line through the hole is two pieces: {through:?}");
         assert!(rows.iter().all(|(_, [a, b])| !(a[1] > 1.01 && a[1] < 2.99 && a[0].min(b[0]) < 2.0 && a[0].max(b[0]) > 2.0)), "none crosses the hole");

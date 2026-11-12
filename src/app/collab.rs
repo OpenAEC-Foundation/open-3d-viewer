@@ -20,6 +20,7 @@ use glam::{DVec3, Vec3};
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Alignment, Element, Length, Task};
 use openaec_ui::design::widgets::{self as w, ButtonKind as K, Density as D, Tone};
+use openaec_ui::design::a11y::{node as named, Node, Role};
 use openaec_ui::design::{site, Look};
 use openaec_ui::Language;
 use std::collections::HashMap;
@@ -40,6 +41,106 @@ pub enum Tab {
     Issues,
     Checks,
     Clashes,
+    /// Two versions of a model side by side: what was added, removed and changed.
+    Compare,
+}
+
+/// What a person decided on a clash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Decision {
+    /// Not looked at yet.
+    #[default]
+    Open,
+    /// Accepted: it may stay as it is.
+    Accepted,
+    /// Rejected: it has to be solved (an issue made of it is rejected too).
+    Rejected,
+}
+
+impl Decision {
+    pub fn key(self) -> &'static str {
+        match self {
+            Decision::Open => "open",
+            Decision::Accepted => "accepted",
+            Decision::Rejected => "rejected",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Decision> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "open" | "undefined" => Some(Decision::Open),
+            "accepted" | "accept" | "akkoord" => Some(Decision::Accepted),
+            "rejected" | "reject" | "afgewezen" => Some(Decision::Rejected),
+            _ => None,
+        }
+    }
+}
+
+/// What changed between two versions of a model, element by element (by GlobalId).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Comparison {
+    pub old: String,
+    pub new: String,
+    /// In the new version only: its element and name.
+    pub added: Vec<(u64, String)>,
+    /// In the old version only.
+    pub removed: Vec<(u64, String)>,
+    /// In both, otherwise: the new version's element, its name and what changed.
+    pub changed: Vec<(u64, String, String)>,
+}
+
+/// Compares the elements of open model `old` with those of model `new` (their places among the
+/// open models) by their GlobalId: their properties (but the express id, which a new export
+/// numbers again) and their place and size, to a millimetre.
+pub fn compare_models(model: &Model, old: u32, new: u32) -> Comparison {
+    let of = |which: u32| -> HashMap<String, u64> {
+        model
+            .props
+            .iter()
+            .filter(|(id, _)| model.element_key(**id).model == which)
+            .filter_map(|(&id, p)| Some((field(p, "GlobalId")?.to_string(), id)))
+            .collect()
+    };
+    let (a, b) = (of(old), of(new));
+    let props = |id: u64| -> serde_json::Map<String, serde_json::Value> {
+        let mut map: serde_json::Map<String, serde_json::Value> = model.props.get(&id).and_then(|p| serde_json::from_str(p).ok()).unwrap_or_default();
+        map.remove("ExpressId");
+        map
+    };
+    let mut out = Comparison::default();
+    for (guid, &id) in &b {
+        let Some(&before) = a.get(guid) else {
+            out.added.push((id, element_name(model, id)));
+            continue;
+        };
+        let (p, q) = (props(before), props(id));
+        let mut what: Vec<String> = q.iter().filter(|(k, v)| p.get(*k) != Some(*v)).map(|(k, _)| k.clone()).chain(p.keys().filter(|k| !q.contains_key(*k)).cloned()).collect();
+        what.sort();
+        what.dedup();
+        let moved = match (model.element_bounds(before), model.element_bounds(id)) {
+            (Some(x), Some(y)) => (0..3).any(|k| (x.min[k] - y.min[k]).abs() > 0.001 || (x.max[k] - y.max[k]).abs() > 0.001),
+            (x, y) => x.is_some() != y.is_some(),
+        };
+        if moved {
+            what.insert(0, "geometry".into());
+        }
+        if !what.is_empty() {
+            let shown: Vec<String> = what.iter().take(4).cloned().collect();
+            let more = what.len().saturating_sub(4);
+            out.changed.push((id, element_name(model, id), if more > 0 { format!("{} +{more}", shown.join(", ")) } else { shown.join(", ") }));
+        }
+    }
+    out.removed = a.iter().filter(|(guid, _)| !b.contains_key(*guid)).map(|(_, &id)| (id, element_name(model, id))).collect();
+    for list in [&mut out.added, &mut out.removed] {
+        list.sort_by(|x, y| x.1.cmp(&y.1));
+    }
+    out.changed.sort_by(|x, y| x.1.cmp(&y.1));
+    out
+}
+
+/// Where the Collaborator keeps who you are: beside the preferences.
+fn user_file() -> Option<PathBuf> {
+    Some(crate::remote_link::settings_dir()?.join("collaborator-user.txt"))
 }
 
 /// A clash as the list shows it.
@@ -54,6 +155,7 @@ pub struct ClashRow {
     pub at: [f32; 3],
     /// How far they cross or are apart (metres).
     pub distance: f32,
+    pub decision: Decision,
 }
 
 /// What a check of one model gave.
@@ -88,6 +190,21 @@ pub struct State {
     /// What the list of issues is narrowed to, and whether closed ones show.
     pub search: String,
     pub show_closed: bool,
+    /// What a clash test can take as a side: everything, a model, a layer, a class; for the
+    /// model with this id.
+    sides: Vec<Side>,
+    sides_for: Option<(u64, Language)>,
+    /// The labels of the issue shown, as typed.
+    labels_text: String,
+    /// The people an issue can be assigned to: you and everyone the issues name.
+    team: Vec<Choice>,
+    /// Whether the list of clashes shows the accepted ones too.
+    pub show_accepted: bool,
+    /// The two open models compared (their places), and what changed.
+    pub compare_pair: (usize, usize),
+    pub comparison: Option<Comparison>,
+    /// The open models to choose from, by name.
+    model_names: Vec<Choice>,
     /// Whether what a click in a list goes to shows alone, the rest of the model hidden.
     pub isolate: bool,
     /// Whether the checks list only what does not pass.
@@ -112,7 +229,9 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        let author = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "user".into());
+        // who you are, as you set it, else the name you log in with
+        let kept = user_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let author = kept.unwrap_or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "user".into()));
         State {
             tab: Tab::default(),
             issues: Issues::new(),
@@ -130,6 +249,14 @@ impl Default for State {
             running: false,
             search: String::new(),
             show_closed: true,
+            team: Vec::new(),
+            labels_text: String::new(),
+            show_accepted: true,
+            compare_pair: (0, 1),
+            comparison: None,
+            model_names: Vec::new(),
+            sides: Vec::new(),
+            sides_for: None,
             isolate: false,
             only_failed: true,
             rule_names: Vec::new(),
@@ -169,6 +296,17 @@ impl State {
             self.statuses = STATUSES.iter().map(|&s| Label(s, status_label(s, l))).collect();
             self.priorities = PRIORITIES.iter().map(|&s| Label(s, priority_label(s, l))).collect();
             self.labelled = Some(l);
+        }
+        let mut people: Vec<String> = std::iter::once(self.author.clone())
+            .chain(self.issues.topics.iter().flat_map(|t| [t.creation_author.clone(), t.assigned_to.clone(), t.modified_author.clone()].into_iter().chain(t.comments.iter().map(|c| c.author.clone()))))
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        people.sort_by_key(|p| p.to_lowercase());
+        people.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        let team: Vec<Choice> = people.into_iter().enumerate().map(|(k, p)| Choice(k, p)).collect();
+        if team != self.team {
+            self.team = team;
         }
         let names: Vec<Choice> = self.rule_sets.iter().enumerate().map(|(k, r)| Choice(k, r.name.clone())).collect();
         if names != self.rule_names {
@@ -211,6 +349,7 @@ pub enum Report {
     Csv,
     Json,
     ClashesCsv,
+    IssuesHtml,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +372,23 @@ pub enum Event {
     Assigned(String),
     Comment(String),
     AddComment,
+    /// Who you are: the author of what you make.
+    User(String),
+    Due(String),
+    Labels(String),
+    KindOf(&'static str),
+    AssignTo(Choice),
+    Decide(usize, Decision),
+    ShowAccepted(bool),
+    /// A section box around what is selected.
+    SectionAround,
+    CompareOld(Choice),
+    CompareNew(Choice),
+    Compare,
+    /// An element of the comparison: 0 added, 1 removed, 2 changed, and its place in that list.
+    ComparePick(u8, usize),
+    /// The issues as a report: a page with each issue, its picture and its comments.
+    ExportIssues,
     Isolate(bool),
     /// To the clash before (−1) or after (1) the one picked.
     Step(i32),
@@ -254,6 +410,10 @@ pub enum Event {
     ClashOn(usize, bool),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
+    /// The first (true) or second side of a clash test.
+    ClashSide(usize, bool, Side),
+    /// The selected elements against the rest of the model.
+    ClashSelection,
     AddClashRule,
     RemoveClashRule(usize),
     Clash,
@@ -342,7 +502,7 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
     let mut seen = std::collections::HashSet::new();
     for rule in rules.iter().filter(|r| r.on) {
         let side = |s: &Selector| -> Vec<usize> {
-            let takes = |item: &Item| s.takes(&models[item.model.min(models.len().saturating_sub(1))].0, &model.layers[item.layer].name, &item.class);
+            let takes = |item: &Item| s.takes_element(item.id, &models[item.model.min(models.len().saturating_sub(1))].0, &model.layers[item.layer].name, &item.class);
             (0..items.len()).filter(|&k| models.is_empty() || takes(&items[k])).collect()
         };
         let (a, b) = (side(&rule.a), side(&rule.b));
@@ -354,7 +514,7 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
             if ia.id == ib.id || !seen.insert((rule.name.clone(), ia.id.min(ib.id), ia.id.max(ib.id))) {
                 continue;
             }
-            rows.push(ClashRow { rule: rule.name.clone(), a: ia.id, b: ib.id, a_name: element_name(model, ia.id), b_name: element_name(model, ib.id), kind: c.kind, at: c.at.to_array(), distance: c.distance });
+            rows.push(ClashRow { rule: rule.name.clone(), a: ia.id, b: ib.id, a_name: element_name(model, ia.id), b_name: element_name(model, ib.id), kind: c.kind, at: c.at.to_array(), distance: c.distance, decision: Decision::Open });
             if rows.len() >= MOST_CLASHES {
                 return rows;
             }
@@ -376,7 +536,7 @@ fn check_file(path: &std::path::Path, rules: &RuleSet, cancel: &AtomicBool) -> R
     });
     let mut runs: Vec<Option<String>> = Vec::new();
     for ids in &rules.ids {
-        runs.push(Some(std::fs::read_to_string(ids).map_err(|e| format!("{}: {e}", ids.display()))?));
+        runs.push(Some(crate::collab::rules::ids_text(ids)?));
     }
     if runs.is_empty() {
         runs.push(None);
@@ -522,6 +682,39 @@ impl App {
             to.fit(&bounds, self.aspect());
             self.anim = Some((self.camera, to, Instant::now()));
         }
+    }
+
+    /// What a clash test can take as a side, worked out once per model and language: everything,
+    /// the structure and the services, each model, each layer and each class of the model.
+    pub(crate) fn collab_refresh_sides(&mut self) {
+        let l = self.collab.language;
+        let key = self.model.as_ref().map(|m| (m.id, l));
+        if self.collab.sides_for == key && !self.collab.sides.is_empty() && self.collab.model_names.len() == self.models.len() {
+            return;
+        }
+        let mut sides = vec![
+            Side { label: l.text("Alles", "Everything").to_string(), selector: Selector::default() },
+            Side { label: l.text("Constructie", "Structure").to_string(), selector: Selector::classes(&crate::collab::rules::STRUCTURE) },
+            Side { label: l.text("Installaties", "Services").to_string(), selector: Selector::classes(&crate::collab::rules::SERVICES) },
+        ];
+        if let Some(model) = &self.model {
+            if self.models.len() > 1 {
+                for entry in &self.models {
+                    let name = entry.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    sides.push(Side { label: format!("{}: {name}", l.text("Model", "Model")), selector: Selector { models: vec![name], ..Selector::default() } });
+                }
+            }
+            for layer in model.layers.iter().filter(|layer| !layer.elements.is_empty()) {
+                sides.push(Side { label: format!("{}: {}", l.text("Laag", "Layer"), layer.name), selector: Selector { layers: vec![layer.name.clone()], ..Selector::default() } });
+            }
+            let classes: std::collections::BTreeSet<&str> = model.props.values().filter_map(|p| field(p, "IfcType")).collect();
+            for class in classes {
+                sides.push(Side { label: format!("{}: {class}", l.text("Klasse", "Class")), selector: Selector::classes(&[class]) });
+            }
+        }
+        self.collab.model_names = self.models.iter().enumerate().map(|(k, e)| Choice(k, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())).collect();
+        self.collab.sides = sides;
+        self.collab.sides_for = key;
     }
 
     /// Goes to elements a list names: selects them, alone when the panel isolates, and frames
@@ -691,6 +884,7 @@ impl App {
         }
         let task = self.collab_handle(event);
         self.collab.refresh();
+        self.collab_refresh_sides();
         task
     }
 
@@ -776,6 +970,7 @@ impl App {
             Event::SaveIssuesTo(None) | Event::SaveRulesTo(None) | Event::ExportTo(_, None) => {}
             Event::Topic(guid) => {
                 self.collab.topic = guid.clone();
+                self.collab.labels_text = guid.as_ref().and_then(|g| self.collab.issues.topics.iter().find(|t| &t.guid == g)).map(|t| t.labels.join(", ")).unwrap_or_default();
                 self.collab.comment.clear();
                 let view = guid.and_then(|g| self.collab.issues.topics.iter().find(|t| t.guid == g)).and_then(|t| t.viewpoints.first().cloned());
                 if let Some(view) = view {
@@ -859,6 +1054,69 @@ impl App {
                 }
             }
             Event::Comment(draft) => self.collab.comment = draft,
+            Event::User(name) => {
+                self.collab.author = name.clone();
+                if let (Some(file), false) = (user_file(), name.trim().is_empty()) {
+                    let _ = file.parent().map(std::fs::create_dir_all);
+                    let _ = std::fs::write(file, name.trim());
+                }
+            }
+            Event::Due(due) => {
+                let author = self.collab.author.clone();
+                if let Some(topic) = self.collab_topic_mut() {
+                    topic.due_date = due;
+                    topic.touch(&author);
+                }
+            }
+            Event::Labels(labels) => {
+                self.collab.labels_text = labels.clone();
+                let author = self.collab.author.clone();
+                if let Some(topic) = self.collab_topic_mut() {
+                    topic.labels = labels.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                    topic.touch(&author);
+                }
+            }
+            Event::KindOf(kind) => {
+                let author = self.collab.author.clone();
+                if let Some(topic) = self.collab_topic_mut() {
+                    topic.kind = kind.to_string();
+                    topic.touch(&author);
+                }
+            }
+            Event::AssignTo(person) => return self.collab_handle(Event::Assigned(person.1)),
+            Event::Decide(k, decision) => {
+                if let Some(clash) = self.collab.clashes.get_mut(k) {
+                    clash.decision = decision;
+                }
+            }
+            Event::ShowAccepted(on) => self.collab.show_accepted = on,
+            Event::SectionAround => return self.update(Message::SectionToSelection),
+            Event::CompareOld(c) => self.collab.compare_pair.0 = c.0,
+            Event::CompareNew(c) => self.collab.compare_pair.1 = c.0,
+            Event::Compare => {
+                let (old, new) = self.collab.compare_pair;
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if self.models.len() < 2 || old == new || old >= self.models.len() || new >= self.models.len() {
+                    self.collab_note(Tone::Warning, l.text("Open twee versies van een model (Toevoegen) en kies welke oud en welke nieuw is.", "Open two versions of a model (Add) and choose which is old and which is new."));
+                    return Task::none();
+                }
+                let mut found = compare_models(&model, old as u32, new as u32);
+                let name = |k: usize| self.models[k].model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                (found.old, found.new) = (name(old), name(new));
+                self.collab.comparison = Some(found);
+                self.collab.tab = Tab::Compare;
+            }
+            Event::ComparePick(list, k) => {
+                let id = self.collab.comparison.as_ref().and_then(|c| match list {
+                    0 => c.added.get(k).map(|x| x.0),
+                    1 => c.removed.get(k).map(|x| x.0),
+                    _ => c.changed.get(k).map(|x| x.0),
+                });
+                if let Some(id) = id {
+                    self.collab_go_to([id]);
+                }
+            }
+            Event::ExportIssues => return self.collab_handle(Event::Export(Report::IssuesHtml)),
             Event::Isolate(on) => {
                 self.collab.isolate = on;
                 // what is selected alone, or everything again
@@ -995,6 +1253,7 @@ impl App {
                     Report::Csv => ("check", "csv"),
                     Report::Json => ("check", "json"),
                     Report::ClashesCsv => ("clashes", "csv"),
+                    Report::IssuesHtml => ("issues", "html"),
                 };
                 let dialog = rfd::AsyncFileDialog::new().add_filter(extension, &[extension]).set_file_name(format!("{name}.{extension}"));
                 return Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, move |path| Message::Collab(Event::ExportTo(kind, path)));
@@ -1009,9 +1268,10 @@ impl App {
                         // one model: its report; more: the reports one after the other
                         reports().map(|(name, r)| bim_validator_core::report_html(r, name, language)).collect::<Vec<_>>().join("\n")
                     }
+                    Report::IssuesHtml => issues_html(&self.collab.issues, l),
                     Report::ClashesCsv => {
                         let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-                        let mut out = "rule,kind,distance_mm,a,b,a_global_id,b_global_id,x,y,z\r\n".to_string();
+                        let mut out = "rule,kind,distance_mm,decision,a,b,a_global_id,b_global_id,x,y,z\r\n".to_string();
                         for c in &self.collab.clashes {
                             let kind = match c.kind {
                                 Kind::Crossing => "crossing",
@@ -1020,7 +1280,7 @@ impl App {
                             };
                             let at = self.collab_to_world(Vec3::from_array(c.at));
                             let guid = |id| self.collab_guid_of(id).unwrap_or_default();
-                            out.push_str(&format!("{},{kind},{:.0},{},{},{},{},{:.3},{:.3},{:.3}\r\n", quote(&c.rule), c.distance * 1000.0, quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
+                            out.push_str(&format!("{},{kind},{:.0},{},{},{},{},{},{:.3},{:.3},{:.3}\r\n", quote(&c.rule), c.distance * 1000.0, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
                         }
                         out
                     }
@@ -1049,6 +1309,51 @@ impl App {
                         }
                     }
                 }
+            }
+            Event::ClashSide(k, first, side) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    if first {
+                        rule.a = side.selector;
+                    } else {
+                        rule.b = side.selector;
+                    }
+                }
+                // the test is named after what it takes
+                let everything = l.text("alles", "everything");
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.name = if rule.within() && rule.a.is_all() {
+                        l.text("Alle elementen onderling", "All elements with each other").to_string()
+                    } else {
+                        format!("{} × {}", rule.a.summary(everything), rule.b.summary(everything))
+                    };
+                }
+            }
+            Event::ClashSelection => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                let ids: Vec<u64> = self.sel.items().iter().filter_map(|item| if let Pickable::Element(id) = item { Some(*id) } else { None }).collect();
+                if ids.is_empty() {
+                    self.collab_note(Tone::Warning, l.text("Selecteer eerst de elementen die je wilt clashen.", "Select the elements to clash first."));
+                    return Task::none();
+                }
+                // as the first test of the rule set asks, against everything else
+                let like = self.collab.rules().and_then(|r| r.clashes.first().cloned()).unwrap_or_default();
+                let rule = ClashRule {
+                    name: format!("{} ({})", l.text("Selectie tegen de rest", "Selection against the rest"), ids.len()),
+                    a: Selector { only: ids.clone(), ..Selector::default() },
+                    b: Selector { except: ids, ..Selector::default() },
+                    on: true,
+                    ..like
+                };
+                let models: Vec<(String, std::ops::Range<usize>)> = self.models.iter().map(|e| (e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.layers.clone())).collect();
+                self.collab.tab = Tab::Clashes;
+                self.collab.cancel = Arc::new(AtomicBool::new(false));
+                self.collab.run += 1;
+                self.collab.running = true;
+                self.collab.clashes.clear();
+                self.collab.clash = None;
+                self.collab.notice = None;
+                let (run, cancel) = (self.collab.run, self.collab.cancel.clone());
+                return job(move || Event::Clashed(run, std::panic::catch_unwind(|| run_clashes(&model, &models, &[rule], &cancel)).unwrap_or_default()));
             }
             Event::AddClashRule => {
                 let name = l.text("Alle elementen onderling", "All elements with each other").to_string();
@@ -1099,6 +1404,9 @@ impl App {
             }
             Event::IssueFromClash(k) => {
                 let Some(row) = self.collab.clashes.get(k).cloned() else { return Task::none() };
+                if let Some(clash) = self.collab.clashes.get_mut(k) {
+                    clash.decision = Decision::Rejected;
+                }
                 let topic = self.collab_clash_topic(&row, l);
                 self.collab.topic = Some(topic.guid.clone());
                 self.collab.issues.topics.push(topic);
@@ -1170,21 +1478,48 @@ impl App {
         let state = &self.collab;
         let tab = |which: Tab, label: String| {
             let active = state.tab == which;
-            button(text(label).size(12).font(if active { crate::app::FONT_BOLD } else { crate::app::FONT })).padding([4, 10]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::Tab(which)))
+            named(button(text(label.clone()).size(12).font(if active { crate::app::FONT_BOLD } else { crate::app::FONT })).padding([4, 10]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::Tab(which))), Node::new(Role::Tab, label.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ')).selected(active))
         };
         let count = |n: usize| if n == 0 { String::new() } else { format!(" {n}") };
         let failed: usize = state.checked.iter().filter_map(|c| c.report.as_ref().ok()).flat_map(|r| &r.specifications).filter(|s| s.status == ValidationStatus::Failed).count();
         let tabs = row![
             tab(Tab::Issues, format!("{}{}", l.text("Issues", "Issues"), count(state.open_issues()))),
             tab(Tab::Checks, format!("{}{}", l.text("Controles", "Checks"), count(failed))),
-            tab(Tab::Clashes, format!("{}{}", l.text("Clashes", "Clashes"), count(state.clashes.len()))),
+            tab(Tab::Clashes, format!("{}{}", l.text("Clashes", "Clashes"), count(state.clashes.iter().filter(|c| c.decision != Decision::Accepted).count()))),
+            tab(Tab::Compare, l.text("Vergelijken", "Compare").to_string()),
         ]
         .spacing(2);
-        let mut body = column![tabs, w::divider(look)].spacing(6);
+        // the models of the project, as the viewer's explorer has them: shown or not, and more to add
+        let mut models = column![row![
+            w::heading(look, format!("{} · {}", l.text("Modellen", "Models"), self.models.len()), 13.0).width(Length::Fill),
+            w::button(look, l.text("Model toevoegen", "Add model"), K::Secondary, D::Compact, None, Some(if self.models.is_empty() { Message::OpenDialog } else { Message::AddDialog })),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)]
+        .spacing(2);
+        for (i, entry) in self.models.iter().enumerate() {
+
+            let line = row![
+                w::checkbox(look, state.model_names.get(i).map_or("", |c| c.1.as_str()), entry.visible, Some(move |on| Message::ModelVisible(i, on))),
+                Space::new().width(Length::Fill),
+                w::secondary(look, entry.model.format.clone()),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            models = models.push(line);
+        }
+        let mut body = column![
+            models,
+            w::divider(look),
+            tabs,
+            w::divider(look),
+            row![w::secondary(look, l.text("Jij", "You")), container(w::text_field(look, l.text("Naam of e-mail", "Name or e-mail"), &state.author, Some(|t| go(Event::User(t))), D::Compact, None)).width(Length::Fill)].spacing(6).align_y(Alignment::Center),
+        ]
+        .spacing(6);
         if let Some((tone, message)) = &state.notice {
             // a notice of its own: what it says can take several lines in a narrow panel
             let (edge, fill) = (tone.color(look), tone.tint(look));
-            let close = button(text("×").size(14)).padding([0, 6]).style(move |_, s| p.ribbon_button(false, s)).on_press(go(Event::Dismiss));
+            let close = named(button(text("×").size(14)).padding([0, 6]).style(move |_, s| p.ribbon_button(false, s)).on_press(go(Event::Dismiss)), Node::new(Role::Button, l.text("Melding sluiten", "Close the notice")));
             body = body.push(
                 container(row![w::body(look, message.clone()).width(Length::Fill), close].spacing(6).align_y(Alignment::Start))
                     .padding([6, 8])
@@ -1202,6 +1537,7 @@ impl App {
             Tab::Issues => self.collab_issues(look, l),
             Tab::Checks => self.collab_checks(look, l),
             Tab::Clashes => self.collab_clashes(look, l),
+            Tab::Compare => self.collab_compare(look, l),
         };
         body.push(scrollable(container(content).padding(iced::Padding { right: 10.0, ..iced::Padding::ZERO })).height(Length::Fill)).height(Length::Fill).into()
     }
@@ -1232,6 +1568,7 @@ impl App {
             w::button(look, l.text("Nieuw issue", "New issue"), K::Primary, D::Compact, None, Some(go(Event::NewIssue))),
             w::button(look, l.text("BCF openen", "Open BCF"), K::Secondary, D::Compact, None, Some(go(Event::Open(File::Bcf)))),
             w::button(look, l.text("BCF opslaan", "Save BCF"), K::Secondary, D::Compact, None, (!state.issues.topics.is_empty()).then(|| go(Event::SaveIssues))),
+            w::button(look, l.text("Rapport", "Report"), K::Quiet, D::Compact, None, (!state.issues.topics.is_empty()).then(|| go(Event::ExportIssues))),
         ]
         .spacing(6)
         .wrap()]
@@ -1277,7 +1614,7 @@ impl App {
             }
             let words = column![
                 w::body(look, topic.title.clone()),
-                row![w::secondary(look, about.join(" · ")).width(Length::Fill), site::chip(look, &status_label(&topic.status, l), status_tone(&topic.status))].spacing(6).align_y(Alignment::Center),
+                row![w::secondary(look, about.join(" · ")).width(Length::Fill), if topic.status.trim().is_empty() { Element::from(Space::new()) } else { site::chip(look, &status_label(&topic.status, l), status_tone(&topic.status)) }].spacing(6).align_y(Alignment::Center),
             ]
             .spacing(2)
             .width(Length::Fill);
@@ -1286,7 +1623,7 @@ impl App {
             if let Some((_, bytes)) = topic.viewpoints.first().and_then(|v| v.snapshot.as_ref()).filter(|_| !picked) {
                 line = line.push(iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone())).width(56).height(42).content_fit(iced::ContentFit::Cover));
             }
-            list = list.push(button(line.push(words)).width(Length::Fill).padding([5, 6]).style(move |_, s| p.ribbon_button(picked, s)).on_press(go(Event::Topic((!picked).then(|| topic.guid.clone())))));
+            list = list.push(named(button(line.push(words)).width(Length::Fill).padding([5, 6]).style(move |_, s| p.ribbon_button(picked, s)).on_press(go(Event::Topic((!picked).then(|| topic.guid.clone())))), Node::new(Role::Row, format!("{}: {}", l.text("Issue", "Issue"), topic.title)).selected(picked).value(topic.status.clone())));
             if picked {
                 list = list.push(self.collab_topic(look, l, topic));
             }
@@ -1308,14 +1645,31 @@ impl App {
                 column![w::mono_label(look, l.text("Prioriteit", "Priority")), w::select(look, &state.priorities, priority, |s: Label| go(Event::Priority(s.0)), D::Compact)].spacing(2).width(Length::FillPortion(1)),
             ]
             .spacing(8),
-            w::text_field(look, l.text("Toegewezen aan", "Assigned to"), &topic.assigned_to, Some(|t| go(Event::Assigned(t))), D::Compact, None),
+            row![
+                container(w::text_field(look, l.text("Toegewezen aan", "Assigned to"), &topic.assigned_to, Some(|t| go(Event::Assigned(t))), D::Compact, None)).width(Length::FillPortion(3)),
+                container(w::select(look, &state.team, None::<Choice>, |c: Choice| go(Event::AssignTo(c)), D::Compact)).width(Length::FillPortion(2)),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+            row![
+                container(w::text_field(look, l.text("Uiterlijk (JJJJ-MM-DD)", "Due (YYYY-MM-DD)"), &topic.due_date, Some(|t| go(Event::Due(t))), D::Compact, None)).width(Length::FillPortion(1)),
+                container(w::text_field(look, l.text("Labels, met komma's", "Labels, with commas"), &state.labels_text, Some(|t| go(Event::Labels(t))), D::Compact, None)).width(Length::FillPortion(1)),
+            ]
+            .spacing(4),
+            row(KINDS.iter().map(|&k| {
+                let active = topic.kind.eq_ignore_ascii_case(k);
+                let p = self.theme.palette();
+                named(button(text(kind_label(k, l)).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::KindOf(k))), Node::new(Role::ToggleButton, format!("{}: {}", l.text("Soort", "Type"), kind_label(k, l))).selected(active))
+            }))
+            .spacing(4)
+            .wrap(),
         ]
         .spacing(6);
         if let Some(first) = topic.viewpoints.first() {
             let mut views = row![].spacing(4).align_y(Alignment::Center);
             for k in 0..topic.viewpoints.len() {
                 let label = format!("{} {}", l.text("Standpunt", "Viewpoint"), k + 1);
-                views = views.push(button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(true, s)).on_press(go(Event::Viewpoint(topic.guid.clone(), k))));
+                views = views.push(named(button(text(label.clone()).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(true, s)).on_press(go(Event::Viewpoint(topic.guid.clone(), k))), Node::new(Role::Button, label)));
             }
             detail = detail.push(views.wrap());
             let mut facts = vec![format!("{} {}", first.selection.len(), l.text("geselecteerd", "selected"))];
@@ -1361,7 +1715,7 @@ impl App {
             list = list.push(w::checkbox(look, l.text("Modelcontroles", "Model checks"), rules.model_checks, Some(|on| go(Event::ModelChecks(on)))));
             list = list.push(w::checkbox(look, l.text("BIM basis ILS", "BIM basis ILS"), rules.ils, Some(|on| go(Event::Ils(on)))));
             for (k, ids) in rules.ids.iter().enumerate() {
-                let name = ids.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = crate::collab::rules::ids_name(ids);
                 list = list.push(row![w::body(look, format!("IDS · {name}")).width(Length::Fill), w::button(look, l.text("Weg", "Remove"), K::Quiet, D::Compact, None, Some(go(Event::RemoveIds(k))))].align_y(Alignment::Center));
             }
         }
@@ -1443,7 +1797,7 @@ impl App {
                     .align_y(Alignment::Center),
                 ]
                 .spacing(2);
-                list = list.push(button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(open, st)).on_press(go(Event::Spec((!open).then_some((c, s))))));
+                list = list.push(named(button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(open, st)).on_press(go(Event::Spec((!open).then_some((c, s))))), Node::new(Role::Row, format!("{}: {}", l.text("Regel", "Rule"), spec.identifier.clone().unwrap_or_else(|| spec.name.clone()))).expanded(open).value(spec_text(spec, l))));
                 if open {
                     let mut findings = column![].spacing(2);
                     for reason in &spec.reasons {
@@ -1453,7 +1807,7 @@ impl App {
                     for f in failed.clone().take(SHOWN) {
                         let name = f.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", f.express_id));
                         let line = column![w::body(look, format!("{name} ({})", f.entity_type)), w::secondary(look, f.reason.clone())].spacing(1);
-                        findings = findings.push(button(line).width(Length::Fill).padding([3, 6]).style(move |_, st| p.ribbon_button(false, st)).on_press(go(Event::Finding(c, f.express_id))));
+                        findings = findings.push(named(button(line).width(Length::Fill).padding([3, 6]).style(move |_, st| p.ribbon_button(false, st)).on_press(go(Event::Finding(c, f.express_id))), Node::new(Role::Row, format!("{}: {name}", l.text("Element", "Element")))));
                     }
                     let more = failed.count().saturating_sub(SHOWN);
                     if more > 0 {
@@ -1478,7 +1832,7 @@ impl App {
             for (k, rule) in rules.clashes.iter().enumerate() {
                 let hard = rule.kind == ClashKind::Hard;
                 let amount = state.amounts.get(k).map(String::as_str).unwrap_or("");
-                let kind = |label: &'static str, active: bool, kind: ClashKind| button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::ClashKindOf(k, kind)));
+                let kind = |label: &'static str, active: bool, kind: ClashKind| named(button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::ClashKindOf(k, kind))), Node::new(Role::ToggleButton, format!("{} {}", rule.name, label)).selected(active));
                 list = list.push(
                     column![
                         row![
@@ -1486,7 +1840,21 @@ impl App {
                             w::button(look, l.text("Weg", "Remove"), K::Quiet, D::Compact, None, Some(go(Event::RemoveClashRule(k)))),
                         ]
                         .align_y(Alignment::Center),
-                        w::secondary(look, format!("{} × {}", rule.a.summary(everything), rule.b.summary(everything))),
+                        {
+                            // each side to choose; one a file set otherwise shows as it is
+                            let side = |first: bool| {
+                                let now = if first { &rule.a } else { &rule.b };
+                                let picked = state.sides.iter().find(|s| &s.selector == now).cloned();
+                                let known = picked.is_some();
+                                let list: Element<'a, Message> = w::select(look, &state.sides, picked, move |s: Side| go(Event::ClashSide(k, first, s)), D::Compact);
+                                let mut col = column![container(list).width(Length::Fill)].spacing(1).width(Length::FillPortion(1));
+                                if !known {
+                                    col = col.push(w::secondary(look, now.summary(everything)));
+                                }
+                                col
+                            };
+                            row![side(true), w::secondary(look, "×"), side(false)].spacing(4).align_y(Alignment::Start)
+                        },
                         row![
                             kind(l.text("Doorsnijding", "Crossing"), hard, ClashKind::Hard),
                             kind(l.text("Vrije ruimte", "Clearance"), !hard, ClashKind::Clearance),
@@ -1505,6 +1873,7 @@ impl App {
             row![
                 w::button(look, l.text("Clashes zoeken", "Find clashes"), K::Primary, D::Compact, None, (!state.running).then(|| go(Event::Clash))),
                 w::button(look, l.text("Nieuwe test", "New test"), K::Secondary, D::Compact, None, Some(go(Event::AddClashRule))),
+                w::button(look, l.text("Selectie clashen", "Clash selection"), K::Secondary, D::Compact, None, (!state.running && self.sel.items().iter().any(|i| matches!(i, Pickable::Element(_)))).then(|| go(Event::ClashSelection))),
             ]
             .spacing(6)
             .wrap(),
@@ -1524,6 +1893,10 @@ impl App {
             .spacing(4)
             .align_y(Alignment::Center),
         );
+        let accepted = state.clashes.iter().filter(|c| c.decision == Decision::Accepted).count();
+        if accepted > 0 {
+            list = list.push(w::checkbox(look, l.text("Geaccepteerde tonen", "Show accepted"), state.show_accepted, Some(|on| go(Event::ShowAccepted(on)))));
+        }
         let mut rule: Option<&str> = None;
         for (k, clash) in state.clashes.iter().enumerate().take(SHOWN) {
             // the clashes of one test under its name
@@ -1539,16 +1912,429 @@ impl App {
                 Kind::Inside => (l.text("ligt erin", "lies inside").to_string(), Tone::Error),
                 Kind::Near => (format!("{mm} mm {}", l.text("ertussen", "apart")), Tone::Warning),
             };
+            if !state.show_accepted && clash.decision == Decision::Accepted && !picked {
+                continue;
+            }
+            let (what, tone) = match clash.decision {
+                Decision::Accepted => (l.text("akkoord", "accepted").to_string(), Tone::Success),
+                Decision::Rejected => (format!("{what} · {}", l.text("afgewezen", "rejected")), tone),
+                Decision::Open => (what, tone),
+            };
             let line = row![column![w::body(look, clash.a_name.clone()), w::secondary(look, format!("× {}", clash.b_name))].spacing(1).width(Length::Fill), site::chip(look, &what, Some(tone))].spacing(6).align_y(Alignment::Center);
-            list = list.push(button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(picked, st)).on_press(go(Event::PickClash(k))));
+            list = list.push(named(button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(picked, st)).on_press(go(Event::PickClash(k))), Node::new(Role::Row, format!("{} {}: {} × {}", l.text("Clash", "Clash"), k + 1, clash.a_name, clash.b_name)).selected(picked).value(clash.decision.key())));
             if picked {
-                list = list.push(container(w::button(look, l.text("Issue maken", "Make issue"), K::Secondary, D::Compact, None, Some(go(Event::IssueFromClash(k))))).padding(iced::Padding { left: 8.0, ..iced::Padding::ZERO }));
+                let decide = |label: &'static str, d: Decision| {
+                    let active = clash.decision == d;
+                    named(button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::Decide(k, if active { Decision::Open } else { d }))), Node::new(Role::ToggleButton, label).selected(active))
+                };
+                list = list.push(
+                    container(
+                        row![
+                            w::button(look, l.text("Issue maken", "Make issue"), K::Secondary, D::Compact, None, Some(go(Event::IssueFromClash(k)))),
+                            decide(l.text("Akkoord", "Accept"), Decision::Accepted),
+                            decide(l.text("Afwijzen", "Reject"), Decision::Rejected),
+                            w::button(look, l.text("Doorsnede", "Section"), K::Quiet, D::Compact, None, Some(go(Event::SectionAround))),
+                        ]
+                        .spacing(4)
+                        .wrap(),
+                    )
+                    .padding(iced::Padding { left: 8.0, ..iced::Padding::ZERO }),
+                );
             }
         }
         if state.clashes.len() > SHOWN {
             list = list.push(w::secondary(look, format!("+ {} {}", state.clashes.len() - SHOWN, l.text("meer, zie het CSV-bestand", "more, see the CSV file"))));
         }
         list.into()
+    }
+}
+
+/// A side of a clash test in a list to choose from: what it is called and what it takes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Side {
+    label: String,
+    selector: Selector,
+}
+
+impl std::fmt::Display for Side {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// The kinds an issue can be, as BCF names them.
+const KINDS: [&str; 5] = ["Issue", "Clash", "Remark", "Request", "Fault"];
+
+fn kind_label(kind: &str, l: Language) -> String {
+    match kind {
+        "Issue" => l.text("Issue", "Issue").to_string(),
+        "Clash" => l.text("Clash", "Clash").to_string(),
+        "Remark" => l.text("Opmerking", "Remark").to_string(),
+        "Request" => l.text("Verzoek", "Request").to_string(),
+        "Fault" => l.text("Fout", "Fault").to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The issues as one HTML page: each with its picture, what it says and its comments.
+fn issues_html(issues: &Issues, l: Language) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+    let mut out = format!(
+        "<!doctype html><html lang=\"{}\"><meta charset=\"utf-8\"><title>{}</title><style>body{{font:14px system-ui,sans-serif;margin:24px;color:#222}}h1{{font-size:22px}}article{{border:1px solid #ccc;border-radius:6px;padding:12px 16px;margin:0 0 16px;page-break-inside:avoid}}h2{{font-size:16px;margin:0 0 6px}}.meta{{color:#666;font-size:12px}}img{{max-width:100%;border:1px solid #ddd;margin:8px 0}}.c{{border-left:3px solid #ddd;padding-left:8px;margin:6px 0}}</style>",
+        if l == Language::Dutch { "nl" } else { "en" },
+        l.text("Issues", "Issues")
+    );
+    out += &format!("<h1>{} ({})</h1>", l.text("Issues", "Issues"), issues.topics.len());
+    for (k, t) in issues.topics.iter().enumerate() {
+        out += &format!("<article><h2>{}. {}</h2>", k + 1, esc(&t.title));
+        let mut meta = vec![format!("{}: {}", l.text("Status", "Status"), esc(&t.status)), format!("{}: {}", l.text("Soort", "Type"), esc(&t.kind))];
+        for (label, value) in [(l.text("Prioriteit", "Priority"), &t.priority), (l.text("Toegewezen aan", "Assigned to"), &t.assigned_to), (l.text("Uiterlijk", "Due"), &t.due_date)] {
+            if !value.is_empty() {
+                meta.push(format!("{label}: {}", esc(value)));
+            }
+        }
+        if !t.labels.is_empty() {
+            meta.push(format!("{}: {}", l.text("Labels", "Labels"), esc(&t.labels.join(", "))));
+        }
+        meta.push(format!("{} {} · {}", l.text("Gemaakt door", "Made by"), esc(&t.creation_author), esc(t.creation_date.get(..10).unwrap_or(&t.creation_date))));
+        out += &format!("<div class=\"meta\">{}</div>", meta.join(" · "));
+        if let Some((name, bytes)) = t.viewpoints.first().and_then(|v| v.snapshot.as_ref()) {
+            let mime = if name.to_ascii_lowercase().ends_with(".jpg") || name.to_ascii_lowercase().ends_with(".jpeg") { "image/jpeg" } else { "image/png" };
+            out += &format!("<img alt=\"\" src=\"data:{mime};base64,{}\">", crate::remote::base64(bytes));
+        }
+        if !t.description.is_empty() {
+            out += &format!("<p>{}</p>", esc(&t.description).replace('\n', "<br>"));
+        }
+        for c in &t.comments {
+            out += &format!("<div class=\"c\"><div class=\"meta\">{} · {}</div>{}</div>", esc(&c.author), esc(c.date.get(..10).unwrap_or(&c.date)), esc(&c.text));
+        }
+        out += "</article>";
+    }
+    out + "</html>\n"
+}
+
+impl App {
+    /// Two versions of a model compared: which, and what was added, removed and changed.
+    fn collab_compare<'a>(&'a self, look: Look, l: Language) -> Element<'a, Message> {
+        let state = &self.collab;
+        let p = self.theme.palette();
+        let mut list = column![w::secondary(
+            look,
+            l.text(
+                "Open de oude en de nieuwe versie van een model samen (Toevoegen) en vergelijk ze: elementen worden herkend aan hun GlobalId.",
+                "Open the old and the new version of a model together (Add) and compare them: elements are known by their GlobalId.",
+            )
+        )]
+        .spacing(6);
+        let (old, new) = state.compare_pair;
+        list = list.push(
+            column![
+                column![w::mono_label(look, l.text("Oud", "Old")), w::select(look, &state.model_names, state.model_names.get(old).cloned(), |c: Choice| go(Event::CompareOld(c)), D::Compact)].spacing(2).width(Length::FillPortion(1)),
+                column![w::mono_label(look, l.text("Nieuw", "New")), w::select(look, &state.model_names, state.model_names.get(new).cloned(), |c: Choice| go(Event::CompareNew(c)), D::Compact)].spacing(2).width(Length::FillPortion(1)),
+            ]
+            .spacing(8),
+        );
+        list = list.push(w::button(look, l.text("Vergelijken", "Compare"), K::Primary, D::Compact, None, (state.model_names.len() >= 2 && old != new).then(|| go(Event::Compare))));
+        let Some(c) = &state.comparison else { return list.into() };
+        list = list.push(w::divider(look)).push(w::secondary(look, format!("{} → {}", c.old, c.new)));
+        let mut summary = row![].spacing(4);
+        summary = summary.push(site::chip(look, &format!("{} {}", c.added.len(), l.text("toegevoegd", "added")), Some(Tone::Success)));
+        summary = summary.push(site::chip(look, &format!("{} {}", c.removed.len(), l.text("verwijderd", "removed")), Some(Tone::Error)));
+        summary = summary.push(site::chip(look, &format!("{} {}", c.changed.len(), l.text("gewijzigd", "changed")), Some(Tone::Warning)));
+        list = list.push(summary.wrap());
+        let group = |list: iced::widget::Column<'a, Message>, title: String, rows: Vec<(String, String)>, kind: u8| -> iced::widget::Column<'a, Message> {
+            if rows.is_empty() {
+                return list;
+            }
+            let mut list = list.push(w::heading(look, title, 13.0));
+            for (k, (name, why)) in rows.iter().enumerate().take(SHOWN) {
+                let mut line = column![w::body(look, name.clone())].spacing(1);
+                if !why.is_empty() {
+                    line = line.push(w::secondary(look, why.clone()));
+                }
+                list = list.push(named(button(line).width(Length::Fill).padding([3, 6]).style(move |_, s| p.ribbon_button(false, s)).on_press(go(Event::ComparePick(kind, k))), Node::new(Role::Row, format!("{}: {name}", l.text("Element", "Element")))));
+            }
+            if rows.len() > SHOWN {
+                list = list.push(w::secondary(look, format!("+ {}", rows.len() - SHOWN)));
+            }
+            list
+        };
+        list = group(list, format!("{} · {}", l.text("Gewijzigd", "Changed"), c.changed.len()), c.changed.iter().map(|x| (x.1.clone(), x.2.clone())).collect(), 2);
+        list = group(list, format!("{} · {}", l.text("Toegevoegd", "Added"), c.added.len()), c.added.iter().map(|x| (x.1.clone(), String::new())).collect(), 0);
+        list = group(list, format!("{} · {}", l.text("Verwijderd", "Removed"), c.removed.len()), c.removed.iter().map(|x| (x.1.clone(), String::new())).collect(), 1);
+        list.into()
+    }
+
+    /// A remote command of the Collaborator (`collab_…`): what a person does in its panel,
+    /// answered at once; checks and clash tests run before the answer.
+    pub(crate) fn collab_command(&mut self, cmd: &str, a: &serde_json::Value) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        self.collab.refresh();
+        self.collab_refresh_sides();
+        let text = |k: &str| a.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let action = text("action").unwrap_or_default();
+        let topic_json = |t: &Topic, full: bool| {
+            let mut v = json!({
+                "guid": t.guid, "title": t.title, "type": t.kind, "status": t.status, "priority": t.priority,
+                "assigned_to": t.assigned_to, "due_date": t.due_date, "labels": t.labels, "author": t.creation_author,
+                "created": t.creation_date, "comments": t.comments.len(), "viewpoints": t.viewpoints.len(),
+                "snapshot": t.viewpoints.first().is_some_and(|v| v.snapshot.is_some()), "elements": t.elements().len(),
+            });
+            if full {
+                v["description"] = json!(t.description);
+                v["comments"] = json!(t.comments.iter().map(|c| json!({ "author": c.author, "date": c.date, "text": c.text })).collect::<Vec<_>>());
+                v["element_guids"] = json!(t.elements());
+            }
+            v
+        };
+        let guid_of = |app: &App| -> Result<String, String> {
+            let by_place = a.get("index").and_then(|v| v.as_u64()).and_then(|k| app.collab.issues.topics.get(k as usize)).map(|t| t.guid.clone());
+            let guid = text("guid").or(by_place).or_else(|| app.collab.topic.clone()).ok_or("give the issue's guid or its index in the list")?;
+            app.collab.issues.topics.iter().any(|t| t.guid == guid).then_some(guid.clone()).ok_or(format!("no issue {guid}"))
+        };
+        let answer = match cmd {
+            "collab_state" => {
+                let rules = self.collab.rules();
+                Ok(json!({
+                    "user": self.collab.author,
+                    "tab": format!("{:?}", self.collab.tab),
+                    "rule_set": rules.map(|r| r.name.clone()),
+                    "rule_sets": self.collab.rule_sets.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+                    "issues": self.collab.issues.topics.len(), "open_issues": self.collab.open_issues(),
+                    "issues_file": self.collab.issues_path.as_ref().map(|p| p.display().to_string()), "issues_changed": self.collab.issues_changed,
+                    "shown_issue": self.collab.topic,
+                    "checked_models": self.collab.checked.len(), "clashes": self.collab.clashes.len(), "picked_clash": self.collab.clash,
+                    "isolate": self.collab.isolate, "team": self.collab.team.iter().map(|c| c.1.clone()).collect::<Vec<_>>(),
+                    "models": self.models.iter().map(|e| e.model.path.file_name().map(|n| n.to_string_lossy().into_owned())).collect::<Vec<_>>(),
+                    "notice": self.collab.notice.as_ref().map(|(_, m)| m.clone()),
+                }))
+            }
+            "collab_issue" => match action.as_str() {
+                "list" | "" => {
+                    let status = text("status").map(|s| s.to_lowercase());
+                    Ok(json!({ "issues": self.collab.issues.topics.iter().filter(|t| status.as_deref().is_none_or(|s| t.status.to_lowercase() == s)).map(|t| topic_json(t, false)).collect::<Vec<_>>() }))
+                }
+                "get" => {
+                    let guid = guid_of(self)?;
+                    Ok(topic_json(self.collab.issues.topics.iter().find(|t| t.guid == guid).ok_or("gone")?, true))
+                }
+                "new" => {
+                    let _ = self.collab_handle(Event::NewIssue);
+                    let guid = self.collab.topic.clone().ok_or("no issue made")?;
+                    self.collab_edit_topic(&guid, a);
+                    Ok(json!({ "guid": guid, "note": "the picture of the view is taken by the window; from here use screenshot to see it" }))
+                }
+                "update" => {
+                    let guid = guid_of(self)?;
+                    self.collab_edit_topic(&guid, a);
+                    Ok(topic_json(self.collab.issues.topics.iter().find(|t| t.guid == guid).ok_or("gone")?, false))
+                }
+                "comment" => {
+                    let guid = guid_of(self)?;
+                    self.collab.topic = Some(guid.clone());
+                    let _ = self.collab_handle(Event::Comment(text("text").ok_or("give the comment's text")?));
+                    let _ = self.collab_handle(Event::AddComment);
+                    Ok(json!({ "guid": guid, "comments": self.collab.issues.topics.iter().find(|t| t.guid == guid).map_or(0, |t| t.comments.len()) }))
+                }
+                "show" => {
+                    let guid = guid_of(self)?;
+                    let k = a.get("viewpoint").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    self.collab.topic = Some(guid.clone());
+                    self.collab.tab = Tab::Issues;
+                    let _ = self.collab_handle(Event::Viewpoint(guid.clone(), k));
+                    Ok(json!({ "guid": guid, "selected": self.sel.len(), "notice": self.collab.notice.as_ref().map(|(_, m)| m.clone()) }))
+                }
+                "remove" => {
+                    let guid = guid_of(self)?;
+                    self.collab.topic = Some(guid.clone());
+                    let _ = self.collab_handle(Event::RemoveTopic);
+                    Ok(json!({ "removed": guid, "issues": self.collab.issues.topics.len() }))
+                }
+                other => Err(format!("collab_issue: unknown action {other} (list, get, new, update, comment, show, remove)")),
+            },
+            "collab_bcf" => {
+                let path = text("path").map(PathBuf::from).ok_or("give the .bcfzip path")?;
+                match action.as_str() {
+                    "open" => {
+                        let _ = self.collab_handle(Event::Opened(File::Bcf, Some(path)));
+                        match &self.collab.notice {
+                            Some((Tone::Error, e)) => Err(e.clone()),
+                            _ => Ok(json!({ "issues": self.collab.issues.topics.len(), "version": self.collab.issues.version })),
+                        }
+                    }
+                    "save" => {
+                        let _ = self.collab_handle(Event::SaveIssuesTo(Some(path.clone())));
+                        match &self.collab.notice {
+                            Some((Tone::Error, e)) => Err(e.clone()),
+                            _ => Ok(json!({ "saved": path.display().to_string(), "issues": self.collab.issues.topics.len() })),
+                        }
+                    }
+                    other => Err(format!("collab_bcf: unknown action {other} (open, save)")),
+                }
+            }
+            "collab_rules" => match action.as_str() {
+                "list" | "" => Ok(json!({
+                    "current": self.collab.rule_set,
+                    "rule_sets": self.collab.rule_sets.iter().map(|r| json!({
+                        "name": r.name, "description": r.description, "model_checks": r.model_checks, "ils": r.ils,
+                        "ids": r.ids.iter().map(|p| crate::collab::rules::ids_name(p)).collect::<Vec<_>>(),
+                        "clash_tests": r.clashes.iter().map(|c| json!({ "name": c.name, "on": c.on, "kind": format!("{:?}", c.kind), "tolerance_mm": c.tolerance_mm, "clearance_mm": c.clearance_mm })).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                })),
+                "select" => {
+                    let k = match a.get("rule_set") {
+                        Some(serde_json::Value::Number(n)) => n.as_u64().map(|n| n as usize),
+                        Some(serde_json::Value::String(s)) => self.collab.rule_sets.iter().position(|r| r.name.to_lowercase().contains(&s.to_lowercase())),
+                        _ => None,
+                    }
+                    .ok_or("give rule_set: its index or name")?;
+                    let _ = self.collab_handle(Event::RuleSet(k));
+                    Ok(json!({ "current": self.collab.rule_set, "name": self.collab.rules().map(|r| r.name.clone()) }))
+                }
+                "open" => {
+                    let _ = self.collab_handle(Event::Opened(File::Rules, Some(text("path").map(PathBuf::from).ok_or("give the path")?)));
+                    Ok(json!({ "current": self.collab.rule_set, "name": self.collab.rules().map(|r| r.name.clone()), "notice": self.collab.notice.as_ref().map(|(_, m)| m.clone()) }))
+                }
+                "save" => {
+                    let _ = self.collab_handle(Event::SaveRulesTo(Some(text("path").map(PathBuf::from).ok_or("give the path")?)));
+                    Ok(json!({ "notice": self.collab.notice.as_ref().map(|(_, m)| m.clone()) }))
+                }
+                "load_ids" => {
+                    let _ = self.collab_handle(Event::Opened(File::Ids, Some(text("path").map(PathBuf::from).ok_or("give the .ids path")?)));
+                    Ok(json!({ "ids": self.collab.rules().map(|r| r.ids.iter().map(|p| crate::collab::rules::ids_name(p)).collect::<Vec<_>>()) }))
+                }
+                "set" => {
+                    if let Some(on) = a.get("model_checks").and_then(|v| v.as_bool()) {
+                        let _ = self.collab_handle(Event::ModelChecks(on));
+                    }
+                    if let Some(on) = a.get("ils").and_then(|v| v.as_bool()) {
+                        let _ = self.collab_handle(Event::Ils(on));
+                    }
+                    if let Some(name) = text("user") {
+                        let _ = self.collab_handle(Event::User(name));
+                    }
+                    Ok(json!({ "user": self.collab.author, "model_checks": self.collab.rules().map(|r| r.model_checks), "ils": self.collab.rules().map(|r| r.ils) }))
+                }
+                other => Err(format!("collab_rules: unknown action {other} (list, select, open, save, load_ids, set)")),
+            },
+            "collab_check" => {
+                self.collab_now(None, None, Some("check"))?;
+                Ok(json!({ "models": self.collab.checked.iter().map(|c| match &c.report {
+                    Ok(r) => json!({
+                        "model": c.name, "status": status_key(r.status),
+                        "rules": r.specifications.iter().map(|s| json!({ "code": s.identifier, "name": s.name, "status": status_key(s.status), "warning": s.severity == Severity::Warning, "passed": s.passed_count, "applicable": s.applicable_count })).collect::<Vec<_>>(),
+                    }),
+                    Err(e) => json!({ "model": c.name, "error": e }),
+                }).collect::<Vec<_>>() }))
+            }
+            "collab_clashes" => match action.as_str() {
+                "run" | "" => {
+                    let started = Instant::now();
+                    if a.get("selection").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        let _ = self.collab_handle(Event::ClashSelection);
+                        // the clash test runs on a thread in the window; here it is waited for
+                        return Ok(json!({ "started": true, "note": "the selection's clash test runs in the background; ask again with action list" }));
+                    }
+                    self.collab_now(None, None, Some("clash"))?;
+                    Ok(json!({ "clashes": self.collab.clashes.len(), "seconds": started.elapsed().as_secs_f32() }))
+                }
+                "list" => {
+                    let offset = a.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let limit = a.get("limit").and_then(|v| v.as_u64()).unwrap_or(50).min(500) as usize;
+                    Ok(json!({ "total": self.collab.clashes.len(), "clashes": self.collab.clashes.iter().enumerate().skip(offset).take(limit).map(|(k, c)| json!({
+                        "index": k, "rule": c.rule, "a": c.a, "b": c.b, "a_name": c.a_name, "b_name": c.b_name,
+                        "kind": format!("{:?}", c.kind), "distance_mm": (c.distance * 1000.0).round(), "decision": c.decision.key(),
+                    })).collect::<Vec<_>>() }))
+                }
+                "pick" => {
+                    let k = a.get("index").and_then(|v| v.as_u64()).ok_or("give the clash's index")? as usize;
+                    let _ = self.collab_handle(Event::PickClash(k));
+                    Ok(json!({ "picked": self.collab.clash, "selected": self.sel.len() }))
+                }
+                "decide" => {
+                    let k = a.get("index").and_then(|v| v.as_u64()).ok_or("give the clash's index")? as usize;
+                    let d = text("decision").as_deref().and_then(Decision::parse).ok_or("decision: open, accepted or rejected")?;
+                    let _ = self.collab_handle(Event::Decide(k, d));
+                    Ok(json!({ "index": k, "decision": self.collab.clashes.get(k).map(|c| c.decision.key()) }))
+                }
+                "issue" => {
+                    let k = a.get("index").and_then(|v| v.as_u64()).ok_or("give the clash's index")? as usize;
+                    let _ = self.collab_handle(Event::IssueFromClash(k));
+                    Ok(json!({ "guid": self.collab.topic, "issues": self.collab.issues.topics.len() }))
+                }
+                "issues" => {
+                    let _ = self.collab_handle(Event::IssuesFromClashes);
+                    Ok(json!({ "issues": self.collab.issues.topics.len() }))
+                }
+                other => Err(format!("collab_clashes: unknown action {other} (run, list, pick, decide, issue, issues)")),
+            },
+            "collab_compare" => {
+                let pick = |k: &str| a.get(k).and_then(|v| v.as_u64()).map(|n| n as usize);
+                if let (Some(old), Some(new)) = (pick("old"), pick("new")) {
+                    self.collab.compare_pair = (old, new);
+                }
+                let _ = self.collab_handle(Event::Compare);
+                match &self.collab.comparison {
+                    Some(c) if self.collab.tab == Tab::Compare => Ok(json!({
+                        "old": c.old, "new": c.new, "added": c.added.len(), "removed": c.removed.len(), "changed": c.changed.len(),
+                        "changed_first": c.changed.iter().take(20).map(|x| json!({ "element": x.0, "name": x.1, "what": x.2 })).collect::<Vec<_>>(),
+                    })),
+                    _ => Err(self.collab.notice.as_ref().map_or("nothing to compare".to_string(), |(_, m)| m.clone())),
+                }
+            }
+            "collab_export" => {
+                let path = text("path").map(PathBuf::from).ok_or("give the path")?;
+                let kind = match text("kind").as_deref().unwrap_or("issues") {
+                    "html" | "report" => Report::Html,
+                    "csv" => Report::Csv,
+                    "json" => Report::Json,
+                    "clashes" => Report::ClashesCsv,
+                    _ => Report::IssuesHtml,
+                };
+                let _ = self.collab_handle(Event::ExportTo(kind, Some(path.clone())));
+                match &self.collab.notice {
+                    Some((Tone::Error, e)) => Err(e.clone()),
+                    _ => Ok(json!({ "saved": path.display().to_string() })),
+                }
+            }
+            other => Err(format!("unknown command {other}")),
+        };
+        self.collab.refresh();
+        answer
+    }
+
+    /// Sets the fields of an issue that a remote command names.
+    fn collab_edit_topic(&mut self, guid: &str, a: &serde_json::Value) {
+        self.collab.topic = Some(guid.to_string());
+        let text = |k: &str| a.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        if let Some(t) = text("title") {
+            let _ = self.collab_handle(Event::Title(t));
+        }
+        if let Some(t) = text("description") {
+            let _ = self.collab_handle(Event::Description(t));
+        }
+        if let Some(s) = text("status").and_then(|s| STATUSES.iter().find(|x| x.eq_ignore_ascii_case(&s)).copied()) {
+            let _ = self.collab_handle(Event::Status(s));
+        }
+        if let Some(s) = text("priority").and_then(|s| PRIORITIES.iter().find(|x| x.eq_ignore_ascii_case(&s)).copied()) {
+            let _ = self.collab_handle(Event::Priority(s));
+        }
+        if let Some(s) = text("type").and_then(|s| KINDS.iter().find(|x| x.eq_ignore_ascii_case(&s)).copied()) {
+            let _ = self.collab_handle(Event::KindOf(s));
+        }
+        if let Some(t) = text("assigned_to") {
+            let _ = self.collab_handle(Event::Assigned(t));
+        }
+        if let Some(t) = text("due_date") {
+            let _ = self.collab_handle(Event::Due(t));
+        }
+        if let Some(list) = a.get("labels") {
+            let joined = match list {
+                serde_json::Value::Array(l) => l.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(","),
+                other => other.as_str().unwrap_or_default().to_string(),
+            };
+            let _ = self.collab_handle(Event::Labels(joined));
+        }
     }
 }
 
@@ -1564,20 +2350,11 @@ impl std::fmt::Display for Label {
 
 /// A rule set in the list to choose from.
 #[derive(Debug, Clone, PartialEq)]
-struct Choice(usize, String);
+pub struct Choice(usize, String);
 
 impl std::fmt::Display for Choice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.1)
-    }
-}
-
-fn tone_icon(tone: Tone) -> &'static str {
-    match tone {
-        Tone::Error => "status.error",
-        Tone::Warning => "status.warning",
-        Tone::Success => "status.success",
-        Tone::Info => "status.info",
     }
 }
 
@@ -1648,6 +2425,29 @@ mod tests {
         // all against all: the pair once; walls against walls: nothing
         assert_eq!(run_clashes(&model, &models, &[rule(&[], &[])], &AtomicBool::new(false)).len(), 1);
         assert!(run_clashes(&model, &models, &[rule(&["IfcWall*"], &["IfcWall*"])], &AtomicBool::new(false)).is_empty());
+    }
+
+    #[test]
+    fn the_selection_clashes_against_the_rest_and_a_side_is_chosen_from_the_model() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let _ = app.collab_update(Event::Tab(Tab::Clashes));
+        // the sides: everything, the two groups, the layer and the two classes
+        let labels: Vec<String> = app.collab.sides.iter().map(|s| s.to_string()).collect();
+        assert_eq!(labels, ["Everything", "Structure", "Services", "Layer: Walls", "Class: IfcPipeSegment", "Class: IfcWall"]);
+        let pipes = app.collab.sides[4].clone();
+        let _ = app.collab_update(Event::ClashSide(0, true, pipes));
+        let rule = app.collab.rules().unwrap().clashes[0].clone();
+        assert_eq!((rule.name.as_str(), rule.a.classes.clone(), rule.within()), ("IfcPipeSegment × everything", vec!["IfcPipeSegment".to_string()], false));
+        // the pipe selected: it clashes with the wall, not with itself
+        let model = app.model.clone().unwrap();
+        let models = vec![("house.ifc".to_string(), 0..1)];
+        let only = ClashRule { name: "selection".into(), a: Selector { only: vec![2], ..Selector::default() }, b: Selector { except: vec![2], ..Selector::default() }, ..ClashRule::default() };
+        let found = run_clashes(&model, &models, &[only], &AtomicBool::new(false));
+        assert_eq!(found.iter().map(|c| (c.a, c.b)).collect::<Vec<_>>(), [(2, 1)]);
+        // nothing selected: the panel says so and runs nothing
+        let _ = app.collab_update(Event::ClashSelection);
+        assert!(!app.collab.running && app.collab.notice.is_some());
     }
 
     #[test]

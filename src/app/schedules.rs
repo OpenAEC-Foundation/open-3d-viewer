@@ -411,7 +411,7 @@ mod tests {
         };
         let mut app = App::default();
         app.set_model(Arc::new(Model::new("doors.rvt".into(), "Revit", vec![layer])));
-        let row = |cells: &[&str], elements: Vec<u64>| ScheduleRow { cells: cells.iter().map(|c| Some(c.to_string())).collect(), elements, total: false };
+        let row = |cells: &[&str], elements: Vec<u64>| ScheduleRow { images: Vec::new(), cells: cells.iter().map(|c| Some(c.to_string())).collect(), elements, total: false };
         app.schedules = vec![Schedule {
             name: "Door Schedule".into(),
             columns: vec!["Mark".into()],

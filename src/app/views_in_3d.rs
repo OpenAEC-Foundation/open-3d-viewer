@@ -20,15 +20,24 @@ impl App {
 
     /// The views drawn in 3D now: none unless switched on and in the 3D view's tab.
     fn views_in_3d_now(&self) -> Views3d {
-        if !self.views_in_3d || !self.model_tab_shown() {
+        if !self.model_tab_shown() {
             return Views3d::default();
         }
-        let bounds = self.world_bounds();
-        let mut v = views3d::document_views(&self.document, &|p| self.cuts.get(p).cloned(), bounds.as_ref());
-        if let Some(model) = &self.model {
-            let saved = views3d::saved_views(&model.views, bounds.as_ref());
-            v.lines.extend(saved.lines);
-            v.labels.extend(saved.labels);
+        let mut v = Views3d::default();
+        if self.views_in_3d {
+            let bounds = self.world_bounds();
+            v = views3d::document_views(&self.document, &|p| self.cuts.get(p).cloned(), bounds.as_ref());
+            if let Some(model) = &self.model {
+                let saved = views3d::saved_views(&model.views, bounds.as_ref());
+                v.lines.extend(saved.lines);
+                v.labels.extend(saved.labels);
+            }
+        }
+        // the views laid in 3D in full, whether or not the frames of all views show
+        for path in &self.projected {
+            let laid = views3d::projected(&self.document, path, self.cuts.get(path).map(|c| &**c));
+            v.lines.extend(laid.lines);
+            v.labels.extend(laid.labels);
         }
         v
     }
@@ -37,6 +46,14 @@ impl App {
     /// crop; the lines are made again when it changes.
     fn views_in_3d_key(&self) -> Vec<u64> {
         let mut key = vec![u64::from(self.views_in_3d && self.model_tab_shown()), self.model.as_ref().map_or(0, |m| Arc::as_ptr(m) as u64)];
+        // the views laid in 3D in full: which, and the cut of each
+        if self.model_tab_shown() {
+            for path in &self.projected {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(path, &mut hasher);
+                key.extend([std::hash::Hasher::finish(&hasher), self.cuts.get(path).map_or(0, |c| Arc::as_ptr(c) as u64)]);
+            }
+        }
         if key[0] == 0 {
             return key;
         }
@@ -57,6 +74,11 @@ impl App {
         if self.views_in_3d && self.model_tab_shown() {
             let paths: Vec<String> = self.document.plans().iter().map(|p| p.path.clone()).chain(self.document.sections().iter().map(|s| s.path.clone())).collect();
             for path in paths {
+                self.cut_view(&path);
+            }
+        }
+        if self.model_tab_shown() {
+            for path in self.projected.clone() {
                 self.cut_view(&path);
             }
         }

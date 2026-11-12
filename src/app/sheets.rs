@@ -21,6 +21,9 @@ use serde_json::{json, Value};
 const MARGIN: f32 = 24.0;
 /// The smallest letters worth drawing (logical pixels).
 const SMALLEST: f32 = 1.5;
+/// The letters of a view's title on the sheet, and of the scale under it (metres on paper).
+const TITLE: f32 = 0.0035;
+const TITLE_SCALE: f32 = 0.0025;
 
 impl App {
     /// The sheets of the model.
@@ -72,12 +75,13 @@ impl App {
     }
 
     /// The explorer group of the sheets, by number (Revit's "Sheets").
-    pub(super) fn sheets_group<'a>(&self, p: Palette, l: Language, query: &str, mut body: Column<'a, Message>) -> Column<'a, Message> {
+    pub(super) fn sheets_group<'a>(&self, p: Palette, l: Language, query: &str, of: std::ops::Range<usize>, mut body: Column<'a, Message>) -> Column<'a, Message> {
         let sheets = self.sheets();
-        if sheets.is_empty() {
+        let of = of.start.min(sheets.len())..of.end.min(sheets.len());
+        if of.is_empty() {
             return body;
         }
-        let shown: Vec<usize> = (0..sheets.len()).filter(|&i| query.is_empty() || sheets[i].title.to_lowercase().contains(query)).collect();
+        let shown: Vec<usize> = of.filter(|&i| query.is_empty() || sheets[i].title.to_lowercase().contains(query)).collect();
         let open = self.explorer_open[4] || !query.is_empty();
         body = body.push(group_header(p, l.text("Bladen", "Sheets"), Some("beta"), shown.len(), open, Message::ToggleExplorer(4)));
         if !open {
@@ -306,13 +310,13 @@ fn draw_text(frame: &mut Frame, t: &crate::model::DraftText, on: &dyn Fn([f32; 2
         ..canvas::Text::default()
     };
     if t.angle == 0.0 {
-        frame.fill_text(text(top));
+        t.face.fill(frame, text(top));
     } else {
         // turned about the foot of its box, under where its lines start
         frame.with_save(|frame| {
             frame.translate(Vector::new(foot.x, foot.y));
             frame.rotate(-t.angle);
-            frame.fill_text(text(Point::new(0.0, -(foot.y - top.y).abs())));
+            t.face.fill(frame, text(Point::new(0.0, -(foot.y - top.y).abs())));
         });
     }
 }
@@ -414,16 +418,59 @@ impl canvas::Program<Message> for SheetDrawing {
                 label(&mut frame, sheet.title.clone(), title, 14.0, ink, alignment::Horizontal::Right, alignment::Vertical::Bottom);
             }
         }
-        // the title block: its lines and its texts
-        let block = Path::new(|path| {
-            for (a, b) in sheet.lines.iter().map(|l| (fit.point(l[0]), fit.point(l[1]))).filter(|(a, b)| seen(*a, *b)) {
-                path.move_to(a);
-                path.line_to(b);
+        // the images of the title block, under its lines
+        for i in &sheet.images {
+            let (centre, size) = (fit.point(i.center), Size::new(i.size[0] * fit.scale, i.size[1] * fit.scale));
+            let at = Point::new(centre.x - size.width / 2.0, centre.y - size.height / 2.0);
+            if seen(at, Point::new(at.x + size.width, at.y + size.height)) {
+                frame.draw_image(Rectangle::new(at, size), canvas::Image::new(i.image.clone()).rotation(iced::Radians(-i.angle)));
             }
-        });
-        frame.stroke(&block, Stroke::default().with_color(ink).with_width(0.9));
+        }
+        // the regions of the title block filled in one colour, under its lines
+        for f in &sheet.fills {
+            let outlines = Path::new(|path| {
+                for outline in f.loops.iter().filter(|l| l.len() >= 3) {
+                    path.move_to(fit.point(outline[0]));
+                    for &q in &outline[1..] {
+                        path.line_to(fit.point(q));
+                    }
+                    path.close();
+                }
+            });
+            // one without a colour of its own masks what lies under it: the paper shows
+            let color = if f.color == [0, 0, 0] { paper } else { Color::from_rgb8(f.color[0], f.color[1], f.color[2]) };
+            frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
+        }
+        // the title block: its lines and its texts
+        // each line in its own colour where it has one; a line count that does not match gives
+        // them all the ink
+        let own = |k: usize| if sheet.line_colors.len() == sheet.lines.len() { sheet.line_colors[k].filter(|c| *c != [0, 0, 0]) } else { None };
+        let mut colors: Vec<Option<[u8; 3]>> = (0..sheet.lines.len()).map(own).collect();
+        colors.sort_unstable();
+        colors.dedup();
+        for c in colors {
+            let block = Path::new(|path| {
+                for (a, b) in sheet.lines.iter().enumerate().filter(|(k, _)| own(*k) == c).map(|(_, l)| (fit.point(l[0]), fit.point(l[1]))).filter(|(a, b)| seen(*a, *b)) {
+                    path.move_to(a);
+                    path.line_to(b);
+                }
+            });
+            frame.stroke(&block, Stroke::default().with_color(c.map_or(ink, |c| Color::from_rgb8(c[0], c[1], c[2]))).with_width(0.9));
+        }
+        // a text on a dark region is written in the paper's colour, to stay readable
+        let dark = |p: [f32; 2]| {
+            sheet.fills.iter().any(|f| {
+                let c = if f.color == [0, 0, 0] { [ink.r, ink.g, ink.b] } else { f.color.map(|v| f32::from(v) / 255.0) };
+                let crossings: usize = f.loops.iter().map(|l| (0..l.len()).filter(|&k| {
+                    let (a, b) = (l[k], l[(k + 1) % l.len()]);
+                    (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
+                }).count()).sum();
+                crossings % 2 == 1 && 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < 0.4
+            })
+        };
         for t in &sheet.texts {
-            draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, ink, bounds.size());
+            let middle = [t.at[0] + t.width.min(t.size * 4.0) / 2.0, t.at[1] + t.height / 2.0];
+            draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, if dark(middle) { paper } else { ink }, bounds.size());
         }
         // the schedules: the borders of their cells and the texts in them
         for table in &self.tables {
@@ -435,12 +482,23 @@ impl canvas::Program<Message> for SheetDrawing {
             let at = |k: usize| table.origin[0] + lefts[k.min(lefts.len() - 1)];
             let mut top = table.origin[1];
             let mut texts = Vec::new();
+            // the images of its cells, each with its cell: left, top, width and height
+            let mut images: Vec<(iced::widget::image::Handle, [f32; 4])> = Vec::new();
             let grid = Path::new(|path| {
                 for row in &table.rows {
                     let foot = top - row.height;
+                    if row.plain {
+                        path.rectangle(fit.point([at(0), top]), Size::new((at(usize::MAX) - at(0)) * fit.scale, row.height * fit.scale));
+                    }
                     for cell in &row.cells {
                         let (left, right) = if row.title { (at(0), at(usize::MAX)) } else { (at(cell.column as usize), at(cell.column as usize + cell.span.max(1) as usize)) };
-                        path.rectangle(fit.point([left, top]), Size::new((right - left) * fit.scale, row.height * fit.scale));
+                        if !row.plain {
+                            path.rectangle(fit.point([left, top]), Size::new((right - left) * fit.scale, row.height * fit.scale));
+                        }
+                        if let Some(image) = &cell.image {
+                            images.push((image.clone(), [left, top, right - left, row.height]));
+                            continue;
+                        }
                         if cell.text.is_empty() {
                             continue;
                         }
@@ -449,11 +507,19 @@ impl canvas::Program<Message> for SheetDrawing {
                         let height = cell.text.lines().count().max(1) as f32 * cell.size * 1.3;
                         let room = (row.height - height).max(0.0);
                         let lift = [room - pad.min(room / 2.0), room / 2.0, pad.min(room / 2.0)][cell.vertical.min(2) as usize];
-                        texts.push(crate::model::DraftText { element: 0, at: [left + pad, foot + lift], width: (right - left - 2.0 * pad).max(0.0), height, size: cell.size, align: cell.align, angle: 0.0, text: cell.text.clone() });
+                        texts.push(crate::model::DraftText { element: 0, at: [left + pad, foot + lift], width: (right - left - 2.0 * pad).max(0.0), height, size: cell.size, align: cell.align, angle: 0.0, text: cell.text.clone(), face: Default::default() });
                     }
                     top = foot;
                 }
             });
+            // an image fills its cell as far as its own shape allows, clear of the borders
+            for (image, [left, top, width, height]) in images {
+                let room = (width.min(height) * 0.08).min(0.0006);
+                let (w, h) = ((width - 2.0 * room).max(0.0), (height - 2.0 * room).max(0.0));
+                let side = w.min(h);
+                let at = fit.point([left + (width - side) / 2.0, top - (height - side) / 2.0]);
+                frame.draw_image(Rectangle::new(at, Size::new(side * fit.scale, side * fit.scale)), canvas::Image::new(image));
+            }
             frame.stroke(&grid, Stroke::default().with_color(ink).with_width(0.7));
             for t in &texts {
                 draw_text(&mut frame, t, &|q| fit.point(q), fit.scale, ink, bounds.size());
@@ -473,13 +539,34 @@ impl canvas::Program<Message> for SheetDrawing {
                 Some(Placed::Draft(k)) => self.model.project.drafts.get(*k).is_some_and(|d| {
                     // a drawing's point on the sheet: its origin where the viewport has it
                     let on = |q: [f32; 2]| fit.point([v.origin[0] + q[0] * v.ratio, v.origin[1] + q[1] * v.ratio]);
-                    let lines = Path::new(|path| {
-                        for (a, b) in d.lines.iter().map(|l| (on(l.a), on(l.b))).filter(|(a, b)| seen(*a, *b)) {
-                            path.move_to(a);
-                            path.line_to(b);
-                        }
-                    });
-                    frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.8));
+                    // the regions filled in one colour, under the lines: black is the ink of the sheet
+                    let shade = |c: [u8; 3]| if c == [0, 0, 0] { ink } else { Color::from_rgb8(c[0], c[1], c[2]) };
+                    for f in &d.fills {
+                        let outlines = Path::new(|path| {
+                            for outline in f.loops.iter().filter(|l| l.len() >= 3) {
+                                path.move_to(on(outline[0]));
+                                for &q in &outline[1..] {
+                                    path.line_to(on(q));
+                                }
+                                path.close();
+                            }
+                        });
+                        frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(if f.color == [0, 0, 0] { paper } else { shade(f.color) }), rule: canvas::fill::Rule::EvenOdd });
+                    }
+                    // the lines, those with a colour of their own in it
+                    let own = |k: usize| d.line_colors.get(k).copied().flatten();
+                    let mut colors: Vec<Option<[u8; 3]>> = d.line_colors.iter().flatten().map(|c| Some(*c)).collect();
+                    colors.sort_unstable();
+                    colors.dedup();
+                    for c in std::iter::once(None).chain(colors) {
+                        let lines = Path::new(|path| {
+                            for (a, b) in d.lines.iter().enumerate().filter(|(k, _)| own(*k) == c).map(|(_, l)| (on(l.a), on(l.b))).filter(|(a, b)| seen(*a, *b)) {
+                                path.move_to(a);
+                                path.line_to(b);
+                            }
+                        });
+                        frame.stroke(&lines, Stroke::default().with_color(c.map_or(ink, shade)).with_width(0.8));
+                    }
                     // what a metre of paper is on screen
                     let paper = fit.scale;
                     for m in &d.dimensions {
@@ -531,7 +618,13 @@ impl canvas::Program<Message> for SheetDrawing {
                     };
                     anchor.is_some_and(|(from, to)| {
                         let ratio = f64::from(v.ratio);
-                        let on = |q: [f64; 2]| fit.point([to[0] + ((q[0] - from[0]) * ratio) as f32, to[1] + ((q[1] - from[1]) * ratio) as f32]);
+                        // along the view's own axes: a turned view lies turned on the sheet
+                        let [cx, cy] = v.turn;
+                        let on = |q: [f64; 2]| {
+                            let (dx, dy) = (q[0] - from[0], q[1] - from[1]);
+                            fit.point([to[0] + ((dx * cx + dy * cy) * ratio) as f32, to[1] + ((dy * cx - dx * cy) * ratio) as f32])
+                        };
+                        let turned = cy.atan2(cx) as f32;
                         let piece = |a: [f64; 2], z: [f64; 2]| match crop {
                             Some((lo, hi)) => super::paper::clip(a, z, *lo, *hi),
                             None => Some((a, z)),
@@ -553,7 +646,15 @@ impl canvas::Program<Message> for SheetDrawing {
                             stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
                             stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
                         }
-                        stroke(&mut frame, &mut lines.iter().map(|l| (l[0], l[1])), ink, 0.7);
+                        // the lines of its dimensions and tags reach past its crop, as its texts do;
+                        // its detail lines are cut to it where they are read
+                        let marks = Path::new(|path| {
+                            for (a, b) in lines.iter().map(|l| (on(l[0]), on(l[1]))).filter(|(a, b)| seen(*a, *b)) {
+                                path.move_to(a);
+                                path.line_to(b);
+                            }
+                        });
+                        frame.stroke(&marks, Stroke::default().with_color(ink).with_width(0.7));
                         let paper = fit.scale;
                         for d in dimensions {
                             let (a, b) = (on(d.from), on(d.to));
@@ -565,7 +666,7 @@ impl canvas::Program<Message> for SheetDrawing {
                         for note in notes {
                             let (at, size) = (on(note.at), note.size as f32 * paper);
                             if size >= SMALLEST && at.x > -size * 60.0 && at.x < bounds.width + size * 60.0 && at.y > -size * 8.0 && at.y < bounds.height + size * 8.0 {
-                                super::marks::draw_note(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32);
+                                super::marks::draw_note_in(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32 - turned, &note.face);
                             }
                         }
                         true
@@ -583,15 +684,26 @@ impl canvas::Program<Message> for SheetDrawing {
                 frame.stroke(&Path::rectangle(at, size), stroke);
             }
             // the title where the sheet has it, else under the box
-            let under = v.label.map_or(Point::new(at.x, at.y + size.height + 16.0), |l| fit.point(l));
+            let under = v.label.map_or(Point::new(at.x, at.y + size.height + TITLE * fit.scale * 1.4), |l| fit.point(l));
+            // as the type of its viewport writes it; else its number on the sheet and its name
             let mut title = String::new();
-            if let Some(d) = &v.detail {
-                title.push_str(d);
-                title.push_str("  ");
+            if let Some(written) = &v.written {
+                title.push_str(written);
+            } else {
+                if let Some(d) = &v.detail {
+                    title.push_str(d);
+                    title.push_str("  ");
+                }
+                title.push_str(&v.title);
             }
-            title.push_str(&v.title);
-            label(&mut frame, title, under, 12.0, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
-            label(&mut frame, v.scale.clone(), Point::new(under.x, under.y + 14.0), 10.0, p.text_secondary, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+            // on paper: it grows and shrinks with the sheet
+            let (name, scale) = (TITLE * fit.scale, TITLE_SCALE * fit.scale);
+            if name >= SMALLEST {
+                label(&mut frame, title, under, name, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+                if v.written.is_none() {
+                    label(&mut frame, v.scale.clone(), Point::new(under.x, under.y + scale * 1.4), scale, p.text_secondary, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+                }
+            }
         }
         vec![frame.into_geometry()]
     }
@@ -621,7 +733,7 @@ mod tests {
             ..Default::default()
         };
         let mut model = Model::new("house.rvt".into(), "Revit", vec![layer]);
-        model.views = vec![SavedView { name: "Level 1".into(), kind: ViewKind::Plan, camera: None, clip: None, plan: None, level: None }];
+        model.views = vec![SavedView { folder: Vec::new(), name: "Level 1".into(), kind: ViewKind::Plan, camera: None, clip: None, plan: None, level: None }];
         let viewport = |view| SheetViewport {
             title: "Level 1".into(),
             view,
@@ -634,7 +746,9 @@ mod tests {
             label: None,
             drawing: None,
             anchor: None,
+            turn: [1.0, 0.0],
             draft: None,
+            written: None,
         };
         model.project.sheets = vec![
             Sheet::new("A-1".into(), "Plans".into(), Some(SheetRect { min: [-1.189, 0.0], max: [0.0, 0.841] }), vec![viewport(Some(0))]),

@@ -198,6 +198,7 @@ impl App {
         if let Some(plan) = self.document.plan(path) {
             let (low, high) = self.document.plan_range(plan)?;
             return Some(SavedView {
+                folder: Vec::new(),
                 name: plan.name.clone(),
                 kind: ViewKind::Plan,
                 camera: None,
@@ -216,7 +217,7 @@ impl App {
             perspective: false,
             fov_y: None,
         };
-        Some(SavedView { name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
+        Some(SavedView { folder: Vec::new(), name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
     }
 
     /// The box a section or elevation shows: beyond its line up to its depth, within its crop
@@ -470,7 +471,13 @@ impl App {
                         .height(12)
                         .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
                     let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemovePlan(Arc::from(plan.path.as_str())));
-                    body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+                    // laid in the 3D view in full, or not
+                    let laid = self.projected.contains(plan.path.as_str());
+                    let project = button(text("3D").size(10).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
+                        .padding([2, 4])
+                        .style(move |_, s| if laid { p.ribbon_button(true, s) } else { p.row_button(s) })
+                        .on_press(Message::ProjectView(Arc::from(plan.path.as_str())));
+                    body = body.push(container(row![open, project, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
                 }
             }
             if !any && !picking {
@@ -555,7 +562,13 @@ impl App {
                 .height(12)
                 .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
             let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSection(Arc::from(section.path.as_str())));
-            body = body.push(container(row![open, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
+            // laid in the 3D view in full, or not
+            let laid = self.projected.contains(section.path.as_str());
+            let project = button(text("3D").size(10).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
+                .padding([2, 4])
+                .style(move |_, s| if laid { p.ribbon_button(true, s) } else { p.row_button(s) })
+                .on_press(Message::ProjectView(Arc::from(section.path.as_str())));
+            body = body.push(container(row![open, project, remove].spacing(4).align_y(Center)).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 8.0 }));
         }
         body
     }

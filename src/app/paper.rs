@@ -6,7 +6,7 @@
 
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
-use crate::drawing::{ceiling_at, plan_at, section_at, Cut, Shown};
+use crate::drawing::{ceiling_at, plan_at, section_at, structural_at, Cut, Shown};
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -200,12 +200,16 @@ impl App {
             let Some((low, high)) = self.document.plan_range(view) else { return };
             if view.kind.looks_up() {
                 ceiling_at(&model, shown, low as f32, high as f32)
+            } else if view.kind == crate::document::PlanKind::Structural {
+                // a structural plan looks through the floor: what lies under it is drawn dashed
+                structural_at(&model, shown, low as f32, high as f32)
             } else {
                 plan_at(&model, shown, low as f32, high as f32)
             }
         };
         // the cut faces in the hatch of what they are made of
-        crate::hatching::hatch(&mut cut, &model, bim_library::DrawingStandard::Nen47);
+        let scale = self.document.view_scale(path).unwrap_or(crate::document::SHEET_SCALE);
+        crate::hatching::hatch(&mut cut, &model, bim_library::DrawingStandard::Nen47, scale);
         self.cuts.insert(path.to_string(), Arc::new(cut));
     }
 
@@ -935,7 +939,7 @@ impl canvas::Program<Message> for PaperDrawing {
             }
             for (k, note) in placed.notes.iter().enumerate() {
                 let picked = self.pick == Some(SheetPick::Note(i, k));
-                super::marks::draw_note(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32);
+                super::marks::draw_note_in(&mut frame, fit.point(self.to_paper(i, note.at)), &note.text, Self::note_size(&fit), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
                 if let Some(b) = self.note_box(&fit, i, k).filter(|_| picked) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
                 }

@@ -68,11 +68,12 @@ impl App {
     }
 
     /// The explorer groups of the legends and of the drafting views, by name.
-    pub(super) fn drafts_groups<'a>(&self, p: Palette, l: Language, query: &str, mut body: Column<'a, Message>) -> Column<'a, Message> {
+    pub(super) fn drafts_groups<'a>(&self, p: Palette, l: Language, query: &str, of: std::ops::Range<usize>, mut body: Column<'a, Message>) -> Column<'a, Message> {
         let drafts = self.drafts();
+        let of = of.start.min(drafts.len())..of.end.min(drafts.len());
         for (kind, slot, title) in [(DraftKind::Legend, 5, l.text("Legenda's", "Legends")), (DraftKind::Drafting, 6, l.text("Detailtekeningen", "Drafting views"))] {
-            let shown: Vec<usize> = (0..drafts.len()).filter(|&i| drafts[i].kind == kind && (query.is_empty() || drafts[i].name.to_lowercase().contains(query))).collect();
-            if !drafts.iter().any(|d| d.kind == kind) {
+            let shown: Vec<usize> = of.clone().filter(|&i| drafts[i].kind == kind && (query.is_empty() || drafts[i].name.to_lowercase().contains(query))).collect();
+            if !drafts[of.clone()].iter().any(|d| d.kind == kind) {
                 continue;
             }
             let open = self.explorer_open[slot] || !query.is_empty();
@@ -254,10 +255,28 @@ impl canvas::Program<Message> for DraftDrawing {
         let picked = |element: u64| self.pick.is_some_and(|(e, _)| e == element);
         let colour = |element: u64| if picked(element) { p.accent } else { ink };
 
-        // the lines, those of the picked element over the others
+        // the regions filled in one colour, under the lines: black is the ink of the drawing
+        let shade = |c: [u8; 3]| if c == [0, 0, 0] { ink } else { Color::from_rgb8(c[0], c[1], c[2]) };
+        for f in &d.fills {
+            let path = Path::new(|path| {
+                for outline in f.loops.iter().filter(|l| l.len() >= 3) {
+                    path.move_to(fit.point(outline[0]));
+                    for &q in &outline[1..] {
+                        path.line_to(fit.point(q));
+                    }
+                    path.close();
+                }
+            });
+            let color = if picked(f.element) { p.accent } else { shade(f.color) };
+            frame.fill(&path, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
+        }
+
+        // the lines, those of the picked element over the others; those with a colour of their
+        // own in it
+        let own = |k: usize| d.line_colors.get(k).copied().flatten();
         let stroke = |frame: &mut Frame, on: bool| {
             let path = Path::new(|path| {
-                for l in d.lines.iter().filter(|l| picked(l.element) == on) {
+                for (_, l) in d.lines.iter().enumerate().filter(|(k, l)| picked(l.element) == on && (on || own(*k).is_none())) {
                     path.move_to(fit.point(l.a));
                     path.line_to(fit.point(l.b));
                 }
@@ -265,6 +284,18 @@ impl canvas::Program<Message> for DraftDrawing {
             frame.stroke(&path, Stroke::default().with_color(if on { p.accent } else { ink }).with_width(if on { 2.0 } else { 1.0 }));
         };
         stroke(&mut frame, false);
+        let mut colors: Vec<[u8; 3]> = d.line_colors.iter().flatten().copied().collect();
+        colors.sort_unstable();
+        colors.dedup();
+        for c in colors {
+            let path = Path::new(|path| {
+                for (_, l) in d.lines.iter().enumerate().filter(|(k, l)| own(*k) == Some(c) && !picked(l.element)) {
+                    path.move_to(fit.point(l.a));
+                    path.line_to(fit.point(l.b));
+                }
+            });
+            frame.stroke(&path, Stroke::default().with_color(shade(c)).with_width(1.0));
+        }
         stroke(&mut frame, true);
 
         // the dimensions: line, extension lines, the mark of their style at the ends and the
@@ -341,14 +372,14 @@ impl canvas::Program<Message> for DraftDrawing {
                 _ => (at, alignment::Horizontal::Left),
             };
             if t.angle == 0.0 {
-                label(&mut frame, t.text.clone(), start, size, colour(t.element), side, alignment::Vertical::Top);
+                t.face.fill(&mut frame, canvas::Text { content: t.text.clone(), position: start, align_x: side.into(), align_y: alignment::Vertical::Top, size: iced::Pixels(size), line_height: iced::widget::text::LineHeight::Relative(1.3), color: colour(t.element), ..canvas::Text::default() });
             } else {
                 // turned about the foot of its box, under where its lines start
                 let foot = fit.point([[t.at[0], t.at[0] + t.width / 2.0, t.at[0] + t.width][t.align.min(2) as usize], t.at[1]]);
                 frame.with_save(|frame| {
                     frame.translate(iced::Vector::new(foot.x, foot.y));
                     frame.rotate(-t.angle);
-                    label(frame, t.text.clone(), Point::new(0.0, start.y - foot.y), size, colour(t.element), side, alignment::Vertical::Top);
+                    t.face.fill(frame, canvas::Text { content: t.text.clone(), position: Point::new(0.0, start.y - foot.y), align_x: side.into(), align_y: alignment::Vertical::Top, size: iced::Pixels(size), line_height: iced::widget::text::LineHeight::Relative(1.3), color: colour(t.element), ..canvas::Text::default() });
                 });
             }
             if picked(t.element) {

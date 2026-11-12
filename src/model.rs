@@ -195,6 +195,11 @@ pub struct ProjectData {
     /// Drawings without a model (Revit, beta): legends and drafting views, with their lines,
     /// texts and dimensions.
     pub drafts: Vec<Draft>,
+    /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
+    /// element of that material is hatched.
+    pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
+    /// The properties of what the legends and drafting views draw, by its element in the file.
+    pub drawn: crate::app::drawn_props::Drawn,
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,
@@ -283,6 +288,8 @@ pub struct Schedule {
 #[derive(Debug, Clone, Default)]
 pub struct ScheduleRow {
     pub cells: Vec<Option<String>>,
+    /// The image a cell shows instead of a text, per column; empty when the row has none.
+    pub images: Vec<Option<iced::widget::image::Handle>>,
 
     /// The elements of the row: one when itemized, the group's otherwise.
     pub elements: Vec<u64>,
@@ -307,18 +314,40 @@ pub struct Sheet {
     pub texts: Vec<DraftText>,
     /// The schedules placed on it.
     pub tables: Vec<SheetTable>,
+    /// The images of its title block, such as a logo.
+    pub images: Vec<SheetImage>,
+    /// The regions of its title block filled in one colour.
+    pub fills: Vec<DraftFill>,
+    /// The colour of each line of its title block that has one of its own: as many as `lines`,
+    /// or none.
+    pub line_colors: Vec<Option<[u8; 3]>>,
+}
+
+/// An image on a sheet (sheet metres).
+#[derive(Debug, Clone)]
+pub struct SheetImage {
+    pub center: [f32; 2],
+    /// Its width and height.
+    pub size: [f32; 2],
+    /// How it is turned (radians, counterclockwise).
+    pub angle: f32,
+    pub image: iced::widget::image::Handle,
 }
 
 impl Sheet {
     pub fn new(number: String, name: String, paper: Option<SheetRect>, viewports: Vec<SheetViewport>) -> Self {
         let title = [number.as_str(), name.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new(), tables: Vec::new() }
+        Self { number, name, title, paper, viewports, lines: Vec::new(), texts: Vec::new(), tables: Vec::new(), images: Vec::new(), fills: Vec::new(), line_colors: Vec::new() }
     }
 
-    /// What the sheet covers: the paper, every viewport and every schedule.
+    /// What the sheet covers: the paper, every viewport and every schedule, and what its title
+    /// block draws.
     pub fn extent(&self) -> Option<SheetRect> {
         let tables = self.tables.iter().map(SheetTable::rect);
-        self.paper.iter().copied().chain(self.viewports.iter().map(|v| v.rect)).chain(tables).reduce(SheetRect::union)
+        let images = self.images.iter().map(|i| SheetRect::around(i.center, i.size));
+        let points = self.lines.iter().flatten().copied().chain(self.texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]]));
+        let block = points.map(|p| SheetRect { min: p, max: p });
+        self.paper.iter().copied().chain(self.viewports.iter().map(|v| v.rect)).chain(tables).chain(images).chain(block).reduce(SheetRect::union)
     }
 }
 
@@ -343,6 +372,8 @@ pub struct TableRow {
     pub cells: Vec<TableCell>,
     /// The title above the columns: its cell runs over the full width.
     pub title: bool,
+    /// A blank line or a footer: no borders between its cells.
+    pub plain: bool,
 }
 
 /// A cell of a [`SheetTable`].
@@ -360,6 +391,8 @@ pub struct TableCell {
     pub vertical: u8,
     /// It shows a value of the row's elements that the file does not store.
     pub open: bool,
+    /// The image it shows, once the computed schedule gives it.
+    pub image: Option<iced::widget::image::Handle>,
 }
 
 impl SheetTable {
@@ -373,21 +406,53 @@ impl SheetTable {
         SheetRect { min: [self.origin[0], self.origin[1] - height], max: [self.origin[0] + self.width(), self.origin[1]] }
     }
 
-    /// The table with its open cells filled from the computed schedule, when that has a row for
-    /// each of its rows with open cells and as many columns.
+    /// The table with its open cells filled from the computed schedule. A row of the table takes
+    /// the one computed row that agrees with every text the file stores for it; where no text
+    /// tells them apart, the rows go by their order when there are as many of each.
     pub fn filled(&self, computed: Option<&Schedule>) -> SheetTable {
         let mut table = self.clone();
         let Some(s) = computed.filter(|s| s.computed && s.columns.len() == self.columns.len()) else { return table };
         let values: Vec<&ScheduleRow> = s.rows.iter().filter(|r| !r.total).collect();
         let open = |r: &TableRow| !r.title && r.cells.iter().any(|c| c.open);
-        if table.rows.iter().filter(|r| open(r)).count() != values.len() {
-            return table;
+        let rows: Vec<usize> = (0..table.rows.len()).filter(|&k| open(&table.rows[k])).collect();
+        // how a computed row stands to a row of the table: the texts they both have, and whether
+        // all of those are the same
+        let agrees = |row: &TableRow, value: &ScheduleRow| {
+            let both = row.cells.iter().filter(|c| !c.text.trim().is_empty()).filter_map(|c| Some((c.text.trim(), value.cells.get(c.column as usize)?.as_deref()?.trim()))).filter(|(_, v)| !v.is_empty());
+            let (mut compared, mut same) = (0, true);
+            for (text, value) in both {
+                compared += 1;
+                same &= text == value;
+            }
+            (compared > 0).then_some(same)
+        };
+        let mut taken = vec![false; values.len()];
+        let mut of: Vec<Option<usize>> = rows
+            .iter()
+            .map(|&k| {
+                let mut candidates = (0..values.len()).filter(|&v| agrees(&table.rows[k], values[v]) == Some(true));
+                let first = candidates.next()?;
+                candidates.next().is_none().then_some(first)
+            })
+            .collect();
+        // a computed row is one row of the table only
+        for v in of.iter_mut() {
+            if let Some(k) = *v {
+                if std::mem::replace(&mut taken[k], true) {
+                    *v = None;
+                }
+            }
         }
-        for (row, value) in table.rows.iter_mut().filter(|r| open(r)).zip(values) {
-            for cell in row.cells.iter_mut().filter(|c| c.open) {
-                if let Some(Some(text)) = value.cells.get(cell.column as usize) {
+        if of.iter().all(Option::is_none) && rows.len() == values.len() {
+            of = (0..rows.len()).map(Some).collect();
+        }
+        for (&k, value) in rows.iter().zip(of).filter_map(|(k, v)| Some((k, values[v?]))) {
+            for cell in table.rows[k].cells.iter_mut().filter(|c| c.open) {
+                let column = cell.column as usize;
+                if let Some(Some(text)) = value.cells.get(column) {
                     cell.text.clone_from(text);
                 }
+                cell.image = value.images.get(column).cloned().flatten();
             }
         }
         table
@@ -442,8 +507,14 @@ pub struct SheetViewport {
     pub drawing: Option<String>,
     /// The point of that view's drawing that lies at `origin` (metres), when the view tells.
     pub anchor: Option<[f64; 2]>,
+    /// The direction of the view's own x on its drawing (unit): `[1, 0]` unless the view is turned
+    /// on the sheet, as a plan whose crop is turned a quarter.
+    pub turn: [f64; 2],
     /// The legend or drafting view in [`ProjectData::drafts`] it shows, when it is one.
     pub draft: Option<usize>,
+    /// Its title as the type of its viewport writes it (its name and scale in one line; empty: the
+    /// type shows none), when the file tells.
+    pub written: Option<String>,
 }
 
 /// The kinds of drawing without a model.
@@ -466,6 +537,20 @@ pub struct Draft {
     pub lines: Vec<DraftLine>,
     pub texts: Vec<DraftText>,
     pub dimensions: Vec<DraftDimension>,
+    /// Per line of `lines` its colour (red, green, blue), when its line style or its fill pattern
+    /// has one that is not black.
+    pub line_colors: Vec<Option<[u8; 3]>>,
+    /// The regions filled in one colour, drawn under the lines.
+    pub fills: Vec<DraftFill>,
+}
+
+/// A region of a drawing filled in one colour (red, green, blue): its outlines, the first its
+/// outer one and the others its holes. `element` is the element of the file it belongs to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftFill {
+    pub element: u64,
+    pub loops: Vec<Vec<[f32; 2]>>,
+    pub color: [u8; 3],
 }
 
 impl Draft {
@@ -502,6 +587,8 @@ pub struct DraftText {
     /// counter-clockwise).
     pub angle: f32,
     pub text: String,
+    /// The typeface of its letters: the app's own unless its file names one.
+    pub face: crate::typeface::Face,
 }
 
 /// A dimension of a drawing: its line from `from` to `to`, and the two points it measures.
@@ -556,6 +643,8 @@ pub struct SavedView {
     pub clip: Option<crate::section::SectionBox>,
     pub plan: Option<PlanRange>,
     pub level: Option<String>,
+    /// The folders it lies in where its file orders its views in folders, the outer one first.
+    pub folder: Vec<String>,
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -575,6 +664,13 @@ impl Model {
     /// are never moved, and models without structural parts (an IFC with another IFC) combine as
     /// they always have.
     pub fn combine(models: &[std::sync::Arc<Model>]) -> Self {
+        Self::combine_moved(models, &[])
+    }
+
+    /// As [`Model::combine`], each model moved by its entry in `moves` (metres; none: not moved):
+    /// its layers, views, levels and grids move, and its origin's shift takes the move, so world
+    /// coordinates stay those of its file.
+    pub fn combine_moved(models: &[std::sync::Arc<Model>], moves: &[DVec3]) -> Self {
         let mut layers = Vec::new();
         let mut props = HashMap::new();
         let mut views = Vec::new();
@@ -614,9 +710,10 @@ impl Model {
                 _ => (None, None),
             };
             let current = model.origins.first().map_or(DVec3::ZERO, |o| o.shift);
-            let moved = shift.map(|s| s - current).filter(|t| *t != DVec3::ZERO);
+            let by = moves.get(m).copied().unwrap_or(DVec3::ZERO);
+            let moved = Some(shift.unwrap_or(current) + by - current).filter(|t| *t != DVec3::ZERO);
             let first_origin = origins.len() as u32;
-            origins.extend(model.origins.iter().map(|o| Origin { anchor: o.anchor, shift: shift.unwrap_or(o.shift) }));
+            origins.extend(model.origins.iter().map(|o| Origin { anchor: o.anchor, shift: shift.unwrap_or(o.shift) + by }));
             if model.origins.is_empty() {
                 origins.push(Origin::default());
             }

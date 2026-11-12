@@ -167,7 +167,7 @@ mod tests {
     use std::io::Read;
 
     fn schedule(name: &str) -> Schedule {
-        let row = |cells: &[&str], total: bool| ScheduleRow { cells: cells.iter().map(|c| (!c.is_empty()).then(|| c.to_string())).collect(), elements: Vec::new(), total };
+        let row = |cells: &[&str], total: bool| ScheduleRow { images: Vec::new(), cells: cells.iter().map(|c| (!c.is_empty()).then(|| c.to_string())).collect(), elements: Vec::new(), total };
         Schedule { name: name.into(), title: "Doors <A & B>".into(), columns: vec!["Mark".into(), "Width".into(), "Area".into()], rows: vec![row(&["007", "930", "1,95"], false), row(&["D2", "", "2.10 m²"], false), row(&["", "", "4,05"], true)], computed: true }
     }
 

@@ -3,10 +3,41 @@
 //! A rule set names the information checks (IDS files, the built-in model checks, the BIM basis
 //! ILS profile) and the clash tests (which elements against which, crossing or clearance, how
 //! strict). It is a JSON file (`.rules.json`) that travels with the project; the app comes with
-//! a few to start from.
+//! a few to start from, among them the Dutch BIM basis ILS and the norm of the
+//! Rijksvastgoedbedrijf as IDS files of its own (`builtin:` paths, see [`builtin_ids`]).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// The IDS files the app comes with: their `builtin:` name, what they are called and their text.
+pub const BUILTIN_IDS: [(&str, &str, &str); 2] = [
+    ("builtin:nl-bim-basis-ils", "NL BIM Basis ILS", include_str!("../../assets/ids/NL_BIM_Basis_ILS_v2.ids")),
+    ("builtin:rvb-bim-norm", "RVB BIM-norm 1.1", include_str!("../../assets/ids/RVB_BIM_Norm_v1.1.ids")),
+];
+
+/// The text of an IDS a rule set names: one the app comes with, or a file.
+pub fn ids_text(path: &Path) -> Result<String, String> {
+    match BUILTIN_IDS.iter().find(|(key, ..)| Path::new(key) == path) {
+        Some((.., text)) => Ok(text.to_string()),
+        None => std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display())),
+    }
+}
+
+/// What an IDS a rule set names is called: the name of one the app comes with, or the file's.
+pub fn ids_name(path: &Path) -> String {
+    match BUILTIN_IDS.iter().find(|(key, ..)| Path::new(key) == path) {
+        Some((_, name, _)) => name.to_string(),
+        None => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+    }
+}
+
+fn builtin_ids(key: &str) -> PathBuf {
+    PathBuf::from(key)
+}
+
+fn is_builtin(path: &Path) -> bool {
+    path.to_str().is_some_and(|p| p.starts_with("builtin:"))
+}
 
 /// Which elements a clash test takes: those of the models, layers and classes named. An empty
 /// list takes all; a name matches when the model's, layer's or class's name holds it, in any
@@ -17,6 +48,11 @@ pub struct Selector {
     pub models: Vec<String>,
     pub layers: Vec<String>,
     pub classes: Vec<String>,
+    /// For a test of the moment, not kept in a file: only these elements, and all but these.
+    #[serde(skip)]
+    pub only: Vec<u64>,
+    #[serde(skip)]
+    pub except: Vec<u64>,
 }
 
 impl Selector {
@@ -27,7 +63,12 @@ impl Selector {
 
     /// Whether it takes every element.
     pub fn is_all(&self) -> bool {
-        self.models.is_empty() && self.layers.is_empty() && self.classes.is_empty()
+        self.models.is_empty() && self.layers.is_empty() && self.classes.is_empty() && self.only.is_empty() && self.except.is_empty()
+    }
+
+    /// Whether it takes element `id` of this model, layer and class.
+    pub fn takes_element(&self, id: u64, model: &str, layer: &str, class: &str) -> bool {
+        (self.only.is_empty() || self.only.contains(&id)) && !self.except.contains(&id) && self.takes(model, layer, class)
     }
 
     /// Whether it takes an element of this model, layer and class.
@@ -125,8 +166,8 @@ impl Default for RuleSet {
     }
 }
 
-const STRUCTURE: [&str; 9] = ["IfcBeam", "IfcColumn", "IfcSlab", "IfcWall*", "IfcFooting", "IfcPile", "IfcMember", "IfcPlate", "IfcStair*"];
-const SERVICES: [&str; 12] = ["IfcDuct*", "IfcPipe*", "IfcCable*", "IfcFlow*", "IfcDistribution*", "IfcAirTerminal*", "IfcValve*", "IfcPump*", "IfcFan*", "IfcTank*", "IfcSanitaryTerminal*", "IfcEnergyConversionDevice*"];
+pub const STRUCTURE: [&str; 9] = ["IfcBeam", "IfcColumn", "IfcSlab", "IfcWall*", "IfcFooting", "IfcPile", "IfcMember", "IfcPlate", "IfcStair*"];
+pub const SERVICES: [&str; 12] = ["IfcDuct*", "IfcPipe*", "IfcCable*", "IfcFlow*", "IfcDistribution*", "IfcAirTerminal*", "IfcValve*", "IfcPump*", "IfcFan*", "IfcTank*", "IfcSanitaryTerminal*", "IfcEnergyConversionDevice*"];
 
 impl RuleSet {
     /// The rule sets the app comes with: `dutch` gives their names and descriptions in Dutch.
@@ -141,9 +182,21 @@ impl RuleSet {
                 ..RuleSet::default()
             },
             RuleSet {
-                name: t("BIM basis ILS", "BIM basis ILS"),
-                description: t("De modelcontroles en de afspraken van de BIM basis ILS.", "The model checks and the agreements of the BIM basis ILS."),
-                ils: true,
+                name: t("NL BIM Basis ILS", "NL BIM Basis ILS"),
+                description: t(
+                    "De modelcontroles en de IDS van de BIM basis ILS: bouwlagen, proxy's, NL-SfB, dragend, buiten en materialen.",
+                    "The model checks and the IDS of the BIM basis ILS: storeys, proxies, NL-SfB, load bearing, external and materials.",
+                ),
+                ids: vec![builtin_ids("builtin:nl-bim-basis-ils")],
+                ..RuleSet::default()
+            },
+            RuleSet {
+                name: t("RVB BIM-norm 1.1", "RVB BIM norm 1.1"),
+                description: t(
+                    "De modelcontroles en de IDS van de BIM-norm van het Rijksvastgoedbedrijf: projectgegevens, bouwlagen, classificatie en eigenschappen.",
+                    "The model checks and the IDS of the BIM norm of the Rijksvastgoedbedrijf: project data, storeys, classification and properties.",
+                ),
+                ids: vec![builtin_ids("builtin:rvb-bim-norm")],
                 ..RuleSet::default()
             },
             RuleSet {
@@ -167,7 +220,7 @@ impl RuleSet {
         let mut set: RuleSet = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("{}: {e}", path.display()))?;
         let folder = path.parent().unwrap_or(Path::new("."));
         for ids in &mut set.ids {
-            if ids.is_relative() {
+            if ids.is_relative() && !is_builtin(ids) {
                 *ids = folder.join(&*ids);
             }
         }
@@ -211,7 +264,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("o3v-rules-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let path = folder.join("project.rules.json");
-        let mut set = RuleSet::built_in(false).remove(2);
+        let mut set = RuleSet::built_in(false).remove(3);
         set.ids = vec![folder.join("agreements.ids")];
         set.write(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
@@ -225,10 +278,29 @@ mod tests {
     }
 
     #[test]
+    fn the_norms_come_with_the_app_and_check_ifc_4_3_too() {
+        let sets = RuleSet::built_in(true);
+        let named: Vec<&Path> = sets.iter().flat_map(|s| &s.ids).map(PathBuf::as_path).collect();
+        assert_eq!(named.len(), 2);
+        for ids in named {
+            let text = ids_text(ids).unwrap();
+            assert!(text.contains("<specification") && !text.contains("ifcVersion=\"IFC2X3 IFC4\""), "{}", ids.display());
+            assert!(!ids_name(ids).is_empty());
+        }
+        // a rule set naming one keeps the name as it is, not taken from beside the file
+        let folder = std::env::temp_dir().join(format!("o3v-norms-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("rvb.rules.json");
+        sets[2].write(&path).unwrap();
+        assert_eq!(RuleSet::read(&path).unwrap().ids, sets[2].ids);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
     fn the_built_in_rule_sets_have_names_in_both_languages() {
         let (nl, en) = (RuleSet::built_in(true), RuleSet::built_in(false));
         assert_eq!(nl.len(), en.len());
         assert!(nl.iter().chain(&en).all(|s| !s.name.is_empty() && !s.description.is_empty()));
-        assert!(en[2].clashes.iter().all(|c| !c.name.is_empty()) && en[2].clashes[1].within());
+        assert!(en[3].clashes.iter().all(|c| !c.name.is_empty()) && en[3].clashes[1].within());
     }
 }

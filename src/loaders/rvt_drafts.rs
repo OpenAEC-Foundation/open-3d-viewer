@@ -7,18 +7,17 @@
 //! - a detail line is a `CurveElem` with `m_detail`: its curve is `CurveElemDriver::m_pCrv`, a
 //!   `GLine` (`m_origin`, `m_dirVec`, between `m_endParams`);
 //! - a text is a `TextNote` and a linear dimension a `LinearDimString`, with their types, as
-//!   [`super::rvt_drawings`] reads them; an element hidden in its view is left out;
-//! - a tag is drawn as [`super::rvt_tags`] reads it.
+//!   [`super::rvt_drawings`] reads them; an element hidden in its view is left out. A dimension
+//!   is drawn as the file has it: its lines and its figures, as lines and texts of the drawing;
+//! - a tag, a detail component and a filled region are drawn as [`super::rvt_tags`] reads them.
 //!
 //! A view's coordinates are feet in its own plane, at full size.
 
 use super::rvt_drawings::{dimension_marks, text_of, vec3, Types};
-use crate::document::DimensionStyle;
 use crate::model::{Draft, DraftKind, DraftLine, DraftText};
 use rvt_export::views::{ViewInfo, ViewKind as K};
 use rvt_model::{FieldValue, ObjectView};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 const FT: f64 = 0.3048;
 /// The category of the dimensions that show (the others of their class are constraints).
@@ -32,7 +31,7 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], de
         let Some(kind) = draft_kind(&v) else { continue };
         index.insert(v.id, drafts.len());
         let scale = v.scale.filter(|s| s.is_finite() && *s >= 1.0).unwrap_or(1.0) as f32;
-        drafts.push(Draft { id: v.id, name: v.name, kind, scale, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() });
+        drafts.push(Draft { id: v.id, name: v.name, kind, scale, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new(), line_colors: Vec::new(), fills: Vec::new() });
     }
     if drafts.is_empty() {
         return drafts;
@@ -44,7 +43,12 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], de
         let Some((view, k)) = owner(id).filter(|(v, _)| !types.hidden(*v, id)) else { continue };
         let _ = view;
         let Some(o) = doc.object(id) else { continue };
-        drafts[k].lines.extend(detail_line(&o));
+        let scale = drafts[k].scale as f64;
+        let (lines, color) = detail_line(&o, &mut types, scale);
+        let draft = &mut drafts[k];
+        draft.line_colors.resize(draft.lines.len(), None);
+        draft.line_colors.extend(std::iter::repeat_n(color, lines.len()));
+        draft.lines.extend(lines);
     }
     for id in doc.object_ids_of_class("TextNote") {
         let Some((_, k)) = owner(id).filter(|(v, _)| !types.hidden(*v, id)) else { continue };
@@ -53,16 +57,18 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], de
             drafts[k].texts.push(text);
         }
     }
+    let mut dimensioned: Vec<u64> = Vec::new();
     for id in doc.object_ids_of_class("LinearConstraint") {
         let Some((_, k)) = owner(id).filter(|(v, _)| !types.hidden(*v, id)) else { continue };
         let Some(o) = doc.object(id).filter(|o| o.category == Some(DIMENSIONS)) else { continue };
         // as the file draws it: its lines and its figures
         let scale = drafts[k].scale as f64;
         let Some(drawn) = dimension_marks(&o, &|p| [p[0] * FT, p[1] * FT], scale, &mut types) else { continue };
+        dimensioned.push(id);
         drafts[k].lines.extend(drawn.lines.iter().map(|l| DraftLine { element: id, a: l[0].map(|v| v as f32), b: l[1].map(|v| v as f32) }));
         drafts[k].texts.extend(drawn.texts.into_iter().map(|t| {
             let height = t.em * 1.3 * scale * t.wording.lines().count().max(1) as f64;
-            DraftText { element: id, at: t.at.map(|v| v as f32), width: 0.0, height: height as f32, size: (t.em * scale) as f32, align: 1, angle: t.angle as f32, text: t.wording }
+            DraftText { element: id, at: t.at.map(|v| v as f32), width: 0.0, height: height as f32, size: (t.em * scale) as f32, align: 1, angle: t.angle as f32, face: t.face, text: t.wording }
         }));
     }
     // a tag: its labels as texts, the lines of its family and its leader, all hanging from its head
@@ -74,19 +80,123 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], de
             let (width, height) = (text.width * scale, text.height() * scale);
             let align = text.align.clamp(0, 2) as usize;
             let at = on([text.at[0] - [0.0, text.width / 2.0, text.width][align], text.at[1]]);
-            drafts[k].texts.push(DraftText { element: tag.element, at, width: width as f32, height: height as f32, size: (text.em * scale) as f32, align: align as u8, angle: text.angle as f32, text: text.wording.clone() });
+            drafts[k].texts.push(DraftText { element: tag.element, at, width: width as f32, height: height as f32, size: (text.em * scale) as f32, align: align as u8, angle: text.angle as f32, text: text.wording.clone(), face: text.face.clone() });
         }
         drafts[k].lines.extend(tag.lines.iter().map(|l| DraftLine { element: tag.element, a: on(l[0]), b: on(l[1]) }));
         let leader = tag.leader_lines(&|p| [p[0] * FT, p[1] * FT], scale);
         drafts[k].lines.extend(leader.iter().map(|l| DraftLine { element: tag.element, a: l[0].map(|v| v as f32), b: l[1].map(|v| v as f32) }));
     }
+    // what is always drawn over the rest: the tags and the dimensions
+    let above: std::collections::HashSet<u64> = tags.iter().map(|t| t.element).chain(dimensioned.iter().copied()).collect();
+    let mut covering: HashMap<usize, Vec<(u64, Vec<Vec<[f32; 2]>>)>> = HashMap::new();
+    // per drawing: where its view's draw order has each element, from the back to the front
+    let orders: Vec<HashMap<u64, usize>> = drafts
+        .iter()
+        .map(|d| {
+            let view = doc.object(d.id);
+            let listed = view.as_ref().and_then(|o| o.get("m_pDetailDrawOrderMgr").and_then(|v| o.deref(v))?.get("m_aDrawOrder")?.as_list());
+            listed.unwrap_or(&[]).iter().filter_map(|e| u64::try_from(e.element()?).ok()).enumerate().map(|(k, e)| (e, k)).collect()
+        })
+        .collect();
     // a detail component: the lines of its family
     for detail in details {
         let Some(&k) = index.get(&detail.view) else { continue };
-        drafts[k].lines.extend(detail.lines.iter().map(|l| DraftLine { element: detail.element, a: point(l[0]), b: point(l[1]) }));
+        // the lines before these have no colour of their own
+        let draft = &mut drafts[k];
+        draft.line_colors.resize(draft.lines.len(), None);
+        draft.lines.extend(detail.lines.iter().map(|l| DraftLine { element: detail.element, a: point(l[0]), b: point(l[1]) }));
+        draft.line_colors.extend(detail.colors.iter().copied());
+        draft.fills.extend(detail.fills.iter().map(|f| crate::model::DraftFill { element: detail.element, loops: f.loops.iter().map(|l| l.iter().map(|&p| point(p)).collect()).collect(), color: f.color }));
+        // what covers what lies under it: a masking region and a region filled in one colour
+        let covers = detail.masks.iter().chain(detail.fills.iter().map(|f| &f.loops));
+        covering.entry(k).or_default().extend(covers.map(|loops| (detail.element, loops.iter().map(|l| l.iter().map(|&p| point(p)).collect()).collect())));
+    }
+    for (k, draft) in drafts.iter_mut().enumerate() {
+        draft.line_colors.resize(draft.lines.len(), None);
+        if let Some(covers) = covering.get(&k) {
+            cover(draft, covers, &above, &orders[k]);
+        }
     }
     drafts.sort_by(|a, b| (a.kind as u8).cmp(&(b.kind as u8)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     drafts
+}
+
+/// Takes away what the covering regions of a drawing hide: the pieces of its lines inside a
+/// region of an element that lies over theirs in the view's draw order
+/// (`DrawOrderMgr::m_aDrawOrder`, from the back to the front). The lines of `above` (tags,
+/// dimensions) are never hidden.
+fn cover(draft: &mut Draft, covers: &[(u64, Vec<Vec<[f32; 2]>>)], above: &std::collections::HashSet<u64>, order: &HashMap<u64, usize>) {
+    // where an element lies: as the view's draw order says, from the back to the front; one it
+    // does not name lies under those, in the order they were made
+    let rank = |element: u64| order.get(&element).map_or((0, element), |k| (1, *k as u64));
+    // each with its box, to pass over quickly
+    let boxed: Vec<(u64, &Vec<Vec<[f32; 2]>>, [f32; 4])> = covers
+        .iter()
+        .map(|(element, loops)| {
+            let all = loops.iter().flatten();
+            let b = all.fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            (*element, loops, b)
+        })
+        .collect();
+    let inside = |loops: &Vec<Vec<[f32; 2]>>, p: [f32; 2]| {
+        let mut odd = false;
+        for outline in loops {
+            for (a, b) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+                if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                    odd = !odd;
+                }
+            }
+        }
+        odd
+    };
+    let (lines, colors) = (std::mem::take(&mut draft.lines), std::mem::take(&mut draft.line_colors));
+    for (k, line) in lines.into_iter().enumerate() {
+        let color = colors.get(k).copied().flatten();
+        // the pieces of the line that still show
+        let mut pieces = vec![(line.a, line.b)];
+        if !above.contains(&line.element) {
+            for (_, loops, b) in boxed.iter().filter(|(element, ..)| *element != line.element && rank(*element) > rank(line.element)) {
+                if line.a[0].max(line.b[0]) < b[0] || line.a[0].min(line.b[0]) > b[2] || line.a[1].max(line.b[1]) < b[1] || line.a[1].min(line.b[1]) > b[3] {
+                    continue;
+                }
+                let mut kept = Vec::new();
+                for (p, q) in pieces {
+                    let d = [q[0] - p[0], q[1] - p[1]];
+                    // where it crosses the outlines, along it
+                    let mut cuts = vec![0.0f32, 1.0];
+                    for outline in loops.iter() {
+                        for (a, c) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+                            let e = [c[0] - a[0], c[1] - a[1]];
+                            let det = d[0] * e[1] - d[1] * e[0];
+                            if det.abs() < 1e-12 {
+                                continue;
+                            }
+                            let t = ((a[0] - p[0]) * e[1] - (a[1] - p[1]) * e[0]) / det;
+                            let s = ((a[0] - p[0]) * d[1] - (a[1] - p[1]) * d[0]) / det;
+                            if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&s) {
+                                cuts.push(t);
+                            }
+                        }
+                    }
+                    cuts.sort_by(f32::total_cmp);
+                    for w in cuts.windows(2).filter(|w| w[1] - w[0] > 1e-6) {
+                        let at = |t: f32| [p[0] + t * d[0], p[1] + t * d[1]];
+                        if !inside(loops, at((w[0] + w[1]) / 2.0)) {
+                            kept.push((at(w[0]), at(w[1])));
+                        }
+                    }
+                }
+                pieces = kept;
+                if pieces.is_empty() {
+                    break;
+                }
+            }
+        }
+        for (a, b) in pieces {
+            draft.lines.push(DraftLine { element: line.element, a, b });
+            draft.line_colors.push(color);
+        }
+    }
 }
 
 /// Whether a view is a legend or a drafting view of the project (not a template, not a view of
@@ -108,7 +218,31 @@ fn point(p: [f64; 3]) -> [f32; 2] {
 
 /// A detail line as lines of the drawing: a straight one as it is, an arc or circle in pieces of
 /// at most 7.5 degrees; none for another curve.
-fn detail_line(o: &ObjectView) -> Vec<DraftLine> {
+fn detail_line(o: &ObjectView, types: &mut Types, scale: f64) -> (Vec<DraftLine>, Option<[u8; 3]>) {
+    let (lines, color, pattern) = detail_curve(o, types);
+    let Some(pattern) = pattern else { return (lines, color) };
+    // in the line pattern of its style: along its pieces in turn
+    let mut points: Vec<[f64; 2]> = lines.first().map(|l| l.a.map(f64::from)).into_iter().collect();
+    points.extend(lines.iter().map(|l| l.b.map(f64::from)));
+    let strokes = super::rvt_drawings::dashed(&points, &pattern, scale * FT);
+    (strokes.into_iter().map(|s| DraftLine { element: o.id, a: s[0].map(|v| v as f32), b: s[1].map(|v| v as f32) }).collect(), color)
+}
+
+/// A detail line as it runs, with the colour and the line pattern of its line style
+/// (`GInfo::m_categoryId` of its curve); nothing for a style that is not drawn.
+fn detail_curve(o: &ObjectView, types: &mut Types) -> (Vec<DraftLine>, Option<[u8; 3]>, Option<std::sync::Arc<Vec<f64>>>) {
+    let none = || (Vec::new(), None, None);
+    let lines = detail_points(o);
+    let curve = o.get("m_pCurveDriver").and_then(|v| o.deref(v)).and_then(|d| d.get("m_pCrv")).and_then(|v| o.deref(v));
+    let style = curve.and_then(|c| c.get("m_GInfo")?.as_object()?.get("m_categoryId")?.element()).filter(|s| *s != -1);
+    match style {
+        Some(s) if !types.line_shows(s) => none(),
+        Some(s) => (lines, types.line_color(s), types.line_dashes(s)),
+        None => (lines, None, None),
+    }
+}
+
+fn detail_points(o: &ObjectView) -> Vec<DraftLine> {
     let curve = || {
         matches!(o.get("m_detail"), Some(FieldValue::Bool(true))).then_some(())?;
         o.get("m_pCurveDriver").and_then(|v| o.deref(v))?.get("m_pCrv").and_then(|v| o.deref(v))
@@ -163,7 +297,7 @@ fn text_note(o: &ObjectView, scale: f64, types: &mut Types) -> Option<DraftText>
     let foot = [orig[0] * FT - up[0] * height, orig[1] * FT - up[1] * height];
     let left = foot[0] - [0.0, width / 2.0, width][text.align.clamp(0, 2) as usize];
     let angle = Some(base[1].atan2(base[0])).filter(|a| a.abs() > 1e-6).unwrap_or(0.0);
-    Some(DraftText { element: o.id, at: [left as f32, foot[1] as f32], width: width as f32, height: height as f32, size: size as f32, align: text.align.clamp(0, 2) as u8, angle: angle as f32, text: text.wording })
+    Some(DraftText { element: o.id, at: [left as f32, foot[1] as f32], width: width as f32, height: height as f32, size: size as f32, align: text.align.clamp(0, 2) as u8, angle: angle as f32, text: text.wording, face: text.face })
 }
 
 #[cfg(test)]

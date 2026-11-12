@@ -19,6 +19,16 @@ mod rvt_drafts;
 mod rvt_tags;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_schedules;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_browser;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_images;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_props;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_fonts;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_materials;
 mod ifc;
 
 mod skp;

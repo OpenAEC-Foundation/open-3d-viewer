@@ -96,6 +96,8 @@ pub(super) struct TagText {
     pub width: f64,
     /// How its lines are turned (radians, counter-clockwise).
     pub angle: f64,
+    /// The typeface of its letters, as its type says.
+    pub face: crate::typeface::Face,
 }
 
 impl TagText {
@@ -190,6 +192,8 @@ struct Label {
     vertical: u8,
     align: i64,
     em: f64,
+    /// The typeface of its letters.
+    face: crate::typeface::Face,
     width: f64,
     parts: Vec<Part>,
 }
@@ -213,7 +217,7 @@ impl Label {
         if wording.trim().is_empty() {
             return None;
         }
-        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: 0.0 };
+        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: 0.0, face: self.face.clone() };
         // from where the label stands to the foot of its lines
         text.at[1] -= [text.height(), text.height() / 2.0, 0.0][self.vertical as usize];
         Some(text)
@@ -255,16 +259,64 @@ pub(super) fn title_block(doc: &rvt_read::Document, types: &mut Types, kind: u64
         let Some(orig) = vec3(fixed.get("m_orig")).filter(|_| !wording.trim().is_empty()) else { continue };
         let flags = fixed.get("m_flags").and_then(FieldValue::as_i64).unwrap_or(0);
         let em = fixed.get("m_attrId").and_then(FieldValue::element).and_then(|k| types.text_em(k)).unwrap_or(crate::document::NOTE_HEIGHT);
+        let mut face = fixed.get("m_attrId").and_then(FieldValue::element).map(|k| types.text_face(k)).unwrap_or_default();
+        let [bold, italic, underline] = super::rvt_fonts::rtf_marks(&bytes);
+        (face.bold, face.italic, face.underline) = (face.bold || bold, face.italic || italic, face.underline || underline);
         let width = fixed.get("m_lineWidth").and_then(FieldValue::as_f64).filter(|w| w.is_finite() && *w > 0.0).map_or(0.0, |w| w * FT);
         let base = vec3(fixed.get("m_baseVec")).unwrap_or([1.0, 0.0, 0.0]);
         let angle = Some(base[1].atan2(base[0])).filter(|a| a.abs() > 1e-6).unwrap_or(0.0);
-        let mut text = TagText { at: [orig[0] * FT, orig[1] * FT], wording, em, align: (flags & 3).clamp(0, 2), width, angle };
+        let mut text = TagText { at: [orig[0] * FT, orig[1] * FT], wording, em, align: (flags & 3).clamp(0, 2), width, angle, face };
         // down its own up to the foot of its lines
         let drop = [text.height(), text.height() / 2.0, 0.0][vertical(flags) as usize];
         text.at = [text.at[0] + angle.sin() * drop, text.at[1] - angle.cos() * drop];
         texts.push(text);
     }
-    (family_lines(doc, kind, types), texts)
+    (family_lines(doc, kind, types, 1.0), texts)
+}
+
+/// The regions of a title block filled in one colour, from its origin on the sheet (on paper,
+/// metres): each its outlines and its colour.
+pub(super) fn title_block_fills(doc: &rvt_read::Document, types: &mut Types, kind: u64) -> Vec<(Vec<Vec<[f64; 2]>>, [u8; 3])> {
+    let fills = graphics_lines(doc, kind, types, 1.0, Seen::PLAIN).fills;
+    fills.into_iter().map(|f| (f.loops.into_iter().map(|l| l.into_iter().map(|p| [p[0] * FT, p[1] * FT]).collect()).collect(), f.color)).collect()
+}
+
+/// Per line of a title block ([`title_block`] gives them in this order) its colour, when its line
+/// style has one that is not black.
+pub(super) fn title_block_line_colors(doc: &rvt_read::Document, types: &mut Types, kind: u64) -> Vec<Option<[u8; 3]>> {
+    graphics_lines(doc, kind, types, 1.0, Seen::PLAIN).colors
+}
+
+/// The title of a view placed on a sheet, as the type of its viewport writes it
+/// (`ViewportAttributes`: `m_showLabel`, and `m_familyTagId`, the type of its title family, whose
+/// labels write the view's name and scale): empty when its type shows no title, none when the
+/// viewport tells nothing of it.
+pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewport: u64, view: u64, name: &str, scale: &str, detail: Option<&str>) -> Option<String> {
+    /// The view's name, its scale and the number of the view on its sheet.
+    const NAME: i64 = -1005203;
+    const SCALE: i64 = -1005204;
+    const DETAIL_NUMBER: i64 = -1005201;
+    let kind = doc.object(viewport)?.get("m_attrId").and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok())?;
+    let kind = doc.object(kind)?;
+    if kind.get("m_showLabel").and_then(FieldValue::as_i64) == Some(0) {
+        return Some(String::new());
+    }
+    let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(String::new()) };
+    let o = doc.object(family)?;
+    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
+    let labels = o.get("m_tagNoteData").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).filter_map(|l| label(l, types));
+    let written: Vec<String> = labels
+        .filter_map(|label| {
+            label.write(&mut |part| match part.parameter {
+                NAME => Some(name.to_string()),
+                SCALE => Some(scale.to_string()),
+                DETAIL_NUMBER => detail.map(str::to_string),
+                _ => value(doc, &mut sources, &mut specs, &units, viewport, part).or_else(|| value(doc, &mut sources, &mut specs, &units, view, part)),
+            })
+        })
+        .map(|text| text.wording)
+        .collect();
+    Some(written.join("  "))
 }
 
 /// What a tag type draws: its labels and the lines of its family (on paper, metres).
@@ -350,41 +402,198 @@ pub(super) struct Detail {
     pub element: u64,
     pub view: u64,
     pub lines: Vec<[[f64; 3]; 2]>,
+    /// Per line its colour, when its line style or its fill pattern has one that is not black.
+    pub colors: Vec<Option<[u8; 3]>>,
+    /// Its regions with a solid fill.
+    pub fills: Vec<Fill>,
+    /// Its masking regions, which cover what lies under them: the outlines of each.
+    pub masks: Vec<Vec<Vec<[f64; 3]>>>,
+}
+
+/// A region filled in one colour: its outlines (the first its outer one, the others its holes;
+/// feet, in the view's coordinates) and its colour (red, green, blue).
+#[derive(Debug, Clone)]
+pub(super) struct Fill {
+    pub loops: Vec<Vec<[f64; 3]>>,
+    pub color: [u8; 3],
+}
+
+/// How graphics are looked at: at which level of detail (1 coarse, 2 medium, 3 fine), and whether
+/// they are those of an element of the model, of which only the symbols nested in its family
+/// are taken (its own solids are cut and drawn with the model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Seen {
+    detail: i64,
+    model: bool,
+}
+
+impl Seen {
+    /// A family drawn on paper or in a view without a level of detail of its own.
+    const PLAIN: Seen = Seen { detail: 2, model: false };
+}
+
+/// What the saved graphics of an element draw: lines, each with its colour when it has one that
+/// is not black, and regions filled in one colour.
+#[derive(Debug, Default)]
+struct Graphics {
+    lines: Vec<[[f64; 3]; 2]>,
+    colors: Vec<Option<[u8; 3]>>,
+    fills: Vec<Fill>,
+    masks: Vec<Vec<Vec<[f64; 3]>>>,
+}
+
+/// Where graphics are placed: the directions of their x, y and z and their origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Placement {
+    axes: [[f64; 3]; 3],
+    origin: [f64; 3],
+}
+
+impl Placement {
+    const NONE: Placement = Placement { axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], origin: [0.0; 3] };
+
+    fn turn(&self, v: [f64; 3]) -> [f64; 3] {
+        std::array::from_fn(|k| v[0] * self.axes[0][k] + v[1] * self.axes[1][k] + v[2] * self.axes[2][k])
+    }
+
+    fn put(&self, p: [f64; 3]) -> [f64; 3] {
+        let v = self.turn(p);
+        std::array::from_fn(|k| self.origin[k] + v[k])
+    }
+
+    /// `inner`, placed in graphics that are placed by this.
+    fn of(&self, inner: &Placement) -> Placement {
+        Placement { axes: inner.axes.map(|a| self.turn(a)), origin: self.put(inner.origin) }
+    }
+}
+
+impl Graphics {
+    /// Places what was added from `from` on (lines, fills, masks).
+    fn place(&mut self, from: (usize, usize, usize), by: &Placement) {
+        if *by == Placement::NONE {
+            return;
+        }
+        for line in &mut self.lines[from.0..] {
+            *line = line.map(|p| by.put(p));
+        }
+        for outline in self.fills[from.1..].iter_mut().flat_map(|f| &mut f.loops).chain(self.masks[from.2..].iter_mut().flatten()) {
+            for p in outline.iter_mut() {
+                *p = by.put(*p);
+            }
+        }
+    }
+
+    fn line(&mut self, line: [[f64; 3]; 2], color: Option<[u8; 3]>) {
+        self.lines.push(line);
+        self.colors.push(color);
+    }
+}
+
+/// A run of points as lines: in its line pattern when it has one, else from point to point.
+fn drawn(points: &[[f64; 3]], pattern: Option<&[f64]>, scale: f64) -> Vec<[[f64; 3]; 2]> {
+    match pattern {
+        Some(pattern) => super::rvt_drawings::dashed(points, pattern, scale),
+        None => points.windows(2).filter(|w| w[0] != w[1]).map(|w| [w[0], w[1]]).collect(),
+    }
+}
+
+/// A colour as the file stores it (blue, green, red from the high byte down); none for black and
+/// for a value that is no colour.
+fn color_of(stored: i64) -> Option<[u8; 3]> {
+    (stored > 0 && stored < 0x100_0000).then(|| [(stored & 0xFF) as u8, (stored >> 8 & 0xFF) as u8, (stored >> 16 & 0xFF) as u8])
 }
 
 /// The detail components of the file that show in a view: a `FamilyInstance` of the category
 /// detail items that names its view. Its type's saved graphics hold the lines of its family, at
-/// full size; `InstanceInfo::m_Trf` places them.
+/// full size; `InstanceInfo::m_Trf` places them. And its filled regions (`FilledRegion`), each
+/// with its outline and the lines of its fill pattern.
 pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail> {
     const DETAIL_ITEMS: i32 = -2002000;
-    let mut families: HashMap<u64, Arc<Vec<[[f64; 2]; 2]>>> = HashMap::new();
+    // a symbol: drawn on paper, and placed as many times as large as the scale of its view
+    const GENERIC_ANNOTATIONS: i32 = -2000150;
+    // per type and scale of the view: a drafting pattern in it is sized on paper
+    let mut families: HashMap<(u64, u64, Seen), Arc<Graphics>> = HashMap::new();
     let mut out = Vec::new();
     for id in doc.object_ids_of_class("FamilyInstance") {
-        let Some(view) = doc.element(id).filter(|e| e.category == DETAIL_ITEMS).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
+        let Some(placed_in) = doc.element(id).filter(|e| e.category == DETAIL_ITEMS || e.category == GENERIC_ANNOTATIONS) else { continue };
+        let symbol = placed_in.category == GENERIC_ANNOTATIONS;
+        let Some(view) = placed_in.view.and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
         let Some(o) = doc.object(id) else { continue };
         // an instance with values of its own (its length) has a type of its own, drawn with them
         let named = |v: Option<&FieldValue>| v.and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok());
         let Some(kind) = named(o.path(&["m_pInstanceInfo", "m_symbolId"])).or_else(|| named(o.get("m_masterSymbolId"))) else { continue };
-        let family = match families.get(&kind) {
+        let scale = if symbol { 1.0 } else { types.view_scale(view) };
+        let seen_as = Seen { detail: types.view_detail(view), model: false };
+        let family = match families.get(&(kind, scale.to_bits(), seen_as)) {
             Some(known) => known.clone(),
             None => {
-                let lines = Arc::new(family_lines(doc, kind, types));
-                families.insert(kind, lines.clone());
-                lines
+                let drawn = Arc::new(graphics_lines(doc, kind, types, scale, seen_as));
+                families.insert((kind, scale.to_bits(), seen_as), drawn.clone());
+                drawn
             }
         };
-        if family.is_empty() {
+        if family.lines.is_empty() && family.fills.is_empty() && family.masks.is_empty() {
             continue;
         }
         // where it is placed: its origin and the directions of its family's x and y
         let placed = o.path(&["m_pInstanceInfo", "m_Trf"]).and_then(FieldValue::as_object);
         let Some(origin) = vec3(placed.and_then(|t| t.get("m_or"))).or_else(|| vec3(o.get("m_instOrigin"))) else { continue };
         let axes = placed.and_then(|t| t.get("m_3x3")?.as_list());
-        let axis = |k: usize, or: [f64; 3]| axes.and_then(|a| vec3(a.get(k))).unwrap_or(or);
+        // the matrix turns the family's coordinates into the view's: the direction of the
+        // family's x is its first column
+        let axis = |k: usize, or: [f64; 3]| axes.and_then(|a| Some([vec3(a.first())?[k], vec3(a.get(1))?[k], vec3(a.get(2))?[k]])).unwrap_or(or);
         let (x, y) = (axis(0, [1.0, 0.0, 0.0]), axis(1, [0.0, 1.0, 0.0]));
-        // the family's lines are metres here: back to feet
-        let at = |p: [f64; 2]| std::array::from_fn(|k| origin[k] + (p[0] * x[k] + p[1] * y[k]) / FT);
-        out.push(Detail { element: id, view, lines: family.iter().map(|l| [at(l[0]), at(l[1])]).collect() });
+        // a mirrored instance says so apart from where it is placed: its family's y the other way
+        let mirrored = o.get("m_pGeomTable").and_then(|v| o.deref(v)).is_some_and(|t| t.get("m_refPntMirrored") == Some(&FieldValue::Bool(true)));
+        let side = if mirrored { -1.0 } else { 1.0 };
+        let at = |p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|k| origin[k] + p[0] * x[k] + side * p[1] * y[k]) };
+        let fills = family.fills.iter().map(|f| Fill { loops: f.loops.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect(), color: f.color }).collect();
+        let masks = family.masks.iter().map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
+        out.push(Detail { element: id, view, lines: family.lines.iter().map(|l| [at(l[0]), at(l[1])]).collect(), colors: family.colors.clone(), fills, masks });
+    }
+    // a filled region: its outline and the lines of its fill pattern, in its own saved graphics
+    for id in doc.object_ids_of_class("FilledRegion") {
+        let Some(view) = doc.element(id).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
+        let scale = types.view_scale(view);
+        let seen_as = Seen { detail: types.view_detail(view), model: false };
+        let drawn = graphics_lines(doc, id, types, scale, seen_as);
+        if !drawn.lines.is_empty() || !drawn.fills.is_empty() || !drawn.masks.is_empty() {
+            out.push(Detail { element: id, view, lines: drawn.lines, colors: drawn.colors, fills: drawn.fills, masks: drawn.masks });
+        }
+    }
+    // an element of the model whose family has symbols nested in it (a pile with its mark): those,
+    // in each plan it lies in the range of. Its saved graphics are its own, where it stands.
+    const WITH_SYMBOLS: [i32; 1] = [-2001300];
+    let plans: Vec<(u64, f64, f64)> = rvt_export::views::views(doc)
+        .into_iter()
+        .filter(|v| v.class == "DBViewPlan" && !v.is_template)
+        .filter_map(|v| {
+            let range = v.view_range?;
+            let (top, low) = (range.top.or(range.cut)?, range.depth.or(range.bottom)?);
+            Some((v.id, low.min(top), low.max(top)))
+        })
+        .collect();
+    let mut drawn: HashMap<(u64, u64, Seen), Arc<Graphics>> = HashMap::new();
+    for id in doc.object_ids_of_class("FamilyInstance") {
+        let Some(e) = doc.element(id).filter(|e| WITH_SYMBOLS.contains(&e.category) && e.view.is_none_or(|v| v < 0)) else { continue };
+        let Some(bbox) = e.bbox else { continue };
+        for &(view, low, top) in plans.iter().filter(|(_, low, top)| bbox[2] <= *top + 1e-6 && bbox[5] >= *low - 1e-6) {
+            if types.hidden(view, id) {
+                continue;
+            }
+            let (scale, seen_as) = (types.view_scale(view), Seen { detail: types.view_detail(view), model: true });
+            let symbols = match drawn.get(&(id, scale.to_bits(), seen_as)) {
+                Some(known) => known.clone(),
+                None => {
+                    let symbols = Arc::new(graphics_lines(doc, id, types, scale, seen_as));
+                    drawn.insert((id, scale.to_bits(), seen_as), symbols.clone());
+                    symbols
+                }
+            };
+            if !symbols.lines.is_empty() {
+                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: Vec::new(), masks: Vec::new() });
+            }
+        }
     }
     out
 }
@@ -403,7 +612,7 @@ fn shape(doc: &rvt_read::Document, kind: i64, types: &mut Types) -> Option<Shape
         };
         Arrow { kind: mark.get("m_tickType").and_then(FieldValue::as_i64).unwrap_or(8), size: number(-1006414).map_or(0.0024, |s| s * FT), angle: number(-1006426).unwrap_or(0.35) }
     });
-    Some(Shape { labels, lines: family_lines(doc, id, types), arrow })
+    Some(Shape { labels, lines: family_lines(doc, id, types, 1.0), arrow })
 }
 
 /// A label of a tag type; none for one that writes nothing.
@@ -411,6 +620,7 @@ fn label(l: &NestedObject, types: &mut Types) -> Option<Label> {
     let orig = vec3(l.get("m_orig"))?;
     let flags = l.get("m_flags").and_then(FieldValue::as_i64).unwrap_or(0);
     let em = l.get("m_attrId").and_then(FieldValue::element).and_then(|k| types.text_em(k)).unwrap_or(crate::document::NOTE_HEIGHT);
+    let face = l.get("m_attrId").and_then(FieldValue::element).map(|k| types.text_face(k)).unwrap_or_default();
     let width = l.get("m_lineWidth").and_then(FieldValue::as_f64).filter(|w| w.is_finite() && *w > 0.0).map_or(0.0, |w| w * FT);
     let parts: Vec<Part> = l
         .get("m_paramDataFormattingArr")
@@ -436,40 +646,87 @@ fn label(l: &NestedObject, types: &mut Types) -> Option<Label> {
     if parts.is_empty() {
         return None;
     }
-    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, width, parts })
+    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, face, width, parts })
 }
 
-/// The lines of a family type, from its saved graphics (on paper, metres): its straight lines as
-/// they are, its arcs and circles in pieces of at most 7.5 degrees, and the edges of its filled
-/// and masking regions. Left out: what has no line style (the family's reference planes), what
-/// its style does not print (invisible lines, reference lines), what a visibility parameter of
-/// the type switches off and what shows from another side than the front.
-fn family_lines(doc: &rvt_read::Document, kind: u64, types: &mut Types) -> Vec<[[f64; 2]; 2]> {
+/// The lines of a family type, from its saved graphics (on paper, metres): see [`graphics_lines`].
+/// `scale` is that of the view it is drawn in (1 on paper).
+fn family_lines(doc: &rvt_read::Document, kind: u64, types: &mut Types, scale: f64) -> Vec<[[f64; 2]; 2]> {
+    graphics_lines(doc, kind, types, scale, Seen::PLAIN).lines.into_iter().map(|l| l.map(|p| [p[0] * FT, p[1] * FT])).collect()
+}
+
+/// The most lines one fill pattern is drawn with in one region: a denser one is left out.
+const MOST_HATCH_LINES: usize = 4000;
+
+/// The lines of the saved graphics of an element (a family type, a filled region), in its own
+/// coordinates (feet): its straight lines as they are, its arcs and circles in pieces of at most
+/// 7.5 degrees, the edges of its regions and the lines of their fill patterns
+/// (`Face::m_pGFilling` and `m_oBackgroundFilling`: a `FillPatternData` of `FillGrid`s, placed by
+/// `m_placer`; a drafting pattern is sized on paper, so `view_scale` times as large in a view),
+/// cut to the region; a solid fill as the region in its colour. Left out: what has no line style (a family's reference
+/// planes), what its style does not print (invisible lines, reference lines), what a visibility
+/// parameter of the type switches off, what shows from another side than the front and the
+/// lines of a family nested in it (where that is placed is not in these graphics).
+fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_scale: f64, seen_as: Seen) -> Graphics {
     /// The flags of a piece of graphics that shows at no level of detail (coarse, medium, fine).
     const SWITCHED_OFF: i64 = 0xE0;
-    let Some(saved) = doc.saved_graphics() else { return Vec::new() };
-    let Some(graph) = saved.bodies.get(&kind).and_then(|body| rvt_core::graph::Graph::decode(&saved.schema, body).ok()) else { return Vec::new() };
-    let class = |o: &rvt_core::graph::Object| saved.schema.class(o.class).map_or("", |c| c.name.as_str());
-    let style = |o: &rvt_core::graph::Object| o.get("m_GInfo").and_then(|g| g.as_obj()).and_then(|g| g.get("m_categoryId")?.element_id()).filter(|c| *c != -1);
-    let floats = |o: &rvt_core::graph::Object, name: &str| o.get(name).and_then(|v| v.floats()).filter(|v| v.len() >= 2 && v.iter().all(|x| x.is_finite()));
+    use rvt_core::graph::{Object, Value};
+    let Some(saved) = doc.saved_graphics() else { return Graphics::default() };
+    let Some(graph) = saved.bodies.get(&id).and_then(|body| rvt_core::graph::Graph::decode(&saved.schema, body).ok()) else { return Graphics::default() };
+    let class = |o: &Object| saved.schema.class(o.class).map_or("", |c| c.name.as_str());
+    let style = |o: &Object| o.get("m_GInfo").and_then(|g| g.as_obj()).and_then(|g| g.get("m_categoryId")?.element_id()).filter(|c| *c != -1);
+    let floats = |o: &Object, name: &str| o.get(name).and_then(|v| v.floats()).filter(|v| v.len() >= 2 && v.iter().all(|x| x.is_finite()));
+    let vector = |o: &Object, name: &str| floats(o, name).map(|v| [v[0], v[1], v.get(2).copied().unwrap_or(0.0)]);
+    let target = |v: Option<&Value>| v.and_then(|p| p.as_ptr()).and_then(|p| Some((p, graph.objects.get(p)?)));
     // a family is drawn in its own plane, seen from the front: what a filter asks of the
     // direction it is seen from is asked of z
-    let holds = |condition: &rvt_core::graph::Object| {
+    let holds = |condition: &Object| {
+        // of the view's level of detail (`m_param` 3): that it is under one (`m_comp` 0) or at
+        // least one (3). A symbol for the coarse and medium levels and one for fine lie side by
+        // side as "under 3" and "at least 3".
+        if class(condition) == "GConditionInt" {
+            let field = |name: &str| condition.get(name).and_then(|v| v.as_i64());
+            return match (field("m_param"), field("m_comp"), field("m_value")) {
+                (Some(3), Some(0), Some(level)) => seen_as.detail < level,
+                (Some(3), Some(3), Some(level)) => seen_as.detail >= level,
+                _ => false,
+            };
+        }
         let Some(dir) = floats(condition, "m_dir").filter(|d| d.len() >= 3 && class(condition) == "GConditionDir") else { return false };
         let met = match condition.get("m_comp").and_then(|c| c.as_i64()) {
             Some(10) => dir[2] > 0.999,
             Some(0) => dir[2].abs() < 1e-6,
+            // seen from the side `m_dir` points to, or from the other: from above or from below
+            // is a plan either way
+            Some(6 | 7) => dir[2].abs() > 0.999,
             _ => false,
         };
-        met != matches!(condition.get("m_negateDirCondition"), Some(rvt_core::graph::Value::Bool(true)))
+        met != matches!(condition.get("m_negateDirCondition"), Some(Value::Bool(true)))
     };
-    let mut out = Vec::new();
+    let mut out = Graphics::default();
     let mut seen = HashSet::new();
     // each with whether it lies in a family nested in this one
-    let mut open = vec![(0usize, false)];
-    while let Some((i, nested)) = open.pop() {
+    let mut open = vec![(0usize, false, Placement::NONE)];
+    // what the piece before this one added, and where that is placed
+    let mut added = ((0, 0, 0), Placement::NONE);
+    while let Some((i, nested, placed)) = open.pop() {
+        out.place(added.0, &added.1);
+        added = ((out.lines.len(), out.fills.len(), out.masks.len()), placed);
         let Some(o) = graph.objects.get(i).filter(|_| seen.insert(i)) else { continue };
         let name = class(o);
+        // a family placed in these graphics: its own graphics, and where they lie
+        if name == "GInstance" {
+            let trf = target(o.get("m_instanceInfo")).and_then(|(_, info)| info.get("m_Trf")?.as_obj());
+            let rows = trf.and_then(|t| t.get("m_3x3")?.as_list()).map(|r| r.iter().filter_map(|v| v.floats()).filter(|v| v.len() >= 3).map(|v| [v[0], v[1], v[2]]).collect::<Vec<_>>());
+            let inner = match (rows.as_deref(), trf.and_then(|t| vector(t, "m_or"))) {
+                // the directions of its x, y and z are the columns of the matrix
+                (Some([a, b, c]), Some(origin)) => Placement { axes: std::array::from_fn(|k| [a[k], b[k], c[k]]), origin },
+                _ => Placement::NONE,
+            };
+            if let Some((at, _)) = target(o.get("m_oEmbeddedSymbolGRep")) {
+                open.push((at, nested, placed.of(&inner)));
+            }
+        }
         // a group with a category is a nested family: its regions lie where they are placed, its
         // lines are in its own coordinates, and where it is placed is not in these graphics
         let nested = nested || name == "GGroup" && style(o).is_some();
@@ -484,51 +741,192 @@ fn family_lines(doc: &rvt_read::Document, kind: u64, types: &mut Types) -> Vec<[
                 continue;
             }
         }
-        open.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| Some((p.as_ptr()?, nested))));
-        // a region: its edges, each a run of points on the plane of its face
+        open.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| Some((p.as_ptr()?, nested, placed))));
+        // of an element of the model only what its nested symbols draw
+        if seen_as.model && !nested {
+            continue;
+        }
+        // regions: their edges, each a run of points on the plane of its face, and their fills
         if name == "Geometry" {
+            // per face: its plane and the pieces of its outline on it
+            let mut faces: HashMap<usize, Vec<[[f64; 2]; 2]>> = HashMap::new();
             for edge in o.get("m_pEdges").and_then(|e| e.as_list()).unwrap_or(&[]).iter().filter_map(|p| graph.objects.get(p.as_ptr()?)) {
-                if !style(edge).is_some_and(|s| types.line_shows(s)) {
-                    continue;
-                }
-                let face = edge.get("m_pFace").and_then(|f| f.as_list()).and_then(|f| f.iter().find_map(|p| graph.objects.get(p.as_ptr()?)));
-                let Some(plane) = face.and_then(|f| graph.objects.get(f.get("m_pSurf")?.as_ptr()?)).filter(|s| class(s) == "Plane") else { continue };
-                let (Some(c), Some(x), Some(y)) = (floats(plane, "m_origin"), floats(plane, "m_xVec"), floats(plane, "m_yVec")) else { continue };
-                let run = |name: &str| edge.get(name).and_then(|l| l.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_obj()?.get("uv")?.as_list()?.first()?.floats()).filter(|uv| uv.len() >= 2 && uv.iter().all(|v| v.is_finite())).collect::<Vec<_>>();
+                let Some((at, face)) = edge.get("m_pFace").and_then(|f| f.as_list()).and_then(|f| f.iter().find_map(|p| target(Some(p)))) else { continue };
+                let Some((_, plane)) = target(face.get("m_pSurf")).filter(|(_, s)| class(s) == "Plane") else { continue };
+                let (Some(c), Some(x), Some(y)) = (vector(plane, "m_origin"), vector(plane, "m_xVec"), vector(plane, "m_yVec")) else { continue };
+                let run = |name: &str| edge.get(name).and_then(|l| l.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_obj()?.get("uv")?.as_list()?.first()?.floats()).filter(|uv| uv.len() >= 2 && uv.iter().all(|v| v.is_finite())).map(|uv| [uv[0], uv[1]]).collect::<Vec<_>>();
                 let (ends, between) = (run("m_firstAndLastEdgePnts"), run("m_interiorEdgePnts"));
                 let [first, last] = ends.as_slice() else { continue };
-                let points: Vec<[f64; 2]> = std::iter::once(first).chain(&between).chain(std::iter::once(last)).map(|uv| [(c[0] + uv[0] * x[0] + uv[1] * y[0]) * FT, (c[1] + uv[0] * x[1] + uv[1] * y[1]) * FT]).collect();
-                out.extend(points.windows(2).filter(|w| w[0] != w[1]).map(|w| [w[0], w[1]]));
+                let points: Vec<[f64; 2]> = std::iter::once(*first).chain(between).chain(std::iter::once(*last)).collect();
+                let pieces = points.windows(2).filter(|w| w[0] != w[1]).map(|w| [w[0], w[1]]);
+                faces.entry(at).or_default().extend(pieces.clone());
+                if let Some(s) = style(edge).filter(|s| types.line_shows(*s)) {
+                    let on = |uv: [f64; 2]| std::array::from_fn(|k| c[k] + uv[0] * x[k] + uv[1] * y[k]);
+                    let color = types.line_color(s);
+                    let run: Vec<[f64; 3]> = points.iter().map(|&uv| on(uv)).collect();
+                    for line in drawn(&run, types.line_dashes(s).as_deref().map(|d| d.as_slice()), view_scale) {
+                        out.line(line, color);
+                    }
+                }
+            }
+            for (at, outline) in &faces {
+                let Some(face) = graph.objects.get(*at) else { continue };
+                let Some((_, plane)) = target(face.get("m_pSurf")) else { continue };
+                let (Some(c), Some(x), Some(y)) = (vector(plane, "m_origin"), vector(plane, "m_xVec"), vector(plane, "m_yVec")) else { continue };
+                let on = |uv: [f64; 2]| -> [f64; 3] { std::array::from_fn(|k| c[k] + uv[0] * x[k] + uv[1] * y[k]) };
+                for filling in ["m_oBackgroundFilling", "m_pGFilling"].into_iter().filter_map(|f| target(face.get(f))) {
+                    let pattern_id = filling.1.get("m_patternId").and_then(|p| p.element_id());
+                    // its own colour, else that of the style of the face (the colour of the type of a
+                    // filled region)
+                    let ink = filling.1.get("m_fillColor").and_then(|c| c.as_i64()).and_then(color_of).or_else(|| style(face).and_then(|s| types.line_color(s)));
+                    let Some((_, pattern)) = target(filling.1.get("m_data")) else {
+                        // no lines: a solid fill, or without a pattern a mask over what lies
+                        // under it; of the outlines of the face in turn
+                        let mask = pattern_id.is_none_or(|p| p < 0);
+                        if !mask && !pattern_id.is_some_and(|p| types.pattern_solid(p)) {
+                            continue;
+                        }
+                        let mut loops: Vec<Vec<[f64; 3]>> = Vec::new();
+                        let mut next = target(face.get("m_pFirstLoop"));
+                        while let Some((_, edges)) = next.filter(|_| loops.len() < 256) {
+                            let mut points: Vec<[f64; 2]> = Vec::new();
+                            let first_of = |v: Option<&Value>| v.and_then(|n| n.as_ptr().or_else(|| n.as_list()?.iter().find_map(|p| p.as_ptr()))).and_then(|p| graph.objects.get(p));
+                            let mut edge = first_of(edges.get("m_next"));
+                            let mut steps = 0;
+                            while let Some(e) = edge.filter(|e| class(e) == "Edge" && steps < 4096) {
+                                steps += 1;
+                                let run = |name: &str| e.get(name).and_then(|l| l.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_obj()?.get("uv")?.as_list()?.first()?.floats()).filter(|uv| uv.len() >= 2 && uv.iter().all(|v| v.is_finite())).map(|uv| [uv[0], uv[1]]).collect::<Vec<_>>();
+                                let (ends, between) = (run("m_firstAndLastEdgePnts"), run("m_interiorEdgePnts"));
+                                if let [first, last] = ends.as_slice() {
+                                    let mut piece: Vec<[f64; 2]> = std::iter::once(*first).chain(between).chain(std::iter::once(*last)).collect();
+                                    // each starts where the one before it ended
+                                    let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+                                    if points.last().is_some_and(|&end| far(end, piece[0]) > far(end, piece[piece.len() - 1])) {
+                                        piece.reverse();
+                                    }
+                                    points.extend(piece);
+                                }
+                                edge = first_of(e.get("m_next"));
+                            }
+                            points.dedup();
+                            if points.len() >= 3 {
+                                loops.push(points.into_iter().map(on).collect());
+                            }
+                            next = target(edges.get("m_nextLoop"));
+                        }
+                        if loops.is_empty() {
+                            continue;
+                        }
+                        if mask {
+                            out.masks.push(loops);
+                        } else {
+                            out.fills.push(Fill { loops, color: ink.unwrap_or([0, 0, 0]) });
+                        }
+                        continue;
+                    };
+                    let placer = filling.1.get("m_placer").and_then(|p| p.as_obj());
+                    let on_paper = pattern_id.is_some_and(|p| types.pattern_on_paper(p));
+                    let scale = placer.and_then(|p| p.get("m_scale")?.as_f64()).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0) * if on_paper { view_scale } else { 1.0 };
+                    let origin = placer.and_then(|p| floats(p, "m_origin")).map_or([0.0, 0.0], |v| [v[0], v[1]]);
+                    let dir = placer.and_then(|p| floats(p, "m_dir")).map_or([1.0, 0.0], |v| [v[0], v[1]]);
+                    let mirror = if placer.is_some_and(|p| matches!(p.get("m_isMirrored"), Some(Value::Bool(true)))) { -1.0 } else { 1.0 };
+                    // a point of the pattern on the plane of the face
+                    let placed = |p: [f64; 2]| [origin[0] + scale * (p[0] * dir[0] - mirror * p[1] * dir[1]), origin[1] + scale * (p[0] * dir[1] + mirror * p[1] * dir[0])];
+                    for grid in pattern.get("m_fillGrids").and_then(|g| g.as_list()).unwrap_or(&[]).iter().filter_map(|g| graph.objects.get(g.as_ptr()?)) {
+                        let (Some(angle), Some(from), Some(deltas)) = (grid.get("m_angle").and_then(|a| a.as_f64()), floats(grid, "m_origin"), floats(grid, "m_deltas")) else { continue };
+                        let segments: Vec<f64> = grid.get("m_segs").and_then(|s| s.floats()).unwrap_or_default();
+                        let (sin, cos) = angle.sin_cos();
+                        // line k of the grid: through this point, along `u`
+                        let base = |k: f64| placed([from[0] + k * (deltas[0] * cos - deltas[1] * sin), from[1] + k * (deltas[0] * sin + deltas[1] * cos)]);
+                        let (b0, b1) = (base(0.0), base(1.0));
+                        let ahead = placed([from[0] + cos, from[1] + sin]);
+                        let u = [(ahead[0] - b0[0]) / scale, (ahead[1] - b0[1]) / scale];
+                        let n = [-u[1], u[0]];
+                        let step = (b1[0] - b0[0]) * n[0] + (b1[1] - b0[1]) * n[1];
+                        if step.abs() < 1e-7 {
+                            continue;
+                        }
+                        let across = outline.iter().flatten().map(|p| ((p[0] - b0[0]) * n[0] + (p[1] - b0[1]) * n[1]) / step);
+                        let (low, high) = across.fold((f64::MAX, f64::MIN), |(lo, hi), k| (lo.min(k), hi.max(k)));
+                        let (low, high) = (low.ceil() as i64, high.floor() as i64);
+                        if high < low || (high - low) as usize > MOST_HATCH_LINES {
+                            continue;
+                        }
+                        for k in low..=high {
+                            let b = base(k as f64);
+                            // where the line crosses the outline: inside between each two
+                            let mut cuts: Vec<f64> = outline
+                                .iter()
+                                .filter_map(|[p, q]| {
+                                    let (sp, sq) = ((p[0] - b[0]) * n[0] + (p[1] - b[1]) * n[1], (q[0] - b[0]) * n[0] + (q[1] - b[1]) * n[1]);
+                                    ((sp < 0.0) != (sq < 0.0)).then(|| {
+                                        let f = sp / (sp - sq);
+                                        (p[0] + f * (q[0] - p[0]) - b[0]) * u[0] + (p[1] + f * (q[1] - p[1]) - b[1]) * u[1]
+                                    })
+                                })
+                                .collect();
+                            cuts.sort_by(f64::total_cmp);
+                            let mut dash = |from: f64, to: f64| {
+                                if to - from > 1e-9 {
+                                    out.line([on([b[0] + from * u[0], b[1] + from * u[1]]), on([b[0] + to * u[0], b[1] + to * u[1]])], ink);
+                                }
+                            };
+                            let period: f64 = segments.iter().map(|s| s.abs() * scale).sum();
+                            for inside in cuts.chunks_exact(2) {
+                                if segments.is_empty() || period < 1e-7 || (inside[1] - inside[0]) / period > MOST_HATCH_LINES as f64 {
+                                    dash(inside[0], inside[1]);
+                                    continue;
+                                }
+                                // its strokes and gaps in turn, from the line's own start
+                                let mut at = (inside[0] / period).floor() * period;
+                                while at < inside[1] {
+                                    for (i, s) in segments.iter().enumerate() {
+                                        let length = s.abs() * scale;
+                                        let stroke = if segments.iter().any(|s| *s < 0.0) { *s >= 0.0 } else { i % 2 == 0 };
+                                        if stroke {
+                                            dash(at.max(inside[0]), (at + length.max(1e-4)).min(inside[1]));
+                                        }
+                                        at += length;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             continue;
         }
-        if nested || !style(o).is_some_and(|s| types.line_shows(s)) {
-            continue;
-        }
+        // the lines of a nested family are in its own coordinates in the graphics of a type; in
+        // those of an element of the model they lie where it stands
+        let Some(shown) = style(o).filter(|s| (seen_as.model || !nested) && types.line_shows(*s)) else { continue };
+        let color = types.line_color(shown);
         let Some(ends) = floats(o, "m_endParams") else { continue };
         let (from, to) = (ends[0], ends[1]);
-        let points: Vec<[f64; 2]> = match name {
+        let points: Vec<[f64; 3]> = match name {
             "GLine" => {
-                let (Some(p), Some(d)) = (floats(o, "m_origin"), floats(o, "m_dirVec")) else { continue };
-                [from, to].iter().map(|t| [(p[0] + t * d[0]) * FT, (p[1] + t * d[1]) * FT]).collect()
+                let (Some(p), Some(d)) = (vector(o, "m_origin"), vector(o, "m_dirVec")) else { continue };
+                [from, to].iter().map(|t| std::array::from_fn(|k| p[k] + t * d[k])).collect()
             }
             "GArc" => {
-                let (Some(c), Some(x), Some(y)) = (floats(o, "m_center"), floats(o, "m_xVec"), floats(o, "m_yVec")) else { continue };
+                let (Some(c), Some(x), Some(y)) = (vector(o, "m_center"), vector(o, "m_xVec"), vector(o, "m_yVec")) else { continue };
                 let Some(r) = o.get("m_radius").and_then(|r| r.as_f64()).filter(|r| r.is_finite() && *r > 0.0) else { continue };
                 // equal ends: a full circle
                 let sweep = if (to - from).abs() < 1e-9 { std::f64::consts::TAU } else { to - from };
                 let pieces = ((sweep.abs() / (std::f64::consts::TAU / 48.0)).ceil() as usize).clamp(2, 96);
                 (0..=pieces)
-                    .map(|k| {
-                        let (s, c0) = (from + sweep * k as f64 / pieces as f64).sin_cos();
-                        [(c[0] + r * (c0 * x[0] + s * y[0])) * FT, (c[1] + r * (c0 * x[1] + s * y[1])) * FT]
+                    .map(|i| {
+                        let (s, c0) = (from + sweep * i as f64 / pieces as f64).sin_cos();
+                        std::array::from_fn(|k| c[k] + r * (c0 * x[k] + s * y[k]))
                     })
                     .collect()
             }
             _ => continue,
         };
-        out.extend(points.windows(2).filter(|w| w[0] != w[1]).map(|w| [w[0], w[1]]));
+        for line in drawn(&points, types.line_dashes(shown).as_deref().map(|d| d.as_slice()), view_scale) {
+            out.line(line, color);
+        }
     }
+    out.place(added.0, &added.1);
     out
 }
 

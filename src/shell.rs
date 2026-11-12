@@ -272,6 +272,11 @@ pub enum Side {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// The window's size changed (layout units).
+    Sized(iced::Size),
+    /// The window's size, asked for before a remote command on the window runs.
+    #[cfg(not(target_arch = "wasm32"))]
+    SizedFor(iced::Size, crate::remote::RemoteCall),
     /// A message for the project shown (from its view and subscriptions).
     App(Message),
     /// A message for project `id`, shown or not: what its tasks (a load, say) return.
@@ -336,6 +341,10 @@ pub struct Studio {
     drag: Option<(Side, Option<f32>, f32)>,
     /// The window's width in layout units: iced reports it already divided by the interface size.
     width: f32,
+    /// Its height, likewise: with the width, the size a remote client's clicks are laid out at.
+    height: f32,
+    /// Whether the window has told its size (it does when it changes, not always when it opens).
+    sized: bool,
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
@@ -400,6 +409,8 @@ impl Studio {
             last_title_press: None,
             drag: None,
             width: 1280.0,
+            height: 800.0,
+            sized: false,
             compact_panel: None,
             ribbon_folded: false,
             edition: Edition::Studio,
@@ -586,6 +597,141 @@ impl Studio {
             return Err("no wgpu adapter for the headless renderer (tiny-skia cannot draw the 3D view)".into());
         }
         std::fs::rename(&written, out).map_err(|e| e.to_string())
+    }
+
+    /// The size the window is laid out at.
+    fn layout_size(&self) -> iced::Size {
+        // a window folded to the taskbar is laid out at the size it opens at
+        if self.width < 640.0 || self.height < 400.0 {
+            return iced::Size::new(1280.0, 800.0);
+        }
+        iced::Size::new(self.width, self.height)
+    }
+
+    /// The window's controls, as a remote client sees them (see [`crate::ui_control`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn ui_controls(&self) -> Vec<openaec_ui::design::a11y::Found> {
+        crate::ui_control::controls(self.view(), self.layout_size())
+    }
+
+    /// A remote command on the window itself: `ui_controls` lists what it shows; `ui_press`
+    /// clicks a control, `ui_type` types into a field and `ui_key` presses a key, through the
+    /// widgets as a person's mouse and keyboard reach them. The messages they send go on as the
+    /// window's would; with `dry_run` they are only told.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn ui_command(&mut self, call: crate::remote::RemoteCall) -> Task<Msg> {
+        use crate::ui_control as ui;
+        use serde_json::json;
+        // the clicks are laid out at the window's size: asked for first when it is not known
+        if !self.sized {
+            self.sized = true;
+            return iced::window::latest().and_then(iced::window::size).map(move |size| Msg::SizedFor(size, call.clone()));
+        }
+        let size = self.layout_size();
+        let found = self.ui_controls();
+        let args = call.args.clone();
+        let answer: Result<serde_json::Value, String> = match call.cmd.as_str() {
+            "ui_controls" => {
+                let filter = args.get("filter").and_then(|v| v.as_str()).map(str::to_lowercase);
+                let all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+                let list: Vec<serde_json::Value> = found
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| all || ui::is_control(f))
+                    .filter(|(_, f)| filter.as_deref().is_none_or(|q| f.node.name.to_lowercase().contains(q) || format!("{:?}", f.node.role).to_lowercase() == q))
+                    .map(|(k, f)| ui::describe(k, f))
+                    .collect();
+                Ok(json!({ "size": [size.width, size.height], "product": self.product().key(), "count": list.len(), "controls": list }))
+            }
+            "ui_press" | "ui_type" | "ui_key" => {
+                let dry = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+                let target = if call.cmd == "ui_key" && args.get("name").is_none() && args.get("index").is_none() { None } else { Some(ui::find(&found, &args)) };
+                match target {
+                    Some(Err(e)) => Err(e),
+                    Some(Ok((_, f))) if f.node.state.disabled => Err(format!("'{}' is disabled", f.node.name)),
+                    target => {
+                        let what = match &target {
+                            Some(Ok((k, f))) => ui::describe(*k, f),
+                            _ => serde_json::Value::Null,
+                        };
+                        // the click, on a copy of the window; `scroll`: first the list it lies in
+                        // scrolls that far, so a control below the end of a panel comes in view
+                        // the click, on a copy of the window laid out at `size`, on the control
+                        // within `bounds`
+                        let run = |size: iced::Size, bounds: Option<iced::Rectangle>| -> Vec<Msg> {
+                            let settings = iced::Settings { fonts: [crate::INTER_REGULAR, crate::INTER_SEMIBOLD].into_iter().chain(fonts::FILES.iter().copied()).map(std::borrow::Cow::Borrowed).collect(), default_font: fonts::BODY, ..Default::default() };
+                            let mut sim = iced_test::Simulator::with_size(settings, size, self.view());
+                            if let Some(at) = bounds.and_then(|b| ui::aim(b, size)) {
+                                sim.point_at(at);
+                                let _ = sim.simulate(iced_test::simulator::click());
+                            }
+                        match call.cmd.as_str() {
+                            "ui_type" => {
+                                let text = args.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                                // a field's old text goes first
+                                if args.get("replace").and_then(|v| v.as_bool()).unwrap_or(true) {
+                                    let old = target.as_ref().and_then(|t| t.as_ref().ok()).and_then(|(_, f)| f.node.value.as_ref()).map_or(64, |v| v.chars().count() + 2);
+                                    for named in [iced::keyboard::key::Named::Backspace, iced::keyboard::key::Named::Delete] {
+                                        for _ in 0..old {
+                                            let _ = sim.simulate(iced_test::simulator::tap_key(iced::keyboard::Key::Named(named), None));
+                                        }
+                                    }
+                                }
+                                let _ = sim.typewrite(text);
+                            }
+                            "ui_key" => {
+                                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("Enter");
+                                use iced::keyboard::key::Named;
+                                let named = match key.to_ascii_lowercase().as_str() {
+                                    "enter" | "return" => Some(Named::Enter),
+                                    "escape" | "esc" => Some(Named::Escape),
+                                    "tab" => Some(Named::Tab),
+                                    "delete" => Some(Named::Delete),
+                                    "backspace" => Some(Named::Backspace),
+                                    _ => None,
+                                };
+                                let key = named.map_or_else(|| iced::keyboard::Key::Character(key.to_lowercase().into()), iced::keyboard::Key::Named);
+                                let _ = sim.simulate(iced_test::simulator::tap_key(key, None));
+                            }
+                            _ => {}
+                        }
+                            sim.into_messages().collect()
+                        };
+                        let first = match &target {
+                            Some(Ok((_, f))) => Some(f.bounds),
+                            _ => None,
+                        };
+                        let mut messages = run(size, first);
+                        // nothing answered: the control may lie past the end of the list it is in,
+                        // out of view; the window is laid out tall enough to show it, and the same
+                        // control (by its name and role, the same one of those) is clicked there
+                        if messages.is_empty() && call.cmd != "ui_key" {
+                            if let Some(Ok((k, f))) = &target {
+                                let same = |g: &openaec_ui::design::a11y::Found| g.node.name == f.node.name && g.node.role == f.node.role;
+                                let before = found[..*k].iter().filter(|g| same(g)).count();
+                                let tall = iced::Size::new(size.width, 6000.0);
+                                let there = crate::ui_control::controls(self.view(), tall);
+                                if let Some(g) = there.iter().filter(|g| same(g)).nth(before) {
+                                    messages = run(tall, Some(g.bounds));
+                                }
+                            }
+                        }
+                        let said: Vec<String> = messages.iter().map(|m| format!("{m:?}").chars().take(240).collect()).collect();
+                        let answered = !messages.is_empty();
+                        if dry {
+                            Ok(json!({ "control": what, "messages": said, "answered": answered, "dry_run": true }))
+                        } else {
+                            let tasks: Vec<Task<Msg>> = messages.into_iter().map(|m| self.update(m)).collect();
+                            call.answer(Ok(json!({ "control": what, "messages": said, "answered": answered })));
+                            return Task::batch(tasks);
+                        }
+                    }
+                }
+            }
+            other => Err(format!("unknown command {other}")),
+        };
+        call.answer(answer);
+        Task::none()
     }
 
     fn look(&self) -> Look {
@@ -867,6 +1013,9 @@ impl Studio {
 
     fn handle(&mut self, message: Msg) -> Task<Msg> {
         match message {
+            // the window driven as a person drives it: its controls, a click, typing
+            #[cfg(not(target_arch = "wasm32"))]
+            Msg::App(Message::Remote(call)) if call.cmd.starts_with("ui_") => return self.ui_command(call),
             Msg::App(message) => {
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
@@ -988,6 +1137,16 @@ impl Studio {
                 self.save_prefs();
             }
             Msg::Resized(width) => self.width = width,
+            Msg::Sized(size) => {
+                self.width = size.width;
+                self.height = size.height;
+                self.sized = true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Msg::SizedFor(size, call) => {
+                let _ = self.update(Msg::Sized(size));
+                return self.ui_command(call);
+            }
             Msg::SplitterPress(side) => {
                 let width = match side {
                     Side::Left => self.prefs.left_width,
@@ -1106,7 +1265,7 @@ impl Studio {
             Subscription::none()
         };
         let resized = iced::event::listen_with(|event, _, _| match event {
-            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Resized(size.width)),
+            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Sized(size)),
             _ => None,
         });
         Subscription::batch([

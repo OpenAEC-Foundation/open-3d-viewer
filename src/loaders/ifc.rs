@@ -172,7 +172,8 @@ impl Loader for IfcLoader {
         let mm = |p: [f32; 3]| [(p[0] * 1000.0).round() as i64, (p[1] * 1000.0).round() as i64];
         grids.retain(|g| seen.insert((g.name.clone(), mm(g.a), mm(g.b))));
         grids.sort_by(|a, b| a.name.cmp(&b.name));
-        let project = ProjectData {
+        let located = georeference(header, scale);
+        let mut project = ProjectData {
             levels,
             grids,
             info: vec![
@@ -188,6 +189,7 @@ impl Loader for IfcLoader {
             ],
             ..ProjectData::default()
         };
+        project.info.extend(located);
         // the anchor subtracted above: it places this model when models are combined
         let origin = Some(glam::DVec3::from_array(anchor));
         Ok(Loaded { structural: Vec::new(), origin, layers: layers.into_values().collect(), views: Vec::new(), project })
@@ -227,6 +229,80 @@ fn storeys(content: &[u8], scale: f64) -> Vec<(String, f64)> {
         }
     }
     out
+}
+
+/// Where the file says its model lies on the map, as project information: the map conversion
+/// (`IfcMapConversion`: eastings, northings and height in metres, and how far the model's x axis
+/// is turned from east) with the name of its coordinate system (`IfcProjectedCRS`), and the
+/// latitude and longitude of the site (`IfcSite`, degrees). For the Dutch national grid
+/// (EPSG:28992) the latitude and longitude of the map conversion are worked out as well.
+fn georeference(content: &[u8], scale: f64) -> Vec<(String, String)> {
+    use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner};
+    let mut scanner = EntityScanner::new(content);
+    let mut decoder = EntityDecoder::new(content);
+    let mut out = Vec::new();
+    let (mut conversion, mut site) = (false, false);
+    while let Some((_, keyword, start, end)) = scanner.next_entity() {
+        if keyword.eq_ignore_ascii_case("IFCMAPCONVERSION") && !conversion {
+            let Ok(map) = decoder.decode_at(start, end) else { continue };
+            let (Some(east), Some(north)) = (map.get_float(2), map.get_float(3)) else { continue };
+            conversion = true;
+            // the map unit is the file's length unit unless the system names its own
+            let crs = map.get_ref(1).and_then(|id| decoder.decode_by_id(id).ok());
+            let name = crs.as_ref().and_then(|c| c.get_string(0)).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty());
+            let (east, north, height) = (east * scale, north * scale, map.get_float(4).unwrap_or(0.0) * scale);
+            if let Some(name) = &name {
+                out.push(("Georeference coordinate system".into(), name.clone()));
+            }
+            out.push(("Georeference eastings, northings (m)".into(), format!("{east:.3}, {north:.3}")));
+            out.push(("Georeference height (m)".into(), format!("{height:.3}")));
+            if let (Some(a), Some(o)) = (map.get_float(5), map.get_float(6)) {
+                out.push(("Georeference rotation (degrees)".into(), format!("{:.4}", o.atan2(a).to_degrees())));
+            }
+            if name.as_deref().is_some_and(|n| n.replace(' ', "").eq_ignore_ascii_case("EPSG:28992")) {
+                let (lat, lon) = rd_to_wgs84(east, north);
+                out.push(("Georeference latitude, longitude".into(), format!("{lat:.6}, {lon:.6}")));
+            }
+        } else if keyword.eq_ignore_ascii_case("IFCSITE") && !site {
+            let Ok(entity) = decoder.decode_at(start, end) else { continue };
+            // degrees, minutes, seconds and millionths of a second
+            let angle = |i: usize| {
+                let parts: Vec<f64> = entity.get_list(i)?.iter().filter_map(|v| v.as_float().or_else(|| v.as_int().map(|n| n as f64))).collect();
+                (parts.len() >= 3).then(|| parts[0] + parts[1] / 60.0 + parts[2] / 3600.0 + parts.get(3).copied().unwrap_or(0.0) / 3.6e9)
+            };
+            let (Some(lat), Some(lon)) = (angle(9), angle(10)) else { continue };
+            // a site left at zero, zero is not placed
+            if lat == 0.0 && lon == 0.0 {
+                continue;
+            }
+            site = true;
+            out.push(("Site latitude, longitude".into(), format!("{lat:.6}, {lon:.6}")));
+        }
+    }
+    out
+}
+
+/// A point of the Dutch national grid (EPSG:28992, metres) as latitude and longitude (WGS 84,
+/// degrees), by the usual series around Amersfoort: good to about a metre within the Netherlands.
+fn rd_to_wgs84(x: f64, y: f64) -> (f64, f64) {
+    let (dx, dy) = ((x - 155_000.0) * 1e-5, (y - 463_000.0) * 1e-5);
+    let lat = 52.155_174_40
+        + (3235.653_89 * dy - 32.582_97 * dx * dx - 0.247_50 * dy * dy - 0.849_78 * dx * dx * dy - 0.065_50 * dy * dy * dy - 0.017_09 * dx * dx * dy * dy
+            - 0.007_38 * dx
+            + 0.005_30 * dx.powi(4)
+            - 0.000_39 * dx * dx * dy.powi(3)
+            + 0.000_33 * dx.powi(4) * dy
+            - 0.000_12 * dx * dy)
+            / 3600.0;
+    let lon = 5.387_206_21
+        + (5260.529_16 * dx + 105.946_84 * dx * dy + 2.455_09 * dx * dy * dy - 0.819_41 * dx.powi(3) + 0.055_94 * dx * dy.powi(3) - 0.055_60 * dx.powi(3) * dy
+            + 0.001_99 * dy
+            - 0.001_27 * dx.powi(3) * dy * dy
+            + 0.000_44 * dy * dy
+            + 0.000_22 * dx * dy.powi(4)
+            + 0.000_26 * dx.powi(5))
+            / 3600.0;
+    (lat, lon)
 }
 
 /// The axes of the file's grids (`IfcGrid`): each its tag and the two ends of its curve in the

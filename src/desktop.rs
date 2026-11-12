@@ -10,6 +10,7 @@
 //!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
+//!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
@@ -45,6 +46,8 @@ struct Args {
     drawing: Option<String>,
     /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
     draft: Option<String>,
+    /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
+    pick: Option<u64>,
     /// For `--screenshot` of the Collaborator: a BCF file to open, an IDS to check on, and what
     /// to run and show (`issues`, `check`, `clash`).
     bcf: Option<PathBuf>,
@@ -69,6 +72,9 @@ struct Args {
     /// Exploded view for `--screenshot`: percent per axis, and the mode.
     explode: Option<[f32; 3]>,
     explode_mode: Option<explode::ExplodeMode>,
+    /// The section box for `--screenshot`: where each of its faces stands, in percent of the model
+    /// (low and high along x, y and z).
+    section: Option<[f32; 6]>,
     /// The graphics backend and present mode of the window, overriding the default (`gpu`).
     gpu_backend: Option<String>,
     present_mode: Option<String>,
@@ -91,6 +97,7 @@ fn parse_args() -> Result<Args, String> {
             "--sheet" => args.sheet = Some(value()?),
             "--drawing" => args.drawing = Some(value()?),
             "--draft" => args.draft = Some(value()?),
+            "--pick" => args.pick = Some(value()?.parse().map_err(|_| "--pick takes an element id")?),
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
             "--ids" => args.ids = Some(PathBuf::from(value()?)),
             "--collab" => args.collab = Some(value()?),
@@ -131,6 +138,10 @@ fn parse_args() -> Result<Args, String> {
             "--explode" => {
                 let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--explode X,Y,Z")).collect::<Result<_, _>>()?;
                 args.explode = Some(<[f32; 3]>::try_from(v).map_err(|_| "--explode X,Y,Z")?);
+            }
+            "--section" => {
+                let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--section X0,X1,Y0,Y1,Z0,Z1")).collect::<Result<_, _>>()?;
+                args.section = Some(<[f32; 6]>::try_from(v).map_err(|_| "--section X0,X1,Y0,Y1,Z0,Z1")?);
             }
             "--explode-mode" => {
                 args.explode_mode = Some(match value()?.as_str() {
@@ -359,6 +370,13 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             }
             app.fit();
         }
+        // the section box, its faces where asked
+        if let Some(faces) = args.section {
+            let _ = app.update(Message::ToggleSection);
+            for (k, percent) in faces.into_iter().enumerate() {
+                let _ = app.update(Message::SectionSlider(k / 2, k % 2 == 0, percent));
+            }
+        }
         if let Some(name) = &args.schedule {
             // the window computes the schedules after the model shows; here, before the frame
             let model = app.model.clone().ok_or("no model")?;
@@ -376,6 +394,9 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let model = app.model.clone().ok_or("no model")?;
             let i = model.project.drafts.iter().position(|d| &d.name == name).ok_or(format!("no legend or drafting view {name} in the file"))?;
             let _ = app.update(Message::OpenDraft(i));
+            if let Some(element) = args.pick {
+                app.pick_drawn(element);
+            }
         }
         if let Some(name) = &args.drawing {
             let document = app.document_now();

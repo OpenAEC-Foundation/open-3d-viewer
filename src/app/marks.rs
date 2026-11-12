@@ -661,7 +661,7 @@ impl canvas::Program<Message> for ViewMarks {
         for (k, note) in self.notes.iter().enumerate() {
             let Some(at) = self.px(&screen, note.at) else { continue };
             let picked = self.pick == Some(MarkPick::Note(k));
-            draw_note(&mut frame, at, &note.text, self.note_size(&screen, note.at, note.size), if picked { p.accent } else { ink }, note.align, note.angle as f32);
+            draw_note_in(&mut frame, at, &note.text, self.note_size(&screen, note.at, note.size), if picked { p.accent } else { ink }, note.align, note.angle as f32, &note.face);
             if picked {
                 if let Some(b) = self.note_box(&screen, k) {
                     frame.stroke(&Path::rectangle(b.position(), b.size()), Stroke::default().with_color(p.accent).with_width(1.0));
@@ -782,6 +782,12 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
 /// A text standing on a screen point: its lower left, the middle of its foot or its lower right,
 /// turned about it by `angle` (radians, counter-clockwise).
 pub(super) fn draw_note(frame: &mut Frame, at: Point, wording: &str, size: f32, color: Color, align: Align, angle: f32) {
+    draw_note_in(frame, at, wording, size, color, align, angle, &crate::typeface::Face::default());
+}
+
+/// A text as [`draw_note`] draws it, set in the typeface its file names.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_note_in(frame: &mut Frame, at: Point, wording: &str, size: f32, color: Color, align: Align, angle: f32, face: &crate::typeface::Face) {
     let align_x = match align {
         Align::Left => alignment::Horizontal::Left,
         Align::Center => alignment::Horizontal::Center,
@@ -794,18 +800,17 @@ pub(super) fn draw_note(frame: &mut Frame, at: Point, wording: &str, size: f32, 
         align_y: alignment::Vertical::Bottom,
         size: iced::Pixels(size),
         color,
-        font: openaec_ui::fonts::MEDIUM,
         ..canvas::Text::default()
     };
     if angle == 0.0 {
-        frame.fill_text(text(at));
+        face.fill(frame, text(at));
         return;
     }
     frame.with_save(|frame| {
         frame.translate(iced::Vector::new(at.x, at.y));
         // the screen's y runs down
         frame.rotate(-angle);
-        frame.fill_text(text(Point::ORIGIN));
+        face.fill(frame, text(Point::ORIGIN));
     });
 }
 

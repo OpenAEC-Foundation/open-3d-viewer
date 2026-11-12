@@ -394,6 +394,8 @@ pub struct Note {
     pub align: Align,
     /// How its lines are turned about that point (radians, counter-clockwise).
     pub angle: f64,
+    /// The typeface of its letters: the app's own unless its file names one.
+    pub face: crate::typeface::Face,
 }
 
 /// The height of the letters of a new text on paper (metres).
@@ -529,6 +531,9 @@ impl Document {
                 if n.angle != 0.0 {
                     note["angle"] = n.angle.into();
                 }
+                if let Some(font) = n.face.to_json() {
+                    note["font"] = font;
+                }
                 note
             };
             n.iter().map(note).collect::<Vec<_>>()
@@ -596,7 +601,7 @@ impl Document {
         };
         let notes = |v: Option<&Value>| -> Vec<Note> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
-            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0) })).filter(|n| !n.text.trim().is_empty()).collect()
+            all.filter_map(|n| Some(Note { at: pair(n.get("at")?)?, text: n.get("text")?.as_str()?.to_string(), size: n.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(NOTE_HEIGHT), align: n.get("align").and_then(Value::as_str).and_then(Align::from_key).unwrap_or_default(), angle: n.get("angle").and_then(Value::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0), face: crate::typeface::Face::from_json(n.get("font")) })).filter(|n| !n.text.trim().is_empty()).collect()
         };
         let lines = |v: Option<&Value>| -> Vec<[[f64; 2]; 2]> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
@@ -1068,7 +1073,7 @@ impl Document {
             return false;
         }
         let Some(notes) = self.notes_mut(view) else { return false };
-        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 });
+        notes.push(Note { at, text: text.to_string(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() });
         true
     }
 
@@ -1712,7 +1717,7 @@ mod tests {
         assert!(!document.set_note_text(&plan, 1, ""), "a note keeps a text");
         assert!(!document.move_note(&plan, 7, [0.0, 0.0]));
         let notes = document.view_notes(&plan).unwrap();
-        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }]);
+        assert_eq!(notes, [Note { at: [1.0, 2.0], text: "Kitchen".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }, Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
         assert!(document.remove_note(&plan, 0));
         assert!(!document.remove_note(&plan, 3));
         // saved with the drawings and taken over again
@@ -1720,8 +1725,8 @@ mod tests {
             document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
         let mut again = Document::from_model(&model_with(&[("00", 0.0)]));
         again.adopt_ifcx(&nodes);
-        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }]);
-        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0 }]);
+        assert_eq!(again.view_notes(&plan).unwrap(), [Note { at: [5.0, 2.5], text: "Hall 2".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
+        assert_eq!(again.view_notes(&section).unwrap(), [Note { at: [0.5, 3.0], text: "Roof +3.000".into(), size: NOTE_HEIGHT, align: Align::Left, angle: 0.0, face: Default::default() }]);
     }
 
     #[test]

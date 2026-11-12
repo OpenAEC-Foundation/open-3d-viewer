@@ -321,6 +321,23 @@ impl Drawing2d {
                     }
                 }
             }
+            // what a structural plan sees through the floor: dashes of 2 mm, 1 mm apart, on paper
+            for [a, b] in &cut.hidden {
+                let (a, b) = ([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]);
+                let piece = match crop {
+                    Some((lo, hi)) => clip(a, b, lo, hi),
+                    None => Some((a, b)),
+                };
+                let Some((a, b)) = piece else { continue };
+                let (dash, gap) = (0.002 * per_metre, 0.001 * per_metre);
+                let run = (b[0] - a[0]).hypot(b[1] - a[1]);
+                let at = |d: f64| [a[0] + (b[0] - a[0]) * d / run, a[1] + (b[1] - a[1]) * d / run];
+                let mut d = 0.0;
+                while d < run {
+                    self.line(Pen::Beyond, to(at(d)), to(at((d + dash).min(run))));
+                    d += dash + gap;
+                }
+            }
             for (pen, segments) in [(Pen::Beyond, &cut.below), (Pen::Cut, &cut.segments)] {
                 for [a, b] in segments {
                     let (a, b) = ([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]);
@@ -462,7 +479,7 @@ mod tests {
             [[8.0, 5.0], [0.0, 5.0]],
             [[0.0, 5.0], [0.0, 0.0]],
         ];
-        Cut { segments, below: vec![[[1.0, 1.0], [7.0, 1.0]]], extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new() }
+        Cut { segments, below: vec![[[1.0, 1.0], [7.0, 1.0]]], extent: Some(([0.0, 0.0], [8.0, 5.0])), fills: Vec::new(), hidden: Vec::new() }
     }
 
     /// A document with a floor plan of the ground floor, an 8 m dimension and a text on it.

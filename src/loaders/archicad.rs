@@ -139,6 +139,23 @@ const RAILING_CACHE_LINK: Guid = guid("e727811bef815a4c89ec484ca6e0ecbc");
 /// §6: the unnamed story above the top story; its level counts, it is not shown.
 const TOP_STORY: Guid = guid("f5c28e4f85caa148b54067746b76d419");
 
+// Layouts (not in the specification; found in the files): a layout and its master are records
+// whose 2D elements name them by an association; a drawing on a layout names the view it shows.
+const LAYOUT: Guid = guid("3cafac32b8269345926cf81a205550ba");
+const LINE_2D: Guid = guid("737dfebd781cca4a809b1b25747e3126");
+const POLYLINE_2D: Guid = guid("228bdcb06dadf14b97335077b6588fc4");
+const TEXT_2D: Guid = guid("ae7ec0e62a5a974595a973e7543ac91e");
+const DRAWING: Guid = guid("528cbe2db393b546a0a92492c45c2ab3");
+const DRAWING_SOURCE: Guid = guid("e30734bafd8ab74e9f53f197ff35c20e");
+const VIEW: Guid = guid("9ac5e679eea35f41bb0e20f2930f9405");
+/// The association from a 2D element to the layout or master layout it is drawn on.
+const ON_LAYOUT: Guid = guid("0b279bbd4703cf4d92cfd2d872117ba1");
+/// The associations from a drawing to its source, and from that to the view it shows.
+const DRAWING_SOURCE_LINK: Guid = guid("48a34c00da048b4fbf9422d0e313040b");
+const SOURCE_VIEW_LINK: Guid = guid("ab1c2077f6664749831dc851ba54217d");
+/// The 2D elements of layouts kept at most: a bound on what a damaged file can ask for.
+const MAX_LAYOUT_PARTS: usize = 200_000;
+
 /// §1: the signature of a project and an archive.
 const SIGNATURE: &[u8; 8] = b"ROF FDB ";
 /// §2: a compressed group.
@@ -295,6 +312,13 @@ struct Records {
     outlines: HashMap<Guid, Outline>,
     libraries: HashMap<Guid, (Option<Guid>, Option<String>)>,
     heights: HashMap<Guid, Option<f64>>,
+    /// Layouts: their name, number and master layout.
+    layouts: Vec<Layout>,
+    /// What is drawn on layouts and masters, by the layout or master it names.
+    layout_parts: Vec<(Guid, LayoutPart)>,
+    /// The sources of drawings (the view each shows) and the names of views.
+    drawing_views: HashMap<Guid, Guid>,
+    view_names: HashMap<Guid, String>,
     /// Blocks of the classes above whose payload could not be decoded, blocks larger than
     /// [`MAX_BLOCK`] and group chunks that did not decompress.
     damaged: usize,
@@ -513,7 +537,8 @@ impl Records {
         let classes = [
             MESH, MESH_CACHE, ZONE, PROFILE, MORPH, MORPH_BODY, STAIR, STAIR_SCHEME, RAILING, RAILING_SEGMENT, SEGMENT_CACHE, RAILING_CACHE,
             WALL, SLAB, STORY, STORY_LEVEL, LINK, COLUMN, BEAM, ROOF, WINDOW, DOOR, OBJECT, OUTLINE, LIBRARY, PARAMETERS, COLUMN_SEGMENT,
-            BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE,
+            BEAM_SEGMENT, SECTION_RECT, SECTION_ROUND, SECTION_PROFILE, LAYOUT, LINE_2D, POLYLINE_2D, TEXT_2D, DRAWING,
+            DRAWING_SOURCE, VIEW,
         ];
         match payload(b, |class| classes.contains(class)) {
             Payload::Data(p) => self.record(object, &p),
@@ -623,6 +648,39 @@ impl Records {
                     self.profiles.insert(object, profile_shape(data));
                 }
             }
+            LAYOUT => {
+                // 20 bytes, the name, 2 bytes, the number; its master layout 50 bytes from the end
+                let Some((name, after)) = text_at(data, 20) else { return };
+                let number = text_at(data, after + 2).map_or(String::new(), |(number, _)| number);
+                let master = data.len().checked_sub(50).and_then(|at| guid_at(data, at));
+                self.layouts.push(Layout { guid: object, name, number, master });
+            }
+            LINE_2D | POLYLINE_2D | TEXT_2D | DRAWING => {
+                // only what is drawn on a layout or a master: the same classes draw on the plans
+                let Some(on) = links.iter().find(|l| l.0 == 0x12 && l.1 == ON_LAYOUT).map(|l| l.2) else { return };
+                if data.len() > MAX_ELEMENT_DATA || self.layout_parts.len() >= MAX_LAYOUT_PARTS {
+                    return;
+                }
+                let part = match class {
+                    LINE_2D => layout_line(data),
+                    POLYLINE_2D => find_polygon(data).filter(|p| p.contours.iter().flatten().flatten().all(on_paper)).map(|p| LayoutPart::Outline(p.contours)).or_else(|| layout_box(data)),
+                    TEXT_2D => layout_text(data),
+                    _ => find_polygon(data).filter(|p| p.contours.iter().flatten().flatten().all(on_paper)).map(|p| LayoutPart::Drawing { outline: p.contours, source: links.iter().find(|l| l.1 == DRAWING_SOURCE_LINK).map(|l| l.2) }),
+                };
+                if let Some(part) = part {
+                    self.layout_parts.push((on, part));
+                }
+            }
+            DRAWING_SOURCE => {
+                if let Some(view) = links.iter().find(|l| l.1 == SOURCE_VIEW_LINK).map(|l| l.2) {
+                    self.drawing_views.insert(object, view);
+                }
+            }
+            VIEW => {
+                if let Some((name, _)) = text_at(data, 31) {
+                    self.view_names.insert(object, name);
+                }
+            }
             STORY => {
                 // §6: 10 bytes, u32 n, n UTF-16LE units of name, i16 index
                 let Some(n) = u32_at(data, 10).map(|n| n as usize) else { return };
@@ -658,6 +716,212 @@ impl Records {
     }
 }
 
+
+/// A layout: a sheet of the layout book.
+struct Layout {
+    guid: Guid,
+    name: String,
+    number: String,
+    /// Its master layout, when it has one.
+    master: Option<Guid>,
+}
+
+/// What is drawn on a layout or a master layout (metres on paper, from its lower left corner).
+enum LayoutPart {
+    Line([[f64; 2]; 2]),
+    /// A polyline or polygon: its contours, each closed.
+    Outline(Vec<Vec<[f64; 2]>>),
+    Text(LayoutText),
+    /// A placed drawing: its frame and the record that names the view it shows.
+    Drawing { outline: Vec<Vec<[f64; 2]>>, source: Option<Guid> },
+}
+
+/// A text block: its lines with the size of each (the height of its capitals), the corner its box
+/// hangs from (the upper left one; the upper right one of a block aligned right), and its box.
+struct LayoutText {
+    lines: Vec<(String, f64)>,
+    at: [f64; 2],
+    size: [f64; 2],
+    /// 0 left, 1 centre, 2 right.
+    align: u8,
+}
+
+/// A string: u32 n, then n UTF-16LE units; with the offset after it.
+fn text_at(data: &[u8], at: usize) -> Option<(String, usize)> {
+    let n = u32_at(data, at).map(|n| n as usize).filter(|&n| n <= 4096)?;
+    let bytes = bytes_at(data, at + 4, n * 2)?;
+    let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    Some((String::from_utf16_lossy(&units), at + 4 + n * 2))
+}
+
+/// Whether a coordinate can lie on a sheet of paper (metres): the largest sheets are under 2 m.
+fn on_paper(v: &f64) -> bool {
+    (-0.5..3.0).contains(v)
+}
+
+/// A polyline whose points do not read: the box around it (four f64 at 139: left, bottom, right,
+/// top), drawn as a rectangle. The frame of a master layout is such a polyline.
+fn layout_box(data: &[u8]) -> Option<LayoutPart> {
+    let v = [0, 8, 16, 24].map(|k| f64_at(data, 139 + k).filter(on_paper));
+    let (x0, y0, x1, y1) = (v[0]?, v[1]?, v[2]?, v[3]?);
+    (x0 < x1 && y0 < y1).then(|| LayoutPart::Outline(vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]))
+}
+
+/// A line on a layout: its two points are the four f64 that end 1 byte before the end of its data.
+fn layout_line(data: &[u8]) -> Option<LayoutPart> {
+    let at = data.len().checked_sub(33)?;
+    let v = [0, 8, 16, 24].map(|k| f64_at(data, at + k).filter(on_paper));
+    Some(LayoutPart::Line([[v[0]?, v[1]?], [v[2]?, v[3]?]]))
+}
+
+/// A text block on a layout: its content is one string at 116 (lines parted by a carriage
+/// return); each line's letter size is the f64 after a u32 11 further on; 116 bytes from the end
+/// stand 1.0, the corner (x, y) and the box (width, height), and 62 from the end how it is aligned.
+/// The corner is in metres; the box and the letter sizes are too, unless the block does not wrap.
+fn layout_text(data: &[u8]) -> Option<LayoutPart> {
+    let (content, after) = text_at(data, 116)?;
+    let tail = data.len().checked_sub(116).filter(|&t| t >= after)?;
+    if f64_at(data, tail)? != 1.0 {
+        return None;
+    }
+    // a block that does not wrap (byte 109 set) gives its box and letter sizes in millimetres
+    let unit = if data.get(109) == Some(&1) { 0.001 } else { 1.0 };
+    let at = [8, 16].map(|k| f64_at(data, tail + k).filter(on_paper));
+    let size = [24, 32].map(|k| f64_at(data, tail + k).map(|v| v * unit).filter(on_paper));
+    let (at, size) = ([at[0]?, at[1]?], [size[0]?, size[1]?]);
+    let mut sizes = Vec::new();
+    let mut i = after;
+    while i + 12 <= tail {
+        match (u32_at(data, i), f64_at(data, i + 4)) {
+            (Some(11), Some(s)) if (0.0005..0.1).contains(&(s * unit)) => {
+                sizes.push(s * unit);
+                i += 12;
+            }
+            _ => i += 1,
+        }
+    }
+    let fallback = sizes.first().copied().unwrap_or(0.0025);
+    let lines = content.split('\r').enumerate().map(|(k, line)| (line.to_string(), sizes.get(k).copied().unwrap_or(fallback))).collect();
+    let align = u32_at(data, data.len() - 62).filter(|&a| a <= 2).unwrap_or(0) as u8;
+    Some(LayoutPart::Text(LayoutText { lines, at, size, align }))
+}
+
+/// A line of a title block with its fields filled in: the layout's number and name and the name
+/// of the drawing on it; fields the reader does not know (project and office data) stay empty.
+fn fill_fields(line: &str, layout: &Layout, drawing: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('<') {
+        let Some(close) = rest[open..].find('>').map(|c| open + c) else { break };
+        out.push_str(&rest[..open]);
+        out.push_str(match &rest[open + 1..close] {
+            "LAYOUTID" | "LAYOUTNUMBER" => &layout.number,
+            "LAYOUTNAME" => &layout.name,
+            "DRAWINGNAME" => drawing,
+            _ => "",
+        });
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The layouts as sheets: the lines and texts of each layout and of its master, and the drawings
+/// placed on it as frames with the name of the view they show. The paper is what the master draws,
+/// with on every side the margin its lower left corner leaves (the size itself was not found in
+/// the file).
+fn layout_sheets(records: &Records) -> Vec<crate::model::Sheet> {
+    use crate::model::{DraftText, Sheet, SheetRect, SheetViewport};
+    let mut layouts: Vec<&Layout> = records.layouts.iter().collect();
+    layouts.sort_by(|a, b| (&a.number, &a.name).cmp(&(&b.number, &b.name)));
+    layouts
+        .into_iter()
+        .map(|layout| {
+            let master = layout.master;
+            let on = |owner: &Guid| *owner == layout.guid || Some(*owner) == master;
+            let parts = || records.layout_parts.iter().filter(|(owner, _)| on(owner)).map(|(owner, part)| (*owner == layout.guid, part));
+            // the drawings first: a title block names the first one
+            let mut viewports = Vec::new();
+            for (_, part) in parts() {
+                let LayoutPart::Drawing { outline, source } = part else { continue };
+                let points = outline.iter().flatten();
+                let Some(rect) = points.map(|p| SheetRect { min: [p[0] as f32, p[1] as f32], max: [p[0] as f32, p[1] as f32] }).reduce(SheetRect::union) else { continue };
+                let view = source.and_then(|s| records.drawing_views.get(&s)).and_then(|v| records.view_names.get(v));
+                viewports.push(SheetViewport {
+                    title: view.cloned().unwrap_or_else(|| layout.name.clone()),
+                    view: None,
+                    rect,
+                    estimated: false,
+                    scale: String::new(),
+                    detail: None,
+                    label: None,
+                    origin: rect.center(),
+                    ratio: 0.01,
+                    drawing: None,
+                    anchor: None,
+                    turn: [1.0, 0.0],
+                    draft: None,
+                    written: None,
+                });
+            }
+            let drawing = viewports.first().map_or("", |v| v.title.as_str()).to_string();
+            let (mut lines, mut texts) = (Vec::new(), Vec::new());
+            let mut drawn: Option<SheetRect> = None;
+            for (own, part) in parts() {
+                let before = lines.len();
+                match part {
+                    LayoutPart::Line(l) => lines.push(l.map(|p| p.map(|v| v as f32))),
+                    LayoutPart::Outline(contours) => {
+                        for c in contours {
+                            lines.extend((0..c.len()).map(|k| [c[k], c[(k + 1) % c.len()]].map(|p| p.map(|v| v as f32))));
+                        }
+                    }
+                    LayoutPart::Text(t) => {
+                        // the lines share the box by their letter sizes, from its top down
+                        let total: f64 = t.lines.iter().map(|l| l.1).sum();
+                        let mut top = t.at[1];
+                        for (line, size) in &t.lines {
+                            let height = if total > 0.0 { t.size[1] * size / total } else { *size };
+                            top -= height;
+                            let text = fill_fields(line, layout, &drawing);
+                            if text.trim().is_empty() {
+                                continue;
+                            }
+                            let left = t.at[0] - [0.0, t.size[0] / 2.0, t.size[0]][t.align as usize];
+                            texts.push(DraftText {
+                                element: 0,
+                                at: [left as f32, top as f32],
+                                width: t.size[0] as f32,
+                                height: height as f32,
+                                // a letter size is the height of the capitals
+                                size: (size * 1.4).min(height) as f32,
+                                align: t.align,
+                                angle: 0.0,
+                                text,
+                                face: crate::typeface::Face::default(),
+                            });
+                        }
+                    }
+                    LayoutPart::Drawing { .. } => {}
+                }
+                if !own {
+                    for l in &lines[before..] {
+                        let r = SheetRect { min: [l[0][0].min(l[1][0]), l[0][1].min(l[1][1])], max: [l[0][0].max(l[1][0]), l[0][1].max(l[1][1])] };
+                        drawn = Some(drawn.map_or(r, |d| d.union(r)));
+                    }
+                }
+            }
+            // the margin its lower left corner leaves, where the master draws from the paper's corner
+            let paper = drawn.map(|d| {
+                let margin = [0, 1].map(|k| if d.min[k] > 0.0 && d.min[k] < 0.05 { d.min[k] } else { 0.01 });
+                SheetRect { min: [d.min[0] - margin[0], d.min[1] - margin[1]], max: [d.max[0] + margin[0], d.max[1] + margin[1]] }
+            });
+            let mut sheet = Sheet::new(layout.number.clone(), layout.name.clone(), paper, viewports);
+            (sheet.lines, sheet.texts) = (lines, texts);
+            sheet
+        })
+        .collect()
+}
 
 /// §4: the class, data and associations of an object record, when its lengths add up.
 fn record_parts(p: &[u8]) -> Option<(Guid, &[u8], &[u8])> {
@@ -3433,6 +3697,7 @@ fn convert(records: Records) -> Result<(Loaded, Stats), String> {
     }
     let project = ProjectData {
         info,
+        sheets: layout_sheets(&records),
         levels: stories.iter().map(|(g, _, z)| (names[*g].clone(), *z as f32)).collect(),
         ..ProjectData::default()
     };

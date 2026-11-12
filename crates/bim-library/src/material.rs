@@ -182,6 +182,8 @@ pub fn starter() -> Vec<Material> {
         m("osb", "OSB", "OSB", "OSB", "OSB", Timber, [214, 182, 128]),
         m("plywood", "multiplex", "plywood", "Sperrholz", "contreplaqué", Timber, [222, 196, 150]),
         m("gypsum-board", "gipsplaat", "gypsum board", "Gipskartonplatte", "plaque de plâtre", Gypsum, [240, 240, 236]),
+        m("breather-membrane", "dampopen folie", "breather membrane", "diffusionsoffene Bahn", "pare-pluie", Generic, [62, 66, 72]),
+        m("vapour-control-membrane", "dampremmende folie", "vapour control layer", "Dampfbremse", "pare-vapeur", Generic, [196, 214, 226]),
         m("metal-stud-insulated", "metal stud met isolatie", "metal studs with insulation", "Metallständerwerk mit Dämmung", "ossature métallique isolée", Insulation, INSULATION),
         m("steel", "staal", "steel", "Stahl", "acier", Steel, [95, 100, 110]),
         m("aluminium", "aluminium", "aluminium", "Aluminium", "aluminium", Generic, [196, 200, 206]),

@@ -104,8 +104,8 @@ pub fn tools() -> Vec<Value> {
     };
     vec![
         tool("get_state", "What the viewer shows now: the open model (file, counts, bounds), camera, render mode, section box and plane, selection, active saved view, viewport size and measurements.", json!({}), &[], true),
-        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), structural analysis models in sam-json (.samjson), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
-            json!({ "path": { "type": "string", "description": "Path of the file: absolute, or relative to the work folder (OPENAEC_MAP) when there is one" } }), &["path"], false),
+        tool("open_file", "Open a model file in the viewer (as File > Open) and wait until it is loaded. Formats: IFC (.ifc .ifczip), IFC5 (.ifcx), STEP (.stp .step .stpz), Revit (.rvt .rfa), SketchUp (.skp), Blender (.blend), FreeCAD (.fcstd), Archicad (.pln .pla), Allplan (.ndw .prj), Tekla (.db1), Vertex BD (.vxz .vxm) and Hundegger BTL (.btl), DWG/DXF/DGN (.dwg .dxf .dgn), CityJSON (.json .cityjson .jsonl .cityjsonl), CityGML (.gml .citygml), GeoJSON (.geojson), Shapefile (.shp), LandXML (.xml .landxml), glTF (.gltf .glb), USD (.usd .usda .usdc .usdz), Rhino (.3dm, Rhino 4 to 8), structural analysis models in sam-json (.samjson), COLLADA (.dae), VRML/X3D (.wrl .wrz .x3d .x3dv .x3dz .x3dvz), 3MF (.3mf), AMF (.amf), FBX (.fbx), 3DS (.3ds), .obj, .off, .stl, .ply, point clouds LAS/LAZ (.las .laz), E57 (.e57), Leica PTS/PTX (.pts .ptx), PCD (.pcd), ASCII XYZ (.xyz .txt .csv .asc), also ESRI ASCII elevation grids (.asc), and OBJ/PLY/glTF point clouds. Returns the model summary.",
+            json!({ "path": { "type": "string", "description": "Path of the file: absolute, or relative to the work folder (OPENAEC_MAP) when there is one" }, "add": { "type": "boolean", "description": "Add it beside the models open (as Add does), instead of opening it in their place" } }), &["path"], false),
         save,
         screenshot,
         tool("list_layers", "The model's layers (Revit categories, SketchUp tags, glTF materials, OBJ groups) with index, visibility, triangle and element counts and colour, a page at a time (total and truncated tell whether there are more).",
@@ -253,6 +253,69 @@ pub fn tools() -> Vec<Value> {
             json!({ "a": { "type": ["integer", "string"] }, "b": { "type": ["integer", "string"] }, "show": { "type": "boolean" } }), &["a", "b"], false),
         tool("clear_measurements", "Remove the measurements drawn in the viewport.", json!({}), &[], false),
         tool("cancel", "Press Esc: stop placing a section plane, else clear the selection.", json!({}), &[], false),
+        // the window itself, as a person drives it
+        tool("ui_controls", "The controls the window shows now (buttons, tabs, fields, checkboxes, lists), each with its index, role, accessible name, value, state (disabled, checked, selected) and bounds in window pixels. Use the names or indices with ui_press and ui_type to drive the window as a person would.",
+            json!({
+                "filter": { "type": "string", "description": "Only controls whose name contains this, or whose role is this (e.g. button)" },
+                "all": { "type": "boolean", "description": "Also areas and labels, not only controls" }
+            }), &[], true),
+        tool("ui_press", "Click a control of the window, as a mouse click does: the click goes through the widget, which sends what it sends (or nothing when it does not answer). Returns the messages it sent; 'answered': false means the control did nothing. A button that opens a file dialog opens it in the window.",
+            json!({
+                "name": { "type": "string", "description": "The control's accessible name, as ui_controls lists it (exact, else contains; any case)" },
+                "role": { "type": "string", "description": "Only controls of this role (Button, Tab, CheckBox, TextField, ComboBox, Switch, ...)" },
+                "nth": { "type": "integer", "description": "Which of the controls that match (from 0)" },
+                "index": { "type": "integer", "description": "The control's index from ui_controls, instead of a name" },
+                "dry_run": { "type": "boolean", "description": "Only tell what the click would send; do not act on it" }
+            }), &[], false),
+        tool("ui_type", "Click a text field of the window and type into it, as a person types: its old text goes first unless replace is false.",
+            json!({
+                "name": { "type": "string" }, "role": { "type": "string" }, "nth": { "type": "integer" }, "index": { "type": "integer" },
+                "text": { "type": "string" },
+                "replace": { "type": "boolean", "description": "Clear the field first (default true)" },
+                "dry_run": { "type": "boolean" }
+            }), &["text"], false),
+        tool("ui_key", "Press a key in the window (Enter, Escape, Tab, Delete, Backspace or a letter), after clicking a control when one is named.",
+            json!({ "key": { "type": "string" }, "name": { "type": "string" }, "index": { "type": "integer" }, "dry_run": { "type": "boolean" } }), &["key"], false),
+        // the BIM Collaborator
+        tool("collab_state", "The BIM Collaborator: who you are (the author of issues), the rule set in use and those to choose from, the number of issues and open issues, the BCF file, the issue shown, checked models, clashes, the team that issues can be assigned to and the open models.", json!({}), &[], true),
+        tool("collab_issue", "Issues (BCF topics): list, get one with its comments, make a new one of the view as it is (camera, selection, hidden elements, section plane), update its fields, comment, show it (go to its viewpoint) or remove it.",
+            json!({
+                "action": { "type": "string", "enum": ["list", "get", "new", "update", "comment", "show", "remove"] },
+                "guid": { "type": "string", "description": "The issue (default: the one shown)" },
+                "index": { "type": "integer", "description": "The issue by its place in the list (from 0), instead of guid" },
+                "status": { "type": "string", "description": "list: only this status; new/update: Open, In Progress, Resolved or Closed" },
+                "title": { "type": "string" }, "description": { "type": "string" },
+                "priority": { "type": "string", "description": "Low, Normal, High or Critical" },
+                "type": { "type": "string", "description": "Issue, Clash, Remark, Request or Fault" },
+                "assigned_to": { "type": "string", "description": "Who takes it on: a name or e-mail" },
+                "due_date": { "type": "string", "description": "YYYY-MM-DD" },
+                "labels": { "type": "array", "items": { "type": "string" } },
+                "text": { "type": "string", "description": "comment: its text" },
+                "viewpoint": { "type": "integer", "description": "show: which viewpoint (from 0)" }
+            }), &["action"], false),
+        tool("collab_bcf", "Open a BCF file (.bcfzip / .bcf, BCF 2.0, 2.1 or 3.0) as the project's issues, or save the issues as BCF 2.1.",
+            json!({ "action": { "type": "string", "enum": ["open", "save"] }, "path": { "type": "string" } }), &["action", "path"], false),
+        tool("collab_rules", "Rule sets: list them (checks and clash tests), select one (NL BIM Basis ILS, RVB BIM-norm 1.1, basic check, coordination of structure and services, or one opened), open or save a rule set file (.rules.json), load an IDS into it, or set the built-in model checks, the BIM basis ILS profile and who you are.",
+            json!({
+                "action": { "type": "string", "enum": ["list", "select", "open", "save", "load_ids", "set"] },
+                "rule_set": { "type": ["integer", "string"], "description": "select: index or name" },
+                "path": { "type": "string" },
+                "model_checks": { "type": "boolean" }, "ils": { "type": "boolean" },
+                "user": { "type": "string", "description": "set: your name or e-mail, the author of what you make" }
+            }), &["action"], false),
+        tool("collab_check", "Check the open IFC models on the rule set in use (IDS, model checks, BIM basis ILS) and wait for the outcome: per model and per rule passed, failed or not checkable, with counts.", json!({}), &[], false),
+        tool("collab_clashes", "Clash tests: run those of the rule set on the open models and wait for them, list the clashes found, pick one (select both elements and frame them), decide on one (accepted, rejected, open), make an issue of one or of all.",
+            json!({
+                "action": { "type": "string", "enum": ["run", "list", "pick", "decide", "issue", "issues"] },
+                "index": { "type": "integer" },
+                "decision": { "type": "string", "enum": ["open", "accepted", "rejected"] },
+                "selection": { "type": "boolean", "description": "run: the selected elements against the rest" },
+                "offset": { "type": "integer" }, "limit": { "type": "integer" }
+            }), &["action"], false),
+        tool("collab_compare", "Compare two versions of a model open together (by their place among the open models): elements added, removed and changed (properties, place or size), known by their GlobalId.",
+            json!({ "old": { "type": "integer" }, "new": { "type": "integer" } }), &[], false),
+        tool("collab_export", "Save a report: the issues as a page with pictures (issues), the check as HTML, CSV or JSON, or the clashes as CSV.",
+            json!({ "kind": { "type": "string", "enum": ["issues", "html", "csv", "json", "clashes"] }, "path": { "type": "string" } }), &["path"], false),
     ]
 }
 
@@ -288,7 +351,7 @@ pub fn tool_list(prefixed: bool) -> Vec<Value> {
 
 /// How long a command may take: opening and saving a large model takes minutes.
 pub fn timeout_of(command: &str) -> Duration {
-    Duration::from_secs(if matches!(command, "open_file" | "save_file") { 900 } else { 60 })
+    Duration::from_secs(if matches!(command, "open_file" | "save_file" | "collab_check" | "collab_clashes" | "collab_compare") { 900 } else { 60 })
 }
 
 /// How a tool call reaches the viewer: command, arguments, time-out; the viewer's answer.

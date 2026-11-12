@@ -217,3 +217,82 @@ from Open BIM Studio (its edit mode, grips and boundary sketch).
   - Joins are found from the walls' definitions every time a wall is evaluated (no join elements
     to keep up to date). Moving a wall in edit mode re-cuts its neighbours.
   - Cross junctions and joins with slabs or roofs are follow-ups.
+
+## Placing preview and grips (2026-11-10)
+
+- **Preview.** While a tool is on, the element the next click would make is drawn over the
+  viewport: the kernel's evaluation of that element alone, its faces filled lightly and outlined,
+  from the points clicked so far to the point under the cursor, snapped as the click will be. A
+  column or object shows before any click; corners with other walls show once it is placed.
+- **Grips.** A selected wall or curtain wall, outside edit mode, has a grip at each end and in the
+  middle. A drag of a grip is a move of edit mode that ends when the button comes up.
+- **Joined walls follow** a grip's move: an end that met a moved end moves with it; an end that
+  lay on the moved axis, between its ends, slides along its own line to the new axis. If the
+  kernel refuses any of them, nothing moves.
+- **Calls made:**
+  - Grips are for walls and curtain walls only; beams, columns and slabs keep edit mode (Tab).
+  - Tab's edit mode moves only the edited element; joined walls follow grips only.
+
+## Taking over a Revit wall (2026-11-10)
+
+- **What the file gives.** The Revit loader keeps, per straight wall, the location line, the base
+  (base level elevation plus base offset), the height, the type's total thickness, the base level's
+  name, and the hosted doors and windows as openings. An opening comes from the door's or window's
+  type (its Width and Height about its insertion point, from its level plus its sill) where the
+  type gives both; else from its box, as the mesher cuts it. A symbol without height (a swing
+  drawn in plan) cuts nothing, and overlapping openings (a door's frame, leaf and lining) make one
+  of their extent. Curved, stacked, in-place and curtain walls stay meshes, and so does a wall
+  with a door or window whose width its box cannot tell (a wall near 45°). It is read on a thread
+  beside the mesher.
+- **Measured, not assumed:** on four local Revit files with saved graphics, all 922 walls drawn with
+  their ids lie centred on their location line, as thick as their type. The Modeller still
+  centres a wall on its own mesh when that lies beside the line.
+- **Only in the Modeller**, a selected wall of the file has grips. A press models the wall (the
+  kernel must make it, or nothing changes), takes its mesh out of the file's model and goes on
+  with the drag. Only the dragged wall is taken over; the rest stays meshes.
+- **The project becomes IFCX**: named after the Revit file with `.ifcx`, in its folder. Save as
+  writes the remaining meshes and the modelled elements with their definitions, and opening it
+  again gives the taken-over wall back as an editable wall.
+
+## Openings up to a wall's edges (2026-11-10)
+
+- **The kernel** cuts a wall's elevation on the grid of the wall's and the openings' edges: a cell
+  is wall or opening, the cells of wall that share a side are one piece, and each piece's outline
+  and holes are traced with the wall on their left. An opening may reach the base, the top or an
+  end; one through the whole height (or length) splits the wall into pieces, each a solid (per
+  layer). What lies past the wall's edges takes nothing. Refused: an opening that takes nothing,
+  openings that touch, and an opening that takes the whole wall (`Empty`). An opening that reaches
+  an end goes on through the wall's reach past it, so a corner is cut back with it.
+- **Why:** in a local Revit 2026 file, every wall with a door that is drawn with its ids was
+  refused before, its door's box reaching the wall's top or end; swing symbols drawn in plan (doors
+  without height) kept 31 more walls out. Now that file gives 634 walls, 345 of them drawn, and the
+  kernel makes all 345, the 17 with doors or windows included.
+- **Door sizes:** the type's Width is its nominal width (in the files measured, the clear opening:
+  a 900 door in a 1012 frame), so the wall may reach a few centimetres into the frame. A type of
+  sliding doors gave no sizes; its box is used.
+- **Not yet:** the type's layers (the reader gives them with material ids, but not on which side
+  the exterior lies); a door's frame size, which families name in their own parameters; joins
+  between a taken-over wall and the file's meshes.
+## Sixth slice: joins between members (2026-11-10)
+
+- **A join is an element.** A connection between two linear elements is selectable and has
+  properties. `bim_core::join::cuts` turns a join kind and its members into what it does to them:
+  trims of a member's end, solids added to a member, solids taken from it, and parts of the join's
+  own. Mitre, butt and end plate are kinds of the same element; tooth joints can be added as
+  another kind.
+- **Steel end plate.** The member that stops is cut back a plate's thickness short of the other's
+  face. A plate as large as its profile plus a margin lies against that face, with two rows of
+  bolts in the margin. The plate (`IfcPlate`) and the bolts (`IfcMechanicalFastener`) are the
+  join's parts, and the member that runs through is drilled for the bolts. The sizes are editable
+  defaults (15 mm plate, 80 mm margin, M20 bolts in 22 mm holes), not a checked design.
+- **Automatic joins.** After every drawn element, edit and typed change, `Model::update_joins`
+  removes joins whose members no longer meet. It adds one where a member's end meets another
+  member: a mitre between two of one profile at an angle, else a butt in which the other (or the
+  larger profile) runs through, none in a straight line. Only meetings that involve a changed
+  element are joined, so a deleted join stays deleted until a member changes.
+- **Node marks.** Every join gets a diamond over the 3D view at `Model::join_node`; a click
+  selects it, so a join without parts of its own can be picked.
+- **Calls made:**
+  - Choosing a join kind for two members that are joined already changes their join.
+  - Bolt holes are blind (50 mm), not through a flange; one join per member end is not enforced
+    for joins made by hand; walls and slabs get no join elements yet.

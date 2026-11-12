@@ -1,7 +1,7 @@
 //! The Definition section of the right pane for a modelled element: its name and the sizes of its
 //! definition typed in (a wall's height, thickness and base; a slab's thickness and top; a
 //! member's profile and roll; an object's size and turn; a curtain wall's spacing, members and
-//! panels), and a wall's openings, added, typed in and removed.
+//! panels), and the openings of a wall or a timber frame, added, typed in and removed.
 //!
 //! A value is used as soon as it is valid and the kernel can make the element with it, as the
 //! View section does; until then the field keeps what was typed and the view's banner says why.
@@ -11,7 +11,7 @@ use super::{prop_row, App, Message};
 use crate::document::parse_elevation;
 use crate::theme::Palette;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, Opening, PlanarDef, ProfileDef, Shape};
+use bim_core::{ConnectionDef, ConnectionKind, Element, Opening, PlanarDef, ProfileDef, Shape};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, row, text, text_input};
 use iced::{Center, Element as Widget, Length};
@@ -39,16 +39,23 @@ pub enum ElementField {
     /// A curtain wall's spacing along its line and up.
     SpacingAlong,
     SpacingUp,
-    /// A wall opening's distance from the wall's start, sill, width and height.
+    /// An opening's distance from its wall's (or timber frame's) start, sill, width and height.
     Along(usize),
     Sill(usize),
     OpeningWidth(usize),
     OpeningHeight(usize),
+    /// An end plate's thickness, its margin past the profile, its bolts' and holes' diameter, and
+    /// how many bolts in each row.
+    PlateThickness,
+    PlateMargin,
+    Bolt,
+    Hole,
+    BoltRows,
 }
 
 /// A door's and a window's size and sill when added (metres).
-const DOOR: (f64, f64, f64) = (0.9, 2.1, 0.0);
-const WINDOW: (f64, f64, f64) = (1.2, 1.2, 0.9);
+pub(super) const DOOR: (f64, f64, f64) = (0.9, 2.1, 0.0);
+pub(super) const WINDOW: (f64, f64, f64) = (1.2, 1.2, 0.9);
 
 /// A number typed: metres (a comma or a point, `m` after it allowed), or degrees (`°` allowed).
 fn number(typed: &str) -> Option<f64> {
@@ -93,6 +100,37 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::System(s), F::Depth) => Some(s.member.y),
         (Shape::System(s), F::SpacingAlong) => Some(s.spacing.x),
         (Shape::System(s), F::SpacingUp) => Some(s.spacing.y),
+        (Shape::System(s), F::Along(i)) => opening(&s.openings, i).map(|o| o.along),
+        (Shape::System(s), F::Sill(i)) => opening(&s.openings, i).map(|o| o.sill),
+        (Shape::System(s), F::OpeningWidth(i)) => opening(&s.openings, i).map(|o| o.width),
+        (Shape::System(s), F::OpeningHeight(i)) => opening(&s.openings, i).map(|o| o.height),
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
+            F::PlateThickness => Some(e.thickness),
+            F::PlateMargin => Some(e.margin),
+            F::Bolt => Some(e.bolt),
+            F::Hole => Some(e.hole),
+            F::BoltRows => Some(f64::from(e.rows)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The openings of `shape` and how long it is, if it can have openings: a wall, or a system whose
+/// type is framed (a timber frame).
+fn openings_of(shape: &Shape) -> Option<(&[Opening], f64)> {
+    match shape {
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, .. }, openings, .. }) => Some((openings, (end - start).length())),
+        Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some((&s.openings, (s.end - s.start).length())),
+        _ => None,
+    }
+}
+
+/// The openings of `shape` to change, if it can have openings.
+fn openings_mut(shape: &mut Shape) -> Option<&mut Vec<Opening>> {
+    match shape {
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) => Some(openings),
+        Shape::System(s) if s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => Some(&mut s.openings),
         _ => None,
     }
 }
@@ -138,6 +176,19 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::System(s), F::Depth) if s.system_type.is_none() => set(&mut s.member.y),
         (Shape::System(s), F::SpacingAlong) => set(&mut s.spacing.x),
         (Shape::System(s), F::SpacingUp) => set(&mut s.spacing.y),
+        (Shape::System(s), F::Along(i)) => set(&mut s.openings.get_mut(i)?.along),
+        (Shape::System(s), F::Sill(i)) => set(&mut s.openings.get_mut(i)?.sill),
+        (Shape::System(s), F::OpeningWidth(i)) => set(&mut s.openings.get_mut(i)?.width),
+        (Shape::System(s), F::OpeningHeight(i)) => set(&mut s.openings.get_mut(i)?.height),
+        (Shape::Connection(ConnectionDef { kind: ConnectionKind::EndPlate(e), .. }), f) => match f {
+            F::PlateThickness => set(&mut e.thickness),
+            F::PlateMargin => set(&mut e.margin),
+            F::Bolt => set(&mut e.bolt),
+            F::Hole => set(&mut e.hole),
+            // a whole number of bolts, at least one
+            F::BoltRows if v >= 1.0 && v.fract() == 0.0 && v <= 64.0 => e.rows = v as u32,
+            _ => return None,
+        },
         _ => return None,
     }
     Some(shape)
@@ -160,7 +211,11 @@ impl App {
         if field == ElementField::Name {
             return e.name.clone();
         }
-        let digits = if field == ElementField::Turn { 1 } else { 3 };
+        let digits = match field {
+            ElementField::Turn => 1,
+            ElementField::BoltRows => 0,
+            _ => 3,
+        };
         value(&e.shape_in_project(&self.modeller.model.grid), field).map_or(String::new(), |v| format!("{v:.digits$}"))
     }
 
@@ -182,29 +237,41 @@ impl App {
         self.modeller.typing = Some((e.id, field, typed));
     }
 
-    /// Adds a door (with no sill) or a window in the middle of the selected wall, if it fits.
+    /// Adds a door (with no sill) or a window in the middle of the selected wall or timber frame,
+    /// if it fits.
     pub(super) fn add_opening(&mut self, door: bool) {
         let Some(e) = self.defined().cloned() else { return };
-        let shape = e.shape_in_project(&self.modeller.model.grid);
-        let Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, .. }, .. }) = &shape else { return };
+        let mut shape = e.shape_in_project(&self.modeller.model.grid);
+        let Some((_, length)) = openings_of(&shape) else { return };
         let (width, height, sill) = if door { DOOR } else { WINDOW };
-        let mut with = shape.clone();
-        if let Shape::Planar(p) = &mut with {
-            p.openings.push(Opening { along: ((end - start).length() - width) / 2.0, sill, width, height });
+        if let Some(openings) = openings_mut(&mut shape) {
+            openings.push(Opening { along: (length - width) / 2.0, sill, width, height });
         }
         self.modeller.refusal = None;
-        self.change_shape(&e, with);
+        self.change_shape(&e, shape);
     }
 
-    /// Removes opening `index` of the selected wall.
+    /// Gives the selected join another kind (a cut stays a cut). An end plate starts with its
+    /// default sizes.
+    pub(super) fn set_join_kind(&mut self, kind: ConnectionKind) {
+        let Some(e) = self.defined().cloned() else { return };
+        let Shape::Connection(c) = &e.shape else { return };
+        if c.kind == ConnectionKind::Cut || std::mem::discriminant(&c.kind) == std::mem::discriminant(&kind) {
+            return;
+        }
+        let mut changed = e.clone();
+        changed.shape = Shape::Connection(ConnectionDef { kind, ..c.clone() });
+        self.modeller.refusal = None;
+        self.change_element(changed);
+    }
+
+    /// Removes opening `index` of the selected wall or timber frame.
     pub(super) fn remove_opening(&mut self, index: usize) {
         let Some(e) = self.defined().cloned() else { return };
         let mut shape = e.shape_in_project(&self.modeller.model.grid);
-        if let Shape::Planar(p) = &mut shape {
-            if index < p.openings.len() {
-                p.openings.remove(index);
-                self.change_shape(&e, shape);
-            }
+        if let Some(openings) = openings_mut(&mut shape).filter(|o| index < o.len()) {
+            openings.remove(index);
+            self.change_shape(&e, shape);
         }
     }
 
@@ -222,6 +289,7 @@ impl App {
         let id = changed.id;
         match self.modeller.model.replace(changed) {
             Ok(()) => {
+                self.joins_follow(&[id]);
                 self.show_modelled();
                 self.select_modelled(id);
             }
@@ -229,8 +297,8 @@ impl App {
         }
     }
 
-    /// The Definition section: the selected modelled element's values to type in, and a wall's
-    /// openings.
+    /// The Definition section: the selected modelled element's values to type in, and the openings
+    /// of a wall or a timber frame.
     pub(super) fn element_properties(&self, p: Palette, l: Language) -> Option<Widget<'_, Message>> {
         let e = self.defined()?;
         let shape = e.shape_in_project(&self.modeller.model.grid);
@@ -264,6 +332,29 @@ impl App {
         if let Some(t) = system_type {
             let name = self.library.system_name(&t.id, crate::app::library::lang(l)).unwrap_or_else(|| t.id.clone());
             rows = rows.push(prop_row(p, l.text("Type", "Type").to_string(), name));
+            // a frame made in prefab units: their lengths, its frame as long as its corners make it
+            if t.framing.is_some_and(|f| f.unit.is_some()) {
+                if let Ok(units) = bim_core::system::joined_units(&self.modeller.model, e) {
+                    let lengths: Vec<String> = units.iter().map(|u| bim_library::millimetres(*u, crate::app::library::lang(l))).collect();
+                    rows = rows.push(prop_row(p, l.text("Prefab-elementen", "Prefab units").to_string(), lengths.join(" + ")));
+                }
+            }
+            // where it meets another frame in a corner: which of the two runs through
+            let ends = [l.text("Hoek bij begin", "Corner at start"), l.text("Hoek bij eind", "Corner at end")];
+            for (meeting, end) in bim_core::system::corners(&self.modeller.model, e).into_iter().zip(ends) {
+                let Some(meeting) = meeting else { continue };
+                let role = if meeting.through { l.text("Loopt door", "Runs through") } else { l.text("Stopt tegen de andere", "Stops against the other") };
+                rows = rows.push(prop_row(p, end.to_string(), role.to_string()));
+            }
+            // where it stands against the side of another frame, and how many stand against its own
+            let tees = bim_core::system::tees(&self.modeller.model, e);
+            let ends = [l.text("T-aansluiting bij begin", "T junction at start"), l.text("T-aansluiting bij eind", "T junction at end")];
+            for (_, end) in tees.ends.into_iter().zip(ends).filter(|(with, _)| with.is_some()) {
+                rows = rows.push(prop_row(p, end.to_string(), l.text("Staat tegen de andere", "Stands against the other").to_string()));
+            }
+            if !tees.sides.is_empty() {
+                rows = rows.push(prop_row(p, l.text("Wanden ertegenaan", "Frames against it").to_string(), tees.sides.len().to_string()));
+            }
         }
         for (f, label) in fields.into_iter().filter(|(f, _)| has(*f)) {
             // what a type gives is shown, not typed
@@ -274,7 +365,35 @@ impl App {
             };
             rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
-        if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, openings, .. }) = &shape {
+        // a join: its kind to choose, and an end plate's sizes
+        if let Shape::Connection(c) = &shape {
+            if c.kind != ConnectionKind::Cut {
+                let choice = |label: &str, kind: ConnectionKind| {
+                    let on = std::mem::discriminant(&c.kind) == std::mem::discriminant(&kind);
+                    button(text(label.to_string()).size(12))
+                        .padding([3, 10])
+                        .style(move |_, s| if on { p.primary_button(s) } else { p.row_button(s) })
+                        .on_press(Message::JoinKind(kind))
+                };
+                rows = rows.push(
+                    row![
+                        choice(l.text("Verstek", "Mitre"), ConnectionKind::Mitre),
+                        choice(l.text("Stomp", "Butt"), ConnectionKind::Butt),
+                        choice(l.text("Kopplaat", "End plate"), ConnectionKind::EndPlate(bim_core::join::EndPlate::default())),
+                    ]
+                    .spacing(6),
+                );
+            }
+            if matches!(c.kind, ConnectionKind::EndPlate(_)) {
+                rows = rows
+                    .push(field(l.text("Plaatdikte (m)", "Plate thickness (m)"), F::PlateThickness))
+                    .push(field(l.text("Plaat voorbij profiel (m)", "Plate past profile (m)"), F::PlateMargin))
+                    .push(field(l.text("Bout (m)", "Bolt (m)"), F::Bolt))
+                    .push(field(l.text("Gat (m)", "Hole (m)"), F::Hole))
+                    .push(field(l.text("Bouten per rij", "Bolts per row"), F::BoltRows));
+            }
+        }
+        if let Some((openings, _)) = openings_of(&shape) {
             for i in 0..openings.len() {
                 let kind = if openings[i].sill <= bim_core::LINEAR_TOLERANCE { l.text("Deur", "Door") } else { l.text("Raam", "Window") };
                 let remove = button(text(l.text("Verwijderen", "Remove")).size(11)).padding([2, 8]).style(move |_, s| p.row_button(s)).on_press(Message::RemoveOpening(i));
@@ -390,6 +509,175 @@ mod tests {
         assert!((volume - (15.0 - 0.9 * 2.1 - 1.2 * 1.2) * 0.2).abs() < 1e-9);
         let _ = app.update(Message::RemoveOpening(0));
         assert_eq!(wall(&app).openings.len(), 1);
+    }
+
+    #[test]
+    fn a_join_changes_kind_and_its_end_plate_takes_typed_sizes() {
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let column = app
+            .add_element("Column", None, Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(0.0, 0.0, 4.0), profile: ProfileDef::Rectangle { width: 0.3, height: 0.3 }, roll: 0.0 }))
+            .unwrap();
+        let beam = app
+            .add_element("Beam", None, Shape::Linear(LinearDef { start: DVec3::new(0.0, 0.0, 2.5), end: DVec3::new(5.0, 0.0, 2.5), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 }))
+            .unwrap();
+        let joint = app.add_element("Joint", None, Shape::Connection(ConnectionDef { kind: ConnectionKind::Butt, primary: column, secondary: beam })).unwrap();
+        let kind = |app: &App| match &app.modeller.model.get(joint).unwrap().shape {
+            Shape::Connection(c) => c.kind,
+            _ => unreachable!(),
+        };
+        // a butt to an end plate, in the Definition section: the join gets a body of its own
+        app.select_modelled(joint);
+        let _ = app.update(Message::JoinKind(ConnectionKind::EndPlate(bim_core::join::EndPlate::default())));
+        assert!(matches!(kind(&app), ConnectionKind::EndPlate(_)));
+        assert_eq!(app.modeller.model.evaluate(joint).unwrap().len(), 5, "a plate and four bolts");
+        assert_eq!(app.defined().map(|e| e.id), Some(joint), "still selected");
+        type_in(&mut app, ElementField::PlateThickness, "0,02");
+        type_in(&mut app, ElementField::BoltRows, "3");
+        let ConnectionKind::EndPlate(plate) = kind(&app) else { panic!() };
+        assert_eq!((plate.thickness, plate.rows), (0.02, 3));
+        type_in(&mut app, ElementField::BoltRows, "2,5");
+        let ConnectionKind::EndPlate(plate) = kind(&app) else { panic!() };
+        assert_eq!(plate.rows, 3, "not a whole number of bolts: kept");
+        // and back to a mitre
+        let _ = app.update(Message::JoinKind(ConnectionKind::Butt));
+        assert_eq!(kind(&app), ConnectionKind::Butt);
+    }
+
+    #[test]
+    fn a_timber_frame_takes_a_door_and_a_window_and_a_curtain_wall_none() {
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+        let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
+        app.select_modelled(id);
+        let system = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
+            Shape::System(s) => s,
+            _ => panic!(),
+        };
+        // a curtain wall has no openings to add
+        let _ = app.update(Message::AddOpening(false));
+        assert!(system(&app).openings.is_empty());
+        assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
+        {
+            // 5 m in prefab units of at most 3300, on the stud lines
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Prefab units").is_ok() && ui.find("2400 + 2600").is_ok());
+        }
+        let _ = app.update(Message::AddOpening(false));
+        assert_eq!(system(&app).openings, [Opening { along: 1.9, sill: 0.9, width: 1.2, height: 1.2 }]);
+        // its header: a member as deep as the studs, 200 high, over the window and its trimmers
+        let header = |app: &App| {
+            app.modeller.model.evaluate(id).unwrap().iter().any(|p| {
+                let (lo, hi) = p.solid.bounds();
+                p.material.as_deref() == Some("timber") && (hi.z - lo.z - 0.2).abs() < 1e-9 && (lo.z - 2.1).abs() < 1e-9
+            })
+        };
+        assert!(header(&app));
+        type_in(&mut app, ElementField::Along(0), "0.5");
+        assert_eq!(system(&app).openings[0].along, 0.5);
+        let _ = app.update(Message::AddOpening(true));
+        assert_eq!(system(&app).openings.len(), 2, "a door in the middle beside the window");
+        let _ = app.update(Message::RemoveOpening(0));
+        assert_eq!(system(&app).openings, [Opening { along: 2.05, sill: 0.0, width: 0.9, height: 2.1 }]);
+        // the right pane lists it with its fields and the buttons to add more
+        let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+        assert!(ui.find("Door 1").is_ok() && ui.find("Add window").is_ok());
+    }
+
+    #[test]
+    fn a_timber_frame_against_the_side_of_another_shows_its_t_junction() {
+        use bim_core::system::tees;
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let frame = |app: &App, start: DVec2, end: DVec2, id: &str| {
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+            Shape::System(s.typed_from(&app.library, id).unwrap())
+        };
+        let outer = frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0), "system.timber-frame-140");
+        let inner = frame(&app, DVec2::new(2.4, 0.0), DVec2::new(2.4, 3.0), "system.timber-frame-internal-89");
+        let x = app.add_element("Timber frame", None, outer).unwrap();
+        // alone nothing stands against it, and its two units meet in the middle
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("2400 + 2400").is_ok() && ui.find("Frames against it").is_err());
+        }
+        let y = app.add_element("Inner wall", None, inner).unwrap();
+        let model = &app.modeller.model;
+        assert_eq!(tees(model, model.get(y).unwrap()).ends, [Some(x), None]);
+        // the one that runs through: one frame against it, and its units meet clear of it
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Frames against it").is_ok() && ui.find("T junction at start").is_err());
+            assert!(ui.find("1800 + 3000").is_ok());
+        }
+        // what the viewer shows is the model's: its plywood left out across the other's frame
+        let boarded = |app: &App| app.modeller.model.evaluate(x).unwrap().iter().filter(|p| p.material.as_deref() == Some("plywood")).map(|p| p.solid.bounds()).any(|(lo, hi)| lo.x < 2.44 && hi.x > 2.36);
+        assert!(!boarded(&app));
+        // the one that stands against it says at which end
+        app.select_modelled(y);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("T junction at start").is_ok() && ui.find("Stands against the other").is_ok());
+            assert!(ui.find("T junction at end").is_err() && ui.find("Frames against it").is_err());
+        }
+        // made higher it no longer stands against the other, which is whole again
+        type_in(&mut app, ElementField::Height, "3");
+        let model = &app.modeller.model;
+        assert_eq!(tees(model, model.get(y).unwrap()).ends, [None, None]);
+        assert!(boarded(&app));
+        app.select_modelled(x);
+        let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+        assert!(ui.find("2400 + 2400").is_ok() && ui.find("Frames against it").is_err());
+    }
+
+    #[test]
+    fn two_timber_frames_at_a_corner_show_which_runs_through() {
+        use bim_core::system::{corners, Meeting};
+        use bim_core::SystemDef;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let frame = |app: &App, start: DVec2, end: DVec2| {
+            let s = SystemDef { start, end, base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
+            Shape::System(s.typed_from(&app.library, "system.timber-frame-140").unwrap())
+        };
+        let (long, short) = (frame(&app, DVec2::ZERO, DVec2::new(4.8, 0.0)), frame(&app, DVec2::new(4.8, 0.0), DVec2::new(4.8, 3.0)));
+        let x = app.add_element("Timber frame", None, long).unwrap();
+        // alone it has no corner, and is as long as it is drawn
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("2400 + 2400").is_ok() && ui.find("Corner at end").is_err());
+        }
+        let y = app.add_element("Timber frame", None, short).unwrap();
+        let model = &app.modeller.model;
+        assert_eq!(corners(model, model.get(x).unwrap()), [None, Some(Meeting { with: y, through: true })]);
+        // the longer one runs on to the outer face of the other's frame: 70 mm longer
+        app.select_modelled(x);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Corner at end").is_ok() && ui.find("Runs through").is_ok() && ui.find("Corner at start").is_err());
+            assert!(ui.find("2400 + 2470").is_ok());
+        }
+        // the other stops at its inner face: 70 mm shorter
+        app.select_modelled(y);
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            assert!(ui.find("Corner at start").is_ok() && ui.find("Stops against the other").is_ok());
+            assert!(ui.find("2930").is_ok());
+        }
+        // what the viewer shows is the model's: the frame that runs through, redrawn to the corner
+        let reach = |app: &App, id| app.modeller.model.evaluate(id).unwrap().iter().filter(|p| p.material.as_deref() == Some("timber")).map(|p| p.solid.bounds().1.x).fold(f64::MIN, f64::max);
+        assert!((reach(&app, x) - 4.87).abs() < 1e-9);
+        // a frame made higher no longer makes the corner
+        type_in(&mut app, ElementField::Height, "3");
+        let model = &app.modeller.model;
+        assert_eq!(corners(model, model.get(x).unwrap()), [None, None]);
+        assert!((reach(&app, x) - 4.8).abs() < 1e-9);
     }
 
     #[test]

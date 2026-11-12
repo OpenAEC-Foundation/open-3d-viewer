@@ -389,7 +389,7 @@ impl App {
         Task::none()
     }
 
-    fn finish_animation(&mut self) {
+    pub(crate) fn finish_animation(&mut self) {
         if let Some((_, to, _)) = self.anim.take() {
             self.camera = to;
         }
@@ -452,6 +452,8 @@ impl App {
                 self.measurements.clear();
                 Ok(json!({ "cleared": n }))
             }
+            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            cmd if cmd.starts_with("collab_") => self.collab_command(cmd, a),
             "cancel" => {
                 let _ = self.update(Message::Escape);
                 Ok(json!({ "placing_section_plane": self.plane_picking, "selection": self.selection_json() }))
@@ -486,7 +488,9 @@ impl App {
             call.answer(Err("another file is still loading".into()));
             return Task::none();
         }
-        let task = self.update(Message::Open(path));
+        // beside the models open, as Add does, or in their place
+        let add = call.args.get("add").and_then(Value::as_bool).unwrap_or(false) && self.model.is_some();
+        let task = self.update(if add { Message::AddPicked(Some(crate::loaders::Source::File(path))) } else { Message::Open(path) });
         self.remote.pending_load.push(call);
         task
     }
@@ -1724,7 +1728,7 @@ fn downscale(rgba: &[u8], w: u32, h: u32, nw: u32, nh: u32) -> Vec<u8> {
     out
 }
 
-fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let mut png = Vec::new();
     let mut encoder = png::Encoder::new(&mut png, w, h);
     encoder.set_color(png::ColorType::Rgba);
@@ -1735,7 +1739,7 @@ fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     Ok(png)
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

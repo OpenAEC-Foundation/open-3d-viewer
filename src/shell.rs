@@ -272,6 +272,11 @@ pub enum Side {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// The window's size changed (layout units).
+    Sized(iced::Size),
+    /// The window's size, asked for before a remote command on the window runs.
+    #[cfg(not(target_arch = "wasm32"))]
+    SizedFor(iced::Size, crate::remote::RemoteCall),
     /// A message for the project shown (from its view and subscriptions).
     App(Message),
     /// A message for project `id`, shown or not: what its tasks (a load, say) return.
@@ -336,6 +341,10 @@ pub struct Studio {
     drag: Option<(Side, Option<f32>, f32)>,
     /// The window's width in layout units: iced reports it already divided by the interface size.
     width: f32,
+    /// Its height, likewise: with the width, the size a remote client's clicks are laid out at.
+    height: f32,
+    /// Whether the window has told its size (it does when it changes, not always when it opens).
+    sized: bool,
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
@@ -400,6 +409,8 @@ impl Studio {
             last_title_press: None,
             drag: None,
             width: 1280.0,
+            height: 800.0,
+            sized: false,
             compact_panel: None,
             ribbon_folded: false,
             edition: Edition::Studio,
@@ -558,7 +569,7 @@ impl Studio {
     /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
     pub fn viewport_in(&self, width: f32, height: f32) -> (f32, f32) {
         use openaec_ui::design::shell::{DOCUMENT_TABS, RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
-        let panels = [(self.prefs.left, self.prefs.left_width), (self.prefs.right, self.prefs.right_width)];
+        let panels = [(self.prefs.left, self.left_width()), (self.prefs.right, self.prefs.right_width)];
         let side: f32 = panels.iter().filter(|(shown, _)| *shown).map(|(_, w)| w + 4.0).sum();
         let bars = TITLEBAR + RIBBON_TABS + RIBBON + DOCUMENT_TABS + STATUSBAR;
         ((width - side).max(1.0), (height - bars).max(1.0))
@@ -588,8 +599,148 @@ impl Studio {
         std::fs::rename(&written, out).map_err(|e| e.to_string())
     }
 
+    /// The size the window is laid out at.
+    fn layout_size(&self) -> iced::Size {
+        // a window folded to the taskbar is laid out at the size it opens at
+        if self.width < 640.0 || self.height < 400.0 {
+            return iced::Size::new(1280.0, 800.0);
+        }
+        iced::Size::new(self.width, self.height)
+    }
+
+    /// The window's controls, as a remote client sees them (see [`crate::ui_control`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn ui_controls(&self) -> Vec<openaec_ui::design::a11y::Found> {
+        crate::ui_control::controls(self.view(), self.layout_size())
+    }
+
+    /// A remote command on the window itself: `ui_controls` lists what it shows; `ui_press`
+    /// clicks a control, `ui_type` types into a field and `ui_key` presses a key, through the
+    /// widgets as a person's mouse and keyboard reach them. The messages they send go on as the
+    /// window's would; with `dry_run` they are only told.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn ui_command(&mut self, call: crate::remote::RemoteCall) -> Task<Msg> {
+        use crate::ui_control as ui;
+        use serde_json::json;
+        // the clicks are laid out at the window's size: asked for first when it is not known
+        if !self.sized {
+            self.sized = true;
+            return iced::window::latest().and_then(iced::window::size).map(move |size| Msg::SizedFor(size, call.clone()));
+        }
+        let size = self.layout_size();
+        let found = self.ui_controls();
+        let args = call.args.clone();
+        let answer: Result<serde_json::Value, String> = match call.cmd.as_str() {
+            "ui_controls" => {
+                let filter = args.get("filter").and_then(|v| v.as_str()).map(str::to_lowercase);
+                let all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+                let list: Vec<serde_json::Value> = found
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| all || ui::is_control(f))
+                    .filter(|(_, f)| filter.as_deref().is_none_or(|q| f.node.name.to_lowercase().contains(q) || format!("{:?}", f.node.role).to_lowercase() == q))
+                    .map(|(k, f)| ui::describe(k, f))
+                    .collect();
+                Ok(json!({ "size": [size.width, size.height], "product": self.product().key(), "count": list.len(), "controls": list }))
+            }
+            "ui_press" | "ui_type" | "ui_key" => {
+                let dry = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+                let target = if call.cmd == "ui_key" && args.get("name").is_none() && args.get("index").is_none() { None } else { Some(ui::find(&found, &args)) };
+                match target {
+                    Some(Err(e)) => Err(e),
+                    Some(Ok((_, f))) if f.node.state.disabled => Err(format!("'{}' is disabled", f.node.name)),
+                    target => {
+                        let what = match &target {
+                            Some(Ok((k, f))) => ui::describe(*k, f),
+                            _ => serde_json::Value::Null,
+                        };
+                        // the click, on a copy of the window; `scroll`: first the list it lies in
+                        // scrolls that far, so a control below the end of a panel comes in view
+                        // the click, on a copy of the window laid out at `size`, on the control
+                        // within `bounds`
+                        let run = |size: iced::Size, bounds: Option<iced::Rectangle>| -> Vec<Msg> {
+                            let settings = iced::Settings { fonts: [crate::INTER_REGULAR, crate::INTER_SEMIBOLD].into_iter().chain(fonts::FILES.iter().copied()).map(std::borrow::Cow::Borrowed).collect(), default_font: fonts::BODY, ..Default::default() };
+                            let mut sim = iced_test::Simulator::with_size(settings, size, self.view());
+                            if let Some(at) = bounds.and_then(|b| ui::aim(b, size)) {
+                                sim.point_at(at);
+                                let _ = sim.simulate(iced_test::simulator::click());
+                            }
+                        match call.cmd.as_str() {
+                            "ui_type" => {
+                                let text = args.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+                                // a field's old text goes first
+                                if args.get("replace").and_then(|v| v.as_bool()).unwrap_or(true) {
+                                    let old = target.as_ref().and_then(|t| t.as_ref().ok()).and_then(|(_, f)| f.node.value.as_ref()).map_or(64, |v| v.chars().count() + 2);
+                                    for named in [iced::keyboard::key::Named::Backspace, iced::keyboard::key::Named::Delete] {
+                                        for _ in 0..old {
+                                            let _ = sim.simulate(iced_test::simulator::tap_key(iced::keyboard::Key::Named(named), None));
+                                        }
+                                    }
+                                }
+                                let _ = sim.typewrite(text);
+                            }
+                            "ui_key" => {
+                                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("Enter");
+                                use iced::keyboard::key::Named;
+                                let named = match key.to_ascii_lowercase().as_str() {
+                                    "enter" | "return" => Some(Named::Enter),
+                                    "escape" | "esc" => Some(Named::Escape),
+                                    "tab" => Some(Named::Tab),
+                                    "delete" => Some(Named::Delete),
+                                    "backspace" => Some(Named::Backspace),
+                                    _ => None,
+                                };
+                                let key = named.map_or_else(|| iced::keyboard::Key::Character(key.to_lowercase().into()), iced::keyboard::Key::Named);
+                                let _ = sim.simulate(iced_test::simulator::tap_key(key, None));
+                            }
+                            _ => {}
+                        }
+                            sim.into_messages().collect()
+                        };
+                        let first = match &target {
+                            Some(Ok((_, f))) => Some(f.bounds),
+                            _ => None,
+                        };
+                        let mut messages = run(size, first);
+                        // nothing answered: the control may lie past the end of the list it is in,
+                        // out of view; the window is laid out tall enough to show it, and the same
+                        // control (by its name and role, the same one of those) is clicked there
+                        if messages.is_empty() && call.cmd != "ui_key" {
+                            if let Some(Ok((k, f))) = &target {
+                                let same = |g: &openaec_ui::design::a11y::Found| g.node.name == f.node.name && g.node.role == f.node.role;
+                                let before = found[..*k].iter().filter(|g| same(g)).count();
+                                let tall = iced::Size::new(size.width, 6000.0);
+                                let there = crate::ui_control::controls(self.view(), tall);
+                                if let Some(g) = there.iter().filter(|g| same(g)).nth(before) {
+                                    messages = run(tall, Some(g.bounds));
+                                }
+                            }
+                        }
+                        let said: Vec<String> = messages.iter().map(|m| format!("{m:?}").chars().take(240).collect()).collect();
+                        let answered = !messages.is_empty();
+                        if dry {
+                            Ok(json!({ "control": what, "messages": said, "answered": answered, "dry_run": true }))
+                        } else {
+                            let tasks: Vec<Task<Msg>> = messages.into_iter().map(|m| self.update(m)).collect();
+                            call.answer(Ok(json!({ "control": what, "messages": said, "answered": answered })));
+                            return Task::batch(tasks);
+                        }
+                    }
+                }
+            }
+            other => Err(format!("unknown command {other}")),
+        };
+        call.answer(answer);
+        Task::none()
+    }
+
     fn look(&self) -> Look {
         Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar())
+    }
+
+    /// The width of the left panel: the Collaborator's lists need more than the explorer's tree.
+    fn left_width(&self) -> f32 {
+        if self.product() == Product::Collaborator { self.prefs.left_width.max(340.0) } else { self.prefs.left_width }
     }
 
     fn l(&self) -> Language {
@@ -729,6 +880,9 @@ impl Studio {
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_linear() == 2),
+            Command::new("model.end-plate", l.text("Kopplaat", "End plate"), go(Message::Connect(bim_core::ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), l.text("Kopplaat", "End plate"))))
+                .icon(small("frame.combination"), large("frame.combination"))
+                .enabled(app.selected_linear() == 2),
             Command::new("model.cut", l.text("Uitsparen", "Cut"), go(Message::Connect(bim_core::ConnectionKind::Cut, l.text("Uitsparing", "Cut-out"))))
                 .icon(small("edit.cut"), large("edit.cut"))
                 .enabled(app.selected_bodies() == 2),
@@ -743,7 +897,53 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
-        for tool in crate::app::modeller::ModelTool::ALL {
+        // the project's levels, views, sheets and library
+        use crate::document::PlanKind;
+        let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
+            Command::new(id, label, go(Message::PickLevelFor((app.views_picker != Some(kind)).then_some(kind)))).icon(small("drawing.plan"), large("drawing.plan")).mode(app.views_picker == Some(kind)).enabled(loaded)
+        };
+        list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
+        list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
+        list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
+        list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
+        list.push(Command::new("project.sheet", l.text("Blad", "Sheet"), go(Message::NewSheet(l.text("Blad", "Sheet")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
+        list.push(
+            Command::new("project.library", l.text("Bibliotheek", "Library"), go(Message::ExplorerTab(crate::app::ExplorerTab::Library)))
+                .icon(small("construction.library"), large("construction.library"))
+                .mode(app.explorer_tab == crate::app::ExplorerTab::Library),
+        );
+        // dimensions, texts and sections in the floor plan or on the sheet shown
+        let (annotatable, sections) = app.annotatable();
+        list.push(
+            Command::new("annotate.dimension", l.text("Maatvoering", "Dimension"), go(Message::DimensionTool(!app.dimension_tool)))
+                .icon(small("draw.dimension"), large("draw.dimension"))
+                .toggle(app.dimension_tool && annotatable)
+                .enabled(annotatable),
+        );
+        // the standard dimensions of the drawing view shown
+        let plan_shown = app.shown_drawing();
+        list.push(
+            Command::new(
+                "annotate.standard-dimensions",
+                l.text("Standaard maatvoering", "Standard dimensions"),
+                plan_shown.clone().map_or(Msg::Dialog(None), |v| go(Message::StandardDimensions(v))),
+            )
+            .icon(small("draw.dimension"), large("draw.dimension"))
+            .enabled(plan_shown.is_some()),
+        );
+        list.push(
+            Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
+                .icon(small("draw.text"), large("draw.text"))
+                .toggle(app.note_tool && annotatable)
+                .enabled(annotatable),
+        );
+        list.push(
+            Command::new("annotate.section", l.text("Doorsnede", "Section"), go(Message::SectionTool(!app.section_tool)))
+                .icon(small("drawing.section"), large("drawing.section"))
+                .toggle(app.section_tool && sections)
+                .enabled(sections),
+        );
+        for tool in crate::app::modeller::ModelTool::ALL.into_iter().chain(crate::app::modeller::ModelTool::OPENINGS) {
             let on = app.modeller.tool.is_some_and(|t| t.0 == tool);
             list.push(Command::new(tool.id(), tool.label(l), go(Message::ModelTool(Some((tool, tool.label(l)))))).icon(small(tool.icon()), large(tool.icon())).mode(on).enabled(loaded));
         }
@@ -762,11 +962,13 @@ impl Studio {
         for &product in &self.products {
             list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
-        // the Collaborator's commands to come: in its ribbon, not working yet (the message is
-        // never sent)
+        // the Collaborator's commands: issues, checks, clashes and the rule set
         for planned in PLANNED {
-            let detail = format!("{} ({})", planned.label(l), l.text("volgt", "to come"));
-            list.push(Command::new(planned.id, planned.label(l), Msg::Dialog(None)).icon(small(planned.icon), large(planned.icon)).enabled(false).detail(&detail));
+            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            let message = planned.event().map(|e| go(Message::Collab(e)));
+            #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+            let message: Option<Msg> = None;
+            list.push(Command::new(planned.id, planned.label(l), message.clone().unwrap_or(Msg::Dialog(None))).icon(small(planned.icon), large(planned.icon)).enabled(message.is_some()).detail(planned.detail(l)));
         }
         list
     }
@@ -848,14 +1050,32 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        {
+            self.app.collab.language = self.l();
+            self.app.collab.refresh();
+        }
+        // the app knows whether the Modeller is shown: there an opened file's walls have grips
+        self.app.modeller.in_modeller = self.product() == Product::Modeller;
         let task = self.handle(message);
+        self.app.modeller.in_modeller = self.product() == Product::Modeller;
         self.keep_dev_session();
         task
     }
 
     fn handle(&mut self, message: Msg) -> Task<Msg> {
         match message {
+            // the window driven as a person drives it: its controls, a click, typing
+            #[cfg(not(target_arch = "wasm32"))]
+            Msg::App(Message::Remote(call)) if call.cmd.starts_with("ui_") => return self.ui_command(call),
             Msg::App(message) => {
+                // what opens in the explorer shows it
+                if matches!(message, Message::NewLevel(_) | Message::PickLevelFor(Some(_)) | Message::ExplorerTab(_)) && !self.prefs.left {
+                    self.prefs.left = true;
+                    self.save_prefs();
+                }
+                // joins made automatically are named in the interface language
+                self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
@@ -976,6 +1196,16 @@ impl Studio {
                 self.save_prefs();
             }
             Msg::Resized(width) => self.width = width,
+            Msg::Sized(size) => {
+                self.width = size.width;
+                self.height = size.height;
+                self.sized = true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Msg::SizedFor(size, call) => {
+                let _ = self.update(Msg::Sized(size));
+                return self.ui_command(call);
+            }
             Msg::SplitterPress(side) => {
                 let width = match side {
                     Side::Left => self.prefs.left_width,
@@ -1094,7 +1324,7 @@ impl Studio {
             Subscription::none()
         };
         let resized = iced::event::listen_with(|event, _, _| match event {
-            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Resized(size.width)),
+            iced::Event::Window(iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size)) => Some(Msg::Sized(size)),
             _ => None,
         });
         Subscription::batch([
@@ -1311,24 +1541,38 @@ impl Studio {
                 groups
             }
             RibbonPage::View => view_groups(),
-            // the five base elements: planar (wall, slab), linear (column, beam), system, point;
-            // connection joins two selected linear elements
+            // what is built, in the order of the five base elements: planar (wall, slab), linear
+            // (column, beam), system, point; then the openings in walls, the connection that joins
+            // two selected elements, and changes. New, open and save are on the File page and in
+            // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
-                w::ribbon_group(look, l.text("Model", "Model"), vec![large("model.new"), smalls(&["file.open", "file.save-as"])]),
                 w::ribbon_group(look, l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
                 w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
-                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"])]),
+                w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
+                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
                 w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), large("model.delete")]),
+            ],
+            // what the model is drawn on and in: its levels, its views and sheets, its types
+            RibbonPage::Project => vec![
+                w::ribbon_group(look, l.text("Niveaus", "Levels"), vec![large("project.level")]),
+                w::ribbon_group(look, l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
+                w::ribbon_group(look, l.text("Bladen", "Sheets"), vec![large("project.sheet")]),
+                w::ribbon_group(look, l.text("Bibliotheek", "Library"), vec![large("project.library")]),
+            ],
+            // in the floor plan, section or sheet shown
+            RibbonPage::Annotate => vec![
+                w::ribbon_group(look, l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
+                w::ribbon_group(look, l.text("Tekst", "Text"), vec![large("annotate.text")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
                 w::ribbon_group(look, l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
                 w::ribbon_group(look, l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
-                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids"])]),
-                w::ribbon_group(look, l.text("Opmerkingen", "Comments"), vec![large("collaborate.comment")]),
-                w::ribbon_group(look, l.text("Delen", "Share"), vec![large("collaborate.share")]),
+                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
+                w::ribbon_group(look, l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
+                w::ribbon_group(look, l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
             ],
         };
         if self.compact() {
@@ -1497,7 +1741,7 @@ impl Studio {
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.left"), 20.0, true, hide, Some(Msg::ToggleLeft)), hide, Some(self.command("view.left").shortcut_label().unwrap_or("")))];
             let (title, content) = self.left_panel(look);
             body = body
-                .push(w::panel(look, title, self.prefs.left_width, actions, content))
+                .push(w::panel(look, title, self.left_width(), actions, content))
                 .push(ch::splitter(look, dragging(Side::Left), Msg::SplitterPress(Side::Left)));
         }
         body = body.push(middle);
@@ -1517,8 +1761,13 @@ impl Studio {
         let l = self.l();
         match self.product() {
             Product::Collaborator => {
-                let models: Vec<&str> = self.app.models.iter().map(|m| m.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D")).collect();
-                let body = container(crate::product::collaboration_panel(look, l, models)).padding([4, 8]).width(Length::Fill).height(Length::Fill);
+                #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+                let body = container(Self::pane(self.app.collab_body(look, l))).padding([4, 8]).width(Length::Fill).height(Length::Fill);
+                #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+                let body = {
+                    let models: Vec<&str> = self.app.models.iter().map(|m| m.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D")).collect();
+                    container(crate::product::collaboration_panel(look, l, models)).padding([4, 8]).width(Length::Fill).height(Length::Fill)
+                };
                 (l.text("Samenwerken", "Collaboration"), body.into())
             }
             Product::Viewer | Product::Modeller => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
@@ -1953,10 +2202,68 @@ mod tests {
         app.select_modelled(bim_core::ElementId(1));
         let mut studio = Studio::new(app);
         studio.prefs.language = Language::Dutch;
-        studio.ribbon_tab = 1;
+        studio.set_product(Product::Modeller);
         let _ = studio.update(Msg::App(Message::EditMode));
         let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(2))));
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-edit-nl.png")).expect("snapshot");
+        // the selected wall's grips, without edit mode
+        let mut app = App::default();
+        app.add_demo_building();
+        app.select_modelled(bim_core::ElementId(2));
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Modeller);
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-grips-nl.png")).expect("snapshot");
+        // a wall being placed: from the building's corner to the cursor
+        let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Wall, "Wand")))));
+        studio.app.modeller.points = vec![glam::DVec3::new(10.0, 0.0, 0.0)];
+        studio.app.modeller.cursor = Some(glam::DVec3::new(10.0, -4.0, 0.0));
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-placing-nl.png")).expect("snapshot");
+        // a window aimed at the front wall's face
+        let _ = studio.update(Msg::App(Message::ModelTool(Some((crate::app::modeller::ModelTool::Window, "Raam")))));
+        let (w, h) = studio.viewport_in(1440.0, 900.0);
+        studio.app.viewport_size = (w, h);
+        let (x, y) = studio.app.on_screen(glam::DVec3::new(7.0, -0.1, 1.5), w, h).expect("on screen");
+        let _ = studio.update(Msg::App(Message::Navigate(crate::viewport::Navigate::Hover { x, y, width: w, height: h })));
+        assert!(studio.app.modeller.aim.is_some(), "the cursor is over the wall");
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-window-nl.png")).expect("snapshot");
+        // the Project tab, and the Annotate tab in a floor plan
+        let _ = studio.update(Msg::App(Message::ModelTool(None)));
+        studio.ribbon_tab = 1;
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-project-nl.png")).expect("snapshot");
+        let level: std::sync::Arc<str> = studio.app.document.levels()[0].path.as_str().into();
+        let _ = studio.update(Msg::App(Message::NewPlan(level)));
+        studio.ribbon_tab = 2;
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-annotate-nl.png")).expect("snapshot");
+        // a wall of an opened Revit file: its grips in the Modeller, then taken over by a drag of
+        // its end, the project now an IFCX document
+        let mut app = App::default();
+        app.set_model(crate::app::revit_house());
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Modeller);
+        studio.app.modeller.in_modeller = true;
+        studio.app.click(Some(crate::selection::Pickable::Element(7)), false);
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-revit-wall-nl.png")).expect("snapshot");
+        let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_press(1))));
+        if let Some(g) = studio.app.modeller.edit.as_mut().and_then(|e| e.grab.as_mut()) {
+            g.delta = glam::DVec3::new(2.0, 0.0, 0.0);
+        }
+        let _ = studio.update(Msg::App(Message::Edit(crate::app::edit_release())));
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-revit-taken-nl.png")).expect("snapshot");
+        // the end plate joining the pergola's beam to its column, selected, seen close up
+        let mut app = App::default();
+        app.add_demo_building();
+        let plate = app.modeller.model.iter().find(|e| e.class() == "IfcElementAssembly").map(|e| e.id).expect("the demo's end plate");
+        app.select_modelled(plate);
+        app.camera.target = glam::Vec3::new(13.3, 0.0, 2.6);
+        app.camera.distance = 3.5;
+        app.camera.yaw = -0.9;
+        app.camera.pitch = 0.35;
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Modeller);
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-end-plate-nl.png")).expect("snapshot");
     }
 
     /// The Library tab with a build-up and a steel profile picked, in every language:
@@ -2070,6 +2377,39 @@ mod tests {
     }
 
     #[test]
+    fn the_modellers_project_and_annotate_tabs_open_levels_views_and_marks() {
+        use crate::app::ExplorerTab;
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        studio.set_product(Product::Modeller);
+        studio.prefs.left = false;
+        // Level opens the form of a new level in the explorer's Levels tab, and shows the explorer
+        let _ = studio.update(studio.command("project.level").message);
+        assert!(studio.prefs.left && studio.app.explorer_tab == ExplorerTab::Levels && studio.app.level_form.is_some());
+        // Floor plan lists the levels to make one of, in the Views tab; again closes the list
+        let _ = studio.update(studio.command("project.floor-plan").message);
+        assert_eq!((studio.app.explorer_tab, studio.app.views_picker), (ExplorerTab::Views, Some(crate::document::PlanKind::Floor)));
+        let _ = studio.update(studio.command("project.floor-plan").message);
+        assert_eq!(studio.app.views_picker, None);
+        let _ = studio.update(studio.command("project.library").message);
+        assert_eq!(studio.app.explorer_tab, ExplorerTab::Library);
+        // dimensions, texts and sections need a floor plan (or a sheet) shown
+        for id in ["annotate.dimension", "annotate.standard-dimensions", "annotate.text", "annotate.section"] {
+            assert!(!studio.command(id).enabled, "{id} without a plan");
+        }
+        let level: std::sync::Arc<str> = studio.app.document.levels()[0].path.as_str().into();
+        let _ = studio.update(Msg::App(Message::NewPlan(level)));
+        for id in ["annotate.dimension", "annotate.standard-dimensions", "annotate.text", "annotate.section"] {
+            assert!(studio.command(id).enabled, "{id} in a plan");
+        }
+        let _ = studio.update(studio.command("annotate.dimension").message);
+        assert!(studio.app.dimension_tool && studio.command("annotate.dimension").kind == openaec_ui::design::command::CommandKind::Toggle(true));
+        // the door and window tools are on the Model tab
+        assert!(studio.command("model.door").enabled && studio.command("model.window").enabled);
+    }
+
+    #[test]
     fn the_switch_at_the_top_right_shows_each_product_with_its_own_ribbon() {
         let mut studio = Studio::new(App::default());
         assert_eq!(studio.product(), Product::Viewer);
@@ -2082,8 +2422,11 @@ mod tests {
         assert!(shown.contains(&"Tab: Home".to_string()) && !shown.contains(&"Tab: Model".to_string()), "{shown:?}");
         let _ = studio.update(Msg::Product(Product::Modeller));
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Modeller, RibbonPage::Model));
-        assert!(tabs(&studio).contains(&"Tab: View".to_string()));
-        let _ = studio.update(Msg::RibbonTab(1));
+        let shown = tabs(&studio);
+        for tab in ["Tab: Model", "Tab: Project", "Tab: Annotate", "Tab: View"] {
+            assert!(shown.contains(&tab.to_string()), "{shown:?}");
+        }
+        let _ = studio.update(Msg::RibbonTab(3));
         assert_eq!(studio.ribbon_page(), RibbonPage::View);
         // another product opens on its first tab
         let _ = studio.update(Msg::Product(Product::Collaborator));
@@ -2092,7 +2435,7 @@ mod tests {
         // the commands to come are there but do nothing yet; the switch marks the product shown
         let commands = studio.default_commands();
         for planned in PLANNED {
-            assert!(commands.iter().any(|c| c.id == planned.id && !c.enabled), "{}", planned.id);
+            assert!(commands.iter().any(|c| c.id == planned.id && c.enabled), "{}", planned.id);
         }
         assert!(commands.iter().any(|c| c.id == Product::Collaborator.command() && c.kind == openaec_ui::design::command::CommandKind::Mode(true)));
     }

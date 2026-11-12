@@ -177,12 +177,13 @@ impl Library {
     }
 
     /// The system type this library already has that makes the same system as `system`: the
-    /// same group, grids, members, panels, layers, corners and level, lengths within 0.01 mm.
+    /// same group, grids, members (and their framing), panels, layers, corners and level, lengths
+    /// within 0.01 mm.
     pub fn matching_system(&self, system: &SystemType) -> Option<&SystemType> {
         let near = |a: f64, b: f64| (a - b).abs() <= SAME_THICKNESS;
         let same_grid = |a: &system::Grid, b: &system::Grid| a.pattern == b.pattern && near(a.bay, b.bay) && near(a.row, b.row);
         let same_members = |a: Option<&system::Members>, b: Option<&system::Members>| match (a, b) {
-            (Some(a), Some(b)) => a.material == b.material && near(a.width, b.width) && near(a.depth, b.depth),
+            (Some(a), Some(b)) => a.material == b.material && a.framing == b.framing && near(a.width, b.width) && near(a.depth, b.depth),
             (None, None) => true,
             _ => false,
         };

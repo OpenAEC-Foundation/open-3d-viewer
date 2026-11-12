@@ -87,6 +87,8 @@ pub struct Viewport3D<'a> {
     pub datum: Option<Arc<Vec<render::DatumSegment>>>,
     /// The lines drawn over the model with their colours: the underlays', the views' in 3D (world).
     pub overlay: Arc<Vec<crate::views3d::Colored>>,
+    /// The cut faces of the section box and plane in their hatches.
+    pub caps: Arc<crate::caps::CutFaces>,
 }
 
 #[derive(Default)]
@@ -292,6 +294,7 @@ where
             structural_shown: self.structural_shown.cloned(),
             datum: self.datum.clone(),
             overlay: self.overlay.clone(),
+            caps: self.caps.clone(),
         }
     }
 
@@ -453,6 +456,7 @@ mod tests {
             structural_shown: None,
             datum: None,
             overlay: Default::default(),
+            caps: Default::default(),
         };
         shader::Program::<Navigate>::update(&view, state, &Event::Mouse(event), bounds(), mouse::Cursor::Available(at))?.into_inner().0
     }

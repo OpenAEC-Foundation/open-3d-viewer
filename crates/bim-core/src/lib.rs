@@ -84,10 +84,17 @@ pub enum Refusal {
     NoBody,
     /// A join of this kind takes two members.
     TwoMembers,
+    /// An end plate's bolts do not fit beside the member's profile or along it.
+    BoltsDoNotFit,
     /// A build-up has no layer that is not a cavity.
     NoLayers,
     /// A system would be generated as more parts than [`system::MAX_PARTS`].
     TooManyParts,
+    /// A system that is not framed has an opening.
+    OpeningNotFramed,
+    /// A frame cannot be split into prefab units short enough, with their joints clear of its
+    /// openings.
+    NoUnitJoint,
 }
 
 impl Refusal {
@@ -116,8 +123,11 @@ impl Refusal {
             Refusal::BooleanFailed => "The cut could not be made exactly.",
             Refusal::NoBody => "A connection has no body to cut with.",
             Refusal::TwoMembers => "This join takes two members.",
+            Refusal::BoltsDoNotFit => "The bolts do not fit on the plate.",
             Refusal::NoLayers => "A build-up needs a layer that is not a cavity.",
             Refusal::TooManyParts => "A system would have more than 50000 parts.",
+            Refusal::OpeningNotFramed => "Only a framed system, such as a timber frame, can have openings.",
+            Refusal::NoUnitJoint => "The frame cannot be split into prefab units clear of its openings.",
         }
     }
 }

@@ -186,8 +186,8 @@ only. What was built:
   kernel's chord tolerance; `ProfileDef::steel("HEA 200")`.
 - In the app, a layered element shows each layer in its material's colour, its Type and Layers as
   properties, and its thickness read only. The Library tab's **Assign to selection** gives the
-  selected walls (or slabs, for a floor, roof or ceiling type) the picked build-up. The Wall and
-  Slab tools still place elements without a type.
+  selected walls (or slabs, for a floor, roof or ceiling type) the picked build-up, and the
+  placement strip above the 3D view gives the Wall and Slab tools the type of the next element.
 
 The original proposal:
 
@@ -225,8 +225,8 @@ There are two kinds of system in Open BIM Studio, and both are asked for:
   members or none, and panels;
 - for a floor or a ceiling, how high above its level it lies.
 
-The 21 starter types are Open BIM Studio's recipes with generic names: three curtain walls, three
-frames, two timber frames with OSB outside and gypsum board inside, three brick bonds, sand-lime
+The 26 starter types are Open BIM Studio's recipes with generic names: three curtain walls, three
+frames, seven timber frames from its catalogue (below), three brick bonds, sand-lime
 elements, zinc, timber and HPL cladding, five hollow-core floors and a 600×600 ceiling. Its window
 layouts (casement, tilt-turn, sliding) need a frame hosted in a wall opening with its leaves, and
 come later. A type is named by rule, after its members when it is framed ("Vliesgevel aluminium
@@ -243,8 +243,9 @@ types by what they make, as build-ups. In IFCX a type is a node of its group's t
   units stop against them, so they do not run through), the layers across the face, and the
   material of every member and panel. A system of more than 50 000 parts is refused rather than
   generated. In the app, the Library tab draws a type's face from the kernel's own parts, and
-  **Assign to selection** gives the selected systems the picked type; a typed system's member and
-  panel sizes are its type's, shown and not typed, its spacing still its own.
+  **Assign to selection** gives the selected systems the picked type; the Curtain wall tool draws
+  one directly, its type picked in the placement strip. A typed system's member and panel sizes
+  are its type's, shown and not typed, its spacing still its own.
 - Members stay parts of their system, with one join rule per pair of roles (the mullion runs
   through, the transom stops against it), not a join element per crossing. Each crossing goes
   through the kernel's join geometry (`bim_core::join::cuts` and `finish`), so a joint in a system
@@ -256,9 +257,88 @@ types by what they make, as build-ups. In IFCX a type is a node of its group's t
   ordinary join element.
 - Lying systems need a domain that lies (an outline and a height), and come after upright ones.
 
-What the first vertical slice of the systems should be is still a decision for the project
-owner. Open BIM Studio's design proposes a suspended ceiling first, then a timber-frame wall with a
-window.
+### The first full system: the timber frame
+
+The project owner chose the timber frame (houtskeletbouw) as the first system to work out fully.
+It follows the HSB family of Open BIM Studio's building-systems catalogue, which goes beyond its
+live recipes (studs at 600 with OSB outside and gypsum board inside):
+
+- **The frame** (built). A type's members can be *framed* (`bim_library::Framing`): the plates
+  along the foot and the head run through, the studs stand between them, one at either end and
+  one at every bay's centre from the start, and noggins stand between the studs at every row up
+  from the foot. The frame lies inside the system's face, square cut. A line on an edge member
+  needs no member of its own; a stud or noggin that would overlap an edge member stands against
+  it. Mineral wool fills the cells.
+- **The layers** (built), from the outside in: a breather membrane, the frame with its insulation,
+  plywood, a vapour control layer, a service zone (45×45 battens framed at the studs' centres,
+  mineral wool between them) and gypsum board. A layer without members lays whole boards (or
+  courses of a roll) from the face's start and foot, the last ones cut, rather than dividing the
+  face equally. The boards are two bays wide and as high as the frame's rows, so every seam has
+  timber behind it (Open BIM Studio's "supported board edges" rule).
+- **The types** (built): studs 38 wide and 140, 184 or 235 deep at 600 or 610 centres, and an
+  interior wall 38×89 at 600 with gypsum board on either face, as in the catalogue.
+- **Openings** (built): a system gets openings, as a wall has, measured from its start and base.
+  A framed face frames each one: a king stud either side from plate to plate, trimmers carrying a
+  header (the type's nominal size, 200 high, not a sized lintel), a sill under a window, cripple
+  studs over the trimmers and at the regular centres above the header and below the sill; the
+  bottom plates stop at a door. The insulation stops at the opening, the boards and membranes are
+  cut around it into rectangles (the strips beside it, then the pieces below and above it), and
+  the cripples over the trimmers carry the seam on the jamb. Only framed systems take openings; a
+  curtain wall or masonry with one is refused until their own openings are worked out. The right
+  pane adds a door or a window to a timber frame as to a wall.
+- **Prefab units** (built): a framing's longest unit (3300 in the catalogue's exterior walls). A
+  longer frame is made of as few units as can be, as equal as can be, each with its own plates and
+  end studs. A joint lies on a stud line or, where none is clear, right beside an opening's
+  framing, clear of its king studs; no board or membrane crosses one. A frame that cannot be split
+  so is refused rather than made with a unit too long. The right pane lists a frame's units.
+- **Corners** (built): two timber frames on one base and of one height, an end of each within a
+  millimetre of the other's and square to each other, make a corner. The longer one runs through,
+  its frame as far as the outer face of the other's frame; the other stops against its inner face.
+  Of two as long as each other the one made first runs through. Their layers nest around the
+  corner without a gap or an overlap: outside, the layers of the one that runs through run on
+  around the corner, each as far out as it lies from its own frame, and the other's stop against
+  them; inside, each of its layers runs on to what the other has between its frame and that
+  layer's depth, and the other's layers start against the layers they would cross. A board inside
+  that ends a member's width or more short of the members it is fixed to gets a member behind its
+  edge: a corner stud in the frame that runs through, with an insulated pocket between it and the
+  end stud, and a batten more in its service zone. A frame keeps its studs at their centres from
+  its own start; the battens and the boards' seams follow the studs, the first board cut to reach
+  a stud line; the prefab units are those of the frame as long as it is made, and an opening keeps
+  clear of a corner stud. A corner is made only where both frames can be made with it and without
+  it, so each stays when the other goes; otherwise, and where three frames end on a point, at
+  another angle or with unequal heights, each ends on its line as before (a frame that cannot be
+  made alone is refused at a corner too). Frames of two types make a corner
+  too (an exterior wall and an interior one). The right pane says at which end a frame makes a
+  corner and whether it runs through, and lists its units as the corner leaves them.
+- **T junctions** (built): a timber frame that ends on the line of another, between that one's
+  ends, on one base, as high as it and square to it, stands against its side. It is the inside of
+  a corner twice over, back to back. The frame that stands against the other stops against the
+  face of the other's frame, and each of its layers, on either side of it, starts against the
+  layers of the other it would cross. The other runs through: its frame is whole, and its layers
+  on that side are left out across the wall that stands against it, each running on, either side
+  of that wall, to what the wall has between its frame and that layer's depth. A stud more stands
+  in the frame that runs through either side of the stretch its boards leave open, behind their
+  edges, the pocket between the two filled as any bay (its noggins carry the end stud of the wall
+  that stands against it); a service zone that is left out ends with a batten either side, as a
+  unit does, and gets a batten more where its board ends short of it. The studs, the battens and
+  the boards' seams of the frame that runs through stay where they were. A joint between prefab
+  units keeps clear of the junction, and so does an opening. A T junction is made only where both
+  frames can be made with it and without it; where two frames end on one point of a third's line
+  (a crossing), or the junction leaves no room, each is made as before. A frame can carry several
+  T junctions along it, on either side, and corners at its ends. The right pane says at which end
+  a frame stands against the side of another, and how many stand against its own.
+- **Drawn directly** (built): the Curtain wall tool's placement strip lists every upright system
+  type by name, generic first; a lying one (a floor, a ceiling) is not drawn as a wall. The list
+  is as wide as its longest name, since the names differ at their end (the centres, the bond). The
+  type picked is what the cursor shows and what the second click places, with the height and the
+  base typed in the strip. Frames drawn in a chain make their corners, and one drawn from the side
+  of another its T junction, as frames given their type afterwards do. A system drawn with a type
+  is named after the type's group (Timber frame 1, Masonry 2) in the language of the interface, a
+  generic one after the tool; all of them are numbered as one class.
+- **Later**: membrane laps and returns, a layer left out on one system (no interior lining), a
+  stock list (stud lengths, boards, rolls), crossings and corners at other angles, layers that
+  run on behind a wall that stands against them (an airtight layer), and a choice of which system
+  runs through.
 
 ## Delivery
 
@@ -276,8 +356,10 @@ Small PRs, each with tests, each visible where it can be:
 5. **System types** in the library: the generator's recipes, the starter types, their IFCX form.
 6. **The system generator in the kernel and the Library tab**: typed systems with running bonds,
    layers and materials, drawn in the tab and assigned to selected systems.
-7. **Joints in systems** with `bim_core::join`, then lying systems, frames in openings and the
-   first full slice the project owner chooses.
+7. **Joints in systems** with `bim_core::join`, then lying systems and frames in openings.
+8. **The timber frame worked out** ([above](#the-first-full-system-the-timber-frame)): the frame
+   and its layers, then openings, then prefab units, then corners, then T junctions, each its
+   own PR.
 
 ## Calls made in writing this design
 
@@ -304,6 +386,27 @@ The author made these calls, not the project owner. They are open to correction.
   zinc is 0.8 mm, as its recipe's name says.
 - A frame (kozijn) type is an IfcWindowType and a timber frame or masonry type an IfcWallType;
   the exchange's owner may choose other classes.
+- The timber frames take the catalogue's build-up (plywood inside, a breather membrane outside)
+  rather than the live recipes' OSB outside, under the same ids. The catalogue gives the membranes
+  no thickness: they are 0.5 mm (breather) and 0.2 mm (vapour control), in rolls 1.5 m wide and
+  50 m long, laps left out. Boards are 1200×3000 at 600 centres and 1220×2440 at 610; the service
+  battens are 45×45; one bottom and one top plate; the interior wall has mineral wool too. All are
+  authoring examples, as the catalogue says, not checked structural or building-physics values.
+- An opening's header is 200 high in the exterior frames, a plate laid flat in the interior wall
+  and a batten in the service zone. The service zone frames an opening as the frame does, with its
+  own battens, so two openings stand at least four battens' widths apart. Boards are cut around
+  openings into rectangles, the policy the catalogue calls rectangular opening regions; boards cut
+  to an L around a corner come later.
+- Corners between timber frames are the author's: the catalogue names corner details but gives no
+  rule for them. The longer system runs through (the earlier one of two equally long), a three-stud
+  corner with an insulated pocket carries the inner board, and layers butt in the order they are
+  met, without laps or corner profiles. Frames meet only when they end on one point (within the
+  kernel's join tolerance of a millimetre); which runs through is not yet a choice of the user.
+  Every frame looks through the model for the frames at its ends when it is made, as walls do.
+- T junctions are the author's too: the frame that stands against another reaches that one's
+  frame, so every layer of the other on that side is left out across it, the membranes included
+  (no layer runs on behind the wall yet), and the frame that runs through gets two studs more
+  with a pocket between them rather than one stud laid flat.
 
 ## Questions for the project owner
 

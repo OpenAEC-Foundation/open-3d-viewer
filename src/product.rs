@@ -75,7 +75,7 @@ impl Product {
     pub fn pages(self) -> &'static [RibbonPage] {
         match self {
             Product::Viewer => &[RibbonPage::Home],
-            Product::Modeller => &[RibbonPage::Model, RibbonPage::View],
+            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View],
             Product::Collaborator => &[RibbonPage::Collaborate, RibbonPage::View],
         }
     }
@@ -157,8 +157,12 @@ impl Edition {
 pub enum RibbonPage {
     /// The Viewer's one tab: file, display, camera, section, measure.
     Home,
-    /// The Modeller's base elements.
+    /// The Modeller's base elements, the openings in walls, joins and changes.
     Model,
+    /// The Modeller's levels, views, sheets and library.
+    Project,
+    /// The Modeller's dimensions, texts and sections, in a floor plan or on a sheet.
+    Annotate,
     /// Display, camera, section and measure, without the file group: the Viewer's tools in the
     /// Modeller and the Collaborator.
     View,
@@ -171,29 +175,33 @@ impl RibbonPage {
         match self {
             RibbonPage::Home => l.text("Start", "Home"),
             RibbonPage::Model => l.text("Modelleren", "Model"),
+            RibbonPage::Project => l.text("Project", "Project"),
+            RibbonPage::Annotate => l.text("Annoteren", "Annotate"),
             RibbonPage::View => l.text("Beeld", "View"),
             RibbonPage::Collaborate => l.text("Samenwerken", "Collaborate"),
         }
     }
 }
 
-/// A command the Collaborator will have, shown in its ribbon but not working yet.
+/// A command of the Collaborator's ribbon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Planned {
     pub id: &'static str,
     pub icon: &'static str,
 }
 
-/// The Collaborator's commands to come, by ribbon group: issues (BCF), checking (IDS), comments
-/// and sharing.
-pub const PLANNED: [Planned; 7] = [
+/// The Collaborator's commands, by ribbon group: issues (BCF), checks (IDS and the built-in
+/// ones), clashes and the rule set that holds them.
+pub const PLANNED: [Planned; 9] = [
     Planned { id: "collaborate.issue", icon: "git.issue" },
     Planned { id: "collaborate.bcf-import", icon: "bcf.import" },
     Planned { id: "collaborate.bcf-export", icon: "bcf.export" },
-    Planned { id: "collaborate.ids", icon: "validation.select-specification" },
     Planned { id: "collaborate.check", icon: "validation.workspace" },
-    Planned { id: "collaborate.comment", icon: "note.reply" },
-    Planned { id: "collaborate.share", icon: "team.add" },
+    Planned { id: "collaborate.ids", icon: "validation.select-specification" },
+    Planned { id: "collaborate.report", icon: "export.ifc-report" },
+    Planned { id: "collaborate.clash", icon: "ifc.compare-files" },
+    Planned { id: "collaborate.rules-open", icon: "validation.select-specification" },
+    Planned { id: "collaborate.rules-save", icon: "file.save-as" },
 ];
 
 impl Planned {
@@ -204,9 +212,44 @@ impl Planned {
             "collaborate.bcf-export" => l.text("BCF opslaan", "Save BCF"),
             "collaborate.ids" => l.text("IDS laden", "Load IDS"),
             "collaborate.check" => l.text("Model controleren", "Check model"),
-            "collaborate.comment" => l.text("Opmerking", "Comment"),
-            _ => l.text("Delen", "Share"),
+            "collaborate.report" => l.text("Rapport opslaan", "Save report"),
+            "collaborate.clash" => l.text("Clashes zoeken", "Find clashes"),
+            "collaborate.rules-open" => l.text("Regelset openen", "Open rule set"),
+            _ => l.text("Regelset opslaan", "Save rule set"),
         }
+    }
+
+    /// What it does, as its tooltip.
+    pub fn detail(self, l: Language) -> &'static str {
+        match self.id {
+            "collaborate.issue" => l.text("Een issue van de weergave zoals die nu is: camera, selectie, wat verborgen is en een afbeelding", "An issue of the view as it is: camera, selection, what is hidden and a picture"),
+            "collaborate.bcf-import" => l.text("Issues openen uit een BCF-bestand (2.0, 2.1 of 3.0)", "Open issues from a BCF file (2.0, 2.1 or 3.0)"),
+            "collaborate.bcf-export" => l.text("De issues opslaan als BCF 2.1", "Save the issues as BCF 2.1"),
+            "collaborate.ids" => l.text("Een IDS toevoegen aan de regelset", "Add an IDS to the rule set"),
+            "collaborate.check" => l.text("De IFC-modellen controleren op de regelset", "Check the IFC models on the rule set"),
+            "collaborate.report" => l.text("Het resultaat van de controle opslaan als HTML-rapport", "Save what the check found as an HTML report"),
+            "collaborate.clash" => l.text("De clashtests van de regelset uitvoeren op de geopende modellen", "Run the clash tests of the rule set on the open models"),
+            "collaborate.rules-open" => l.text("Een regelset openen: controles en clashtests in één bestand", "Open a rule set: checks and clash tests in one file"),
+            _ => l.text("De regelset opslaan om te delen met het project", "Save the rule set to share with the project"),
+        }
+    }
+
+    /// What it sets off in the project.
+    #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+    pub fn event(self) -> Option<crate::app::collab::Event> {
+        use crate::app::collab::{Event, File, Report};
+        Some(match self.id {
+            "collaborate.issue" => Event::NewIssue,
+            "collaborate.bcf-import" => Event::Open(File::Bcf),
+            "collaborate.bcf-export" => Event::SaveIssues,
+            "collaborate.ids" => Event::Open(File::Ids),
+            "collaborate.check" => Event::Check,
+            "collaborate.report" => Event::Export(Report::Html),
+            "collaborate.clash" => Event::Clash,
+            "collaborate.rules-open" => Event::Open(File::Rules),
+            "collaborate.rules-save" => Event::SaveRules,
+            _ => return None,
+        })
     }
 }
 

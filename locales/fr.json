@@ -605,6 +605,13 @@
     "Location line": "Ligne de référence",
     "Chain": "Chaîne",
     "Generic": "Générique",
-    "Top height": "Hauteur du dessus"
+    "Top height": "Hauteur du dessus",
+    "Fetching the map…": "Chargement de la carte…",
+    "Model moved (m)": "Modèle déplacé (m)",
+    "No map": "Pas de carte",
+    "No properties are read of this element": "Aucune propriété n'est lue pour cet élément",
+    "X, Y, Z in metres; Enter applies.": "X, Y, Z en mètres ; Entrée applique.",
+    "Zero point": "Point zéro",
+    "Zero point in model (m)": "Point zéro dans le modèle (m)"
   }
 }

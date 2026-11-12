@@ -605,6 +605,13 @@
     "Location line": "Referenzlinie",
     "Chain": "Kette",
     "Generic": "Generisch",
-    "Top height": "Oberkante"
+    "Top height": "Oberkante",
+    "Fetching the map…": "Karte wird geladen…",
+    "Model moved (m)": "Modell verschoben (m)",
+    "No map": "Keine Karte",
+    "No properties are read of this element": "Von diesem Element werden keine Eigenschaften gelesen",
+    "X, Y, Z in metres; Enter applies.": "X, Y, Z in Metern; Enter übernimmt.",
+    "Zero point": "Nullpunkt",
+    "Zero point in model (m)": "Nullpunkt im Modell (m)"
   }
 }

@@ -35,9 +35,6 @@ pub enum Message {
     Done(Moves),
     /// The map of a model (by its id) came, as RGBA rows, or why not.
     Map(u64, Result<Arc<Vec<u8>>, String>),
-    /// Fetch the map of the picked model: asked for by the user, as it tells the tile server
-    /// where the model lies.
-    ShowMap,
 }
 
 /// The map of where a model lies.
@@ -75,9 +72,6 @@ fn shown(v: f64) -> String {
 
 impl App {
     pub(super) fn update_origin(&mut self, message: Message) -> Task<AppMessage> {
-        if matches!(message, Message::ShowMap) {
-            return self.load_map();
-        }
         if let Message::Map(id, result) = message {
             if let Some(entry) = self.models.iter_mut().find(|entry| entry.model.id == id) {
                 entry.placed.map = match result {
@@ -100,8 +94,7 @@ impl App {
         Some((lat.trim().parse().ok()?, lon.trim().parse().ok()?))
     }
 
-    /// Asks for the map of the picked model, once, when its file says where it lies; only when
-    /// the user asks for it.
+    /// Asks for the map of the picked model, once, when its file says where it lies.
     pub(super) fn load_map(&mut self) -> Task<AppMessage> {
         let Some(entry) = self.picked_model.and_then(|i| self.models.get_mut(i)) else { return Task::none() };
         let (Some((lat, lon)), Map::None) = (Self::located(entry), &entry.placed.map) else { return Task::none() };
@@ -112,7 +105,7 @@ impl App {
     fn typed_origin(&mut self, message: Message) {
         let Some(entry) = self.picked_model.and_then(|i| self.models.get_mut(i)) else { return };
         match message {
-            Message::Map(..) | Message::ShowMap => {}
+            Message::Map(..) => {}
             Message::Typed(moves, axis, typed) => {
                 if let Some(slot) = entry.placed.typed[moves as usize].get_mut(axis) {
                     *slot = Some(typed);
@@ -199,14 +192,6 @@ impl App {
         // the map of where its file says it lies
         let note = |words: String| text(words).size(11).color(p.text_muted).wrapping(Wrapping::WordOrGlyph);
         match &entry.placed.map {
-            // only on request: the tile server learns where the model lies
-            Map::None if Self::located(entry).is_some() => {
-                let ask = iced::widget::button(text(l.text("Kaart tonen (OpenStreetMap)", "Show the map (OpenStreetMap)")).size(11))
-                    .padding([3, 8])
-                    .style(move |_, s| p.row_button(s))
-                    .on_press(AppMessage::Origin(Message::ShowMap));
-                rows = rows.push(ask).push(note(l.text("Vraagt de kaart op bij OpenStreetMap; daarmee is de plek van het model daar bekend.", "Asks OpenStreetMap for the map; the place of the model is then known there.").to_string()));
-            }
             Map::None => {}
             Map::Loading => rows = rows.push(note(l.text("Kaart wordt opgehaald…", "Fetching the map…").to_string())),
             Map::Ready(picture) => {

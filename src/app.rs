@@ -20,6 +20,7 @@ mod openings;
 pub(crate) use take_over::{across_mesh, house as revit_house};
 mod join_marks;
 mod later;
+mod precut;
 mod levels;
 pub mod library;
 mod marks;
@@ -288,6 +289,15 @@ pub struct App {
     pub schedules_pending: bool,
     /// The models (by id) whose drawings are still being read (see `later`).
     pub drawings_pending: std::collections::HashSet<u64>,
+    /// The window cuts the views of the drawings ahead, on worker threads (see `precut`); off
+    /// where nothing runs the tasks (a screenshot without a window, a test): views are then cut
+    /// when they are asked for.
+    pub background_cuts: bool,
+    /// The views waiting to be cut ahead, those being cut, and a count that goes up whenever what
+    /// views show changes: a cut started before is not kept.
+    pub cut_queue: std::collections::VecDeque<String>,
+    pub cutting: std::collections::HashSet<String>,
+    pub cut_epoch: u64,
     /// Measurements shown in the viewport (made through remote control).
     pub measurements: Vec<crate::annotations::Measurement>,
     /// Where the viewport sits in the window (logical pixels), to cut it out of screenshots.
@@ -552,6 +562,8 @@ pub enum Message {
     Schedules(u64, Vec<crate::model::Schedule>),
     /// The drawings of a model (by its id) are read: they were left for after the model showed.
     Drawings(u64, Box<crate::model::Drawings>),
+    /// A view cut ahead (see `precut`): the count of when it was started, its path and its cut.
+    CutAhead(u64, String, Option<Arc<crate::drawing::Cut>>),
     /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
     OpenIfc,
     CloseIfc,
@@ -791,6 +803,10 @@ impl Default for App {
             schedules: Vec::new(),
             schedules_pending: false,
             drawings_pending: Default::default(),
+            background_cuts: false,
+            cut_queue: Default::default(),
+            cutting: Default::default(),
+            cut_epoch: 0,
             measurements: Vec::new(),
             viewport_origin: (0.0, 0.0),
             remote: Default::default(),
@@ -1315,6 +1331,7 @@ impl App {
         self.open_doc_sheets.clear();
         self.active_doc_sheet = None;
         self.cuts.clear();
+        self.cut_epoch += 1;
         self.sheet_pick = None;
         self.cut_edit = None;
         self.view_typing = None;
@@ -1813,6 +1830,7 @@ impl App {
                 self.close_plan(&plan);
                 self.document.remove_plan(&plan);
                 self.cuts.remove(&*plan);
+                self.cut_epoch += 1;
             }
             Message::NewView3d(word) => self.new_view_3d(word),
             Message::RemoveView3d(view) => {
@@ -1940,6 +1958,7 @@ impl App {
                 self.close_plan(&path);
                 self.document.remove_section(&path);
                 self.cuts.remove(&*path);
+                self.cut_epoch += 1;
             }
             Message::MakeElevations(names) => self.make_elevations(names),
             Message::NewSection(from, to, word) => {
@@ -1981,6 +2000,7 @@ impl App {
             Message::IfcQuery(query) => return self.ifc_query(query),
             Message::IfcNext(forward) => return self.ifc_next(forward),
             Message::Drawings(id, drawings) => return self.take_drawings(id, *drawings),
+            Message::CutAhead(epoch, view, cut) => return self.take_cut(epoch, view, cut),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;

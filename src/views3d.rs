@@ -99,11 +99,12 @@ pub const INK: [u8; 4] = [36, 38, 46, 255];
 pub const BEYOND: [u8; 4] = [128, 130, 138, 255];
 
 /// One of the project's views laid in 3D in full: a floor plan on its level, a section or
-/// elevation upright on its line, with the lines of its cut, what it sees beyond it, the lines
-/// it draws itself and its texts where they stand. Nothing for a path that is no such view.
+/// elevation upright on its line, with the lines of its cut and the hatches of its cut faces,
+/// what it sees beyond it, the lines it draws itself, its dimensions and its texts where they
+/// stand. Nothing for a path that is no such view.
 pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
     let mut out = Views3d::default();
-    let mut lay = |crop: Option<([f64; 2], [f64; 2])>, lines: &[[[f64; 2]; 2]], notes: &[crate::document::Note], place: &dyn Fn([f64; 2]) -> [f32; 3]| {
+    let mut lay = |crop: Option<([f64; 2], [f64; 2])>, lines: &[[[f64; 2]; 2]], notes: &[crate::document::Note], dimensions: &[crate::document::Dimension], place: &dyn Fn([f64; 2]) -> [f32; 3]| {
         let mut line = |a: [f64; 2], b: [f64; 2], color: [u8; 4]| {
             let piece = match crop {
                 Some((lo, hi)) => clip(a, b, lo, hi),
@@ -114,6 +115,18 @@ pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
             }
         };
         let wide = |p: [f32; 2]| [f64::from(p[0]), f64::from(p[1])];
+        // the hatches of its cut faces, and what it draws faint
+        for fill in cut.iter().flat_map(|c| &c.fills) {
+            let Some((_, ink)) = fill.look else { continue };
+            for [a, b] in fill.lines(1.0, 1.0) {
+                line(wide(*a), wide(*b), [ink[0], ink[1], ink[2], 255]);
+            }
+        }
+        for (segments, color) in cut.iter().flat_map(|c| [(&c.faint_below, BEYOND), (&c.faint_segments, BEYOND), (&c.hidden, BEYOND)]) {
+            for [a, b] in segments {
+                line(wide(*a), wide(*b), color);
+            }
+        }
         for (segments, color) in cut.iter().flat_map(|c| [(&c.below, BEYOND), (&c.segments, CUT)]) {
             for [a, b] in segments {
                 line(wide(*a), wide(*b), color);
@@ -122,15 +135,29 @@ pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
         for [a, b] in lines {
             line(*a, *b, INK);
         }
+        // its dimensions: the line between the points it measures, a tick at either end
+        for d in dimensions {
+            line(d.from, d.to, INK);
+            let (dx, dy) = (d.to[0] - d.from[0], d.to[1] - d.from[1]);
+            let run = dx.hypot(dy);
+            if run > 1e-9 {
+                let tick = [(-dy + dx) / run * 0.06, (dx + dy) / run * 0.06];
+                for end in [d.from, d.to] {
+                    line([end[0] - tick[0], end[1] - tick[1]], [end[0] + tick[0], end[1] + tick[1]], INK);
+                }
+            }
+        }
         let inside = |p: [f64; 2]| crop.is_none_or(|(lo, hi)| p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]);
         out.labels.extend(notes.iter().filter(|n| inside(n.at) && !n.text.trim().is_empty()).map(|n| (n.text.clone(), place(n.at))));
+        // the figure of a dimension, in whole millimetres, at its middle
+        out.labels.extend(dimensions.iter().map(|d| (format!("{:.0}", d.length() * 1000.0), place([(d.from[0] + d.to[0]) / 2.0, (d.from[1] + d.to[1]) / 2.0]))));
     };
     if let Some(plan) = doc.plans().iter().find(|p| p.path == path) {
         let Some(z) = doc.level(&plan.level).map(|l| l.elevation) else { return out };
-        lay(plan.crop, &plan.lines, &plan.notes, &|p| world([p[0], p[1], z]));
+        lay(plan.crop, &plan.lines, &plan.notes, &plan.dimensions, &|p| world([p[0], p[1], z]));
     } else if let Some(section) = doc.sections().iter().find(|s| s.path == path) {
         let (along, _) = section.axes();
-        lay(section.crop, &section.lines, &section.notes, &|p| world([section.from[0] + along[0] * p[0], section.from[1] + along[1] * p[0], p[1]]));
+        lay(section.crop, &section.lines, &section.notes, &section.dimensions, &|p| world([section.from[0] + along[0] * p[0], section.from[1] + along[1] * p[0], p[1]]));
     }
     out
 }

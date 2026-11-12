@@ -254,6 +254,7 @@ fn run_app(args: Args) -> iced::Result {
     gpu::configure(args.gpu_backend.clone(), args.present_mode.clone(), dir.as_deref());
     let mut app = initial_state(&args);
     app.initial_view = args.view;
+    app.background_cuts = true;
     // remote control for AI agents (open-3d-viewer-mcp); O3V_REMOTE=0 or --no-remote switch it off
     app.remote.enabled = !args.no_remote && std::env::var("O3V_REMOTE").as_deref() != Ok("0");
     // the work folder, as an absolute path before the app moves into it; with the HTTP endpoint
@@ -332,6 +333,7 @@ fn run_app_standalone(args: Args) -> iced::Result {
     let boot = move || {
         let mut app = initial_state(&args);
         app.initial_view = args.view;
+        app.background_cuts = true;
         app.window_shot = args.window_screenshot.clone();
         let task = match &file {
             Some(path) => iced::Task::done(Message::Open(path.clone())),

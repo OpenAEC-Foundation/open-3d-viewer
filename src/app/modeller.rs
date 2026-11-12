@@ -524,6 +524,7 @@ impl App {
         self.hover_scene = None;
         self.measure.forget_edges();
         self.cuts.clear();
+        self.cut_epoch += 1;
         self.explode_index = Some(Arc::new(crate::explode::ExplodeIndex::new(&model)));
         self.update_explode();
         if let Some(b) = self.world_bounds() {

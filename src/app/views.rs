@@ -475,9 +475,9 @@ impl App {
                         .height(12)
                         .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
                     let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemovePlan(Arc::from(plan.path.as_str())));
-                    // laid in the 3D view in full, or not
+                    // a plus lays it in the 3D view in full, where it is taken; a minus takes it out again
                     let laid = self.projected.contains(plan.path.as_str());
-                    let project = button(text("3D").size(10).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
+                    let project = button(text(if laid { "−" } else { "+" }).size(13).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
                         .padding([2, 4])
                         .style(move |_, s| if laid { p.ribbon_button(true, s) } else { p.row_button(s) })
                         .on_press(Message::ProjectView(Arc::from(plan.path.as_str())));
@@ -566,9 +566,9 @@ impl App {
                 .height(12)
                 .style(move |_, _| svg::Style { color: Some(p.text_secondary) });
             let remove = button(close).padding(3).style(move |_, s| p.row_button(s)).on_press(Message::RemoveSection(Arc::from(section.path.as_str())));
-            // laid in the 3D view in full, or not
+            // a plus lays it in the 3D view in full, where it is taken; a minus takes it out again
             let laid = self.projected.contains(section.path.as_str());
-            let project = button(text("3D").size(10).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
+            let project = button(text(if laid { "−" } else { "+" }).size(13).font(FONT_BOLD).color(if laid { p.accent } else { p.text_secondary }))
                 .padding([2, 4])
                 .style(move |_, s| if laid { p.ribbon_button(true, s) } else { p.row_button(s) })
                 .on_press(Message::ProjectView(Arc::from(section.path.as_str())));

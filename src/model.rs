@@ -714,6 +714,12 @@ pub struct SavedView {
     pub folder: Vec<String>,
 }
 
+/// Under what name what belongs to a 3D view of the file is kept beside that of the document's
+/// views (its hidden lines, the elements it leaves out): by its place among [`Model::views`].
+pub fn view3d_key(view: usize) -> String {
+    format!("view3d/{view}")
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Model {

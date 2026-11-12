@@ -191,6 +191,27 @@ impl<'a> Shapes<'a> {
         Some((own, parts))
     }
 
+    /// For finding out how a cut is placed: the first shape of a cut in the cut's own frame, the
+    /// plane's normal and point as written, and the matrix the second shape is placed by.
+    #[doc(hidden)]
+    pub fn probe_cut(&mut self, k: u32) -> Option<(Mesh, DVec3, DVec3, DMat4)> {
+        let g = &self.d.geos[k as usize];
+        let slots = g.slots;
+        let (V::Geo(first), V::Geo(second)) = (slots[0], slots[1]) else { return None };
+        let half = &self.d.geos[second as usize];
+        if g.kind != GeoKind::Csg || half.kind != GeoKind::Halfspace {
+            return None;
+        }
+        let point = |v: V| if let V::Pt(p) = v { Some(DVec3::from(self.d.points[p as usize].map(f64::from))) } else { None };
+        let (normal, at) = (point(half.slots[0])?, point(half.slots[1])?);
+        let placed = self.matrix(slots[2]);
+        let mut mesh = Mesh::default();
+        let there = self.beside(k, first);
+        // millimetres: the mesh is written in metres
+        self.shape(first, there, GREY, 1, &mut mesh);
+        Some((mesh, normal, at, placed))
+    }
+
     /// The triangles of an element's shapes.
     pub fn element(&mut self, e: &Elem, out: &mut Mesh) {
         for child in self.d.list(e.children) {

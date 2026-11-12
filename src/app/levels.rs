@@ -40,6 +40,7 @@ impl App {
         self.document = Document::default();
         self.level_form = None;
         self.cuts.clear();
+        self.cut_epoch += 1;
         self.underlays.clear();
         self.refresh_underlays();
     }

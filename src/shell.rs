@@ -962,6 +962,9 @@ impl Studio {
                 Tool::Volume => ("measure.volume", "measure.takeoff"),
                 Tool::Polygon => ("measure.polygon", "measure.perimeter"),
                 Tool::Note => ("measure.note", "draw.text"),
+                Tool::Arrow => ("measure.arrow", "draw.dimension"),
+                Tool::Line => ("measure.line", "draw.line"),
+                Tool::Cloud => ("measure.cloud", "draw.filled-area"),
             };
             list.push(Command::new(id, tool.label(l), go(Message::Measure(tool))).icon(small(icon), large(icon)).mode(app.measure.tool == Some(tool)).enabled(loaded));
         }
@@ -1528,8 +1531,8 @@ impl Studio {
         // the Viewer's tools, also the View tab of the Modeller and the Collaborator
         let view_groups = || {
             let mut measure = vec![smalls(first_tools)];
-            if !more_tools.is_empty() {
-                measure.push(smalls(more_tools));
+            for column in more_tools.chunks(3) {
+                measure.push(smalls(column));
             }
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
@@ -1607,6 +1610,9 @@ impl Studio {
             Tool::Volume => "measure.volume",
             Tool::Polygon => "measure.polygon",
             Tool::Note => "measure.note",
+            Tool::Arrow => "measure.arrow",
+            Tool::Line => "measure.line",
+            Tool::Cloud => "measure.cloud",
         }
     }
 

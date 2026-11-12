@@ -77,12 +77,15 @@ impl App {
         // the drawings the document draws, and the cuts made without the joins and phases
         self.document.recognise(&scene);
         self.cuts.clear();
+        self.cut_epoch += 1;
         self.model = Some(scene);
         // a sheet opened meanwhile showed the frames of its views alone: drawn again, with them
-        match self.active_sheet {
+        let shown = match self.active_sheet {
             Some(i) => self.open_sheet(i),
             None => Task::none(),
-        }
+        };
+        // and the views of every drawing are cut ahead, so a drawing opens at once
+        Task::batch([shown, self.cut_ahead()])
     }
 }
 

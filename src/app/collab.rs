@@ -87,6 +87,8 @@ pub struct Comparison {
     pub removed: Vec<(u64, String)>,
     /// In both, otherwise: the new version's element, its name and what changed.
     pub changed: Vec<(u64, String, String)>,
+    /// How many elements with a GlobalId each version has.
+    pub counts: (usize, usize),
 }
 
 /// Compares the elements of open model `old` with those of model `new` (their places among the
@@ -108,6 +110,7 @@ pub fn compare_models(model: &Model, old: u32, new: u32) -> Comparison {
         map
     };
     let mut out = Comparison::default();
+    out.counts = (a.len(), b.len());
     for (guid, &id) in &b {
         let Some(&before) = a.get(guid) else {
             out.added.push((id, element_name(model, id)));
@@ -2036,7 +2039,7 @@ impl App {
         );
         list = list.push(w::button(look, l.text("Vergelijken", "Compare"), K::Primary, D::Compact, None, (state.model_names.len() >= 2 && old != new).then(|| go(Event::Compare))));
         let Some(c) = &state.comparison else { return list.into() };
-        list = list.push(w::divider(look)).push(w::secondary(look, format!("{} → {}", c.old, c.new)));
+        list = list.push(w::divider(look)).push(w::secondary(look, format!("{} ({}) → {} ({} {})", c.old, c.counts.0, c.new, c.counts.1, l.text("elementen", "elements"))));
         let mut summary = row![].spacing(4);
         summary = summary.push(site::chip(look, &format!("{} {}", c.added.len(), l.text("toegevoegd", "added")), Some(Tone::Success)));
         summary = summary.push(site::chip(look, &format!("{} {}", c.removed.len(), l.text("verwijderd", "removed")), Some(Tone::Error)));
@@ -2276,7 +2279,7 @@ impl App {
                 let _ = self.collab_handle(Event::Compare);
                 match &self.collab.comparison {
                     Some(c) if self.collab.tab == Tab::Compare => Ok(json!({
-                        "old": c.old, "new": c.new, "added": c.added.len(), "removed": c.removed.len(), "changed": c.changed.len(),
+                        "old": c.old, "new": c.new, "old_elements": c.counts.0, "new_elements": c.counts.1, "added": c.added.len(), "removed": c.removed.len(), "changed": c.changed.len(),
                         "changed_first": c.changed.iter().take(20).map(|x| json!({ "element": x.0, "name": x.1, "what": x.2 })).collect::<Vec<_>>(),
                     })),
                     _ => Err(self.collab.notice.as_ref().map_or("nothing to compare".to_string(), |(_, m)| m.clone())),
@@ -2406,6 +2409,29 @@ mod tests {
             layer.props.push((id, format!("{{\"IfcType\":\"{class}\",\"Name\":\"E{id}\",\"GlobalId\":\"guid-{id}\"}}")));
         }
         Model::new(PathBuf::from("house.ifc"), "IFC", vec![layer])
+    }
+
+    #[test]
+    fn two_versions_tell_what_was_added_removed_and_changed() {
+        let old = two_blocks();
+        // the new version: the pipe renamed and moved, the wall as it was, and a third element
+        let mut new = two_blocks();
+        let layer = &mut new.layers[0];
+        layer.props[1].1 = layer.props[1].1.replace("\"E2\"", "\"E2 moved\"");
+        for p in layer.positions.chunks_exact_mut(3).skip(8) {
+            p[0] += 0.5;
+        }
+        layer.props.push((3, "{\"IfcType\":\"IfcSlab\",\"Name\":\"E3\",\"GlobalId\":\"guid-3\"}".into()));
+        layer.props.remove(0);
+        layer.props.insert(0, (1, "{\"IfcType\":\"IfcWall\",\"Name\":\"E1\",\"GlobalId\":\"guid-1\",\"ExpressId\":\"99\"}".into()));
+        let new = Model::new(PathBuf::from("house-2.ifc"), "IFC", new.layers.clone());
+        let both = Model::combine(&[Arc::new(old), Arc::new(new)]);
+        let c = compare_models(&both, 0, 1);
+        assert_eq!((c.added.len(), c.removed.len(), c.counts), (1, 0, (2, 3)), "{c:?}");
+        assert_eq!(c.added[0].1, "E3 (IfcSlab)");
+        // the pipe changed in name and place; the wall's new express id is no change
+        assert_eq!(c.changed.len(), 1, "{c:?}");
+        assert!(c.changed[0].2.contains("geometry") && c.changed[0].2.contains("Name"), "{c:?}");
     }
 
     #[test]

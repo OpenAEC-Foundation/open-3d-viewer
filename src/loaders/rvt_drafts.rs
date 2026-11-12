@@ -106,6 +106,16 @@ pub(super) fn drafts(doc: &rvt_read::Document, tags: &[super::rvt_tags::Tag], de
         draft.line_colors.resize(draft.lines.len(), None);
         draft.lines.extend(detail.lines.iter().map(|l| DraftLine { element: detail.element, a: point(l[0]), b: point(l[1]) }));
         draft.line_colors.extend(detail.colors.iter().copied());
+        let scale = draft.scale as f64;
+        // its texts and labels: from the foot of their lines, along them to where the box starts
+        for (foot, text) in &detail.texts {
+            let (width, height) = (text.width * scale, text.height() * scale);
+            let align = text.align.clamp(0, 2) as usize;
+            let back = [0.0, width / 2.0, width][align];
+            let (s, c) = text.angle.sin_cos();
+            let at = [(foot[0] * FT - c * back) as f32, (foot[1] * FT - s * back) as f32];
+            draft.texts.push(DraftText { element: detail.element, at, width: width as f32, height: height as f32, size: (text.em * scale) as f32, align: align as u8, angle: text.angle as f32, text: text.wording.clone(), face: text.face.clone() });
+        }
         draft.fills.extend(detail.fills.iter().map(|f| crate::model::DraftFill { element: detail.element, loops: f.loops.iter().map(|l| l.iter().map(|&p| point(p)).collect()).collect(), color: f.color }));
         // what covers what lies under it: a masking region and a region filled in one colour
         let covers = detail.masks.iter().chain(detail.fills.iter().map(|f| &f.loops));

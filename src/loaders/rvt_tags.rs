@@ -243,14 +243,22 @@ pub(super) fn title_block(doc: &rvt_read::Document, types: &mut Types, kind: u64
     let Some(o) = doc.object(kind) else { return Default::default() };
     let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
     let project = doc.object_ids_of_class("ProjectInfo").first().copied();
+    let texts = family_texts(doc, types, &o, &mut |part| match part.parameter {
+        -1007401 => Some(number.to_string()),
+        -1007400 => Some(name.to_string()),
+        _ => value(doc, &mut sources, &mut specs, &units, sheet, part).or_else(|| value(doc, &mut sources, &mut specs, &units, project?, part)),
+    });
+    (family_lines(doc, kind, types, 1.0), texts)
+}
+
+/// The texts of a family type, in its own coordinates (metres): its labels with what `value`
+/// gives for each of their parameters (`m_tagNoteData`), and its fixed texts (`m_textNoteData`).
+fn family_texts(doc: &rvt_read::Document, types: &mut Types, o: &ObjectView, value: &mut dyn FnMut(&Part) -> Option<String>) -> Vec<TagText> {
+    let _ = doc;
     let mut texts = Vec::new();
     let of = |field: &str| o.get(field).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v));
     for label in of("m_tagNoteData").filter_map(|l| label(l, types)) {
-        texts.extend(label.write(&mut |part| match part.parameter {
-            -1007401 => Some(number.to_string()),
-            -1007400 => Some(name.to_string()),
-            _ => value(doc, &mut sources, &mut specs, &units, sheet, part).or_else(|| value(doc, &mut sources, &mut specs, &units, project?, part)),
-        }));
+        texts.extend(label.write(value));
     }
     for fixed in of("m_textNoteData") {
         let stream = fixed.get("m_oRtfData").and_then(|v| o.deref(v)).and_then(|r| r.get("m_arrRtfStream")?.as_list());
@@ -271,7 +279,7 @@ pub(super) fn title_block(doc: &rvt_read::Document, types: &mut Types, kind: u64
         text.at = [text.at[0] + angle.sin() * drop, text.at[1] - angle.cos() * drop];
         texts.push(text);
     }
-    (family_lines(doc, kind, types, 1.0), texts)
+    texts
 }
 
 /// The regions of a title block filled in one colour, from its origin on the sheet (on paper,
@@ -408,6 +416,9 @@ pub(super) struct Detail {
     pub fills: Vec<Fill>,
     /// Its masking regions, which cover what lies under them: the outlines of each.
     pub masks: Vec<Vec<Vec<[f64; 3]>>>,
+    /// Its texts and labels: each where the foot of its lines starts (feet, in the view's
+    /// coordinates), turned as it lies in the view; sizes on paper.
+    pub texts: Vec<([f64; 3], TagText)>,
 }
 
 /// A region filled in one colour: its outlines (the first its outer one, the others its holes;
@@ -549,7 +560,22 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let at = |p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|k| origin[k] + p[0] * x[k] + side * p[1] * y[k]) };
         let fills = family.fills.iter().map(|f| Fill { loops: f.loops.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect(), color: f.color }).collect();
         let masks = family.masks.iter().map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
-        out.push(Detail { element: id, view, lines: family.lines.iter().map(|l| [at(l[0]), at(l[1])]).collect(), colors: family.colors.clone(), fills, masks });
+        // its texts and labels, with the values of the instance and of its type
+        let texts = doc.object(kind).map_or(Vec::new(), |symbol| {
+            let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
+            family_texts(doc, types, &symbol, &mut |part| value(doc, &mut sources, &mut specs, &units, id, part))
+        });
+        let texts = texts
+            .into_iter()
+            .map(|mut t| {
+                let foot = at([t.at[0] / FT, t.at[1] / FT, 0.0]);
+                let (s, c) = t.angle.sin_cos();
+                let run = std::array::from_fn::<f64, 3, _>(|k| c * x[k] + side * s * y[k]);
+                t.angle = run[1].atan2(run[0]);
+                (foot, t)
+            })
+            .collect();
+        out.push(Detail { element: id, view, lines: family.lines.iter().map(|l| [at(l[0]), at(l[1])]).collect(), colors: family.colors.clone(), fills, masks, texts });
     }
     // a filled region: its outline and the lines of its fill pattern, in its own saved graphics
     for id in doc.object_ids_of_class("FilledRegion") {
@@ -558,7 +584,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let seen_as = Seen { detail: types.view_detail(view), model: false };
         let drawn = graphics_lines(doc, id, types, scale, seen_as);
         if !drawn.lines.is_empty() || !drawn.fills.is_empty() || !drawn.masks.is_empty() {
-            out.push(Detail { element: id, view, lines: drawn.lines, colors: drawn.colors, fills: drawn.fills, masks: drawn.masks });
+            out.push(Detail { element: id, view, lines: drawn.lines, colors: drawn.colors, fills: drawn.fills, masks: drawn.masks, texts: Vec::new() });
         }
     }
     // an element of the model whose family has symbols nested in it (a pile with its mark): those,
@@ -577,7 +603,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
     for id in doc.object_ids_of_class("FamilyInstance") {
         let Some(e) = doc.element(id).filter(|e| WITH_SYMBOLS.contains(&e.category) && e.view.is_none_or(|v| v < 0)) else { continue };
         let Some(bbox) = e.bbox else { continue };
-        for &(view, low, top) in plans.iter().filter(|(_, low, top)| bbox[2] <= *top + 1e-6 && bbox[5] >= *low - 1e-6) {
+        for &(view, _, _) in plans.iter().filter(|(_, low, top)| bbox[2] <= *top + 1e-6 && bbox[5] >= *low - 1e-6) {
             if types.hidden(view, id) {
                 continue;
             }
@@ -591,7 +617,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
                 }
             };
             if !symbols.lines.is_empty() {
-                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: Vec::new(), masks: Vec::new() });
+                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: Vec::new(), masks: Vec::new(), texts: Vec::new() });
             }
         }
     }
@@ -955,7 +981,9 @@ fn read_source(o: &ObjectView) -> Source {
         values.entry(id).or_default().text = v.as_str().map(str::to_string);
     }
     // a family type: the values of its family's parameters
-    for p in o.path(&["m_pParams", "m_params"]).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_object) {
+    // a family type: the values of its family's parameters; a placed family: those of its own
+    let params = ["m_pParams", "m_pInstParams"].into_iter().filter_map(|f| o.path(&[f, "m_params"])?.as_list()).flatten();
+    for p in params.filter_map(FieldValue::as_object) {
         let Some(id) = p.get("m_paramId").and_then(FieldValue::element) else { continue };
         let text = p.get("m_str").and_then(FieldValue::as_str).filter(|s| !s.is_empty()).map(str::to_string);
         let stored = values.entry(id).or_default();

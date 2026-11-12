@@ -1523,7 +1523,6 @@ impl App {
                     self.picked_model = Some(i);
                 }
                 self.side_tab = SideTab::Properties;
-                return self.load_map();
             }
             Message::ModelVisible(i, shown) => {
                 if let Some(entry) = self.models.get_mut(i) {

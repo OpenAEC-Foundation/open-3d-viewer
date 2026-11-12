@@ -461,6 +461,22 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
     // a detail component: the lines of its family, within the view's crop as the model is
     for detail in details {
         let Some((frame, node, _)) = frames.get(&detail.view) else { continue };
+        // its texts and labels
+        for (foot, text) in &detail.texts {
+            let mut note = json!({"at": frame.project(*foot), "text": text.wording, "size": text.em});
+            if let Some(font) = text.face.to_json() {
+                note["font"] = font;
+            }
+            match text.align {
+                1 => note["align"] = "center".into(),
+                2 => note["align"] = "right".into(),
+                _ => {}
+            }
+            if text.angle.abs() > 1e-9 {
+                note["angle"] = text.angle.into();
+            }
+            marks.entry(detail.view).or_default().notes.push(note);
+        }
         let crop = crop_of(node);
         let lines = detail.lines.iter().filter_map(|l| within(frame.project(l[0]), frame.project(l[1]), crop));
         marks.entry(detail.view).or_default().lines.extend(lines.map(|l| json!(l)));

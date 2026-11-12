@@ -119,6 +119,7 @@ impl App {
                     dimensions: dimensions.to_vec(),
                     notes: self.document.view_notes(path).map_or(Vec::new(), <[_]>::to_vec),
                     lines: self.document.view_lines(path).to_vec(),
+                    fills: self.document.view_fills(path).to_vec(),
                 },
                 (None, None) => Placed::Frame,
             })
@@ -206,8 +207,9 @@ enum Placed {
     /// A legend or drafting view of the model.
     Draft(usize),
     /// A plan, section or elevation of the document: what it cuts and sees, its dimensions, texts
-    /// and the lines of its tags, and what it shows of its drawing (lower left, upper right).
-    View { cut: Option<Arc<Cut>>, crop: Option<([f64; 2], [f64; 2])>, dimensions: Vec<Dimension>, notes: Vec<Note>, lines: Vec<[[f64; 2]; 2]> },
+    /// and the lines of its tags, the regions it fills in one colour, and what it shows of its
+    /// drawing (lower left, upper right).
+    View { cut: Option<Arc<Cut>>, crop: Option<([f64; 2], [f64; 2])>, dimensions: Vec<Dimension>, notes: Vec<Note>, lines: Vec<[[f64; 2]; 2]>, fills: Vec<crate::document::Fill> },
 }
 
 /// A sheet on a canvas.
@@ -605,7 +607,7 @@ impl canvas::Program<Message> for SheetDrawing {
                     }
                     true
                 }),
-                Some(Placed::View { cut, crop, dimensions, notes, lines }) => {
+                Some(Placed::View { cut, crop, dimensions, notes, lines, fills }) => {
                     // a drawing's point on the sheet: its own origin where the viewport has it, else
                     // its crop in the viewport's box, else the middle of what it cuts in the middle
                     // of that
@@ -645,6 +647,22 @@ impl canvas::Program<Message> for SheetDrawing {
                             // what is seen beyond the cut, thin and grey, then the cut itself
                             stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
                             stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
+                        }
+                        // the regions the view fills in one colour, under its own lines: black is
+                        // the ink of the sheet; one that starts outside the crop is left out
+                        let within = |q: [f64; 2]| crop.is_none_or(|(lo, hi)| q[0] >= lo[0] && q[0] <= hi[0] && q[1] >= lo[1] && q[1] <= hi[1]);
+                        for f in fills.iter().filter(|f| f.loops.first().and_then(|l| l.first()).is_some_and(|q| within(*q))) {
+                            let outlines = Path::new(|path| {
+                                for outline in f.loops.iter().filter(|l| l.len() >= 3) {
+                                    path.move_to(on(outline[0]));
+                                    for &q in &outline[1..] {
+                                        path.line_to(on(q));
+                                    }
+                                    path.close();
+                                }
+                            });
+                            let color = if f.color == [0, 0, 0] { ink } else { Color::from_rgb8(f.color[0], f.color[1], f.color[2]) };
+                            frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
                         }
                         // the lines of its dimensions and tags reach past its crop, as its texts do;
                         // its detail lines are cut to it where they are read

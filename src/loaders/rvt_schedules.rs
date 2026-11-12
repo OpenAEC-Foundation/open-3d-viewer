@@ -51,6 +51,9 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
     let data = o.get("m_pData").and_then(|v| o.deref(v))?;
     let list = |of: &NestedObject, field: &str| -> Vec<&NestedObject> { of.get(field).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).collect() };
     let number = |of: &NestedObject, field: &str| of.get(field).and_then(FieldValue::as_i64).unwrap_or(0);
+    // the values all elements of a category share, by category and parameter
+    let mut alike: HashMap<(i64, i64), Option<f64>> = HashMap::new();
+    let comma = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1);
     let mut columns: Vec<f32> = Vec::new();
     let mut rows = Vec::new();
     // the rows of the elements are as high as the schedule sets for rows with an image
@@ -84,6 +87,17 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
                 }
                 // one line fits a row of its own height; more lines need their room
                 let lines = text.lines().count().max(1) as f64;
+                // a length every element of the category has alike is what each row shows
+                if text.is_empty() && parameter && k > 0 {
+                    let ids = (cell.get("m_categoryId").and_then(FieldValue::element), cell.get("m_paramId").and_then(FieldValue::element));
+                    if let (Some(category), Some(id), Some(format)) = (ids.0, ids.1, cell.get("m_formatOptions").and_then(FieldValue::as_object)) {
+                        let key = (category, id);
+                        let value = *alike.entry(key).or_insert_with(|| uniform(doc, category, id));
+                        if let Some(written) = value.and_then(|feet| written(format, feet, comma)) {
+                            text = written;
+                        }
+                    }
+                }
                 tall = tall.max(if lines > 1.0 { lines * em * LINE + 2.0 * PAD } else { em * 1.2 });
                 cells.push(TableCell {
                     column: c as u16,
@@ -106,8 +120,69 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
     (!rows.is_empty()).then_some(SheetTable { schedule: name, origin: [0.0; 2], columns, rows })
 }
 
+/// The number every element of a category stores alike for a parameter (internal units), on the
+/// element itself or on its type; none when they differ or none stores one.
+fn uniform(doc: &rvt_read::Document, category: i64, parameter: i64) -> Option<f64> {
+    let category = i32::try_from(category).ok()?;
+    let mut types: HashMap<u64, Option<f64>> = HashMap::new();
+    let of_type = |kind: u64| -> Option<f64> {
+        let o = doc.object(kind)?;
+        let all = o.path(&["m_pParams", "m_params"])?.as_list()?.iter().filter_map(FieldValue::as_object);
+        all.filter(|p| p.get("m_paramId").and_then(FieldValue::element) == Some(parameter)).find_map(|p| p.get("m_value")?.as_f64())
+    };
+    let mut found: Option<f64> = None;
+    for element in doc.elements_in_category(category) {
+        let Some(o) = doc.object(element.id) else { continue };
+        let own = o.get("m_pParamValueSetDouble").and_then(|v| o.deref(v)).and_then(|s| s.get("m_paramSet")?.as_list());
+        let own = own.unwrap_or(&[]).iter().filter_map(FieldValue::as_object).find(|p| p.get("m_paramId").and_then(FieldValue::element) == Some(parameter)).and_then(|p| p.get("m_value")?.as_f64());
+        let value = own.or_else(|| {
+            let kind = ["m_masterSymbolId", "m_symbolId"].into_iter().find_map(|f| u64::try_from(o.get(f)?.element()?).ok())?;
+            *types.entry(kind).or_insert_with(|| of_type(kind))
+        });
+        let Some(value) = value.filter(|v| v.is_finite()) else { continue };
+        match found {
+            Some(known) if (known - value).abs() > 1e-9 => return None,
+            _ => found = Some(value),
+        }
+    }
+    found
+}
+
+/// A length (feet) as the format of a cell writes it: its unit, its decimals, a plus before what
+/// lies above zero and the unit's sign after it. None for a format that leaves it to the project
+/// or names a unit that is no length.
+fn written(format: &NestedObject, feet: f64, comma: bool) -> Option<String> {
+    if format.get("m_bUseDefault").and_then(FieldValue::as_i64) == Some(1) {
+        return None;
+    }
+    let named = |field: &str| format.get(field).and_then(FieldValue::as_object).and_then(|t| t.get("m_typeId")?.as_str()).unwrap_or_default();
+    let (per_foot, sign) = match named("m_unitTypeId").split(':').nth(1)?.split('-').next()? {
+        "meters" => (FT, "m"),
+        "centimeters" => (FT * 100.0, "cm"),
+        "millimeters" => (FT * 1000.0, "mm"),
+        "feet" => (1.0, "ft"),
+        _ => return None,
+    };
+    let accuracy = format.get("m_accuracy").and_then(FieldValue::as_f64).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(1.0);
+    let decimals = (-accuracy.log10()).round().clamp(0.0, 9.0) as usize;
+    let value = feet * per_foot;
+    let mut figure = format!("{value:.decimals$}");
+    if comma {
+        figure = figure.replace('.', ",");
+    }
+    if value > 0.0 && format.get("m_bUsePlusPrefix").and_then(FieldValue::as_i64) == Some(1) {
+        figure.insert(0, '+');
+    }
+    if !named("m_symbolTypeId").is_empty() {
+        figure.push(' ');
+        figure.push_str(sign);
+    }
+    Some(figure)
+}
+
 #[cfg(test)]
 mod tests {
+
     /// A project with schedules on its sheets (`RVT_DRAWINGS`, read-only; skipped when absent).
     #[test]
     fn placed_schedules_become_tables_of_their_sheets() {
@@ -124,5 +199,8 @@ mod tests {
         assert!(!tables.is_empty(), "no schedule on any sheet");
         assert!(tables.iter().all(|t| t.rows.iter().all(|r| r.height > 0.0)));
         assert!(tables.iter().any(|t| t.rows.iter().flat_map(|r| &r.cells).any(|c| !c.text.is_empty())));
+        // a length every pile has alike, written as its cell formats it
+        let texts: Vec<&str> = tables.iter().flat_map(|t| &t.rows).flat_map(|r| &r.cells).map(|c| c.text.as_str()).collect();
+        eprintln!("signed lengths: {:?}", texts.iter().filter(|t| t.starts_with('+')).collect::<Vec<_>>());
     }
 }

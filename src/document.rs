@@ -106,6 +106,8 @@ pub struct PlanView {
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (x, y, metres).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// The regions drawn on it in one colour that are no model, under its lines.
+    pub fills: Vec<Fill>,
     /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
     /// all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
@@ -162,6 +164,8 @@ pub struct SectionView {
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (u, v).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// The regions drawn on it in one colour that are no model, under its lines.
+    pub fills: Vec<Fill>,
     /// What it shows, in its drawing's (u, v); `None`: all of it.
     pub crop: Option<([f64; 2], [f64; 2])>,
     /// Its own layers: those it shows otherwise than the model.
@@ -365,6 +369,34 @@ impl Align {
     }
 }
 
+/// A region of a drawing filled in one colour (red, green, blue; black is the ink of the
+/// drawing): its outlines, the first its outer one and the others its holes (a floor plan's x, y,
+/// a section's u, v; metres).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fill {
+    pub loops: Vec<Vec<[f64; 2]>>,
+    pub color: [u8; 3],
+}
+
+impl Fill {
+    fn to_ifcx(&self) -> Value {
+        json!({"loops": self.loops, "color": self.color})
+    }
+
+    /// The fills of a view of an IFCX file; one without an outline of three points is left out.
+    fn from_ifcx(v: Option<&Value>) -> Vec<Fill> {
+        let point = |p: &Value| Some([p.get(0)?.as_f64()?, p.get(1)?.as_f64()?]).filter(|p| p.iter().all(|x| x.is_finite()));
+        let all = v.and_then(Value::as_array).into_iter().flatten();
+        all.filter_map(|f| {
+            let loops: Vec<Vec<[f64; 2]>> = f.get("loops")?.as_array()?.iter().filter_map(|l| Some(l.as_array()?.iter().filter_map(point).collect::<Vec<_>>())).filter(|l| l.len() >= 3).collect();
+            let c = f.get("color")?.as_array()?;
+            let color = [u8::try_from(c.first()?.as_u64()?).ok()?, u8::try_from(c.get(1)?.as_u64()?).ok()?, u8::try_from(c.get(2)?.as_u64()?).ok()?];
+            (!loops.is_empty()).then_some(Fill { loops, color })
+        })
+        .collect()
+    }
+}
+
 /// A dimension on a drawing: the distance between two of its points (a floor plan's x, y in the
 /// model's frame, a section's u, v; metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -543,15 +575,17 @@ impl Document {
         for (i, p) in self.plans.iter().enumerate() {
             let level = self.level(&p.level).map(|l| l.name.clone()).unwrap_or_default();
             children.insert(format!("plan {}", i + 1), p.path.clone().into());
+            let fills = |all: &[Fill]| all.iter().map(Fill::to_ifcx).collect::<Vec<_>>();
             let view = json!({
-                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "layers": p.layers,
+                "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
             nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(view, &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
+            let fills = |all: &[Fill]| all.iter().map(Fill::to_ifcx).collect::<Vec<_>>();
             let view = json!({
-                "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "layers": s.layers,
+                "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "fills": fills(&s.fills), "layers": s.layers,
             });
             nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
         }
@@ -639,6 +673,7 @@ impl Document {
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     lines: lines(p.get("lines")),
+                    fills: Fill::from_ifcx(p.get("fills")),
                     crop: rect(p.get("crop")),
                     layers: layers(p.get("layers")),
                     hidden: hidden(p),
@@ -656,6 +691,7 @@ impl Document {
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
                     lines: lines(s.get("lines")),
+                    fills: Fill::from_ifcx(s.get("fills")),
                     crop: rect(s.get("crop")),
                     layers: layers(s.get("layers")),
                     hidden: hidden(s),
@@ -760,7 +796,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -811,7 +847,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1048,6 +1084,14 @@ impl Document {
             return Some(&p.notes);
         }
         self.section(path).map(|s| &s.notes[..])
+    }
+
+    /// The regions of a view filled in one colour that are no model, drawn under its lines.
+    pub fn view_fills(&self, path: &str) -> &[Fill] {
+        if let Some(p) = self.plan(path) {
+            return &p.fills;
+        }
+        self.section(path).map_or(&[], |s| &s.fills[..])
     }
 
     /// The lines of a view that are no model: the shapes and leaders of its tags.

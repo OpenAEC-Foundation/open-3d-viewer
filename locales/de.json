@@ -612,6 +612,7 @@
     "No properties are read of this element": "Von diesem Element werden keine Eigenschaften gelesen",
     "X, Y, Z in metres; Enter applies.": "X, Y, Z in Metern; Enter übernimmt.",
     "Zero point": "Nullpunkt",
-    "Zero point in model (m)": "Nullpunkt im Modell (m)"
+    "Zero point in model (m)": "Nullpunkt im Modell (m)",
+    "The file dialog is opening; the first time it can take a moment.": "Das Dateifenster wird geöffnet; beim ersten Mal kann das etwas dauern."
   }
 }

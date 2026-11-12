@@ -93,6 +93,9 @@ impl Loader for RvtLoader {
         let details = super::rvt_tags::details(&doc, &mut types);
         drop(types);
         project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags, &details);
+        // the phase and phase filter of every view, and the phases of the elements
+        let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
+        project.phasing = super::rvt_phases::phasing(&doc, &ids, &|view| crate::document::uuid(&format!("rvt/{file}/view/{view}")));
         // the legends and drafting views: drawings without a model
         project.drafts = super::rvt_drafts::drafts(&doc, &tags, &details);
         project.drawn = super::rvt_props::drawn(&doc, &project.drafts);
@@ -512,14 +515,18 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
                     let range = v.view_range.as_ref();
                     let cut = limited(range.and_then(|r| r.cut)).or(level.zip(v.cut_offset).map(|(l, c)| l + c)).or(level.map(|l| l + 4.0))?;
                     let ceiling = v.kind == K::CeilingPlan;
-                    let (low, high) = if ceiling {
+                    // a structural plan can look up too: its view depth then lies above its cut
+                    let above = limited(range.and_then(|r| r.depth)).filter(|depth| !ceiling && *depth > cut + 1e-6);
+                    let (low, high) = if let Some(depth) = above {
+                        (cut, depth + 0.01)
+                    } else if ceiling {
                         (cut, limited(range.and_then(|r| r.top)).unwrap_or(cut + 10.0))
                     } else {
                         // down to the view depth, so the floor below the cut shows
                         let low = limited(range.and_then(|r| r.depth)).or(limited(range.and_then(|r| r.bottom))).or(level).unwrap_or(cut - 10.0);
                         (low - 0.01, cut)
                     };
-                    out.plan = Some(PlanRange { low: low as f32 * FT, high: high as f32 * FT, from_below: ceiling });
+                    out.plan = Some(PlanRange { low: low as f32 * FT, high: high as f32 * FT, from_below: ceiling || above.is_some() });
                 }
                 _ => {
                     let crop = v.crop_box.as_ref()?;

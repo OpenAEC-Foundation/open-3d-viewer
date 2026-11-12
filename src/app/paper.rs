@@ -190,9 +190,25 @@ impl App {
                 *u |= *out;
             }
         }
-        let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
+        // the view's phase and phase filter: what it leaves out, and what it draws in halftone
+        let mut halftone: Vec<bool> = Vec::new();
+        let phasing = &model.project.phasing;
+        if let (true, Some(index)) = (phasing.applies(path), self.explode_index.as_deref()) {
+            units.resize(index.len().max(units.len()), false);
+            halftone.resize(index.len(), false);
+            for unit in 1..index.len() {
+                let Some(crate::explode::UnitOwner::Element(id)) = index.owner(unit) else { continue };
+                match phasing.look(path, id) {
+                    crate::phasing::Look::Hidden => units[unit] = true,
+                    crate::phasing::Look::Halftone => halftone[unit] = true,
+                    crate::phasing::Look::Normal => {}
+                }
+            }
+        }
+        let index = self.explode_index.clone().filter(|_| units.iter().chain(&halftone).any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
-        let shown = Shown { layers: &layers, hidden: &hidden };
+        let faint = |l: usize, v: u32| index.as_ref().is_some_and(|ix| halftone.get(ix.unit(l, v)).copied().unwrap_or(false));
+        let shown = Shown { layers: &layers, hidden: &hidden, faint: halftone.iter().any(|h| *h).then_some(&faint as &dyn Fn(usize, u32) -> bool) };
         let mut cut = if let Some(s) = self.document.section(path) {
             section_at(&model, shown, s.from, s.to, s.depth)
         } else {

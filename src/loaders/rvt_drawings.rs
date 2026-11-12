@@ -60,6 +60,10 @@ pub(super) struct Types<'a> {
     dashes: HashMap<i64, Option<std::sync::Arc<Vec<f64>>>>,
     /// Per view: its scale (1 : this).
     scales: HashMap<u64, f64>,
+    /// Per dimension type: the length of its witness lines, when they have one of their own.
+    witness: HashMap<i64, Option<f64>>,
+    /// Per text type: how far its box stands off its texts, when it shows one.
+    boxes: HashMap<i64, Option<f64>>,
     /// Per view: its level of detail.
     details: HashMap<u64, i64>,
     /// Per type of texts (a text type, a dimension type): the typeface of its letters.
@@ -68,7 +72,7 @@ pub(super) struct Types<'a> {
 
 impl<'a> Types<'a> {
     pub(super) fn new(doc: &'a rvt_read::Document) -> Self {
-        Self { doc, text: HashMap::new(), dimension: HashMap::new(), styles: Vec::new(), hidden: HashMap::new(), lines: HashMap::new(), patterns: HashMap::new(), solids: HashMap::new(), colors: HashMap::new(), dashes: HashMap::new(), scales: HashMap::new(), details: HashMap::new(), faces: HashMap::new() }
+        Self { doc, text: HashMap::new(), dimension: HashMap::new(), styles: Vec::new(), hidden: HashMap::new(), lines: HashMap::new(), patterns: HashMap::new(), solids: HashMap::new(), colors: HashMap::new(), dashes: HashMap::new(), scales: HashMap::new(), witness: HashMap::new(), boxes: HashMap::new(), details: HashMap::new(), faces: HashMap::new() }
     }
 
     /// The em of a font element's letters on paper (metres).
@@ -272,6 +276,33 @@ impl<'a> Types<'a> {
         })
     }
 
+    /// The length of the witness lines of a dimension type on paper (metres), when it gives them
+    /// one of their own (its value -1006327 is 1; the length is -1006407) and does not let them
+    /// run from what is measured.
+    pub(super) fn witness_fixed(&mut self, kind: i64) -> Option<f64> {
+        let doc = self.doc;
+        *self.witness.entry(kind).or_insert_with(|| {
+            let o = u64::try_from(kind).ok().and_then(|id| doc.object(id))?;
+            let value = |parameter: i64| {
+                let all = o.path(&["m_pParamValueSetDouble", "m_paramSet"]).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_object);
+                all.filter(|p| p.get("m_paramId").and_then(FieldValue::element) == Some(parameter)).find_map(|p| p.get("m_value")?.as_f64())
+            };
+            (value(-1006327)? == 1.0).then_some(())?;
+            value(-1006407).filter(|l| l.is_finite() && *l > 0.0 && *l < 0.5).map(|l| l * FT)
+        })
+    }
+
+    /// How far the box a text type draws around its texts stands off them, on paper (metres):
+    /// none for a type that shows no box (`m_textBoxVisibility`, `m_leaderOffsetSheet`).
+    pub(super) fn text_box(&mut self, kind: i64) -> Option<f64> {
+        let doc = self.doc;
+        *self.boxes.entry(kind).or_insert_with(|| {
+            let o = u64::try_from(kind).ok().and_then(|id| doc.object(id))?;
+            (o.get("m_textBoxVisibility") == Some(&FieldValue::Bool(true))).then_some(())?;
+            Some(o.get("m_leaderOffsetSheet").and_then(FieldValue::as_f64).filter(|v| v.is_finite() && *v >= 0.0 && *v < 0.1).map_or(0.002, |v| v * FT))
+        })
+    }
+
     /// The scale of a view (1 : this); 1 for a view without one.
     pub(super) fn view_scale(&mut self, view: u64) -> f64 {
         let doc = self.doc;
@@ -409,6 +440,7 @@ struct Marks {
     notes: Vec<Value>,
     dimensions: Vec<Value>,
     lines: Vec<Value>,
+    fills: Vec<Value>,
 }
 
 /// The views of `views` the document can hold, as its nodes (path, attributes), and before them
@@ -461,6 +493,11 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
     // a detail component: the lines of its family, within the view's crop as the model is
     for detail in details {
         let Some((frame, node, _)) = frames.get(&detail.view) else { continue };
+        // its regions filled in one colour
+        for fill in &detail.fills {
+            let loops: Vec<Vec<[f64; 2]>> = fill.loops.iter().map(|l| l.iter().map(|&p| frame.project(p)).collect()).collect();
+            marks.entry(detail.view).or_default().fills.push(json!({"loops": loops, "color": fill.color}));
+        }
         // its texts and labels
         for (foot, text) in &detail.texts {
             let mut note = json!({"at": frame.project(*foot), "text": text.wording, "size": text.em});
@@ -485,13 +522,21 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
     for id in doc.object_ids_of_class("CurveElem") {
         let Some(view) = owner(id).filter(|v| !types.hidden(*v, id)) else { continue };
         let Some(o) = doc.object(id).filter(|o| o.category == Some(LINES)) else { continue };
-        if o.get("m_categoryId").and_then(FieldValue::element).is_some_and(|style| style != -1 && !types.line_shows(style)) {
+        // its line style: that of its curve
+        let curve = o.get("m_pCurveDriver").and_then(|v| o.deref(v)).and_then(|d| d.get("m_pCrv")).and_then(|v| o.deref(v));
+        let style = curve.and_then(|c| c.get("m_GInfo")?.as_object()?.get("m_categoryId")?.element()).filter(|s| *s != -1);
+        if style.is_some_and(|style| !types.line_shows(style)) {
             continue;
         }
         let (frame, node, _) = &frames[&view];
         let crop = crop_of(node);
         let points = curve_points(&o);
-        let lines = points.windows(2).filter_map(|w| within(frame.project(w[0]), frame.project(w[1]), crop));
+        // in its line pattern, sized on paper
+        let strokes: Vec<[[f64; 3]; 2]> = match style.and_then(|style| types.line_dashes(style)) {
+            Some(pattern) => dashed(&points, &pattern, scales[&view]),
+            None => points.windows(2).map(|w| [w[0], w[1]]).collect(),
+        };
+        let lines = strokes.iter().filter_map(|w| within(frame.project(w[0]), frame.project(w[1]), crop));
         marks.entry(view).or_default().lines.extend(lines.map(|l| json!(l)));
     }
     let styles = types.styles_node().map(|node| (uuid(&format!("rvt/{file}/drawings")), node));
@@ -503,6 +548,7 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
             node["notes"] = m.notes.into();
             node["dimensions"] = m.dimensions.into();
             node["lines"] = m.lines.into();
+            node["fills"] = m.fills.into();
         }
         Some((uuid(&format!("rvt/{file}/view/{}", v.id)), json!({ key: node })))
     });
@@ -588,18 +634,21 @@ fn view_node(v: &ViewInfo) -> Option<(Frame, Value, &'static str)> {
     if v.class == "DBViewPlan" {
         let (_, level) = v.level?;
         let name = v.level_name.as_ref()?;
-        let ceiling = v.kind == K::CeilingPlan;
+        let range = v.view_range.as_ref();
+        // a structural plan whose view depth lies above its cut looks up (a pile plan, cut under
+        // the foundation): it is drawn as a ceiling plan is, from its cut up to that depth
+        let above = range.and_then(|r| r.depth).zip(v.cut_offset).filter(|(depth, cut)| v.kind == K::StructuralPlan && depth.is_finite() && *depth > level + cut + 1e-6).map(|(depth, _)| depth);
+        let ceiling = v.kind == K::CeilingPlan || above.is_some();
         let kind = match v.kind {
-            K::CeilingPlan => "ceiling",
+            _ if ceiling => "ceiling",
             K::StructuralPlan => "structural",
             _ => "floor",
         };
         let mut node = json!({"name": v.name, "kind": kind, "level": name});
-        let range = v.view_range.as_ref();
         if let Some(cut) = v.cut_offset {
             node["cut"] = (cut * FT).into();
             // a plan looks down from its level to its view depth, a ceiling plan up from its cut
-            let far = if ceiling { range.and_then(|r| r.top).map(|top| top - level - cut) } else { range.and_then(|r| r.depth.or(r.bottom)).map(|low| level - low) };
+            let far = if let Some(depth) = above { Some(depth - level - cut) } else if ceiling { range.and_then(|r| r.top).map(|top| top - level - cut) } else { range.and_then(|r| r.depth.or(r.bottom)).map(|low| level - low) };
             if let Some(far) = far.filter(|f| f.is_finite()) {
                 // just past the plane, so what lies on it shows
                 node["depth"] = (far.max(0.0) * FT + 0.01).into();
@@ -750,7 +799,9 @@ pub(super) fn dimension_marks(o: &ObjectView, project: &dyn Fn([f64; 3]) -> [f64
         return None;
     }
     marks.lines.push([on_line(first), on_line(last)]);
-    // the witness lines
+    // the witness lines: from just off each point, or of a length of their own where the type
+    // says so
+    let fixed = o.get("m_styleSymbolId").and_then(FieldValue::element).and_then(|kind| types.witness_fixed(kind)).map(|l| l * scale);
     let (gap, past) = (style.gap * scale, style.extension * scale);
     for &q in &points {
         let foot = on_line(along(q));
@@ -760,7 +811,10 @@ pub(super) fn dimension_marks(o: &ObjectView, project: &dyn Fn([f64; 3]) -> [f64
             continue;
         }
         let w = [(foot[0] - q[0]) / length, (foot[1] - q[1]) / length];
-        let start = gap.min(length);
+        let start = match fixed {
+            Some(fixed) => (length - fixed).max(0.0),
+            None => gap.min(length),
+        };
         marks.lines.push([[q[0] + w[0] * start, q[1] + w[1] * start], [foot[0] + w[0] * past, foot[1] + w[1] * past]]);
     }
     // the mark at each point

@@ -220,6 +220,9 @@ pub struct State {
     amounts: Vec<String>,
     labelled: Option<Language>,
     pub notice: Option<(Tone, String)>,
+    /// A file dialog was asked for and has not answered: Windows can take seconds to show the
+    /// first one, so the panel says it is coming.
+    pub dialog_open: bool,
     /// The language of the interface: what the panel reports is said in it.
     pub language: Language,
     cancel: Arc<AtomicBool>,
@@ -268,6 +271,7 @@ impl Default for State {
             amounts: Vec::new(),
             labelled: None,
             notice: None,
+            dialog_open: false,
             language: Language::English,
             cancel: Arc::default(),
             run: 0,
@@ -924,6 +928,23 @@ impl App {
         if self.collab.rule_sets.is_empty() {
             self.collab.rule_sets = RuleSet::built_in(l == Language::Dutch);
         }
+        // a file dialog answered: its notice goes
+        if matches!(event, Event::Opened(..) | Event::SaveIssuesTo(_) | Event::SaveRulesTo(_) | Event::ExportTo(..)) && self.collab.dialog_open {
+            self.collab.dialog_open = false;
+            self.collab.notice = None;
+        }
+        let asks = matches!(event, Event::Open(_) | Event::SaveIssues | Event::SaveRules | Event::Export(_));
+        let task = self.collab_dispatch(event);
+        // a file dialog asked for: say it is coming until it answers
+        if asks {
+            self.collab.dialog_open = true;
+            self.collab_note(Tone::Info, l.text("Het bestandsvenster wordt geopend; de eerste keer kan dat even duren.", "The file dialog is opening; the first time it can take a moment."));
+        }
+        task
+    }
+
+    fn collab_dispatch(&mut self, event: Event) -> Task<Message> {
+        let l = self.collab.language;
         match event {
             Event::Tab(tab) => self.collab.tab = tab,
             Event::Dismiss => self.collab.notice = None,
@@ -1528,17 +1549,19 @@ impl App {
         .spacing(6)
         .align_y(Alignment::Center)]
         .spacing(2);
+        let mut rows = column![].spacing(2);
         for (i, entry) in self.models.iter().enumerate() {
-
             let line = row![
-                w::checkbox(look, state.model_names.get(i).map_or("", |c| c.1.as_str()), entry.visible, Some(move |on| Message::ModelVisible(i, on))),
+                w::checkbox(look, entry.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D"), entry.visible, Some(move |on| Message::ModelVisible(i, on))),
                 Space::new().width(Length::Fill),
                 w::secondary(look, entry.model.format.clone()),
             ]
             .spacing(6)
             .align_y(Alignment::Center);
-            models = models.push(line);
+            rows = rows.push(line);
         }
+        // many models: their list scrolls in a few rows, so the tabs under it stay in view
+        models = if self.models.len() > 6 { models.push(scrollable(container(rows).padding(iced::Padding { right: 10.0, ..iced::Padding::ZERO })).height(128)) } else { models.push(rows) };
         let mut body = column![
             models,
             w::divider(look),
@@ -2548,5 +2571,59 @@ mod tests {
         // written and read again: the same issue
         let again = Issues::read(&app.collab.issues.write().unwrap()).unwrap();
         assert_eq!(again.topics[0].viewpoints, topic.viewpoints);
+    }
+}
+
+#[cfg(test)]
+mod timing {
+    use super::*;
+
+    /// Where the time goes when models are added one after the other (`O3V_MODELS_DIR`: a folder
+    /// of IFC files; skipped without it): `cargo test --lib timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads a folder of models"]
+    fn adding_models_one_after_the_other() {
+        let Some(dir) = std::env::var_os("O3V_MODELS_DIR").map(PathBuf::from) else { return };
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().filter_map(|e| Some(e.ok()?.path())).filter(|p| p.to_string_lossy().ends_with("-IFC4.ifc")).collect();
+        files.sort();
+        files.truncate(std::env::var("O3V_MODELS").ok().and_then(|n| n.parse().ok()).unwrap_or(10));
+        let mut app = App::default();
+        let mut total = std::time::Duration::ZERO;
+        for file in &files {
+            let t = Instant::now();
+            let model = Arc::new(crate::loaders::load(file).unwrap());
+            let read = t.elapsed();
+            let mut sources: Vec<Arc<Model>> = app.models.iter().map(|e| e.model.clone()).collect();
+            if sources.is_empty() {
+                sources.extend(app.model.clone());
+            }
+            sources.push(model.clone());
+            let t = Instant::now();
+            let combined = Model::combine(&sources);
+            let combine = t.elapsed();
+            let t = Instant::now();
+            let _ = crate::explode::ExplodeIndex::new(&combined);
+            let index = t.elapsed();
+            let t = Instant::now();
+            app.add_model(model);
+            let add = t.elapsed();
+            total += read + add;
+            eprintln!("{:>5.2} read {:>5.2} combine {:>5.2} explode index {:>5.2} add_model (all)  {} triangles  {}", read.as_secs_f32(), combine.as_secs_f32(), index.as_secs_f32(), add.as_secs_f32(), combined.triangle_count(), file.file_name().unwrap().to_string_lossy());
+        }
+        // the same files added at once: read one after the other, the scene built once
+        let mut at_once = App::default();
+        let t = Instant::now();
+        let sources: Vec<crate::loaders::Source> = files.iter().cloned().map(crate::loaders::Source::File).collect();
+        let mut message = Some(Message::AddSeveral(sources[1..].to_vec()));
+        at_once.set_model(Arc::new(crate::loaders::load(&files[0]).unwrap()));
+        let _ = at_once.update(message.take().unwrap());
+        while at_once.adding_model {
+            let next = at_once.loading_stack.0.last().cloned().unwrap();
+            let crate::loaders::Source::File(path) = next else { break };
+            let _ = at_once.update(Message::Loaded(crate::loaders::load(&path).map(Arc::new)));
+        }
+        eprintln!("one after the other: {:.1} s; at once: {:.1} s, {} models, {} triangles", total.as_secs_f32(), t.elapsed().as_secs_f32(), at_once.models.len(), at_once.model.as_ref().map_or(0, |m| m.triangle_count()));
+        assert_eq!(at_once.models.len(), files.len());
+        assert_eq!(at_once.model.as_ref().map(|m| m.triangle_count()), app.model.as_ref().map(|m| m.triangle_count()));
     }
 }

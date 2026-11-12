@@ -195,6 +195,11 @@ struct Label {
     /// The typeface of its letters.
     face: crate::typeface::Face,
     width: f64,
+    /// How its lines are turned in its family (radians, counter-clockwise).
+    angle: f64,
+    /// How far the box drawn around it stands off its lines (on paper, metres), when its text
+    /// type shows one.
+    boxed: Option<f64>,
     parts: Vec<Part>,
 }
 
@@ -217,11 +222,23 @@ impl Label {
         if wording.trim().is_empty() {
             return None;
         }
-        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: 0.0, face: self.face.clone() };
-        // from where the label stands to the foot of its lines
-        text.at[1] -= [text.height(), text.height() / 2.0, 0.0][self.vertical as usize];
+        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: self.angle, face: self.face.clone() };
+        // from where the label stands down its own up to the foot of its lines
+        let drop = [text.height(), text.height() / 2.0, 0.0][self.vertical as usize];
+        text.at = [text.at[0] + self.angle.sin() * drop, text.at[1] - self.angle.cos() * drop];
         Some(text)
     }
+}
+
+/// The box around a text, `off` away from its lines (on paper, metres): its four sides, turned
+/// with it.
+fn frame_of(text: &TagText, off: f64) -> [[[f64; 2]; 2]; 4] {
+    let (sin, cos) = text.angle.sin_cos();
+    let left = -[0.0, text.width / 2.0, text.width][text.align.clamp(0, 2) as usize] - off;
+    let (right, foot, top) = (left + text.width + 2.0 * off, -off, text.height() + off);
+    let at = |x: f64, y: f64| [text.at[0] + x * cos - y * sin, text.at[1] + x * sin + y * cos];
+    let corners = [at(left, foot), at(right, foot), at(right, top), at(left, top)];
+    std::array::from_fn(|k| [corners[k], corners[(k + 1) % 4]])
 }
 
 /// Which of a text box's heights its origin is, as its flags say: 0 the top, 1 the middle, 2 the
@@ -377,13 +394,18 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
         let (sin, cos) = angle.sin_cos();
         let turn = |p: [f64; 2]| [p[0] * cos - p[1] * sin, p[0] * sin + p[1] * cos];
         let mut texts = Vec::new();
+        let mut boxes: Vec<[[f64; 2]; 2]> = Vec::new();
         for label in &shape.labels {
             let Some(mut text) = label.write(&mut |part| tagged.and_then(|e| value(doc, &mut sources, &mut specs, &units, e, part))) else { continue };
+            // the box its text type draws around it
+            if let Some(off) = label.boxed {
+                boxes.extend(frame_of(&text, off).map(|l| [turn(l[0]), turn(l[1])]));
+            }
             text.at = turn(text.at);
-            text.angle = angle;
+            text.angle += angle;
             texts.push(text);
         }
-        let lines = shape.lines.iter().map(|l| [turn(l[0]), turn(l[1])]).collect();
+        let lines = shape.lines.iter().map(|l| [turn(l[0]), turn(l[1])]).chain(boxes).collect();
         // a leader: through its elbow to its end, both stored from the head; an end that holds on
         // to what is tagged is not stored: the head stands off that by `m_relHeadLocation`
         let mut leader = Vec::new();
@@ -555,8 +577,10 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let axis = |k: usize, or: [f64; 3]| axes.and_then(|a| Some([vec3(a.first())?[k], vec3(a.get(1))?[k], vec3(a.get(2))?[k]])).unwrap_or(or);
         let (x, y) = (axis(0, [1.0, 0.0, 0.0]), axis(1, [0.0, 1.0, 0.0]));
         // a mirrored instance says so apart from where it is placed: its family's y the other way
+        // (a type of its own is saved mirrored already: only the family's shared type is turned)
         let mirrored = o.get("m_pGeomTable").and_then(|v| o.deref(v)).is_some_and(|t| t.get("m_refPntMirrored") == Some(&FieldValue::Bool(true)));
-        let side = if mirrored { -1.0 } else { 1.0 };
+        let shared = named(o.get("m_masterSymbolId")) == Some(kind);
+        let side = if mirrored && shared { -1.0 } else { 1.0 };
         let at = |p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|k| origin[k] + p[0] * x[k] + side * p[1] * y[k]) };
         let fills = family.fills.iter().map(|f| Fill { loops: f.loops.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect(), color: f.color }).collect();
         let masks = family.masks.iter().map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
@@ -616,8 +640,8 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
                     symbols
                 }
             };
-            if !symbols.lines.is_empty() {
-                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: Vec::new(), masks: Vec::new(), texts: Vec::new() });
+            if !symbols.lines.is_empty() || !symbols.fills.is_empty() {
+                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: symbols.fills.clone(), masks: Vec::new(), texts: Vec::new() });
             }
         }
     }
@@ -672,7 +696,10 @@ fn label(l: &NestedObject, types: &mut Types) -> Option<Label> {
     if parts.is_empty() {
         return None;
     }
-    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, face, width, parts })
+    let base = vec3(l.get("m_baseVec")).unwrap_or([1.0, 0.0, 0.0]);
+    let angle = Some(base[1].atan2(base[0])).filter(|a| a.abs() > 1e-6).unwrap_or(0.0);
+    let boxed = l.get("m_attrId").and_then(FieldValue::element).and_then(|k| types.text_box(k));
+    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, face, width, angle, boxed, parts })
 }
 
 /// The lines of a family type, from its saved graphics (on paper, metres): see [`graphics_lines`].

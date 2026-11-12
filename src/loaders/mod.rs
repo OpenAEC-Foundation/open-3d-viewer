@@ -29,6 +29,8 @@ mod rvt_props;
 mod rvt_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_materials;
+#[cfg(not(target_arch = "wasm32"))]
+mod rvt_phases;
 mod ifc;
 
 mod skp;

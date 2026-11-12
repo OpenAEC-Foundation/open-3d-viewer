@@ -23,6 +23,7 @@ pub mod drawing;
 pub mod drawing2d;
 pub mod caps;
 pub mod hatching;
+pub mod phasing;
 pub mod element_class;
 mod explode;
 pub mod export;

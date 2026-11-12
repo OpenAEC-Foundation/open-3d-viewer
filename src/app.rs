@@ -121,6 +121,11 @@ pub struct App {
     pub model: Option<Arc<Model>>,
     pub models: Vec<ModelEntry>,
     adding_model: bool,
+    /// The files still to add after the one loading, when several are added at once: each is
+    /// read, and the scene is built once, after the last.
+    add_queue: Vec<loaders::Source>,
+    /// Models read from the queue that the scene does not show yet.
+    scene_stale: bool,
     /// The files of the last model when they layer over each other (IFCX) and that model: a
     /// file of the same kind added next composes with them into that model.
     layer_stack: (Vec<loaders::Source>, Option<u64>),
@@ -348,6 +353,8 @@ pub enum Message {
     Open(PathBuf),
     Picked(Option<loaders::Source>),
     AddPicked(Option<loaders::Source>),
+    /// Several files to add at once: read one after the other, shown together.
+    AddSeveral(Vec<loaders::Source>),
     ModelVisible(usize, bool),
     /// Pick a model in the explorer (its project data show); picked already: fold or unfold it.
     PickModel(usize),
@@ -681,6 +688,8 @@ impl Default for App {
             model: None,
             models: Vec::new(),
             adding_model: false,
+            add_queue: Vec::new(),
+            scene_stale: false,
             layer_stack: (Vec::new(), None),
             loading_stack: (Vec::new(), false),
             visible: Vec::new(),
@@ -864,13 +873,22 @@ fn pick_model_task(add: bool) -> Task<Message> {
                 Some(work) => dialog.set_directory(work),
                 None => dialog,
             };
-            let file = dialog.pick_file().await?;
-            #[cfg(not(target_arch = "wasm32"))]
-            return Some(loaders::Source::File(file.path().to_path_buf()));
-            #[cfg(target_arch = "wasm32")]
-            return Some(loaders::Source::Bytes { name: file.file_name(), data: Arc::new(file.read().await) });
+            // adding: several files at once
+            let files = if add { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
+            let mut sources = Vec::new();
+            for file in files {
+                #[cfg(not(target_arch = "wasm32"))]
+                sources.push(loaders::Source::File(file.path().to_path_buf()));
+                #[cfg(target_arch = "wasm32")]
+                sources.push(loaders::Source::Bytes { name: file.file_name(), data: Arc::new(file.read().await) });
+            }
+            sources
         },
-        move |source| if add { Message::AddPicked(source) } else { Message::Picked(source) },
+        move |mut sources: Vec<loaders::Source>| match (add, sources.len()) {
+            (true, 2..) => Message::AddSeveral(sources),
+            (true, _) => Message::AddPicked(sources.pop()),
+            (false, _) => Message::Picked(sources.pop()),
+        },
     )
 }
 
@@ -1203,6 +1221,33 @@ impl App {
         self.restore_model_visibility();
     }
 
+    /// Files to add after the one that is loading (see `add_queue`).
+    pub(crate) fn queue_added(&mut self, sources: Vec<loaders::Source>) {
+        self.add_queue = sources;
+    }
+
+    /// Takes a model in among the open ones without building the scene: more follow, and the
+    /// scene is built once (`add_model` of the last, or `rebuild_scene`).
+    fn add_model_later(&mut self, model: Arc<Model>) {
+        if self.models.is_empty() {
+            if let Some(shown) = self.model.clone() {
+                self.models.push(ModelEntry::new(shown, 0));
+            }
+        }
+        let first = self.models.last().map_or(0, |entry| entry.layers.end);
+        self.models.push(ModelEntry::new(model, first));
+        self.scene_stale = true;
+    }
+
+    /// Builds the scene again from the open models.
+    fn rebuild_scene(&mut self) {
+        let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
+        if sources.len() > 1 {
+            self.set_scene(Arc::new(Model::combine(&sources)));
+            self.restore_model_visibility();
+        }
+    }
+
     fn restore_model_visibility(&mut self) {
         for entry in &self.models {
             for (layer, shown) in entry.layers.clone().zip(&entry.layer_visibility) {
@@ -1399,6 +1444,14 @@ impl App {
             Message::AddPicked(None) => {}
             Message::Picked(Some(source)) => return self.open(source, false),
             Message::AddPicked(Some(source)) => return self.open(source, true),
+            Message::AddSeveral(mut sources) => {
+                if sources.is_empty() || matches!(self.status, Status::Loading { .. }) {
+                    return Task::none();
+                }
+                let first = sources.remove(0);
+                self.add_queue = sources;
+                return self.open(first, true);
+            }
             Message::Open(path) => return self.open(loaders::Source::File(path), false),
             Message::Loaded(Ok(model)) => {
                 let (mut stack, restack) = std::mem::take(&mut self.loading_stack);
@@ -1406,6 +1459,15 @@ impl App {
                     stack.clear();
                 }
                 let id = model.id;
+                // more files wait to be added: this one joins the models, and the scene is built
+                // once, after the last
+                if self.adding_model && !restack && !self.add_queue.is_empty() && self.model.is_some() {
+                    self.add_model_later(model);
+                    let next = self.add_queue.remove(0);
+                    self.status = Status::Loaded(String::new());
+                    return self.open(next, true);
+                }
+                self.scene_stale = false;
                 if restack {
                     self.replace_last_model(model);
                 } else if self.adding_model {
@@ -1415,10 +1477,25 @@ impl App {
                 }
                 self.layer_stack = (stack, Some(id));
                 self.adding_model = false;
+                // the first of several is in: the others are added after it
+                if !self.add_queue.is_empty() {
+                    let next = self.add_queue.remove(0);
+                    return self.open(next, true);
+                }
                 self.remote_loaded();
                 return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
+                // one of several files does not read: the others still come
+                if self.adding_model && !self.add_queue.is_empty() {
+                    eprintln!("not added: {e}");
+                    let next = self.add_queue.remove(0);
+                    self.status = Status::Loaded(String::new());
+                    return self.open(next, true);
+                }
+                if std::mem::take(&mut self.scene_stale) {
+                    self.rebuild_scene();
+                }
                 self.adding_model = false;
                 self.loading_stack = (Vec::new(), false);
                 self.status = Status::Error(e);

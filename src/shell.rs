@@ -1054,6 +1054,7 @@ impl Studio {
         {
             self.app.collab.language = self.l();
             self.app.collab.refresh();
+            self.app.collab_refresh_sides();
         }
         // the app knows whether the Modeller is shown: there an opened file's walls have grips
         self.app.modeller.in_modeller = self.product() == Product::Modeller;

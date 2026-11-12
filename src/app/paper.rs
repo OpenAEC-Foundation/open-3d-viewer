@@ -205,10 +205,22 @@ impl App {
                 }
             }
         }
+        // what the view leaves out because the element's family shows none of its solids as the
+        // view looks at it
+        if let (Some(off), Some(index)) = (model.project.switched_off.get(path), self.explode_index.as_deref()) {
+            units.resize(index.len().max(units.len()), false);
+            for unit in 1..index.len() {
+                if matches!(index.owner(unit), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    units[unit] = true;
+                }
+            }
+        }
         let index = self.explode_index.clone().filter(|_| units.iter().chain(&halftone).any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
         let faint = |l: usize, v: u32| index.as_ref().is_some_and(|ix| halftone.get(ix.unit(l, v)).copied().unwrap_or(false));
-        let shown = Shown { layers: &layers, hidden: &hidden, faint: halftone.iter().any(|h| *h).then_some(&faint as &dyn Fn(usize, u32) -> bool) };
+        // the pieces joined elements of one material make: the seams within one are not drawn
+        let pieces = crate::hatching::pieces(&model, bim_library::DrawingStandard::Nen47);
+        let shown = Shown { layers: &layers, hidden: &hidden, faint: halftone.iter().any(|h| *h).then_some(&faint as &dyn Fn(usize, u32) -> bool), pieces: (!pieces.is_empty()).then_some(&pieces) };
         let mut cut = if let Some(s) = self.document.section(path) {
             section_at(&model, shown, s.from, s.to, s.depth)
         } else {

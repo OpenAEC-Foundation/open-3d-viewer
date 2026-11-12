@@ -201,6 +201,12 @@ pub struct ProjectData {
     /// The phases of the elements and of the views (Revit): what a view leaves out or draws in
     /// halftone.
     pub phasing: crate::phasing::Phasing,
+    /// Per view (its path) the elements it leaves out because their family shows none of their
+    /// solids as the view looks at them (Revit): a pile in a plan that draws only its symbol.
+    pub switched_off: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+    /// The pairs of elements joined in the file (Revit), the smaller id first: a drawing leaves
+    /// out the line between two of them of one material.
+    pub joins: std::collections::HashSet<(u64, u64)>,
     /// The properties of what the legends and drafting views draw, by its element in the file.
     pub drawn: crate::app::drawn_props::Drawn,
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;

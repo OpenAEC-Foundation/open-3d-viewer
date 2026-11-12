@@ -60,6 +60,9 @@ pub(super) struct Types<'a> {
     dashes: HashMap<i64, Option<std::sync::Arc<Vec<f64>>>>,
     /// Per view: its scale (1 : this).
     scales: HashMap<u64, f64>,
+    /// The elements of the model a view leaves out because their family shows none of their
+    /// solids as the view looks at them: view and element.
+    off: Vec<(u64, u64)>,
     /// Per dimension type: the length of its witness lines, when they have one of their own.
     witness: HashMap<i64, Option<f64>>,
     /// Per text type: how far its box stands off its texts, when it shows one.
@@ -72,7 +75,7 @@ pub(super) struct Types<'a> {
 
 impl<'a> Types<'a> {
     pub(super) fn new(doc: &'a rvt_read::Document) -> Self {
-        Self { doc, text: HashMap::new(), dimension: HashMap::new(), styles: Vec::new(), hidden: HashMap::new(), lines: HashMap::new(), patterns: HashMap::new(), solids: HashMap::new(), colors: HashMap::new(), dashes: HashMap::new(), scales: HashMap::new(), witness: HashMap::new(), boxes: HashMap::new(), details: HashMap::new(), faces: HashMap::new() }
+        Self { doc, text: HashMap::new(), dimension: HashMap::new(), styles: Vec::new(), hidden: HashMap::new(), lines: HashMap::new(), patterns: HashMap::new(), solids: HashMap::new(), colors: HashMap::new(), dashes: HashMap::new(), scales: HashMap::new(), off: Vec::new(), witness: HashMap::new(), boxes: HashMap::new(), details: HashMap::new(), faces: HashMap::new() }
     }
 
     /// The em of a font element's letters on paper (metres).
@@ -301,6 +304,17 @@ impl<'a> Types<'a> {
             (o.get("m_textBoxVisibility") == Some(&FieldValue::Bool(true))).then_some(())?;
             Some(o.get("m_leaderOffsetSheet").and_then(FieldValue::as_f64).filter(|v| v.is_finite() && *v >= 0.0 && *v < 0.1).map_or(0.002, |v| v * FT))
         })
+    }
+
+    /// Notes that a view leaves an element of the model out: its family shows none of its solids
+    /// as the view looks at it.
+    pub(super) fn switch_off(&mut self, view: u64, element: u64) {
+        self.off.push((view, element));
+    }
+
+    /// The elements views leave out ([`Self::switch_off`]): view and element.
+    pub(super) fn switched_off(&self) -> &[(u64, u64)] {
+        &self.off
     }
 
     /// The scale of a view (1 : this); 1 for a view without one.

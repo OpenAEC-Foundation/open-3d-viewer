@@ -91,11 +91,17 @@ impl Loader for RvtLoader {
         let tags = super::rvt_tags::tags(&doc, &mut types);
         // the detail components of its views, as the lines of their families
         let details = super::rvt_tags::details(&doc, &mut types);
+        // what a view leaves out because the element's family shows none of its solids there
+        for &(view, element) in types.switched_off() {
+            project.switched_off.entry(crate::document::uuid(&format!("rvt/{file}/view/{view}"))).or_default().insert(element);
+        }
         drop(types);
         project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags, &details);
         // the phase and phase filter of every view, and the phases of the elements
         let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
         project.phasing = super::rvt_phases::phasing(&doc, &ids, &|view| crate::document::uuid(&format!("rvt/{file}/view/{view}")));
+        // which of the drawn elements are joined with which
+        project.joins = super::rvt_joins::joins(&doc, layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)));
         // the legends and drafting views: drawings without a model
         project.drafts = super::rvt_drafts::drafts(&doc, &tags, &details);
         project.drawn = super::rvt_props::drawn(&doc, &project.drafts);

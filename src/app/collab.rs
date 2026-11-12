@@ -428,6 +428,34 @@ pub enum Event {
     Dismiss,
 }
 
+/// Asks for a file to open (or, with `save`, where to save one) in a dialog that belongs to the
+/// window, so it opens in front of it, and then the message `then` makes of the answer.
+fn ask_file(
+    make: impl Fn() -> rfd::AsyncFileDialog + Send + Sync + Clone + 'static,
+    save: bool,
+    then: impl Fn(Option<PathBuf>) -> Message + Send + Sync + Clone + 'static,
+) -> Task<Message> {
+    let alone = make.clone();
+    iced::window::latest()
+        .then(move |id| match id {
+            Some(id) => {
+                let make = make.clone();
+                iced::window::run(id, move |window| make().set_parent(window))
+            }
+            None => Task::done(alone()),
+        })
+        .then(move |dialog| {
+            let then = then.clone();
+            Task::perform(
+                async move {
+                    let file = if save { dialog.save_file().await } else { dialog.pick_file().await };
+                    file.map(|f| f.path().to_path_buf())
+                },
+                then,
+            )
+        })
+}
+
 /// Work on a thread of its own, its result as an event.
 fn job(work: impl FnOnce() -> Event + Send + 'static) -> Task<Message> {
     Task::perform(
@@ -910,8 +938,8 @@ impl App {
                     File::Ids => ("IDS", &["ids"]),
                     File::Rules => ("Rule set", &["json"]),
                 };
-                let dialog = rfd::AsyncFileDialog::new().add_filter(name, extensions);
-                return Task::perform(async move { dialog.pick_file().await.map(|f| f.path().to_path_buf()) }, move |path| Message::Collab(Event::Opened(kind, path)));
+                let (name, extensions) = (name.to_string(), extensions.iter().map(|e| e.to_string()).collect::<Vec<_>>());
+                return ask_file(move || rfd::AsyncFileDialog::new().add_filter(&name, &extensions), false, move |path| Message::Collab(Event::Opened(kind, path)));
             }
             Event::Opened(_, None) => {}
             Event::Opened(File::Bcf, Some(path)) => match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| Issues::read(&bytes)) {
@@ -942,13 +970,15 @@ impl App {
                 Err(e) => self.collab_note(Tone::Error, e),
             },
             Event::SaveIssues => {
-                let mut dialog = rfd::AsyncFileDialog::new().add_filter("BCF", &["bcfzip"]).set_file_name("issues.bcfzip");
-                if let Some(path) = &self.collab.issues_path {
-                    if let (Some(folder), Some(name)) = (path.parent(), path.file_name()) {
-                        dialog = dialog.set_directory(folder).set_file_name(name.to_string_lossy());
+                let at = self.collab.issues_path.clone();
+                let make = move || {
+                    let dialog = rfd::AsyncFileDialog::new().add_filter("BCF", &["bcfzip"]).set_file_name("issues.bcfzip");
+                    match at.as_ref().and_then(|p| Some((p.parent()?, p.file_name()?))) {
+                        Some((folder, name)) => dialog.set_directory(folder).set_file_name(name.to_string_lossy()),
+                        None => dialog,
                     }
-                }
-                return Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, |path| Message::Collab(Event::SaveIssuesTo(path)));
+                };
+                return ask_file(make, true, |path| Message::Collab(Event::SaveIssuesTo(path)));
             }
             Event::SaveIssuesTo(Some(path)) => match self.collab.issues.write().and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())) {
                 Ok(()) => {
@@ -960,8 +990,7 @@ impl App {
             },
             Event::SaveRules => {
                 let name = self.collab.rules().map(|r| r.name.clone()).unwrap_or_default();
-                let dialog = rfd::AsyncFileDialog::new().add_filter("Rule set", &["json"]).set_file_name(format!("{name}.rules.json"));
-                return Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, |path| Message::Collab(Event::SaveRulesTo(path)));
+                return ask_file(move || rfd::AsyncFileDialog::new().add_filter("Rule set", &["json"]).set_file_name(format!("{name}.rules.json")), true, |path| Message::Collab(Event::SaveRulesTo(path)));
             }
             Event::SaveRulesTo(Some(path)) => {
                 if let Some(Err(e)) = self.collab.rules().map(|r| r.write(&path)) {
@@ -1258,8 +1287,7 @@ impl App {
                     Report::ClashesCsv => ("clashes", "csv"),
                     Report::IssuesHtml => ("issues", "html"),
                 };
-                let dialog = rfd::AsyncFileDialog::new().add_filter(extension, &[extension]).set_file_name(format!("{name}.{extension}"));
-                return Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, move |path| Message::Collab(Event::ExportTo(kind, path)));
+                return ask_file(move || rfd::AsyncFileDialog::new().add_filter(extension, &[extension]).set_file_name(format!("{name}.{extension}")), true, move |path| Message::Collab(Event::ExportTo(kind, path)));
             }
             Event::ExportTo(kind, Some(path)) => {
                 let reports = || self.collab.checked.iter().filter_map(|c| Some((c.name.as_str(), c.report.as_ref().ok()?)));
@@ -2416,15 +2444,14 @@ mod tests {
         let old = two_blocks();
         // the new version: the pipe renamed and moved, the wall as it was, and a third element
         let mut new = two_blocks();
-        let layer = &mut new.layers[0];
-        layer.props[1].1 = layer.props[1].1.replace("\"E2\"", "\"E2 moved\"");
-        for p in layer.positions.chunks_exact_mut(3).skip(8) {
+        new.path = PathBuf::from("house-2.ifc");
+        let renamed = new.props[&2].replace("\"E2\"", "\"E2 moved\"");
+        new.props.insert(2, renamed);
+        for p in new.layers[0].positions.chunks_exact_mut(3).skip(8) {
             p[0] += 0.5;
         }
-        layer.props.push((3, "{\"IfcType\":\"IfcSlab\",\"Name\":\"E3\",\"GlobalId\":\"guid-3\"}".into()));
-        layer.props.remove(0);
-        layer.props.insert(0, (1, "{\"IfcType\":\"IfcWall\",\"Name\":\"E1\",\"GlobalId\":\"guid-1\",\"ExpressId\":\"99\"}".into()));
-        let new = Model::new(PathBuf::from("house-2.ifc"), "IFC", new.layers.clone());
+        new.props.insert(3, "{\"IfcType\":\"IfcSlab\",\"Name\":\"E3\",\"GlobalId\":\"guid-3\"}".into());
+        new.props.insert(1, "{\"IfcType\":\"IfcWall\",\"Name\":\"E1\",\"GlobalId\":\"guid-1\",\"ExpressId\":\"99\"}".into());
         let both = Model::combine(&[Arc::new(old), Arc::new(new)]);
         let c = compare_models(&both, 0, 1);
         assert_eq!((c.added.len(), c.removed.len(), c.counts), (1, 0, (2, 3)), "{c:?}");

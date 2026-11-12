@@ -3,7 +3,7 @@
 //!
 //! This asks the tile server for the tiles around the place, so the place is known there; nothing
 //! else of the model or the user goes along (the request names the app and its version only). It
-//! is asked for when the user asks for it, once per place while the model is open. Without a network there is no map and
+//! is asked for once per place while the model is open. Without a network there is no map and
 //! the pane says so. The browser build shows no map.
 
 /// The zoom of the tiles: a street and its surroundings.

@@ -6,7 +6,7 @@
 //! bolts) are its body. A connection that cannot be made is refused by its own evaluation and
 //! leaves its members as they are.
 
-use crate::element::{planar_parts, point_solid, system_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::element::{planar_parts, point_solid, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
 use crate::join::{self, JoinKind, JoinResult, Member, MemberEnd};
 use crate::solid::{Plane, Solid};
 use crate::tile::{TileGrid, TileKey};
@@ -153,7 +153,8 @@ impl Model {
                 };
                 Ok(parts.into_iter().map(|(material, solid)| Part { material, ..part(solid) }).collect())
             }
-            Shape::System(s) => Ok(system_parts(s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
+            // a framed system meeting another at a corner ends there as the corner says
+            Shape::System(s) => Ok(crate::system::joined_parts(self, element, s)?.into_iter().map(|p| Part { class: p.class, tile: element.tile, solid: p.solid, material: p.material }).collect()),
             Shape::Linear(l) => {
                 let joined = self.joined(element.id, element.tile);
                 let body = join::finish(&Member::of(l)?, joined.start, joined.end, &joined.additions, &joined.removals);
@@ -444,7 +445,7 @@ mod tests {
         let point = add(&mut m, Shape::Point(PointDef { at: DVec3::new(1.0, 1.0, 0.0), rotation: 0.5, size: DVec3::new(0.6, 0.6, 0.9) }));
         let system = add(
             &mut m,
-            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None }),
+            Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
         );
         assert!((m.evaluate(point).unwrap()[0].solid.volume() - 0.6 * 0.6 * 0.9).abs() < 1e-12);
         assert!(m.evaluate(system).unwrap().len() > 10);
@@ -507,7 +508,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let s = add(
             &mut m,
-            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None }),
+            Shape::System(SystemDef { start: DVec2::ZERO, end: DVec2::new(3.0, 0.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.5, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
         );
         let parts = m.evaluate(s).unwrap().len();
         let b = add(&mut m, beam(DVec3::new(0.75, -1.0, 2.0), DVec3::new(0.75, 1.0, 2.0)));

@@ -75,7 +75,7 @@ impl Product {
     pub fn pages(self) -> &'static [RibbonPage] {
         match self {
             Product::Viewer => &[RibbonPage::Home],
-            Product::Modeller => &[RibbonPage::Model, RibbonPage::View],
+            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View],
             Product::Collaborator => &[RibbonPage::Collaborate, RibbonPage::View],
         }
     }
@@ -157,8 +157,12 @@ impl Edition {
 pub enum RibbonPage {
     /// The Viewer's one tab: file, display, camera, section, measure.
     Home,
-    /// The Modeller's base elements.
+    /// The Modeller's base elements, the openings in walls, joins and changes.
     Model,
+    /// The Modeller's levels, views, sheets and library.
+    Project,
+    /// The Modeller's dimensions, texts and sections, in a floor plan or on a sheet.
+    Annotate,
     /// Display, camera, section and measure, without the file group: the Viewer's tools in the
     /// Modeller and the Collaborator.
     View,
@@ -171,6 +175,8 @@ impl RibbonPage {
         match self {
             RibbonPage::Home => l.text("Start", "Home"),
             RibbonPage::Model => l.text("Modelleren", "Model"),
+            RibbonPage::Project => l.text("Project", "Project"),
+            RibbonPage::Annotate => l.text("Annoteren", "Annotate"),
             RibbonPage::View => l.text("Beeld", "View"),
             RibbonPage::Collaborate => l.text("Samenwerken", "Collaborate"),
         }

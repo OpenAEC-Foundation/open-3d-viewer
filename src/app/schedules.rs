@@ -192,6 +192,11 @@ impl App {
             Some(bar) => column![bar, viewport].into(),
             None => viewport,
         };
+        // a tool on: its type and sizes over it
+        let viewport = match self.placement_bar(p, l) {
+            Some(strip) => column![strip, viewport].into(),
+            None => viewport,
+        };
         if self.ifc.shown && self.ifc.structure.is_some() {
             return column![container(viewport).height(FillPortion(1)), rule::horizontal(1), container(self.ifc_panel(p, l)).height(FillPortion(1)).style(move |_| p.panel())].into();
         }

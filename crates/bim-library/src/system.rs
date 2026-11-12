@@ -6,10 +6,14 @@
 //! of its own: the boards on either side of a timber frame. One generator makes them all; a type
 //! says how. A floor or a ceiling is a system lying level.
 //!
-//! The starter types are Open BIM Studio's recipes for curtain walls, frames, timber frames,
-//! masonry, cladding, hollow-core floors and a suspended ceiling, with generic names: no
-//! manufacturer's system is claimed. The sizes are those recipes' authoring examples, not checked
-//! structural, thermal or fire values.
+//! A timber frame's members are framed rather than on a grid's lines: plates along its foot and
+//! head run through, studs stand between them at their centres from the start, and noggins carry
+//! the boards' seams ([`Framing`]).
+//!
+//! The starter types are Open BIM Studio's recipes for curtain walls, frames, masonry, cladding,
+//! hollow-core floors and a suspended ceiling, and the timber frames of its building-systems
+//! catalogue, with generic names: no manufacturer's system is claimed. The sizes are those
+//! recipes' authoring examples, not checked structural, thermal or fire values.
 
 use crate::material::Material;
 use crate::{millimetres, Lang, LibraryError, MIN_THICKNESS};
@@ -132,17 +136,67 @@ impl Grid {
     }
 }
 
-/// The members on a grid's lines: `width` in the face, `depth` across it, of `material`.
+/// How a framed face's members lie, as a timber frame's: plates along its foot and its head run
+/// through its length; studs stand between them, one at either end and one at every bay's centre
+/// from the start; noggins between the studs at every row up from the foot, where boards meet. As
+/// many plates lie on one another as it says (a double top plate is two). The frame lies inside
+/// its face.
+///
+/// An opening in it is framed: a king stud either side runs from plate to plate, a trimmer inside
+/// it carries a header `header` high (as deep as the studs) over the opening, a window has a sill
+/// under it, and cripple studs stand above the header (over the trimmers too) and below the sill
+/// at the bay's centres. The header is the type's nominal size, not a lintel sized for its load.
+///
+/// A frame longer than its `unit` is made of prefab units, each with its own plates and end studs;
+/// no board crosses a joint between them.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Framing {
+    pub bottom_plates: u8,
+    pub top_plates: u8,
+    #[serde(default = "Framing::nominal_header")]
+    pub header: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<f64>,
+}
+
+impl Framing {
+    /// One plate at the foot and one at the head, headers 200 high, made in one piece.
+    pub const PLATES: Framing = Framing { bottom_plates: 1, top_plates: 1, header: 0.2, unit: None };
+
+    fn nominal_header() -> f64 {
+        Self::PLATES.header
+    }
+
+    /// This framing with headers `header` high.
+    pub fn with_header(self, header: f64) -> Self {
+        Self { header, ..self }
+    }
+
+    /// This framing made in prefab units at most `unit` long.
+    pub fn with_unit(self, unit: f64) -> Self {
+        Self { unit: Some(unit), ..self }
+    }
+}
+
+/// The members of a face: `width` in the face, `depth` across it, of `material`; on a grid's lines
+/// or, with a framing, framed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Members {
     pub width: f64,
     pub depth: f64,
     pub material: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framing: Option<Framing>,
 }
 
 impl Members {
     pub fn new(width: f64, depth: f64, material: &str) -> Self {
-        Self { width, depth, material: material.into() }
+        Self { width, depth, material: material.into(), framing: None }
+    }
+
+    /// These members framed as `framing` says.
+    pub fn framed(self, framing: Framing) -> Self {
+        Self { framing: Some(framing), ..self }
     }
 }
 
@@ -225,7 +279,7 @@ impl SystemType {
                 return Err(LibraryError::NotPositive);
             }
             if let Some(m) = members {
-                if !thick(m.width) || !thick(m.depth) {
+                if !thick(m.width) || !thick(m.depth) || m.framing.is_some_and(|f| !thick(f.header) || f.unit.is_some_and(|u| !thick(u))) {
                     return Err(LibraryError::NotPositive);
                 }
                 known(&m.material)?;
@@ -283,9 +337,9 @@ impl SystemType {
     }
 }
 
-/// The starter system types: Open BIM Studio's recipes for curtain walls, frames, timber frames,
-/// masonry, sand-lime elements, cladding, hollow-core floors and a suspended ceiling. Glass is 24
-/// mm, as there.
+/// The starter system types: Open BIM Studio's recipes for curtain walls, frames, masonry,
+/// sand-lime elements, cladding, hollow-core floors and a suspended ceiling, and its catalogue's
+/// timber frames. Glass is 24 mm, as there.
 pub fn starter() -> Vec<SystemType> {
     use Pattern::*;
     use SystemGroup::*;
@@ -293,14 +347,40 @@ pub fn starter() -> Vec<SystemType> {
     let upright = |id: &str, group, grid, members, panels| SystemType { id: id.into(), group, grid, members, panels, layers: Vec::new(), corners: Corner::Butt, lying: None };
     // aluminium and PVC frames are mitred at their corners
     let mitred = |t: SystemType| SystemType { corners: Corner::Mitre, ..t };
-    // a timber frame: studs `depth` deep at 600 with mineral wool between them, OSB on the
-    // exterior face and gypsum board on the interior one
-    let timber_frame = |id: &str, depth: f64| {
-        let boards = |offset: f64, material: &str, thickness: f64| SystemLayer { offset, grid: Grid::new(1.2, 3.0, Stack), members: None, panels: Panels::new(material, thickness) };
+    // boards of `material` laid edge to edge, `bay` wide and `row` high; membranes come in rolls
+    // 1.5 m wide, laid in courses up the face
+    let boards = |offset: f64, material: &str, thickness: f64, bay: f64, row: f64| SystemLayer { offset, grid: Grid::new(bay, row, Stack), members: None, panels: Panels::new(material, thickness) };
+    let roll = |offset: f64, material: &str, thickness: f64| boards(offset, material, thickness, 50.0, 1.5);
+    // an exterior timber frame as Open BIM Studio's catalogue builds it, from the outside in: a
+    // breather membrane; the frame, studs 38 wide and `depth` deep at `centres` between a bottom and
+    // a top plate, mineral wool between them; plywood; a vapour control layer; a service zone of
+    // 45×45 battens framed at the studs' centres, mineral wool between them; gypsum board. The
+    // boards are two bays wide (1200 at 600, 1220 at 610) and as high as the frame's rows (3000,
+    // or 2440 with the 1220 boards), so their seams fall on studs and on noggins. The frame is made
+    // in prefab units of at most 3300, the catalogue's example.
+    let timber_frame = |id: &str, depth: f64, centres: f64| {
+        let row = if centres > 0.6 { 2.44 } else { 3.0 };
+        let (membrane, plywood, vapour, service, gypsum) = (0.0005, 0.018, 0.0002, 0.045, 0.0125);
+        // the centre of a layer `thickness` thick, `before` from the frame's interior face
+        let inside = |before: f64, thickness: f64| -(depth / 2.0 + before + thickness / 2.0);
+        // a batten over an opening in the service zone
+        let battens = Members::new(0.045, service, "timber").framed(Framing::PLATES.with_header(0.045));
         SystemType {
-            layers: vec![boards(depth / 2.0 + 0.009, "osb", 0.018), boards(-(depth / 2.0 + 0.00625), "gypsum-board", 0.0125)],
-            ..upright(id, TimberFrame, Grid::new(0.6, 3.0, Stack), Members::new(0.038, depth, "timber"), Panels::new("mineral-wool", depth))
+            layers: vec![
+                roll(depth / 2.0 + membrane / 2.0, "breather-membrane", membrane),
+                boards(inside(0.0, plywood), "plywood", plywood, 2.0 * centres, row),
+                roll(inside(plywood, vapour), "vapour-control-membrane", vapour),
+                SystemLayer { offset: inside(plywood + vapour, service), grid: Grid::new(centres, row, Stack), members: Some(battens), panels: Panels::new("mineral-wool", service) },
+                boards(inside(plywood + vapour + service, gypsum), "gypsum-board", gypsum, 2.0 * centres, row),
+            ],
+            ..upright(id, TimberFrame, Grid::new(centres, row, Stack), Members::new(0.038, depth, "timber").framed(Framing::PLATES.with_unit(3.3)), Panels::new("mineral-wool", depth))
         }
+    };
+    // an interior timber frame: studs 38×89 at 600 with mineral wool, gypsum board on either face,
+    // a plate laid flat over an opening
+    let internal = SystemType {
+        layers: [1.0, -1.0].map(|side| boards(side * (0.089 / 2.0 + 0.00625), "gypsum-board", 0.0125, 1.2, 3.0)).to_vec(),
+        ..upright("system.timber-frame-internal-89", TimberFrame, Grid::new(0.6, 3.0, Stack), Members::new(0.038, 0.089, "timber").framed(Framing::PLATES.with_header(0.038)), Panels::new("mineral-wool", 0.089))
     };
     let hollow_core = |depth: f64| SystemType {
         lying: Some(3.0),
@@ -313,8 +393,13 @@ pub fn starter() -> Vec<SystemType> {
         upright("system.frame-timber-67x114", Frame, Grid::new(0.9, 1.2, Stack), Members::new(0.067, 0.114, "timber"), glass()),
         mitred(upright("system.frame-aluminium-75", Frame, Grid::new(1.0, 1.4, Stack), Members::new(0.05, 0.075, "aluminium"), glass())),
         mitred(upright("system.frame-pvc-70", Frame, Grid::new(1.0, 1.4, Stack), Members::new(0.064, 0.07, "pvc"), glass())),
-        timber_frame("system.timber-frame-140", 0.14),
-        timber_frame("system.timber-frame-184", 0.184),
+        timber_frame("system.timber-frame-140", 0.14, 0.6),
+        timber_frame("system.timber-frame-184", 0.184, 0.6),
+        timber_frame("system.timber-frame-235", 0.235, 0.6),
+        timber_frame("system.timber-frame-140-610", 0.14, 0.61),
+        timber_frame("system.timber-frame-184-610", 0.184, 0.61),
+        timber_frame("system.timber-frame-235-610", 0.235, 0.61),
+        internal,
         // bricks as panels, the mortar as members set back 5 mm from either face
         upright("system.masonry-waal-stretcher", Masonry, Grid::new(0.22, 0.0625, RunningBond), Members::new(0.01, 0.09, "mortar"), Panels::new("brick", 0.1)),
         upright("system.masonry-dik-stretcher", Masonry, Grid::new(0.22, 0.075, RunningBond), Members::new(0.01, 0.09, "mortar"), Panels::new("brick", 0.1)),
@@ -340,7 +425,7 @@ mod tests {
     #[test]
     fn the_starter_types_check_and_have_names_of_their_own() {
         let types = starter();
-        assert_eq!(types.len(), 21);
+        assert_eq!(types.len(), 26);
         for t in &types {
             t.check(&materials()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
         }
@@ -361,6 +446,8 @@ mod tests {
         // the group's name says the material
         assert_eq!(name("system.timber-frame-140", Lang::Nl), "Houtskeletbouw 38×140 h.o.h. 600");
         assert_eq!(name("system.timber-frame-140", Lang::Fr), "Ossature bois 38×140 entraxe 600");
+        assert_eq!(name("system.timber-frame-235-610", Lang::En), "Timber frame 38×235 c/c 610");
+        assert_eq!(name("system.timber-frame-internal-89", Lang::Nl), "Houtskeletbouw 38×89 h.o.h. 600");
         assert_eq!(name("system.frame-pvc-70", Lang::De), "Rahmen PVC 64×70 Achsabstand 1000");
         assert_eq!(name("system.masonry-waal-stretcher", Lang::Nl), "Metselwerk 100 220×62.5 halfsteensverband");
         assert_eq!(name("system.masonry-waal-stack", Lang::En), "Brickwork 100 220×62.5 stack bond");
@@ -371,13 +458,31 @@ mod tests {
     }
 
     #[test]
-    fn a_timber_frame_has_its_boards_on_its_faces() {
+    fn a_timber_frame_has_its_layers_against_one_another() {
         let t = starter().into_iter().find(|t| t.id == "system.timber-frame-140").unwrap();
-        // OSB 18 against the studs' exterior face, gypsum board 12.5 against their interior one
+        assert_eq!(t.members.framing, Some(Framing::PLATES.with_unit(3.3)));
+        // from the outside in: the membrane, the frame, plywood, the vapour control layer, the
+        // service zone, gypsum board; each layer against the one before it
+        let mut faces: Vec<(f64, f64, &str)> = t.faces().map(|(offset, _, m, p)| (offset, m.map_or(0.0, |m| m.depth).max(p.thickness), p.material.as_str())).collect();
+        faces.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let materials: Vec<&str> = faces.iter().map(|f| f.2).collect();
+        assert_eq!(materials, ["breather-membrane", "mineral-wool", "plywood", "vapour-control-membrane", "mineral-wool", "gypsum-board"]);
+        for pair in faces.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(((a.0 - a.1 / 2.0) - (b.0 + b.1 / 2.0)).abs() < 1e-12, "{} against {}", b.2, a.2);
+        }
         let (interior, exterior) = t.extent();
-        assert!((exterior - (0.07 + 0.018)).abs() < 1e-12 && (interior + (0.07 + 0.0125)).abs() < 1e-12, "{interior} {exterior}");
-        assert_eq!(t.faces().count(), 3);
-        assert!(t.layers.iter().all(|l| l.members.is_none()), "boards lie edge to edge");
+        assert!((exterior - (0.07 + 0.0005)).abs() < 1e-12 && (interior + (0.07 + 0.018 + 0.0002 + 0.045 + 0.0125)).abs() < 1e-12, "{interior} {exterior}");
+        // the boards are two bays wide and as high as the frame's rows; the battens framed
+        for l in &t.layers {
+            match &l.members {
+                Some(m) => assert_eq!((m.framing, l.grid.bay), (Some(Framing::PLATES.with_header(m.width)), t.grid.bay), "a batten over an opening"),
+                None if l.panels.material.ends_with("membrane") => assert_eq!((l.grid.bay, l.grid.row), (50.0, 1.5)),
+                None => assert_eq!((l.grid.bay, l.grid.row), (2.0 * t.grid.bay, t.grid.row)),
+            }
+        }
+        let wide = starter().into_iter().find(|t| t.id == "system.timber-frame-184-610").unwrap();
+        assert_eq!((wide.grid.bay, wide.grid.row, wide.layers[1].grid.bay), (0.61, 2.44, 1.22));
     }
 
     #[test]
@@ -391,6 +496,7 @@ mod tests {
         assert_eq!(with(&|t| t.grid.bay = 0.04), Err(LibraryError::BadGrid), "a bay narrower than the members");
         assert_eq!(with(&|t| t.grid.row = 0.0), Err(LibraryError::BadGrid));
         assert_eq!(with(&|t| t.members.depth = 0.0), Err(LibraryError::NotPositive));
+        assert_eq!(with(&|t| t.members.framing = Some(Framing::PLATES.with_header(0.0))), Err(LibraryError::NotPositive), "a header of nothing");
         assert_eq!(with(&|t| t.panels.thickness = f64::NAN), Err(LibraryError::NotPositive));
         assert_eq!(with(&|t| t.members.material = "unobtainium".into()), Err(LibraryError::UnknownMaterial("unobtainium".into())));
         assert_eq!(with(&|t| t.id = " ".into()), Err(LibraryError::NoKey));
@@ -406,5 +512,11 @@ mod tests {
         assert!(curtain.get("layers").is_none() && curtain.get("lying").is_none() && curtain.get("corners").is_none() && curtain["grid"].get("pattern").is_none(), "{curtain}");
         let aluminium = starter().into_iter().find(|t| t.id == "system.frame-aluminium-75").unwrap();
         assert_eq!(serde_json::to_value(&aluminium).unwrap()["corners"], "mitre");
+        assert!(serde_json::to_value(&aluminium).unwrap()["members"].get("framing").is_none());
+        let frame = serde_json::to_value(starter().into_iter().find(|t| t.id == "system.timber-frame-140").unwrap()).unwrap();
+        assert_eq!(frame["members"]["framing"], serde_json::json!({"bottom_plates": 1, "top_plates": 1, "header": 0.2, "unit": 3.3}));
+        // a framing written without a header has the nominal one
+        let read: Framing = serde_json::from_str(r#"{"bottom_plates": 1, "top_plates": 2}"#).unwrap();
+        assert_eq!(read, Framing { top_plates: 2, ..Framing::PLATES });
     }
 }

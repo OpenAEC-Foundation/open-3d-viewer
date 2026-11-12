@@ -84,7 +84,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 | | |
 |---|---|
 | ![Het huismodel in de vier thema's Licht, Donker, Blueprint en High contrast donker](docs/images/readme/themes.png) **Licht, Donker, Blueprint en High contrast donker** | ![De kavel van boven als draadmodel met een orthografische camera, thema Donker](docs/images/readme/plan.png) **Bovenaanzicht, draadmodel en orthografisch** |
-| ![Een badkamermodel uit elkaar getrokken per element](docs/images/readme/explode.png) **Uit elkaar per element** | ![De Bestand-pagina met Openen, Toevoegen, Opslaan als, Instellingen en de recente bestanden](docs/images/readme/file.png) **De Bestand-pagina met recente bestanden** |
+| ![Een badkamermodel uit elkaar getrokken per element](docs/images/readme/explode.png) **Uit elkaar per element** | ![De Bestand-pagina met Nieuw, Openen, Toevoegen, Opslaan als, Instellingen en de recente bestanden](docs/images/readme/file.png) **De Bestand-pagina met recente bestanden** |
 | ![Het instellingenvenster met thema, werkruimte, statusbalk, interfacegrootte en taal, thema Blueprint](docs/images/readme/settings.png) **Instellingen, thema Blueprint** | ![De pagina sneltoetsen in de instellingen, waar elke opdracht een eigen toets kan krijgen](docs/images/readme/shortcuts.png) **Eigen sneltoetsen voor elke opdracht** |
 
 ## Bekijken en navigeren

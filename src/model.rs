@@ -205,6 +205,9 @@ pub struct ProjectData {
     pub info: Vec<(String, String)>,
     /// Levels: name and elevation (metres), low to high.
     pub levels: Vec<(String, f32)>,
+    /// The path the file gives a level, by its name: what its elements and plans name it by. A
+    /// level without one gets a path of its name and elevation.
+    pub level_paths: Vec<(String, String)>,
     /// Phases in the order of the project.
     pub phases: Vec<String>,
     pub grids: Vec<GridLine>,

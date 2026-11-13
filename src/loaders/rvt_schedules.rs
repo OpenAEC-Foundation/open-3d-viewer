@@ -260,6 +260,32 @@ pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::
             !left_out.contains(&(k - 1))
         });
     }
+    // an area of a floor, roof or ceiling the file leaves to be computed: measured on the
+    // element's saved graphics, written as its cell or the project formats it. That of a room
+    // or a wall is not: their saved graphics give it too far off (a room's solid is not its
+    // boundary on plan, a wall's lacks its faces)
+    let measured: Vec<usize> = (0..s.columns.len()).filter(|&i| !s.columns[i].hidden && s.columns[i].parameter == HOST_AREA).collect();
+    if let (false, Some(saved)) = (measured.is_empty(), doc.saved_graphics()) {
+        let mut mesher = rvt_export::saved::SavedMesher::new(saved);
+        let area_format = units.as_ref().and_then(|u| u.get("m_units")?.as_object()?.get("m_formatOptionsMap")?.as_list()).unwrap_or(&[]).iter().filter_map(FieldValue::as_object).find(|pair| pair.get("first").and_then(FieldValue::as_object).and_then(|t| t.get("m_typeId")?.as_str()).is_some_and(|t| t.starts_with("autodesk.spec.aec:area-"))).and_then(|pair| pair.get("second")?.as_object());
+        for &i in &measured {
+            let parameter = s.columns[i].parameter;
+            let format = formats.get(&parameter).copied().filter(|f| f.get("m_bUseDefault").and_then(FieldValue::as_i64) != Some(1)).or(area_format);
+            let mut area = |e: u64| {
+                let class = doc.object(e).map(|o| o.class.clone()).unwrap_or_default();
+                if class.contains("Wall") {
+                    return None;
+                }
+                mesher.element(e).map(|t| top_area(&t))
+            };
+            for row in s.rows.iter_mut().filter(|r| !r.total && r.cells.get(i).is_some_and(&open)) {
+                let areas: Option<Vec<f64>> = row.elements.iter().map(|&e| area(e)).collect();
+                if let Some(text) = areas.filter(|a| !a.is_empty() && a.iter().all(|v| *v > 0.0)).and_then(|a| written_area(format?, a.iter().sum(), comma)) {
+                    row.cells[i] = Some(text);
+                }
+            }
+        }
+    }
     for row in s.rows.iter_mut().filter(|r| r.total) {
         for cell in row.cells.iter_mut().filter(|c| c.is_none()) {
             *cell = Some(String::new());
@@ -337,6 +363,61 @@ fn uniform(doc: &rvt_read::Document, category: i32) -> HashMap<i64, Option<f64>>
         }
     }
     found
+}
+
+/// The area a floor, roof or ceiling computes (`HOST_AREA_COMPUTED`).
+const HOST_AREA: i64 = -1012805;
+/// The area (square feet) of the top of a floor, roof or ceiling, from its triangles (feet):
+/// its faces looking up or down that no other one lies over, the top of its upper layer, sloped
+/// as it is. Which way round a triangle is turned is left aside (the file does not keep it alike).
+fn top_area(tris: &[[[f64; 3]; 3]]) -> f64 {
+    let cross = |t: &[[f64; 3]; 3]| {
+        let (a, b) = ([t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]], [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]]);
+        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    };
+    let size = |n: [f64; 3]| (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    let flat: Vec<(&[[f64; 3]; 3], [f64; 3])> = tris.iter().map(|t| (t, cross(t))).filter(|(_, n)| size(*n) > 1e-12 && n[2].abs() > 0.2 * size(*n)).collect();
+    // the height of a face over a point on plan, where it covers that point
+    let over = |t: &[[f64; 3]; 3], n: [f64; 3], p: [f64; 2]| -> Option<f64> {
+        let side = |a: [f64; 3], b: [f64; 3]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+        let (s0, s1, s2) = (side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0]));
+        let inside = s0 >= -1e-9 && s1 >= -1e-9 && s2 >= -1e-9 || s0 <= 1e-9 && s1 <= 1e-9 && s2 <= 1e-9;
+        inside.then(|| t[0][2] - (n[0] * (p[0] - t[0][0]) + n[1] * (p[1] - t[0][1])) / n[2])
+    };
+    flat.iter()
+        .filter(|(t, _)| {
+            let c = [(t[0][0] + t[1][0] + t[2][0]) / 3.0, (t[0][1] + t[1][1] + t[2][1]) / 3.0, (t[0][2] + t[1][2] + t[2][2]) / 3.0];
+            !flat.iter().any(|(o, n)| !std::ptr::eq(*o, *t) && over(o, *n, [c[0], c[1]]).is_some_and(|z| z > c[2] + 0.01))
+        })
+        .map(|(_, n)| size(*n) / 2.0)
+        .sum()
+}
+
+/// An area (square feet) as a format writes it: in square metres (or centimetres,
+/// millimetres), its decimals, and the unit's sign after it where the format has one.
+fn written_area(format: &NestedObject, square_feet: f64, comma: bool) -> Option<String> {
+    let named = |field: &str| format.get(field).and_then(FieldValue::as_object).and_then(|t| t.get("m_typeId")?.as_str()).unwrap_or_default();
+    let (per, sign) = match named("m_unitTypeId").split(':').nth(1)?.split('-').next()? {
+        "squareMeters" => (FT * FT, "m²"),
+        "squareCentimeters" => (FT * FT * 1e4, "cm²"),
+        "squareMillimeters" => (FT * FT * 1e6, "mm²"),
+        "squareFeet" => (1.0, "ft²"),
+        _ => return None,
+    };
+    let accuracy = format.get("m_accuracy").and_then(FieldValue::as_f64).filter(|a| a.is_finite() && *a > 0.0).unwrap_or(0.01);
+    let decimals = (-accuracy.log10()).round().clamp(0.0, 9.0) as usize;
+    let mut figure = format!("{:.decimals$}", square_feet * per);
+    if decimals > 0 && format.get("m_bSuppressTrailingZeros").and_then(FieldValue::as_i64) == Some(1) {
+        figure = figure.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    if comma {
+        figure = figure.replace('.', ",");
+    }
+    if !named("m_symbolTypeId").is_empty() {
+        figure.push(' ');
+        figure.push_str(sign);
+    }
+    Some(figure)
 }
 
 /// A length (feet) as the format of a cell writes it: its unit, its decimals, a plus before what

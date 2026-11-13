@@ -29,6 +29,38 @@ pub struct Cut {
     pub faint_below: Vec<Segment>,
     /// The covered edges (see `hidden`) of the elements it draws faint: dashed in halftone.
     pub faint_hidden: Vec<Segment>,
+    /// The cut lines and the edges beyond the cut of the elements the view draws in a pen of
+    /// their own (a Revit view's filters); they are not in `segments` and `below`.
+    pub inked: Vec<Inked>,
+}
+
+/// The pen a view draws some lines in: its colour and its width on paper (millimetres), each
+/// where it gives one; else the drawing's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Ink {
+    pub color: Option<[u8; 3]>,
+    pub width: Option<f32>,
+}
+
+impl Ink {
+    /// Whether it changes anything.
+    pub fn is_empty(&self) -> bool {
+        self.color.is_none() && self.width.is_none()
+    }
+
+    /// The width of a line in this ink where the drawing draws such lines `plain` wide: as its
+    /// pen stands to the drawing's own (0.35 mm for cut lines, 0.18 mm beyond the cut).
+    pub fn wide(&self, plain: f32, cut: bool) -> f32 {
+        self.width.map_or(plain, |mm| (plain * mm / if cut { 0.35 } else { 0.18 }).clamp(plain * 0.3, plain * 4.0))
+    }
+}
+
+/// Lines drawn in an ink of their own: cut lines, or edges beyond the cut.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Inked {
+    pub ink: Ink,
+    pub cut: bool,
+    pub lines: Vec<Segment>,
 }
 
 /// A cut face: the outlines one element (or a layer outside its elements) shows where the plane
@@ -68,6 +100,9 @@ pub struct Shown<'a> {
     /// two elements of one piece are left out where the faces round it lie in one plane. `None`:
     /// no elements are joined.
     pub pieces: Option<&'a HashMap<u64, u32>>,
+    /// The triangles whose lines are drawn in an ink of their own, by their layer and first
+    /// vertex: which of the inks (cut lines, edges beyond the cut) they take; `None`: none.
+    pub inks: Option<(&'a dyn Fn(usize, u32) -> Option<usize>, &'a [(Ink, Ink)])>,
 }
 
 /// Hides no triangle.
@@ -78,7 +113,7 @@ fn none_hidden(_: usize, _: u32) -> bool {
 impl<'a> Shown<'a> {
     /// The layers that are on, with no element hidden.
     pub fn layers(layers: &'a [bool]) -> Self {
-        Shown { layers, hidden: &none_hidden, faint: None, pieces: None }
+        Shown { layers, hidden: &none_hidden, faint: None, pieces: None, inks: None }
     }
 
     /// Every layer, with no element hidden.
@@ -98,7 +133,7 @@ pub fn plan_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, high);
     cut.below = seen_between(model, shown, high - low, move |p| [p[0], p[1], high - p[2]]);
     part(&mut cut, model, shown, move |p| [p[0], p[1], high - p[2]], high - low, None);
-    cut.extent = extent(cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below));
+    cut.extent = extent(drawn(&cut));
     cut
 }
 
@@ -127,17 +162,43 @@ pub fn structural_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
         }
     }
     part(&mut cut, model, shown, map, depth, None);
-    cut.extent = extent(cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below));
+    cut.extent = extent(self::drawn(&cut));
     cut
 }
 
-/// Sets apart what the view draws faint: the lines of `cut` (in the frame `map` gives, its third
-/// coordinate the depth from the cut, down to `depth`) that lie on an edge or a cut of a faint
-/// element and on none of another, and the cut faces of the faint elements. A faint element's
-/// covered edges are not drawn dashed.
+/// Sets apart what the view draws faint and what it draws in an ink of its own (see
+/// [`Shown::inks`]): the lines of `cut` (in the frame `map` gives, its third coordinate the
+/// depth from the cut, down to `depth`) that lie on an edge or a cut of such an element and on
+/// none of another, and the cut faces of the faint elements. A faint element's covered edges are
+/// not drawn dashed. `edges`: the edges of the faint elements and of the others, where known.
 fn part(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3] + Copy, depth: f32, edges: Option<[Vec<[[f32; 3]; 2]>; 2]>) {
-    let Some(faint) = shown.faint else { return };
-    // the edges of the faint elements alone and of the others alone: as given, else found here
+    part_faint(cut, model, shown, map, depth, edges);
+    let Some((of, inks)) = shown.inks else { return };
+    for (k, &(on_cut, beyond)) in inks.iter().enumerate() {
+        let mine = move |l: usize, v: u32| of(l, v) == Some(k);
+        let [(my_edges, other_edges), (my_cuts, other_cuts)] = lines_of(model, Shown { faint: Some(&mine), ..shown }, map, depth, None);
+        // a pen that changes nothing leaves its lines where they are
+        let segments = if on_cut.is_empty() { Vec::new() } else { apart(&mut cut.segments, &my_cuts, &other_cuts) };
+        let below = if beyond.is_empty() { Vec::new() } else { apart(&mut cut.below, &my_edges, &other_edges) };
+        for (ink, is_cut, lines) in [(on_cut, true, segments), (beyond, false, below)] {
+            if !lines.is_empty() {
+                cut.inked.push(Inked { ink, cut: is_cut, lines });
+            }
+        }
+    }
+}
+
+/// The lines of `all` that lie on `on` and not on `off`, taken out of it.
+fn apart(all: &mut Vec<Segment>, on: &Lines, off: &Lines) -> Vec<Segment> {
+    let (taken, kept): (Vec<Segment>, Vec<Segment>) = std::mem::take(all).into_iter().partition(|s| on.has(s) && !off.has(s));
+    *all = kept;
+    taken
+}
+
+/// The edges (as given, else found here) and the cuts of the triangles `shown.faint` takes, and
+/// those of the others: [(edges of them, of the others), (cuts of them, of the others)].
+fn lines_of(model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3] + Copy, depth: f32, edges: Option<[Vec<[[f32; 3]; 2]>; 2]>) -> [(Lines, Lines); 2] {
+    let Some(faint) = shown.faint else { return Default::default() };
     let [of_faint, of_plain] = edges.unwrap_or_else(|| {
         let [_, of_faint, of_plain] = feature_edges_apart(model, shown, map, 0.0, depth, true);
         [of_faint, of_plain]
@@ -148,7 +209,6 @@ fn part(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f
         lines
     };
     let (faint_edges, plain_edges) = (filed(of_faint), filed(of_plain));
-    // where the cut goes through the faint elements, and through the others
     let (mut faint_cuts, mut plain_cuts) = (Lines::default(), Lines::default());
     for (i, layer) in model.layers.iter().enumerate().filter(|(i, l)| !l.points && shown.on(*i)) {
         let p = &layer.positions;
@@ -160,11 +220,14 @@ fn part(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f
             }
         }
     }
-    let apart = |all: &mut Vec<Segment>, on: &Lines, off: &Lines| {
-        let (faint, plain): (Vec<Segment>, Vec<Segment>) = std::mem::take(all).into_iter().partition(|s| on.has(s) && !off.has(s));
-        *all = plain;
-        faint
-    };
+    [(faint_edges, plain_edges), (faint_cuts, plain_cuts)]
+}
+
+/// Sets apart what the view draws faint (see [`part`]).
+fn part_faint(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f32; 3] + Copy, depth: f32, edges: Option<[Vec<[[f32; 3]; 2]>; 2]>) {
+    let Some(faint) = shown.faint else { return };
+    // the edges and the cuts of the faint elements alone and of the others alone
+    let [(faint_edges, plain_edges), (faint_cuts, plain_cuts)] = lines_of(model, shown, map, depth, edges);
     cut.faint_segments = apart(&mut cut.segments, &faint_cuts, &plain_cuts);
     cut.faint_below = apart(&mut cut.below, &faint_edges, &plain_edges);
     cut.faint_hidden = apart(&mut cut.hidden, &faint_edges, &plain_edges);
@@ -267,7 +330,7 @@ pub fn ceiling_at(model: &Model, shown: Shown, low: f32, high: f32) -> Cut {
     let mut cut = cut_at(model, shown, low);
     cut.below = seen_between(model, shown, high - low, move |p| [p[0], p[1], p[2] - low]);
     part(&mut cut, model, shown, move |p| [p[0], p[1], p[2] - low], high - low, None);
-    cut.extent = extent(cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below));
+    cut.extent = extent(drawn(&cut));
     cut
 }
 
@@ -588,7 +651,8 @@ pub fn section_at(model: &Model, shown: Shown, from: [f64; 2], to: [f64; 2], dep
     let extent = extent(segments.iter().chain(&below));
     let mut cut = Cut { segments, below, extent, fills: faces.fills(), ..Cut::default() };
     cut.fills.extend(earth(ground, &cut.fills, model.project.earth.as_ref().map(|e| e.0)));
-    cut.fills.sort_by_key(|f| (f.layer, f.element));
+    // the faces are drawn in this order: the earth first, behind all that stands in it
+    cut.fills.sort_by_key(|f| (!terrain.get(f.layer).copied().unwrap_or(false), f.layer, f.element));
     part(&mut cut, model, shown, map, depth as f32, Some([of_faint, of_plain]));
     cut
 }
@@ -825,6 +889,11 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// All the lines a cut draws solid: its cut lines and the edges beyond it, plain, faint and inked.
+pub fn drawn(cut: &Cut) -> impl Iterator<Item = &Segment> {
+    cut.segments.iter().chain(&cut.below).chain(&cut.faint_segments).chain(&cut.faint_below).chain(cut.inked.iter().flat_map(|i| &i.lines))
+}
+
 /// Lower left and upper right of segments.
 fn extent<'a>(segments: impl Iterator<Item = &'a Segment>) -> Option<([f32; 2], [f32; 2])> {
     segments.flatten().fold(None, |e: Option<([f32; 2], [f32; 2])>, q| {
@@ -950,7 +1019,8 @@ pub fn join(cut: &mut Cut, same: &dyn Fn(usize, usize) -> bool) {
     }
     let near = Near::of(met.iter());
     // the cut lines, and those of what the view draws faint
-    for lines in [&mut cut.segments, &mut cut.faint_segments] {
+    let inked = cut.inked.iter_mut().filter(|i| i.cut).map(|i| &mut i.lines);
+    for lines in [&mut cut.segments, &mut cut.faint_segments].into_iter().chain(inked) {
         let mut kept = Vec::with_capacity(lines.len());
         for s in lines.iter() {
             let mut gaps: Vec<(f32, f32)> = near.to(s).into_iter().filter_map(|o| lies_on(s, &met[o])).collect();
@@ -1249,6 +1319,32 @@ mod tests {
     }
 
     #[test]
+    fn what_a_view_draws_in_a_pen_of_its_own_is_set_apart() {
+        // a wall cut by the plan in a red pen, a block under the cut in a thick one, another plain
+        let layers = vec![block("Wall", [0.0, 0.0, 0.0], [4.0, 0.3, 3.0]), block("Thick", [0.0, 2.0, 0.0], [1.0, 3.0, 0.5]), block("Plain", [2.0, 2.0, 0.0], [3.0, 3.0, 0.5])];
+        let model = Model::new(PathBuf::from("house.obj"), "OBJ", layers);
+        let red = Ink { color: Some([255, 0, 0]), width: None };
+        let thick = Ink { color: None, width: Some(0.5) };
+        let inks = [(red, Ink::default()), (Ink::default(), thick)];
+        let of = |layer: usize, _: u32| (layer < 2).then_some(layer);
+        let shown = Shown { inks: Some((&of, &inks)), ..Shown::all() };
+        let plan = plan_at(&model, shown, -0.5, 1.2);
+        let length = |s: &[Segment]| s.iter().map(|[a, b]| (b[0] - a[0]).hypot(b[1] - a[1])).sum::<f32>();
+        assert!(plan.segments.is_empty(), "the only wall cut is red: {:?}", plan.segments);
+        let wall = plan.inked.iter().find(|i| i.cut).expect("the wall's cut");
+        assert_eq!(wall.ink, red);
+        assert!((length(&wall.lines) - 8.6).abs() < 0.05, "the wall's outline, 4 by 0.3: {}", length(&wall.lines));
+        let block = plan.inked.iter().find(|i| !i.cut).expect("the thick block");
+        assert_eq!(block.ink, thick);
+        assert!(block.lines.iter().all(|[a, b]| a[0] <= 1.1 && b[0] <= 1.1), "{:?}", block.lines);
+        assert!(!plan.below.iter().any(|[a, b]| a[1] >= 1.9 && b[1] >= 1.9 && a[0] <= 1.1 && b[0] <= 1.1), "not the thick block: {:?}", plan.below);
+        assert!(plan.below.iter().any(|[a, b]| a[0] >= 1.9 && b[0] >= 1.9), "the plain block: {:?}", plan.below);
+        assert_eq!(plan.extent.map(|(lo, hi)| (lo[0], hi[0])), Some((0.0, 4.0)), "the inked lines count for its extent");
+        // a thick pen draws wider, within reason
+        assert!(thick.wide(0.5, false) > 1.0 && red.wide(1.2, true) == 1.2);
+    }
+
+    #[test]
     fn short_pieces_join_into_runs_whatever_their_order() {
         // a square in pieces, given out of order and some the other way round, and a lone line
         let square: Vec<Segment> = vec![[[1.0, 0.0], [1.0, 1.0]], [[0.0, 0.0], [1.0, 0.0]], [[0.0, 1.0], [0.0, 0.0]], [[0.0, 1.0], [1.0, 1.0]], [[5.0, 5.0], [6.0, 5.0]]];
@@ -1290,6 +1386,7 @@ mod tests {
         assert!(left < 0.01 && right > 9.99, "under all of the cut line: {left} to {right}");
         // the wall keeps its own face; an elevation in front of the terrain cuts nothing of it
         assert!(section.fills.iter().any(|f| f.layer == 1));
+        assert_eq!(section.fills.first().map(|f| f.layer), Some(0), "the earth is drawn first, behind the wall");
         assert!(section_at(&model, Shown::all(), [0.0, -1.0], [10.0, -1.0], 20.0).fills.is_empty());
     }
 
@@ -1340,7 +1437,7 @@ mod tests {
         room.positions.extend(&table.positions);
         let model = Model::new(PathBuf::from("room.obj"), "OBJ", vec![room]);
         let table_hidden = |_: usize, v: u32| v >= 24;
-        let shown = Shown { layers: &[], hidden: &table_hidden, faint: None, pieces: None };
+        let shown = Shown { layers: &[], hidden: &table_hidden, faint: None, pieces: None, inks: None };
         let all = plan_at(&model, Shown::all(), 0.0, 0.5);
         let without = plan_at(&model, shown, 0.0, 0.5);
         assert!(without.segments.len() < all.segments.len());

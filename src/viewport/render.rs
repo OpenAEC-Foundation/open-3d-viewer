@@ -42,6 +42,16 @@ pub enum RenderMode {
     Wireframe,
     /// Solid with feature edges (creases and open borders) on top.
     SolidEdges,
+    /// Hidden lines: the faces white, unlit, hiding what lies behind them, and their feature
+    /// edges in black on top.
+    HiddenLine,
+}
+
+impl RenderMode {
+    /// Whether the mode draws the feature edges (else all triangle edges, or none).
+    pub fn features(self) -> bool {
+        matches!(self, RenderMode::SolidEdges | RenderMode::HiddenLine)
+    }
 }
 
 /// Colours and switches that come from the UI.
@@ -911,10 +921,12 @@ impl ScenePipeline {
         let plane = settings.plane.unwrap_or([[0.0; 4]; 2]);
         // half the point size in clip units (x, y), for `vs_point`
         let point = POINT_SIZE * scale;
+        // eye.w: 2 draws the faces white and unlit (hidden lines)
+        let faces = if settings.mode == RenderMode::HiddenLine { 2.0 } else { 1.0 };
         let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3], plane: [[f32; 4]; 2]| Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
             model: model.to_cols_array_2d(),
-            eye: [eye.x, eye.y, eye.z, 1.0],
+            eye: [eye.x, eye.y, eye.z, faces],
             params: [srgb, line_scale, point / w as f32, point / h as f32],
             clip,
             cap: [CAP_COLOR[0], CAP_COLOR[1], CAP_COLOR[2], CAP_HATCH * viewport.scale_factor() as f32],
@@ -937,7 +949,12 @@ impl ScenePipeline {
                 chunks::draws(&layer.chunks, &sight, true, l as u32, &mut self.glass_draws);
             }
         }
-        let wire_scale = if settings.mode == RenderMode::SolidEdges { 0.35 } else { 0.8 };
+        // the edges darker than their colour; black in hidden lines
+        let wire_scale = match settings.mode {
+            RenderMode::SolidEdges => 0.35,
+            RenderMode::HiddenLine => 0.0,
+            _ => 0.8,
+        };
         queue.write_buffer(&self.model_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, 1.0, clip, plane)));
         queue.write_buffer(&self.edge_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, wire_scale, clip, plane)));
         // the grid is never cut

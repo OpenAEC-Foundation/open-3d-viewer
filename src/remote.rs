@@ -318,6 +318,7 @@ fn mode_name(m: RenderMode) -> &'static str {
         RenderMode::Solid => "solid",
         RenderMode::Wireframe => "wireframe",
         RenderMode::SolidEdges => "edges",
+        RenderMode::HiddenLine => "hidden",
     }
 }
 
@@ -1401,7 +1402,8 @@ impl App {
                 "solid" => RenderMode::Solid,
                 "wireframe" => RenderMode::Wireframe,
                 "edges" => RenderMode::SolidEdges,
-                _ => return Err(format!("unknown mode '{m}': solid, wireframe, edges")),
+                "hidden" => RenderMode::HiddenLine,
+                _ => return Err(format!("unknown mode '{m}': solid, wireframe, edges, hidden")),
             };
         }
         if let Some(v) = flag(a, "grid") {

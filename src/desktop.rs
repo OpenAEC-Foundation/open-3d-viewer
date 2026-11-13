@@ -4,7 +4,7 @@
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--product viewer|modeller|collaborator] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...]
 //!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
@@ -114,7 +114,8 @@ fn parse_args() -> Result<Args, String> {
                     "solid" => RenderMode::Solid,
                     "wireframe" => RenderMode::Wireframe,
                     "edges" => RenderMode::SolidEdges,
-                    _ => return Err("--mode solid|wireframe|edges".into()),
+                    "hidden" => RenderMode::HiddenLine,
+                    _ => return Err("--mode solid|wireframe|edges|hidden".into()),
                 })
             }
             "--view" => {

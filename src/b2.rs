@@ -43,7 +43,7 @@ icons! {
     "section.box", "section.plane-z", "section.fit-selection", "section.reset-box", "section.clear",
     "transform.mirror", "transform.flip-vertical", "transform.explode",
     "measure.distance", "measure.angle", "measure.area", "measure.perimeter", "measure.takeoff",
-    "edit.clear-all",
+    "edit.clear-all", "edit.undo", "edit.redo",
     "status.success", "status.error", "status.warning", "status.info",
     "object.show", "object.hide", "project.folder", "data.table",
     // the modeller

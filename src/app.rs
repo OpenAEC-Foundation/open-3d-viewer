@@ -710,6 +710,23 @@ impl From<CubeEvent> for Message {
     }
 }
 
+/// The choice of how the model is drawn under the view cube: its width, its top (under the
+/// cube's lens button) and the distance of the cube's middle from the right edge
+/// ([`crate::view_cube`]), in logical pixels.
+const STYLE_WIDTH: f32 = 116.0;
+const STYLE_TOP: f32 = 150.0;
+const CUBE_RIGHT: f32 = 73.0;
+
+/// A way of drawing the model, named in the interface language, as the view cube offers it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Look(RenderMode, &'static str);
+
+impl std::fmt::Display for Look {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+
 /// Length of a camera transition (view cube, presets).
 const ANIM_SECONDS: f32 = 0.45;
 
@@ -3462,6 +3479,22 @@ impl App {
                 .width(Fill)
                 .height(Fill)
         });
+        // under the cube and its lens button: how the model is drawn
+        let style = (self.model.is_some() && overlay.is_none()).then(|| {
+            let styles = [
+                Look(RenderMode::Wireframe, l.text("Draadmodel", "Wireframe")),
+                Look(RenderMode::HiddenLine, l.text("Verborgen lijnen", "Hidden line")),
+                Look(RenderMode::Solid, l.text("Gearceerd", "Shaded")),
+            ];
+            // solid with its edges is shaded too
+            let shown = if self.mode == RenderMode::SolidEdges { RenderMode::Solid } else { self.mode };
+            let picked = styles.iter().find(|s| s.0 == shown).copied();
+            let pick = iced::widget::pick_list(styles, picked, |s: Look| Message::Mode(s.0)).text_size(11).padding([2, 6]).width(STYLE_WIDTH);
+            container(pick)
+                .padding(iced::Padding { top: STYLE_TOP, right: CUBE_RIGHT - STYLE_WIDTH / 2.0, ..iced::Padding::ZERO })
+                .align_right(Fill)
+                .align_top(Fill)
+        });
         // a view's tab keeps its box without the handles: its crop is set on the sheet
         let section = self.active_section().filter(|_| overlay.is_none() && self.shown_view().is_none()).map(|section| {
             canvas(SectionOverlay { section, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
@@ -3606,6 +3639,7 @@ impl App {
             .push(boxed)
             .push(picking)
             .push(cube)
+            .push(style)
             .push(menu)
             .push(overlay)
             .width(Fill)
@@ -3718,6 +3752,7 @@ impl App {
                 RenderMode::Solid => "Solid",
                 RenderMode::Wireframe => "Wireframe",
                 RenderMode::SolidEdges => "Edges",
+                RenderMode::HiddenLine => "Hidden line",
             }
             .into(),
         ));

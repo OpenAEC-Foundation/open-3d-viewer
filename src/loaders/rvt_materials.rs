@@ -12,12 +12,12 @@ const FOOT: f64 = 0.3048;
 const MODEL_TARGET: i64 = 1;
 
 /// Red, green and blue of a colour as Revit stores it (blue in the high byte).
-fn rgb(color: i64) -> [u8; 3] {
+pub(super) fn rgb(color: i64) -> [u8; 3] {
     [(color & 0xff) as u8, ((color >> 8) & 0xff) as u8, ((color >> 16) & 0xff) as u8]
 }
 
 /// A fill pattern: its grids in metres, and whether they are sized on paper. No grids: solid.
-fn fill_pattern(doc: &rvt_read::Document, id: i64) -> Option<(Vec<Grid>, bool)> {
+pub(super) fn fill_pattern(doc: &rvt_read::Document, id: i64) -> Option<(Vec<Grid>, bool)> {
     let o = doc.object(u64::try_from(id).ok().filter(|id| *id > 0)?)?;
     let pattern = o.deref(o.get("m_pFillPattern")?)?;
     let pair = |v: &rvt_model::FieldValue| {

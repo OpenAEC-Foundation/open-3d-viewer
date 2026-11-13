@@ -451,7 +451,7 @@ impl ViewMarks {
     /// The drawing point a click at `pointer` means: the nearest end of one of the view's lines
     /// within [`SNAP`] pixels, else the point under it.
     fn snap(&self, screen: &Screen, pointer: Point) -> Option<[f64; 2]> {
-        let ends = self.cut.iter().flat_map(|c| c.segments.iter().chain(&c.below)).flatten();
+        let ends = self.cut.iter().flat_map(|c| crate::drawing::drawn(c)).flatten();
         ends.map(|q| [q[0] as f64, q[1] as f64])
             .filter_map(|q| Some((q, self.px(screen, q)?.distance(pointer))))
             .filter(|(_, d)| *d <= SNAP)

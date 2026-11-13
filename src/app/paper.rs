@@ -224,6 +224,16 @@ impl App {
                 }
             }
         }
+        // what the view's filters draw in halftone
+        let looks = model.project.looks.get(path).cloned();
+        if let (Some(looks), Some(index)) = (looks.as_ref().filter(|l| l.values().any(|l| l.halftone)), self.explode_index.as_deref()) {
+            halftone.resize(index.len().max(halftone.len()), false);
+            for unit in 1..index.len() {
+                if matches!(index.owner(unit), Some(crate::explode::UnitOwner::Element(id)) if looks.get(&id).is_some_and(|l| l.halftone)) {
+                    halftone[unit] = true;
+                }
+            }
+        }
         let kind = if let Some(s) = self.document.section(path) {
             CutKind::Section { from: s.from, to: s.to, depth: s.depth }
         } else {
@@ -232,7 +242,7 @@ impl App {
             CutKind::Plan { kind: view.kind, low, high }
         };
         let scale = self.document.view_scale(path).unwrap_or(crate::document::SHEET_SCALE);
-        Some(CutJob { model, layers, units, halftone, index: self.explode_index.clone(), kind, scale })
+        Some(CutJob { model, layers, units, halftone, index: self.explode_index.clone(), kind, scale, looks })
     }
 
     /// The drawings of views as the sheet layout takes them (`crate::sheet_layout`): the crop, or
@@ -909,7 +919,7 @@ impl canvas::Program<Message> for PaperDrawing {
                 frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(p.accent).with_width(1.5));
             }
             let placed = self.placed.get(i).cloned().unwrap_or_default();
-            match placed.cut.filter(|c| !c.segments.is_empty() || !c.below.is_empty()) {
+            match placed.cut.filter(|c| crate::drawing::drawn(c).next().is_some()) {
                 Some(cut) => {
                     // what is seen below the cut, thin and grey, then the cut itself
                     // within the crop, when there is one
@@ -937,6 +947,18 @@ impl canvas::Program<Message> for PaperDrawing {
                         }
                     });
                     frame.stroke(&lines, Stroke::default().with_color(ink).with_width(1.2));
+                    // the lines the view's filters give a pen of their own
+                    for inked in &cut.inked {
+                        let lines = Path::new(|b| {
+                            for (a, z) in inked.lines.iter().filter_map(|[a, z]| piece(a, z)) {
+                                b.move_to(fit.point(self.to_paper(i, a)));
+                                b.line_to(fit.point(self.to_paper(i, z)));
+                            }
+                        });
+                        let (plain, width) = if inked.cut { (ink, 1.2) } else { (Color { a: 0.55, ..ink }, 0.6) };
+                        let color = inked.ink.color.map_or(plain, |c| Color::from_rgb8(c[0], c[1], c[2]));
+                        frame.stroke(&lines, Stroke::default().with_color(color).with_width(inked.ink.wide(width, inked.cut)));
+                    }
                     if crop.is_some() {
                         frame.stroke(&Path::rectangle(at, size), Stroke::default().with_color(faint).with_width(0.8));
                     }

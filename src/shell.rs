@@ -797,6 +797,9 @@ impl Studio {
                 .icon(small("mesh.closed"), large("mesh.closed"))
                 .shortcut(key('e'))
                 .mode(app.mode == RenderMode::SolidEdges),
+            Command::new("view.hidden", l.text("Verborgen lijnen", "Hidden line"), go(Message::Mode(RenderMode::HiddenLine)))
+                .icon(small("drawing.plan"), large("drawing.plan"))
+                .mode(app.mode == RenderMode::HiddenLine),
             Command::new("view.grid", l.text("Raster", "Grid"), go(Message::ToggleGrid)).icon(small("view.grid"), large("view.grid")).shortcut(key('g')).toggle(app.grid),
             Command::new("view.grid-lines", l.text("Stramien", "Grid lines"), go(Message::ToggleGrids))
                 .icon(small("measure.distance"), large("measure.distance"))
@@ -834,8 +837,8 @@ impl Studio {
                 .toggle(app.plane.is_some() || app.plane_picking)
                 .enabled(loaded),
             Command::new("section.flip", l.text("Omdraaien", "Flip"), go(Message::FlipPlane)).icon(small("transform.mirror"), large("transform.mirror")).enabled(app.plane.is_some()),
-            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.can_undo()),
-            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.can_redo()),
+            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).icon(small("edit.undo"), large("edit.undo")).shortcut(Shortcut::ctrl('z')).enabled(app.can_undo()),
+            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).icon(small("edit.redo"), large("edit.redo")).shortcut(Shortcut::ctrl('y')).enabled(app.can_redo()),
             Command::new("selection.layer", l.text("Laag selecteren", "Select layer"), go(Message::SelectLayerOfSelection))
                 .icon(small("view.fit-selection"), large("view.fit-selection"))
                 .enabled(!app.sel.is_empty()),
@@ -1443,7 +1446,10 @@ impl Studio {
     }
 
     fn title_bar(&self, look: Look) -> Element<'_, Msg> {
-        let quick: Vec<Element<'_, Msg>> = ["file.new", "file.open", "file.save-as"].iter().map(|id| cm::icon_button(look, &self.command(id), 28.0)).collect();
+        // the Modeller changes the model, so taking a step back or forth is at hand there
+        let modelling = self.product() == Product::Modeller;
+        let ids: &[&str] = if modelling { &["file.new", "file.open", "file.save-as", "edit.undo", "edit.redo"] } else { &["file.new", "file.open", "file.save-as"] };
+        let quick: Vec<Element<'_, Msg>> = ids.iter().map(|id| cm::icon_button(look, &self.command(id), 28.0)).collect();
         let mut extra = Vec::new();
         if let Some(available) = &self.update {
             extra.push(container(upd::notice(look, available, Msg::Update)).padding([0, 8]).into());
@@ -1536,7 +1542,7 @@ impl Studio {
             }
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
-                w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
+                w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"])]),
                 w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
                 w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
                 w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),

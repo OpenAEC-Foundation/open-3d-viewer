@@ -47,7 +47,12 @@ impl Loader for RvtLoader {
             let scene = rvt_export::mesh::scene(&doc);
             (scene, walls.join().unwrap_or_default())
         });
-        let infos = rvt_export::views::views(&doc);
+        let mut infos = rvt_export::views::views(&doc);
+        for v in &mut infos {
+            if let (Some(crop), Some(active)) = (v.crop_box.as_mut(), crop_active(&doc, v.id)) {
+                crop.active = active;
+            }
+        }
         // each view in the folders the file's browser orders it in
         let folders = super::rvt_browser::folders(&doc, &infos);
         let in_folder = |(id, mut view): (u64, SavedView)| {
@@ -127,8 +132,8 @@ impl Loader for RvtLoader {
 /// The elements a view does not show: those of the categories it switches off (its view
 /// template's, when it has one: a template decides them) and those hidden in it one by one.
 /// So are the elements its filters hide by rule ([`super::rvt_filters`]). Worksets are not
-/// looked at.
-fn hidden_in_view(doc: &rvt_read::Document, view: u64, by_category: &HashMap<i64, Vec<u64>>, names: &super::rvt_filters::Names) -> std::collections::HashSet<u64> {
+/// looked at; its phase is, where [`drawings`] adds what its phase filter leaves out.
+fn hidden_in_view(doc: &rvt_read::Document, view: u64, by_category: &HashMap<i64, Vec<u64>>, filters: &mut super::rvt_filters::Filters) -> std::collections::HashSet<u64> {
     let mut out = std::collections::HashSet::new();
     let Some(o) = doc.object(view) else { return out };
     let template = o.get("m_viewTemplateId").and_then(|v| v.element()).filter(|t| *t > 0).and_then(|t| doc.object(t as u64));
@@ -140,8 +145,11 @@ fn hidden_in_view(doc: &rvt_read::Document, view: u64, by_category: &HashMap<i64
         }
     }
     // and what its filters hide by rule
-    out.extend(super::rvt_filters::hidden(doc, from, by_category, names));
-    out.extend(o.get("m_explicitlyHiddenElements").and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|e| e.element()).filter_map(|e| u64::try_from(e).ok()));
+    out.extend(filters.hidden(from));
+    // the elements hidden in it one by one: where the view keeps them, and where older files did
+    let one_by_one = o.path(&["m_oHiddenElementsViewSettings", "m_hiddenElements"]).and_then(|v| v.as_list()).unwrap_or(&[]);
+    let older = o.get("m_explicitlyHiddenElements").and_then(|v| v.as_list()).unwrap_or(&[]);
+    out.extend(one_by_one.iter().chain(older).filter_map(|e| e.element()).filter_map(|e| u64::try_from(e).ok()));
     out
 }
 
@@ -167,18 +175,72 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
             by_category.entry(e.category as i64).or_default().push(id);
         }
     }
+    // the filters of the views, worked out as they are asked
+    let mut filters = super::rvt_filters::Filters::new(doc, &by_category, names);
+    // the phase and phase filter of every view, and the phases of the elements
+    let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
+    let path = |view: u64| crate::document::uuid(&format!("rvt/{file}/view/{view}"));
+    project.phasing = super::rvt_phases::phasing(doc, &ids, &path);
     for (i, &view) in view_ids.iter().enumerate() {
         if views.get(i).is_some_and(|v| v.kind == ViewKind::ThreeD) {
-            let hidden = hidden_in_view(doc, view, &by_category, names);
+            let mut hidden = hidden_in_view(doc, view, &by_category, &mut filters);
+            // and what its phase filter leaves out: work of a later phase, or demolished before
+            let at = path(view);
+            if project.phasing.applies(&at) {
+                hidden.extend(elements.iter().copied().filter(|e| project.phasing.look(&at, *e) == crate::phasing::Look::Hidden));
+            }
             if !hidden.is_empty() {
                 project.switched_off.insert(crate::model::view3d_key(i), hidden);
             }
         }
     }
+    // what the plans, sections and elevations leave out, and how their filters draw elements
+    // otherwise: once per template (or per view without one), as views share them
+    // the looks of a view's filters by where they come from (its template, or itself), and with
+    // the widths of their pens at the view's scale
+    let mut by_source: HashMap<u64, HashMap<u64, crate::hatching::Look>> = HashMap::new();
+    let mut at_scale: HashMap<(u64, u64), std::sync::Arc<HashMap<u64, crate::hatching::Look>>> = HashMap::new();
+    let mut pens: Option<super::rvt_props::Pens> = None;
+    let scales: HashMap<u64, f64> = infos.iter().filter_map(|v| Some((v.id, v.scale?))).collect();
+    for (i, &view) in view_ids.iter().enumerate() {
+        if views.get(i).is_none_or(|v| v.kind == ViewKind::ThreeD) {
+            continue;
+        }
+        let at = path(view);
+        let hidden = hidden_in_view(doc, view, &by_category, &mut filters);
+        if !hidden.is_empty() {
+            project.switched_off.entry(at.clone()).or_default().extend(hidden);
+        }
+        let Some(o) = doc.object(view) else { continue };
+        let source = o.get("m_viewTemplateId").and_then(|v| v.element()).filter(|t| *t > 0).map_or(view, |t| t as u64);
+        let scale = scales.get(&view).copied().unwrap_or(100.0);
+        let looks = match at_scale.get(&(source, scale.to_bits())) {
+            Some(looks) => looks.clone(),
+            None => {
+                let looks = by_source.entry(source).or_insert_with(|| {
+                    let from = if source == view { Some(o.clone()) } else { doc.object(source) };
+                    from.map(|from| filters.looks(&from)).unwrap_or_default()
+                });
+                let mut looks = looks.clone();
+                if looks.values().any(|l| l.pens.iter().any(Option::is_some)) {
+                    let pens = pens.get_or_insert_with(|| super::rvt_props::pens(doc));
+                    // feet on paper to millimetres
+                    let width = |pen: Option<i64>| pen.and_then(|p| pens.width(p, scale, true)).map(|w| (w * 304.8) as f32);
+                    for look in looks.values_mut() {
+                        look.cut_line.width = width(look.pens[0]);
+                        look.seen_line.width = width(look.pens[1]);
+                    }
+                }
+                let looks = std::sync::Arc::new(looks);
+                at_scale.insert((source, scale.to_bits()), looks.clone());
+                looks
+            }
+        };
+        if !looks.is_empty() {
+            project.looks.insert(at, looks);
+        }
+    }
     project.drawings = super::rvt_drawings::drawings(doc, infos, file, &tags, &details);
-    // the phase and phase filter of every view, and the phases of the elements
-    let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
-    project.phasing = super::rvt_phases::phasing(doc, &ids, &|view| crate::document::uuid(&format!("rvt/{file}/view/{view}")));
     // which of the drawn elements are joined with which
     project.joins = super::rvt_joins::joins(doc, elements.iter().copied());
     // the legends and drafting views: drawings without a model
@@ -190,6 +252,7 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
         drafts: project.drafts,
         phasing: project.phasing,
         switched_off: project.switched_off,
+        looks: project.looks,
         joins: project.joins,
         drawn: project.drawn,
         drawings: project.drawings,
@@ -347,6 +410,28 @@ fn cut_of(wall: &SourceWall, hole: &Hole) -> Cut {
     } else {
         Cut::Nothing
     }
+}
+
+/// The crop of a view split in pieces, when it is: the view's viewer (`m_viewerId`) lays it out in
+/// regions (`ViewLayout::m_arrViewRegions`) along one axis (`m_iDim`: 0 across, 1 up), each the
+/// part of the crop it shows (`m_dMin`, `m_dMax`: fractions) and how far it is moved
+/// (`m_dOffset`, feet). One region is a crop that is not split.
+fn split_of(doc: &rvt_read::Document, view: u64) -> Option<crate::model::CropSplit> {
+    let o = doc.object(view)?;
+    let viewer = doc.object(u64::try_from(o.get("m_viewerId")?.element()?).ok()?)?;
+    let layout = viewer.get("m_oViewLayout").and_then(|v| viewer.deref(v))?;
+    let axis = u8::try_from(layout.get("m_iDim")?.as_i64()?).ok().filter(|a| *a <= 1)?;
+    let regions = layout.get("m_arrViewRegions")?.as_list()?;
+    let pieces: Vec<[f64; 3]> = regions
+        .iter()
+        .filter_map(|r| {
+            let r = r.as_object()?;
+            let number = |name: &str| r.get(name)?.as_f64().filter(|v| v.is_finite());
+            Some([number("m_dMin")?, number("m_dMax")?, number("m_dOffset")? * FT])
+        })
+        .filter(|p| p[1] > p[0])
+        .collect();
+    (pieces.len() > 1).then_some(crate::model::CropSplit { axis, pieces })
 }
 
 /// The schedules as the viewer shows them: templates left out, the shown columns only.
@@ -637,6 +722,34 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
         .collect()
 }
 
+/// Whether a view's crop region crops it: its frame's bounds are active across the view
+/// (`BoundedSpace::m_boundActive`, the rows of right and up). A frame resized but not switched on
+/// keeps its size with these off (3077 R26: four 3D views of 8 x 6 m printed whole); bit 1 of
+/// `m_viewerFlags` goes with them in every view of that file, bit 0 does not. `None`: the view
+/// has no frame to tell.
+fn crop_active(doc: &rvt_read::Document, view: u64) -> Option<bool> {
+    let o = doc.object(view)?;
+    let viewer = doc.object(u64::try_from(o.get("m_viewerId")?.element()?).ok()?)?;
+    let space = match viewer.get("m_boundedSpace")? {
+        FieldValue::Object(n) => n,
+        v => viewer.deref(v)?,
+    };
+    let rows = space.get("m_boundActive")?.as_list()?;
+    let on = |row: &FieldValue| row.as_list().is_some_and(|r| r.iter().any(|b| matches!(b, FieldValue::Bool(true))));
+    Some(rows.iter().take(2).any(on))
+}
+
+/// Where the origin of a 3D view's frame lies on its drawing in hidden lines (metres, along the
+/// axes [`crate::drawing::view_axes`] gives the view's camera direction `forward`). Its viewport
+/// holds that point at its position, whether the frame crops the view or not (3077 R26: a 3D view
+/// whose frame lies 9 m above the middle of the building prints 9 cm under its position at 1:100).
+fn frame_origin(frame: &rvt_export::views::OrientedBox, forward: [f64; 3]) -> [f64; 2] {
+    let f = Vec3::new(forward[0] as f32, forward[1] as f32, forward[2] as f32).normalize_or(Vec3::NEG_Z);
+    let (right, up, _) = crate::drawing::view_axes(f.to_array());
+    let p = glam::DVec3::from(frame.origin) * 0.3048;
+    [p.dot(glam::DVec3::from(Vec3::from(right))), p.dot(glam::DVec3::from(Vec3::from(up)))]
+}
+
 /// The sheets (beta) in sheet metres. The paper comes from the title block's size: its
 /// insertion point is the paper's lower right corner (3077 R26), else another corner or the
 /// centre, whichever holds the most viewports. `bare` leaves out what takes long to read (the title
@@ -647,6 +760,14 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
     // the schedules placed on the sheets, as tables
     let mut tables = if bare { HashMap::new() } else { super::rvt_schedules::placed(doc) };
     let anchors: HashMap<u64, ([f64; 2], [f64; 2])> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
+    // whether a view's crop region crops it (rvt-export reads another flag for its viewports' boxes)
+    let cropping: HashMap<u64, bool> = infos.iter().filter_map(|v| Some((v.id, v.crop_box.as_ref()?.active))).collect();
+    // a 3D view (not in perspective): the point of its drawing at its viewport's position
+    let origins: HashMap<u64, [f64; 2]> = infos
+        .iter()
+        .filter(|v| v.kind == K::ThreeD)
+        .filter_map(|v| Some((v.id, frame_origin(v.crop_box.as_ref()?, v.camera.as_ref().filter(|c| !c.perspective)?.forward))))
+        .collect();
     // the views the document draws, and the legends and drafting views, by their element
     let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
     let drafts: HashMap<u64, usize> = project.drafts.iter().enumerate().map(|(k, d)| (d.id, k)).collect();
@@ -671,7 +792,9 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
                     let scale = v.scale as f32;
                     // a legend or drafting view covers what is drawn in it
                     let drawn = drafts.get(&v.view).and_then(|&k| project.drafts[k].extent()).map(|e| SheetRect { min: [position[0] + e.min[0] * scale, position[1] + e.min[1] * scale], max: [position[0] + e.max[0] * scale, position[1] + e.max[1] * scale] });
-                    let (rect, estimated) = match (v.rect, drawn) {
+                    // the box of its crop, where its crop crops it
+                    let cropped_box = v.rect.filter(|_| cropping.get(&v.view).copied().unwrap_or(true));
+                    let (rect, estimated) = match (cropped_box, drawn) {
                         (Some([lo, hi]), _) => (SheetRect { min: lo.map(|x| x as f32 * FT), max: hi.map(|x| x as f32 * FT) }, false),
                         (None, Some(drawn)) => (drawn, false),
                         (None, None) => {
@@ -695,15 +818,25 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
                                 // legends and drafting views: a label-sized box
                                 _ => [0.12 / scale, 0.08 / scale],
                             };
-                            (SheetRect::around(position, [seen[0] * scale, seen[1] * scale]), true)
+                            // a 3D view holds the origin of its frame at its position: what it shows lies
+                            // around the middle of its section box, where it has one
+                            let middle = view.and_then(|i| Some((views[i].camera.as_ref()?, views[i].clip.as_ref()?, origins.get(&v.view)?))).map(|(c, clip, at)| {
+                                let (right, up, _) = crate::drawing::view_axes(c.forward);
+                                let mid = clip.to_world((clip.min + clip.max) * 0.5);
+                                [(f64::from(mid.dot(Vec3::from(right))) - at[0]) as f32, (f64::from(mid.dot(Vec3::from(up))) - at[1]) as f32]
+                            });
+                            let centre = middle.map_or(position, |m| [position[0] + m[0] * scale, position[1] + m[1] * scale]);
+                            (SheetRect::around(centre, [seen[0] * scale, seen[1] * scale]), true)
                         }
                     };
+
                     // the title as the type of the viewport writes it: its name and scale in one, or none
                     let ratio_text = format!("1:{}", (1.0 / v.scale).round());
-                    let written = if bare { None } else { super::rvt_tags::viewport_title(doc, &mut types, v.id, v.view, &v.view_name, &format!("1 : {}", (1.0 / v.scale).round()), v.detail_number.as_deref()) };
+                    let (written, face) = if bare { (None, Default::default()) } else { super::rvt_tags::viewport_title(doc, &mut types, v.id, v.view, &v.view_name, &format!("1 : {}", (1.0 / v.scale).round()), v.detail_number.as_deref()).map_or((None, Default::default()), |(w, f)| (Some(w), f)) };
                     SheetViewport {
                         title: v.view_name.clone(),
                         written,
+                        face,
                         view,
                         rect,
                         estimated,
@@ -713,9 +846,10 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
                         origin: position,
                         ratio: scale,
                         drawing: Some(crate::document::uuid(&format!("rvt/{file}/view/{}", v.view))).filter(|path| drawings.contains(path.as_str())),
-                        anchor: anchors.get(&v.view).map(|a| a.0),
+                        anchor: anchors.get(&v.view).map(|a| a.0).or(origins.get(&v.view).copied()),
                         turn: anchors.get(&v.view).map_or([1.0, 0.0], |a| a.1),
                         draft: drafts.get(&v.view).copied(),
+                        split: split_of(doc, v.view),
                     }
                 })
                 .collect();

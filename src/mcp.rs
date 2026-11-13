@@ -212,9 +212,9 @@ pub fn tools() -> Vec<Value> {
             }), &[], false),
         tool("zoom_to", "Frame the model, the selection or elements from the current direction.",
             json!({ "target": target_schema("What to frame") }), &[], false),
-        tool("set_display", "Display settings: render mode (solid, wireframe, edges), ground grid, the model's grid lines, flip up axis (for files with Y up), fill of cut faces.",
+        tool("set_display", "Display settings: render mode (solid, wireframe, edges, hidden: hidden lines), ground grid, the model's grid lines, flip up axis (for files with Y up), fill of cut faces.",
             json!({
-                "mode": { "type": "string", "enum": ["solid", "wireframe", "edges"] },
+                "mode": { "type": "string", "enum": ["solid", "wireframe", "edges", "hidden"] },
                 "grid": { "type": "boolean" }, "grid_lines": { "type": "boolean" },
                 "flip_up": { "type": "boolean" }, "section_fill": { "type": "boolean" }
             }), &[], false),

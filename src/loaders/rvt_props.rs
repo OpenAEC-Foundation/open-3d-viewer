@@ -62,7 +62,7 @@ struct Reader<'a> {
     /// The line style of a category without a style of its own: its projection style.
     defaults: Option<HashMap<i64, i64>>,
     /// The widths of the pens (feet on paper): per view scale for the model, and for annotations.
-    pens: Option<(Vec<(f64, Vec<f64>)>, Vec<f64>)>,
+    pens: Option<Pens>,
     /// The caption and spec of a parameter of the file.
     defs: HashMap<i64, Option<(String, String)>>,
 }
@@ -231,29 +231,8 @@ impl Reader<'_> {
 
     /// The width of a pen at a view scale (feet on paper).
     fn pen(&mut self, pen: i64, scale: f64, model: bool) -> Option<f64> {
-        if self.pens.is_none() {
-            // the project's table is the first one; a family brings its own
-            let table = self.doc.object_ids_of_class("PenWidthTableElem").into_iter().min().and_then(|id| self.doc.object(id));
-            let widths = |o: &NestedObject| -> Vec<f64> { o.get("m_pens").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_f64).collect() };
-            let read = table.as_ref().and_then(|o| {
-                let t = o.get("m_pPenWidthTable").and_then(|v| o.deref(v))?;
-                let per_scale = t.get("m_modelPenInfo").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_object);
-                let mut model: Vec<(f64, Vec<f64>)> = per_scale.filter_map(|i| Some((i.get("m_invertedScale")?.as_f64()?, widths(i)))).collect();
-                model.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let draft = t.get("m_draftPenInfo").and_then(FieldValue::as_object).map(widths).unwrap_or_default();
-                Some((model, draft))
-            });
-            self.pens = Some(read.unwrap_or_default());
-        }
-        let (model_pens, draft) = self.pens.as_ref()?;
-        let index = usize::try_from(pen - 1).ok()?;
-        let widths = if model {
-            // the column of the view's scale, else of the next coarser one
-            &model_pens.iter().find(|(s, _)| *s >= scale - 1e-6).or(model_pens.last())?.1
-        } else {
-            draft
-        };
-        widths.get(index).copied().filter(|w| w.is_finite() && *w > 0.0)
+        let doc = self.doc;
+        self.pens.get_or_insert_with(|| pens(doc)).width(pen, scale, model)
     }
 
     /// The rows of a graphics style (a `GStyleElem`): line weight, colour and line pattern.
@@ -596,6 +575,44 @@ impl Reader<'_> {
             groups.extend(self.kind(kind, scale));
         }
         groups
+    }
+}
+
+/// The widths of the pens of a project (feet on paper): per view scale for what is drawn of the
+/// model and of details, and for annotations.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Pens {
+    model: Vec<(f64, Vec<f64>)>,
+    draft: Vec<f64>,
+}
+
+/// The pens of the project's table (the first one; a family brings its own).
+pub(super) fn pens(doc: &rvt_read::Document) -> Pens {
+    let table = doc.object_ids_of_class("PenWidthTableElem").into_iter().min().and_then(|id| doc.object(id));
+    let widths = |o: &NestedObject| -> Vec<f64> { o.get("m_pens").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_f64).collect() };
+    let read = table.as_ref().and_then(|o| {
+        let t = o.get("m_pPenWidthTable").and_then(|v| o.deref(v))?;
+        let per_scale = t.get("m_modelPenInfo").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_object);
+        let mut model: Vec<(f64, Vec<f64>)> = per_scale.filter_map(|i| Some((i.get("m_invertedScale")?.as_f64()?, widths(i)))).collect();
+        model.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let draft = t.get("m_draftPenInfo").and_then(FieldValue::as_object).map(widths).unwrap_or_default();
+        Some(Pens { model, draft })
+    });
+    read.unwrap_or_default()
+}
+
+impl Pens {
+    /// The width of pen `pen` (feet on paper) on a view at 1 : `scale`: of the model's pens, or
+    /// of the annotations'.
+    pub(super) fn width(&self, pen: i64, scale: f64, model: bool) -> Option<f64> {
+        let index = usize::try_from(pen - 1).ok()?;
+        let widths = if model {
+            // the column of the view's scale, else of the next coarser one
+            &self.model.iter().find(|(s, _)| *s >= scale - 1e-6).or(self.model.last())?.1
+        } else {
+            &self.draft
+        };
+        widths.get(index).copied().filter(|w| w.is_finite() && *w > 0.0)
     }
 }
 

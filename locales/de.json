@@ -638,6 +638,8 @@
     "Click where that point turns to · Esc: start again": "Klicken Sie, wohin dieser Punkt gedreht wird · Esc: neu beginnen",
     "Click a point of the mirror axis · Esc: stop": "Klicken Sie auf einen Punkt der Spiegelachse · Esc: beenden",
     "Click a second point of the mirror axis · Esc: start again": "Klicken Sie auf einen zweiten Punkt der Spiegelachse · Esc: neu beginnen",
-    "Metal stud walls": "Metallständerwände"
+    "Metal stud walls": "Metallständerwände",
+    "Hidden line": "Verdeckte Linien",
+    "Shaded": "Schattiert"
   }
 }

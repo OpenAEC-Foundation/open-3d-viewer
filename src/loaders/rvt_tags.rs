@@ -329,8 +329,9 @@ pub(super) fn symbol_lines(doc: &rvt_read::Document, types: &mut Types, kind: u6
 /// The title of a view placed on a sheet, as the type of its viewport writes it
 /// (`ViewportAttributes`: `m_showLabel`, and `m_familyTagId`, the type of its title family, whose
 /// labels write the view's name and scale): empty when its type shows no title, none when the
-/// viewport tells nothing of it.
-pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewport: u64, view: u64, name: &str, scale: &str, detail: Option<&str>) -> Option<String> {
+/// viewport tells nothing of it. With it the typeface of its first label (its type's, so a
+/// title set in italic stays italic).
+pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewport: u64, view: u64, name: &str, scale: &str, detail: Option<&str>) -> Option<(String, crate::typeface::Face)> {
     /// The view's name, its scale and the number of the view on its sheet.
     const NAME: i64 = -1005203;
     const SCALE: i64 = -1005204;
@@ -338,12 +339,13 @@ pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewpo
     let kind = doc.object(viewport)?.get("m_attrId").and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok())?;
     let kind = doc.object(kind)?;
     if kind.get("m_showLabel").and_then(FieldValue::as_i64) == Some(0) {
-        return Some(String::new());
+        return Some(Default::default());
     }
-    let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(String::new()) };
+    let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(Default::default()) };
     let o = doc.object(family)?;
     let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc, types.units()));
     let labels = o.get("m_tagNoteData").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).filter_map(|l| label(l, types));
+    let mut face: Option<crate::typeface::Face> = None;
     let written: Vec<String> = labels
         .filter_map(|label| {
             label.write(&mut |part| match part.parameter {
@@ -353,9 +355,12 @@ pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewpo
                 _ => value(doc, &mut sources, &mut specs, &units, viewport, part).or_else(|| value(doc, &mut sources, &mut specs, &units, view, part)),
             })
         })
-        .map(|text| text.wording)
+        .map(|text| {
+            face.get_or_insert_with(|| text.face.clone());
+            text.wording
+        })
         .collect();
-    Some(written.join("  "))
+    Some((written.join("  "), face.unwrap_or_default()))
 }
 
 /// What a tag type draws: its labels and the lines of its family (on paper, metres).

@@ -146,12 +146,15 @@ impl Face {
         let space = self.measure("a a", size) - self.measure("aa", size);
         let mut lines: Vec<String> = Vec::new();
         for paragraph in text.lines() {
+            // a line with tabs is measured whole: how far a tab runs depends on what stands
+            // before it, so the widths of its words do not add up
+            let tabbed = paragraph.contains('\t');
             let (mut line, mut run) = (String::new(), 0.0);
             for word in paragraph.split(' ') {
                 // a word may break after a hyphen in it
                 for (k, piece) in word.split_inclusive('-').enumerate() {
                     let gap = if k == 0 && !line.is_empty() { space } else { 0.0 };
-                    let w = self.measure(piece, size);
+                    let w = if tabbed { self.measure(&format!("{line}{}{piece}", if gap > 0.0 { " " } else { "" }), size) - run - gap } else { self.measure(piece, size) };
                     if !line.is_empty() && run + gap + w > width {
                         lines.push(std::mem::take(&mut line));
                         run = 0.0;
@@ -160,7 +163,7 @@ impl Face {
                         run += gap;
                     }
                     line.push_str(piece);
-                    run += w;
+                    run = if tabbed { self.measure(&line, size) } else { run + w };
                 }
             }
             lines.push(line);

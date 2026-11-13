@@ -148,9 +148,13 @@ fn selected(lit: vec3<f32>) -> vec3<f32> {
     return mix(lit, amber * glow, 0.6);
 }
 
-// Lit colour of a surface, in the selection colour when its unit is selected.
+// Lit colour of a surface, in the selection colour when its unit is selected. In hidden lines
+// (eye.w 2) a surface is white and unlit: it only hides what lies behind it.
 fn surface(in: VertexOut) -> vec3<f32> {
-    let lit = shade(in);
+    var lit = shade(in);
+    if (u.eye.w > 1.5) {
+        lit = vec3<f32>(1.0);
+    }
     if ((in.flags & UNIT_SELECTED) != 0u) {
         return selected(lit);
     }

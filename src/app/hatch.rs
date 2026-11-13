@@ -77,6 +77,23 @@ pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [
             }
         });
         frame.stroke(&lines, Stroke::default().with_color(color).with_width(1.2));
+        // those the view's filters give a pen of their own
+        for inked in cut.inked.iter().filter(|i| i.cut) {
+            let lines = Path::new(|path| {
+                for [a, b] in &inked.lines {
+                    let (a, b) = (a.map(f64::from), b.map(f64::from));
+                    let piece = match crop {
+                        Some((lo, hi)) => crate::drawing2d::clip(a, b, lo, hi),
+                        None => Some((a, b)),
+                    };
+                    if let Some((Some(a), Some(b))) = piece.map(|(a, b)| (to(a), to(b))) {
+                        path.move_to(a);
+                        path.line_to(b);
+                    }
+                }
+            });
+            frame.stroke(&lines, Stroke::default().with_color(inked.ink.color.map_or(color, rgb)).with_width(inked.ink.wide(1.2, true)));
+        }
     }
     // what the view draws faint: its edges beyond the cut thin, its cut lines bolder
     for (lines, width) in [(&cut.faint_below, 0.5), (&cut.faint_segments, 1.0)] {

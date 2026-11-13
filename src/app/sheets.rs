@@ -90,7 +90,7 @@ impl App {
         }
         let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
-        let shown = crate::drawing::Shown { layers: &layers, hidden: &hidden, faint: None, pieces: None };
+        let shown = crate::drawing::Shown { layers: &layers, hidden: &hidden, faint: None, pieces: None, inks: None };
         let cut = crate::drawing::view_at(&model, shown, camera.forward, saved.clip.as_ref());
         self.cuts.insert(key, Arc::new(cut));
     }
@@ -160,9 +160,16 @@ impl App {
                     lines: self.document.view_lines(path).to_vec(),
                     fills: self.document.view_fills(path).to_vec(),
                 },
-                // a 3D view: its hidden lines, once they are made
+                // a 3D view: its hidden lines, once they are made, within its crop where it has
+                // one: the viewport's box, measured from the point of the drawing at its position
                 (None, None) => match v.view.and_then(|i| self.cuts.get(&view3d_key(i))) {
-                    Some(cut) => Placed::View { cut: Some(cut.clone()), crop: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new() },
+                    Some(cut) => {
+                        let crop = v.anchor.filter(|_| !v.estimated && v.ratio > 0.0).map(|at| {
+                            let on = |p: [f32; 2]| [0, 1].map(|k| at[k] + f64::from((p[k] - v.origin[k]) / v.ratio));
+                            (on(v.rect.min), on(v.rect.max))
+                        });
+                        Placed::View { cut: Some(cut.clone()), crop, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new() }
+                    }
                     None => Placed::Frame,
                 },
             })
@@ -672,64 +679,104 @@ impl canvas::Program<Message> for SheetDrawing {
                             fit.point([to[0] + ((dx * cx + dy * cy) * ratio) as f32, to[1] + ((dy * cx - dx * cy) * ratio) as f32])
                         };
                         let turned = cy.atan2(cx) as f32;
-                        let piece = |a: [f64; 2], z: [f64; 2]| match crop {
-                            Some((lo, hi)) => super::paper::clip(a, z, *lo, *hi),
-                            None => Some((a, z)),
+                        // a crop split in pieces (parts of the view left out, the pieces moved
+                        // together, `SheetViewport::split`): each piece cut to its part of the crop
+                        // and moved; else the crop whole
+                        let pieces: Vec<(Option<([f64; 2], [f64; 2])>, [f64; 2], bool)> = match (&v.split, crop) {
+                            (Some(split), Some((lo, hi))) => split
+                                .pieces
+                                .iter()
+                                .map(|p| {
+                                    let k = usize::from(split.axis.min(1));
+                                    let (mut low, mut high, mut shift) = (*lo, *hi, [0.0; 2]);
+                                    let span = hi[k] - lo[k];
+                                    (low[k], high[k], shift[k]) = (lo[k] + p[0] * span, lo[k] + p[1] * span, p[2]);
+                                    (Some((low, high)), shift, true)
+                                })
+                                .collect(),
+                            _ => vec![(*crop, [0.0, 0.0], false)],
                         };
-                        let stroke = |frame: &mut Frame, segments: &mut dyn Iterator<Item = ([f64; 2], [f64; 2])>, color: Color, width: f32| {
-                            let path = Path::new(|path| {
-                                for (a, b) in segments.filter_map(|(a, z)| piece(a, z)).map(|(a, z)| (on(a), on(z))).filter(|(a, b)| seen(*a, *b)) {
+                        let whole = on;
+                        for (crop, shift, split) in pieces {
+                            let crop = &crop;
+                            let on = |q: [f64; 2]| whole([q[0] + shift[0], q[1] + shift[1]]);
+                            // what an annotation stands on: of a split view only the piece it is in
+                            let here = |q: [f64; 2]| !split || crop.is_some_and(|(lo, hi)| (0..2).all(|k| q[k] >= lo[k] && q[k] <= hi[k]));
+                            let piece = |a: [f64; 2], z: [f64; 2]| match crop {
+                                Some((lo, hi)) => super::paper::clip(a, z, *lo, *hi),
+                                None => Some((a, z)),
+                            };
+                            let stroke = |frame: &mut Frame, segments: &mut dyn Iterator<Item = ([f64; 2], [f64; 2])>, color: Color, width: f32| {
+                                let path = Path::new(|path| {
+                                    for (a, b) in segments.filter_map(|(a, z)| piece(a, z)).map(|(a, z)| (on(a), on(z))).filter(|(a, b)| seen(*a, *b)) {
+                                        path.move_to(a);
+                                        path.line_to(b);
+                                    }
+                                });
+                                frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
+                            };
+                            let wide = |s: &[[f32; 2]; 2]| (s[0].map(f64::from), s[1].map(f64::from));
+                            if let Some(cut) = cut {
+                                // the cut faces in their hatch, under the lines
+                                super::hatch::draw_fills(&mut frame, cut, *crop, &|q| Some(on(q)), (ratio * f64::from(fit.scale)) as f32, None);
+                                // what is seen beyond the cut, thin and grey, then the cut itself
+                                stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
+                                stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
+                                // the lines the view's filters give a pen of their own
+                                for inked in &cut.inked {
+                                    let (plain, width) = if inked.cut { (ink, 1.1) } else { (Color { a: 0.55, ..ink }, 0.5) };
+                                    let color = inked.ink.color.map_or(plain, |c| Color::from_rgb8(c[0], c[1], c[2]));
+                                    stroke(&mut frame, &mut inked.lines.iter().map(wide), color, inked.ink.wide(width, inked.cut));
+                                }
+                            }
+                            // the regions the view fills in one colour, under its own lines (black is
+                            // the ink of the sheet), cut to its crop: a masking region that reaches
+                            // past it still covers what lies under it within
+                            let clip = crop.map(|(lo, hi)| {
+                                let (a, b, c, d) = (on(lo), on(hi), on([lo[0], hi[1]]), on([hi[0], lo[1]]));
+                                let (x0, x1) = (a.x.min(b.x).min(c.x).min(d.x), a.x.max(b.x).max(c.x).max(d.x));
+                                let (y0, y1) = (a.y.min(b.y).min(c.y).min(d.y), a.y.max(b.y).max(c.y).max(d.y));
+                                iced::Rectangle { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+                            });
+                            let all = iced::Rectangle { x: 0.0, y: 0.0, width: bounds.width, height: bounds.height };
+                            frame.with_clip(clip.unwrap_or(all), |frame| {
+                                let at = |q: [f64; 2]| { let p = on(q); Point::new(p.x - clip.map_or(0.0, |c| c.x), p.y - clip.map_or(0.0, |c| c.y)) };
+                            for f in fills.iter() {
+                                let outlines = Path::new(|path| {
+                                    for outline in f.loops.iter().filter(|l| l.len() >= 3) {
+                                        path.move_to(at(outline[0]));
+                                        for &q in &outline[1..] {
+                                            path.line_to(at(q));
+                                        }
+                                        path.close();
+                                    }
+                                });
+                                let color = if f.color == [0, 0, 0] { ink } else { Color::from_rgb8(f.color[0], f.color[1], f.color[2]) };
+                                frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
+                            }
+                            });
+                            // the lines of its dimensions and tags reach past its crop, as its texts do;
+                            // its detail lines are cut to it where they are read
+                            let marks = Path::new(|path| {
+                                for (a, b) in lines.iter().filter(|l| here([(l[0][0] + l[1][0]) / 2.0, (l[0][1] + l[1][1]) / 2.0])).map(|l| (on(l[0]), on(l[1]))).filter(|(a, b)| seen(*a, *b)) {
                                     path.move_to(a);
                                     path.line_to(b);
                                 }
                             });
-                            frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
-                        };
-                        let wide = |s: &[[f32; 2]; 2]| (s[0].map(f64::from), s[1].map(f64::from));
-                        if let Some(cut) = cut {
-                            // the cut faces in their hatch, under the lines
-                            super::hatch::draw_fills(&mut frame, cut, *crop, &|q| Some(on(q)), (ratio * f64::from(fit.scale)) as f32, None);
-                            // what is seen beyond the cut, thin and grey, then the cut itself
-                            stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
-                            stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
-                        }
-                        // the regions the view fills in one colour, under its own lines: black is
-                        // the ink of the sheet; one that starts outside the crop is left out
-                        let within = |q: [f64; 2]| crop.is_none_or(|(lo, hi)| q[0] >= lo[0] && q[0] <= hi[0] && q[1] >= lo[1] && q[1] <= hi[1]);
-                        for f in fills.iter().filter(|f| f.loops.first().and_then(|l| l.first()).is_some_and(|q| within(*q))) {
-                            let outlines = Path::new(|path| {
-                                for outline in f.loops.iter().filter(|l| l.len() >= 3) {
-                                    path.move_to(on(outline[0]));
-                                    for &q in &outline[1..] {
-                                        path.line_to(on(q));
-                                    }
-                                    path.close();
-                                }
-                            });
-                            let color = if f.color == [0, 0, 0] { ink } else { Color::from_rgb8(f.color[0], f.color[1], f.color[2]) };
-                            frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
-                        }
-                        // the lines of its dimensions and tags reach past its crop, as its texts do;
-                        // its detail lines are cut to it where they are read
-                        let marks = Path::new(|path| {
-                            for (a, b) in lines.iter().map(|l| (on(l[0]), on(l[1]))).filter(|(a, b)| seen(*a, *b)) {
-                                path.move_to(a);
-                                path.line_to(b);
+                            frame.stroke(&marks, Stroke::default().with_color(ink).with_width(0.7));
+                            let paper = fit.scale;
+                            for d in dimensions.iter().filter(|d| here([(d.from[0] + d.to[0]) / 2.0, (d.from[1] + d.to[1]) / 2.0])) {
+                                let (a, b) = (on(d.from), on(d.to));
+                                let style = self.styles.get(d.style).or(self.styles.first());
+                                let Some(style) = style.filter(|_| seen(a, b)) else { continue };
+                                let look = super::marks::DimensionLook { offset: paper * super::marks::OFFSET as f32, paper, size: (paper * style.size as f32).max(SMALLEST), style };
+                                super::marks::draw_dimension_px(&mut frame, a, b, d.length(), ink, look);
                             }
-                        });
-                        frame.stroke(&marks, Stroke::default().with_color(ink).with_width(0.7));
-                        let paper = fit.scale;
-                        for d in dimensions {
-                            let (a, b) = (on(d.from), on(d.to));
-                            let style = self.styles.get(d.style).or(self.styles.first());
-                            let Some(style) = style.filter(|_| seen(a, b)) else { continue };
-                            let look = super::marks::DimensionLook { offset: paper * super::marks::OFFSET as f32, paper, size: (paper * style.size as f32).max(SMALLEST), style };
-                            super::marks::draw_dimension_px(&mut frame, a, b, d.length(), ink, look);
-                        }
-                        for note in notes {
-                            let (at, size) = (on(note.at), note.size as f32 * paper);
-                            if size >= SMALLEST && at.x > -size * 60.0 && at.x < bounds.width + size * 60.0 && at.y > -size * 8.0 && at.y < bounds.height + size * 8.0 {
-                                super::marks::draw_note_in(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32 - turned, &note.face);
+                            for note in notes.iter().filter(|n| here(n.at)) {
+                                let (at, size) = (on(note.at), note.size as f32 * paper);
+                                if size >= SMALLEST && at.x > -size * 60.0 && at.x < bounds.width + size * 60.0 && at.y > -size * 8.0 && at.y < bounds.height + size * 8.0 {
+                                    super::marks::draw_note_in(&mut frame, at, &note.text, size, ink, note.align, note.angle as f32 - turned, &note.face);
+                                }
                             }
                         }
                         true
@@ -742,8 +789,9 @@ impl canvas::Program<Message> for SheetDrawing {
             if v.estimated {
                 stroke.line_dash = canvas::LineDash { segments: &[6.0, 4.0], offset: 0 };
             }
-            // a guessed box says nothing once the view itself is drawn
-            if !(v.estimated && drawn) {
+            // a guessed box says nothing once the view itself is drawn, nor does the box of a
+            // split crop: its pieces lie elsewhere than the whole crop
+            if !((v.estimated || v.split.is_some() && !hot) && drawn) {
                 frame.stroke(&Path::rectangle(at, size), stroke);
             }
             // the title where the sheet has it, else under the box
@@ -762,7 +810,13 @@ impl canvas::Program<Message> for SheetDrawing {
             // on paper: it grows and shrinks with the sheet
             let (name, scale) = (TITLE * fit.scale, TITLE_SCALE * fit.scale);
             if name >= SMALLEST {
-                label(&mut frame, title, under, name, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+                if v.face.is_plain() {
+                    label(&mut frame, title, under, name, color, alignment::Horizontal::Left, alignment::Vertical::Bottom);
+                } else {
+                    // in the typeface of its type: italic, bold or its own family where it says
+                    let text = canvas::Text { content: title, position: under, align_y: alignment::Vertical::Bottom, size: iced::Pixels(name), line_height: iced::widget::text::LineHeight::Relative(1.3), color, ..canvas::Text::default() };
+                    v.face.fill(&mut frame, text);
+                }
                 if v.written.is_none() {
                     label(&mut frame, v.scale.clone(), Point::new(under.x, under.y + scale * 1.4), scale, p.text_secondary, alignment::Horizontal::Left, alignment::Vertical::Bottom);
                 }
@@ -812,6 +866,8 @@ mod tests {
             turn: [1.0, 0.0],
             draft: None,
             written: None,
+            face: Default::default(),
+            split: None,
         };
         model.project.sheets = vec![
             Sheet::new("A-1".into(), "Plans".into(), Some(SheetRect { min: [-1.189, 0.0], max: [0.0, 0.841] }), vec![viewport(Some(0))]),

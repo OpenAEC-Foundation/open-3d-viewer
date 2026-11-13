@@ -11,6 +11,7 @@
 //! backend that matters (WebGL2 and WebGPU have no point size).
 
 use super::camera::Camera;
+use super::chunks;
 use super::structural::{GpuStructural, StructUniforms, StructuralPipelines};
 use crate::structural::display::Marks;
 use crate::structural::pick::Lod;
@@ -123,6 +124,8 @@ pub struct ScenePrimitive {
     /// The cut faces of the section box and plane in their hatches (`crate::caps`), drawn over
     /// the model's own cut fill.
     pub caps: Arc<crate::caps::CutFaces>,
+    /// The view moved since the frame before: elements too small to show are left out.
+    pub moving: bool,
 }
 
 /// A datum line (a grid line or a level) as drawn: its two ends (world).
@@ -165,8 +168,8 @@ struct GpuLayer {
     features: Option<(wgpu::Buffer, u32)>,
     /// Triangles that enclose volume (cut fill), built on first use.
     solid: Option<(wgpu::Buffer, u32)>,
-    /// Some vertices are transparent (glass pass).
-    transparent: bool,
+    /// The triangles as they lie in `indices`: by where they are and how large (`chunks`).
+    chunks: Vec<chunks::Chunk>,
 }
 
 struct Targets {
@@ -183,7 +186,8 @@ pub struct ScenePipeline {
     lit: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
     stencil_clear: wgpu::RenderPipeline,
-    face_count: wgpu::RenderPipeline,
+    /// Counts the surfaces behind a cut, one layer to a bit of the stencil: eight layers a pass.
+    face_count: [wgpu::RenderPipeline; 8],
     cap: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     /// Flat coloured triangles, not cut by the section: the cut faces in their hatches.
@@ -209,6 +213,12 @@ pub struct ScenePipeline {
     model_id: u64,
     model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
+    /// What this frame draws of the layers (layer, first index, end), opaque and transparent:
+    /// the chunks in view, without the elements too small to show.
+    lit_draws: Vec<(u32, u32, u32)>,
+    glass_draws: Vec<(u32, u32, u32)>,
+    /// The exploded view moves elements: everything is drawn then.
+    moved: bool,
     grid: Option<(wgpu::Buffer, u32, [i64; 6])>,
     /// The datum lines (grid lines, levels) of the view shown, dash-dot, and what they were
     /// built from.
@@ -399,15 +409,19 @@ impl ScenePipeline {
             stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Zero),
             wgpu::ColorWrites::empty(),
         );
-        let face_count = special(
-            "o3v.face_count",
-            "vs_face",
-            "fs_face_count",
-            true,
-            (wgpu::CompareFunction::Always, false),
-            stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Invert),
-            wgpu::ColorWrites::empty(),
-        );
+        // each layer turns a bit of its own: two models that lie in each other (a supplier's
+        // slabs in the engineer's floor) then do not cancel each other out
+        let face_count = std::array::from_fn(|bit| {
+            special(
+                "o3v.face_count",
+                "vs_face",
+                "fs_face_count",
+                true,
+                (wgpu::CompareFunction::Always, false),
+                wgpu::StencilState { write_mask: 1 << bit, ..stencil(wgpu::CompareFunction::Always, wgpu::StencilOperation::Invert) },
+                wgpu::ColorWrites::empty(),
+            )
+        });
         let cap = special(
             "o3v.cap",
             "vs_cap",
@@ -554,6 +568,9 @@ impl ScenePipeline {
             model_id: 0,
             model: None,
             layers: Vec::new(),
+            lit_draws: Vec::new(),
+            glass_draws: Vec::new(),
+            moved: false,
             grid: None,
             datum: None,
             overlay: None,
@@ -636,6 +653,9 @@ impl ScenePipeline {
                 self.structural = Some(StructuralPipelines::new(device, self.format, &self.uniform_layout));
             }
         }
+        // the grid of cells the layers' triangles are put in
+        let (low, high) = (Vec3::from(model.bounds.min), Vec3::from(model.bounds.max));
+        let cell = ((high - low).max_element() / chunks::CELLS).max(1e-3);
         for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
@@ -661,9 +681,10 @@ impl ScenePipeline {
                 contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
+            let chunked = chunks::chunked(layer, low, cell);
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("o3v.layer.indices"),
-                contents: bytemuck::cast_slice(&layer.indices),
+                contents: bytemuck::cast_slice(&chunked.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
             self.layers.push(GpuLayer {
@@ -674,7 +695,7 @@ impl ScenePipeline {
                 wire: None,
                 features: None,
                 solid: None,
-                transparent: layer.colors.as_ref().is_some_and(|c| c.iter().any(|c| c[3] < 253)),
+                chunks: chunked.chunks,
             });
         }
     }
@@ -865,6 +886,7 @@ impl ScenePipeline {
                 write_offsets(queue, &self.offsets, &primitive.offsets[..n]);
             }
             self.offsets_written = Some(primitive.offsets.clone());
+            self.moved = primitive.offsets.iter().any(|o| o[0] != 0.0 || o[1] != 0.0 || o[2] != 0.0);
         }
         let settings = &primitive.settings;
         if settings.mode != RenderMode::Solid {
@@ -898,6 +920,23 @@ impl ScenePipeline {
             cap: [CAP_COLOR[0], CAP_COLOR[1], CAP_COLOR[2], CAP_HATCH * viewport.scale_factor() as f32],
             plane,
         };
+        // what of the layers this frame draws
+        let sight = chunks::Sight {
+            clip: view_proj * settings.model_matrix,
+            eye: settings.model_matrix.inverse().transform_point3(eye),
+            scale: camera.projection(w as f32 / h as f32).y_axis.y * h as f32 / 2.0,
+            parallel: camera.ortho,
+            all: self.moved,
+            still: !primitive.moving,
+        };
+        self.lit_draws.clear();
+        self.glass_draws.clear();
+        for (l, layer) in self.layers.iter().enumerate() {
+            if primitive.visible.get(l).copied().unwrap_or(true) && layer.index_count > 0 {
+                chunks::draws(&layer.chunks, &sight, false, l as u32, &mut self.lit_draws);
+                chunks::draws(&layer.chunks, &sight, true, l as u32, &mut self.glass_draws);
+            }
+        }
         let wire_scale = if settings.mode == RenderMode::SolidEdges { 0.35 } else { 0.8 };
         queue.write_buffer(&self.model_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, 1.0, clip, plane)));
         queue.write_buffer(&self.edge_uniforms, 0, bytemuck::bytes_of(&uniforms(settings.model_matrix, wire_scale, clip, plane)));
@@ -908,6 +947,20 @@ impl ScenePipeline {
             let proj11 = camera.projection(w as f32 / h as f32).y_axis.y;
             let logical = (w as f32 / scale, h as f32 / scale);
             structural.write(queue, &StructUniforms::new(logical, proj11, settings.background, &Lod::default()));
+        }
+    }
+
+    /// Draws index ranges of the layers (layer, first index, end), as `prepare` chose them.
+    fn draw_layers(&self, pass: &mut wgpu::RenderPass<'_>, draws: &[(u32, u32, u32)]) {
+        let mut bound = u32::MAX;
+        for &(l, from, to) in draws {
+            let Some(layer) = self.layers.get(l as usize) else { continue };
+            if l != bound {
+                pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
+                bound = l;
+            }
+            pass.draw_indexed(from..to, 0, 0..1);
         }
     }
 
@@ -964,13 +1017,7 @@ impl ScenePipeline {
             if mode != RenderMode::Wireframe {
                 pass.set_pipeline(&self.lit);
                 pass.set_bind_group(0, &self.model_group, &[]);
-                for (i, layer) in self.layers.iter().enumerate() {
-                    if visible(i) && layer.index_count > 0 {
-                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
-                        pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..layer.index_count, 0, 0..1);
-                    }
-                }
+                self.draw_layers(&mut pass, &self.lit_draws);
             }
             // point clouds in every mode: they have no faces or edges
             if self.layers.iter().any(|l| l.points > 0) {
@@ -996,21 +1043,23 @@ impl ScenePipeline {
                 if primitive.settings.plane.is_some_and(|p| plane_cap_visible(p[0], &primitive.camera)) {
                     faces.push(6);
                 }
+                // the layers with solids, eight at a time: each counts in a bit of its own, and
+                // the face is filled where any of them is cut
+                let solids: Vec<&GpuLayer> = self.layers.iter().enumerate().filter(|(i, layer)| visible(*i) && layer.solid.as_ref().is_some_and(|(_, count)| *count > 0)).map(|(_, layer)| layer).collect();
                 for face in faces {
-                    pass.set_pipeline(&self.stencil_clear);
-                    pass.draw(0..3, 0..1);
-                    pass.set_pipeline(&self.face_count);
-                    for (i, layer) in self.layers.iter().enumerate() {
-                        if let (true, Some((solid, count))) = (visible(i), &layer.solid) {
-                            if *count > 0 {
-                                pass.set_vertex_buffer(0, layer.vertices.slice(..));
-                                pass.set_index_buffer(solid.slice(..), wgpu::IndexFormat::Uint32);
-                                pass.draw_indexed(0..*count, 0, face..face + 1);
-                            }
+                    for group in solids.chunks(self.face_count.len()) {
+                        pass.set_pipeline(&self.stencil_clear);
+                        pass.draw(0..3, 0..1);
+                        for (layer, count_bit) in group.iter().zip(&self.face_count) {
+                            let Some((solid, count)) = &layer.solid else { continue };
+                            pass.set_pipeline(count_bit);
+                            pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                            pass.set_index_buffer(solid.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..*count, 0, face..face + 1);
                         }
+                        pass.set_pipeline(&self.cap);
+                        pass.draw(0..6, face..face + 1);
                     }
-                    pass.set_pipeline(&self.cap);
-                    pass.draw(0..6, face..face + 1);
                 }
                 // the cut faces in their hatches, over that fill
                 for (pipeline, drawn) in [(&self.flat, &self.cut_faces), (&self.flat_lines, &self.cut_lines)] {
@@ -1025,13 +1074,7 @@ impl ScenePipeline {
             if mode != RenderMode::Wireframe {
                 pass.set_pipeline(&self.glass);
                 pass.set_bind_group(0, &self.model_group, &[]);
-                for (i, layer) in self.layers.iter().enumerate() {
-                    if visible(i) && layer.transparent && layer.index_count > 0 {
-                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
-                        pass.set_index_buffer(layer.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..layer.index_count, 0, 0..1);
-                    }
-                }
+                self.draw_layers(&mut pass, &self.glass_draws);
             }
             pass.set_pipeline(&self.lines);
             if mode != RenderMode::Solid {
@@ -1112,7 +1155,7 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
         usage: wgpu::BufferUsages::INDEX,
         mapped_at_creation: false,
     });
-    GpuLayer { vertices, indices, index_count: 0, points: n as u32, wire: None, features: None, solid: None, transparent: false }
+    GpuLayer { vertices, indices, index_count: 0, points: n as u32, wire: None, features: None, solid: None, chunks: Vec::new() }
 }
 
 /// Units per row of the offsets texture; `OFFSETS_WIDTH` in scene.wgsl. With WebGL2's 2048 rows

@@ -104,7 +104,15 @@ try {
             if ($buildExitCode -eq 0) {
                 Stop-Viewer
                 New-Item -ItemType Directory -Path $runFolder -Force | Out-Null
-                Copy-Item -LiteralPath $builtExe -Destination $viewerExe -Force
+                # another program may run the copy (a second viewer, a screenshot): then the build is
+                # there but the viewer cannot be replaced; keep watching instead of stopping
+                try {
+                    Copy-Item -LiteralPath $builtExe -Destination $viewerExe -Force -ErrorAction Stop
+                } catch {
+                    Write-DevStatus 'error' "Built, but $viewerExe is in use by another program; close it to see the new build."
+                    if ($Once) { exit 1 }
+                    continue
+                }
                 # the file of -Model the first time; after that the files the viewer kept open
                 $arguments = @('--no-remote')
                 if ($modelPath) { $arguments = @(('"' + $modelPath + '"')) + $arguments; $modelPath = '' }

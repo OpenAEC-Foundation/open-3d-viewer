@@ -171,6 +171,7 @@ impl App {
 
     /// Cuts a view again that was cut, through its layers as they are now.
     pub(super) fn cut_again(&mut self, path: &str) {
+        self.cut_epoch += 1;
         if self.cuts.remove(path).is_some() {
             self.cut_view(path);
         }

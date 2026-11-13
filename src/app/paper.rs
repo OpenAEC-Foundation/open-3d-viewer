@@ -6,7 +6,7 @@
 
 use super::{App, Message, FONT_BOLD};
 use crate::document::{parse_elevation, Dimension, SectionKind, Sheet, A3_LANDSCAPE, PAPERS, SCALES};
-use crate::drawing::{ceiling_at, plan_at, section_at, structural_at, Cut, Shown};
+use crate::drawing::Cut;
 use crate::sheet_layout::{self, Item};
 use crate::theme::Palette;
 use iced::alignment;
@@ -175,10 +175,19 @@ impl App {
     /// Cuts a view when it is not cut yet: a floor plan at its cut height, a section or
     /// elevation along its line, through its own layers.
     pub(super) fn cut_view(&mut self, path: &str) {
-        let Some(model) = self.model.clone() else { return };
         if self.cuts.contains_key(path) {
             return;
         }
+        if let Some(job) = self.cut_job(path) {
+            self.cuts.insert(path.to_string(), Arc::new(job.run()));
+        }
+    }
+
+    /// What cutting a view takes (see `precut`): what it cuts through and what it leaves out or
+    /// draws in halftone; `None` for a path that is no view.
+    pub(super) fn cut_job(&mut self, path: &str) -> Option<super::precut::CutJob> {
+        use super::precut::{CutJob, CutKind};
+        let model = self.model.clone()?;
         let layers = self.view_visibility(path);
         // the elements hidden in the view, by the unit of a triangle's first vertex
         let mut units = self.document.view_hidden(path).map(|h| self.hidden_units(h)).unwrap_or_default();
@@ -190,27 +199,40 @@ impl App {
                 *u |= *out;
             }
         }
-        let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
-        let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
-        let shown = Shown { layers: &layers, hidden: &hidden };
-        let mut cut = if let Some(s) = self.document.section(path) {
-            section_at(&model, shown, s.from, s.to, s.depth)
-        } else {
-            let Some(view) = self.document.plan(path) else { return };
-            let Some((low, high)) = self.document.plan_range(view) else { return };
-            if view.kind.looks_up() {
-                ceiling_at(&model, shown, low as f32, high as f32)
-            } else if view.kind == crate::document::PlanKind::Structural {
-                // a structural plan looks through the floor: what lies under it is drawn dashed
-                structural_at(&model, shown, low as f32, high as f32)
-            } else {
-                plan_at(&model, shown, low as f32, high as f32)
+        // the view's phase and phase filter: what it leaves out, and what it draws in halftone
+        let mut halftone: Vec<bool> = Vec::new();
+        let phasing = &model.project.phasing;
+        if let (true, Some(index)) = (phasing.applies(path), self.explode_index.as_deref()) {
+            units.resize(index.len().max(units.len()), false);
+            halftone.resize(index.len(), false);
+            for unit in 1..index.len() {
+                let Some(crate::explode::UnitOwner::Element(id)) = index.owner(unit) else { continue };
+                match phasing.look(path, id) {
+                    crate::phasing::Look::Hidden => units[unit] = true,
+                    crate::phasing::Look::Halftone => halftone[unit] = true,
+                    crate::phasing::Look::Normal => {}
+                }
             }
+        }
+        // what the view leaves out because the element's family shows none of its solids as the
+        // view looks at it
+        if let (Some(off), Some(index)) = (model.project.switched_off.get(path), self.explode_index.as_deref()) {
+            units.resize(index.len().max(units.len()), false);
+            for unit in 1..index.len() {
+                if matches!(index.owner(unit), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    units[unit] = true;
+                }
+            }
+        }
+        let kind = if let Some(s) = self.document.section(path) {
+            CutKind::Section { from: s.from, to: s.to, depth: s.depth }
+        } else {
+            let view = self.document.plan(path)?;
+            let (low, high) = self.document.plan_range(view)?;
+            CutKind::Plan { kind: view.kind, low, high }
         };
-        // the cut faces in the hatch of what they are made of
         let scale = self.document.view_scale(path).unwrap_or(crate::document::SHEET_SCALE);
-        crate::hatching::hatch(&mut cut, &model, bim_library::DrawingStandard::Nen47, scale);
-        self.cuts.insert(path.to_string(), Arc::new(cut));
+        Some(CutJob { model, layers, units, halftone, index: self.explode_index.clone(), kind, scale })
     }
 
     /// The drawings of views as the sheet layout takes them (`crate::sheet_layout`): the crop, or
@@ -1089,7 +1111,7 @@ pub(super) fn sheets_list<'a>(app: &'a App, p: Palette, l: Language, mut body: i
             .padding([4, 8])
             .width(Fill)
             .style(move |_, s| p.row_button(s))
-            .on_press(Message::NewSheet(l.text("Blad", "Sheet"))),
+            .on_press(Message::NewSheet(l.text("Tekening", "Drawing"))),
     );
     // the views on no sheet yet, on new sheets
     let (plans, sections) = app.unplaced_views();

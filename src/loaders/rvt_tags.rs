@@ -168,8 +168,9 @@ struct Units {
 }
 
 impl Units {
-    fn of(doc: &rvt_read::Document) -> Units {
-        let o = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id));
+    /// Of the element with the units of the project (`Types::units`: finding it walks the file).
+    fn of(doc: &rvt_read::Document, element: Option<u64>) -> Units {
+        let o = element.and_then(|id| doc.object(id));
         let units = o.as_ref().and_then(|o| o.get("m_units")?.as_object());
         let length = units.and_then(|u| {
             let all = u.get("m_formatOptionsMap")?.as_list()?.iter().filter_map(FieldValue::as_object);
@@ -195,19 +196,29 @@ struct Label {
     /// The typeface of its letters.
     face: crate::typeface::Face,
     width: f64,
+    /// How its lines are turned in its family (radians, counter-clockwise).
+    angle: f64,
+    /// How far the box drawn around it stands off its lines (on paper, metres), when its text
+    /// type shows one.
+    boxed: Option<f64>,
     parts: Vec<Part>,
 }
 
 impl Label {
     /// The label with what `value` gives for each of its parameters, standing on the foot of its
-    /// lines; none when it writes nothing.
+    /// lines; none when it writes nothing. A parameter without a value writes nothing at all:
+    /// not what stands before and after it either, nor the line it would start (a line of a
+    /// title block for a revision that is not filled in).
     fn write(&self, value: &mut dyn FnMut(&Part) -> Option<String>) -> Option<TagText> {
         let mut wording = String::new();
         for (k, part) in self.parts.iter().enumerate() {
             let value = value(part).unwrap_or_default();
-            if part.line_break {
+            if value.trim().is_empty() {
+                continue;
+            }
+            if part.line_break && !wording.is_empty() {
                 wording.push('\n');
-            } else if k > 0 {
+            } else if k > 0 && !wording.is_empty() {
                 wording.extend(std::iter::repeat_n(' ', part.spaces));
             }
             wording.push_str(&part.prefix);
@@ -217,11 +228,23 @@ impl Label {
         if wording.trim().is_empty() {
             return None;
         }
-        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: 0.0, face: self.face.clone() };
-        // from where the label stands to the foot of its lines
-        text.at[1] -= [text.height(), text.height() / 2.0, 0.0][self.vertical as usize];
+        let mut text = TagText { at: self.at, wording, em: self.em, align: self.align, width: self.width, angle: self.angle, face: self.face.clone() };
+        // from where the label stands down its own up to the foot of its lines
+        let drop = [text.height(), text.height() / 2.0, 0.0][self.vertical as usize];
+        text.at = [text.at[0] + self.angle.sin() * drop, text.at[1] - self.angle.cos() * drop];
         Some(text)
     }
+}
+
+/// The box around a text, `off` away from its lines (on paper, metres): its four sides, turned
+/// with it.
+fn frame_of(text: &TagText, off: f64) -> [[[f64; 2]; 2]; 4] {
+    let (sin, cos) = text.angle.sin_cos();
+    let left = -[0.0, text.width / 2.0, text.width][text.align.clamp(0, 2) as usize] - off;
+    let (right, foot, top) = (left + text.width + 2.0 * off, -off, text.height() + off);
+    let at = |x: f64, y: f64| [text.at[0] + x * cos - y * sin, text.at[1] + x * sin + y * cos];
+    let corners = [at(left, foot), at(right, foot), at(right, top), at(left, top)];
+    std::array::from_fn(|k| [corners[k], corners[(k + 1) % 4]])
 }
 
 /// Which of a text box's heights its origin is, as its flags say: 0 the top, 1 the middle, 2 the
@@ -241,11 +264,14 @@ fn vertical(flags: i64) -> u8 {
 /// `name` among it) and the project information store for them.
 pub(super) fn title_block(doc: &rvt_read::Document, types: &mut Types, kind: u64, sheet: u64, number: &str, name: &str) -> (Vec<[[f64; 2]; 2]>, Vec<TagText>) {
     let Some(o) = doc.object(kind) else { return Default::default() };
-    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
-    let project = doc.object_ids_of_class("ProjectInfo").first().copied();
+    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc, types.units()));
+    let project = types.project_info();
+    let issued = doc.object(sheet).and_then(|s| s.get("m_issueDate").and_then(FieldValue::as_str).map(str::to_string));
     let texts = family_texts(doc, types, &o, &mut |part| match part.parameter {
         -1007401 => Some(number.to_string()),
         -1007400 => Some(name.to_string()),
+        // the date the sheet was issued
+        -1006322 => issued.clone(),
         _ => value(doc, &mut sources, &mut specs, &units, sheet, part).or_else(|| value(doc, &mut sources, &mut specs, &units, project?, part)),
     });
     (family_lines(doc, kind, types, 1.0), texts)
@@ -295,6 +321,11 @@ pub(super) fn title_block_line_colors(doc: &rvt_read::Document, types: &mut Type
     graphics_lines(doc, kind, types, 1.0, Seen::PLAIN).colors
 }
 
+/// The lines of an annotation symbol type, on paper (metres).
+pub(super) fn symbol_lines(doc: &rvt_read::Document, types: &mut Types, kind: u64) -> Vec<[[f64; 2]; 2]> {
+    family_lines(doc, kind, types, 1.0)
+}
+
 /// The title of a view placed on a sheet, as the type of its viewport writes it
 /// (`ViewportAttributes`: `m_showLabel`, and `m_familyTagId`, the type of its title family, whose
 /// labels write the view's name and scale): empty when its type shows no title, none when the
@@ -311,7 +342,7 @@ pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewpo
     }
     let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(String::new()) };
     let o = doc.object(family)?;
-    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
+    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc, types.units()));
     let labels = o.get("m_tagNoteData").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).filter_map(|l| label(l, types));
     let written: Vec<String> = labels
         .filter_map(|label| {
@@ -359,7 +390,7 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
     let mut shapes: HashMap<i64, Arc<Shape>> = HashMap::new();
     let mut sources: HashMap<u64, Arc<Source>> = HashMap::new();
     let mut specs: HashMap<i64, String> = HashMap::new();
-    let units = Units::of(doc);
+    let units = Units::of(doc, types.units());
     let mut out = Vec::new();
     for id in doc.object_ids_of_class("IndependentTag") {
         let Some(view) = doc.element(id).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
@@ -377,13 +408,18 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
         let (sin, cos) = angle.sin_cos();
         let turn = |p: [f64; 2]| [p[0] * cos - p[1] * sin, p[0] * sin + p[1] * cos];
         let mut texts = Vec::new();
+        let mut boxes: Vec<[[f64; 2]; 2]> = Vec::new();
         for label in &shape.labels {
             let Some(mut text) = label.write(&mut |part| tagged.and_then(|e| value(doc, &mut sources, &mut specs, &units, e, part))) else { continue };
+            // the box its text type draws around it
+            if let Some(off) = label.boxed {
+                boxes.extend(frame_of(&text, off).map(|l| [turn(l[0]), turn(l[1])]));
+            }
             text.at = turn(text.at);
-            text.angle = angle;
+            text.angle += angle;
             texts.push(text);
         }
-        let lines = shape.lines.iter().map(|l| [turn(l[0]), turn(l[1])]).collect();
+        let lines = shape.lines.iter().map(|l| [turn(l[0]), turn(l[1])]).chain(boxes).collect();
         // a leader: through its elbow to its end, both stored from the head; an end that holds on
         // to what is tagged is not stored: the head stands off that by `m_relHeadLocation`
         let mut leader = Vec::new();
@@ -436,11 +472,20 @@ pub(super) struct Fill {
 struct Seen {
     detail: i64,
     model: bool,
+    /// The direction it is looked along, in the element's surroundings (millionths of a unit
+    /// vector): z for a plan and for a family drawn on paper, a section's own for a section.
+    along: [i32; 3],
 }
 
 impl Seen {
+    /// Seen from above, as a plan and a family drawn on paper are.
+    const DOWN: [i32; 3] = [0, 0, 1_000_000];
     /// A family drawn on paper or in a view without a level of detail of its own.
-    const PLAIN: Seen = Seen { detail: 2, model: false };
+    const PLAIN: Seen = Seen { detail: 2, model: false, along: Seen::DOWN };
+
+    fn towards(dir: [f64; 3]) -> [i32; 3] {
+        dir.map(|v| (v * 1e6).round() as i32)
+    }
 }
 
 /// What the saved graphics of an element draw: lines, each with its colour when it has one that
@@ -451,6 +496,9 @@ struct Graphics {
     colors: Vec<Option<[u8; 3]>>,
     fills: Vec<Fill>,
     masks: Vec<Vec<Vec<[f64; 3]>>>,
+    /// Of an element of the model: that it has solids and none of them shows as it is looked at
+    /// (its family switches them off for that direction or level of detail).
+    solids_off: bool,
 }
 
 /// Where graphics are placed: the directions of their x, y and z and their origin.
@@ -525,6 +573,11 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
     // per type and scale of the view: a drafting pattern in it is sized on paper
     let mut families: HashMap<(u64, u64, Seen), Arc<Graphics>> = HashMap::new();
     let mut out = Vec::new();
+    let units = Units::of(doc, types.units());
+    // the values their labels show are looked up through these, shared by all of them: the
+    // type of an instance and what a parameter measures were read again for every instance
+    let (mut sources, mut specs) = (HashMap::new(), HashMap::new());
+    let mut symbols: HashMap<u64, Option<rvt_model::ObjectView>> = HashMap::new();
     for id in doc.object_ids_of_class("FamilyInstance") {
         let Some(placed_in) = doc.element(id).filter(|e| e.category == DETAIL_ITEMS || e.category == GENERIC_ANNOTATIONS) else { continue };
         let symbol = placed_in.category == GENERIC_ANNOTATIONS;
@@ -534,7 +587,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let named = |v: Option<&FieldValue>| v.and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok());
         let Some(kind) = named(o.path(&["m_pInstanceInfo", "m_symbolId"])).or_else(|| named(o.get("m_masterSymbolId"))) else { continue };
         let scale = if symbol { 1.0 } else { types.view_scale(view) };
-        let seen_as = Seen { detail: types.view_detail(view), model: false };
+        let seen_as = Seen { detail: types.view_detail(view), model: false, along: Seen::DOWN };
         let family = match families.get(&(kind, scale.to_bits(), seen_as)) {
             Some(known) => known.clone(),
             None => {
@@ -555,16 +608,15 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let axis = |k: usize, or: [f64; 3]| axes.and_then(|a| Some([vec3(a.first())?[k], vec3(a.get(1))?[k], vec3(a.get(2))?[k]])).unwrap_or(or);
         let (x, y) = (axis(0, [1.0, 0.0, 0.0]), axis(1, [0.0, 1.0, 0.0]));
         // a mirrored instance says so apart from where it is placed: its family's y the other way
+        // (a type of its own is saved mirrored already: only the family's shared type is turned)
         let mirrored = o.get("m_pGeomTable").and_then(|v| o.deref(v)).is_some_and(|t| t.get("m_refPntMirrored") == Some(&FieldValue::Bool(true)));
-        let side = if mirrored { -1.0 } else { 1.0 };
+        let shared = named(o.get("m_masterSymbolId")) == Some(kind);
+        let side = if mirrored && shared { -1.0 } else { 1.0 };
         let at = |p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|k| origin[k] + p[0] * x[k] + side * p[1] * y[k]) };
         let fills = family.fills.iter().map(|f| Fill { loops: f.loops.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect(), color: f.color }).collect();
         let masks = family.masks.iter().map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
         // its texts and labels, with the values of the instance and of its type
-        let texts = doc.object(kind).map_or(Vec::new(), |symbol| {
-            let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
-            family_texts(doc, types, &symbol, &mut |part| value(doc, &mut sources, &mut specs, &units, id, part))
-        });
+        let texts = symbols.entry(kind).or_insert_with(|| doc.object(kind)).as_ref().map_or(Vec::new(), |symbol| family_texts(doc, types, symbol, &mut |part| value(doc, &mut sources, &mut specs, &units, id, part)));
         let texts = texts
             .into_iter()
             .map(|mut t| {
@@ -581,33 +633,63 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
     for id in doc.object_ids_of_class("FilledRegion") {
         let Some(view) = doc.element(id).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
         let scale = types.view_scale(view);
-        let seen_as = Seen { detail: types.view_detail(view), model: false };
+        let seen_as = Seen { detail: types.view_detail(view), model: false, along: Seen::DOWN };
         let drawn = graphics_lines(doc, id, types, scale, seen_as);
         if !drawn.lines.is_empty() || !drawn.fills.is_empty() || !drawn.masks.is_empty() {
             out.push(Detail { element: id, view, lines: drawn.lines, colors: drawn.colors, fills: drawn.fills, masks: drawn.masks, texts: Vec::new() });
         }
     }
     // an element of the model whose family has symbols nested in it (a pile with its mark): those,
-    // in each plan it lies in the range of. Its saved graphics are its own, where it stands.
+    // in each section it lies in and each plan that cuts it, as that looks at it. Its saved graphics are its own,
+    // where it stands. Where its family shows none of its solids as the view looks at it, the
+    // view leaves the element itself out ([`Types::switch_off`]).
     const WITH_SYMBOLS: [i32; 1] = [-2001300];
-    let plans: Vec<(u64, f64, f64)> = rvt_export::views::views(doc)
+    /// Where a view shows the model: between two heights, or in a box of its own.
+    enum Range {
+        Heights(f64, f64),
+        Box { origin: [f64; 3], basis: [[f64; 3]; 3], min: [f64; 3], max: [f64; 3] },
+    }
+    // with the height of a plan's cut: a family's symbols show where the plan cuts the element
+    let views: Vec<(u64, Range, [f64; 3], Option<f64>)> = rvt_export::views::views(doc)
         .into_iter()
-        .filter(|v| v.class == "DBViewPlan" && !v.is_template)
-        .filter_map(|v| {
-            let range = v.view_range?;
-            let (top, low) = (range.top.or(range.cut)?, range.depth.or(range.bottom)?);
-            Some((v.id, low.min(top), low.max(top)))
+        .filter(|v| !v.is_template)
+        .filter_map(|v| match v.class.as_str() {
+            "DBViewPlan" => {
+                let range = v.view_range?;
+                let (top, low) = (range.top.or(range.cut)?, range.depth.or(range.bottom)?);
+                Some((v.id, Range::Heights(low.min(top), low.max(top)), [0.0, 0.0, 1.0], range.cut))
+            }
+            "DBViewSection" => {
+                let b = v.crop_box?;
+                Some((v.id, Range::Box { origin: b.origin, basis: b.basis, min: b.min, max: b.max }, b.basis[2], None))
+            }
+            _ => None,
         })
         .collect();
+    let within = |range: &Range, bbox: &[f64; 6]| match range {
+        Range::Heights(low, top) => bbox[2] <= *top + 1e-6 && bbox[5] >= *low - 1e-6,
+        Range::Box { origin, basis, min, max } => (0..3).all(|k| {
+            // the element's box along this direction of the view's
+            let along = (0..8).map(|c| (0..3).map(|n| (bbox[n + if c >> n & 1 == 1 { 3 } else { 0 }] - origin[n]) * basis[k][n]).sum::<f64>());
+            let (lo, hi) = along.fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            lo <= max[k] + 1e-6 && hi >= min[k] - 1e-6
+        }),
+    };
     let mut drawn: HashMap<(u64, u64, Seen), Arc<Graphics>> = HashMap::new();
     for id in doc.object_ids_of_class("FamilyInstance") {
         let Some(e) = doc.element(id).filter(|e| WITH_SYMBOLS.contains(&e.category) && e.view.is_none_or(|v| v < 0)) else { continue };
         let Some(bbox) = e.bbox else { continue };
-        for &(view, _, _) in plans.iter().filter(|(_, low, top)| bbox[2] <= *top + 1e-6 && bbox[5] >= *low - 1e-6) {
+        for (view, _, along, cut) in views.iter().filter(|(_, range, ..)| within(range, &bbox)) {
+            let view = *view;
             if types.hidden(view, id) {
                 continue;
             }
-            let (scale, seen_as) = (types.view_scale(view), Seen { detail: types.view_detail(view), model: true });
+            // a plan that does not cut the element looks at it from outside: it shows the element
+            // itself (dashed where something covers it), not the symbols of its cut
+            if cut.is_some_and(|cut| cut < bbox[2] - 1e-6 || cut > bbox[5] + 1e-6) {
+                continue;
+            }
+            let (scale, seen_as) = (types.view_scale(view), Seen { detail: types.view_detail(view), model: true, along: Seen::towards(*along) });
             let symbols = match drawn.get(&(id, scale.to_bits(), seen_as)) {
                 Some(known) => known.clone(),
                 None => {
@@ -616,8 +698,11 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
                     symbols
                 }
             };
-            if !symbols.lines.is_empty() {
-                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: Vec::new(), masks: Vec::new(), texts: Vec::new() });
+            if symbols.solids_off {
+                types.switch_off(view, id);
+            }
+            if !symbols.lines.is_empty() || !symbols.fills.is_empty() || !symbols.masks.is_empty() {
+                out.push(Detail { element: id, view, lines: symbols.lines.clone(), colors: symbols.colors.clone(), fills: symbols.fills.clone(), masks: symbols.masks.clone(), texts: Vec::new() });
             }
         }
     }
@@ -672,7 +757,10 @@ fn label(l: &NestedObject, types: &mut Types) -> Option<Label> {
     if parts.is_empty() {
         return None;
     }
-    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, face, width, parts })
+    let base = vec3(l.get("m_baseVec")).unwrap_or([1.0, 0.0, 0.0]);
+    let angle = Some(base[1].atan2(base[0])).filter(|a| a.abs() > 1e-6).unwrap_or(0.0);
+    let boxed = l.get("m_attrId").and_then(FieldValue::element).and_then(|k| types.text_box(k));
+    Some(Label { at: [orig[0] * FT, orig[1] * FT], vertical: vertical(flags), align: (flags & 3).clamp(0, 2), em, face, width, angle, boxed, parts })
 }
 
 /// The lines of a family type, from its saved graphics (on paper, metres): see [`graphics_lines`].
@@ -691,8 +779,7 @@ const MOST_HATCH_LINES: usize = 4000;
 /// `m_placer`; a drafting pattern is sized on paper, so `view_scale` times as large in a view),
 /// cut to the region; a solid fill as the region in its colour. Left out: what has no line style (a family's reference
 /// planes), what its style does not print (invisible lines, reference lines), what a visibility
-/// parameter of the type switches off, what shows from another side than the front and the
-/// lines of a family nested in it (where that is placed is not in these graphics).
+/// parameter of the type switches off and what shows from another side than the front.
 fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_scale: f64, seen_as: Seen) -> Graphics {
     /// The flags of a piece of graphics that shows at no level of detail (coarse, medium, fine).
     const SWITCHED_OFF: i64 = 0xE0;
@@ -706,29 +793,57 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
     let target = |v: Option<&Value>| v.and_then(|p| p.as_ptr()).and_then(|p| Some((p, graph.objects.get(p)?)));
     // a family is drawn in its own plane, seen from the front: what a filter asks of the
     // direction it is seen from is asked of z
-    let holds = |condition: &Object| {
-        // of the view's level of detail (`m_param` 3): that it is under one (`m_comp` 0) or at
-        // least one (3). A symbol for the coarse and medium levels and one for fine lie side by
-        // side as "under 3" and "at least 3".
+    // the direction it is looked along, and the level of detail as one of three marks
+    let along: [f64; 3] = seen_as.along.map(|v| v as f64 / 1e6);
+    let level = 1i64 << (seen_as.detail.clamp(1, 3) - 1);
+    let holds = |condition: &Object, placed: &Placement| {
+        // of the view's level of detail (`m_param` 3): `m_value` marks levels (1 coarse, 2
+        // medium, 4 fine), and it shows at one of them (`m_comp` 0) or at none of them (3)
         if class(condition) == "GConditionInt" {
             let field = |name: &str| condition.get(name).and_then(|v| v.as_i64());
             return match (field("m_param"), field("m_comp"), field("m_value")) {
-                (Some(3), Some(0), Some(level)) => seen_as.detail < level,
-                (Some(3), Some(3), Some(level)) => seen_as.detail >= level,
+                (Some(3), Some(0), Some(levels)) => levels & level != 0,
+                (Some(3), Some(3), Some(levels)) => levels & level == 0,
                 _ => false,
             };
         }
         let Some(dir) = floats(condition, "m_dir").filter(|d| d.len() >= 3 && class(condition) == "GConditionDir") else { return false };
+        // how far the view looks along `m_dir`, which is in the family's own directions
+        let to = placed.turn([dir[0], dir[1], dir[2]]);
+        let dot = to[0] * along[0] + to[1] * along[1] + to[2] * along[2];
         let met = match condition.get("m_comp").and_then(|c| c.as_i64()) {
-            Some(10) => dir[2] > 0.999,
-            Some(0) => dir[2].abs() < 1e-6,
-            // seen from the side `m_dir` points to, or from the other: from above or from below
-            // is a plan either way
-            Some(6 | 7) => dir[2].abs() > 0.999,
+            Some(10) => dot > 0.999,
+            Some(0) => dot.abs() < 1e-6,
+            // seen from the side `m_dir` points to or from the other (6, 7), or along it either
+            // way (8): from above or from below is a plan either way, from the front or the back
+            // an elevation
+            Some(6..=8) => dot.abs() > 0.999,
             _ => false,
         };
         met != matches!(condition.get("m_negateDirCondition"), Some(Value::Bool(true)))
     };
+    // a solid: a region with a face that has no fill, with a face that is not flat, or with
+    // four faces or more (a solid of a material has a fill on every face too; a filled region
+    // is one flat face, or a few)
+    let solid = |o: &Object| {
+        let faces: Vec<&Object> = o.get("m_pFaces").and_then(|f| f.as_list()).unwrap_or(&[]).iter().filter_map(|p| graph.objects.get(p.as_ptr()?)).collect();
+        let flat = |f: &&Object| target(f.get("m_pSurf")).is_some_and(|(_, s)| class(s) == "Plane");
+        !faces.is_empty() && (faces.len() >= 4 || !faces.iter().all(|f| target(f.get("m_pGFilling")).is_some() && flat(f)))
+    };
+    // how many it has of its own (not of a family nested in it), whatever shows
+    let mut solids = 0usize;
+    if seen_as.model {
+        let (mut todo, mut met) = (vec![(0usize, false)], HashSet::new());
+        while let Some((i, nested)) = todo.pop() {
+            let Some(o) = graph.objects.get(i).filter(|_| met.insert(i)) else { continue };
+            let name = class(o);
+            let nested = nested || name == "GGroup" && style(o).is_some();
+            solids += (!nested && name == "Geometry" && solid(o)) as usize;
+            todo.extend(target(o.get("m_oEmbeddedSymbolGRep")).map(|(at, _)| (at, nested)));
+            todo.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| Some((p.as_ptr()?, nested))));
+        }
+    }
+    let mut shown_solids = 0usize;
     let mut out = Graphics::default();
     let mut seen = HashSet::new();
     // each with whether it lies in a family nested in this one
@@ -753,8 +868,8 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
                 open.push((at, nested, placed.of(&inner)));
             }
         }
-        // a group with a category is a nested family: its regions lie where they are placed, its
-        // lines are in its own coordinates, and where it is placed is not in these graphics
+        // a group with a category is a nested family: its regions and lines lie where it is
+        // placed; its reference lines are in its own coordinates and never show
         let nested = nested || name == "GGroup" && style(o).is_some();
         // what a parameter of the type switches off stays in its graphics, marked as showing at
         // none of the three levels of detail
@@ -763,14 +878,20 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
         }
         if name == "GFilter" {
             let conditions = o.get("m_oConditions").and_then(|c| c.as_list()).unwrap_or(&[]);
-            if !conditions.iter().all(|c| c.as_ptr().and_then(|p| graph.objects.get(p)).is_some_and(&holds)) {
+            if !conditions.iter().all(|c| c.as_ptr().and_then(|p| graph.objects.get(p)).is_some_and(|c| holds(c, &placed))) {
                 continue;
             }
         }
         open.extend(o.get("m_subNodes").and_then(|s| s.as_list()).unwrap_or(&[]).iter().filter_map(|p| Some((p.as_ptr()?, nested, placed))));
-        // of an element of the model only what its nested symbols draw
+        // of an element of the model only what its symbols draw: what lies in a family nested in
+        // it, and a region of its own that is filled (its solids have faces without a fill)
         if seen_as.model && !nested {
-            continue;
+            let own_solid = name == "Geometry" && solid(o);
+            shown_solids += own_solid as usize;
+            let filled = name == "Geometry" && !own_solid && o.get("m_pFaces").and_then(|f| f.as_list()).is_some_and(|f| !f.is_empty());
+            if !filled {
+                continue;
+            }
         }
         // regions: their edges, each a run of points on the plane of its face, and their fills
         if name == "Geometry" {
@@ -922,9 +1043,9 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
             }
             continue;
         }
-        // the lines of a nested family are in its own coordinates in the graphics of a type; in
-        // those of an element of the model they lie where it stands
-        let Some(shown) = style(o).filter(|s| (seen_as.model || !nested) && types.line_shows(*s)) else { continue };
+        // the lines of a nested family lie where it is placed, as its regions do (the leader of a
+        // row of bars); what it has in its own coordinates are reference lines, which never show
+        let Some(shown) = style(o).filter(|s| types.line_shows(*s)) else { continue };
         let color = types.line_color(shown);
         let Some(ends) = floats(o, "m_endParams") else { continue };
         let (from, to) = (ends[0], ends[1]);
@@ -953,6 +1074,7 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
         }
     }
     out.place(added.0, &added.1);
+    out.solids_off = seen_as.model && solids > 0 && shown_solids == 0;
     out
 }
 
@@ -1082,7 +1204,7 @@ mod tests {
             eprintln!("  tag {} view {} head {:?} leader {:?} lines {} texts {texts:?}", tag.element, tag.view, tag.head.map(|v| (v * 100.0).round() / 100.0), tag.leader, tag.lines.len());
         }
         // which parameters the labels ask for that nothing stores
-        let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(&doc));
+        let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(&doc, doc.object_ids_of_class("UnitsElem").first().copied()));
         let mut missing: HashMap<i64, (usize, usize)> = HashMap::new();
         for id in doc.object_ids_of_class("IndependentTag") {
             let Some(o) = doc.object(id) else { continue };

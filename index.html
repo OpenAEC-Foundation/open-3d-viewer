@@ -8,8 +8,8 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="3D Viewer" />
-    <title>Open 3D Viewer Studio</title>
-    <meta name="description" content="Open 3D Viewer Studio: view IFC, SketchUp, Tekla, glTF, OBJ, STL and PLY models in the browser and save them as IFC. Open source, by the OpenAEC Foundation." />
+    <title>Open BIM Suite</title>
+    <meta name="description" content="Open BIM Suite: view IFC, SketchUp, Tekla, glTF, OBJ, STL and PLY models in the browser and save them as IFC. Open source, by the OpenAEC Foundation." />
     <link data-trunk rel="icon" href="assets/logo.svg" />
     <link data-trunk rel="copy-file" href="assets/logo.svg" />
     <!-- installable as an app (Android, ChromeOS, desktop Chrome and Edge) and startable offline -->
@@ -55,7 +55,7 @@
     </div>
     <div id="boot">
       <img src="logo.svg" alt="" />
-      <div id="boot-text">Open 3D Viewer Studio is loading…</div>
+      <div id="boot-text">Open BIM Suite is loading…</div>
     </div>
     <script>
       // The viewer draws with WebGPU, or WebGL2 where the browser offers no WebGPU adapter (Chrome on
@@ -72,13 +72,13 @@
         const webgpu = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
         const webgl2 = !!document.createElement("canvas").getContext("webgl2");
         if (!webgpu && !webgl2) {
-          unsupported("This browser offers neither WebGPU nor WebGL2, which Open 3D Viewer Studio needs to draw.");
+          unsupported("This browser offers neither WebGPU nor WebGL2, which Open BIM Suite needs to draw.");
         }
       })();
       for (const type of ["error", "unhandledrejection"]) {
         addEventListener(type, () => {
           if (!document.body.classList.contains("started")) {
-            unsupported("Open 3D Viewer Studio could not start its graphics in this browser.");
+            unsupported("Open BIM Suite could not start its graphics in this browser.");
           }
         });
       }

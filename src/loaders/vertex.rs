@@ -132,7 +132,7 @@ fn load_library() -> Result<Library, String> {
         }
     }
     let detail = if tried.is_empty() { String::new() } else { format!(" ({})", tried.join("; ")) };
-    Err(format!("Vertex BD and BTL files need the Vertex reader ({LIBRARY}), which comes with the installers of Open 3D Viewer Studio{detail}"))
+    Err(format!("Vertex BD and BTL files need the Vertex reader ({LIBRARY}), which comes with the installers of Open BIM Suite{detail}"))
 }
 
 /// The scene buffer of the library (`VXS1`, see its docs/ABI.md) as the viewer's layers.

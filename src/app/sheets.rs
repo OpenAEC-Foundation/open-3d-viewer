@@ -50,10 +50,49 @@ impl App {
         }
         // the plans and sections on it are cut once, to be drawn in their viewports
         let views: Vec<String> = i.and_then(|i| self.sheets().get(i)).into_iter().flat_map(|s| s.viewports.iter().filter_map(|v| v.drawing.clone())).collect();
-        for view in views {
-            self.cut_view(&view);
+        // in the window on worker threads, these first: the drawing shows its views as they come
+        let ahead = if self.background_cuts {
+            self.cut_first(views)
+        } else {
+            for view in views {
+                self.cut_view(&view);
+            }
+            Task::none()
+        };
+        // the 3D views on it, in hidden lines
+        let threes: Vec<usize> = i.and_then(|i| self.sheets().get(i)).into_iter().flat_map(|s| s.viewports.iter().filter(|v| v.drawing.is_none() && v.draft.is_none()).filter_map(|v| v.view)).collect();
+        for view in threes {
+            self.cut_view_3d(view);
         }
-        Task::none()
+        ahead
+    }
+
+    /// Draws a 3D view of the file in hidden lines when it is not drawn yet: looked at along its
+    /// camera's direction, within its section box. A view in perspective is left as its frame.
+    pub(super) fn cut_view_3d(&mut self, view: usize) {
+        let Some(model) = self.model.clone() else { return };
+        let key = view3d_key(view);
+        let Some(saved) = model.views.get(view).filter(|v| v.kind == crate::model::ViewKind::ThreeD) else { return };
+        let Some(camera) = saved.camera.as_ref().filter(|c| !c.perspective) else { return };
+        if self.cuts.contains_key(&key) {
+            return;
+        }
+        let layers = vec![true; model.layers.len()];
+        // what the view leaves out, by the unit of a triangle's first vertex
+        let mut units: Vec<bool> = Vec::new();
+        if let (Some(off), Some(index)) = (model.project.switched_off.get(&key), self.explode_index.as_deref()) {
+            units.resize(index.len(), false);
+            for unit in 1..index.len() {
+                if matches!(index.owner(unit), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    units[unit] = true;
+                }
+            }
+        }
+        let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
+        let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
+        let shown = crate::drawing::Shown { layers: &layers, hidden: &hidden, faint: None, pieces: None };
+        let cut = crate::drawing::view_at(&model, shown, camera.forward, saved.clip.as_ref());
+        self.cuts.insert(key, Arc::new(cut));
     }
 
     /// Closes a sheet's tab; when it was shown, the sheet before it (or the 3D view) shows.
@@ -83,7 +122,7 @@ impl App {
         }
         let shown: Vec<usize> = of.filter(|&i| query.is_empty() || sheets[i].title.to_lowercase().contains(query)).collect();
         let open = self.explorer_open[4] || !query.is_empty();
-        body = body.push(group_header(p, l.text("Bladen", "Sheets"), Some("beta"), shown.len(), open, Message::ToggleExplorer(4)));
+        body = body.push(group_header(p, l.text("Tekeningen", "Drawings"), Some("beta"), shown.len(), open, Message::ToggleExplorer(4)));
         if !open {
             return body;
         }
@@ -119,8 +158,13 @@ impl App {
                     dimensions: dimensions.to_vec(),
                     notes: self.document.view_notes(path).map_or(Vec::new(), <[_]>::to_vec),
                     lines: self.document.view_lines(path).to_vec(),
+                    fills: self.document.view_fills(path).to_vec(),
                 },
-                (None, None) => Placed::Frame,
+                // a 3D view: its hidden lines, once they are made
+                (None, None) => match v.view.and_then(|i| self.cuts.get(&view3d_key(i))) {
+                    Some(cut) => Placed::View { cut: Some(cut.clone()), crop: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new() },
+                    None => Placed::Frame,
+                },
             })
             .collect();
         // the schedules on it, with what the computed ones add to what the file stores
@@ -199,6 +243,8 @@ impl App {
     }
 }
 
+use crate::model::view3d_key;
+
 /// What a placed view shows on its sheet.
 enum Placed {
     /// Its frame only: a view the viewer cannot draw.
@@ -206,8 +252,9 @@ enum Placed {
     /// A legend or drafting view of the model.
     Draft(usize),
     /// A plan, section or elevation of the document: what it cuts and sees, its dimensions, texts
-    /// and the lines of its tags, and what it shows of its drawing (lower left, upper right).
-    View { cut: Option<Arc<Cut>>, crop: Option<([f64; 2], [f64; 2])>, dimensions: Vec<Dimension>, notes: Vec<Note>, lines: Vec<[[f64; 2]; 2]> },
+    /// and the lines of its tags, the regions it fills in one colour, and what it shows of its
+    /// drawing (lower left, upper right).
+    View { cut: Option<Arc<Cut>>, crop: Option<([f64; 2], [f64; 2])>, dimensions: Vec<Dimension>, notes: Vec<Note>, lines: Vec<[[f64; 2]; 2]>, fills: Vec<crate::document::Fill> },
 }
 
 /// A sheet on a canvas.
@@ -605,7 +652,7 @@ impl canvas::Program<Message> for SheetDrawing {
                     }
                     true
                 }),
-                Some(Placed::View { cut, crop, dimensions, notes, lines }) => {
+                Some(Placed::View { cut, crop, dimensions, notes, lines, fills }) => {
                     // a drawing's point on the sheet: its own origin where the viewport has it, else
                     // its crop in the viewport's box, else the middle of what it cuts in the middle
                     // of that
@@ -645,6 +692,22 @@ impl canvas::Program<Message> for SheetDrawing {
                             // what is seen beyond the cut, thin and grey, then the cut itself
                             stroke(&mut frame, &mut cut.below.iter().map(wide), Color { a: 0.55, ..ink }, 0.5);
                             stroke(&mut frame, &mut cut.segments.iter().map(wide), ink, 1.1);
+                        }
+                        // the regions the view fills in one colour, under its own lines: black is
+                        // the ink of the sheet; one that starts outside the crop is left out
+                        let within = |q: [f64; 2]| crop.is_none_or(|(lo, hi)| q[0] >= lo[0] && q[0] <= hi[0] && q[1] >= lo[1] && q[1] <= hi[1]);
+                        for f in fills.iter().filter(|f| f.loops.first().and_then(|l| l.first()).is_some_and(|q| within(*q))) {
+                            let outlines = Path::new(|path| {
+                                for outline in f.loops.iter().filter(|l| l.len() >= 3) {
+                                    path.move_to(on(outline[0]));
+                                    for &q in &outline[1..] {
+                                        path.line_to(on(q));
+                                    }
+                                    path.close();
+                                }
+                            });
+                            let color = if f.color == [0, 0, 0] { ink } else { Color::from_rgb8(f.color[0], f.color[1], f.color[2]) };
+                            frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
                         }
                         // the lines of its dimensions and tags reach past its crop, as its texts do;
                         // its detail lines are cut to it where they are read

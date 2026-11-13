@@ -19,6 +19,8 @@ mod openings;
 #[cfg(test)]
 pub(crate) use take_over::{across_mesh, house as revit_house};
 mod join_marks;
+mod later;
+mod precut;
 mod levels;
 pub mod library;
 mod marks;
@@ -123,6 +125,11 @@ pub struct App {
     pub model: Option<Arc<Model>>,
     pub models: Vec<ModelEntry>,
     adding_model: bool,
+    /// The files still to add after the one loading, when several are added at once: each is
+    /// read, and the scene is built once, after the last.
+    add_queue: Vec<loaders::Source>,
+    /// Models read from the queue that the scene does not show yet.
+    scene_stale: bool,
     /// The files of the last model when they layer over each other (IFCX) and that model: a
     /// file of the same kind added next composes with them into that model.
     layer_stack: (Vec<loaders::Source>, Option<u64>),
@@ -238,6 +245,10 @@ pub struct App {
     /// The cut faces of the section box and plane in their hatches, and what they were made from.
     cut_faces: Arc<crate::caps::CutFaces>,
     cut_faces_key: Option<caps::CutFacesKey>,
+    /// The cut faces are being made on a worker thread (see `caps`).
+    cut_faces_running: bool,
+    /// What the faces of the section box cut before: moving one face cuts that one again alone.
+    kept_faces: caps::KeptCutFaces,
     /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
     pub views_in_3d: bool,
     views_3d_key: Vec<u64>,
@@ -280,6 +291,17 @@ pub struct App {
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
     pub schedules_pending: bool,
+    /// The models (by id) whose drawings are still being read (see `later`).
+    pub drawings_pending: std::collections::HashSet<u64>,
+    /// The window cuts the views of the drawings ahead, on worker threads (see `precut`); off
+    /// where nothing runs the tasks (a screenshot without a window, a test): views are then cut
+    /// when they are asked for.
+    pub background_cuts: bool,
+    /// The views waiting to be cut ahead, those being cut, and a count that goes up whenever what
+    /// views show changes: a cut started before is not kept.
+    pub cut_queue: std::collections::VecDeque<String>,
+    pub cutting: std::collections::HashSet<String>,
+    pub cut_epoch: u64,
     /// Measurements shown in the viewport (made through remote control).
     pub measurements: Vec<crate::annotations::Measurement>,
     /// Where the viewport sits in the window (logical pixels), to cut it out of screenshots.
@@ -354,6 +376,8 @@ pub enum Message {
     Open(PathBuf),
     Picked(Option<loaders::Source>),
     AddPicked(Option<loaders::Source>),
+    /// Several files to add at once: read one after the other, shown together.
+    AddSeveral(Vec<loaders::Source>),
     ModelVisible(usize, bool),
     /// Pick a model in the explorer (its project data show); picked already: fold or unfold it.
     PickModel(usize),
@@ -540,6 +564,12 @@ pub enum Message {
     ScheduleScroll(scrollable::Viewport),
     /// The schedules of a model (by id), computed.
     Schedules(u64, Vec<crate::model::Schedule>),
+    /// The drawings of a model (by its id) are read: they were left for after the model showed.
+    Drawings(u64, Box<crate::model::Drawings>),
+    /// A view cut ahead (see `precut`): the count of when it was started, its path and its cut.
+    CutAhead(u64, String, Option<Arc<crate::drawing::Cut>>),
+    /// The cut faces of the section were made (see `caps`): what they were made from, and they.
+    CutFaces(Box<Option<caps::CutFacesKey>>, Arc<crate::caps::CutFaces>),
     /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
     OpenIfc,
     CloseIfc,
@@ -587,6 +617,8 @@ pub enum Message {
     /// A structural hover grid built off the UI thread (`None`: the build was dropped).
     StructuralGrid(Option<structural::BuiltGrid>),
     MeasureDelete(usize),
+    /// The text the next remark in the model gets.
+    MeasureNote(String),
     MeasureClear,
     MeasureLength(LengthUnit),
     MeasureArea(AreaUnit),
@@ -689,6 +721,8 @@ impl Default for App {
             model: None,
             models: Vec::new(),
             adding_model: false,
+            add_queue: Vec::new(),
+            scene_stale: false,
             layer_stack: (Vec::new(), None),
             loading_stack: (Vec::new(), false),
             visible: Vec::new(),
@@ -750,6 +784,8 @@ impl Default for App {
             overlay_lines: Arc::new(Vec::new()),
             cut_faces: Default::default(),
             cut_faces_key: None,
+            cut_faces_running: false,
+            kept_faces: Default::default(),
             views_in_3d: false,
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
@@ -774,6 +810,11 @@ impl Default for App {
             ifc: IfcTab::default(),
             schedules: Vec::new(),
             schedules_pending: false,
+            drawings_pending: Default::default(),
+            background_cuts: false,
+            cut_queue: Default::default(),
+            cutting: Default::default(),
+            cut_epoch: 0,
             measurements: Vec::new(),
             viewport_origin: (0.0, 0.0),
             remote: Default::default(),
@@ -808,7 +849,8 @@ pub fn load_task(sources: Vec<loaders::Source>, progress: Arc<loaders::Progress>
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(loaders::load_stack(&sources, &progress).map(Arc::new));
+                // the model first: its drawings are read while it shows (`later`)
+                let _ = tx.send(loaders::load_first(&sources, &progress).map(Arc::new));
             });
             rx.await.unwrap_or_else(|_| Err("loader thread stopped".to_string()))
         },
@@ -874,13 +916,22 @@ fn pick_model_task(add: bool) -> Task<Message> {
                 Some(work) => dialog.set_directory(work),
                 None => dialog,
             };
-            let file = dialog.pick_file().await?;
-            #[cfg(not(target_arch = "wasm32"))]
-            return Some(loaders::Source::File(file.path().to_path_buf()));
-            #[cfg(target_arch = "wasm32")]
-            return Some(loaders::Source::Bytes { name: file.file_name(), data: Arc::new(file.read().await) });
+            // adding: several files at once
+            let files = if add { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
+            let mut sources = Vec::new();
+            for file in files {
+                #[cfg(not(target_arch = "wasm32"))]
+                sources.push(loaders::Source::File(file.path().to_path_buf()));
+                #[cfg(target_arch = "wasm32")]
+                sources.push(loaders::Source::Bytes { name: file.file_name(), data: Arc::new(file.read().await) });
+            }
+            sources
         },
-        move |source| if add { Message::AddPicked(source) } else { Message::Picked(source) },
+        move |mut sources: Vec<loaders::Source>| match (add, sources.len()) {
+            (true, 2..) => Message::AddSeveral(sources),
+            (true, _) => Message::AddPicked(sources.pop()),
+            (false, _) => Message::Picked(sources.pop()),
+        },
     )
 }
 
@@ -945,8 +996,8 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace:
 impl App {
     pub fn title(&self) -> String {
         match &self.model {
-            Some(m) => format!("{} - Open 3D Viewer Studio", m.file_name()),
-            None => "Open 3D Viewer Studio".to_string(),
+            Some(m) => format!("{} - Open BIM Suite", m.file_name()),
+            None => "Open BIM Suite".to_string(),
         }
     }
 
@@ -1213,6 +1264,33 @@ impl App {
         self.restore_model_visibility();
     }
 
+    /// Files to add after the one that is loading (see `add_queue`).
+    pub(crate) fn queue_added(&mut self, sources: Vec<loaders::Source>) {
+        self.add_queue = sources;
+    }
+
+    /// Takes a model in among the open ones without building the scene: more follow, and the
+    /// scene is built once (`add_model` of the last, or `rebuild_scene`).
+    fn add_model_later(&mut self, model: Arc<Model>) {
+        if self.models.is_empty() {
+            if let Some(shown) = self.model.clone() {
+                self.models.push(ModelEntry::new(shown, 0));
+            }
+        }
+        let first = self.models.last().map_or(0, |entry| entry.layers.end);
+        self.models.push(ModelEntry::new(model, first));
+        self.scene_stale = true;
+    }
+
+    /// Builds the scene again from the open models.
+    fn rebuild_scene(&mut self) {
+        let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
+        if sources.len() > 1 {
+            self.set_scene(Arc::new(Model::combine(&sources)));
+            self.restore_model_visibility();
+        }
+    }
+
     fn restore_model_visibility(&mut self) {
         for entry in &self.models {
             for (layer, shown) in entry.layers.clone().zip(&entry.layer_visibility) {
@@ -1261,6 +1339,7 @@ impl App {
         self.open_doc_sheets.clear();
         self.active_doc_sheet = None;
         self.cuts.clear();
+        self.cut_epoch += 1;
         self.sheet_pick = None;
         self.cut_edit = None;
         self.view_typing = None;
@@ -1347,7 +1426,7 @@ impl App {
         // a step that changed the modelled elements can be taken back
         self.keep_model_history();
         self.keep_views_in_3d();
-        self.keep_cut_faces();
+        let faces = self.keep_cut_faces();
         self.follow_selection();
         // the view in its tab is cut, to show its cut faces in their hatch
         if let Some(view) = self.shown_view().filter(|v| !self.cuts.contains_key(*v)).map(str::to_string) {
@@ -1360,6 +1439,7 @@ impl App {
             self.set_structural_hover(None);
         }
         // the IFC tab follows the element selected in the model
+        let task = Task::batch([task, faces]);
         let task = if self.ifc.shown { Task::batch([task, self.ifc_follow()]) } else { task };
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
@@ -1412,13 +1492,31 @@ impl App {
             Message::AddPicked(None) => {}
             Message::Picked(Some(source)) => return self.open(source, false),
             Message::AddPicked(Some(source)) => return self.open(source, true),
+            Message::AddSeveral(mut sources) => {
+                if sources.is_empty() || matches!(self.status, Status::Loading { .. }) {
+                    return Task::none();
+                }
+                let first = sources.remove(0);
+                self.add_queue = sources;
+                return self.open(first, true);
+            }
             Message::Open(path) => return self.open(loaders::Source::File(path), false),
             Message::Loaded(Ok(model)) => {
+                let drawings = self.read_drawings(&model);
                 let (mut stack, restack) = std::mem::take(&mut self.loading_stack);
                 if !stack.last().is_some_and(loaders::composes) {
                     stack.clear();
                 }
                 let id = model.id;
+                // more files wait to be added: this one joins the models, and the scene is built
+                // once, after the last
+                if self.adding_model && !restack && !self.add_queue.is_empty() && self.model.is_some() {
+                    self.add_model_later(model);
+                    let next = self.add_queue.remove(0);
+                    self.status = Status::Loaded(String::new());
+                    return Task::batch([drawings, self.open(next, true)]);
+                }
+                self.scene_stale = false;
                 if restack {
                     self.replace_last_model(model);
                 } else if self.adding_model {
@@ -1428,10 +1526,25 @@ impl App {
                 }
                 self.layer_stack = (stack, Some(id));
                 self.adding_model = false;
+                // the first of several is in: the others are added after it
+                if !self.add_queue.is_empty() {
+                    let next = self.add_queue.remove(0);
+                    return Task::batch([drawings, self.open(next, true)]);
+                }
                 self.remote_loaded();
-                return Task::batch([self.compute_schedules(), self.shot_after_delay()]);
+                return Task::batch([drawings, self.compute_schedules(), self.shot_after_delay()]);
             }
             Message::Loaded(Err(e)) => {
+                // one of several files does not read: the others still come
+                if self.adding_model && !self.add_queue.is_empty() {
+                    eprintln!("not added: {e}");
+                    let next = self.add_queue.remove(0);
+                    self.status = Status::Loaded(String::new());
+                    return self.open(next, true);
+                }
+                if std::mem::take(&mut self.scene_stale) {
+                    self.rebuild_scene();
+                }
                 self.adding_model = false;
                 self.loading_stack = (Vec::new(), false);
                 self.status = Status::Error(e);
@@ -1726,6 +1839,7 @@ impl App {
                 self.close_plan(&plan);
                 self.document.remove_plan(&plan);
                 self.cuts.remove(&*plan);
+                self.cut_epoch += 1;
             }
             Message::NewView3d(word) => self.new_view_3d(word),
             Message::RemoveView3d(view) => {
@@ -1853,6 +1967,7 @@ impl App {
                 self.close_plan(&path);
                 self.document.remove_section(&path);
                 self.cuts.remove(&*path);
+                self.cut_epoch += 1;
             }
             Message::MakeElevations(names) => self.make_elevations(names),
             Message::NewSection(from, to, word) => {
@@ -1893,6 +2008,9 @@ impl App {
             Message::IfcRelation(relation) => return self.ifc_relation(relation),
             Message::IfcQuery(query) => return self.ifc_query(query),
             Message::IfcNext(forward) => return self.ifc_next(forward),
+            Message::Drawings(id, drawings) => return self.take_drawings(id, *drawings),
+            Message::CutAhead(epoch, view, cut) => return self.take_cut(epoch, view, cut),
+            Message::CutFaces(key, faces) => return self.take_cut_faces(*key, faces),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;
@@ -2037,6 +2155,7 @@ impl App {
                     }
                 }
             }
+            Message::MeasureNote(text) => self.measure.note = text,
             Message::MeasureDelete(i) => {
                 if i < self.measure.results.len() {
                     self.measure.results.remove(i);
@@ -2339,6 +2458,15 @@ impl App {
                 *f |= UNIT_HIDDEN;
             }
         }
+        // the open view leaves out the elements whose family shows none of their solids as it
+        // looks at them (a pile it draws as a symbol)
+        if let Some(off) = self.active_plan.as_ref().zip(self.model.as_ref()).and_then(|(p, m)| m.project.switched_off.get(p)) {
+            for (u, f) in flags.iter_mut().enumerate().skip(1) {
+                if matches!(index.owner(u), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    *f |= UNIT_HIDDEN;
+                }
+            }
+        }
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
     }
 
@@ -2571,7 +2699,7 @@ impl App {
             tab("Home", RibbonTab::Home),
             tab("View", RibbonTab::View),
             Space::new().width(Fill),
-            text("Open 3D Viewer Studio").size(12).font(FONT_BOLD).color(p.accent),
+            text("Open BIM Suite").size(12).font(FONT_BOLD).color(p.accent),
             text(" · iced").size(12).color(p.text_muted),
         ]
         .spacing(4)
@@ -2846,6 +2974,11 @@ impl App {
 
             if i == with_schedules {
                 inner = self.schedules_group(p, l, &query, inner);
+            }
+            // (the sheets are listed at once; the header alone stands in for a file without any yet)
+            if self.reads_drawings(own) && sheets.is_empty() {
+                let tag = l.text("leest…", "reading…");
+                inner = inner.push(group_header(p, l.text("Tekeningen", "Drawings"), Some(tag), 0, false, Message::ToggleExplorer(4)));
             }
             inner = self.sheets_group(p, l, &query, sheets, inner);
             inner = self.drafts_groups(p, l, &query, drafts, inner);
@@ -3178,6 +3311,10 @@ impl App {
             button(text(label).size(11)).padding([2, 6]).style(move |_, s| p.ribbon_button(active, s)).on_press_maybe(msg)
         };
         let mut body = column![heading(l.text("Metingen", "Measurements"))].spacing(5);
+        // the remark tool: its text first, then a click in the model
+        if m.tool == Some(Tool::Note) {
+            body = body.push(text_input(l.text("Tekst van de opmerking", "Text of the note"), &m.note).on_input(Message::MeasureNote).size(12).padding(5));
+        }
         if m.results.is_empty() {
             body = body.push(
                 text(l.text("Nog geen metingen", "No measurements yet")).size(12).color(p.text_muted),
@@ -3518,7 +3655,7 @@ impl App {
         exts.sort();
         container(
             column![
-                text("Open 3D Viewer Studio").size(24).font(FONT_BOLD).color(p.text),
+                text("Open BIM Suite").size(24).font(FONT_BOLD).color(p.text),
                 text("Rust + iced edition").size(13).color(p.accent),
                 Space::new().height(8),
                 text("Open a model or drop a file on the window.").size(13).color(p.text_secondary),

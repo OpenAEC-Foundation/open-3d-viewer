@@ -23,12 +23,62 @@ pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64
         patterns.push((fill.layer, pattern));
     }
     // elements of one category and one material that meet are of one piece: joined walls
-    crate::drawing::join(cut, &|a, b| patterns[a] == patterns[b]);
+    // and so are elements of one material that the file says are joined, whatever their
+    // categories (a wall on a beam): the line between them goes, the elements stay apart
+    let elements: Vec<Option<u64>> = cut.fills.iter().map(|f| f.element).collect();
+    let joined = |a: usize, b: usize| match (elements[a], elements[b]) {
+        (Some(a), Some(b)) => model.project.joins.contains(&(a.min(b), a.max(b))),
+        _ => false,
+    };
+    crate::drawing::join(cut, &|a, b| patterns[a] == patterns[b] || (patterns[a].1 == patterns[b].1 && joined(a, b)));
+}
+
+/// The pieces the joined elements of the model make: elements the file says are joined and that
+/// are hatched alike are of one piece (an element to its piece, counted from 1). A drawing leaves
+/// out the edges on the seams within a piece; the elements stay what they are.
+pub fn pieces(model: &Model, standard: DrawingStandard) -> std::collections::HashMap<u64, u32> {
+    use std::collections::HashMap;
+    let mut out = HashMap::new();
+    if model.project.joins.is_empty() {
+        return out;
+    }
+    let layer_of: HashMap<u64, usize> = model.layers.iter().enumerate().flat_map(|(i, l)| l.elements.iter().map(move |e| (e.0, i))).collect();
+    let mut patterns: HashMap<u64, Option<Pattern>> = HashMap::new();
+    let mut pattern = |id: u64| patterns.entry(id).or_insert_with(|| layer_of.get(&id).map(|&layer| pattern_of(model, layer, Some(id), standard))).clone();
+    // every element starts as its own piece; a join of two hatched alike makes theirs one
+    let mut head: HashMap<u64, u64> = HashMap::new();
+    fn top(head: &mut HashMap<u64, u64>, mut id: u64) -> u64 {
+        while let Some(&up) = head.get(&id).filter(|up| **up != id) {
+            id = up;
+        }
+        id
+    }
+    for &(a, b) in &model.project.joins {
+        let (Some(pa), Some(pb)) = (pattern(a), pattern(b)) else { continue };
+        if pa == pb {
+            let (ta, tb) = (top(&mut head, a), top(&mut head, b));
+            head.insert(ta, ta);
+            head.insert(tb, ta);
+        }
+    }
+    let mut numbers: HashMap<u64, u32> = HashMap::new();
+    for id in head.keys().copied().collect::<Vec<_>>() {
+        let piece = top(&mut head, id);
+        let next = numbers.len() as u32 + 1;
+        out.insert(id, *numbers.entry(piece).or_insert(next));
+    }
+    out
 }
 
 /// The hatch of an element's cut: the cut pattern of its material where the file brought one (a
 /// Revit model), else the hatch `standard` gives what it is made of.
 pub fn pattern_of(model: &Model, layer: usize, element: Option<u64>, standard: DrawingStandard) -> Pattern {
+    // the earth under a cut terrain: the material the site's settings give it
+    let terrain = model.layers.get(layer).is_some_and(|l| l.name.contains("Topograph"));
+    let earth = model.project.earth.as_ref().filter(|_| terrain).and_then(|e| e.1.as_ref()).and_then(|name| model.project.cut_patterns.get(name));
+    if let Some(earth) = earth {
+        return earth.clone();
+    }
     material_pattern(model, element).unwrap_or_else(|| kind_of(model, layer, element).pattern(standard).into())
 }
 
@@ -294,6 +344,41 @@ mod tests {
 
     fn model(layers: Vec<Layer>) -> Model {
         Model::new(PathBuf::from("test.obj"), "OBJ", layers)
+    }
+
+    #[test]
+    fn joined_elements_of_one_material_lose_the_line_between_them() {
+        // a concrete wall against a concrete beam: two categories, two elements, side by side
+        let mut wall = box_layer("Wanden beton");
+        wall.elements = vec![(1, 0, 36)];
+        let mut beam = box_layer("Balken beton");
+        beam.elements = vec![(2, 0, 36)];
+        for p in beam.positions.chunks_exact_mut(3) {
+            p[0] += 4.0;
+        }
+        let between = |cut: &Cut| cut.segments.iter().filter(|[a, b]| (a[0] - 4.0).abs() < 1e-3 && (b[0] - 4.0).abs() < 1e-3).map(|[a, b]| (b[1] - a[1]).abs()).sum::<f32>();
+        let mut model = model(vec![wall, beam]);
+        let mut apart = cut_at(&model, Shown::all(), 1.5);
+        hatch(&mut apart, &model, DrawingStandard::Nen47, 100.0);
+        assert!(between(&apart) > 1.9, "not joined in the file: the line between them stays ({})", between(&apart));
+        model.project.joins.insert((1, 2));
+        let mut joined = cut_at(&model, Shown::all(), 1.5);
+        hatch(&mut joined, &model, DrawingStandard::Nen47, 100.0);
+        assert!(between(&joined) < 1e-3, "joined: the line is gone ({})", between(&joined));
+        assert_eq!(joined.fills.iter().map(|f| f.element).collect::<Vec<_>>(), [Some(1), Some(2)], "the elements stay apart");
+        // of another material the line stays, joined or not
+        let mut brick = box_layer("Wanden metselwerk");
+        brick.elements = vec![(1, 0, 36)];
+        let mut beam = box_layer("Balken beton");
+        beam.elements = vec![(2, 0, 36)];
+        for p in beam.positions.chunks_exact_mut(3) {
+            p[0] += 4.0;
+        }
+        let mut model = super::tests::model(vec![brick, beam]);
+        model.project.joins.insert((1, 2));
+        let mut mixed = cut_at(&model, Shown::all(), 1.5);
+        hatch(&mut mixed, &model, DrawingStandard::Nen47, 100.0);
+        assert!(between(&mixed) > 1.9, "brick against concrete: {}", between(&mixed));
     }
 
     #[test]

@@ -162,7 +162,11 @@ impl Graph {
                     for id in g.refs(a, "Units") {
                         if let Some(unit) = g.nodes.get(&id) {
                             if let Some(kind) = g.attr(unit, "UnitType").and_then(text) {
-                                if g.project_units.insert(kind, id).is_some() {
+                                // a project may name several units of its own (USERDEFINED);
+                                // of every other type it names one
+                                if kind == "USERDEFINED" {
+                                    g.project_units.entry(kind).or_insert(id);
+                                } else if g.project_units.insert(kind, id).is_some() {
                                     return Err("Duplicate project unit types".into());
                                 }
                             }

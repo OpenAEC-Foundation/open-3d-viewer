@@ -2,7 +2,7 @@
 name = "bim-structural"
 version = "0.1.0"
 description = "Headless structural analysis model: document types, conventions, presets, sam-json v1 exchange, section geometry and member frames"
-authors = ["Open 3D Viewer Studio Contributors"]
+authors = ["Open BIM Suite Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.96"

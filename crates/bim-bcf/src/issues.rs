@@ -105,6 +105,16 @@ pub struct Viewpoint {
     /// Colours (`AARRGGBB` or `RRGGBB`, hexadecimal) with the elements that have them.
     pub coloring: Vec<(String, Vec<String>)>,
     pub clipping_planes: Vec<ClippingPlane>,
+    /// Lines drawn in the view, from and to (the model's coordinates): dimensions, as BCF's
+    /// `Lines`.
+    pub lines: Vec<([f64; 3], [f64; 3])>,
+    /// Remarks standing at a point of the model: where, and the text. BCF has no place for
+    /// them; they go in a file of their own beside the viewpoint (`*.notes.xml`), which other
+    /// tools leave alone.
+    pub notes: Vec<([f64; 3], String)>,
+    /// Marks drawn in the model: what each is (`arrow`, `line`, `cloud`) and the points it runs
+    /// through. Kept with the remarks.
+    pub marks: Vec<(String, Vec<[f64; 3]>)>,
     /// The picture: its file name in the topic's folder and its bytes (PNG or JPEG).
     pub snapshot: Option<(String, Vec<u8>)>,
 }
@@ -241,6 +251,11 @@ fn read_viewpoint(bytes: &[u8], guid: &str) -> Result<Viewpoint, String> {
             }
         }
     }
+    for line in root.descendants().filter(|n| n.has_tag_name("Line")) {
+        if let (Some(from), Some(to)) = (vector(line, "StartPoint"), vector(line, "EndPoint")) {
+            view.lines.push((from, to));
+        }
+    }
     for plane in root.descendants().filter(|n| n.has_tag_name("ClippingPlane")) {
         if let (Some(location), Some(direction)) = (vector(plane, "Location"), vector(plane, "Direction")) {
             view.clipping_planes.push(ClippingPlane { location, direction });
@@ -297,6 +312,10 @@ fn read_topic(folder: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Topic, 
         if let Some(bytes) = files.get(&picture) {
             view.snapshot = Some((picture.clone(), bytes.clone()));
         }
+        if let Some(bytes) = files.get(&notes_file(&file)) {
+            (view.notes, view.marks) = read_notes(bytes);
+            used.push(notes_file(&file));
+        }
         used.extend([file, picture]);
         topic.viewpoints.push(view);
     }
@@ -321,6 +340,38 @@ fn point(name: &str, v: [f64; 3]) -> String {
 
 fn components(list: &[String]) -> String {
     list.iter().map(|g| format!("<Component IfcGuid=\"{}\"/>", escape(g))).collect()
+}
+
+/// The file of a viewpoint's remarks, beside the viewpoint's own file.
+fn notes_file(viewpoint_file: &str) -> String {
+    format!("{}.notes.xml", viewpoint_file.strip_suffix(".bcfv").unwrap_or(viewpoint_file))
+}
+
+fn write_notes(view: &Viewpoint) -> String {
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Notes>");
+    for (at, text) in &view.notes {
+        out += &format!("<Note>{}<Text>{}</Text></Note>", point("Location", *at), escape(text));
+    }
+    for (kind, points) in &view.marks {
+        out += &format!("<Mark Kind=\"{}\">{}</Mark>", escape(kind), points.iter().map(|p| point("Point", *p)).collect::<String>());
+    }
+    out + "</Notes>\n"
+}
+
+/// The remarks and the marks of a viewpoint's file of them.
+#[allow(clippy::type_complexity)]
+fn read_notes(bytes: &[u8]) -> (Vec<([f64; 3], String)>, Vec<(String, Vec<[f64; 3]>)>) {
+    let Ok(doc) = xml(bytes) else { return (Vec::new(), Vec::new()) };
+    let notes = doc.descendants().filter(|n| n.has_tag_name("Note")).filter_map(|n| Some((vector(n, "Location")?, text(n, "Text")))).collect();
+    let xyz = |p: Node| {
+        let mut out = [0.0; 3];
+        for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
+            out[k] = text(p, axis).parse::<f64>().ok().filter(|v| v.is_finite())?;
+        }
+        Some(out)
+    };
+    let marks = doc.descendants().filter(|n| n.has_tag_name("Mark")).map(|n| (attribute(n, "Kind"), n.children().filter(|c| c.has_tag_name("Point")).filter_map(xyz).collect())).collect();
+    (notes, marks)
 }
 
 /// A viewpoint as its BCF 2.1 file.
@@ -352,6 +403,13 @@ fn write_viewpoint(view: &Viewpoint) -> String {
             Lens::Orthogonal { view_to_world_scale } => ("OrthogonalCamera", format!("<ViewToWorldScale>{view_to_world_scale}</ViewToWorldScale>")),
         };
         out += &format!("<{name}>{}{}{}{lens}</{name}>", point("CameraViewPoint", c.position), point("CameraDirection", c.direction), point("CameraUpVector", c.up));
+    }
+    if !view.lines.is_empty() {
+        out += "<Lines>";
+        for (from, to) in &view.lines {
+            out += &format!("<Line>{}{}</Line>", point("StartPoint", *from), point("EndPoint", *to));
+        }
+        out += "</Lines>";
     }
     if !view.clipping_planes.is_empty() {
         out += "<ClippingPlanes>";
@@ -402,6 +460,9 @@ fn write_topic(topic: &Topic) -> BTreeMap<String, Vec<u8>> {
             files.insert(picture, bytes.clone());
         }
         out += "</Viewpoints>";
+        if !(view.notes.is_empty() && view.marks.is_empty()) {
+            files.insert(notes_file(&file), write_notes(view).into_bytes());
+        }
         files.insert(file, write_viewpoint(view).into_bytes());
     }
     out += "</Markup>\n";
@@ -612,5 +673,27 @@ mod tests {
         let issues = Issues::read(&two).unwrap();
         let view = &issues.topics[0].viewpoints[0];
         assert_eq!((view.selection.clone(), view.default_visibility, view.exceptions.clone(), view.snapshot.is_some()), (vec!["G1".to_string()], true, vec!["G2".to_string()], true));
+    }
+    #[test]
+    fn dimensions_and_remarks_go_with_a_viewpoint() {
+        let mut issues = Issues::new();
+        let mut topic = Topic::new("Maat", "an");
+        let mut view = Viewpoint::new();
+        view.lines.push(([0.0, 0.0, 0.0], [3.0, 4.0, 0.5]));
+        view.notes.push(([1.0, 2.0, 3.0], "Hier <te> laag & \"scheef\"".into()));
+        view.marks.push(("arrow".into(), vec![[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]]));
+        view.marks.push(("cloud".into(), vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]]));
+        let mut second = Viewpoint::new();
+        second.notes.push(([4.0, 5.0, 6.0], "Tweede".into()));
+        topic.viewpoints = vec![view.clone(), second.clone()];
+        issues.topics.push(topic);
+        let bytes = issues.write().unwrap();
+        let back = Issues::read(&bytes).unwrap();
+        let views = &back.topics[0].viewpoints;
+        assert_eq!((&views[0].lines, &views[0].notes), (&view.lines, &view.notes));
+        assert_eq!(views[0].marks, view.marks);
+        assert_eq!((&views[1].lines, &views[1].notes), (&second.lines, &second.notes));
+        // read and written again unchanged, the remarks' files stay
+        assert_eq!(Issues::read(&back.write().unwrap()).unwrap().topics[0].viewpoints[1].notes, second.notes);
     }
 }

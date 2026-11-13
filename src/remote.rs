@@ -469,8 +469,41 @@ impl App {
     // ---- files ----
 
     fn remote_open(&mut self, call: RemoteCall) -> Task<Message> {
+        // several files at once: all added (the first opened, without `add`), the scene built once
+        if let Some(list) = call.args.get("paths").and_then(Value::as_array) {
+            let mut sources = Vec::new();
+            for p in list.iter().filter_map(Value::as_str) {
+                match confine(p) {
+                    Ok(path) if path.is_file() => sources.push(crate::loaders::Source::File(path)),
+                    Ok(path) => {
+                        call.answer(Err(format!("no such file: {}", path.display())));
+                        return Task::none();
+                    }
+                    Err(e) => {
+                        call.answer(Err(e));
+                        return Task::none();
+                    }
+                }
+            }
+            if sources.is_empty() || matches!(self.status, Status::Loading { .. }) {
+                call.answer(Err("paths is empty, or another file is still loading".into()));
+                return Task::none();
+            }
+            let add = call.args.get("add").and_then(Value::as_bool).unwrap_or(false) && self.model.is_some();
+            let task = if add {
+                self.update(Message::AddSeveral(sources))
+            } else {
+                let first = sources.remove(0);
+                let crate::loaders::Source::File(first) = first else { return Task::none() };
+                let task = self.update(Message::Open(first));
+                self.queue_added(sources);
+                task
+            };
+            self.remote.pending_load.push(call);
+            return task;
+        }
         let Some(path) = call.args.get("path").and_then(Value::as_str) else {
-            call.answer(Err("path is required".into()));
+            call.answer(Err("path or paths is required".into()));
             return Task::none();
         };
         let path = match confine(path) {

@@ -42,6 +42,13 @@ fn fill_pattern(doc: &rvt_read::Document, id: i64) -> Option<(Vec<Grid>, bool)> 
 
 /// The cut patterns of the project's materials, by the material's name; a material without a
 /// cut pattern is left out.
+/// The name of a material (a `MaterialElem`), as [`cut_patterns`] names it.
+pub fn name(doc: &rvt_read::Document, material: i64) -> Option<String> {
+    let o = doc.object(u64::try_from(material).ok()?)?;
+    let name = o.get("m_pMaterial").and_then(|v| o.deref(v))?.get("m_name")?.as_str()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 pub fn cut_patterns(doc: &rvt_read::Document) -> HashMap<String, Pattern> {
     let mut fills: HashMap<i64, Option<(Vec<Grid>, bool)>> = HashMap::new();
     let mut out = HashMap::new();

@@ -913,7 +913,7 @@ impl Studio {
         list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
         list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
         list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
-        list.push(Command::new("project.sheet", l.text("Blad", "Sheet"), go(Message::NewSheet(l.text("Blad", "Sheet")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
+        list.push(Command::new("project.sheet", l.text("Tekening", "Drawing"), go(Message::NewSheet(l.text("Tekening", "Drawing")))).icon(small("drawing.sheet-new"), large("drawing.sheet-new")).enabled(loaded));
         list.push(
             Command::new("project.library", l.text("Bibliotheek", "Library"), go(Message::ExplorerTab(crate::app::ExplorerTab::Library)))
                 .icon(small("construction.library"), large("construction.library"))
@@ -961,6 +961,10 @@ impl Studio {
                 Tool::Area => ("measure.area", "measure.area"),
                 Tool::Volume => ("measure.volume", "measure.takeoff"),
                 Tool::Polygon => ("measure.polygon", "measure.perimeter"),
+                Tool::Note => ("measure.note", "draw.text"),
+                Tool::Arrow => ("measure.arrow", "draw.dimension"),
+                Tool::Line => ("measure.line", "draw.line"),
+                Tool::Cloud => ("measure.cloud", "draw.filled-area"),
             };
             list.push(Command::new(id, tool.label(l), go(Message::Measure(tool))).icon(small(icon), large(icon)).mode(app.measure.tool == Some(tool)).enabled(loaded));
         }
@@ -1061,6 +1065,7 @@ impl Studio {
         {
             self.app.collab.language = self.l();
             self.app.collab.refresh();
+            self.app.collab_refresh_sides();
         }
         // the app knows whether the Modeller is shown: there an opened file's walls have grips
         self.app.modeller.in_modeller = self.product() == Product::Modeller;
@@ -1526,8 +1531,8 @@ impl Studio {
         // the Viewer's tools, also the View tab of the Modeller and the Collaborator
         let view_groups = || {
             let mut measure = vec![smalls(first_tools)];
-            if !more_tools.is_empty() {
-                measure.push(smalls(more_tools));
+            for column in more_tools.chunks(3) {
+                measure.push(smalls(column));
             }
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
@@ -1565,7 +1570,7 @@ impl Studio {
             RibbonPage::Project => vec![
                 w::ribbon_group(look, l.text("Niveaus", "Levels"), vec![large("project.level")]),
                 w::ribbon_group(look, l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
-                w::ribbon_group(look, l.text("Bladen", "Sheets"), vec![large("project.sheet")]),
+                w::ribbon_group(look, l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
                 w::ribbon_group(look, l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
             // in the floor plan, section or sheet shown
@@ -1604,6 +1609,10 @@ impl Studio {
             Tool::Area => "measure.area",
             Tool::Volume => "measure.volume",
             Tool::Polygon => "measure.polygon",
+            Tool::Note => "measure.note",
+            Tool::Arrow => "measure.arrow",
+            Tool::Line => "measure.line",
+            Tool::Cloud => "measure.cloud",
         }
     }
 
@@ -2495,7 +2504,7 @@ mod tests {
         // a product binary: its own name in the title and About
         let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
         assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, "Open BIM Collaborator".to_string()));
-        assert_eq!(Studio::new(App::default()).title(), "Open 3D Viewer Studio");
+        assert_eq!(Studio::new(App::default()).title(), "Open BIM Suite");
     }
 
     #[test]

@@ -345,7 +345,7 @@ fn materials(props: &[(String, String)]) -> Vec<String> {
 /// Writes the model as an IFC 4 file named `file_name`, with the document's levels as storeys.
 pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl Write) -> io::Result<()> {
     let units = Units::of(model);
-    let app = format!("Open 3D Viewer Studio {}", env!("CARGO_PKG_VERSION"));
+    let app = format!("Open BIM Suite {}", env!("CARGO_PKG_VERSION"));
     let ids = Guids { seed: file_name.to_string() };
 
     writeln!(out, "ISO-10303-21;")?;

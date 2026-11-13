@@ -169,7 +169,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             "id": file_name,
             "ifcxVersion": "ifcx_alpha",
             "dataVersion": "1.0.0",
-            "author": format!("Open 3D Viewer Studio {}", env!("CARGO_PKG_VERSION")),
+            "author": format!("Open BIM Suite {}", env!("CARGO_PKG_VERSION")),
             "timestamp": timestamp(),
         },
         "imports": [],

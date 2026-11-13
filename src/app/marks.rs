@@ -138,6 +138,7 @@ impl App {
             dimensions: dimensions.to_vec(),
             notes: self.document.view_notes(view)?.to_vec(),
             lines: self.document.view_lines(view).to_vec(),
+            fills: self.document.view_fills(view).to_vec(),
             cut: self.cuts.get(view).cloned(),
             crop,
             measuring: self.dimension_tool,
@@ -401,6 +402,8 @@ pub(super) struct ViewMarks {
     notes: Vec<Note>,
     /// The lines of the view's tags: their shapes and leaders.
     lines: Vec<[[f64; 2]; 2]>,
+    /// The regions of the view filled in one colour, under its lines.
+    fills: Vec<crate::document::Fill>,
     /// The view's lines, to snap to.
     cut: Option<Arc<Cut>>,
     /// The view's crop: its cut faces are drawn within it.
@@ -660,6 +663,24 @@ impl canvas::Program<Message> for ViewMarks {
             let (Some(a), Some(b)) = (self.px(&screen, d.from), self.px(&screen, d.to)) else { continue };
             let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else { ink };
             draw_dimension_px(&mut frame, a, b, d.length(), color, self.look(&screen, d.from, d.style));
+        }
+        // the regions filled in one colour, under the lines: black is the ink of the drawing
+        for fill in &self.fills {
+            let outline = Path::new(|path| {
+                for points in &fill.loops {
+                    let on: Vec<Point> = points.iter().filter_map(|p| self.px(&screen, *p)).collect();
+                    if on.len() < 3 || on.len() != points.len() {
+                        continue;
+                    }
+                    path.move_to(on[0]);
+                    for q in &on[1..] {
+                        path.line_to(*q);
+                    }
+                    path.close();
+                }
+            });
+            let color = if fill.color == [0, 0, 0] { ink } else { Color::from_rgb8(fill.color[0], fill.color[1], fill.color[2]) };
+            frame.fill(&outline, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
         }
         if !self.lines.is_empty() {
             let lines = Path::new(|path| {

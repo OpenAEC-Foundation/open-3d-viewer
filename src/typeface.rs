@@ -21,11 +21,14 @@ pub struct Face {
     pub width: f32,
     /// How far apart the stops are a tab runs to, in ems (0: [`TAB`]).
     pub tab: f32,
+    /// The colour of its letters (red, green, blue), when it has one of its own: else the ink of
+    /// the drawing.
+    pub color: Option<[u8; 3]>,
 }
 
 impl Default for Face {
     fn default() -> Self {
-        Self { family: Arc::from(""), bold: false, italic: false, underline: false, width: 1.0, tab: 0.0 }
+        Self { family: Arc::from(""), bold: false, italic: false, underline: false, width: 1.0, tab: 0.0, color: None }
     }
 }
 
@@ -66,6 +69,9 @@ impl Face {
         if self.tab > 0.0 {
             v["tab"] = self.tab.into();
         }
+        if let Some(color) = self.color {
+            v["color"] = json!(color);
+        }
         Some(v)
     }
 
@@ -80,6 +86,7 @@ impl Face {
             underline: on("underline"),
             width: v.get("width").and_then(Value::as_f64).filter(|w| w.is_finite() && (0.1..=10.0).contains(w)).map_or(1.0, |w| w as f32),
             tab: v.get("tab").and_then(Value::as_f64).filter(|t| t.is_finite() && (0.0..=1000.0).contains(t)).map_or(0.0, |t| t as f32),
+            color: v.get("color").and_then(Value::as_array).filter(|c| c.len() == 3).and_then(|c| Some([u8::try_from(c[0].as_u64()?).ok()?, u8::try_from(c[1].as_u64()?).ok()?, u8::try_from(c[2].as_u64()?).ok()?])),
         }
     }
 
@@ -163,7 +170,9 @@ impl Face {
 
     /// Draws a text of a canvas in this face: `text` as it would be drawn, its font replaced.
     pub fn fill(&self, frame: &mut Frame, text: canvas::Text) {
-        let text = canvas::Text { font: self.font(), ..text };
+        // in its own colour, as dark or light as the drawing's ink is meant to be seen
+        let color = self.color.map_or(text.color, |c| iced::Color { a: text.color.a, ..iced::Color::from_rgb8(c[0], c[1], c[2]) });
+        let text = canvas::Text { font: self.font(), color, ..text };
         let wide = (self.width - 1.0).abs() > 1e-3;
         if text.content.contains('\t') && text.max_width.is_infinite() {
             return self.fill_tabbed(frame, text);
@@ -286,7 +295,7 @@ mod tests {
     #[test]
     fn a_face_keeps_what_it_says_as_an_attribute() {
         assert_eq!(Face::default().to_json(), None);
-        let face = Face { family: Arc::from("Arial"), bold: true, italic: false, underline: true, width: 0.8, tab: 3.5 };
+        let face = Face { family: Arc::from("Arial"), bold: true, italic: false, underline: true, width: 0.8, tab: 3.5, color: Some([255, 255, 255]) };
         assert_eq!(Face::from_json(face.to_json().as_ref()), face);
         assert_eq!(Face::from_json(None), Face::default());
     }

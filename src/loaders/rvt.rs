@@ -38,7 +38,7 @@ impl Loader for RvtLoader {
         progress.set(Phase::Read);
         // the Revit reader opens the file itself (a compound file, read in parts)
         let path = source.path().ok_or("Revit files open in the desktop app only")?;
-        let doc = rvt_read::Document::open(path).map_err(|e| format!("Cannot read Revit file: {e}"))?;
+        let doc = std::sync::Arc::new(rvt_read::Document::open(path).map_err(|e| format!("Cannot read Revit file: {e}"))?);
         progress.set(Phase::Convert);
         // `scene` returns view coordinates: metres, Y up (x, z, -y); the walls the Modeller can
         // take over are read beside it (a second or so on a large project)
@@ -59,10 +59,14 @@ impl Loader for RvtLoader {
         project.walls = walls;
         // how a cut through each material is hatched
         project.cut_patterns = super::rvt_materials::cut_patterns(&doc);
+        // down to where a section fills the earth under the terrain, and as what material
+        project.earth = doc.site_poche_base().map(|(base, material)| ((base * FT) as f32, material.and_then(|m| super::rvt_materials::name(&doc, m))));
         let layers = scene
             .batches
             .into_iter()
             .map(|b| {
+                // the categories whose elements say whether they carry load
+                let hosts = matches!(b.name.as_str(), "Walls" | "Floors");
                 let mut positions = b.positions;
                 let mut normals = b.normals;
                 y_up_to_z_up(&mut positions);
@@ -78,28 +82,117 @@ impl Loader for RvtLoader {
                     colors,
                     indices: b.indices,
                     elements: b.elements,
-                    props: b.props,
+                    // a wall or a floor also says whether it carries load: a structural plan
+                    // leaves out the ones that do not
+                    props: b.props.into_iter().map(|(id, props)| match Some(id).filter(|_| hosts).and_then(|id| super::rvt_structure::bearing(&doc, id)) {
+                        Some(bearing) => (id, super::rvt_structure::with_bearing(props, bearing)),
+                        None => (id, props),
+                    }).collect(),
                     hidden: false,
                     points: false,
                 }
             })
             .collect::<Vec<Layer>>();
-        // the plans, sections and elevations with their texts and dimensions: the project's drawings
+        // the drawings (the annotated views, the legends and drafting views, the sheets) take far
+        // longer than the model on a large project: read once the model shows
         let file = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        // the tags of its views, with the labels and lines of their types
-        let mut types = super::rvt_drawings::Types::new(&doc);
-        let tags = super::rvt_tags::tags(&doc, &mut types);
-        // the detail components of its views, as the lines of their families
-        let details = super::rvt_tags::details(&doc, &mut types);
-        drop(types);
-        project.drawings = super::rvt_drawings::drawings(&doc, &infos, &file, &tags, &details);
-        // the legends and drafting views: drawings without a model
-        project.drafts = super::rvt_drafts::drafts(&doc, &tags, &details);
-        project.drawn = super::rvt_props::drawn(&doc, &project.drafts);
-        project.sheets = sheets(&doc, &view_ids, &views, &layers, &file, &project, &infos);
+        let elements: Vec<u64> = layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        // the type and family name of every element, for the filters of the views
+        let names: super::rvt_filters::Names = layers
+            .iter()
+            .flat_map(|l| &l.props)
+            .filter_map(|(id, json)| {
+                let said: serde_json::Value = serde_json::from_str(json).ok()?;
+                let name = |key: &str| said.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                Some((*id, (name("type"), name("family"))))
+            })
+            .collect();
+        // the building without its site: the terrain reaches far beyond what a view shows
+        let mut building = crate::model::Bounds::empty();
+        for p in layers.iter().filter(|l| !l.name.contains("Topograph")).flat_map(|l| l.positions.chunks_exact(3)) {
+            building.extend([p[0], p[1], p[2]]);
+        }
+        let size = if building.is_valid() { building.size() } else { [10.0; 3] };
+        // the sheets at once, as their list and frames (their number, name, paper and placed
+        // views); their title blocks, tables and view titles come with the drawings
+        project.sheets = sheets(&doc, &view_ids, &views, size, &file, &project, &infos, true);
+        let (later, placed) = (doc.clone(), views.clone());
+        project.later = Later::new(move || drawings(&later, &infos, &view_ids, &placed, &elements, &names, size, &file));
         // the schedules take seconds on a large project: computed once the model shows
         project.schedules = Later::new(move || schedules(&doc));
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
+    }
+}
+
+/// The elements a view does not show: those of the categories it switches off (its view
+/// template's, when it has one: a template decides them) and those hidden in it one by one.
+/// So are the elements its filters hide by rule ([`super::rvt_filters`]). Worksets are not
+/// looked at.
+fn hidden_in_view(doc: &rvt_read::Document, view: u64, by_category: &HashMap<i64, Vec<u64>>, names: &super::rvt_filters::Names) -> std::collections::HashSet<u64> {
+    let mut out = std::collections::HashSet::new();
+    let Some(o) = doc.object(view) else { return out };
+    let template = o.get("m_viewTemplateId").and_then(|v| v.element()).filter(|t| *t > 0).and_then(|t| doc.object(t as u64));
+    let from = template.as_ref().unwrap_or(&o);
+    for filter in from.get("m_oaDrawFilters").and_then(|v| v.as_list()).unwrap_or(&[]) {
+        let Some(filter) = from.deref(filter).filter(|f| f.class.starts_with("IckyExcludedCategories")) else { continue };
+        for category in filter.get("m_categoryIds").and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|c| c.element()) {
+            out.extend(by_category.get(&category).into_iter().flatten().copied());
+        }
+    }
+    // and what its filters hide by rule
+    out.extend(super::rvt_filters::hidden(doc, from, by_category, names));
+    out.extend(o.get("m_explicitlyHiddenElements").and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|e| e.element()).filter_map(|e| u64::try_from(e).ok()));
+    out
+}
+
+/// The drawings of the project: its plans, sections and elevations with their tags, texts,
+/// dimensions and detail components, its legends and drafting views, and its sheets. `elements`
+/// are the elements the model draws, `size` the extent of the building.
+fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], view_ids: &[u64], views: &[SavedView], elements: &[u64], names: &super::rvt_filters::Names, size: [f32; 3], file: &str) -> crate::model::Drawings {
+    let mut project = ProjectData::default();
+    // the tags of its views, with the labels and lines of their types
+    let mut types = super::rvt_drawings::Types::new(doc);
+    let tags = super::rvt_tags::tags(doc, &mut types);
+    // the detail components of its views, as the lines of their families
+    let details = super::rvt_tags::details(doc, &mut types);
+    // what a view leaves out because the element's family shows none of its solids there
+    for &(view, element) in types.switched_off() {
+        project.switched_off.entry(crate::document::uuid(&format!("rvt/{file}/view/{view}"))).or_default().insert(element);
+    }
+    drop(types);
+    // what each 3D view leaves out: the categories it switches off and the elements hidden in it
+    let mut by_category: HashMap<i64, Vec<u64>> = HashMap::new();
+    for &id in elements {
+        if let Some(e) = doc.element(id) {
+            by_category.entry(e.category as i64).or_default().push(id);
+        }
+    }
+    for (i, &view) in view_ids.iter().enumerate() {
+        if views.get(i).is_some_and(|v| v.kind == ViewKind::ThreeD) {
+            let hidden = hidden_in_view(doc, view, &by_category, names);
+            if !hidden.is_empty() {
+                project.switched_off.insert(crate::model::view3d_key(i), hidden);
+            }
+        }
+    }
+    project.drawings = super::rvt_drawings::drawings(doc, infos, file, &tags, &details);
+    // the phase and phase filter of every view, and the phases of the elements
+    let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
+    project.phasing = super::rvt_phases::phasing(doc, &ids, &|view| crate::document::uuid(&format!("rvt/{file}/view/{view}")));
+    // which of the drawn elements are joined with which
+    project.joins = super::rvt_joins::joins(doc, elements.iter().copied());
+    // the legends and drafting views: drawings without a model
+    project.drafts = super::rvt_drafts::drafts(doc, &tags, &details);
+    project.drawn = super::rvt_props::drawn(doc, &project.drafts);
+    project.sheets = sheets(doc, view_ids, views, size, file, &project, infos, false);
+    crate::model::Drawings {
+        sheets: project.sheets,
+        drafts: project.drafts,
+        phasing: project.phasing,
+        switched_off: project.switched_off,
+        joins: project.joins,
+        drawn: project.drawn,
+        drawings: project.drawings,
     }
 }
 
@@ -258,10 +351,13 @@ fn cut_of(wall: &SourceWall, hole: &Hole) -> Cut {
 
 /// The schedules as the viewer shows them: templates left out, the shown columns only.
 fn schedules(doc: &rvt_read::Document) -> Vec<Schedule> {
+    let units = super::rvt_schedules::units(doc);
     rvt_export::schedules::schedules(doc)
         .into_iter()
         .filter(|s| !s.is_template)
-        .map(|s| {
+        .map(|mut s| {
+            // what the computation left open: from the types and from the texts the file stores
+            super::rvt_schedules::complete(doc, &mut s, units);
             let shown: Vec<usize> = (0..s.columns.len()).filter(|&i| !s.columns[i].hidden).collect();
             // the image a cell shows: what the column's parameter names for the row's first element
             let parameters: Vec<i64> = shown.iter().map(|&i| s.columns[i].parameter).collect();
@@ -512,7 +608,11 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
                     let range = v.view_range.as_ref();
                     let cut = limited(range.and_then(|r| r.cut)).or(level.zip(v.cut_offset).map(|(l, c)| l + c)).or(level.map(|l| l + 4.0))?;
                     let ceiling = v.kind == K::CeilingPlan;
-                    let (low, high) = if ceiling {
+                    // a structural plan can look up too: its view depth then lies above its cut
+                    let above = limited(range.and_then(|r| r.depth)).filter(|depth| !ceiling && *depth > cut + 1e-6);
+                    let (low, high) = if let Some(depth) = above {
+                        (cut, depth + 0.01)
+                    } else if ceiling {
                         (cut, limited(range.and_then(|r| r.top)).unwrap_or(cut + 10.0))
                     } else {
                         // down to the view depth, so the floor below the cut shows
@@ -539,12 +639,13 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
 
 /// The sheets (beta) in sheet metres. The paper comes from the title block's size: its
 /// insertion point is the paper's lower right corner (3077 R26), else another corner or the
-/// centre, whichever holds the most viewports. A viewport without an active crop region gets the
+/// centre, whichever holds the most viewports. `bare` leaves out what takes long to read (the title
+/// blocks, the placed schedules and the titles of the views): the list of sheets right after opening. A viewport without an active crop region gets the
 /// size of the building as its view sees it (`estimated`, centred on its position).
-fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layers: &[Layer], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo]) -> Vec<Sheet> {
+fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size: [f32; 3], file: &str, project: &ProjectData, infos: &[rvt_export::views::ViewInfo], bare: bool) -> Vec<Sheet> {
     let mut types = super::rvt_drawings::Types::new(doc);
     // the schedules placed on the sheets, as tables
-    let mut tables = super::rvt_schedules::placed(doc);
+    let mut tables = if bare { HashMap::new() } else { super::rvt_schedules::placed(doc) };
     let anchors: HashMap<u64, ([f64; 2], [f64; 2])> = infos.iter().filter_map(|v| Some((v.id, super::rvt_drawings::view_origin(v)?))).collect();
     // the views the document draws, and the legends and drafting views, by their element
     let drawings: std::collections::HashSet<&str> = project.drawings.iter().map(|(path, _)| path.as_str()).collect();
@@ -552,12 +653,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
     use rvt_export::views::ViewKind as K;
     const FT: f32 = 0.3048;
     let index: HashMap<u64, usize> = view_ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
-    // the building without its site: the terrain reaches far beyond what a view shows
-    let mut model = crate::model::Bounds::empty();
-    for p in layers.iter().filter(|l| !l.name.contains("Topograph")).flat_map(|l| l.positions.chunks_exact(3)) {
-        model.extend([p[0], p[1], p[2]]);
-    }
-    let [dx, dy, dz] = if model.is_valid() { model.size() } else { [10.0; 3] };
+    let [dx, dy, dz] = size;
     // a placed title block draws its own variant of its type, with what is switched on for it
     let block_kind = |t: &rvt_export::sheets::TitleBlock| {
         let own = doc.object(t.id).and_then(|o| u64::try_from(o.path(&["m_pInstanceInfo", "m_symbolId"])?.element()?).ok());
@@ -583,6 +679,17 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                             // direction (and the full height) for the others
                             let seen = match (&v.view_kind, view.and_then(|i| views[i].camera.as_ref())) {
                                 (k, _) if k.is_plan() => [dx, dy],
+                                // a 3D view: what it shows (its section box, else the building)
+                                // as it lies on the drawing, looked at along its camera
+                                (K::ThreeD, Some(c)) => {
+                                    let (right, up, _) = crate::drawing::view_axes(c.forward);
+                                    let sides: [Vec3; 3] = match view.and_then(|i| views[i].clip.as_ref()) {
+                                        Some(clip) => [0, 1, 2].map(|i| clip.axis(i) * (clip.max[i] - clip.min[i])),
+                                        None => [Vec3::X * dx, Vec3::Y * dy, Vec3::Z * dz],
+                                    };
+                                    let across = |axis: [f32; 3]| sides.iter().map(|s| s.dot(Vec3::from(axis)).abs()).sum::<f32>();
+                                    [across(right), across(up)]
+                                }
                                 (_, Some(c)) => [dx * c.forward[1].abs() + dy * c.forward[0].abs(), dz],
                                 (K::ThreeD, None) => [dx.max(dy), dz],
                                 // legends and drafting views: a label-sized box
@@ -593,7 +700,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                     };
                     // the title as the type of the viewport writes it: its name and scale in one, or none
                     let ratio_text = format!("1:{}", (1.0 / v.scale).round());
-                    let written = super::rvt_tags::viewport_title(doc, &mut types, v.id, v.view, &v.view_name, &format!("1 : {}", (1.0 / v.scale).round()), v.detail_number.as_deref());
+                    let written = if bare { None } else { super::rvt_tags::viewport_title(doc, &mut types, v.id, v.view, &v.view_name, &format!("1 : {}", (1.0 / v.scale).round()), v.detail_number.as_deref()) };
                     SheetViewport {
                         title: v.view_name.clone(),
                         written,
@@ -625,7 +732,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 Some(SheetRect { min, max: [min[0] + w, min[1] + h] })
             });
             // the title block as its family draws it, from where it is placed
-            let block = s.title_block.as_ref().and_then(|t| Some((t, block_kind(t)?))).map(|(t, kind)| {
+            let block = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))).map(|(t, kind)| {
                 let (lines, texts) = super::rvt_tags::title_block(doc, &mut types, kind, s.id, &s.number, &s.name);
                 let on = |p: [f64; 2]| [(t.origin[0] * 0.3048 + p[0]) as f32, (t.origin[1] * 0.3048 + p[1]) as f32];
                 let texts = texts.into_iter().map(|x| {
@@ -635,12 +742,32 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
                 });
                 (lines.into_iter().map(|l| [on(l[0]), on(l[1])]).collect(), texts.collect())
             });
+            // the paper where the title block draws its border, when its lines span the paper's
+            // size: a family has its origin at the lower right or at the lower left corner
+            let paper = paper.map(|chosen| {
+                let Some((lines, _)) = block.as_ref() else { return chosen };
+                let lines: &Vec<[[f32; 2]; 2]> = lines;
+                let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+                for p in lines.iter().flatten() {
+                    lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                    hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+                }
+                let (w, h) = (chosen.max[0] - chosen.min[0], chosen.max[1] - chosen.min[1]);
+                let spans = |got: f32, want: f32| got <= want * 1.001 && got >= want * 0.9;
+                if lo[0].is_finite() && spans(hi[0] - lo[0], w) && spans(hi[1] - lo[1], h) {
+                    // centred on the border the block draws
+                    let min = [(lo[0] + hi[0] - w) / 2.0, (lo[1] + hi[1] - h) / 2.0];
+                    SheetRect { min, max: [min[0] + w, min[1] + h] }
+                } else {
+                    chosen
+                }
+            });
             let mut sheet = Sheet::new(s.number, s.name, paper, viewports);
             if let Some((lines, texts)) = block {
                 (sheet.lines, sheet.texts) = (lines, texts);
             }
             // the regions of its title block filled in one colour
-            if let Some((t, kind)) = s.title_block.as_ref().and_then(|t| Some((t, block_kind(t)?))) {
+            if let Some((t, kind)) = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))) {
                 let on = |p: [f64; 2]| [(t.origin[0] * 0.3048 + p[0]) as f32, (t.origin[1] * 0.3048 + p[1]) as f32];
                 let fills = super::rvt_tags::title_block_fills(doc, &mut types, kind).into_iter();
                 sheet.line_colors = super::rvt_tags::title_block_line_colors(doc, &mut types, kind);
@@ -648,7 +775,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], layer
             }
             sheet.tables = tables.remove(&s.id).unwrap_or_default();
             // the images of its title block
-            if let Some((t, kind)) = s.title_block.as_ref().and_then(|t| Some((t, block_kind(t)?))) {
+            if let Some((t, kind)) = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))) {
                 // decoded here: an image that cannot be read is left out, the others show at once
                 let images = super::rvt_images::images(doc, kind).into_iter().filter_map(|i| {
                     let pixels = image::load_from_memory(&i.file).ok()?.to_rgba8();
@@ -886,5 +1013,126 @@ mod tests {
             model.load_time,
             model.bounds
         );
+    }
+    /// What the 3D views of a file say about what they show: `O3V_RVT` names the file.
+    #[test]
+    #[ignore]
+    fn what_3d_views_say_of_their_visibility() {
+        let Ok(path) = std::env::var("O3V_RVT") else { return };
+        let doc = rvt_read::Document::open(&path).expect("rvt");
+        for id in doc.object_ids_of_class("DBView3d") {
+            let Some(o) = doc.object(id) else { continue };
+            let name = o.get("m_viewName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !name.contains("3D") {
+                continue;
+            }
+            println!("== view {id} {name:?} class {} fields {}", o.class, o.fields.len());
+            for f in &o.fields {
+                let n = f.name.to_lowercase();
+                if n.contains("emplate") || n.contains("filter") || n.contains("hidden") || n.contains("hide") || n.contains("discipline") || n.contains("categor") || n.contains("visib") {
+                    println!("   {} : {} = {}", f.name, f.ty, format!("{:?}", o.get(&f.name)).chars().take(160).collect::<String>());
+                }
+            }
+            for f in o.get("m_oaDrawFilters").and_then(|v| v.as_list()).unwrap_or(&[]) {
+                let Some(df) = o.deref(f) else { continue };
+                let ids = df.get("m_categoryIds").and_then(|v| v.as_list()).map_or(0, |l| l.len());
+                println!("   draw filter {} ({} category ids; fields {:?})", df.class, ids, df.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>());
+            }
+        }
+    }
+    /// Which categories a view named in `O3V_VIEW` (of the file in `O3V_RVT`) switches off, and
+    /// what the elements the model draws are, by category, with whether the view leaves them out.
+    #[test]
+    #[ignore]
+    fn what_a_3d_view_leaves_out_by_category() {
+        let (Ok(path), Ok(name)) = (std::env::var("O3V_RVT"), std::env::var("O3V_VIEW")) else { return };
+        let doc = rvt_read::Document::open(&path).expect("rvt");
+        let Some(view) = doc.object_ids_of_class("DBView3d").into_iter().find(|id| doc.object(*id).is_some_and(|o| o.get("m_viewName").and_then(|v| v.as_str()) == Some(name.as_str()))) else { panic!("no view {name}") };
+        let o = doc.object(view).unwrap();
+        println!("view {view}: template {:?}", o.get("m_viewTemplateId").and_then(|v| v.element()));
+        let mut off = std::collections::HashSet::new();
+        for f in o.get("m_oaDrawFilters").and_then(|v| v.as_list()).unwrap_or(&[]) {
+            let Some(df) = o.deref(f) else { continue };
+            if df.class.starts_with("IckyExcludedCategories") {
+                off.extend(df.get("m_categoryIds").and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|c| c.element()));
+                println!("   models excluded {:?} imports {:?} annotations {:?}", df.get("m_modelsExcluded"), df.get("m_importsExcluded"), df.get("m_annotationsExcluded"));
+            }
+        }
+        println!("   {} categories off", off.len());
+        // the elements with a shape, by the category in their record
+        let scene = rvt_export::mesh::scene(&doc);
+        let mut by: std::collections::BTreeMap<i64, (usize, String)> = std::collections::BTreeMap::new();
+        for batch in &scene.batches {
+            for id in batch.elements.iter().map(|e| e.0) {
+                let Some(e) = doc.element(id) else { continue };
+                let entry = by.entry(e.category as i64).or_insert((0, batch.name.clone()));
+                entry.0 += 1;
+            }
+        }
+        for (category, (count, layer)) in by {
+            println!("   {} category {category} ({layer}): {count} elements", if off.contains(&category) { "off" } else { "ON " });
+        }
+    }
+    /// The filters of a view (`O3V_VIEW` of `O3V_RVT`) as its record holds them, and the filter
+    /// elements they name: for finding out how they are stored.
+    #[test]
+    #[ignore]
+    fn how_a_view_keeps_its_filters() {
+        let (Ok(path), Ok(name)) = (std::env::var("O3V_RVT"), std::env::var("O3V_VIEW")) else { return };
+        let doc = rvt_read::Document::open(&path).expect("rvt");
+        let Some(view) = doc.object_ids_of_class("DBView3d").into_iter().find(|id| doc.object(*id).is_some_and(|o| o.get("m_viewName").and_then(|v| v.as_str()) == Some(name.as_str()))) else { panic!("no view {name}") };
+        let o = doc.object(view).unwrap();
+        let short = |s: String, n: usize| s.chars().take(n).collect::<String>();
+        let over = o.get("m_oFilterOverrides").and_then(|v| o.deref(v)).expect("overrides");
+        println!("OVERRIDES {} {}", over.class, short(serde_json::to_string(over).unwrap(), 3000));
+        // every element id in it that is a filter
+        let settings: Vec<String> = over.get("m_oaSettings").and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|s| o.deref(s)).map(|s| serde_json::to_string(s).unwrap()).collect();
+        for s in settings.iter().take(4) {
+            println!("SETTING {}", short(s.clone(), 1500));
+        }
+        let text = settings.join(" ");
+        let mut ids: Vec<u64> = text.split("\"element\":").skip(1).filter_map(|s| s.trim_start().split(|c: char| !c.is_ascii_digit() && c != '-').next()?.parse::<i64>().ok()).filter(|i| *i > 0).map(|i| i as u64).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let hidden: Vec<bool> = over.get("m_oaSettings").and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|s| o.deref(s)).map(|s| format!("{:?}", s.get("m_bVisibilityFlag")).contains("false")).collect();
+        println!("hidden flags {hidden:?}");
+        for id in ids {
+            let Some(f) = doc.object(id) else { continue };
+            let strip = |s: String| { let mut s = s; for cut in ["\"owner\":\"", "\"type\":\""] { while let Some(a) = s.find(cut) { let b = s[a + cut.len()..].find("\",").map_or(s.len(), |b| a + cut.len() + b + 2); s.replace_range(a..b, ""); } } s };
+            println!("ELEMENT {id} {:?}", f.get("m_name"));
+            println!("   OBJECTS {}", short(strip(serde_json::to_string(&f.objects).unwrap()), 1800));
+        }
+    }
+    /// What the model says of a few elements per layer (`O3V_RVT`): for finding out under what
+    /// names the values a filter asks for are kept.
+    #[test]
+    #[ignore]
+    fn what_elements_say_of_themselves() {
+        let Ok(path) = std::env::var("O3V_RVT") else { return };
+        let doc = rvt_read::Document::open(&path).expect("rvt");
+        let names = doc.parameter_names_global();
+        for id in [503389u64] {
+            println!("parameter {id}: {:?}", names.get(&id));
+        }
+        for id in [2292835u64, 2850051] {
+            let Some(o) = doc.object(id) else { continue };
+            for set in ["m_pParamValueSetInt", "m_pParamValueSetDouble", "m_pParamValueSetAString", "m_pParamValueSetElementId"] {
+                println!("{id} {set}: {}", o.get(set).and_then(|v| o.deref(v)).map_or("none".to_string(), |s| serde_json::to_string(s).unwrap().chars().take(900).collect()));
+            }
+            println!("record {id} {}: {:?}", o.class, o.fields.iter().map(|f| f.name.as_str()).filter(|n| { let n = n.to_lowercase(); n.contains("truct") || n.contains("bearing") || n.contains("usage") || n.contains("flags") }).map(|n| format!("{n}={:?}", o.get(n))).collect::<Vec<_>>());
+        }
+        let over = |name: &str| doc.object_ids_of_class("DBView3d").into_iter().find(|id| doc.object(*id).is_some_and(|o| o.get("m_viewName").and_then(|v| v.as_str()) == Some(name)));
+        if let Some(o) = over("3D Constructie").and_then(|id| doc.object(id)) {
+            for s in o.get("m_oFilterOverrides").and_then(|v| o.deref(v)).and_then(|f| f.get("m_oaSettings")).and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|s| o.deref(s)) {
+                let id = s.get("m_filterElemId").and_then(|v| v.element()).unwrap_or(-1);
+                println!("filter {id} {:?} visible {:?} enabled {:?}", doc.object(id as u64).and_then(|f| f.get("m_name").and_then(|v| v.as_str()).map(str::to_string)), s.get("m_bVisibilityFlag"), s.get("m_bEnabledFlag"));
+            }
+        }
+        let scene = rvt_export::mesh::scene(&doc);
+        for batch in scene.batches.iter().take(0) {
+            for (id, json) in batch.props.iter().take(2) {
+                println!("{} #{id}: {}", batch.name, json.chars().take(1400).collect::<String>());
+            }
+        }
     }
 }

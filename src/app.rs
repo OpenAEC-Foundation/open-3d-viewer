@@ -245,6 +245,10 @@ pub struct App {
     /// The cut faces of the section box and plane in their hatches, and what they were made from.
     cut_faces: Arc<crate::caps::CutFaces>,
     cut_faces_key: Option<caps::CutFacesKey>,
+    /// The cut faces are being made on a worker thread (see `caps`).
+    cut_faces_running: bool,
+    /// What the faces of the section box cut before: moving one face cuts that one again alone.
+    kept_faces: caps::KeptCutFaces,
     /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
     pub views_in_3d: bool,
     views_3d_key: Vec<u64>,
@@ -564,6 +568,8 @@ pub enum Message {
     Drawings(u64, Box<crate::model::Drawings>),
     /// A view cut ahead (see `precut`): the count of when it was started, its path and its cut.
     CutAhead(u64, String, Option<Arc<crate::drawing::Cut>>),
+    /// The cut faces of the section were made (see `caps`): what they were made from, and they.
+    CutFaces(Box<Option<caps::CutFacesKey>>, Arc<crate::caps::CutFaces>),
     /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
     OpenIfc,
     CloseIfc,
@@ -778,6 +784,8 @@ impl Default for App {
             overlay_lines: Arc::new(Vec::new()),
             cut_faces: Default::default(),
             cut_faces_key: None,
+            cut_faces_running: false,
+            kept_faces: Default::default(),
             views_in_3d: false,
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
@@ -1418,7 +1426,7 @@ impl App {
         // a step that changed the modelled elements can be taken back
         self.keep_model_history();
         self.keep_views_in_3d();
-        self.keep_cut_faces();
+        let faces = self.keep_cut_faces();
         self.follow_selection();
         // the view in its tab is cut, to show its cut faces in their hatch
         if let Some(view) = self.shown_view().filter(|v| !self.cuts.contains_key(*v)).map(str::to_string) {
@@ -1431,6 +1439,7 @@ impl App {
             self.set_structural_hover(None);
         }
         // the IFC tab follows the element selected in the model
+        let task = Task::batch([task, faces]);
         let task = if self.ifc.shown { Task::batch([task, self.ifc_follow()]) } else { task };
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
@@ -2001,6 +2010,7 @@ impl App {
             Message::IfcNext(forward) => return self.ifc_next(forward),
             Message::Drawings(id, drawings) => return self.take_drawings(id, *drawings),
             Message::CutAhead(epoch, view, cut) => return self.take_cut(epoch, view, cut),
+            Message::CutFaces(key, faces) => return self.take_cut_faces(*key, faces),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;

@@ -57,9 +57,25 @@ impl CutFaces {
     }
 }
 
+/// Where a face of a section box lies: its axis and side, the face's place along the axis, and the
+/// turn and pivot of the box (their bits). What a face cuts depends on that alone, not on where
+/// the other faces are: they only crop it.
+pub type FaceKey = [u32; 7];
+
+/// What each face of a section box cut, before it was cropped to the box (see [`cut_faces_kept`]).
+pub type KeptFaces = std::collections::HashMap<FaceKey, Vec<Fill>>;
+
 /// The cut faces of what is `shown` of the model on the six faces of `section` and on `plane`.
 pub fn cut_faces(model: &Model, shown: Shown, section: Option<&SectionBox>, plane: Option<&SectionPlane>, standard: DrawingStandard) -> CutFaces {
+    cut_faces_kept(model, shown, section, plane, standard, &mut KeptFaces::new())
+}
+
+/// As [`cut_faces`], taking what a face of the box cut from `kept` when it lay there before, and
+/// keeping there what the six faces cut now: dragging one face of the box cuts that face alone
+/// again. `kept` holds for one model and what is shown of it.
+pub fn cut_faces_kept(model: &Model, shown: Shown, section: Option<&SectionBox>, plane: Option<&SectionPlane>, standard: DrawingStandard, kept: &mut KeptFaces) -> CutFaces {
     let mut out = CutFaces::default();
+    let mut now = KeptFaces::new();
     if let Some(s) = section {
         for axis in 0..3 {
             let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
@@ -77,10 +93,14 @@ pub fn cut_faces(model: &Model, shown: Shown, section: Option<&SectionBox>, plan
                     l[c] = q[1] as f32;
                     s.to_world(l).to_array()
                 };
-                out.add(model, faces_at(model, shown, frame), crop, standard, &world);
+                let key: FaceKey = [axis as u32, (sign > 0.0) as u32, limit.to_bits(), s.turn.to_bits(), s.pivot.x.to_bits(), s.pivot.y.to_bits(), s.pivot.z.to_bits()];
+                let fills = kept.remove(&key).unwrap_or_else(|| faces_at(model, shown, frame));
+                out.add(model, fills.clone(), crop, standard, &world);
+                now.insert(key, fills);
             }
         }
     }
+    *kept = now;
     if let Some(p) = plane {
         let (u, v) = p.basis();
         let frame = move |q: [f32; 3]| {
@@ -162,6 +182,22 @@ mod tests {
         let hatch = faces.lines.iter().filter(|(_, c)| *c == [0, 0, 0, 255]).count();
         assert!(hatch > 20, "{hatch} lines");
         assert!(faces.lines.iter().all(|([a, b], _)| (a[0] - 1.0).abs() < 1e-2 && (b[0] - 1.0).abs() < 1e-2));
+    }
+
+    /// Moving one face of the box cuts that face again alone; the faces it kept give what cutting
+    /// them all again gives, cropped to where the box is now.
+    #[test]
+    fn a_moved_face_alone_is_cut_again() {
+        let model = Model::new(PathBuf::from("test.obj"), "OBJ", vec![box_layer("Beton")]);
+        let mut kept = KeptFaces::new();
+        let first = SectionBox { min: Vec3::new(-1.0, 0.5, 1.0), max: Vec3::new(1.0, 5.0, 5.0), turn: 0.0, pivot: Vec3::ZERO };
+        let _ = cut_faces_kept(&model, Shown::all(), Some(&first), None, DrawingStandard::Nen47, &mut kept);
+        assert_eq!(kept.len(), 6);
+        let moved = SectionBox { max: Vec3::new(1.5, 5.0, 2.5), ..first };
+        let from_kept = cut_faces_kept(&model, Shown::all(), Some(&moved), None, DrawingStandard::Nen47, &mut kept);
+        assert_eq!(from_kept, cut_faces(&model, Shown::all(), Some(&moved), None, DrawingStandard::Nen47));
+        assert!(area(&from_kept) > 0.1);
+        assert_eq!(kept.len(), 6, "the faces of where the box is now");
     }
 
     #[test]

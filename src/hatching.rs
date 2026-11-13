@@ -73,6 +73,12 @@ pub fn pieces(model: &Model, standard: DrawingStandard) -> std::collections::Has
 /// The hatch of an element's cut: the cut pattern of its material where the file brought one (a
 /// Revit model), else the hatch `standard` gives what it is made of.
 pub fn pattern_of(model: &Model, layer: usize, element: Option<u64>, standard: DrawingStandard) -> Pattern {
+    // the earth under a cut terrain: the material the site's settings give it
+    let terrain = model.layers.get(layer).is_some_and(|l| l.name.contains("Topograph"));
+    let earth = model.project.earth.as_ref().filter(|_| terrain).and_then(|e| e.1.as_ref()).and_then(|name| model.project.cut_patterns.get(name));
+    if let Some(earth) = earth {
+        return earth.clone();
+    }
     material_pattern(model, element).unwrap_or_else(|| kind_of(model, layer, element).pattern(standard).into())
 }
 

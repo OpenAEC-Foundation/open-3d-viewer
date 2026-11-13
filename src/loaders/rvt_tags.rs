@@ -168,8 +168,9 @@ struct Units {
 }
 
 impl Units {
-    fn of(doc: &rvt_read::Document) -> Units {
-        let o = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id));
+    /// Of the element with the units of the project (`Types::units`: finding it walks the file).
+    fn of(doc: &rvt_read::Document, element: Option<u64>) -> Units {
+        let o = element.and_then(|id| doc.object(id));
         let units = o.as_ref().and_then(|o| o.get("m_units")?.as_object());
         let length = units.and_then(|u| {
             let all = u.get("m_formatOptionsMap")?.as_list()?.iter().filter_map(FieldValue::as_object);
@@ -205,14 +206,19 @@ struct Label {
 
 impl Label {
     /// The label with what `value` gives for each of its parameters, standing on the foot of its
-    /// lines; none when it writes nothing.
+    /// lines; none when it writes nothing. A parameter without a value writes nothing at all:
+    /// not what stands before and after it either, nor the line it would start (a line of a
+    /// title block for a revision that is not filled in).
     fn write(&self, value: &mut dyn FnMut(&Part) -> Option<String>) -> Option<TagText> {
         let mut wording = String::new();
         for (k, part) in self.parts.iter().enumerate() {
             let value = value(part).unwrap_or_default();
-            if part.line_break {
+            if value.trim().is_empty() {
+                continue;
+            }
+            if part.line_break && !wording.is_empty() {
                 wording.push('\n');
-            } else if k > 0 {
+            } else if k > 0 && !wording.is_empty() {
                 wording.extend(std::iter::repeat_n(' ', part.spaces));
             }
             wording.push_str(&part.prefix);
@@ -258,11 +264,14 @@ fn vertical(flags: i64) -> u8 {
 /// `name` among it) and the project information store for them.
 pub(super) fn title_block(doc: &rvt_read::Document, types: &mut Types, kind: u64, sheet: u64, number: &str, name: &str) -> (Vec<[[f64; 2]; 2]>, Vec<TagText>) {
     let Some(o) = doc.object(kind) else { return Default::default() };
-    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
-    let project = doc.object_ids_of_class("ProjectInfo").first().copied();
+    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc, types.units()));
+    let project = types.project_info();
+    let issued = doc.object(sheet).and_then(|s| s.get("m_issueDate").and_then(FieldValue::as_str).map(str::to_string));
     let texts = family_texts(doc, types, &o, &mut |part| match part.parameter {
         -1007401 => Some(number.to_string()),
         -1007400 => Some(name.to_string()),
+        // the date the sheet was issued
+        -1006322 => issued.clone(),
         _ => value(doc, &mut sources, &mut specs, &units, sheet, part).or_else(|| value(doc, &mut sources, &mut specs, &units, project?, part)),
     });
     (family_lines(doc, kind, types, 1.0), texts)
@@ -333,7 +342,7 @@ pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewpo
     }
     let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(String::new()) };
     let o = doc.object(family)?;
-    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
+    let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc, types.units()));
     let labels = o.get("m_tagNoteData").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).filter_map(|l| label(l, types));
     let written: Vec<String> = labels
         .filter_map(|label| {
@@ -381,7 +390,7 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
     let mut shapes: HashMap<i64, Arc<Shape>> = HashMap::new();
     let mut sources: HashMap<u64, Arc<Source>> = HashMap::new();
     let mut specs: HashMap<i64, String> = HashMap::new();
-    let units = Units::of(doc);
+    let units = Units::of(doc, types.units());
     let mut out = Vec::new();
     for id in doc.object_ids_of_class("IndependentTag") {
         let Some(view) = doc.element(id).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
@@ -564,6 +573,11 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
     // per type and scale of the view: a drafting pattern in it is sized on paper
     let mut families: HashMap<(u64, u64, Seen), Arc<Graphics>> = HashMap::new();
     let mut out = Vec::new();
+    let units = Units::of(doc, types.units());
+    // the values their labels show are looked up through these, shared by all of them: the
+    // type of an instance and what a parameter measures were read again for every instance
+    let (mut sources, mut specs) = (HashMap::new(), HashMap::new());
+    let mut symbols: HashMap<u64, Option<rvt_model::ObjectView>> = HashMap::new();
     for id in doc.object_ids_of_class("FamilyInstance") {
         let Some(placed_in) = doc.element(id).filter(|e| e.category == DETAIL_ITEMS || e.category == GENERIC_ANNOTATIONS) else { continue };
         let symbol = placed_in.category == GENERIC_ANNOTATIONS;
@@ -602,10 +616,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let fills = family.fills.iter().map(|f| Fill { loops: f.loops.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect(), color: f.color }).collect();
         let masks = family.masks.iter().map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
         // its texts and labels, with the values of the instance and of its type
-        let texts = doc.object(kind).map_or(Vec::new(), |symbol| {
-            let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc));
-            family_texts(doc, types, &symbol, &mut |part| value(doc, &mut sources, &mut specs, &units, id, part))
-        });
+        let texts = symbols.entry(kind).or_insert_with(|| doc.object(kind)).as_ref().map_or(Vec::new(), |symbol| family_texts(doc, types, symbol, &mut |part| value(doc, &mut sources, &mut specs, &units, id, part)));
         let texts = texts
             .into_iter()
             .map(|mut t| {
@@ -629,7 +640,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         }
     }
     // an element of the model whose family has symbols nested in it (a pile with its mark): those,
-    // in each plan and section it lies in, as that looks at it. Its saved graphics are its own,
+    // in each section it lies in and each plan that cuts it, as that looks at it. Its saved graphics are its own,
     // where it stands. Where its family shows none of its solids as the view looks at it, the
     // view leaves the element itself out ([`Types::switch_off`]).
     const WITH_SYMBOLS: [i32; 1] = [-2001300];
@@ -638,18 +649,19 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         Heights(f64, f64),
         Box { origin: [f64; 3], basis: [[f64; 3]; 3], min: [f64; 3], max: [f64; 3] },
     }
-    let views: Vec<(u64, Range, [f64; 3])> = rvt_export::views::views(doc)
+    // with the height of a plan's cut: a family's symbols show where the plan cuts the element
+    let views: Vec<(u64, Range, [f64; 3], Option<f64>)> = rvt_export::views::views(doc)
         .into_iter()
         .filter(|v| !v.is_template)
         .filter_map(|v| match v.class.as_str() {
             "DBViewPlan" => {
                 let range = v.view_range?;
                 let (top, low) = (range.top.or(range.cut)?, range.depth.or(range.bottom)?);
-                Some((v.id, Range::Heights(low.min(top), low.max(top)), [0.0, 0.0, 1.0]))
+                Some((v.id, Range::Heights(low.min(top), low.max(top)), [0.0, 0.0, 1.0], range.cut))
             }
             "DBViewSection" => {
                 let b = v.crop_box?;
-                Some((v.id, Range::Box { origin: b.origin, basis: b.basis, min: b.min, max: b.max }, b.basis[2]))
+                Some((v.id, Range::Box { origin: b.origin, basis: b.basis, min: b.min, max: b.max }, b.basis[2], None))
             }
             _ => None,
         })
@@ -667,9 +679,14 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
     for id in doc.object_ids_of_class("FamilyInstance") {
         let Some(e) = doc.element(id).filter(|e| WITH_SYMBOLS.contains(&e.category) && e.view.is_none_or(|v| v < 0)) else { continue };
         let Some(bbox) = e.bbox else { continue };
-        for (view, _, along) in views.iter().filter(|(_, range, _)| within(range, &bbox)) {
+        for (view, _, along, cut) in views.iter().filter(|(_, range, ..)| within(range, &bbox)) {
             let view = *view;
             if types.hidden(view, id) {
+                continue;
+            }
+            // a plan that does not cut the element looks at it from outside: it shows the element
+            // itself (dashed where something covers it), not the symbols of its cut
+            if cut.is_some_and(|cut| cut < bbox[2] - 1e-6 || cut > bbox[5] + 1e-6) {
                 continue;
             }
             let (scale, seen_as) = (types.view_scale(view), Seen { detail: types.view_detail(view), model: true, along: Seen::towards(*along) });
@@ -1187,7 +1204,7 @@ mod tests {
             eprintln!("  tag {} view {} head {:?} leader {:?} lines {} texts {texts:?}", tag.element, tag.view, tag.head.map(|v| (v * 100.0).round() / 100.0), tag.leader, tag.lines.len());
         }
         // which parameters the labels ask for that nothing stores
-        let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(&doc));
+        let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(&doc, doc.object_ids_of_class("UnitsElem").first().copied()));
         let mut missing: HashMap<i64, (usize, usize)> = HashMap::new();
         for id in doc.object_ids_of_class("IndependentTag") {
             let Some(o) = doc.object(id) else { continue };

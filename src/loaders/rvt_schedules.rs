@@ -32,12 +32,15 @@ const VIEW_NAME: i64 = -1005112;
 /// The schedules placed on each sheet, by the sheet's element.
 pub(super) fn placed(doc: &rvt_read::Document) -> HashMap<u64, Vec<SheetTable>> {
     let mut on: HashMap<u64, Vec<SheetTable>> = HashMap::new();
+    let units = units(doc);
+    // what the elements of a category store alike: read once per category, for all schedules
+    let mut alike = Alike::default();
     for id in doc.object_ids_of_class("ScheduleInstance") {
         let Some(o) = doc.object(id) else { continue };
         let element = |name: &str| o.get(name).and_then(FieldValue::element).and_then(|e| u64::try_from(e).ok());
         let (Some(sheet), Some(schedule)) = (element("m_ownerDBViewId"), element("m_scheduleId")) else { continue };
         let origin = o.get("origin_XYZ").and_then(FieldValue::as_object).and_then(|p| super::rvt_drawings::vec3(p.get("m_xyz")));
-        let (Some(origin), Some(mut table)) = (origin, table(doc, schedule)) else { continue };
+        let (Some(origin), Some(mut table)) = (origin, table(doc, schedule, units, &mut alike)) else { continue };
         table.origin = [(origin[0] * FT) as f32, (origin[1] * FT) as f32];
         on.entry(sheet).or_default().push(table);
     }
@@ -45,15 +48,13 @@ pub(super) fn placed(doc: &rvt_read::Document) -> HashMap<u64, Vec<SheetTable>> 
 }
 
 /// The table of a schedule, at the origin.
-fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
+fn table(doc: &rvt_read::Document, schedule: u64, units: Option<u64>, alike: &mut Alike) -> Option<SheetTable> {
     let o = doc.object(schedule)?;
     let name = o.get("m_viewName").and_then(FieldValue::as_str).unwrap_or_default().to_string();
     let data = o.get("m_pData").and_then(|v| o.deref(v))?;
     let list = |of: &NestedObject, field: &str| -> Vec<&NestedObject> { of.get(field).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).collect() };
     let number = |of: &NestedObject, field: &str| of.get(field).and_then(FieldValue::as_i64).unwrap_or(0);
-    // the values all elements of a category share, by category and parameter
-    let mut alike: HashMap<(i64, i64), Option<f64>> = HashMap::new();
-    let comma = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1);
+    let comma = units.and_then(|id| doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1);
     let mut columns: Vec<f32> = Vec::new();
     let mut rows = Vec::new();
     // the rows of the elements are as high as the schedule sets for rows with an image
@@ -91,8 +92,7 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
                 if text.is_empty() && parameter && k > 0 {
                     let ids = (cell.get("m_categoryId").and_then(FieldValue::element), cell.get("m_paramId").and_then(FieldValue::element));
                     if let (Some(category), Some(id), Some(format)) = (ids.0, ids.1, cell.get("m_formatOptions").and_then(FieldValue::as_object)) {
-                        let key = (category, id);
-                        let value = *alike.entry(key).or_insert_with(|| uniform(doc, category, id));
+                        let value = alike.of(doc, category, id);
                         if let Some(written) = value.and_then(|feet| written(format, feet, comma)) {
                             text = written;
                         }
@@ -120,7 +120,13 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
     (!rows.is_empty()).then_some(SheetTable { schedule: name, origin: [0.0; 2], columns, rows })
 }
 
-/// Completes a computed schedule where it left cells open:
+/// The element with the units of the project (`UnitsElem`). Finding it walks the file: look it
+/// up once for all schedules.
+pub(super) fn units(doc: &rvt_read::Document) -> Option<u64> {
+    doc.object_ids_of_class("UnitsElem").first().copied()
+}
+
+/// Completes a computed schedule where it left cells open (`units`: [`units`]):
 /// - a parameter the elements of a row do not store themselves is read from their types
 ///   (`m_pParams.m_params` of the symbol: its text, or its number as the schedule's cell for
 ///   that parameter formats it), when all of the row have it alike;
@@ -129,12 +135,12 @@ fn table(doc: &rvt_read::Document, schedule: u64) -> Option<SheetTable> {
 ///   stored row not taken yet that agrees with every text they both have, or the row in its
 ///   place when there are as many of each;
 /// - a total row shows nothing where it totals nothing.
-pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::Schedule) {
+pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::Schedule, units: Option<u64>) {
     let Some(o) = doc.object(s.id) else { return };
     let Some(data) = o.get("m_pData").and_then(|v| o.deref(v)) else { return };
     let list = |of: &NestedObject, field: &str| -> Vec<&NestedObject> { of.get(field).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).collect() };
     let number = |of: &NestedObject, field: &str| of.get(field).and_then(FieldValue::as_i64).unwrap_or(0);
-    let comma = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1);
+    let comma = units.and_then(|id| doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1);
     // the rows of the elements as the file stores them, and how a parameter's cells are formatted
     let mut stored: Vec<Vec<String>> = Vec::new();
     let mut formats: HashMap<i64, &NestedObject> = HashMap::new();
@@ -157,7 +163,7 @@ pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::
     let open = |cell: &Option<String>| cell.as_deref().is_none_or(|t| t.trim().is_empty());
     // how the project writes what a parameter measures (`UnitsElem`, by the parameter's spec),
     // for a cell that leaves its format to the project
-    let units = doc.object_ids_of_class("UnitsElem").first().and_then(|&id| doc.object(id));
+    let units = units.and_then(|id| doc.object(id));
     let of_project = |parameter: i64| -> Option<&NestedObject> {
         let p = doc.object(u64::try_from(parameter).ok()?)?;
         let spec = p.get("m_pParamDef").and_then(|v| p.deref(v))?.get("m_specTypeId")?.as_object()?.get("m_typeId")?.as_str()?.rsplit_once('-')?.0.to_string();
@@ -179,6 +185,18 @@ pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::
     };
     for (i, column) in s.columns.iter().enumerate() {
         if column.parameter == -1 {
+            continue;
+        }
+        // the date a sheet was issued: a field of the sheet itself
+        if column.parameter == -1006322 {
+            for row in s.rows.iter_mut().filter(|r| !r.total && r.cells.get(i).is_some_and(&open)) {
+                let mut dates = row.elements.iter().map(|&e| doc.object(e).and_then(|o| o.get("m_issueDate").and_then(FieldValue::as_str).map(str::to_string)));
+                if let Some(Some(first)) = dates.next() {
+                    if dates.all(|d| d.as_deref() == Some(first.as_str())) {
+                        row.cells[i] = Some(first);
+                    }
+                }
+            }
             continue;
         }
         for row in s.rows.iter_mut().filter(|r| !r.total && r.cells.get(i).is_some_and(&open)) {
@@ -249,29 +267,73 @@ pub(super) fn complete(doc: &rvt_read::Document, s: &mut rvt_export::schedules::
     }
 }
 
-/// The number every element of a category stores alike for a parameter (internal units), on the
-/// element itself or on its type; none when they differ or none stores one.
-fn uniform(doc: &rvt_read::Document, category: i64, parameter: i64) -> Option<f64> {
-    let category = i32::try_from(category).ok()?;
-    let mut types: HashMap<u64, Option<f64>> = HashMap::new();
-    let of_type = |kind: u64| -> Option<f64> {
-        let o = doc.object(kind)?;
-        let all = o.path(&["m_pParams", "m_params"])?.as_list()?.iter().filter_map(FieldValue::as_object);
-        all.filter(|p| p.get("m_paramId").and_then(FieldValue::element) == Some(parameter)).find_map(|p| p.get("m_value")?.as_f64())
+/// The numbers every element of a category stores alike (internal units), by parameter: on the
+/// element itself or on its type. A category is read once, its elements one after the other, for
+/// all its parameters: reading it again for every column of every schedule took minutes on a
+/// large project.
+#[derive(Default)]
+struct Alike {
+    categories: HashMap<i32, HashMap<i64, Option<f64>>>,
+}
+
+impl Alike {
+    /// The number every element of `category` has for `parameter`; none when they differ or none
+    /// stores one.
+    fn of(&mut self, doc: &rvt_read::Document, category: i64, parameter: i64) -> Option<f64> {
+        let category = i32::try_from(category).ok()?;
+        self.categories.entry(category).or_insert_with(|| uniform(doc, category)).get(&parameter).copied().flatten()
+    }
+}
+
+/// See [`Alike`]: per parameter the number all elements of the category have alike (`None`:
+/// they differ). An element's own value goes before that of its type.
+fn uniform(doc: &rvt_read::Document, category: i32) -> HashMap<i64, Option<f64>> {
+    // the numbers a type stores, by parameter
+    let mut types: HashMap<u64, HashMap<i64, f64>> = HashMap::new();
+    let of_type = |kind: u64| -> HashMap<i64, f64> {
+        let Some(o) = doc.object(kind) else { return HashMap::new() };
+        let all = o.path(&["m_pParams", "m_params"]).and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(FieldValue::as_object);
+        let mut numbers = HashMap::new();
+        for p in all {
+            if let (Some(id), Some(value)) = (p.get("m_paramId").and_then(FieldValue::element), p.get("m_value").and_then(FieldValue::as_f64)) {
+                // the first of a parameter counts
+                numbers.entry(id).or_insert(value);
+            }
+        }
+        numbers
     };
-    let mut found: Option<f64> = None;
-    for element in doc.elements_in_category(category) {
-        let Some(o) = doc.object(element.id) else { continue };
+    let mut found: HashMap<i64, Option<f64>> = HashMap::new();
+    // the numbers each element stores itself and its type, read on all cores
+    let ids: Vec<u64> = doc.elements_in_category(category).map(|e| e.id).collect();
+    let read = rvt_core::par::map(&ids, |&id| {
+        let o = doc.object(id)?;
         let own = o.get("m_pParamValueSetDouble").and_then(|v| o.deref(v)).and_then(|s| s.get("m_paramSet")?.as_list());
-        let own = own.unwrap_or(&[]).iter().filter_map(FieldValue::as_object).find(|p| p.get("m_paramId").and_then(FieldValue::element) == Some(parameter)).and_then(|p| p.get("m_value")?.as_f64());
-        let value = own.or_else(|| {
-            let kind = ["m_masterSymbolId", "m_symbolId"].into_iter().find_map(|f| u64::try_from(o.get(f)?.element()?).ok())?;
-            *types.entry(kind).or_insert_with(|| of_type(kind))
-        });
-        let Some(value) = value.filter(|v| v.is_finite()) else { continue };
-        match found {
-            Some(known) if (known - value).abs() > 1e-9 => return None,
-            _ => found = Some(value),
+        let mut numbers: HashMap<i64, f64> = HashMap::new();
+        for p in own.unwrap_or(&[]).iter().filter_map(FieldValue::as_object) {
+            if let (Some(id), Some(value)) = (p.get("m_paramId").and_then(FieldValue::element), p.get("m_value").and_then(FieldValue::as_f64)) {
+                numbers.entry(id).or_insert(value);
+            }
+        }
+        let kind = ["m_masterSymbolId", "m_symbolId"].into_iter().find_map(|f| u64::try_from(o.get(f)?.element()?).ok());
+        Some((numbers, kind))
+    });
+    for (mut numbers, kind) in read.into_iter().flatten() {
+        if let Some(kind) = kind {
+            for (&id, &value) in types.entry(kind).or_insert_with(|| of_type(kind)).iter() {
+                numbers.entry(id).or_insert(value);
+            }
+        }
+        for (id, value) in numbers.into_iter().filter(|(_, v)| v.is_finite()) {
+            match found.get(&id) {
+                // they differ: stays so
+                Some(None) => {}
+                Some(Some(known)) if (known - value).abs() > 1e-9 => {
+                    found.insert(id, None);
+                }
+                _ => {
+                    found.insert(id, Some(value));
+                }
+            }
         }
     }
     found
@@ -348,7 +410,7 @@ mod tests {
         let (mut before, mut after) = (0, 0);
         for mut s in rvt_export::schedules::schedules(&doc).into_iter().filter(|s| !s.is_template) {
             let was = open(&s);
-            super::complete(&doc, &mut s);
+            super::complete(&doc, &mut s, super::units(&doc));
             eprintln!("{:?}: {} open cells, {} after", s.name, was, open(&s));
             for r in s.rows.iter().take(7) {
                 eprintln!("    {:?}", r.cells.iter().enumerate().filter(|(i, _)| !s.columns[*i].hidden).map(|(_, c)| c.as_deref().unwrap_or("?")).collect::<Vec<_>>());

@@ -112,6 +112,9 @@ pub struct Viewpoint {
     /// them; they go in a file of their own beside the viewpoint (`*.notes.xml`), which other
     /// tools leave alone.
     pub notes: Vec<([f64; 3], String)>,
+    /// Marks drawn in the model: what each is (`arrow`, `line`, `cloud`) and the points it runs
+    /// through. Kept with the remarks.
+    pub marks: Vec<(String, Vec<[f64; 3]>)>,
     /// The picture: its file name in the topic's folder and its bytes (PNG or JPEG).
     pub snapshot: Option<(String, Vec<u8>)>,
 }
@@ -310,7 +313,7 @@ fn read_topic(folder: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Topic, 
             view.snapshot = Some((picture.clone(), bytes.clone()));
         }
         if let Some(bytes) = files.get(&notes_file(&file)) {
-            view.notes = read_notes(bytes);
+            (view.notes, view.marks) = read_notes(bytes);
             used.push(notes_file(&file));
         }
         used.extend([file, picture]);
@@ -344,17 +347,31 @@ fn notes_file(viewpoint_file: &str) -> String {
     format!("{}.notes.xml", viewpoint_file.strip_suffix(".bcfv").unwrap_or(viewpoint_file))
 }
 
-fn write_notes(notes: &[([f64; 3], String)]) -> String {
+fn write_notes(view: &Viewpoint) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Notes>");
-    for (at, text) in notes {
+    for (at, text) in &view.notes {
         out += &format!("<Note>{}<Text>{}</Text></Note>", point("Location", *at), escape(text));
+    }
+    for (kind, points) in &view.marks {
+        out += &format!("<Mark Kind=\"{}\">{}</Mark>", escape(kind), points.iter().map(|p| point("Point", *p)).collect::<String>());
     }
     out + "</Notes>\n"
 }
 
-fn read_notes(bytes: &[u8]) -> Vec<([f64; 3], String)> {
-    let Ok(doc) = xml(bytes) else { return Vec::new() };
-    doc.descendants().filter(|n| n.has_tag_name("Note")).filter_map(|n| Some((vector(n, "Location")?, text(n, "Text")))).collect()
+/// The remarks and the marks of a viewpoint's file of them.
+#[allow(clippy::type_complexity)]
+fn read_notes(bytes: &[u8]) -> (Vec<([f64; 3], String)>, Vec<(String, Vec<[f64; 3]>)>) {
+    let Ok(doc) = xml(bytes) else { return (Vec::new(), Vec::new()) };
+    let notes = doc.descendants().filter(|n| n.has_tag_name("Note")).filter_map(|n| Some((vector(n, "Location")?, text(n, "Text")))).collect();
+    let xyz = |p: Node| {
+        let mut out = [0.0; 3];
+        for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
+            out[k] = text(p, axis).parse::<f64>().ok().filter(|v| v.is_finite())?;
+        }
+        Some(out)
+    };
+    let marks = doc.descendants().filter(|n| n.has_tag_name("Mark")).map(|n| (attribute(n, "Kind"), n.children().filter(|c| c.has_tag_name("Point")).filter_map(xyz).collect())).collect();
+    (notes, marks)
 }
 
 /// A viewpoint as its BCF 2.1 file.
@@ -443,8 +460,8 @@ fn write_topic(topic: &Topic) -> BTreeMap<String, Vec<u8>> {
             files.insert(picture, bytes.clone());
         }
         out += "</Viewpoints>";
-        if !view.notes.is_empty() {
-            files.insert(notes_file(&file), write_notes(&view.notes).into_bytes());
+        if !(view.notes.is_empty() && view.marks.is_empty()) {
+            files.insert(notes_file(&file), write_notes(view).into_bytes());
         }
         files.insert(file, write_viewpoint(view).into_bytes());
     }
@@ -664,6 +681,8 @@ mod tests {
         let mut view = Viewpoint::new();
         view.lines.push(([0.0, 0.0, 0.0], [3.0, 4.0, 0.5]));
         view.notes.push(([1.0, 2.0, 3.0], "Hier <te> laag & \"scheef\"".into()));
+        view.marks.push(("arrow".into(), vec![[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]]));
+        view.marks.push(("cloud".into(), vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]]));
         let mut second = Viewpoint::new();
         second.notes.push(([4.0, 5.0, 6.0], "Tweede".into()));
         topic.viewpoints = vec![view.clone(), second.clone()];
@@ -672,6 +691,7 @@ mod tests {
         let back = Issues::read(&bytes).unwrap();
         let views = &back.topics[0].viewpoints;
         assert_eq!((&views[0].lines, &views[0].notes), (&view.lines, &view.notes));
+        assert_eq!(views[0].marks, view.marks);
         assert_eq!((&views[1].lines, &views[1].notes), (&second.lines, &second.notes));
         // read and written again unchanged, the remarks' files stay
         assert_eq!(Issues::read(&back.write().unwrap()).unwrap().topics[0].viewpoints[1].notes, second.notes);

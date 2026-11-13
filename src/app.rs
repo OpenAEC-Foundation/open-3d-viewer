@@ -20,6 +20,7 @@ mod openings;
 pub(crate) use take_over::{across_mesh, house as revit_house};
 mod join_marks;
 mod later;
+mod precut;
 mod levels;
 pub mod library;
 mod marks;
@@ -244,6 +245,10 @@ pub struct App {
     /// The cut faces of the section box and plane in their hatches, and what they were made from.
     cut_faces: Arc<crate::caps::CutFaces>,
     cut_faces_key: Option<caps::CutFacesKey>,
+    /// The cut faces are being made on a worker thread (see `caps`).
+    cut_faces_running: bool,
+    /// What the faces of the section box cut before: moving one face cuts that one again alone.
+    kept_faces: caps::KeptCutFaces,
     /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
     pub views_in_3d: bool,
     views_3d_key: Vec<u64>,
@@ -288,6 +293,15 @@ pub struct App {
     pub schedules_pending: bool,
     /// The models (by id) whose drawings are still being read (see `later`).
     pub drawings_pending: std::collections::HashSet<u64>,
+    /// The window cuts the views of the drawings ahead, on worker threads (see `precut`); off
+    /// where nothing runs the tasks (a screenshot without a window, a test): views are then cut
+    /// when they are asked for.
+    pub background_cuts: bool,
+    /// The views waiting to be cut ahead, those being cut, and a count that goes up whenever what
+    /// views show changes: a cut started before is not kept.
+    pub cut_queue: std::collections::VecDeque<String>,
+    pub cutting: std::collections::HashSet<String>,
+    pub cut_epoch: u64,
     /// Measurements shown in the viewport (made through remote control).
     pub measurements: Vec<crate::annotations::Measurement>,
     /// Where the viewport sits in the window (logical pixels), to cut it out of screenshots.
@@ -552,6 +566,10 @@ pub enum Message {
     Schedules(u64, Vec<crate::model::Schedule>),
     /// The drawings of a model (by its id) are read: they were left for after the model showed.
     Drawings(u64, Box<crate::model::Drawings>),
+    /// A view cut ahead (see `precut`): the count of when it was started, its path and its cut.
+    CutAhead(u64, String, Option<Arc<crate::drawing::Cut>>),
+    /// The cut faces of the section were made (see `caps`): what they were made from, and they.
+    CutFaces(Box<Option<caps::CutFacesKey>>, Arc<crate::caps::CutFaces>),
     /// Open the IFC tab (the IFCX file of the model, read again), close it, pick what it shows.
     OpenIfc,
     CloseIfc,
@@ -766,6 +784,8 @@ impl Default for App {
             overlay_lines: Arc::new(Vec::new()),
             cut_faces: Default::default(),
             cut_faces_key: None,
+            cut_faces_running: false,
+            kept_faces: Default::default(),
             views_in_3d: false,
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
@@ -791,6 +811,10 @@ impl Default for App {
             schedules: Vec::new(),
             schedules_pending: false,
             drawings_pending: Default::default(),
+            background_cuts: false,
+            cut_queue: Default::default(),
+            cutting: Default::default(),
+            cut_epoch: 0,
             measurements: Vec::new(),
             viewport_origin: (0.0, 0.0),
             remote: Default::default(),
@@ -1315,6 +1339,7 @@ impl App {
         self.open_doc_sheets.clear();
         self.active_doc_sheet = None;
         self.cuts.clear();
+        self.cut_epoch += 1;
         self.sheet_pick = None;
         self.cut_edit = None;
         self.view_typing = None;
@@ -1401,7 +1426,7 @@ impl App {
         // a step that changed the modelled elements can be taken back
         self.keep_model_history();
         self.keep_views_in_3d();
-        self.keep_cut_faces();
+        let faces = self.keep_cut_faces();
         self.follow_selection();
         // the view in its tab is cut, to show its cut faces in their hatch
         if let Some(view) = self.shown_view().filter(|v| !self.cuts.contains_key(*v)).map(str::to_string) {
@@ -1414,6 +1439,7 @@ impl App {
             self.set_structural_hover(None);
         }
         // the IFC tab follows the element selected in the model
+        let task = Task::batch([task, faces]);
         let task = if self.ifc.shown { Task::batch([task, self.ifc_follow()]) } else { task };
         match self.build_edges() {
             Some(edges) => Task::batch([task, edges]),
@@ -1813,6 +1839,7 @@ impl App {
                 self.close_plan(&plan);
                 self.document.remove_plan(&plan);
                 self.cuts.remove(&*plan);
+                self.cut_epoch += 1;
             }
             Message::NewView3d(word) => self.new_view_3d(word),
             Message::RemoveView3d(view) => {
@@ -1940,6 +1967,7 @@ impl App {
                 self.close_plan(&path);
                 self.document.remove_section(&path);
                 self.cuts.remove(&*path);
+                self.cut_epoch += 1;
             }
             Message::MakeElevations(names) => self.make_elevations(names),
             Message::NewSection(from, to, word) => {
@@ -1981,6 +2009,8 @@ impl App {
             Message::IfcQuery(query) => return self.ifc_query(query),
             Message::IfcNext(forward) => return self.ifc_next(forward),
             Message::Drawings(id, drawings) => return self.take_drawings(id, *drawings),
+            Message::CutAhead(epoch, view, cut) => return self.take_cut(epoch, view, cut),
+            Message::CutFaces(key, faces) => return self.take_cut_faces(*key, faces),
             Message::Schedules(id, schedules) => {
                 if self.model.as_ref().is_some_and(|m| m.id == id) {
                     self.schedules = schedules;

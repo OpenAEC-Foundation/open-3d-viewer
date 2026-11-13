@@ -40,6 +40,12 @@ const LINE: f64 = 1.3;
 /// What the types of a file say of its texts and dimensions, read once each.
 pub(super) struct Types<'a> {
     doc: &'a rvt_read::Document,
+    /// The element with the units of the project, looked up once: finding it walks the file.
+    units: std::cell::OnceCell<Option<u64>>,
+    /// Whether the project writes a comma before the decimals, looked up once.
+    comma: std::cell::OnceCell<bool>,
+    /// The element with the information of the project, looked up once.
+    project: std::cell::OnceCell<Option<u64>>,
     /// Per text type: the em of its letters on paper (metres).
     text: HashMap<i64, Option<f64>>,
     /// Per dimension type: its name, once the document has its style.
@@ -75,7 +81,7 @@ pub(super) struct Types<'a> {
 
 impl<'a> Types<'a> {
     pub(super) fn new(doc: &'a rvt_read::Document) -> Self {
-        Self { doc, text: HashMap::new(), dimension: HashMap::new(), styles: Vec::new(), hidden: HashMap::new(), lines: HashMap::new(), patterns: HashMap::new(), solids: HashMap::new(), colors: HashMap::new(), dashes: HashMap::new(), scales: HashMap::new(), off: Vec::new(), witness: HashMap::new(), boxes: HashMap::new(), details: HashMap::new(), faces: HashMap::new() }
+        Self { doc, text: HashMap::new(), dimension: HashMap::new(), styles: Vec::new(), hidden: HashMap::new(), lines: HashMap::new(), patterns: HashMap::new(), solids: HashMap::new(), colors: HashMap::new(), dashes: HashMap::new(), scales: HashMap::new(), off: Vec::new(), witness: HashMap::new(), boxes: HashMap::new(), details: HashMap::new(), faces: HashMap::new(), units: Default::default(), comma: Default::default(), project: Default::default() }
     }
 
     /// The em of a font element's letters on paper (metres).
@@ -169,7 +175,7 @@ impl<'a> Types<'a> {
         // that to the project, as the project does (`UnitsElem`): its unit (millimetres unless
         // it says metres), its decimals, and whether zeros that say nothing are left out, at the
         // end ("trim": 3.5 for 3.500) and before the point ("trim_lead": .5 for 0.5)
-        let units = self.doc.object_ids_of_class("UnitsElem").first().and_then(|&id| self.doc.object(id));
+        let units = self.units().and_then(|id| self.doc.object(id));
         let of_project = units.as_ref().and_then(|u| u.get("m_units")?.as_object()?.get("m_formatOptionsMap")?.as_list()).unwrap_or(&[]).iter().filter_map(FieldValue::as_object).find(|pair| pair.get("first").and_then(FieldValue::as_object).and_then(|t| t.get("m_typeId")?.as_str()).is_some_and(|t| t.starts_with("autodesk.spec.aec:length-"))).and_then(|pair| pair.get("second")?.as_object());
         let own = o.path(&["m_oLinFormatOptions", "m_bUseDefault"]) == Some(&FieldValue::Bool(false));
         let format = |name: &str| if own { o.path(&["m_oLinFormatOptions", name]) } else { of_project.and_then(|f| f.get(name)) };
@@ -188,7 +194,17 @@ impl<'a> Types<'a> {
 
     /// Whether the project writes a comma before the decimals (`UnitsElem`: `m_decimalSymbol` 1).
     pub(super) fn comma(&self) -> bool {
-        self.doc.object_ids_of_class("UnitsElem").first().and_then(|&id| self.doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1)
+        *self.comma.get_or_init(|| self.units().and_then(|id| self.doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1))
+    }
+
+    /// The element with the information of the project (`ProjectInfo`), looked up once.
+    pub(super) fn project_info(&self) -> Option<u64> {
+        *self.project.get_or_init(|| self.doc.object_ids_of_class("ProjectInfo").first().copied())
+    }
+
+    /// The element with the units of the project (`UnitsElem`), looked up once.
+    pub(super) fn units(&self) -> Option<u64> {
+        *self.units.get_or_init(|| self.doc.object_ids_of_class("UnitsElem").first().copied())
     }
 
     /// A length (metres) as a dimension type writes it: in the unit and with the decimals of
@@ -515,18 +531,24 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         annotation.get(&view).is_none_or(|(lo, hi)| !Iterator::any(&mut points, |p| !(p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1])))
     };
     let at_of = |note: &Value| Some([note["at"][0].as_f64()?, note["at"][1].as_f64()?]);
-    for id in doc.object_ids_of_class("TextNote") {
+    // the records of the marks are decoded on all cores, each kind at once: decoding is most of
+    // the work of a mark, and a large project has tens of thousands
+    let in_view = |ids: Vec<u64>| -> Vec<u64> { ids.into_iter().filter(|&id| owner(id).is_some()).collect() };
+    let ids = in_view(doc.object_ids_of_class("TextNote"));
+    for (id, o) in ids.iter().copied().zip(objects(doc, &ids)) {
         let Some(view) = owner(id).filter(|v| !types.hidden(*v, id)) else { continue };
-        let Some(note) = doc.object(id).and_then(|o| text_note(&o, &frames[&view].0, scales[&view], &mut types)) else { continue };
+        let Some(note) = o.and_then(|o| text_note(&o, &frames[&view].0, scales[&view], &mut types)) else { continue };
         if !shows(view, &mut at_of(&note).into_iter()) {
             continue;
         }
         marks.entry(view).or_default().notes.push(note);
     }
     // a dimension: a linear one, a radial one, an angular one
-    for (id, make) in DIMENSION_MAKERS.iter().flat_map(|(class, make)| doc.object_ids_of_class(class).into_iter().map(move |id| (id, *make))) {
+    let makers: Vec<_> = DIMENSION_MAKERS.iter().flat_map(|(class, make)| doc.object_ids_of_class(class).into_iter().map(move |id| (id, *make))).filter(|(id, _)| owner(*id).is_some()).collect();
+    let ids: Vec<u64> = makers.iter().map(|(id, _)| *id).collect();
+    for ((id, make), o) in makers.into_iter().zip(objects(doc, &ids)) {
         let Some(view) = owner(id).filter(|v| !types.hidden(*v, id)) else { continue };
-        let Some(o) = doc.object(id).filter(|o| o.category == Some(DIMENSIONS)) else { continue };
+        let Some(o) = o.filter(|o| o.category == Some(DIMENSIONS)) else { continue };
         let frame = frames[&view].0;
         let Some(drawn) = make(&o, &|p| frame.project(p), scales[&view], &mut types) else { continue };
         if !shows(view, &mut drawn.lines.iter().flatten().copied().chain(drawn.texts.iter().map(|t| t.at))) {
@@ -537,9 +559,10 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         marks.notes.extend(drawn.texts.iter().map(dimension_note));
     }
     // a spot elevation: its symbol, its leader and the height it writes
-    for id in doc.object_ids_of_class("SpotElevation") {
+    let ids = in_view(doc.object_ids_of_class("SpotElevation"));
+    for (id, o) in ids.iter().copied().zip(objects(doc, &ids)) {
         let Some(view) = owner(id).filter(|v| !types.hidden(*v, id)) else { continue };
-        let Some(o) = doc.object(id) else { continue };
+        let Some(o) = o else { continue };
         let frame = frames[&view].0;
         let Some(drawn) = spot_marks(doc, &o, &|p| frame.project(p), scales[&view], &mut types) else { continue };
         if !shows(view, &mut drawn.lines.iter().flatten().copied().chain(drawn.texts.iter().map(|t| t.at))) {
@@ -589,8 +612,8 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         // within the view's crop, as its lines are
         let crop = crop_of(node);
         let on = |loops: &Vec<Vec<[f64; 3]>>| -> Vec<Vec<[f64; 2]>> { loops.iter().map(|l| cropped(l.iter().map(|&p| frame.project(p)).collect(), crop)).filter(|l| l.len() >= 3).collect() };
-        let masks = detail.masks.iter().map(|m| Cover { rank, loops: on(m), color: PAPER });
-        let fills = detail.fills.iter().map(|f| Cover { rank, loops: on(&f.loops), color: f.color });
+        let masks = detail.masks.iter().map(|m| Cover::new(rank, on(m), PAPER));
+        let fills = detail.fills.iter().map(|f| Cover::new(rank, on(&f.loops), f.color));
         covers.entry(detail.view).or_default().extend(masks.chain(fills).filter(|c| !c.loops.is_empty()));
     }
     // from the back to the front, as they are drawn
@@ -599,11 +622,17 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         marks.entry(*view).or_default().fills.extend(all.iter().map(|c| json!({"loops": c.loops, "color": c.color})));
     }
     let none: Vec<Cover> = Vec::new();
-    // a detail component: the lines of its family, within the view's crop as the model is
-    for detail in details {
-        let Some((frame, node, _)) = frames.get(&detail.view) else { continue };
+    // a detail component: the lines of its family, within the view's crop as the model is and
+    // less what covers them; worked out on all cores (hundreds of thousands on a large project)
+    let drawn: Vec<Vec<Value>> = rvt_core::par::map(details, |detail| {
+        let Some((frame, node, _)) = frames.get(&detail.view) else { return Vec::new() };
         let over = covers.get(&detail.view).unwrap_or(&none);
         let rank = orders.get(&detail.view).map_or((0, detail.element), |order| rank_of(order, detail.element));
+        let crop = crop_of(node);
+        detail.lines.iter().filter_map(|l| within(frame.project(l[0]), frame.project(l[1]), crop)).flat_map(|l| uncovered(l, rank, over)).map(|l| json!(l)).collect()
+    });
+    for (detail, lines) in details.iter().zip(drawn) {
+        let Some((frame, node, _)) = frames.get(&detail.view) else { continue };
         let crop = crop_of(node);
         // its texts and labels, those that stand within the view's crop as its lines do
         for (foot, text) in &detail.texts {
@@ -625,13 +654,13 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
             }
             marks.entry(detail.view).or_default().notes.push(note);
         }
-        let lines = detail.lines.iter().filter_map(|l| within(frame.project(l[0]), frame.project(l[1]), crop)).flat_map(|l| uncovered(l, rank, over));
-        marks.entry(detail.view).or_default().lines.extend(lines.map(|l| json!(l)));
+        marks.entry(detail.view).or_default().lines.extend(lines);
     }
     // a detail line: a straight one as it is, an arc or circle in pieces, within the view's crop
-    for id in doc.object_ids_of_class("CurveElem") {
+    let ids = in_view(doc.object_ids_of_class("CurveElem"));
+    for (id, o) in ids.iter().copied().zip(objects(doc, &ids)) {
         let Some(view) = owner(id).filter(|v| !types.hidden(*v, id)) else { continue };
-        let Some(o) = doc.object(id).filter(|o| o.category == Some(LINES)) else { continue };
+        let Some(o) = o.filter(|o| o.category == Some(LINES)) else { continue };
         // its line style: that of its curve
         let curve = o.get("m_pCurveDriver").and_then(|v| o.deref(v)).and_then(|d| d.get("m_pCrv")).and_then(|v| o.deref(v));
         let style = curve.and_then(|c| c.get("m_GInfo")?.as_object()?.get("m_categoryId")?.element()).filter(|s| *s != -1);
@@ -679,6 +708,20 @@ struct Cover {
     rank: (u8, u64),
     loops: Vec<Vec<[f64; 2]>>,
     color: [u8; 3],
+    /// The box round its outlines: a line outside it is not tried against them (a view of a
+    /// large project has thousands of regions and hundreds of thousands of lines).
+    bounds: ([f64; 2], [f64; 2]),
+}
+
+impl Cover {
+    fn new(rank: (u8, u64), loops: Vec<Vec<[f64; 2]>>, color: [u8; 3]) -> Self {
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in loops.iter().flatten() {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        Self { rank, loops, color, bounds: (lo, hi) }
+    }
 }
 
 /// Where a view's draw order has each element it names, from the back to the front
@@ -709,7 +752,11 @@ fn uncovered(line: [[f64; 2]; 2], own: (u8, u64), covers: &[Cover]) -> Vec<[[f64
         odd
     };
     let mut pieces = vec![line];
-    for cover in covers.iter().filter(|c| c.rank > own) {
+    // the regions the line can touch: those whose box meets its own
+    let lo = [line[0][0].min(line[1][0]), line[0][1].min(line[1][1])];
+    let hi = [line[0][0].max(line[1][0]), line[0][1].max(line[1][1])];
+    let near = |c: &&Cover| c.bounds.0[0] <= hi[0] && c.bounds.1[0] >= lo[0] && c.bounds.0[1] <= hi[1] && c.bounds.1[1] >= lo[1];
+    for cover in covers.iter().filter(|c| c.rank > own).filter(near) {
         let mut kept = Vec::new();
         for [p, q] in pieces {
             let d = [q[0] - p[0], q[1] - p[1]];
@@ -757,6 +804,11 @@ fn annotation_crop(doc: &rvt_read::Document, view: u64) -> Option<[f64; 4]> {
     let offsets = viewer.get("m_pAnnotationCropOffsets").and_then(|v| viewer.deref(v)).and_then(|o| o.get("m_leftRightTopBottomOffsets")?.as_list());
     let offset = |k: usize| offsets.and_then(|l| l.get(k)?.as_f64()).filter(|x| x.is_finite() && *x >= 0.0).unwrap_or(0.0);
     Some([offset(0), offset(1), offset(2), offset(3)])
+}
+
+/// The objects of `ids`, in their order, decoded on all cores (in a browser one after the other).
+pub(super) fn objects(doc: &rvt_read::Document, ids: &[u64]) -> Vec<Option<rvt_model::ObjectView>> {
+    rvt_core::par::map(ids, |&id| doc.object(id))
 }
 
 /// The crop of a view's node (lower left, upper right; metres), when it has one.

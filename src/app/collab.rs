@@ -878,10 +878,11 @@ impl App {
         }
         self.collab_select(ids(&view.selection));
         // its dimensions and remarks come back in place of what was measured
-        if !(view.lines.is_empty() && view.notes.is_empty()) {
+        if !(view.lines.is_empty() && view.notes.is_empty() && view.marks.is_empty()) {
             let lines = view.lines.iter().map(|(from, to)| crate::measure::Measurement::Distance(crate::measure::geometry::Distance { p1: self.collab_to_display(*from), p2: self.collab_to_display(*to), extensions: Vec::new() }));
             let notes = view.notes.iter().map(|(at, text)| crate::measure::Measurement::Note { at: self.collab_to_display(*at), text: text.clone() });
-            self.measure.results = lines.chain(notes).collect();
+            let marks = view.marks.iter().filter_map(|(kind, points)| Some(crate::measure::Measurement::Mark { kind: crate::measure::MarkKind::parse(kind)?, points: points.iter().map(|p| self.collab_to_display(*p)).collect() }));
+            self.measure.results = lines.chain(notes).chain(marks).collect();
         }
         // the first plane cuts; the side its direction points to is left out
         self.plane = view.clipping_planes.first().and_then(|plane| {
@@ -950,6 +951,7 @@ impl App {
             match result {
                 crate::measure::Measurement::Distance(d) => view.lines.push((self.collab_to_world(d.p1), self.collab_to_world(d.p2))),
                 crate::measure::Measurement::Note { at, text } => view.notes.push((self.collab_to_world(*at), text.clone())),
+                crate::measure::Measurement::Mark { kind, points } => view.marks.push((kind.key().to_string(), points.iter().map(|p| self.collab_to_world(*p)).collect())),
                 _ => {}
             }
         }
@@ -2634,6 +2636,7 @@ mod tests {
         app.measure.results = vec![
             Measurement::Distance(Distance { p1: Vec3::new(0.0, 0.0, 0.0), p2: Vec3::new(3.0, 4.0, 0.0), extensions: Vec::new() }),
             Measurement::Note { at: Vec3::new(1.0, 1.0, 2.0), text: "Te laag".into() },
+            Measurement::Mark { kind: crate::measure::MarkKind::Cloud, points: vec![Vec3::ZERO, Vec3::X, Vec3::Y] },
         ];
         let view = app.collab_viewpoint_now();
         assert_eq!((view.lines.len(), view.notes.len()), (1, 1));
@@ -2645,14 +2648,15 @@ mod tests {
         app.measure.results.clear();
         let _ = app.collab_update(Event::Topic(Some(topic.guid.clone())));
         let back = &app.measure.results;
-        assert_eq!(back.len(), 2);
+        assert_eq!(back.len(), 3);
+        assert!(matches!(&back[2], Measurement::Mark { kind: crate::measure::MarkKind::Cloud, points } if points.len() == 3), "{back:?}");
         assert!(matches!(&back[0], Measurement::Distance(d) if d.p1.distance(Vec3::ZERO) < 1e-4 && d.p2.distance(Vec3::new(3.0, 4.0, 0.0)) < 1e-4), "{back:?}");
         assert!(matches!(&back[1], Measurement::Note { at, text } if at.distance(Vec3::new(1.0, 1.0, 2.0)) < 1e-4 && text == "Te laag"), "{back:?}");
         // an issue without any leaves what is measured alone
         let plain = Topic::new("Zonder", "an");
         app.collab.issues.topics.push(plain.clone());
         let _ = app.collab_update(Event::Topic(Some(plain.guid.clone())));
-        assert_eq!(app.measure.results.len(), 2);
+        assert_eq!(app.measure.results.len(), 3);
     }
 
     #[test]

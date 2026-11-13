@@ -1,6 +1,7 @@
 //! Measuring in the viewport, as Trimble Connect: distances (perpendicular between points, edges
 //! and faces), angles, the area of a face, the volume of an element and the area of a polygon;
-//! and remarks, texts that stand at a point of the model.
+//! and remarks, texts that stand at a point of the model, with arrows, lines and clouds to
+//! point things out.
 //!
 //! The cursor snaps to what is under it, within a few pixels on screen: a corner or the middle of
 //! an edge, else an edge (the real model edges from `geometry`), else the face. That is
@@ -33,10 +34,37 @@ pub enum Tool {
     Polygon,
     /// A remark standing at a point of the model.
     Note,
+    /// Marks drawn in the model: an arrow and a line between two points, a cloud round some.
+    Arrow,
+    Line,
+    Cloud,
+}
+
+/// What a mark drawn in the model is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkKind {
+    Arrow,
+    Line,
+    Cloud,
+}
+
+impl MarkKind {
+    /// Its name in a file.
+    pub fn key(self) -> &'static str {
+        match self {
+            MarkKind::Arrow => "arrow",
+            MarkKind::Line => "line",
+            MarkKind::Cloud => "cloud",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<MarkKind> {
+        [MarkKind::Arrow, MarkKind::Line, MarkKind::Cloud].into_iter().find(|k| k.key() == key)
+    }
 }
 
 impl Tool {
-    pub const ALL: [Tool; 6] = [Tool::Distance, Tool::Angle, Tool::Area, Tool::Volume, Tool::Polygon, Tool::Note];
+    pub const ALL: [Tool; 9] = [Tool::Distance, Tool::Angle, Tool::Area, Tool::Volume, Tool::Polygon, Tool::Note, Tool::Arrow, Tool::Line, Tool::Cloud];
 
     pub fn label(self, l: Language) -> &'static str {
         match self {
@@ -46,6 +74,9 @@ impl Tool {
             Tool::Volume => l.text("Volume", "Volume"),
             Tool::Polygon => l.text("Polygoon", "Polygon"),
             Tool::Note => l.text("Opmerking", "Note"),
+            Tool::Arrow => l.text("Pijl", "Arrow"),
+            Tool::Line => l.text("Lijn", "Line"),
+            Tool::Cloud => l.text("Wolk", "Cloud"),
         }
     }
 
@@ -60,6 +91,12 @@ impl Tool {
             ),
             (Tool::Angle, _) => l.text("Klik op de tweede rand, vlak of punt", "Click the second edge, face or point"),
             (Tool::Area, _) => l.text("Klik op een vlak", "Click a face"),
+            (Tool::Arrow, 0) => l.text("Klik waar de pijl begint", "Click where the arrow starts"),
+            (Tool::Arrow, _) => l.text("Klik waar de pijl naar wijst", "Click what the arrow points at"),
+            (Tool::Line, 0) => l.text("Klik op het begin van de lijn", "Click the start of the line"),
+            (Tool::Line, _) => l.text("Klik op het eind van de lijn", "Click the end of the line"),
+            (Tool::Cloud, n) if n < 3 => l.text("Klik rond wat de wolk omvat", "Click round what the cloud holds"),
+            (Tool::Cloud, _) => l.text("Klik op het eerste punt of druk Enter om de wolk te sluiten", "Click the first point or press Enter to close the cloud"),
             (Tool::Note, _) => l.text("Typ de tekst rechts en klik waar hij moet staan", "Type the text at the right and click where it goes"),
             (Tool::Volume, _) => l.text("Klik op een element", "Click an element"),
             (Tool::Polygon, n) if n < 3 => l.text("Klik op de hoekpunten", "Click the corners"),
@@ -87,6 +124,8 @@ pub enum Measurement {
     Polygon { points: Vec<Vec3>, polygon: Polygon },
     /// A remark at a point: no measure, a text that stands in the model.
     Note { at: Vec3, text: String },
+    /// A mark drawn in the model: no measure either.
+    Mark { kind: MarkKind, points: Vec<Vec3> },
 }
 
 impl Measurement {
@@ -99,7 +138,7 @@ impl Measurement {
             Measurement::Volume { result, .. } => (Category::Volume, result.volume),
             Measurement::Polygon { polygon, .. } => (Category::Area, polygon.area),
             // nothing to add up
-            Measurement::Note { .. } => (Category::Angle, 0.0),
+            Measurement::Note { .. } | Measurement::Mark { .. } => (Category::Angle, 0.0),
         }
     }
 
@@ -112,6 +151,9 @@ impl Measurement {
             Measurement::Volume { name, .. } => format!("{} · {name}", l.text("Volume", "Volume")),
             Measurement::Polygon { .. } => l.text("Polygoon", "Polygon").into(),
             Measurement::Note { .. } => l.text("Opmerking", "Note").into(),
+            Measurement::Mark { kind: MarkKind::Arrow, .. } => l.text("Pijl", "Arrow").into(),
+            Measurement::Mark { kind: MarkKind::Line, .. } => l.text("Lijn", "Line").into(),
+            Measurement::Mark { kind: MarkKind::Cloud, .. } => l.text("Wolk", "Cloud").into(),
         }
     }
 
@@ -119,6 +161,10 @@ impl Measurement {
     pub fn label(&self, units: &UnitSettings, l: Language) -> String {
         if let Measurement::Note { text, .. } = self {
             return text.clone();
+        }
+        // a mark says nothing
+        if let Measurement::Mark { .. } = self {
+            return String::new();
         }
         let (category, value) = self.value();
         units.format(l, category, value)
@@ -132,7 +178,7 @@ impl Measurement {
                 let delta = (d.p2 - d.p1).abs();
                 vec![("ΔX", len(delta.x as f64)), ("ΔY", len(delta.y as f64)), ("ΔZ", len(delta.z as f64))]
             }
-            Measurement::Angle(_) | Measurement::Note { .. } => Vec::new(),
+            Measurement::Angle(_) | Measurement::Note { .. } | Measurement::Mark { .. } => Vec::new(),
             Measurement::Area(r) => vec![(l.text("Omtrek", "Perimeter"), len(r.perimeter))],
             Measurement::Volume { result, .. } => {
                 let mut out = vec![(l.text("Buitenoppervlak", "Surface area"), units.format(l, Category::Area, result.surface_area))];
@@ -163,6 +209,7 @@ impl Measurement {
             Measurement::Volume { result, .. } => result.center,
             Measurement::Polygon { polygon, .. } => polygon.centroid,
             Measurement::Note { at, .. } => *at,
+            Measurement::Mark { points, .. } => points.first().copied().unwrap_or(Vec3::ZERO),
         }
     }
 }
@@ -332,7 +379,7 @@ impl MeasureState {
                     self.results.push(Measurement::Note { at: hover.snap.entity.pick(), text: text.to_string() });
                 }
             }
-            Tool::Distance | Tool::Angle | Tool::Polygon => self.add_pick(tool, hover.snap, SNAP_PX * hover.pixel),
+            Tool::Distance | Tool::Angle | Tool::Polygon | Tool::Arrow | Tool::Line | Tool::Cloud => self.add_pick(tool, hover.snap, SNAP_PX * hover.pixel),
         }
     }
 
@@ -365,7 +412,15 @@ impl MeasureState {
                     self.picks.clear();
                 }
             },
-            Tool::Polygon => {
+            Tool::Arrow | Tool::Line => {
+                if let Some(first) = self.picks.pop() {
+                    let kind = if tool == Tool::Arrow { MarkKind::Arrow } else { MarkKind::Line };
+                    self.results.push(Measurement::Mark { kind, points: vec![first.entity.pick(), s.entity.pick()] });
+                } else {
+                    self.picks.push(s);
+                }
+            }
+            Tool::Polygon | Tool::Cloud => {
                 let p = s.entity.pick();
                 let closes = self.picks.len() >= 3 && self.picks[0].entity.pick().distance(p) <= tolerance;
                 if closes {
@@ -380,12 +435,19 @@ impl MeasureState {
 
     /// Enter: close the polygon in progress.
     pub fn finish(&mut self) {
-        if self.tool == Some(Tool::Polygon) && self.picks.len() >= 3 {
-            let points: Vec<Vec3> = self.picks.iter().map(|s| s.entity.pick()).collect();
-            let polygon = geometry::polygon_area(&points);
-            self.results.push(Measurement::Polygon { points, polygon });
-            self.picks.clear();
+        if self.picks.len() < 3 {
+            return;
         }
+        let points: Vec<Vec3> = self.picks.iter().map(|s| s.entity.pick()).collect();
+        match self.tool {
+            Some(Tool::Polygon) => {
+                let polygon = geometry::polygon_area(&points);
+                self.results.push(Measurement::Polygon { points, polygon });
+            }
+            Some(Tool::Cloud) => self.results.push(Measurement::Mark { kind: MarkKind::Cloud, points }),
+            _ => return,
+        }
+        self.picks.clear();
     }
 
     /// Sum of the results that can be added up, per category, in the order of `Category::ALL`.
@@ -393,7 +455,7 @@ impl MeasureState {
         let mut out: Vec<(Category, f64, usize)> = Vec::new();
         for m in &self.results {
             let (c, v) = m.value();
-            if !c.summable() || matches!(m, Measurement::Note { .. }) {
+            if !c.summable() || matches!(m, Measurement::Note { .. } | Measurement::Mark { .. }) {
                 continue;
             }
             match out.iter_mut().find(|t| t.0 == c) {
@@ -549,5 +611,33 @@ mod tests {
         let vp = cam.view_proj(1.0);
         let h = 2.0 * 10.0 * (cam.fov_y / 2.0).tan();
         assert!((pixel_size(&vp, (500.0, 500.0), Vec3::ZERO) - h / 500.0).abs() < 1e-4);
+    }
+    #[test]
+    fn marks_are_drawn_by_clicks_and_measure_nothing() {
+        let at = |x: f32, y: f32| Snap { entity: Entity::Point(Vec3::new(x, y, 0.0)), face: Entity::Point(Vec3::new(x, y, 0.0)) };
+        let mut m = MeasureState { tool: Some(Tool::Arrow), ..MeasureState::default() };
+        // an arrow: from the first click to the second
+        m.add_pick(Tool::Arrow, at(0.0, 0.0), 0.01);
+        assert!(m.results.is_empty() && m.picks.len() == 1);
+        m.add_pick(Tool::Arrow, at(2.0, 0.0), 0.01);
+        assert!(matches!(&m.results[0], Measurement::Mark { kind: MarkKind::Arrow, points } if points[1] == Vec3::new(2.0, 0.0, 0.0)) && m.picks.is_empty());
+        // a cloud: round its points, closed by a click on the first or by Enter
+        m.tool = Some(Tool::Cloud);
+        for p in [at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0)] {
+            m.add_pick(Tool::Cloud, p, 0.01);
+        }
+        m.add_pick(Tool::Cloud, at(0.0, 0.001), 0.01);
+        assert!(matches!(&m.results[1], Measurement::Mark { kind: MarkKind::Cloud, points } if points.len() == 3) && m.picks.is_empty());
+        for p in [at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)] {
+            m.add_pick(Tool::Cloud, p, 0.01);
+        }
+        m.finish();
+        assert!(matches!(&m.results[2], Measurement::Mark { kind: MarkKind::Cloud, points } if points.len() == 4));
+        // marks and a remark say what they are, show no number and add nothing up
+        m.results.push(Measurement::Note { at: Vec3::ZERO, text: "Hier".into() });
+        assert!(m.totals().is_empty());
+        let units = UnitSettings::default();
+        assert_eq!((m.results[0].label(&units, Language::English), m.results[3].label(&units, Language::English)), (String::new(), "Hier".to_string()));
+        assert_eq!(MarkKind::parse(MarkKind::Cloud.key()), Some(MarkKind::Cloud));
     }
 }

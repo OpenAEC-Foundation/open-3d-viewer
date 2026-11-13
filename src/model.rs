@@ -198,6 +198,9 @@ pub struct ProjectData {
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
+    /// The earth under the terrain a section cuts (Revit, the settings of the site): the height
+    /// down to which it is filled (metres) and the name of the material it is hatched as.
+    pub earth: Option<(f32, Option<String>)>,
     /// The phases of the elements and of the views (Revit): what a view leaves out or draws in
     /// halftone.
     pub phasing: crate::phasing::Phasing,
@@ -712,6 +715,12 @@ pub struct SavedView {
     pub level: Option<String>,
     /// The folders it lies in where its file orders its views in folders, the outer one first.
     pub folder: Vec<String>,
+}
+
+/// Under what name what belongs to a 3D view of the file is kept beside that of the document's
+/// views (its hidden lines, the elements it leaves out): by its place among [`Model::views`].
+pub fn view3d_key(view: usize) -> String {
+    format!("view3d/{view}")
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);

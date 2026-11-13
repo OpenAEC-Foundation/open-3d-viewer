@@ -50,10 +50,49 @@ impl App {
         }
         // the plans and sections on it are cut once, to be drawn in their viewports
         let views: Vec<String> = i.and_then(|i| self.sheets().get(i)).into_iter().flat_map(|s| s.viewports.iter().filter_map(|v| v.drawing.clone())).collect();
-        for view in views {
-            self.cut_view(&view);
+        // in the window on worker threads, these first: the drawing shows its views as they come
+        let ahead = if self.background_cuts {
+            self.cut_first(views)
+        } else {
+            for view in views {
+                self.cut_view(&view);
+            }
+            Task::none()
+        };
+        // the 3D views on it, in hidden lines
+        let threes: Vec<usize> = i.and_then(|i| self.sheets().get(i)).into_iter().flat_map(|s| s.viewports.iter().filter(|v| v.drawing.is_none() && v.draft.is_none()).filter_map(|v| v.view)).collect();
+        for view in threes {
+            self.cut_view_3d(view);
         }
-        Task::none()
+        ahead
+    }
+
+    /// Draws a 3D view of the file in hidden lines when it is not drawn yet: looked at along its
+    /// camera's direction, within its section box. A view in perspective is left as its frame.
+    pub(super) fn cut_view_3d(&mut self, view: usize) {
+        let Some(model) = self.model.clone() else { return };
+        let key = view3d_key(view);
+        let Some(saved) = model.views.get(view).filter(|v| v.kind == crate::model::ViewKind::ThreeD) else { return };
+        let Some(camera) = saved.camera.as_ref().filter(|c| !c.perspective) else { return };
+        if self.cuts.contains_key(&key) {
+            return;
+        }
+        let layers = vec![true; model.layers.len()];
+        // what the view leaves out, by the unit of a triangle's first vertex
+        let mut units: Vec<bool> = Vec::new();
+        if let (Some(off), Some(index)) = (model.project.switched_off.get(&key), self.explode_index.as_deref()) {
+            units.resize(index.len(), false);
+            for unit in 1..index.len() {
+                if matches!(index.owner(unit), Some(crate::explode::UnitOwner::Element(id)) if off.contains(&id)) {
+                    units[unit] = true;
+                }
+            }
+        }
+        let index = self.explode_index.clone().filter(|_| units.iter().any(|u| *u));
+        let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
+        let shown = crate::drawing::Shown { layers: &layers, hidden: &hidden, faint: None, pieces: None };
+        let cut = crate::drawing::view_at(&model, shown, camera.forward, saved.clip.as_ref());
+        self.cuts.insert(key, Arc::new(cut));
     }
 
     /// Closes a sheet's tab; when it was shown, the sheet before it (or the 3D view) shows.
@@ -121,7 +160,11 @@ impl App {
                     lines: self.document.view_lines(path).to_vec(),
                     fills: self.document.view_fills(path).to_vec(),
                 },
-                (None, None) => Placed::Frame,
+                // a 3D view: its hidden lines, once they are made
+                (None, None) => match v.view.and_then(|i| self.cuts.get(&view3d_key(i))) {
+                    Some(cut) => Placed::View { cut: Some(cut.clone()), crop: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new() },
+                    None => Placed::Frame,
+                },
             })
             .collect();
         // the schedules on it, with what the computed ones add to what the file stores
@@ -199,6 +242,8 @@ impl App {
             .ok_or(format!("no sheet '{want}'"))
     }
 }
+
+use crate::model::view3d_key;
 
 /// What a placed view shows on its sheet.
 enum Placed {

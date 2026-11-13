@@ -73,8 +73,8 @@ pub enum GeoKind {
 
 /// A shape. `slots` holds, by kind: Brep and Multi: vertices, loop sizes, loops per face,
 /// colours, and for Multi its shapes; Extrusion: profile and route; Csg: first shape, second
-/// shape, the second's matrix and the operation (0 cut, 1 join, 2 cross); Halfspace: normal and
-/// point.
+/// shape, the second's matrix and the operation (0 cut, 1 join, 2 cross); Halfspace: normal, point,
+/// a flag and, when it is bounded, the outline it reaches to (points on the plane).
 #[derive(Clone, Debug)]
 pub struct Geo {
     pub kind: GeoKind,
@@ -489,7 +489,7 @@ impl<R: Read> Reader<R> {
             "SEntity" => Role::Element,
             "Model" => Role::Model,
             "Relation" | "Profile" | "SType" | "Issue" | "IssueViewpoint" | "Snapshot" | "Category" | "Presentation" | "Slide" => Role::Rec,
-            "IssueCoordination" | "AnimationKeyFrame" | "Visualization" | "ClipPlane" | "Tuple4d" => Role::Rec,
+            "IssueCoordination" | "AnimationKeyFrame" | "Visualization" | "ClipPlane" | "Tuple4d" | "ParametricProfileTypes" => Role::Rec,
             short if self.keep.iter().any(|k| k == short) => Role::Rec,
             _ => return None,
         })
@@ -790,7 +790,7 @@ impl<R: Read> Reader<R> {
                     GeoKind::Multi => [f(b, "vertices"), f(b, "strips"), f(b, "contours"), f(b, "colors"), f("MultiGeometry", "geometries")],
                     GeoKind::Extrusion => [f("Extrusion", "profile"), f("Extrusion", "route"), V::Null, V::Null, V::Null],
                     GeoKind::Csg => [f("CSGSolid", "child1"), f("CSGSolid", "child2"), f("CSGSolid", "child2Transformation"), f("CSGSolid", "operation"), V::Null],
-                    GeoKind::Halfspace => [f("Halfspace", "normal"), f("Halfspace", "pt"), f("Halfspace", "isRelative"), V::Null, V::Null],
+                    GeoKind::Halfspace => [f("Halfspace", "normal"), f("Halfspace", "pt"), f("Halfspace", "isRelative"), f("BoundedHalfspace", "boundingPolyline"), V::Null],
                     GeoKind::Mapped | GeoKind::Other => [V::Null; 5],
                 };
                 let geo = Geo { kind, matrix: f("CoordinateSystem", "matrix"), origin: f("CoordinateSystem", "origin"), color: f("GEntity", "importedMaterialInfo"), children: f("Entity", "children"), slots };

@@ -14,7 +14,8 @@
 //! The slides of the file's presentations are its issues: what the checker's user wrote up to
 //! send round, each with its title, state, camera, cut planes and picture. They are kept for
 //! the collaborator to take in ([`take_issues`]). The checking results (tens of thousands of
-//! found clashes) are not taken as issues; shapes cut by another are drawn uncut.
+//! found clashes) are not taken as issues. Shapes cut off by a plane are; shapes cut by another
+//! shape are drawn uncut.
 
 mod mesh;
 mod stream;

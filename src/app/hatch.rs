@@ -98,27 +98,45 @@ pub(super) fn draw_fills(frame: &mut Frame, cut: &Cut, crop: Option<([f64; 2], [
         });
         frame.stroke(&path, Stroke::default().with_color(rgb(FAINT)).with_width(width));
     }
-    // what a structural plan sees through the floor: dashed
-    if !cut.hidden.is_empty() {
+    // what a structural plan sees through the floor: dashed, in halftone for what it draws faint
+    for (segments, color) in [(&cut.hidden, outline.unwrap_or(Color::from_rgb8(40, 40, 40))), (&cut.faint_hidden, rgb(FAINT))] {
+        if segments.is_empty() {
+            continue;
+        }
         let covered = Path::new(|path| {
-            for [a, b] in &cut.hidden {
-                let (a, b) = (a.map(f64::from), b.map(f64::from));
-                let piece = match crop {
-                    Some((lo, hi)) => crate::drawing2d::clip(a, b, lo, hi),
-                    None => Some((a, b)),
-                };
-                let Some((Some(a), Some(b))) = piece.map(|(a, b)| (to(a), to(b))) else { continue };
-                // each dash a line of its own: a dashed stroke would join the lines of a path
-                let run = a.distance(b);
-                let at = |d: f32| Point::new(a.x + (b.x - a.x) * d / run, a.y + (b.y - a.y) * d / run);
-                let mut d = 0.0;
-                while d < run {
-                    path.move_to(at(d));
-                    path.line_to(at((d + DASH).min(run)));
-                    d += DASH + GAP;
+            // run by run, so the dashes run on round a curve of many short pieces
+            for run in crate::drawing::chained(segments) {
+                // where along the run the pattern stands: a dash ends at DASH, a gap at DASH + GAP
+                let mut phase = 0.0f32;
+                for pair in run.windows(2) {
+                    let (a, b) = (pair[0].map(f64::from), pair[1].map(f64::from));
+                    let piece = match crop {
+                        Some((lo, hi)) => crate::drawing2d::clip(a, b, lo, hi),
+                        None => Some((a, b)),
+                    };
+                    let Some((Some(a), Some(b))) = piece.map(|(a, b)| (to(a), to(b))) else { continue };
+                    // each dash a line of its own: a dashed stroke would join the lines of a path
+                    let length = a.distance(b);
+                    let at = |d: f32| Point::new(a.x + (b.x - a.x) * d / length, a.y + (b.y - a.y) * d / length);
+                    let mut d = 0.0;
+                    while d < length {
+                        // a step too small to move on (the pattern at the very end of a dash or gap): the next begins
+                        if (if phase < DASH { DASH - phase } else { DASH + GAP - phase }) < 1e-3 {
+                            phase = if phase < DASH { DASH } else { 0.0 };
+                        }
+                        let step = if phase < DASH { DASH - phase } else { DASH + GAP - phase };
+                        let to = (d + step).min(length);
+                        if phase < DASH {
+                            path.move_to(at(d));
+                            path.line_to(at(to));
+                        }
+                        phase = (phase + (to - d)) % (DASH + GAP);
+                        d = to;
+                    }
                 }
             }
         });
-        frame.stroke(&covered, Stroke::default().with_color(outline.unwrap_or(Color::from_rgb8(40, 40, 40))).with_width(0.8));
+        frame.stroke(&covered, Stroke::default().with_color(color).with_width(0.8));
     }
 }
+

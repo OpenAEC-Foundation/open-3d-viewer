@@ -27,6 +27,8 @@ pub struct Cut {
     /// work in a view of a later phase, in halftone); they are not in `segments` and `below`.
     pub faint_segments: Vec<Segment>,
     pub faint_below: Vec<Segment>,
+    /// The covered edges (see `hidden`) of the elements it draws faint: dashed in halftone.
+    pub faint_hidden: Vec<Segment>,
 }
 
 /// A cut face: the outlines one element (or a layer outside its elements) shows where the plane
@@ -165,7 +167,7 @@ fn part(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f
     };
     cut.faint_segments = apart(&mut cut.segments, &faint_cuts, &plain_cuts);
     cut.faint_below = apart(&mut cut.below, &faint_edges, &plain_edges);
-    apart(&mut cut.hidden, &faint_edges, &plain_edges);
+    cut.faint_hidden = apart(&mut cut.hidden, &faint_edges, &plain_edges);
     for fill in &mut cut.fills {
         // by the first vertex of the element
         let first = fill.element.and_then(|id| {
@@ -175,6 +177,47 @@ fn part(cut: &mut Cut, model: &Model, shown: Shown, map: impl Fn([f32; 3]) -> [f
         });
         fill.faint = first.is_some_and(|v| faint(fill.layer, v));
     }
+}
+
+/// Segments joined end to end into runs, so a dashed line runs on round a curve drawn as many
+/// short pieces (a pile's outline) instead of starting a dash on every piece. Ends nearer than a
+/// tenth of a millimetre meet; a run that branches goes on along one branch, the rest start runs
+/// of their own.
+pub fn chained(segments: &[Segment]) -> Vec<Vec<[f32; 2]>> {
+    let key = |p: [f32; 2]| ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64);
+    let mut at: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in segments.iter().enumerate() {
+        at.entry(key(s[0])).or_default().push(i);
+        at.entry(key(s[1])).or_default().push(i);
+    }
+    let mut used = vec![false; segments.len()];
+    // the next unused segment at `p`, and its other end
+    let next = |p: [f32; 2], used: &mut Vec<bool>| {
+        let i = at.get(&key(p))?.iter().copied().find(|&i| !used[i])?;
+        used[i] = true;
+        let s = segments[i];
+        Some(if key(s[0]) == key(p) { s[1] } else { s[0] })
+    };
+    let mut runs = Vec::new();
+    for i in 0..segments.len() {
+        if used[i] {
+            continue;
+        }
+        used[i] = true;
+        let mut run = vec![segments[i][0], segments[i][1]];
+        // on from its end, then back from its start
+        while let Some(p) = next(*run.last().unwrap(), &mut used) {
+            run.push(p);
+        }
+        let mut back = Vec::new();
+        while let Some(p) = next(*back.last().unwrap_or(&run[0]), &mut used) {
+            back.push(p);
+        }
+        back.reverse();
+        back.extend(run);
+        runs.push(back);
+    }
+    runs
 }
 
 /// Lines by the square metre they pass through, to find the ones a line lies on.
@@ -1203,6 +1246,20 @@ mod tests {
         // without faint elements nothing is set apart
         let plain = plan_at(&model, Shown::all(), -0.5, 1.2);
         assert!(plain.faint_segments.is_empty() && plain.faint_below.is_empty() && !plain.segments.is_empty());
+    }
+
+    #[test]
+    fn short_pieces_join_into_runs_whatever_their_order() {
+        // a square in pieces, given out of order and some the other way round, and a lone line
+        let square: Vec<Segment> = vec![[[1.0, 0.0], [1.0, 1.0]], [[0.0, 0.0], [1.0, 0.0]], [[0.0, 1.0], [0.0, 0.0]], [[0.0, 1.0], [1.0, 1.0]], [[5.0, 5.0], [6.0, 5.0]]];
+        let mut runs = chained(&square);
+        runs.sort_by_key(|r| r.len());
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].len(), 2, "the lone line");
+        assert_eq!(runs[1].len(), 5, "the square: four pieces, five points, round: {:?}", runs[1]);
+        assert_eq!(runs[1].first(), runs[1].last());
+        let length: f32 = runs[1].windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+        assert!((length - 4.0).abs() < 1e-6);
     }
 
     #[test]

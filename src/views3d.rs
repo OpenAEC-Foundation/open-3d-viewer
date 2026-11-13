@@ -122,7 +122,7 @@ pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
                 line(wide(*a), wide(*b), [ink[0], ink[1], ink[2], 255]);
             }
         }
-        for (segments, color) in cut.iter().flat_map(|c| [(&c.faint_below, BEYOND), (&c.faint_segments, BEYOND), (&c.hidden, BEYOND)]) {
+        for (segments, color) in cut.iter().flat_map(|c| [(&c.faint_below, BEYOND), (&c.faint_segments, BEYOND), (&c.hidden, BEYOND), (&c.faint_hidden, BEYOND)]) {
             for [a, b] in segments {
                 line(wide(*a), wide(*b), color);
             }

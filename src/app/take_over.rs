@@ -101,6 +101,35 @@ impl App {
         Some(Source { entry, id, wall, level: w.level.clone(), name })
     }
 
+    /// Shows every opened file a wall was taken over from without the walls `taken` names (the
+    /// file, the wall), and keeps `taken` as what is taken over now. A file whose walls are all
+    /// back is shown as it was opened. The scene is put together again by the next
+    /// [`App::show_modelled`].
+    pub(super) fn show_files_without(&mut self, taken: Arc<Vec<(u64, u64)>>) {
+        if *taken != *self.modeller.taken {
+            let files: Vec<(u64, Arc<Model>, u64)> = self.modeller.files.iter().map(|(id, (original, shown))| (*id, original.clone(), *shown)).collect();
+            for (id, original, shown) in files {
+                let gone = |list: &[(u64, u64)]| list.iter().filter(|t| t.0 == id).map(|t| t.1).collect::<std::collections::HashSet<u64>>();
+                let ids = gone(&taken);
+                let Some(k) = self.models.iter().position(|e| e.model.id == shown).filter(|_| ids != gone(&self.modeller.taken)) else { continue };
+                let model = if ids.is_empty() { original.clone() } else { Arc::new(original.without_elements(&ids)) };
+                self.modeller.files.insert(id, (original, model.id));
+                let file = std::mem::replace(&mut self.models[k], ModelEntry::new(model, 0));
+                // its layers keep their switches by name (a layer that emptied is gone), and it
+                // stays where it was placed
+                let switched: std::collections::HashMap<&str, bool> = file.model.layers.iter().map(|l| l.name.as_str()).zip(file.layer_visibility.iter().copied()).collect();
+                let entry = &mut self.models[k];
+                (entry.visible, entry.placed) = (file.visible, file.placed);
+                for (layer, shown) in entry.model.layers.iter().zip(entry.layer_visibility.iter_mut()) {
+                    if let Some(&s) = switched.get(layer.name.as_str()) {
+                        *shown = s;
+                    }
+                }
+            }
+        }
+        self.modeller.taken = taken;
+    }
+
     /// Takes wall `source` over: models it, takes the file's mesh of it out of the scene and
     /// selects the new wall, which it returns. When the kernel cannot make the wall, nothing
     /// changes and the banner says why.
@@ -116,20 +145,17 @@ impl App {
             self.models.push(ModelEntry::new(self.model.clone()?, 0));
         }
         let k = source.entry.unwrap_or(0);
-        let without = Arc::new(self.models[k].model.without_elements(&[source.id].into()));
-        let file = std::mem::replace(&mut self.models[k], ModelEntry::new(without, 0));
-        // its layers keep their switches by name (a layer it emptied is gone)
-        let switched: std::collections::HashMap<&str, bool> = file.model.layers.iter().map(|l| l.name.as_str()).zip(file.layer_visibility.iter().copied()).collect();
-        let entry = &mut self.models[k];
-        entry.visible = file.visible;
-        for (layer, shown) in entry.model.layers.iter().zip(entry.layer_visibility.iter_mut()) {
-            if let Some(&s) = switched.get(layer.name.as_str()) {
-                *shown = s;
-            }
-        }
+        // the file as it was opened: kept, so the wall can come back when the step is taken back
+        let shown = self.models[k].model.clone();
+        let original = self.modeller.files.iter().find(|(_, (_, now))| *now == shown.id).map_or(shown.id, |(id, _)| *id);
+        self.modeller.files.entry(original).or_insert((shown.clone(), shown.id));
+        let before = self.modeller.taken.clone();
+        let mut taken = (*before).clone();
+        taken.push((original, source.id));
+        self.show_files_without(Arc::new(taken));
         let first = self.modeller.project_file.is_none();
         if first {
-            self.modeller.project_file = Some(file.model.path.with_extension("ifcx"));
+            self.modeller.project_file = Some(shown.path.with_extension("ifcx"));
         }
         let level = source.level.and_then(|name| self.document.levels().iter().find(|l| l.name == name).map(|l| l.path.clone()));
         match self.add_element(&source.name, level, shape) {
@@ -139,7 +165,7 @@ impl App {
             }
             Err(refusal) => {
                 // not expected after the check above; put the file back as it was
-                self.models[k] = file;
+                self.show_files_without(before);
                 if first {
                     self.modeller.project_file = None;
                 }
@@ -324,6 +350,37 @@ mod tests {
         let t = std::time::Instant::now();
         let bytes = crate::export::to_bytes(&scene, &app.document_now(), "taken.ifcx").unwrap();
         eprintln!("took over wall {id} ({}, {} openings); IFCX of {} MB written in {:?}", taken[0].name, p.openings.len(), bytes.len() / 1_000_000, t.elapsed());
+    }
+
+    #[test]
+    fn undo_gives_the_files_wall_back_and_redo_takes_it_over_again() {
+        let mut app = opened();
+        select(&mut app, 7);
+        drag(&mut app, 1, 8.0, 0.15);
+        let files = |app: &App, id: u64| app.model.as_ref().unwrap().element_with_key(ElementKey { model: 0, source: id }).is_some();
+        assert!(!files(&app, 7) && app.modeller.model.len() == 1);
+        // taken back: no modelled wall, the wall of the file where it was, the project the file again
+        let _ = app.update(Message::Undo);
+        assert!(app.modeller.model.is_empty());
+        assert!(files(&app, 7) && files(&app, 8), "the wall is the file's again");
+        assert!(app.modeller.project_file.is_none() && app.modeller.taken.is_empty());
+        let shown = app.model.as_ref().unwrap().element_with_key(ElementKey { model: 0, source: 7 }).unwrap();
+        select(&mut app, shown);
+        assert!(app.source_gripped().is_some(), "and can be taken over again");
+        // made again: the editable wall with its dragged end, the file's mesh of it gone
+        let _ = app.update(Message::Redo);
+        assert!(!files(&app, 7) && files(&app, 8));
+        let wall = app.modeller.model.iter().next().unwrap().shape_in_project(&app.modeller.model.grid);
+        assert_eq!(edit_points(&wall).0[1], DVec3::new(8.0, 0.15, 0.0));
+        assert_eq!(app.modeller.project_file, Some(PathBuf::from("C:/work/house.ifcx")));
+        // a second step on the wall is taken back alone: the wall stays the project's
+        let id = app.modeller.model.iter().next().unwrap().id;
+        app.select_modelled(id);
+        drag(&mut app, 1, 9.0, 0.15);
+        let _ = app.update(Message::Undo);
+        assert!(!files(&app, 7) && app.modeller.model.len() == 1);
+        let wall = app.modeller.model.iter().next().unwrap().shape_in_project(&app.modeller.model.grid);
+        assert_eq!(edit_points(&wall).0[1], DVec3::new(8.0, 0.15, 0.0));
     }
 
     #[test]

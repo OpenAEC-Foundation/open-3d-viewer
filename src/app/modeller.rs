@@ -186,11 +186,26 @@ pub struct Modeller {
     /// The model before each step that changed it, to take the step back (`super::undo`).
     /// A move, copy, turn or mirror of the selected elements under way (`super::transform`).
     pub transform: Option<super::transform::Transform>,
-    pub history: crate::history::History<Arc<bim_core::Model>>,
-    /// The model as its last step left it: what a change is measured against.
-    pub base: Arc<bim_core::Model>,
+    pub history: crate::history::History<Step>,
+    /// The project as its last step left it: what a change is measured against.
+    pub base: Step,
+    /// The walls taken over from opened files: the file (the id of its model as it was opened)
+    /// and the wall's id in it (see `super::take_over`).
+    pub taken: Arc<Vec<(u64, u64)>>,
+    /// The opened files a wall was taken over from, by the id of their model as it was opened:
+    /// that model, and the id of the model shown in its place (it without the walls taken over).
+    pub files: std::collections::HashMap<u64, (Arc<Model>, u64)>,
     /// The elements were shown again since the history last looked: they may have changed.
     pub touched: bool,
+}
+
+/// The modelled project at one step of its history: the elements, the walls taken over from
+/// opened files, and the IFCX document the project became when it took over its first wall.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Step {
+    pub model: Arc<bim_core::Model>,
+    pub taken: Arc<Vec<(u64, u64)>>,
+    pub project_file: Option<PathBuf>,
 }
 
 impl App {

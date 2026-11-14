@@ -6,6 +6,47 @@ use crate::app::transform::TransformKind;
 use crate::app::{App, Message};
 use openaec_ui::Language;
 
+impl ModelKey {
+    /// What it does, as the ribbon names it.
+    pub fn label(self, l: Language) -> &'static str {
+        match self {
+            ModelKey::Select => l.text("Selecteren", "Select"),
+            ModelKey::Wall => ModelTool::Wall.label(l),
+            ModelKey::Slab => ModelTool::Slab.label(l),
+            ModelKey::Column => ModelTool::Column.label(l),
+            ModelKey::Beam => ModelTool::Beam.label(l),
+            ModelKey::System => ModelTool::System.label(l),
+            ModelKey::Object => ModelTool::Point.label(l),
+            ModelKey::Door => ModelTool::Door.label(l),
+            ModelKey::Window => ModelTool::Window.label(l),
+            ModelKey::Grid => l.text("Stramien", "Grid"),
+            ModelKey::Section => l.text("Doorsnede", "Section"),
+            ModelKey::Dimension => l.text("Maatvoering", "Dimension"),
+            ModelKey::Grab => l.text("Pakken (bewerken) of verplaatsen", "Grab (editing) or move"),
+            ModelKey::Move => TransformKind::Move.label(l),
+            ModelKey::Copy => TransformKind::Copy.label(l),
+            ModelKey::Rotate => TransformKind::Rotate.label(l),
+            ModelKey::Mirror => TransformKind::Mirror.label(l),
+            ModelKey::Delete => l.text("Verwijderen", "Delete"),
+            ModelKey::LevelUp => l.text("Niveau hoger", "Level up"),
+            ModelKey::LevelDown => l.text("Niveau lager", "Level down"),
+        }
+    }
+}
+
+/// The Modeller's keys for the shortcuts page: each letter, pair and page key with what it does.
+pub fn key_list<'a, M: 'a>(look: openaec_ui::design::Look, l: Language) -> iced::Element<'a, M> {
+    use openaec_ui::design::widgets as w;
+    let mut rows = iced::widget::column![w::mono_label(look, "MODELLER")].spacing(4);
+    let keys = super::keys::SINGLE.iter().map(|(c, k)| (c.to_ascii_uppercase().to_string(), *k));
+    let pairs = super::keys::PAIRS.iter().map(|(p, k)| (p.to_ascii_uppercase(), *k));
+    let pages = [("PgUp".to_string(), ModelKey::LevelUp), ("PgDn".to_string(), ModelKey::LevelDown)];
+    for (key, command) in keys.chain(pairs).chain(pages) {
+        rows = rows.push(w::property_row(look, command.label(l), w::secondary(look, key).into()));
+    }
+    rows.into()
+}
+
 impl App {
     /// Steps the level worked on to the next one up (or down); with a floor plan shown, that
     /// level's floor plan opens, made when it has none. At the highest (lowest) level nothing

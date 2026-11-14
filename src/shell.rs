@@ -2299,7 +2299,11 @@ impl Studio {
                         }
                         list.push(w::button(look, l.text("Alle groepen tonen", "Show all groups"), K::Secondary, D::Compact, None, (!hidden.is_empty()).then_some(Msg::RibbonReset))).into()
                     }
-                    SettingsPage::Shortcuts => sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts),
+                    // in the Modeller its own keys follow the commands' shortcuts
+                    SettingsPage::Shortcuts => column![sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts)]
+                        .push((self.product() == Product::Modeller).then(|| crate::app::modeller::key_actions::key_list(look, l)))
+                        .spacing(14)
+                        .into(),
                 };
                 w::dialog(
                     look,
@@ -2906,6 +2910,25 @@ mod tests {
         let studio = Studio::new(App::default());
         let _ = studio.view();
         let _ = studio.backstage_view(studio.look());
+    }
+
+    #[test]
+    fn the_shortcuts_page_of_the_modeller_lists_its_keys() {
+        let mut studio = Studio::new(App::default());
+        studio.dialog = Some(Dialog::Settings);
+        studio.settings_page = SettingsPage::Shortcuts;
+        studio.prefs.language = Language::English;
+        assert!(iced_test::simulator(studio.view()).find("MV").is_err(), "not in the Viewer");
+        studio.set_product(Product::Modeller);
+        // the dialog scrolls: its first rows show, the list itself has them all
+        let mut ui = iced_test::simulator(studio.view());
+        for label in ["MODELLER", "MV", "Move", "Select"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        let mut list = iced_test::simulator(crate::app::modeller::key_actions::key_list::<Msg>(studio.look(), Language::English));
+        for label in ["S", "W", "CL", "FL", "PgUp", "PgDn", "Level up"] {
+            assert!(list.find(label).is_ok(), "{label}");
+        }
     }
 
     #[test]

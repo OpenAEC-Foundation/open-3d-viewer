@@ -60,7 +60,13 @@ impl App {
             None => Err(LevelError::BadElevation),
         };
         match added {
-            Ok(_) => self.level_form = None,
+            Ok(index) => {
+                self.level_form = None;
+                // in the Modeller a new level gets its floor plan
+                if let Some(path) = self.document.levels().get(index).map(|l| l.path.clone()) {
+                    self.level_added(&path);
+                }
+            }
             Err(e) => form.error = Some(e),
         }
     }
@@ -139,7 +145,13 @@ impl App {
                 .padding([2, 6])
                 .style(move |_, s| p.row_button(s))
                 .on_press(Message::AddUnderlay(Arc::from(level.path.as_str())));
+            // in the Modeller: the level's form in place of its row while it is edited
+            if let Some(form) = self.level_edit_form(&level.path, p, l) {
+                body = body.push(form);
+                continue;
+            }
             let mut item = row![name, elevation, underlay].spacing(6).align_y(Center);
+            item = item.push(self.level_edit_button(&level.path, p, l));
             if level.added {
                 let close = svg(svg::Handle::from_memory(openaec_ui::icons::Icon::Close.bytes()))
                     .width(12)

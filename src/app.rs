@@ -684,6 +684,8 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// The form of a level being edited in the Modeller.
+    LevelEdit(modeller::levels::LevelEditMessage),
     /// Switch the Modeller's Grid tool on or off.
     GridTool,
     /// Give the selected join another kind.
@@ -1663,6 +1665,7 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::GridTool => self.toggle_grid_tool(),
+            Message::LevelEdit(message) => self.level_edit_message(message),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),

@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod grids;
+pub mod levels;
 
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,6 +152,8 @@ pub struct Modeller {
     pub model: bim_core::Model,
     /// The tool placing elements, and the name its elements get (in the interface language).
     pub tool: Option<(ModelTool, &'static str)>,
+    /// The level being renamed or moved in the Levels tab (see `levels`).
+    pub level_edit: Option<levels::LevelEdit>,
     /// The Grid tool is on: two clicks draw a grid line (see `grids`).
     pub grid_tool: bool,
     /// The points clicked so far for the tool (scene coordinates).

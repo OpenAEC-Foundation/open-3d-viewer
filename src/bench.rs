@@ -321,7 +321,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             app.fit();
             let (vw, vh) = app.viewport_size;
             // a crossing box over the whole viewport: everything it touches
-            let boxed = crate::viewport::Navigate::Box { x0: vw, y0: vh, x1: 0.0, y1: 0.0, width: vw, height: vh, done: true };
+            let boxed = crate::viewport::Navigate::Box { x0: vw, y0: vh, x1: 0.0, y1: 0.0, width: vw, height: vh, done: true, add: true };
             let t = Instant::now();
             let _ = app.update(crate::app::Message::Navigate(boxed));
             timed(format!("box select {} elements", app.sel.len()), t.elapsed().as_secs_f64() * 1000.0);

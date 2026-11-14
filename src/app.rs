@@ -3,13 +3,17 @@
 //! bottom.
 
 mod caps;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod cloud;
 mod export_drawing;
 mod grids;
 mod hatch;
 mod ifc;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod inform;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod room_checks;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod reports;
 mod layers;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
@@ -707,6 +711,10 @@ pub enum Message {
     LevelEdit(modeller::levels::LevelEditMessage),
     /// Switch the Modeller's Grid tool on or off.
     GridTool,
+    /// The Modeller's Select tool: every other tool off.
+    SelectTool,
+    /// A key of the Modeller (see modeller::keys), with the interface language its tools are named in.
+    ModelKey(modeller::keys::ModelKey, openaec_ui::Language),
     /// Give the selected join another kind.
     JoinKind(bim_core::ConnectionKind),
     /// Turn the selected join round: its other member runs through.
@@ -1461,6 +1469,7 @@ impl App {
         ));
         self.document.recognise(&model);
         self.model = Some(model);
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         self.collab.model_changed();
         self.section = None;
         self.section_on = false;
@@ -1691,6 +1700,8 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::GridTool => self.toggle_grid_tool(),
+            Message::SelectTool => self.select_tool(),
+            Message::ModelKey(key, l) => self.model_key(key, l),
             Message::LevelEdit(message) => self.level_edit_message(message),
             Message::Browser(message) => self.browser_message(message),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
@@ -1878,11 +1889,11 @@ impl App {
                 }
                 Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
                 Navigate::Context { x, y, width, height } => self.context_click(x, y, width, height),
-                Navigate::Box { x0, y0, x1, y1, width, height, done } => {
+                Navigate::Box { x0, y0, x1, y1, width, height, done, add } => {
                     let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
                     self.box_select = (!done).then_some(rect);
                     if done {
-                        self.select_box(rect, width, height);
+                        self.select_box(rect, width, height, add);
                     }
                 }
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
@@ -2352,6 +2363,8 @@ impl App {
                     self.modeller.refusal = None;
                 }
             }
+            // in the Modeller a tool still on goes, back to Select, before the selection does
+            Message::Escape if self.modeller.in_modeller && self.context_menu.is_none() && self.modeller_escape() => {}
             Message::Escape => {
                 if self.context_menu.take().is_some() {
                     return Task::none();
@@ -2641,19 +2654,23 @@ impl App {
                 looks = (0..index.len()).map(|u| if u == 0 { [0.0; 4] } else { element(u).and_then(|id| view.get(&id)).map_or([0.0; 4], crate::units::unit_look) }).collect();
             }
         }
-        // coloured by a property: each element in the colour of its value
-        if let Some(painted) = self.painted_looks(index.len(), |u| index.owner(u)) {
-            looks = painted;
-        }
-        // a picture of clashes: their elements red and blue, the rest see-through
-        if let Some(shown) = self.clash_looks(index.len(), |u| index.owner(u)) {
-            // what is far from them is left out (its look says so: wholly see-through)
-            for (f, look) in flags.iter_mut().zip(&shown).skip(1) {
-                if look[2] >= 1.0 {
-                    *f |= UNIT_HIDDEN;
-                }
+        // the Collaborator's colours (the web build leaves them out)
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        {
+            // coloured by a property: each element in the colour of its value
+            if let Some(painted) = self.painted_looks(index.len(), |u| index.owner(u)) {
+                looks = painted;
             }
-            looks = shown;
+            // a picture of clashes: their elements red and blue, the rest see-through
+            if let Some(shown) = self.clash_looks(index.len(), |u| index.owner(u)) {
+                // what is far from them is left out (its look says so: wholly see-through)
+                for (f, look) in flags.iter_mut().zip(&shown).skip(1) {
+                    if look[2] >= 1.0 {
+                        *f |= UNIT_HIDDEN;
+                    }
+                }
+                looks = shown;
+            }
         }
         self.unit_looks = Arc::new(looks);
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
@@ -2679,9 +2696,10 @@ impl App {
         self.selection_changed();
     }
 
-    /// Adds what the box `rect` (viewport pixels of a viewport of width × height) holds to the
-    /// selection: elements, and layers without elements; nothing hidden or switched off.
-    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32) {
+    /// Selects what the box `rect` (viewport pixels of a viewport of width × height) holds:
+    /// elements, and layers without elements; nothing hidden or switched off. With `add` beside
+    /// the selection, else in its place.
+    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32, add: bool) {
         let (Some(model), Some(index)) = (self.model.clone(), self.explode_index.clone()) else { return };
         // the elements on layers that are switched on; with every layer on, all of them
         let all_on = self.visible.iter().all(|&v| v);
@@ -2729,6 +2747,10 @@ impl App {
                 UnitOwner::LayerRest(l) => Some(Pickable::Layer(l)),
             })
             .collect();
+        if !add {
+            self.sel.clear();
+            self.set_structural_selection(Vec::new());
+        }
         self.sel.extend(items);
         self.selection_changed();
     }
@@ -3585,7 +3607,10 @@ impl App {
     /// The 3D viewport with its overlays; the shell's workspace.
     pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
         // a picture for a report: the model alone, without the cube, the grids and the hints
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         let clean = self.collab.report_job.is_some();
+        #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+        let clean = false;
         let settings = RenderSettings {
             mode: self.mode,
             grid: self.grid && !clean,
@@ -3611,6 +3636,7 @@ impl App {
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
             looks: &self.unit_looks,
+            drag_selects: self.drag_selects(),
             hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
@@ -3636,6 +3662,8 @@ impl App {
                 "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken: menu, en slepen: pannen",
                 "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press: menu, then drag: pan",
             )
+        } else if let Some(gestures) = self.modeller_gestures(l) {
+            gestures
         } else {
             l.text(
                 "Klik: selecteren · Rechtsklik: menu · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend · W A S D: lopen",
@@ -3718,7 +3746,7 @@ impl App {
         } else {
             self.measure.tool.map(|tool| {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
-            })
+            }).or_else(|| self.select_hint(l))
         };
         // what a click would take, found in this view (not one the camera left)
         let view_proj = self.camera.view_proj(self.aspect());
@@ -4937,7 +4965,7 @@ mod tests {
         let (w, h) = app.viewport_size;
         let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true, add: true }));
         assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
     }
 
@@ -4958,7 +4986,7 @@ mod tests {
         let (ax, ay) = screen_point(&app, Vec3::new(-0.5, 0.0, 5.0));
         let (bx, by) = screen_point(&app, Vec3::new(0.5, 0.0, -1.0));
         let (x0, x1) = (ax.min(bx), ax.max(bx));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true, add: true }));
         let mut got: Vec<u64> = app.sel.items().iter().filter_map(|i| match i { Pickable::Element(id) => Some(*id), _ => None }).collect();
         got.sort_unstable();
         assert_eq!(got, want);
@@ -5023,9 +5051,9 @@ mod tests {
         let (w, h) = app.viewport_size;
         let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false, add: true }));
         assert!(app.box_select.is_some(), "drawn while dragging");
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true, add: true }));
         assert!(app.box_select.is_none());
         assert_eq!(app.sel.len(), 2);
     }

@@ -487,6 +487,8 @@ pub enum Side {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// While a letter waits for its pair: the time to look at.
+    KeyWindow,
     /// The window's size changed (layout units).
     Sized(iced::Size),
     /// The window's size, asked for before a remote command on the window runs.
@@ -540,6 +542,8 @@ pub enum Msg {
 pub struct Studio {
     /// The project shown.
     pub app: App,
+    /// The Modeller's letters typed so far (one waiting for its pair).
+    pub(crate) keys: crate::app::modeller::keys::KeySequence,
     /// Its id, the other open projects with theirs, and the order of the project tabs.
     project: u64,
     parked: Vec<(u64, App)>,
@@ -611,8 +615,32 @@ impl DevSession {
 }
 
 impl Studio {
+    /// The time is `now`: a letter that waited too long for its pair does what it does alone.
+    pub(crate) fn expire_keys(&mut self, now: Instant) {
+        if let Some(step) = self.keys.expire_step(now) {
+            let _ = self.key_step(step);
+        }
+    }
+
+    /// What a letter typed in the Modeller came to: its command, or, when the Modeller has no use
+    /// for the letter, the app's own shortcut on it (F fits, H hides).
+    fn key_step(&mut self, step: crate::app::modeller::keys::Step) -> Task<Msg> {
+        use crate::app::modeller::keys::Step;
+        match step {
+            Step::Key(key) => {
+                let l = self.l();
+                self.update(Msg::App(Message::ModelKey(key, l)))
+            }
+            Step::Letter(c) => match cm::find(&self.commands(), &iced::keyboard::Key::Character(c.to_string().into()), iced::keyboard::Modifiers::empty()) {
+                Some(message) => self.update(message),
+                None => Task::none(),
+            },
+        }
+    }
+
     pub fn new(app: App) -> Self {
         Self {
+            keys: Default::default(),
             app,
             project: 0,
             parked: Vec::new(),
@@ -1095,18 +1123,6 @@ impl Studio {
                 .icon(small("object.hide"), large("object.hide"))
                 .shortcut(key('h'))
                 .enabled(app.has_selection()),
-            // through the clashes with the keys: the next and the one before, accept, reject, issue
-            Command::new("clash.next", l.text("Volgende clash", "Next clash"), go(Message::Collab(crate::app::collab::Event::Step(1)))).shortcut(key('j')).enabled(!app.collab.clashes.is_empty()),
-            Command::new("clash.previous", l.text("Vorige clash", "Previous clash"), go(Message::Collab(crate::app::collab::Event::Step(-1)))).shortcut(key('k')).enabled(!app.collab.clashes.is_empty()),
-            Command::new("clash.accept", l.text("Clash akkoord", "Accept clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Accepted))))
-                .shortcut(key('a'))
-                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
-            Command::new("clash.reject", l.text("Clash afwijzen", "Reject clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Rejected))))
-                .shortcut(key('r'))
-                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
-            Command::new("clash.issue", l.text("Issue van clash", "Issue of clash"), go(Message::Collab(crate::app::collab::Event::IssueFromPicked)))
-                .shortcut(key('t'))
-                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
             Command::new("object.isolate", l.text("Isoleren", "Isolate"), go(Message::IsolateSelection))
                 .icon(small("object.show"), large("object.show"))
                 .shortcut(key('i'))
@@ -1141,6 +1157,11 @@ impl Studio {
                 .enabled(!app.measure.results.is_empty()),
             Command::new("app.settings", l.text("Instellingen…", "Settings…"), Msg::Dialog(Some(Dialog::Settings))).icon(small("ui.settings"), large("ui.settings")).shortcut(Shortcut::ctrl(',')).dialog(),
             Command::new("model.new", l.text("Nieuw model", "New model"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("object.add"), large("object.add")),
+            // the Select tool of the Modeller: on when no other tool is
+            Command::new("model.select", l.text("Selecteren", "Select"), go(Message::SelectTool))
+                .icon(small("view.fit-selection"), large("view.fit-selection"))
+                .mode(app.selecting())
+                .enabled(app.modeller.shown.is_some()),
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_joinable()),
@@ -1164,6 +1185,22 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // through the clashes with the keys: the next and the one before, accept, reject, issue
+        // (the Collaborator's, which the web build leaves out)
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        list.extend([
+            Command::new("clash.next", l.text("Volgende clash", "Next clash"), go(Message::Collab(crate::app::collab::Event::Step(1)))).shortcut(key('j')).enabled(!app.collab.clashes.is_empty()),
+            Command::new("clash.previous", l.text("Vorige clash", "Previous clash"), go(Message::Collab(crate::app::collab::Event::Step(-1)))).shortcut(key('k')).enabled(!app.collab.clashes.is_empty()),
+            Command::new("clash.accept", l.text("Clash akkoord", "Accept clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Accepted))))
+                .shortcut(key('a'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+            Command::new("clash.reject", l.text("Clash afwijzen", "Reject clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Rejected))))
+                .shortcut(key('r'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+            Command::new("clash.issue", l.text("Issue van clash", "Issue of clash"), go(Message::Collab(crate::app::collab::Event::IssueFromPicked)))
+                .shortcut(key('t'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+        ]);
         // move, copy, turn and mirror what is selected
         list.extend(crate::app::transform::TransformKind::ALL.map(|kind| {
             Command::new(kind.id(), kind.label(l), go(Message::Transform(kind)))
@@ -1389,6 +1426,7 @@ impl Studio {
                 let started = self.dev_opens(id, &message);
                 let task = self.app.update(message).map(move |m| Msg::Project(id, m));
                 // a model changed and the rule set asks for it: the clash tests run again
+                #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
                 let task = if self.app.collab.rerun_due() { Task::batch([task, Task::done(Msg::Project(id, Message::Collab(crate::app::collab::Event::Clash)))]) } else { task };
                 if started {
                     if let Some(&shown) = self.dev.as_mut().and_then(|d| d.tab.take()).and_then(|t| self.tabs.get(t)) {
@@ -1546,9 +1584,15 @@ impl Studio {
             // the 3D view (tab 0) stays open
             Msg::CloseTab(i) => return self.update(Msg::App(Message::CloseTab(i))),
             Msg::Key(press) if self.shortcuts.recording() => return self.update(Msg::Shortcuts(sc::Message::Key(press))),
+            Msg::KeyWindow => self.expire_keys(Instant::now()),
             Msg::Key(press) => {
                 use iced::keyboard::{key::Named, Key};
                 if press.key == Key::Named(Named::Escape) {
+                    // a letter waiting for its pair goes, and nothing else
+                    if self.keys.pending().is_some() {
+                        self.keys.clear();
+                        return Task::none();
+                    }
                     if self.dialog.is_some() {
                         return self.update(Msg::Dialog(None));
                     }
@@ -1564,6 +1608,22 @@ impl Studio {
                         if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c)) {
                             return self.update(Msg::App(Message::EditKey(c)));
                         }
+                    }
+                }
+                // in the Modeller a plain letter is a key of its own (see `app::modeller::keys`),
+                // and PageUp / PageDown step through the levels
+                // (not in edit mode, whose own keys came before; its other letters stay the app's)
+                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !press.modifiers.control() && !press.modifiers.alt() {
+                    use crate::app::modeller::keys::{ModelKey, Step};
+                    let steps: Option<Vec<Step>> = match &press.key {
+                        Key::Character(c) => c.chars().next().filter(|c| c.is_ascii_alphabetic()).map(|c| self.keys.steps(c, Instant::now())),
+                        Key::Named(Named::PageUp) => Some(vec![Step::Key(ModelKey::LevelUp)]),
+                        Key::Named(Named::PageDown) => Some(vec![Step::Key(ModelKey::LevelDown)]),
+                        _ => None,
+                    };
+                    if let Some(steps) = steps {
+                        let tasks: Vec<Task<Msg>> = steps.into_iter().map(|step| self.key_step(step)).collect();
+                        return Task::batch(tasks);
                     }
                 }
                 if self.dialog.is_none() {
@@ -1689,6 +1749,8 @@ impl Studio {
             open.map(Msg::App),
             drag,
             openaec_ui::keyboard::presses().map(Msg::Key),
+            // while a letter waits for its pair, the time is looked at every frame
+            if self.keys.pending().is_some() { iced::window::frames().map(|_| Msg::KeyWindow) } else { Subscription::none() },
             openaec_ui::keyboard::navigation().map(Msg::Navigate),
             iced::window::close_requests().map(|_| Msg::CloseWindow),
         ])
@@ -1920,6 +1982,7 @@ impl Studio {
             // two selected elements, and changes. New, open and save are on the File page and in
             // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
+                (l.text("Selecteren", "Select"), vec![large("model.select")]),
                 (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 (l.text("Systeem", "System"), vec![large("model.system")]),
@@ -2251,7 +2314,11 @@ impl Studio {
                         }
                         list.push(w::button(look, l.text("Alle groepen tonen", "Show all groups"), K::Secondary, D::Compact, None, (!hidden.is_empty()).then_some(Msg::RibbonReset))).into()
                     }
-                    SettingsPage::Shortcuts => sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts),
+                    // in the Modeller its own keys follow the commands' shortcuts
+                    SettingsPage::Shortcuts => column![sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts)]
+                        .push((self.product() == Product::Modeller).then(|| crate::app::modeller::key_actions::key_list(look, l)))
+                        .spacing(14)
+                        .into(),
                 };
                 w::dialog(
                     look,
@@ -2858,6 +2925,25 @@ mod tests {
         let studio = Studio::new(App::default());
         let _ = studio.view();
         let _ = studio.backstage_view(studio.look());
+    }
+
+    #[test]
+    fn the_shortcuts_page_of_the_modeller_lists_its_keys() {
+        let mut studio = Studio::new(App::default());
+        studio.dialog = Some(Dialog::Settings);
+        studio.settings_page = SettingsPage::Shortcuts;
+        studio.prefs.language = Language::English;
+        assert!(iced_test::simulator(studio.view()).find("MV").is_err(), "not in the Viewer");
+        studio.set_product(Product::Modeller);
+        // the dialog scrolls: its first rows show, the list itself has them all
+        let mut ui = iced_test::simulator(studio.view());
+        for label in ["MODELLER", "MV", "Move", "Select"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        let mut list = iced_test::simulator(crate::app::modeller::key_actions::key_list::<Msg>(studio.look(), Language::English));
+        for label in ["S", "W", "CL", "FL", "PgUp", "PgDn", "Level up"] {
+            assert!(list.find(label).is_ok(), "{label}");
+        }
     }
 
     #[test]

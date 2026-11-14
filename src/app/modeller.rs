@@ -19,6 +19,9 @@ use std::sync::Arc;
 
 mod grids;
 pub mod browser;
+pub mod key_actions;
+pub mod keys;
+pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 
@@ -156,6 +159,8 @@ pub struct Modeller {
     pub tool: Option<(ModelTool, &'static str)>,
     /// The level being renamed or moved in the Levels tab (see `levels`).
     pub level_edit: Option<levels::LevelEdit>,
+    /// The level worked on when no floor plan is shown (its path): PageUp and PageDown step it.
+    pub level: Option<String>,
     /// The Grid tool is on: two clicks draw a grid line (see `grids`).
     pub grid_tool: bool,
     /// The points clicked so far for the tool (scene coordinates).
@@ -284,7 +289,9 @@ impl App {
     pub(super) fn work_plane(&self) -> (f64, f64, Option<String>) {
         let levels = self.document.levels();
         let shown = self.active_plan.as_deref().and_then(|p| self.document.plan(p)).and_then(|plan| self.document.level(&plan.level));
-        let level = shown.or_else(|| levels.iter().min_by(|a, b| a.elevation.abs().total_cmp(&b.elevation.abs())));
+        // the floor plan shown, else the level stepped to, else the one nearest zero
+        let stepped = self.modeller.level.as_deref().and_then(|p| self.document.level(p));
+        let level = shown.or(stepped).or_else(|| levels.iter().min_by(|a, b| a.elevation.abs().total_cmp(&b.elevation.abs())));
         let Some(level) = level else { return (0.0, STOREY, None) };
         let above = levels.iter().map(|l| l.elevation).filter(|&z| z > level.elevation + 0.1).fold(f64::INFINITY, f64::min);
         let height = if above.is_finite() { above - level.elevation } else { STOREY };

@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn revit_views_show_their_frames() {
         let plan = SavedView {
-            folder: Vec::new(), style: None,
+            folder: Vec::new(), style: None, drawing: None,
             name: "Level 1".into(),
             kind: ViewKind::Plan,
             camera: None,
@@ -290,8 +290,8 @@ mod tests {
         };
         // a section looking north (+y) from y = -1, 8 m wide and 3 m high
         let crop = SectionBox::from_frame(Vec3::new(0.0, -1.0, 0.0), [Vec3::X, Vec3::Z, Vec3::Y], Vec3::new(0.0, 0.0, 0.0), Vec3::new(8.0, 3.0, 6.0)).unwrap();
-        let section = SavedView { folder: Vec::new(), style: None, name: "Section 1".into(), kind: ViewKind::Section, camera: None, clip: Some(crop), plan: None, level: None };
-        let three_d = SavedView { folder: Vec::new(), style: None, name: "{3D}".into(), kind: ViewKind::ThreeD, camera: None, clip: None, plan: None, level: None };
+        let section = SavedView { folder: Vec::new(), style: None, drawing: None, name: "Section 1".into(), kind: ViewKind::Section, camera: None, clip: Some(crop), plan: None, level: None };
+        let three_d = SavedView { folder: Vec::new(), style: None, drawing: None, name: "{3D}".into(), kind: ViewKind::ThreeD, camera: None, clip: None, plan: None, level: None };
         let v = saved_views(&[plan, section, three_d], Some(&bounds()));
         let frame = of(&v, FRAME);
         assert_eq!(frame.len(), 8, "two frames: {frame:?}");

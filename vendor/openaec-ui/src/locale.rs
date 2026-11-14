@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 /// the application installs ([`install_catalogue`]), and falls back to English where the
 /// catalogue has no text.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Language { #[default] Dutch, English, German, French }
+pub enum Language { #[default] Dutch, English, German, French, Spanish, Italian, Portuguese, Polish, Swedish, Turkish }
 
 /// Finds the text of an English `en` in a language's catalogue.
 pub type Lookup = fn(Language, &'static str) -> Option<&'static str>;
@@ -20,7 +20,7 @@ pub fn install_catalogue(lookup: Lookup) {
 }
 
 impl Language {
-    pub const ALL: [Self; 4] = [Self::Dutch, Self::English, Self::German, Self::French];
+    pub const ALL: [Self; 10] = [Self::Dutch, Self::English, Self::German, Self::French, Self::Spanish, Self::Italian, Self::Portuguese, Self::Polish, Self::Swedish, Self::Turkish];
 
     /// The text in this language: `nl` in Dutch, `en` in English, the catalogue's text for `en`
     /// in the others.
@@ -44,7 +44,18 @@ impl Language {
 
     /// Its ISO 639-1 code.
     pub fn code(self) -> &'static str {
-        match self { Self::Dutch => "nl", Self::English => "en", Self::German => "de", Self::French => "fr" }
+        match self {
+            Self::Dutch => "nl",
+            Self::English => "en",
+            Self::German => "de",
+            Self::French => "fr",
+            Self::Spanish => "es",
+            Self::Italian => "it",
+            Self::Portuguese => "pt",
+            Self::Polish => "pl",
+            Self::Swedish => "sv",
+            Self::Turkish => "tr",
+        }
     }
 
     /// The language of an ISO 639-1 code or a locale that starts with one (`de`, `fr-BE`).
@@ -66,6 +77,12 @@ impl std::fmt::Display for Language {
             Self::English => "English",
             Self::German => "Deutsch",
             Self::French => "Français",
+            Self::Spanish => "Español",
+            Self::Italian => "Italiano",
+            Self::Portuguese => "Português",
+            Self::Polish => "Polski",
+            Self::Swedish => "Svenska",
+            Self::Turkish => "Türkçe",
         })
     }
 }
@@ -83,7 +100,8 @@ mod tests {
         assert_eq!(Language::from_code("fr-BE"), Some(Language::French));
         assert_eq!(Language::from_code("DE"), Some(Language::German));
         assert_eq!(Language::from_code("x"), None);
-        assert_eq!(Language::from_code("es"), None);
+        assert_eq!(Language::from_code("es"), Some(Language::Spanish));
+        assert_eq!(Language::from_code("zz"), None);
     }
 
     #[test]

@@ -12,9 +12,15 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// The catalogues, by language: the file's text.
-const CATALOGUES: [(Language, &str); 2] = [
+const CATALOGUES: [(Language, &str); 8] = [
     (Language::German, include_str!("../locales/de.json")),
     (Language::French, include_str!("../locales/fr.json")),
+    (Language::Spanish, include_str!("../locales/es.json")),
+    (Language::Italian, include_str!("../locales/it.json")),
+    (Language::Portuguese, include_str!("../locales/pt.json")),
+    (Language::Polish, include_str!("../locales/pl.json")),
+    (Language::Swedish, include_str!("../locales/sv.json")),
+    (Language::Turkish, include_str!("../locales/tr.json")),
 ];
 
 #[derive(Deserialize)]

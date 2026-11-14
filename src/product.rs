@@ -53,6 +53,15 @@ impl Product {
         }
     }
 
+    /// How far along it is, said beside its name on the switch where it is not ready to work
+    /// with (the same in every language, as its name is).
+    pub fn stage(self) -> Option<&'static str> {
+        match self {
+            Product::Modeller => Some("(alpha, not usable)"),
+            Product::Viewer | Product::Collaborator => None,
+        }
+    }
+
     /// What it is for, as the switch's tooltip.
     pub fn purpose(self, l: Language) -> &'static str {
         match self {

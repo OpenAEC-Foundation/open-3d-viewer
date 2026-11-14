@@ -735,6 +735,9 @@ pub struct SavedView {
     pub folder: Vec<String>,
     /// How it draws the model, where its file says (a 3D view's visual style).
     pub style: Option<ViewStyle>,
+    /// Its drawing in the project document, where the file's drawings are read: a floor plan,
+    /// section, elevation or detail then opens as that drawing, as its sheets show it.
+    pub drawing: Option<String>,
 }
 
 /// How a saved view draws the model.

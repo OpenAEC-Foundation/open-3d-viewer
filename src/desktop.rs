@@ -420,7 +420,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         if let Some(name) = &args.saved_view {
             let model = app.model.clone().ok_or("no model")?;
             let i = model.views.iter().position(|v| &v.name == name).ok_or(format!("no view {name} in the file"))?;
-            app.apply_view(i);
+            let _ = app.update(Message::ApplyView(i));
             app.finish_animation();
         }
         if let Some(name) = &args.draft {

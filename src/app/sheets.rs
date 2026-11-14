@@ -870,7 +870,7 @@ mod tests {
             ..Default::default()
         };
         let mut model = Model::new("house.rvt".into(), "Revit", vec![layer]);
-        model.views = vec![SavedView { folder: Vec::new(), style: None, name: "Level 1".into(), kind: ViewKind::Plan, camera: None, clip: None, plan: None, level: None }];
+        model.views = vec![SavedView { folder: Vec::new(), style: None, drawing: None, name: "Level 1".into(), kind: ViewKind::Plan, camera: None, clip: None, plan: None, level: None }];
         let viewport = |view| SheetViewport {
             title: "Level 1".into(),
             view,

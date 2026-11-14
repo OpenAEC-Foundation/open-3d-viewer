@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod grids;
+pub mod browser;
 pub mod levels;
 pub(super) mod shape_handles;
 

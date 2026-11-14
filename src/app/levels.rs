@@ -23,6 +23,8 @@ pub enum ExplorerTab {
     Views,
     /// The project's library of materials and types.
     Library,
+    /// The Modeller's project browser: views, levels, grid lines and building components.
+    Project,
 }
 
 /// The form of a new level, as typed.
@@ -80,7 +82,11 @@ impl App {
                 .style(move |_, s| p.ribbon_button(active, s))
                 .on_press(Message::ExplorerTab(t))
         };
+        // the Modeller's project browser comes first; outside the Modeller it is not there
+        let browser = self.has_project_browser();
+        let tabs = row![tab(l.text("Project", "Project"), ExplorerTab::Project)].spacing(2);
         let tabs = row![
+            browser.then_some(tabs),
             tab(l.text("Model", "Model"), ExplorerTab::Model),
             tab(l.text("Niveaus", "Levels"), ExplorerTab::Levels),
             tab(l.text("Weergaven", "Views"), ExplorerTab::Views),
@@ -90,7 +96,8 @@ impl App {
         .wrap()
         .vertical_spacing(2);
         let body = match self.explorer_tab {
-            ExplorerTab::Model => self.model_body(p, l),
+            ExplorerTab::Project if browser => self.project_browser(p, l),
+            ExplorerTab::Model | ExplorerTab::Project => self.model_body(p, l),
             ExplorerTab::Levels => self.levels_body(p, l),
             ExplorerTab::Views => self.views_body(p, l),
             ExplorerTab::Library => self.library_body(p, l),

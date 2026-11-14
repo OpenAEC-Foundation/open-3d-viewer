@@ -221,7 +221,7 @@ impl App {
     pub(super) fn new_model(&mut self, level: &str) {
         let empty = Arc::new(Model::new(PathBuf::from("model.ifcx"), "IFCX", Vec::new()));
         self.set_model(empty.clone());
-        self.modeller = Modeller { shown: Some(empty.id), ..Modeller::default() };
+        self.modeller = Modeller { shown: Some(empty.id), in_modeller: self.modeller.in_modeller, ..Modeller::default() };
         let _ = self.document.add_level(level, 0.0);
         self.grid = true;
         // nothing to fit yet: look at the work plane from above and aside, 20 m around

@@ -1355,7 +1355,8 @@ impl App {
         self.parked_histories.clear();
         self.new_document();
         self.models = vec![ModelEntry::new(model.clone(), 0)];
-        self.modeller = modeller::Modeller::default();
+        // the product shown stays the one it was
+        self.modeller = modeller::Modeller { in_modeller: self.modeller.in_modeller, ..modeller::Modeller::default() };
         self.set_scene(model.clone());
         self.adopt_elements(&model);
     }

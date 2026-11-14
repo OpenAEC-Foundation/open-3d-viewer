@@ -733,7 +733,15 @@ impl Studio {
                 }
             }
         }
+        // the Modeller's explorer opens on its project browser; elsewhere that tab is not there
+        let (browser, model) = (crate::app::ExplorerTab::Project, crate::app::ExplorerTab::Model);
+        if product == Product::Modeller && self.product() != product && self.app.explorer_tab == model {
+            self.app.explorer_tab = browser;
+        } else if product != Product::Modeller && self.app.explorer_tab == browser {
+            self.app.explorer_tab = model;
+        }
         self.prefs.product = product;
+        self.app.modeller.in_modeller = product == Product::Modeller;
         self.backstage = false;
         self.ribbon_folded = false;
         self.save_prefs();

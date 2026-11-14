@@ -1154,6 +1154,11 @@ impl Studio {
                 .enabled(!app.measure.results.is_empty()),
             Command::new("app.settings", l.text("Instellingen…", "Settings…"), Msg::Dialog(Some(Dialog::Settings))).icon(small("ui.settings"), large("ui.settings")).shortcut(Shortcut::ctrl(',')).dialog(),
             Command::new("model.new", l.text("Nieuw model", "New model"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("object.add"), large("object.add")),
+            // the Select tool of the Modeller: on when no other tool is
+            Command::new("model.select", l.text("Selecteren", "Select"), go(Message::SelectTool))
+                .icon(small("view.fit-selection"), large("view.fit-selection"))
+                .mode(app.selecting())
+                .enabled(app.modeller.shown.is_some()),
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_joinable()),
@@ -1962,6 +1967,7 @@ impl Studio {
             // two selected elements, and changes. New, open and save are on the File page and in
             // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
+                (l.text("Selecteren", "Select"), vec![large("model.select")]),
                 (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 (l.text("Systeem", "System"), vec![large("model.system")]),

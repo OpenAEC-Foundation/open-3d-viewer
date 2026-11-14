@@ -2358,6 +2358,8 @@ impl App {
                     self.modeller.refusal = None;
                 }
             }
+            // in the Modeller a tool still on goes, back to Select, before the selection does
+            Message::Escape if self.modeller.in_modeller && self.context_menu.is_none() && self.modeller_escape() => {}
             Message::Escape => {
                 if self.context_menu.take().is_some() {
                     return Task::none();
@@ -3724,7 +3726,7 @@ impl App {
         } else {
             self.measure.tool.map(|tool| {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
-            })
+            }).or_else(|| self.select_hint(l))
         };
         // what a click would take, found in this view (not one the camera left)
         let view_proj = self.camera.view_proj(self.aspect());

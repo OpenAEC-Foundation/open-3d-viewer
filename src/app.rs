@@ -3,13 +3,17 @@
 //! bottom.
 
 mod caps;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod cloud;
 mod export_drawing;
 mod grids;
 mod hatch;
 mod ifc;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod inform;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod room_checks;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod reports;
 mod layers;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
@@ -1465,6 +1469,7 @@ impl App {
         ));
         self.document.recognise(&model);
         self.model = Some(model);
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         self.collab.model_changed();
         self.section = None;
         self.section_on = false;
@@ -2649,19 +2654,23 @@ impl App {
                 looks = (0..index.len()).map(|u| if u == 0 { [0.0; 4] } else { element(u).and_then(|id| view.get(&id)).map_or([0.0; 4], crate::units::unit_look) }).collect();
             }
         }
-        // coloured by a property: each element in the colour of its value
-        if let Some(painted) = self.painted_looks(index.len(), |u| index.owner(u)) {
-            looks = painted;
-        }
-        // a picture of clashes: their elements red and blue, the rest see-through
-        if let Some(shown) = self.clash_looks(index.len(), |u| index.owner(u)) {
-            // what is far from them is left out (its look says so: wholly see-through)
-            for (f, look) in flags.iter_mut().zip(&shown).skip(1) {
-                if look[2] >= 1.0 {
-                    *f |= UNIT_HIDDEN;
-                }
+        // the Collaborator's colours (the web build leaves them out)
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        {
+            // coloured by a property: each element in the colour of its value
+            if let Some(painted) = self.painted_looks(index.len(), |u| index.owner(u)) {
+                looks = painted;
             }
-            looks = shown;
+            // a picture of clashes: their elements red and blue, the rest see-through
+            if let Some(shown) = self.clash_looks(index.len(), |u| index.owner(u)) {
+                // what is far from them is left out (its look says so: wholly see-through)
+                for (f, look) in flags.iter_mut().zip(&shown).skip(1) {
+                    if look[2] >= 1.0 {
+                        *f |= UNIT_HIDDEN;
+                    }
+                }
+                looks = shown;
+            }
         }
         self.unit_looks = Arc::new(looks);
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
@@ -3598,7 +3607,10 @@ impl App {
     /// The 3D viewport with its overlays; the shell's workspace.
     pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
         // a picture for a report: the model alone, without the cube, the grids and the hints
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         let clean = self.collab.report_job.is_some();
+        #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+        let clean = false;
         let settings = RenderSettings {
             mode: self.mode,
             grid: self.grid && !clean,

@@ -345,7 +345,7 @@ impl Fit {
 /// A text of a drawing on the canvas: `on` places its points, `scale` is what a metre of the
 /// drawing is on screen. Left out when its letters are too small to see or it lies off the canvas.
 /// An outline cut to the box `lo`..`hi` (Sutherland-Hodgman): what of the region lies in it.
-fn clip_outline(outline: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> Vec<[f64; 2]> {
+pub(super) fn clip_outline(outline: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> Vec<[f64; 2]> {
     let mut out = outline.to_vec();
     // each side of the box in turn: the axis, the bound, and whether inside is above it
     for (k, bound, above) in [(0, lo[0], true), (0, hi[0], false), (1, lo[1], true), (1, hi[1], false)] {

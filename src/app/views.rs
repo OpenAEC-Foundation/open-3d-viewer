@@ -202,7 +202,8 @@ impl App {
                 name: plan.name.clone(),
                 kind: ViewKind::Plan,
                 camera: None,
-                clip: None,
+                // its crop: what the camera frames
+                clip: plan.crop.map(|(lo, hi)| SectionBox::around(&crate::model::Bounds { min: [lo[0] as f32, lo[1] as f32, low as f32], max: [hi[0] as f32, hi[1] as f32, high as f32] })),
                 plan: Some(PlanRange { low: low as f32, high: high as f32, from_below: plan.kind.seen_from_below() }),
                 level: self.document.level(&plan.level).map(|l| l.name.clone()),
             });

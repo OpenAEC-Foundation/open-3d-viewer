@@ -257,6 +257,9 @@ pub struct App {
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
+    /// A view's tab draws it as a sheet does: on paper, its cut in ink (else over the model
+    /// as the 3D view shows it).
+    pub drawing_on_paper: bool,
     /// The section tool of the sheets is on: two clicks on a floor plan draw a section.
     pub section_tool: bool,
     /// What is picked on the sheet shown: a placed view or a dimension.
@@ -470,6 +473,8 @@ pub enum Message {
     MoveOnSheet(Arc<str>, usize, [f64; 2]),
     /// Switch the dimension tool of the sheets on or off.
     DimensionTool(bool),
+    /// A view's tab draws it as on a sheet, or over the model.
+    DrawingOnPaper(bool),
     /// Crop a floor plan (its path) to a rectangle in plan, or show all of it (`None`).
     CropPlan(Arc<str>, Option<([f64; 2], [f64; 2])>),
     /// Pick a placed view or a dimension on the sheet shown (`None`: nothing).
@@ -811,6 +816,7 @@ impl Default for App {
             views_3d_labels: Vec::new(),
             export_menu: false,
             dimension_tool: false,
+            drawing_on_paper: true,
             section_tool: false,
             sheet_pick: None,
             cut_edit: None,
@@ -1194,8 +1200,9 @@ impl App {
         }
         let Some(world) = self.world_bounds() else { return false };
         let clip = match (view.plan, view.clip) {
-            (Some(plan), _) => {
-                let mut b = SectionBox::around(&world);
+            (Some(plan), crop) => {
+                // within its crop, where it has one
+                let mut b = crop.unwrap_or_else(|| SectionBox::around(&world));
                 b.min.z = plan.low;
                 b.max.z = plan.high.max(plan.low + 0.01);
                 Some(b)
@@ -2035,6 +2042,7 @@ impl App {
                 self.section_tool = false;
                 self.new_section(from, to, word);
             }
+            Message::DrawingOnPaper(on) => self.drawing_on_paper = on,
             Message::SectionTool(on) => {
                 self.section_tool = on;
                 if on {

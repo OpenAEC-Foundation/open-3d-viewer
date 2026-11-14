@@ -23,7 +23,7 @@ pub enum Product {
 }
 
 impl Product {
-    pub const ALL: [Product; 3] = [Product::Viewer, Product::Modeller, Product::Collaborator];
+    pub const ALL: [Product; 3] = [Product::Viewer, Product::Collaborator, Product::Modeller];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {

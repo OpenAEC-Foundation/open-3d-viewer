@@ -24,6 +24,10 @@ struct Uniforms {
 // (WebGL2 has no storage buffers): xyz its offset (world) in the exploded view, w its flags
 // (`src/units.rs`); unit 0 never moves and has no flags
 @group(0) @binding(1) var offsets: texture_2d<f32>;
+// how every unit looks otherwise than its material, at the same place in a texture of its own
+// (`crate::units::unit_looks`): x the colour of its surfaces and y of its lines (0xRRGGBB + 1;
+// 0 none), z its transparency (0..1), w halftone (1)
+@group(0) @binding(2) var looks: texture_2d<f32>;
 const OFFSETS_WIDTH: u32 = 1024u;
 const UNIT_HIDDEN: u32 = 1u;
 const UNIT_SELECTED: u32 = 2u;
@@ -43,10 +47,26 @@ struct VertexOut {
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
     @location(3) @interpolate(flat) flags: u32,
+    @location(4) @interpolate(flat) look: vec4<f32>,
 };
 
 fn unit_state(v: VertexIn) -> vec4<f32> {
     return textureLoad(offsets, vec2<i32>(i32(v.unit % OFFSETS_WIDTH), i32(v.unit / OFFSETS_WIDTH)), 0);
+}
+
+fn unit_look(v: VertexIn) -> vec4<f32> {
+    return textureLoad(looks, vec2<i32>(i32(v.unit % OFFSETS_WIDTH), i32(v.unit / OFFSETS_WIDTH)), 0);
+}
+
+// A colour a look gives (0xRRGGBB + 1), in linear space.
+fn unpacked(packed: f32) -> vec3<f32> {
+    let c = u32(packed + 0.5) - 1u;
+    return to_linear(vec3<f32>(f32((c >> 16u) & 255u), f32((c >> 8u) & 255u), f32(c & 255u)) / 255.0);
+}
+
+// Halftone: halfway to white.
+fn faint(c: vec3<f32>, look: vec4<f32>) -> vec3<f32> {
+    return select(c, mix(c, vec3<f32>(1.0), 0.6), look.w > 0.5);
 }
 
 fn unit_flags(state: vec4<f32>) -> u32 {
@@ -67,6 +87,9 @@ fn vs_main(v: VertexIn) -> VertexOut {
     out.normal = (u.model * vec4<f32>(v.normal, 0.0)).xyz;
     out.color = v.color;
     out.flags = flags;
+    out.look = unit_look(v);
+    // a see-through unit: its surfaces in the glass pass
+    out.color.a = out.color.a * (1.0 - out.look.z);
     out.clip = u.view_proj * world;
     if ((flags & UNIT_HIDDEN) != 0u) {
         out.clip = NOWHERE;
@@ -130,7 +153,10 @@ fn shade(in: VertexOut) -> vec3<f32> {
     if (dot(n, view_dir) < 0.0) {
         n = -n;
     }
-    let base = to_linear(in.color.rgb);
+    var base = to_linear(in.color.rgb);
+    if (in.look.x > 0.5) {
+        base = unpacked(in.look.x);
+    }
     let key = normalize(vec3<f32>(0.45, -0.35, 0.82));
     let fill = normalize(vec3<f32>(-0.6, 0.5, 0.35));
     let sky = 0.5 + 0.5 * n.z;
@@ -153,8 +179,10 @@ fn selected(lit: vec3<f32>) -> vec3<f32> {
 fn surface(in: VertexOut) -> vec3<f32> {
     var lit = shade(in);
     if (u.eye.w > 1.5) {
-        lit = vec3<f32>(1.0);
+        // white, or the colour a solid pattern gives it
+        lit = select(vec3<f32>(1.0), unpacked(in.look.x), in.look.x > 0.5);
     }
+    lit = faint(lit, in.look);
     if ((in.flags & UNIT_SELECTED) != 0u) {
         return selected(lit);
     }
@@ -189,7 +217,10 @@ fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
     if ((in.flags & UNIT_SELECTED) != 0u) {
         return vec4<f32>(encode(to_linear(vec3<f32>(0.851, 0.467, 0.024))), 1.0);
     }
-    return vec4<f32>(encode(to_linear(in.color.rgb) * u.params.y), in.color.a);
+    if (in.look.y > 0.5) {
+        return vec4<f32>(encode(faint(unpacked(in.look.y), in.look)), in.color.a);
+    }
+    return vec4<f32>(encode(faint(to_linear(in.color.rgb) * u.params.y, in.look)), in.color.a);
 }
 
 // ---- point clouds ---------------------------------------------------------------------------------
@@ -223,6 +254,7 @@ fn vs_point(p: PointIn, @builtin(vertex_index) vi: u32) -> VertexOut {
     out.normal = vec3<f32>(0.0);
     out.color = p.color;
     out.flags = 0u;
+    out.look = vec4<f32>(0.0);
     return out;
 }
 

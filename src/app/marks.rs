@@ -148,6 +148,7 @@ impl App {
             word: l.text("Doorsnede", "Section"),
             pick: self.mark_pick,
             palette: p,
+            on_paper: self.drawing_on_paper,
         })
     }
 
@@ -169,6 +170,11 @@ impl App {
         if is_plan {
             bar = bar.push(tool(l.text("Doorsnede", "Section"), cutting, Message::SectionTool(!cutting)));
         }
+        // as on a sheet, or over the model; and laid in the 3D view where it is taken
+        let (on_paper, laid) = (self.drawing_on_paper, self.projected.contains(view));
+        bar = bar
+            .push(tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)))
+            .push(tool(l.text("In 3D", "In 3D"), laid, Message::ProjectView(Arc::from(view))));
         bar = bar
             .push(tool(l.text("Standaard maatvoering", "Standard dimensions"), false, Message::StandardDimensions(Arc::from(view))))
             .push(self.export_control(p, l))
@@ -420,6 +426,8 @@ pub(super) struct ViewMarks {
     word: &'static str,
     pick: Option<MarkPick>,
     palette: Palette,
+    /// Drawn as a sheet draws it: on paper, its cut in ink.
+    on_paper: bool,
 }
 
 /// The first point of a dimension being made, where the pointer snaps to now, a text being
@@ -650,12 +658,47 @@ impl canvas::Program<Message> for ViewMarks {
         let screen = self.screen(bounds);
         let mut frame = Frame::new(renderer, bounds.size());
         let ink = p.text;
+        // as a sheet draws it: on paper, over the model as the 3D view shows it
+        if self.on_paper {
+            let paper = if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE };
+            frame.fill_rectangle(Point::ORIGIN, bounds.size(), paper);
+        }
         // the cut faces in their hatch, over the model's own cut fill
         if let Some(cut) = &self.cut {
             let per_metre = cut.extent.map_or(0.0, |(lo, _)| self.paper(&screen, lo.map(f64::from)) / self.scale as f32);
-            super::hatch::draw_fills(&mut frame, cut, self.crop, &|q| self.px(&screen, q), per_metre, Some(ink));
+            super::hatch::draw_fills(&mut frame, cut, self.crop, &|q| self.px(&screen, q), per_metre, if self.on_paper { None } else { Some(ink) });
+            if self.on_paper {
+                // its lines within its crop: what is seen beyond the cut thin and grey, the cut
+                // itself in ink, then those the view's filters give a pen of their own
+                let mut stroke = |segments: &[[[f32; 2]; 2]], color: Color, width: f32| {
+                    let path = Path::new(|path| {
+                        for s in segments {
+                            let (a, b) = (s[0].map(f64::from), s[1].map(f64::from));
+                            let Some((a, b)) = (match self.crop {
+                                Some((lo, hi)) => super::paper::clip(a, b, lo, hi),
+                                None => Some((a, b)),
+                            }) else { continue };
+                            if let (Some(a), Some(b)) = (self.px(&screen, a), self.px(&screen, b)) {
+                                path.move_to(a);
+                                path.line_to(b);
+                            }
+                        }
+                    });
+                    frame.stroke(&path, Stroke::default().with_color(color).with_width(width));
+                };
+                let beyond = Color { a: 0.55, ..ink };
+                stroke(&cut.below, beyond, 0.5);
+                stroke(&cut.segments, ink, 1.1);
+                for inked in &cut.inked {
+                    let (plain, width) = if inked.cut { (ink, 1.1) } else { (beyond, 0.5) };
+                    let color = inked.ink.color.map_or(plain, |c| Color::from_rgb8(c[0], c[1], c[2]));
+                    stroke(&inked.lines, color, inked.ink.wide(width, inked.cut));
+                }
+            }
         }
-        for (name, from, to) in &self.sections {
+        // the sections drawn on the plan: with the section tool, or over the model (as on a sheet
+        // the view shows the marks it has itself)
+        for (name, from, to) in self.sections.iter().filter(|_| self.cutting || !self.on_paper) {
             let letter = name.rsplit(' ').next().unwrap_or(name).to_string();
             self.draw_section(&mut frame, &screen, *from, *to, letter, ink);
         }
@@ -668,6 +711,11 @@ impl canvas::Program<Message> for ViewMarks {
         for fill in &self.fills {
             let outline = Path::new(|path| {
                 for points in &fill.loops {
+                    // within the view's crop, as on a sheet
+                    let points = &match self.crop {
+                        Some((lo, hi)) => super::sheets::clip_outline(points, lo, hi),
+                        None => points.clone(),
+                    };
                     let on: Vec<Point> = points.iter().filter_map(|p| self.px(&screen, *p)).collect();
                     if on.len() < 3 || on.len() != points.len() {
                         continue;

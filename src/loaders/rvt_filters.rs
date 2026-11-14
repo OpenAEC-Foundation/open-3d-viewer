@@ -254,6 +254,104 @@ impl<'a> Filters<'a> {
     }
 }
 
+impl Filters<'_> {
+    /// How a 3D view draws its elements otherwise than their materials: what its categories are
+    /// set to (`GraphicOverrides`: the colour of their lines, halftone, transparency, the colour
+    /// of a solid surface pattern), with its filters over that. `from` is the view's record or
+    /// its template's.
+    pub(super) fn looks_3d(&mut self, from: &ObjectView) -> HashMap<u64, crate::hatching::Look> {
+        let mut by_category: HashMap<i64, crate::hatching::Look> = HashMap::new();
+        if let Some(over) = from.get("m_oGraphicOverrides").and_then(|v| object(from, v)) {
+            // the pairs of a list: a category and what it is set to
+            let pairs = |field: &str| objects(from, over, field).into_iter().filter_map(|p| Some((p.get("first")?.element()?, p.get("second")?)));
+            let ids = |field: &str| over.get(field).and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|v| v.element()).collect::<HashSet<i64>>();
+            let given = |c: i64| (c >= 0 && c != NO_COLOR).then(|| super::rvt_materials::rgb(c));
+            for (category, style) in pairs("m_gStylesProj") {
+                // black is what a line is anyway: an override that leaves the colour gives 0
+                let color = object(from, style).and_then(|s| s.get("m_color")?.as_i64()).filter(|c| *c != 0).and_then(given);
+                by_category.entry(category).or_default().seen_line.color = color;
+            }
+            for category in ids("m_halftones") {
+                by_category.entry(category).or_default().halftone = true;
+            }
+            for (category, t) in pairs("m_surfacesTransparency") {
+                by_category.entry(category).or_default().transparency = t.as_i64().map_or(0, |t| t.clamp(0, 100) as u8);
+            }
+            // a surface colour shows where a solid pattern covers the surface
+            let hidden = ids("m_fillHiddenProj");
+            let patterns: HashMap<i64, i64> = pairs("m_fillPatternsProj").filter_map(|(c, p)| Some((c, p.element().or_else(|| object(from, p)?.get("m_fillPatternId")?.element())?))).collect();
+            for (category, c) in pairs("m_fillColorsProj") {
+                let solid = patterns.get(&category).is_some_and(|&id| self.solid(id));
+                if let (true, false, Some(color)) = (solid, hidden.contains(&category), c.as_i64().and_then(given)) {
+                    by_category.entry(category).or_default().surface = Some(color);
+                }
+            }
+        }
+        let mut out: HashMap<u64, crate::hatching::Look> = HashMap::new();
+        for (category, look) in by_category.into_iter().filter(|(_, l)| !l.is_empty()) {
+            for &element in self.by_category.get(&category).into_iter().flatten() {
+                out.insert(element, look.clone());
+            }
+        }
+        for (element, look) in self.looks(from) {
+            let under = out.remove(&element).unwrap_or_default();
+            out.insert(element, look.over(&under));
+        }
+        out
+    }
+
+    /// Whether a fill pattern fills solid.
+    fn solid(&mut self, id: i64) -> bool {
+        let doc = self.doc;
+        self.fills.entry(id).or_insert_with(|| super::rvt_materials::fill_pattern(doc, id)).as_ref().is_some_and(|(grids, _)| grids.is_empty())
+    }
+
+    /// What the discipline of a view (`from`: its record or its template's) does to its
+    /// elements: a structural view leaves out the walls that carry nothing; a view of a building
+    /// service (mechanical, electrical, plumbing) draws what is not of a service in halftone.
+    /// The hidden, and the halftone.
+    pub(super) fn discipline(&mut self, from: &ObjectView) -> (HashSet<u64>, HashSet<u64>) {
+        let discipline = values(from).get(&DISCIPLINE).and_then(|s| match s {
+            Said::Number(n) => Some(*n as i64),
+            Said::Text(_) => None,
+        });
+        let (mut hidden, mut faint) = (HashSet::new(), HashSet::new());
+        match discipline {
+            Some(STRUCTURAL) => {
+                for &wall in self.by_category.get(&WALLS).into_iter().flatten() {
+                    let doc = self.doc;
+                    let said = self.values.entry(wall).or_insert_with(|| doc.object(wall).map(|o| values(&o)).unwrap_or_default());
+                    if said.get(&WALL_STRUCTURAL) == Some(&Said::Number(0.0)) {
+                        hidden.insert(wall);
+                    }
+                }
+            }
+            Some(MECHANICAL | ELECTRICAL | PLUMBING) => {
+                for elements in self.by_category.iter().filter(|(c, _)| !SERVICES.contains(c)).map(|(_, e)| e) {
+                    faint.extend(elements.iter().copied());
+                }
+            }
+            _ => {}
+        }
+        (hidden, faint)
+    }
+}
+
+/// A view's discipline (`VIEW_DISCIPLINE`), and what it can be.
+const DISCIPLINE: i64 = -1005163;
+const STRUCTURAL: i64 = 2;
+const MECHANICAL: i64 = 4;
+const ELECTRICAL: i64 = 8;
+const PLUMBING: i64 = 16;
+/// The category of walls.
+const WALLS: i64 = -2000011;
+/// The categories of the building services: ducts, pipes, cable trays and conduits with their
+/// fittings and accessories, and the equipment, fixtures and devices on them.
+const SERVICES: [i64; 29] = [
+    -2008000, -2008010, -2008016, -2008013, -2008020, -2008123, -2008122, -2008044, -2008049, -2008055, -2008050, -2001160, -2001140, -2001040, -2001060,
+    -2001120, -2008087, -2008130, -2008126, -2008132, -2008128, -2008081, -2008083, -2008085, -2008079, -2008077, -2008075, -2008099, -2008039,
+];
+
 /// Whether a filter's setting shows what it holds for.
 fn shown(setting: &NestedObject) -> bool {
     matches!(setting.get("m_bVisibilityFlag"), Some(FieldValue::Bool(true)))
@@ -276,6 +374,11 @@ fn look_of(doc: &rvt_read::Document, view: &ObjectView, over: &NestedObject, fil
     // a pen: none is -1
     let pen = |part: &str| inner(part, "m_penNumber").and_then(|v| v.as_i64()).filter(|p| *p > 0);
     let ink = |part: &str| crate::drawing::Ink { color: color(part), width: None };
+    // the colour of its surfaces where a solid pattern covers them
+    let solid = |id: i64| fills.entry(id).or_insert_with(|| super::rvt_materials::fill_pattern(doc, id)).as_ref().is_some_and(|(grids, _)| grids.is_empty());
+    let surface_pattern = inner("m_oProjFillPattern", "m_fillPatternId").and_then(|v| v.element()).filter(|id| *id > 0);
+    let surface = color("m_oProjFillColor").filter(|_| flag("m_bProjFillPatternVisible") != Some(false) && surface_pattern.is_some_and(solid));
+    let transparency = inner("m_oSurfacesTransparency", "m_transparency").and_then(|v| v.as_i64()).map_or(0, |t| t.clamp(0, 100) as u8);
     crate::hatching::Look {
         cut_line: ink("m_oCutPenColor"),
         seen_line: ink("m_oProjPenColor"),
@@ -286,6 +389,8 @@ fn look_of(doc: &rvt_read::Document, view: &ObjectView, over: &NestedObject, fil
         behind: color("m_oCutBackgroundPatternColorOverrider"),
         no_pattern: flag("m_bCutFillPatternVisible") == Some(false),
         no_behind: flag("m_bCutBackgroundFillPatternVisible") == Some(false),
+        surface,
+        transparency,
     }
 }
 

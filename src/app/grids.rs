@@ -31,6 +31,10 @@ impl App {
     pub(super) fn datums(&self) -> Vec<Datum> {
         let Some(model) = self.model.as_ref().filter(|_| self.grids_shown()) else { return Vec::new() };
         let grids = model.project.grids.iter().enumerate();
+        // a 3D view of the file draws no grids
+        if self.active_plan.is_none() && self.active_view.is_some_and(|i| model.views.get(i).is_some_and(|v| v.kind == crate::model::ViewKind::ThreeD)) {
+            return Vec::new();
+        }
         let as_is = |(i, g): (usize, &GridLine)| Datum { line: g.clone(), kind: DatumKind::Grid(i) };
         let Some(view) = self.shown_view() else { return grids.map(as_is).collect() };
         if let Some(plan) = self.document.plan(view) {

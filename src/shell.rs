@@ -223,6 +223,104 @@ pub enum Dialog {
     Settings,
     /// A file of this format (such as Revit) opens only in the desktop app: where to get it.
     DesktopOnly(&'static str),
+    /// The form to send feedback on the app.
+    Feedback,
+}
+
+/// The feedback form: what is written in it, and how sending it goes.
+#[derive(Default)]
+pub struct Feedback {
+    email: String,
+    name: String,
+    /// What it is about (an index into [`FEEDBACK_KINDS`]).
+    kind: usize,
+    message: iced::widget::text_editor::Content,
+    /// How the writer feels (an index into [`FEEDBACK_MOODS`]), if said.
+    mood: Option<usize>,
+    state: FeedbackState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+enum FeedbackState {
+    #[default]
+    Writing,
+    Sending,
+    Sent,
+    Failed(String),
+}
+
+/// A step in the feedback form.
+#[derive(Debug, Clone)]
+pub enum FeedbackMsg {
+    Email(String),
+    Name(String),
+    Kind(usize),
+    Message(iced::widget::text_editor::Action),
+    Mood(usize),
+    Send,
+    Done(Result<(), String>),
+    Again,
+}
+
+/// What feedback can be about, as the feedback service names it, with its label.
+const FEEDBACK_KINDS: [(&str, &str, &str); 3] = [("general", "Algemeen", "General"), ("bug", "Fout", "Bug"), ("feature", "Wens", "Feature")];
+/// How the writer feels, as the feedback service names it, with its label.
+const FEEDBACK_MOODS: [(&str, &str, &str); 3] = [("Frustrated", "Gefrustreerd", "Frustrated"), ("Neutral", "Neutraal", "Neutral"), ("Happy", "Blij", "Happy")];
+/// Where feedback on the OpenAEC apps goes, and what this app is called there.
+#[cfg(not(target_arch = "wasm32"))]
+const FEEDBACK_URL: &str = "https://open-feedback-studio.pages.dev/api/feedback";
+const FEEDBACK_APP: &str = "open-3d-viewer";
+/// The shortest and the longest message the service takes.
+const FEEDBACK_SHORTEST: usize = 10;
+const FEEDBACK_LONGEST: usize = 5000;
+
+impl Feedback {
+    fn wording(&self) -> String {
+        self.message.text().trim().to_string()
+    }
+
+    /// An e-mail address is asked, to answer the writer.
+    fn email_ok(&self) -> bool {
+        let e = self.email.trim();
+        !e.contains(char::is_whitespace) && e.split_once('@').is_some_and(|(name, host)| !name.is_empty() && host.contains('.') && !host.starts_with('.') && !host.ends_with('.'))
+    }
+
+    fn ready(&self) -> bool {
+        let n = self.wording().chars().count();
+        self.email_ok() && (FEEDBACK_SHORTEST..=FEEDBACK_LONGEST).contains(&n) && self.state != FeedbackState::Sending
+    }
+
+    /// What is sent: only what the writer filled in, and the version of the app.
+    fn payload(&self) -> serde_json::Value {
+        let mut out = serde_json::json!({
+            "app": FEEDBACK_APP,
+            "email": self.email.trim(),
+            "category": FEEDBACK_KINDS[self.kind.min(2)].0,
+            "message": self.wording(),
+            "appVersion": env!("CARGO_PKG_VERSION"),
+        });
+        if !self.name.trim().is_empty() {
+            out["fullname"] = self.name.trim().into();
+        }
+        if let Some(mood) = self.mood.and_then(|m| FEEDBACK_MOODS.get(m)) {
+            out["sentiment"] = mood.0.into();
+        }
+        out
+    }
+}
+
+/// Sends feedback to the service; what went wrong as the service says it, else the status.
+#[cfg(not(target_arch = "wasm32"))]
+fn send_feedback(payload: serde_json::Value) -> Result<(), String> {
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(20)).user_agent(concat!("OpenBIMSuite/", env!("CARGO_PKG_VERSION"))).build();
+    match agent.post(FEEDBACK_URL).set("Content-Type", "application/json").send_string(&payload.to_string()) {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, response)) => {
+            let said = response.into_string().ok().and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok()).and_then(|v| v.get("error")?.as_str().map(str::to_string));
+            Err(said.unwrap_or_else(|| format!("HTTP {code}")))
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// What a screenshot shows: the workspace, the Bestand page or a page of the settings.
@@ -233,6 +331,7 @@ pub enum Page {
     File,
     Settings,
     Shortcuts,
+    Feedback,
 }
 
 impl Page {
@@ -242,6 +341,7 @@ impl Page {
             "file" => Page::File,
             "settings" => Page::Settings,
             "shortcuts" => Page::Shortcuts,
+            "feedback" => Page::Feedback,
             _ => return None,
         })
     }
@@ -290,6 +390,7 @@ pub enum Msg {
     Backstage(bool),
     OpenRecent(PathBuf),
     Dialog(Option<Dialog>),
+    Feedback(FeedbackMsg),
     SettingsPage(SettingsPage),
     Shortcuts(sc::Message),
     Theme(ThemeId),
@@ -333,6 +434,8 @@ pub struct Studio {
     shortcuts: sc::Editor,
     backstage: bool,
     dialog: Option<Dialog>,
+    /// What the feedback form holds while it is open.
+    feedback: Feedback,
     settings_page: SettingsPage,
     update: Option<Available>,
     maximized: bool,
@@ -403,6 +506,7 @@ impl Studio {
             shortcuts: sc::Editor::default(),
             backstage: false,
             dialog: None,
+            feedback: Feedback::default(),
             settings_page: SettingsPage::General,
             update: None,
             maximized: false,
@@ -562,7 +666,11 @@ impl Studio {
     /// Shows a page over the workspace, for `--screenshot`.
     pub fn show(&mut self, page: Page) {
         self.backstage = page == Page::File;
-        self.dialog = matches!(page, Page::Settings | Page::Shortcuts).then_some(Dialog::Settings);
+        self.dialog = match page {
+            Page::Settings | Page::Shortcuts => Some(Dialog::Settings),
+            Page::Feedback => Some(Dialog::Feedback),
+            _ => None,
+        };
         self.settings_page = if page == Page::Shortcuts { SettingsPage::Shortcuts } else { SettingsPage::General };
     }
 
@@ -1310,6 +1418,37 @@ impl Studio {
                     }
                 }
             }
+            Msg::Feedback(step) => {
+                let form = &mut self.feedback;
+                match step {
+                    FeedbackMsg::Email(e) => form.email = e,
+                    FeedbackMsg::Name(n) => form.name = n,
+                    FeedbackMsg::Kind(k) => form.kind = k,
+                    FeedbackMsg::Message(action) => form.message.perform(action),
+                    FeedbackMsg::Mood(m) => form.mood = if form.mood == Some(m) { None } else { Some(m) },
+                    // another one: who writes stays filled in
+                    FeedbackMsg::Again => *form = Feedback { email: std::mem::take(&mut form.email), name: std::mem::take(&mut form.name), ..Feedback::default() },
+                    FeedbackMsg::Done(result) => {
+                        form.state = match result {
+                            Ok(()) => FeedbackState::Sent,
+                            Err(e) => FeedbackState::Failed(e),
+                        }
+                    }
+                    FeedbackMsg::Send if form.ready() => {
+                        form.state = FeedbackState::Sending;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let payload = form.payload();
+                            let (tx, rx) = iced::futures::channel::oneshot::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(send_feedback(payload));
+                            });
+                            return Task::perform(async move { rx.await.unwrap_or_else(|_| Err("not sent".to_string())) }, |r| Msg::Feedback(FeedbackMsg::Done(r)));
+                        }
+                    }
+                    FeedbackMsg::Send => {}
+                }
+            }
             Msg::DownloadDesktop => {
                 if let Err(e) = open_url(crate::loaders::DESKTOP_DOWNLOAD) {
                     self.app.status = Status::Error(e);
@@ -1463,6 +1602,9 @@ impl Studio {
         if self.products.len() > 1 {
             extra.push(self.product_switch(look));
         }
+        // feedback on the app, from the desktop app (it sends it itself)
+        #[cfg(not(target_arch = "wasm32"))]
+        extra.push(w::button(look, self.l().text("Feedback", "Feedback"), K::Quiet, D::Compact, Some(small("ui.feedback")), Some(Msg::Dialog(Some(Dialog::Feedback)))));
         extra.push(cm::icon_button(look, &self.command("app.settings"), 28.0));
         let name = self.title();
         #[cfg(not(target_arch = "wasm32"))]
@@ -1842,6 +1984,76 @@ impl Studio {
                     column![tabs, body].spacing(14).into(),
                     None,
                     vec![w::button(look, l.text("Sluiten", "Close"), K::Primary, D::Regular, None, Some(Msg::Dialog(None)))],
+                    true,
+                )
+            }
+            Dialog::Feedback => {
+                let form = &self.feedback;
+                let send = |m: FeedbackMsg| Msg::Feedback(m);
+                if form.state == FeedbackState::Sent {
+                    return w::dialog(
+                        look,
+                        l.text("Feedback verzenden", "Send feedback"),
+                        close_icon,
+                        Some(Msg::Dialog(None)),
+                        column![w::heading(look, l.text("Bedankt!", "Thank you!"), 16.0), w::body(look, l.text("Je feedback is verzonden.", "Your feedback was sent."))].spacing(6).into(),
+                        None,
+                        vec![
+                            w::button(look, l.text("Nog een verzenden", "Send another"), K::Quiet, D::Regular, None, Some(send(FeedbackMsg::Again))),
+                            w::button(look, l.text("Sluiten", "Close"), K::Primary, D::Regular, None, Some(Msg::Dialog(None))),
+                        ],
+                        false,
+                    );
+                }
+                let sending = form.state == FeedbackState::Sending;
+                let wrong_email = (!form.email.trim().is_empty() && !form.email_ok()).then(|| l.text("Dit is geen e-mailadres.", "This is not an e-mail address."));
+                let kinds = row(FEEDBACK_KINDS.iter().enumerate().map(|(k, kind)| w::radio(look, l.text(kind.1, kind.2), k, Some(form.kind), |k| send(FeedbackMsg::Kind(k))))).spacing(16);
+                let moods = row(FEEDBACK_MOODS.iter().enumerate().map(|(m, mood)| {
+                    w::button(look, l.text(mood.1, mood.2), if form.mood == Some(m) { K::Secondary } else { K::Quiet }, D::Compact, None, Some(send(FeedbackMsg::Mood(m))))
+                }))
+                .spacing(4);
+                let c = look.color;
+                let message = iced::widget::text_editor(&form.message)
+                    .placeholder(l.text("Vertel wat je ervan vindt (minstens 10 tekens)", "Tell us what you think (at least 10 characters)"))
+                    .on_action(|a| Msg::Feedback(FeedbackMsg::Message(a)))
+                    .height(140)
+                    .size(13)
+                    .font(fonts::BODY)
+                    .style(move |_, status| iced::widget::text_editor::Style {
+                        background: c.raised.into(),
+                        border: iced::Border { color: if matches!(status, iced::widget::text_editor::Status::Focused { .. }) { c.accent } else { c.border }, width: 1.0, radius: 4.0.into() },
+                        placeholder: c.text_disabled,
+                        value: c.text,
+                        selection: iced::Color { a: 0.35, ..c.accent },
+                    });
+                let count = form.wording().chars().count();
+                let mut body = column![
+                    w::property_row(look, l.text("E-mail", "E-mail"), w::text_field(look, "naam@voorbeeld.nl", &form.email, Some(|e| Msg::Feedback(FeedbackMsg::Email(e))), D::Regular, wrong_email)),
+                    w::property_row(look, l.text("Naam", "Name"), w::text_field(look, l.text("Je naam (hoeft niet)", "Your name (optional)"), &form.name, Some(|n| Msg::Feedback(FeedbackMsg::Name(n))), D::Regular, None)),
+                    w::property_row(look, l.text("Soort", "Kind"), kinds.into()),
+                    message,
+                    w::secondary(look, format!("{count} / {FEEDBACK_LONGEST}")),
+                    w::property_row(look, l.text("Hoe bevalt het?", "How is it going?"), moods.into()),
+                    w::secondary(look, l.text(
+                        "Verzonden worden: wat je hier invult en de versie van het programma. Niets van je model.",
+                        "Sent are: what you fill in here and the version of the app. Nothing of your model.",
+                    )),
+                ]
+                .spacing(10);
+                if let FeedbackState::Failed(why) = &form.state {
+                    body = body.push(w::body(look, format!("{} ({why})", l.text("Verzenden is niet gelukt.", "Sending failed."))).color(c.error));
+                }
+                w::dialog(
+                    look,
+                    l.text("Feedback verzenden", "Send feedback"),
+                    close_icon,
+                    Some(Msg::Dialog(None)),
+                    body.into(),
+                    None,
+                    vec![
+                        w::button(look, l.text("Annuleren", "Cancel"), K::Quiet, D::Regular, None, Some(Msg::Dialog(None))),
+                        w::button(look, if sending { l.text("Bezig met verzenden…", "Sending…") } else { l.text("Verzenden", "Send") }, K::Primary, D::Regular, None, form.ready().then(|| send(FeedbackMsg::Send))),
+                    ],
                     true,
                 )
             }

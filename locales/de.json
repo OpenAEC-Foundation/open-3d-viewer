@@ -640,6 +640,27 @@
     "Click a second point of the mirror axis · Esc: start again": "Klicken Sie auf einen zweiten Punkt der Spiegelachse · Esc: neu beginnen",
     "Metal stud walls": "Metallständerwände",
     "Hidden line": "Verdeckte Linien",
-    "Shaded": "Schattiert"
+    "Shaded": "Schattiert",
+    "As on sheet": "Wie auf dem Blatt",
+    "In 3D": "In 3D",
+    "Feedback": "Feedback",
+    "Send feedback": "Feedback senden",
+    "Thank you!": "Danke!",
+    "Your feedback was sent.": "Ihr Feedback wurde gesendet.",
+    "Send another": "Noch eines senden",
+    "This is not an e-mail address.": "Das ist keine E-Mail-Adresse.",
+    "Bug": "Fehler",
+    "Feature": "Wunsch",
+    "Frustrated": "Frustriert",
+    "Neutral": "Neutral",
+    "Happy": "Zufrieden",
+    "Tell us what you think (at least 10 characters)": "Sagen Sie uns, was Sie denken (mindestens 10 Zeichen)",
+    "E-mail": "E-Mail",
+    "Your name (optional)": "Ihr Name (optional)",
+    "How is it going?": "Wie gefällt es Ihnen?",
+    "Sent are: what you fill in here and the version of the app. Nothing of your model.": "Gesendet werden: was Sie hier eintragen und die Version des Programms. Nichts von Ihrem Modell.",
+    "Sending failed.": "Das Senden ist fehlgeschlagen.",
+    "Sending…": "Wird gesendet…",
+    "Send": "Senden"
   }
 }

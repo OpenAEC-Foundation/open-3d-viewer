@@ -733,6 +733,19 @@ pub struct SavedView {
     pub level: Option<String>,
     /// The folders it lies in where its file orders its views in folders, the outer one first.
     pub folder: Vec<String>,
+    /// How it draws the model, where its file says (a 3D view's visual style).
+    pub style: Option<ViewStyle>,
+}
+
+/// How a saved view draws the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewStyle {
+    Wireframe,
+    /// White surfaces that hide what lies behind them, and their edges.
+    HiddenLine,
+    Shaded,
+    /// Shaded, with the edges drawn over it.
+    ShadedEdges,
 }
 
 /// Under what name what belongs to a 3D view of the file is kept beside that of the document's

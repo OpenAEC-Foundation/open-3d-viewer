@@ -59,7 +59,11 @@ impl Loader for RvtLoader {
             view.folder = folders.get(&id).cloned().unwrap_or_default();
             (id, view)
         };
-        let (view_ids, views): (Vec<u64>, Vec<SavedView>) = saved_views(&infos).into_iter().map(in_folder).unzip();
+        let (view_ids, mut views): (Vec<u64>, Vec<SavedView>) = saved_views(&infos).into_iter().map(in_folder).unzip();
+        // how each 3D view draws the model
+        for (view, &id) in views.iter_mut().zip(&view_ids).filter(|(v, _)| v.kind == ViewKind::ThreeD) {
+            view.style = view_style(&doc, id);
+        }
         let mut project = project_data(&doc, &scene.levels);
         project.walls = walls;
         // how a cut through each material is hatched
@@ -153,6 +157,24 @@ fn hidden_in_view(doc: &rvt_read::Document, view: u64, by_category: &HashMap<i64
     out
 }
 
+/// How a 3D view (its template, when it has one) draws the model: its visual style
+/// (`ViewDisplayModel::m_surfaces`: 1 wireframe, 2 hidden line, else shaded or in colours), with
+/// its edges where it shows them.
+fn view_style(doc: &rvt_read::Document, view: u64) -> Option<crate::model::ViewStyle> {
+    use crate::model::ViewStyle;
+    let o = doc.object(view)?;
+    let template = o.get("m_viewTemplateId").and_then(|v| v.element()).filter(|t| *t > 0).and_then(|t| doc.object(t as u64));
+    let from = template.as_ref().unwrap_or(&o);
+    let surfaces = from.path(&["m_pViewDisplayMgr", "m_model", "m_surfaces"])?.as_i64()?;
+    let edges = from.path(&["m_pViewDisplayMgr", "m_model", "m_edges"]).and_then(|v| v.as_i64()).unwrap_or(1) != 0;
+    Some(match surfaces {
+        1 => ViewStyle::Wireframe,
+        2 => ViewStyle::HiddenLine,
+        _ if edges => ViewStyle::ShadedEdges,
+        _ => ViewStyle::Shaded,
+    })
+}
+
 /// The drawings of the project: its plans, sections and elevations with their tags, texts,
 /// dimensions and detail components, its legends and drafting views, and its sheets. `elements`
 /// are the elements the model draws, `size` the extent of the building.
@@ -186,8 +208,30 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
             let mut hidden = hidden_in_view(doc, view, &by_category, &mut filters);
             // and what its phase filter leaves out: work of a later phase, or demolished before
             let at = path(view);
+            let mut faint = std::collections::HashSet::new();
             if project.phasing.applies(&at) {
-                hidden.extend(elements.iter().copied().filter(|e| project.phasing.look(&at, *e) == crate::phasing::Look::Hidden));
+                for &e in elements {
+                    match project.phasing.look(&at, e) {
+                        crate::phasing::Look::Hidden => _ = hidden.insert(e),
+                        crate::phasing::Look::Halftone => _ = faint.insert(e),
+                        crate::phasing::Look::Normal => {}
+                    }
+                }
+            }
+            // how it draws its elements otherwise: its categories and filters, and its
+            // discipline, which leaves some out or draws them faint
+            let Some(o) = doc.object(view) else { continue };
+            let template = o.get("m_viewTemplateId").and_then(|v| v.element()).filter(|t| *t > 0).and_then(|t| doc.object(t as u64));
+            let from = template.as_ref().unwrap_or(&o);
+            let mut looks = filters.looks_3d(from);
+            let (off, service) = filters.discipline(from);
+            hidden.extend(off);
+            for e in faint.into_iter().chain(service) {
+                looks.entry(e).or_default().halftone = true;
+            }
+            looks.retain(|e, look| !hidden.contains(e) && !look.is_empty());
+            if !looks.is_empty() {
+                project.looks.insert(crate::model::view3d_key(i), std::sync::Arc::new(looks));
             }
             if !hidden.is_empty() {
                 project.switched_off.insert(crate::model::view3d_key(i), hidden);
@@ -677,7 +721,7 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
                 K::Detail => ViewKind::Detail,
                 _ => return None,
             };
-            let mut out = SavedView { folder: Vec::new(), name: v.name.clone(), kind, camera: None, clip: None, plan: None, level: v.level_name.clone() };
+            let mut out = SavedView { folder: Vec::new(), style: None, name: v.name.clone(), kind, camera: None, clip: None, plan: None, level: v.level_name.clone() };
             match kind {
                 ViewKind::ThreeD => {
                     out.camera = v.camera.as_ref().map(|c| ViewCamera {

@@ -355,6 +355,10 @@ pub struct State {
     pub cloud: super::cloud::State,
     /// The PDF report being made.
     pub report_job: Option<ReportJob>,
+    /// The walk of each room to its way out (by the room's element), and the room whose walk
+    /// the 3D view draws.
+    pub routes: HashMap<u64, Vec<[f32; 3]>>,
+    pub route_shown: Option<u64>,
     /// The issues are written as BCF 3.0, not 2.1.
     pub bcf3: bool,
     /// The clashes of the run before that this run no longer found, and whether the list shows
@@ -449,6 +453,8 @@ impl Default for State {
             inform: Default::default(),
             cloud: Default::default(),
             report_job: None,
+            routes: HashMap::new(),
+            route_shown: None,
             bcf3: false,
             resolved: Vec::new(),
             show_resolved: false,
@@ -1264,10 +1270,17 @@ impl App {
         const FIRST: [u8; 4] = [214, 40, 40, 255];
         const SECOND: [u8; 4] = [30, 100, 220, 255];
         const AT: [u8; 4] = [255, 140, 0, 255];
-        let (Some(model), Some(clash)) = (self.model.as_ref(), self.collab.clash.and_then(|k| self.collab.clashes.get(k))) else { return Vec::new() };
+        const ROUTE: [u8; 4] = [20, 150, 60, 255];
+        let Some(model) = self.model.as_ref() else { return Vec::new() };
         let matrix = self.model_matrix();
         let world = |p: Vec3| matrix.transform_point3(p).to_array();
         let mut lines = Vec::new();
+        // the walk of the room picked to its way out, a little above the floor
+        if let Some(walk) = self.collab.route_shown.and_then(|id| self.collab.routes.get(&id)) {
+            let up = |p: &[f32; 3]| world(Vec3::from_array(*p) + Vec3::Z * 0.1);
+            lines.extend(walk.windows(2).map(|w| ([up(&w[0]), up(&w[1])], ROUTE)));
+        }
+        let Some(clash) = self.collab.clash.and_then(|k| self.collab.clashes.get(k)) else { return lines };
         for (id, color) in [(clash.a, FIRST), (clash.b, SECOND)] {
             let Some(bounds) = model.element_bounds(id) else { continue };
             let (lo, hi) = (Vec3::from_array(bounds.min), Vec3::from_array(bounds.max));
@@ -2172,8 +2185,9 @@ impl App {
                     self.collab.running = false;
                     // the checks that need the rooms' shapes, on the model as it is drawn
                     if let Some(rooms) = self.collab.rules().map(|r| r.rooms.clone()).filter(|r| r.on) {
-                        self.room_shape_checks(&mut checked, &rooms);
+                        self.collab.routes = self.room_shape_checks(&mut checked, &rooms);
                     }
+                    self.collab.route_shown = None;
                     self.collab.checked = checked;
                 }
             }
@@ -2182,7 +2196,12 @@ impl App {
                 let Some(model) = self.model.clone() else { return Task::none() };
                 let which = self.collab.checked.get(checked).map_or(0, |c| c.model) as u32;
                 match model.element_with_key(crate::model::ElementKey { model: which, source: u64::from(express_id) }) {
-                    Some(id) if !model.element_ranges(id).is_empty() => self.collab_go_to([id]),
+                    Some(id) if !model.element_ranges(id).is_empty() => {
+                        // a room's walk to its way out is drawn with it
+                        self.collab.route_shown = self.collab.routes.contains_key(&id).then_some(id);
+                        self.collab_go_to([id]);
+                        self.refresh_overlay();
+                    }
                     _ => self.collab_note(Tone::Info, l.text("Dit element heeft geen geometrie in het model.", "This element has no geometry in the model.")),
                 }
             }
@@ -2583,7 +2602,7 @@ impl App {
                 let files = self.models.iter().enumerate().filter(|(_, e)| e.model.path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc")));
                 let mut checked: Vec<Checked> = check_files(files.map(|(model, e)| (model, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone())).collect(), &rules, &cancel);
                 if rules.rooms.on {
-                    self.room_shape_checks(&mut checked, &rules.rooms);
+                    self.collab.routes = self.room_shape_checks(&mut checked, &rules.rooms);
                 }
                 self.collab.checked = checked;
                 let failed = self.collab.checked.first().and_then(|c| c.report.as_ref().ok()).and_then(|r| r.specifications.iter().position(|s| s.status == ValidationStatus::Failed));

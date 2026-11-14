@@ -38,6 +38,12 @@ impl Boxed {
 /// How far each room is from a way out at its worst corner, walking through doors; None for a
 /// room no way out is reached from.
 pub fn escape_distances(rooms: &[Boxed], doors: &[Boxed], stairs: &[Boxed]) -> Vec<Option<f32>> {
+    escape_routes(rooms, doors, stairs).into_iter().map(|r| r.map(|(far, _)| far)).collect()
+}
+
+/// As [`escape_distances`], with the walk itself: from the worst corner of the room to its door
+/// and on from door to door to the way out.
+pub fn escape_routes(rooms: &[Boxed], doors: &[Boxed], stairs: &[Boxed]) -> Vec<Option<(f32, Vec<Vec3>)>> {
     const REACH: f32 = 0.3;
     // the ways in and out: the doors, then the stairs
     let ways: Vec<Boxed> = doors.iter().chain(stairs).copied().collect();
@@ -69,6 +75,8 @@ pub fn escape_distances(rooms: &[Boxed], doors: &[Boxed], stairs: &[Boxed]) -> V
     let of_room: Vec<Vec<usize>> = (0..rooms.len()).map(|r| (0..ways.len()).filter(|&k| touching[k].contains(&r)).collect()).collect();
     // from the ways out back through the rooms: the shortest walk from each door to outside
     let mut far = vec![f32::INFINITY; ways.len()];
+    // the door a walk goes on to from each door, towards the way out
+    let mut on: Vec<Option<usize>> = vec![None; ways.len()];
     let mut queue = BinaryHeap::new();
     for k in (0..ways.len()).filter(|&k| outside(k)) {
         far[k] = 0.0;
@@ -84,6 +92,7 @@ pub fn escape_distances(rooms: &[Boxed], doors: &[Boxed], stairs: &[Boxed]) -> V
                 let step = d + ways[k].middle().distance(ways[j].middle());
                 if step + 1e-3 < far[j] {
                     far[j] = step;
+                    on[j] = Some(k);
                     queue.push((std::cmp::Reverse((step * 1000.0) as u32), j));
                 }
             }
@@ -95,11 +104,20 @@ pub fn escape_distances(rooms: &[Boxed], doors: &[Boxed], stairs: &[Boxed]) -> V
         .map(|(r, room)| {
             let floor = room.min.z;
             let corners = [Vec3::new(room.min.x, room.min.y, floor), Vec3::new(room.max.x, room.min.y, floor), Vec3::new(room.min.x, room.max.y, floor), Vec3::new(room.max.x, room.max.y, floor)];
-            let worst = corners
-                .iter()
-                .map(|c| of_room[r].iter().map(|&k| c.distance(ways[k].middle()) + far[k]).fold(f32::INFINITY, f32::min))
-                .fold(0.0f32, f32::max);
-            worst.is_finite().then_some(worst)
+            // each corner by its nearest way; the corner that has furthest to go
+            let best = |c: &Vec3| of_room[r].iter().map(|&k| (c.distance(ways[k].middle()) + far[k], k)).min_by(|x, y| x.0.total_cmp(&y.0));
+            let (corner, (worst, first)) = corners.iter().filter_map(|c| Some((*c, best(c)?))).max_by(|x, y| x.1 .0.total_cmp(&y.1 .0))?;
+            if !worst.is_finite() {
+                return None;
+            }
+            let mut walk = vec![corner];
+            let mut at = Some(first);
+            while let Some(k) = at.filter(|_| walk.len() <= ways.len() + 1) {
+                let m = ways[k].middle();
+                walk.push(Vec3::new(m.x, m.y, ways[k].min.z));
+                at = on[k];
+            }
+            Some((worst, walk))
         })
         .collect()
 }
@@ -145,8 +163,9 @@ impl App {
     }
 
     /// Adds the checks of the rooms' shapes to the reports of the checked models.
-    pub(super) fn room_shape_checks(&self, checked: &mut [Checked], rules: &RoomRules) {
-        let Some(model) = self.model.clone() else { return };
+    pub(super) fn room_shape_checks(&self, checked: &mut [Checked], rules: &RoomRules) -> std::collections::HashMap<u64, Vec<[f32; 3]>> {
+        let mut routes = std::collections::HashMap::new();
+        let Some(model) = self.model.clone() else { return routes };
         for c in checked.iter_mut() {
             let Ok(report) = &mut c.report else { continue };
             let (rooms, doors, stairs) = Self::room_boxes(&model, c.model as u32);
@@ -196,9 +215,13 @@ impl App {
             } else if turning.failed_count > 0 {
                 turning.status = S::Failed;
             }
-            for (room, walk) in rooms.iter().zip(escape_distances(&rooms, &doors, &stairs)) {
+            for (room, walk) in rooms.iter().zip(escape_routes(&rooms, &doors, &stairs)) {
                 escape.applicable_count += 1;
-                match walk {
+                // the walk of each room, to draw when its finding is picked
+                if let Some((_, path)) = &walk {
+                    routes.insert(room.id, path.iter().map(|p| p.to_array()).collect());
+                }
+                match walk.map(|w| w.0) {
                     Some(d) if d <= rules.escape_distance => escape.passed_count += 1,
                     Some(d) => {
                         escape.failed_count += 1;
@@ -227,6 +250,7 @@ impl App {
             report.specifications.push(escape);
             report.specifications.push(turning);
         }
+        routes
     }
 }
 
@@ -249,6 +273,11 @@ mod tests {
         // the first room: from its far corner to the first door, then 20 m on
         assert!(far[0] > 30.0 && far[0] < 32.0, "{far:?}");
         assert!(far[2] < far[1] && far[1] < far[0], "{far:?}");
+        // the walk of the first room: from a far corner through the three doors
+        let routes = escape_routes(&rooms, &doors, &[]);
+        let walk = &routes[0].as_ref().unwrap().1;
+        assert_eq!(walk.len(), 4, "{walk:?}");
+        assert!(walk[0].x.abs() < 1e-6 && (walk[1].x - 10.0).abs() < 0.1 && (walk[3].x - 30.0).abs() < 0.1, "{walk:?}");
         // without the door to outside no way out is found
         assert!(escape_distances(&rooms, &doors[..2], &[]).iter().all(|w| w.is_none()));
         // a stair in the middle room is a way out too

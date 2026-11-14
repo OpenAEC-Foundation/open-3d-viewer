@@ -17,6 +17,8 @@ use openaec_ui::Language;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod grids;
+
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelTool {
@@ -149,6 +151,8 @@ pub struct Modeller {
     pub model: bim_core::Model,
     /// The tool placing elements, and the name its elements get (in the interface language).
     pub tool: Option<(ModelTool, &'static str)>,
+    /// The Grid tool is on: two clicks draw a grid line (see `grids`).
+    pub grid_tool: bool,
     /// The points clicked so far for the tool (scene coordinates).
     pub points: Vec<DVec3>,
     /// The viewer model that shows the elements (its id), an entry of `App::models`.
@@ -192,7 +196,12 @@ impl App {
             return;
         }
         for definition in &model.project.elements {
-            if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
+            // a grid line comes under its own key, an element as it is
+            if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
+                if let Ok(grid) = serde_json::from_value::<bim_core::GridDef>(grid.clone()) {
+                    let _ = self.modeller.model.insert_grid(grid);
+                }
+            } else if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
                 self.modeller.model.insert(element);
             }
         }
@@ -220,6 +229,7 @@ impl App {
     pub(super) fn set_model_tool(&mut self, tool: Option<(ModelTool, &'static str)>) {
         let same = tool.map(|t| t.0) == self.modeller.tool.map(|t| t.0);
         self.modeller.tool = if same { None } else { tool };
+        self.modeller.grid_tool = false;
         self.modeller.points.clear();
         self.modeller.cursor = None;
         self.modeller.aim = None;
@@ -301,6 +311,7 @@ impl App {
                 Shape::Connection(_) => {}
             }
         }
+        points.extend(self.grid_snap_points());
         points
     }
 
@@ -479,7 +490,9 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let built = Arc::new(viewer_model(&self.modeller.model, &levels, &self.library));
+        let mut built = viewer_model(&self.modeller.model, &levels, &self.library);
+        built.project.grids = self.modelled_grid_lines();
+        let built = Arc::new(built);
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {
             if let Some(m) = self.model.clone().filter(|m| Some(m.id) != before) {
@@ -812,7 +825,7 @@ mod tests {
 
     /// An app with a new model, seen from the top, the viewport 1000 × 800 with the origin in
     /// its middle and 10 px per metre.
-    fn modelling() -> App {
+    pub(super) fn modelling() -> App {
         let mut app = App::default();
         app.new_model("Level 0");
         app.viewport_size = (1000.0, 800.0);
@@ -825,7 +838,7 @@ mod tests {
     }
 
     /// Clicks at scene point (x, y) on the work plane.
-    fn click(app: &mut App, x: f64, y: f64) {
+    pub(super) fn click(app: &mut App, x: f64, y: f64) {
         let (sx, sy) = app.on_screen(DVec3::new(x, y, 0.0), 1000.0, 800.0).unwrap();
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
     }

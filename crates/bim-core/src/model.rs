@@ -35,11 +35,14 @@ pub struct Model {
     pub grid: TileGrid,
     elements: BTreeMap<ElementId, Element>,
     next: u64,
+    /// The grid lines the project is set out on (see [`crate::datum`]).
+    #[serde(default)]
+    pub(crate) grids: Vec<crate::datum::GridDef>,
 }
 
 impl Model {
     pub fn new(grid: TileGrid) -> Self {
-        Self { grid, elements: BTreeMap::new(), next: 1 }
+        Self { grid, elements: BTreeMap::new(), next: 1, grids: Vec::new() }
     }
 
     pub fn len(&self) -> usize {

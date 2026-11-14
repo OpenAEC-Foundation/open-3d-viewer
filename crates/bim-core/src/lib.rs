@@ -16,6 +16,7 @@
 //!   source of truth and never change the definitions.
 
 pub mod boolean;
+pub mod datum;
 pub mod element;
 pub mod join;
 mod joins;
@@ -28,6 +29,7 @@ pub mod system;
 pub mod tile;
 
 pub use boolean::{boolean, BooleanOp};
+pub use datum::GridDef;
 pub use element::{BaseKind, BuildUpDef, ConnectionDef, ConnectionKind, Element, ElementId, LayerDef, LinearDef, Opening, PlanarDef, PointDef, Shape, SystemDef};
 pub use mesh::Mesh;
 pub use model::{Model, Part};

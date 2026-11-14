@@ -1140,6 +1140,8 @@ impl Studio {
             Command::new(id, label, go(Message::PickLevelFor((app.views_picker != Some(kind)).then_some(kind)))).icon(small("drawing.plan"), large("drawing.plan")).mode(app.views_picker == Some(kind)).enabled(loaded)
         };
         list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
+        // a grid line of the modelled project: two clicks on the work plane
+        list.push(Command::new("project.grid", l.text("Stramien", "Grid"), go(Message::GridTool)).icon(small("view.grid"), large("view.grid")).mode(app.modeller.grid_tool).enabled(app.modeller.shown.is_some()));
         list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
         list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
         list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
@@ -1884,6 +1886,7 @@ impl Studio {
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![
                 (l.text("Niveaus", "Levels"), vec![large("project.level")]),
+                (l.text("Stramien", "Grid"), vec![large("project.grid")]),
                 (l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
                 (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
                 (l.text("Bibliotheek", "Library"), vec![large("project.library")]),

@@ -684,6 +684,8 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// Switch the Modeller's Grid tool on or off.
+    GridTool,
     /// Give the selected join another kind.
     JoinKind(bim_core::ConnectionKind),
     /// Turn the selected join round: its other member runs through.
@@ -1660,6 +1662,7 @@ impl App {
             Message::ClearMeasurements => self.measurements.clear(),
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
+            Message::GridTool => self.toggle_grid_tool(),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),
@@ -1853,7 +1856,7 @@ impl App {
                     }
                 }
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
-                Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) => {}
+                Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) || self.grid_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } => {
                     self.hover_request = Some((x, y, width, height));
                     self.update_hover();
@@ -2030,6 +2033,8 @@ impl App {
                     // in edit mode: the picked corners go
                 } else if self.delete_modelled() {
                     // modelled elements selected: they go
+                } else if self.delete_picked_grid() {
+                    // the picked grid line of the modelled project goes
                 } else if self.active_doc_sheet.is_some() {
                     if self.sheet_pick.is_some() {
                         self.remove_picked();
@@ -2307,6 +2312,7 @@ impl App {
             Message::Escape if self.modeller.transform.is_some() => {
                 self.escape_transform();
             }
+            Message::Escape if self.modeller.grid_tool => self.escape_grid_tool(),
             Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
                 if !self.escape_model_tool() {
                     self.modeller.refusal = None;
@@ -2426,6 +2432,9 @@ impl App {
         let (width, height) = (width.max(1.0), height.max(1.0));
         if self.modeller.transform.is_some() {
             return self.transform_click(x, y, width, height);
+        }
+        if self.modeller.grid_tool {
+            return self.grid_click(x, y, width, height);
         }
         if self.modeller.tool.is_some() {
             return self.model_click(x, y, width, height);
@@ -3551,7 +3560,7 @@ impl App {
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
             looks: &self.unit_looks,
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some()) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3645,6 +3654,8 @@ impl App {
                 Some(refusal) => format!("{}: {} · {}", t.kind.label(l), l.translate(refusal.reason()), hint),
                 None => format!("{}: {}", t.kind.label(l), hint),
             })
+        } else if let Some(hint) = self.grid_hint(l) {
+            Some(hint)
         } else if let Some((tool, _)) = self.modeller.tool {
             let hint = tool.hint(l, self.modeller.points.len());
             Some(match self.modeller.refusal {

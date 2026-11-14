@@ -42,6 +42,11 @@ const OWN_KEYS: [&str; 8] = ["Name", "name", "IfcType", "Class", "class", "Path"
 /// reader gives the elements back.
 pub const DEFINITION: &str = "OpenAEC_definition";
 
+/// The attribute of a grid line's node that holds its definition: its name and its ends in plan
+/// (`start`, `end`: x, y in metres). The reader gives it back among the project's definitions,
+/// under this key.
+pub const GRID: &str = "openaec::grid";
+
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.
 pub fn element_path(file_name: &str, layer: usize, id: u64) -> String {
@@ -161,7 +166,24 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         building_children.insert(key, level.path.clone().into());
     }
     data.push(json!({"path": building, "children": building_children, "attributes": {"bsi::ifc::class": {"code": "IfcBuilding"}, "bsi::ifc::prop::Name": "Building"}}));
-    data.push(json!({"path": project, "children": {"Building": building}, "attributes": {"bsi::ifc::class": {"code": "IfcProject"}, "bsi::ifc::prop::Name": stem}}));
+    // the grid lines, under the project: each its name and its ends in plan (`openaec::grid`),
+    // from which the reader gives them back to the modelled project
+    let mut project_children = Map::new();
+    project_children.insert("Building".into(), building.clone().into());
+    for (i, grid) in model.project.grids.iter().enumerate() {
+        let path = uuid(&format!("{file_name}/grid/{i}"));
+        // to a tenth of a millimetre: the scene keeps them in single precision
+        let end = |p: [f32; 3]| json!([(f64::from(p[0]) * 1e4).round() / 1e4, (f64::from(p[1]) * 1e4).round() / 1e4]);
+        let mut key = format!("Grid {}", grid.name);
+        let mut n = 1;
+        while project_children.contains_key(&key) {
+            n += 1;
+            key = format!("Grid {} ({n})", grid.name);
+        }
+        project_children.insert(key, path.clone().into());
+        data.push(json!({"path": path, "attributes": {"bsi::ifc::class": {"code": "IfcGridAxis"}, "bsi::ifc::prop::Name": grid.name, GRID: {"name": grid.name, "start": end(grid.a), "end": end(grid.b)}}}));
+    }
+    data.push(json!({"path": project, "children": project_children, "attributes": {"bsi::ifc::class": {"code": "IfcProject"}, "bsi::ifc::prop::Name": stem}}));
     data.extend(document.ifcx_drawing_nodes_with(&|set| hidden_paths(model, file_name, set)));
 
     let file = json!({

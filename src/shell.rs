@@ -1711,8 +1711,8 @@ impl Studio {
 
     pub fn title(&self) -> String {
         let title = match &self.app.model {
-            Some(m) => format!("{} · {}", m.file_name(), self.edition.name()),
-            None => self.edition.name().into(),
+            Some(m) => format!("{} · {} {VERSION}", m.file_name(), self.edition.name()),
+            None => format!("{} {VERSION}", self.edition.name()),
         };
         match self.dev.as_ref().and_then(|d| d.label.as_deref()) {
             Some(label) => format!("{title} · {label}"),
@@ -3014,8 +3014,8 @@ mod tests {
         assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
         // a product binary: its own name in the title and About
         let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
-        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, "Open BIM Collaborator".to_string()));
-        assert_eq!(Studio::new(App::default()).title(), "Open BIM Suite");
+        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, format!("Open BIM Collaborator {VERSION}")));
+        assert_eq!(Studio::new(App::default()).title(), format!("Open BIM Suite {VERSION}"));
     }
 
     #[test]

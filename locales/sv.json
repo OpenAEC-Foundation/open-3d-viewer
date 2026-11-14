@@ -835,6 +835,8 @@
     "Save as IDS": "Spara som IDS",
     "Find again when a model changes": "Sök igen när en modell ändras",
     "properties added as rules (off); tick the ones you ask.": "egenskaper tillagda som regler (av); bocka för dem du kräver.",
-    "Show ambient shadows": "Visa omgivningsskuggor"
+    "Show ambient shadows": "Visa omgivningsskuggor",
+    "By kind": "Efter typ",
+    "Order": "Ordna"
   }
 }

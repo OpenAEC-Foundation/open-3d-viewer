@@ -3,17 +3,18 @@
 SKP, Tekla and PLY readers are standalone Git dependencies in Cargo.toml.
 The viewer's scene model and clipping code live in the app itself.
 
-`openaec-ui/` is a snapshot of `crates/openaec-ui` from the
-[OpenAEC Style Repo](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo), commit `6c9c896`
-(28 October 2026, crate version 2026.44.1, iced 0.14). The Style Repo is the source of truth;
-Open Pointcloud Studio carries a snapshot the same way. Local changes, for the web build (wasm32):
-`thread-pool` only off the web (`Cargo.toml`), and no minimize / maximize / close in the title bar
-in the browser (`src/shell.rs`); and German and French in `Language` (`src/locale.rs`): `text(nl,
-en)` looks those up by the English text in a catalogue the app installs with `install_catalogue`,
-falling back to English (the viewer's catalogues are `locales/*.json`, read by `src/i18n.rs`).
-The Style Repo should take the same change, so other OpenAEC tools get the languages too. To
-update, copy the
-crate again from the Style Repo and run its `scripts/check_portable_ui.py` there first.
+`openaec-ui/` is a snapshot of `crates/openaec-ui` from
+[OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) (the Style Repo under
+its new name), commit `5e4b0f3` (November 2026, crate version 2026.45.0, iced 0.14). Blueprint is
+the source of truth; Open Pointcloud Studio carries a snapshot the same way. Local changes, for
+the web build (wasm32): `thread-pool` only off the web (`Cargo.toml`), and no minimize / maximize
+/ close in the title bar in the browser (`src/shell.rs`); and eight more languages in `Language`
+(`src/locale.rs`: German, French, Spanish, Italian, Portuguese, Polish, Swedish and Turkish):
+`text(nl, en)` looks those up by the English text in a catalogue the app installs with
+`install_catalogue`, falling back to English (the viewer's catalogues are `locales/*.json`, read
+by `src/i18n.rs`). Blueprint should take the same change, so other OpenAEC tools get the
+languages too. To update, copy the crate again from Blueprint, run its
+`scripts/check_portable_ui.py` there first, and apply these three changes again.
 Licenses: see `openaec-ui/LICENSE.md` and `openaec-ui/NOTICE.md`.
 
 `vertex/` holds the Vertex BD / BTL reader as compiled shared libraries (`vertex.dll`,

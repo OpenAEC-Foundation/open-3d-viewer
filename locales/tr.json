@@ -747,6 +747,10 @@
     "Date": "Tarih",
     "Summary": "Özet",
     "Clash groups in view": "Görünümdeki çakışma grupları",
-    "Shadows": "Gölgeler"
+    "Shadows": "Gölgeler",
+    "Text size": "Metin boyutu",
+    "Ribbon": "Şerit",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Şu anda açık olan şerit sekmesinin grupları. Kullanmadıklarınızı kapatın.",
+    "Show all groups": "Tüm grupları göster"
   }
 }

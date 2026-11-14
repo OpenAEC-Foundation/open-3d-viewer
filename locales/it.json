@@ -747,6 +747,10 @@
     "Date": "Data",
     "Summary": "Riepilogo",
     "Clash groups in view": "Gruppi di interferenze nella vista",
-    "Shadows": "Ombre"
+    "Shadows": "Ombre",
+    "Text size": "Dimensione del testo",
+    "Ribbon": "Barra multifunzione",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "I gruppi della scheda della barra multifunzione aperta ora. Disattivare ciò che non si usa.",
+    "Show all groups": "Mostra tutti i gruppi"
   }
 }

@@ -9,7 +9,7 @@
 //! because iced 0.14 has no dashed borders.
 use super::a11y::{self, Node, Role};
 use super::focus::{self, focusable, group, Axis};
-use super::{font, hex, mix, radius, shell, Look, ShadowLayer, Shadows};
+use super::{hex, mix, radius, shell, Look, ShadowLayer, Shadows};
 use crate::fonts;
 use iced::alignment::{Horizontal, Vertical};
 use iced::border::Radius;
@@ -132,17 +132,17 @@ fn glyph_handle(source: &'static str, color: Color, accent: Color) -> svg::Handl
 
 /// Body text, 12 px.
 pub fn body<'a>(look: Look, content: impl text::IntoFragment<'a>) -> text::Text<'a> {
-    text(content).size(font::SIZE_BODY).font(fonts::BODY).color(look.color.text)
+    text(content).size(look.text.body).font(fonts::BODY).color(look.color.text)
 }
 
 /// Secondary text, 12 px.
 pub fn secondary<'a>(look: Look, content: impl text::IntoFragment<'a>) -> text::Text<'a> {
-    text(content).size(font::SIZE_BODY).font(fonts::BODY).color(look.color.text_secondary)
+    text(content).size(look.text.body).font(fonts::BODY).color(look.color.text_secondary)
 }
 
 /// Mono label: JetBrains Mono, 11 px, uppercase. iced 0.14 has no letter spacing.
 pub fn mono_label<'a>(look: Look, content: &str) -> text::Text<'a> {
-    text(content.to_uppercase()).size(font::SIZE_LABEL).font(fonts::MONO).color(look.color.text_secondary)
+    text(content.to_uppercase()).size(look.text.label).font(fonts::MONO).color(look.color.text_secondary)
 }
 
 /// Heading in Space Grotesk, for dialogs (16 px) and pages (22 px).
@@ -153,6 +153,12 @@ pub fn heading<'a>(look: Look, content: impl text::IntoFragment<'a>, size: f32) 
 /// A 1 px line in `border`.
 pub fn divider<'a, M: 'a>(look: Look) -> Element<'a, M> {
     let color = look.color.border;
+    container(Space::new().width(Length::Fill).height(1)).height(1).style(move |_| container::Style { background: fill(color), ..Default::default() }).into()
+}
+
+/// The line between table rows: the soft line, so rows stay calm (issue #41).
+pub fn row_divider<'a, M: 'a>(look: Look) -> Element<'a, M> {
+    let color = look.color.border_subtle;
     container(Space::new().width(Length::Fill).height(1)).height(1).style(move |_| container::Style { background: fill(color), ..Default::default() }).into()
 }
 
@@ -275,7 +281,7 @@ pub fn button<'a, M: Clone + 'a>(
     if let Some(source) = icon {
         content = content.push(glyph(source, 16.0, fg, if on_press.is_none() { fg } else { accent }));
     }
-    content = content.push(text(label).size(font::SIZE_BODY).font(fonts::STRONG));
+    content = content.push(text(label).size(look.text.body).font(fonts::STRONG));
     let enabled = on_press.is_some();
     let control = iced_button(container(content).height(Length::Fill).align_y(Vertical::Center))
         .height(density.height())
@@ -351,9 +357,9 @@ fn plain_icon_button<'a, M: Clone + 'a>(
 /// Wraps `content` in a tooltip with the theme colours: name and shortcut in mono.
 pub fn with_tooltip<'a, M: 'a>(look: Look, content: Element<'a, M>, name: &'a str, shortcut: Option<&'a str>) -> Element<'a, M> {
     let tip = || {
-        let mut tip = row![text(name).size(font::SIZE_LABEL).font(fonts::BODY).color(look.color.text)].spacing(8);
+        let mut tip = row![text(name).size(look.text.label).font(fonts::BODY).color(look.color.text)].spacing(8);
         if let Some(keys) = shortcut {
-            tip = tip.push(text(keys).size(font::SIZE_LABEL).font(fonts::MONO).color(look.color.text_secondary));
+            tip = tip.push(text(keys).size(look.text.label).font(fonts::MONO).color(look.color.text_secondary));
         }
         container(tip).padding([4, 8]).style(move |_| surface(look, look.tokens.shadow.popup, radius::SMALL))
     };
@@ -398,12 +404,12 @@ fn input_style(look: Look, status: text_input::Status, invalid: bool) -> text_in
         S::Active => border(c.border_strong, 1.0, r),
     };
     text_input::Style {
-        background: Background::Color(if status == S::Disabled { c.panel } else { c.raised }),
+        background: Background::Color(if status == S::Disabled { c.panel } else { c.field }),
         border: edge,
         icon: c.text_secondary,
         placeholder: if status == S::Disabled { c.text_disabled } else { c.text_secondary },
         value: if status == S::Disabled { c.text_disabled } else { c.text },
-        selection: mix(c.accent, 0.35, c.raised),
+        selection: mix(c.accent, 0.35, c.field),
     }
 }
 
@@ -438,12 +444,12 @@ pub fn text_field_in<'a, M: Clone + 'a>(
     }
     let field = text_input(placeholder, value)
         .on_input_maybe(on_input)
-        .size(font::SIZE_BODY)
+        .size(look.text.body)
         .font(face)
         .padding(Padding::from([pad_y, 8.0]))
         .style(move |_, status| input_style(look, status, invalid));
     let field: Element<'a, M> = match error {
-        Some(message) => column![field, text(message).size(font::SIZE_LABEL).font(fonts::BODY).color(look.color.error)].spacing(4).into(),
+        Some(message) => column![field, text(message).size(look.text.label).font(fonts::BODY).color(look.color.error)].spacing(4).into(),
         None => field.into(),
     };
     a11y::node(field, node)
@@ -470,7 +476,7 @@ where
     }
     let control = pick_list(options, selected, on_select)
         .width(Length::Fill)
-        .text_size(font::SIZE_BODY)
+        .text_size(look.text.body)
         .font(fonts::BODY)
         .padding(Padding::from([pad_y, 8.0]))
         .style(move |_, status| {
@@ -479,7 +485,7 @@ where
                 text_color: c.text,
                 placeholder_color: c.text_secondary,
                 handle_color: c.text_secondary,
-                background: Background::Color(c.raised),
+                background: Background::Color(c.field),
                 border: match status {
                     S::Opened { .. } => border(c.focus, 2.0, radius::MEDIUM),
                     S::Hovered => border(c.text, 1.0, radius::MEDIUM),
@@ -511,7 +517,7 @@ pub fn checkbox<'a, M: 'a>(look: Look, label: &'a str, checked: bool, on_toggle:
         .on_toggle_maybe(on_toggle)
         .size(16)
         .spacing(8)
-        .text_size(font::SIZE_BODY)
+        .text_size(look.text.body)
         .font(fonts::BODY)
         .style(move |_, status| {
             use iced_checkbox::Status as S;
@@ -549,7 +555,7 @@ where
     let control = iced_radio(label, value, selected, on_click)
         .size(16)
         .spacing(8)
-        .text_size(font::SIZE_BODY)
+        .text_size(look.text.body)
         .font(fonts::BODY)
         .style(move |_, status| {
             use iced_radio::Status as S;
@@ -577,7 +583,7 @@ pub fn switch<'a, M: 'a>(look: Look, label: &'a str, on: bool, on_toggle: Option
         .on_toggle_maybe(on_toggle)
         .size(18)
         .spacing(8)
-        .text_size(font::SIZE_BODY)
+        .text_size(look.text.body)
         .font(fonts::BODY)
         .style(move |_, status| {
             use iced_toggler::Status as S;
@@ -619,7 +625,7 @@ pub fn slider<'a, M: Clone + 'a>(look: Look, range: std::ops::RangeInclusive<f32
         },
     });
     let node = Node::new(Role::Slider, "").value(value_label.clone());
-    a11y::node(row![control, text(value_label).size(font::SIZE_BODY).font(fonts::MONO).color(c.text)].spacing(8).align_y(Alignment::Center), node)
+    a11y::node(row![control, text(value_label).size(look.text.body).font(fonts::MONO).color(c.text)].spacing(8).align_y(Alignment::Center), node)
 }
 
 /// A 6 px progress bar in `accent`.
@@ -704,7 +710,7 @@ pub fn tree_row<'a, M: Clone + 'a>(
     if let Some(source) = icon {
         line = line.push(glyph(source, 14.0, c.text, c.accent_text));
     }
-    line = line.push(text(label).size(font::SIZE_BODY).font(if selected { fonts::STRONG } else { fonts::BODY }).color(c.text));
+    line = line.push(text(label).size(look.text.body).font(if selected { fonts::STRONG } else { fonts::BODY }).color(c.text));
     let enabled = on_press.is_some();
     let content = iced_button(container(line).height(Length::Fill).align_y(Vertical::Center))
         .padding(0)
@@ -742,8 +748,8 @@ pub fn property_row<'a, M: 'a>(look: Look, label: &'a str, value: Element<'a, M>
     let value = a11y::named(value, Role::Label, label);
     container(
         row![
-            container(secondary(look, label)).width(Length::FillPortion(2)).height(28).align_y(Vertical::Center),
-            container(row![Space::new().width(1).height(28), container(value).width(Length::Fill)].align_y(Alignment::Center)).width(Length::FillPortion(3)),
+            container(secondary(look, label)).width(Length::FillPortion(2)).height(look.text.row).align_y(Vertical::Center),
+            container(row![Space::new().width(1).height(look.text.row), container(value).width(Length::Fill)].align_y(Alignment::Center)).width(Length::FillPortion(3)),
         ]
         .spacing(8)
         .align_y(Alignment::Start),
@@ -754,7 +760,7 @@ pub fn property_row<'a, M: 'a>(look: Look, label: &'a str, value: Element<'a, M>
 
 /// A number or code in mono, right-aligned, as in tables and the property grid.
 pub fn number<'a>(look: Look, value: impl text::IntoFragment<'a>) -> text::Text<'a> {
-    text(value).size(font::SIZE_BODY).font(fonts::NUMBERS).color(look.color.text).width(Length::Fill).align_x(Horizontal::Right)
+    text(value).size(look.text.body).font(fonts::NUMBERS).color(look.color.text).width(Length::Fill).align_x(Horizontal::Right)
 }
 
 /// One table column.
@@ -794,7 +800,7 @@ pub fn table<'a, M: Clone + 'a>(
             })
             .collect(),
     );
-    let mut sheet = column![container(header).height(28).align_y(Vertical::Center), bar(c.border_strong, Length::Fill, 1.0)];
+    let mut sheet = column![container(header).height(look.text.row).align_y(Vertical::Center), bar(c.border_strong, Length::Fill, 1.0)];
     for (i, cells) in rows.into_iter().enumerate() {
         let on = selected == Some(i);
         let name = cells.iter().filter(|c| !c.is_empty()).cloned().collect::<Vec<_>>().join(", ");
@@ -842,15 +848,15 @@ pub fn table<'a, M: Clone + 'a>(
         let line = if full.is_empty() { line } else { full_text_tip(look, line, full.join("
 ")) };
         let line = a11y::node(line, Node::new(Role::Row, name).selected(on));
-        sheet = sheet.push(selectable(look, line, on, 28.0));
-        sheet = sheet.push(divider(look));
+        sheet = sheet.push(selectable(look, line, on, look.text.row));
+        sheet = sheet.push(row_divider(look));
     }
     group(sheet.width(Length::Fill), Axis::Vertical)
 }
 
 /// A tooltip with text the row owns, for cells that were shortened.
 fn full_text_tip<'a, M: 'a>(look: Look, content: Element<'a, M>, full: String) -> Element<'a, M> {
-    let tip = |full: String| container(text(full).size(font::SIZE_LABEL).font(fonts::BODY).color(look.color.text)).padding([4, 8]).max_width(420).style(move |_| surface(look, look.tokens.shadow.popup, radius::SMALL));
+    let tip = |full: String| container(text(full).size(look.text.label).font(fonts::BODY).color(look.color.text)).padding([4, 8]).max_width(420).style(move |_| surface(look, look.tokens.shadow.popup, radius::SMALL));
     tooltip(focus::tip(content, tip(full.clone())), tip(full), tooltip::Position::Bottom).gap(4).into()
 }
 
@@ -879,8 +885,8 @@ pub fn banner_with_action<'a, M: Clone + 'a>(
     let tint = if hc { c.panel } else { tone.tint(look) };
     let content = row![
         glyph(icon, 16.0, fg, fg),
-        text(tone.word()).size(font::SIZE_BODY).font(fonts::STRONG).color(c.text),
-        text(message).size(font::SIZE_BODY).font(fonts::BODY).color(c.text).width(Length::Fill),
+        text(tone.word()).size(look.text.body).font(fonts::STRONG).color(c.text),
+        text(message).size(look.text.body).font(fonts::BODY).color(c.text).width(Length::Fill),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -908,7 +914,7 @@ pub fn toast<'a, M: Clone + 'a>(look: Look, tone: Tone, icon: &'static str, titl
     let card = container(
         row![
             glyph(icon, 16.0, fg, fg),
-            column![text(title).size(font::SIZE_BODY).font(fonts::STRONG).color(look.color.text), secondary(look, message)].spacing(2).width(Length::Fill),
+            column![text(title).size(look.text.body).font(fonts::STRONG).color(look.color.text), secondary(look, message)].spacing(2).width(Length::Fill),
             icon_button(look, close_icon, 20.0, false, "Melding sluiten", on_close),
         ]
         .spacing(10),
@@ -941,7 +947,7 @@ pub fn dialog<'a, M: Clone + 'a>(
     }
     let card = container(
         column![
-            row![heading(look, title, font::SIZE_DIALOG_HEADING).width(Length::Fill), plain_icon_button(look, close_icon, 28.0, false, on_close)].align_y(Alignment::Center),
+            row![heading(look, title, look.text.dialog_heading).width(Length::Fill), plain_icon_button(look, close_icon, 28.0, false, on_close)].align_y(Alignment::Center),
             content,
             footer,
         ]
@@ -965,7 +971,7 @@ pub fn overlay<'a, M: 'a>(look: Look, dialog: Element<'a, M>) -> Element<'a, M> 
 pub fn ribbon_tabs<'a, M: Clone + 'a>(look: Look, file_label: &'a str, on_file: Option<M>, tabs: &[&'a str], active: usize, on_select: impl Fn(usize) -> M) -> Element<'a, M> {
     let c = look.color;
     let file_enabled = on_file.is_some();
-    let file = iced_button(container(text(file_label).size(font::SIZE_BODY).font(fonts::STRONG)).height(Length::Fill).align_y(Vertical::Center))
+    let file = iced_button(container(text(file_label).size(look.text.body).font(fonts::STRONG)).height(Length::Fill).align_y(Vertical::Center))
         .height(22)
         .padding([0, 12])
         .on_press_maybe(on_file)
@@ -975,7 +981,7 @@ pub fn ribbon_tabs<'a, M: Clone + 'a>(look: Look, file_label: &'a str, on_file: 
     for (i, &name) in tabs.iter().enumerate() {
         let on = i == active;
         let label = text(name)
-            .size(font::SIZE_BODY)
+            .size(look.text.body)
             .font(if on { fonts::STRONG } else { fonts::MEDIUM })
             .color(if on { c.text } else { c.text_secondary });
         // The label sets the size; the 2 px accent bar is a second layer at its bottom.
@@ -1038,7 +1044,7 @@ pub fn ribbon_large<'a, M: Clone + 'a>(look: Look, icon: &'static str, label: &'
     let content = column![
         Space::new().width(48),
         icon_tile(look, glyph(icon, 22.0, fg, accent), active, 32.0),
-        text(label).size(font::SIZE_LABEL).font(fonts::BODY).align_x(Horizontal::Center),
+        text(label).size(look.text.label).font(fonts::BODY).align_x(Horizontal::Center),
     ]
     .spacing(4)
     .align_x(Alignment::Center);
@@ -1064,7 +1070,7 @@ pub fn ribbon_small<'a, M: Clone + 'a>(look: Look, icon: &'static str, label: &'
     let fg = if disabled { c.text_disabled } else if active { c.accent_text } else { c.text };
     let accent = if disabled { fg } else { c.accent_text };
     let enabled = on_press.is_some();
-    let control = iced_button(row![glyph(icon, 16.0, fg, accent), text(label).size(font::SIZE_LABEL).font(fonts::BODY)].spacing(6).align_y(Alignment::Center))
+    let control = iced_button(row![glyph(icon, 16.0, fg, accent), text(label).size(look.text.label).font(fonts::BODY)].spacing(6).align_y(Alignment::Center))
         .height(22)
         .padding([0, 4])
         .on_press_maybe(on_press)
@@ -1160,7 +1166,7 @@ pub fn document_tabs<'a, M: Clone + 'a>(
         let tab_dirty = tab.dirty;
         let title = shorten(full_title, TAB_TITLE_MAX);
         let shortened = title.len() != full_title.len();
-        inner = inner.push(text(title).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::BODY }).color(fg));
+        inner = inner.push(text(title).size(look.text.body).font(if on { fonts::STRONG } else { fonts::BODY }).color(fg));
         // The 16 px close button is its own button inside the tab.
         let hover_bg = if on { mix(c.workspace_text, 0.12, c.workspace) } else { c.pressed };
         if !tab.pinned {
@@ -1181,7 +1187,7 @@ pub fn document_tabs<'a, M: Clone + 'a>(
         ));
         }
         let workspace = c.workspace;
-        let tab = iced_button(inner).height(24).padding([0, 10]).on_press(on_select(i)).style(move |_, status| iced_button::Style { snap: false,
+        let tab = iced_button(inner).height(look.text.row - 4.0).padding([0, 10]).on_press(on_select(i)).style(move |_, status| iced_button::Style { snap: false,
             background: if on { fill(workspace) } else if status == iced_button::Status::Hovered && !look.high_contrast() { fill(c.hover) } else { None },
             text_color: fg,
             border: Border {
@@ -1203,7 +1209,7 @@ pub fn document_tabs<'a, M: Clone + 'a>(
 /// Statusbalk setting makes it dark.
 pub fn status_bar<'a, M: 'a>(look: Look, left: Vec<String>, right: Vec<String>) -> Element<'a, M> {
     let c = look.color;
-    let item = move |s: String| -> Element<'a, M> { text(s).size(font::SIZE_LABEL).font(fonts::BODY).color(c.statusbar_text).into() };
+    let item = move |s: String| -> Element<'a, M> { text(s).size(look.text.label).font(fonts::BODY).color(c.statusbar_text).into() };
     let name = left.join(", ");
     let mut line = row![].spacing(16).align_y(Alignment::Center).padding([0, 10]);
     for s in left {
@@ -1211,7 +1217,7 @@ pub fn status_bar<'a, M: 'a>(look: Look, left: Vec<String>, right: Vec<String>) 
     }
     line = line.push(Space::new().width(Length::Fill));
     for s in right {
-        line = line.push(text(s).size(font::SIZE_LABEL).font(fonts::MONO).color(c.statusbar_text));
+        line = line.push(text(s).size(look.text.label).font(fonts::MONO).color(c.statusbar_text));
     }
     let bar = column![
         divider(look),
@@ -1225,7 +1231,7 @@ pub fn empty_state<'a, M: 'a>(look: Look, icon: &'static str, title: &'a str, ex
     let c = look.color;
     let mut content = column![
         glyph(icon, 32.0, c.accent_text, c.accent_text),
-        text(title).size(font::SIZE_PANEL_HEADING).font(fonts::STRONG).color(c.text),
+        text(title).size(look.text.panel_heading).font(fonts::STRONG).color(c.text),
         secondary(look, explanation).align_x(Horizontal::Center),
     ]
     .spacing(8)

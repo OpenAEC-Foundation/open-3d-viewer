@@ -7,7 +7,7 @@
 use super::a11y::{self, Node, Role};
 use super::focus::{focusable, group, Axis};
 use super::widgets::{border, fill, glyph, icon_button, surface};
-use super::{font, radius, shell as size, Look};
+use super::{radius, shell as size, Look};
 use crate::fonts;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
@@ -78,7 +78,7 @@ pub fn title_bar<'a, M: Clone + 'a>(
         left = left.push(e);
     }
     let middle = mouse_area(
-        container(text(name).size(font::SIZE_BODY).font(fonts::MEDIUM).color(c.text))
+        container(text(name).size(look.text.body).font(fonts::MEDIUM).color(c.text))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Horizontal::Center)
@@ -167,7 +167,7 @@ pub fn menu<'a, M: Clone + 'a>(look: Look, items: Vec<MenuItem<'a, M>>, check_ic
                 list = list.push(container(container(Space::new().width(Length::Fill).height(1)).style(move |_| container::Style { background: fill(c.border), ..Default::default() })).padding([4, 0]));
             }
             MenuItem::Heading(label) => {
-                list = list.push(container(text(label.to_uppercase()).size(font::SIZE_LABEL).font(fonts::MONO).color(c.text_secondary)).height(24).padding([0, 10]).align_y(Vertical::Center));
+                list = list.push(container(text(label.to_uppercase()).size(look.text.label).font(fonts::MONO).color(c.text_secondary)).height(24).padding([0, 10]).align_y(Vertical::Center));
             }
             MenuItem::Action { icon, label, shortcut, checked, danger, on_press } => {
                 let disabled = on_press.is_none();
@@ -179,9 +179,9 @@ pub fn menu<'a, M: Clone + 'a>(look: Look, items: Vec<MenuItem<'a, M>>, check_ic
                 } else {
                     Space::new().width(14).into()
                 };
-                let mut line = row![lead, text(label).size(font::SIZE_BODY).font(fonts::BODY).color(fg).width(Length::Fill)].spacing(10).align_y(Alignment::Center);
+                let mut line = row![lead, text(label).size(look.text.body).font(fonts::BODY).color(fg).width(Length::Fill)].spacing(10).align_y(Alignment::Center);
                 if let Some(keys) = shortcut {
-                    line = line.push(text(keys).size(font::SIZE_LABEL).font(fonts::MONO).color(if disabled { c.text_disabled } else { c.text_secondary }));
+                    line = line.push(text(keys).size(look.text.label).font(fonts::MONO).color(if disabled { c.text_disabled } else { c.text_secondary }));
                 }
                 let mut node = Node::new(Role::MenuItem, label).disabled(disabled);
                 if checked {
@@ -193,7 +193,7 @@ pub fn menu<'a, M: Clone + 'a>(look: Look, items: Vec<MenuItem<'a, M>>, check_ic
                 list = list.push(a11y::node(focusable(
                     look,
                     button(container(line).height(Length::Fill).align_y(Vertical::Center))
-                        .height(28)
+                        .height(look.text.row)
                         .width(Length::Fill)
                         .padding([0, 10])
                         .on_press_maybe(on_press)

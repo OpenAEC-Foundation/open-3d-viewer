@@ -747,6 +747,10 @@
     "Date": "Date",
     "Summary": "Résumé",
     "Clash groups in view": "Groupes de conflits en image",
-    "Shadows": "Ombres"
+    "Shadows": "Ombres",
+    "Text size": "Taille du texte",
+    "Ribbon": "Ruban",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Les groupes de l'onglet du ruban ouvert en ce moment. Désactivez ce que vous n'utilisez pas.",
+    "Show all groups": "Afficher tous les groupes"
   }
 }

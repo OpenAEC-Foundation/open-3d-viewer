@@ -3707,7 +3707,7 @@ dependencies = [
 
 [[package]]
 name = "openaec-ui"
-version = "2026.44.1"
+version = "2026.45.0"
 dependencies = [
  "iced",
  "iced_tiny_skia",

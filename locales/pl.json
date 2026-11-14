@@ -747,6 +747,10 @@
     "Date": "Data",
     "Summary": "Podsumowanie",
     "Clash groups in view": "Grupy kolizji na obrazie",
-    "Shadows": "Cienie"
+    "Shadows": "Cienie",
+    "Text size": "Rozmiar tekstu",
+    "Ribbon": "Wstążka",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Grupy karty wstążki, która jest teraz otwarta. Wyłącz to, czego nie używasz.",
+    "Show all groups": "Pokaż wszystkie grupy"
   }
 }

@@ -747,6 +747,10 @@
     "Date": "Datum",
     "Summary": "Zusammenfassung",
     "Clash groups in view": "Kollisionsgruppen im Bild",
-    "Shadows": "Schatten"
+    "Shadows": "Schatten",
+    "Text size": "Textgröße",
+    "Ribbon": "Menüband",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Die Gruppen der Registerkarte, die jetzt geöffnet ist. Schalten Sie aus, was Sie nicht verwenden.",
+    "Show all groups": "Alle Gruppen anzeigen"
   }
 }

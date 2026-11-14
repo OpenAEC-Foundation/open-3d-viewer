@@ -17,7 +17,7 @@ use openaec_ui::design::shortcuts::{self as sc, Keymap};
 use openaec_ui::design::tiles as t;
 use openaec_ui::design::update::{self as upd, Available};
 use openaec_ui::design::widgets::{self as w, ButtonKind as K, Density as D, DocumentTab};
-use openaec_ui::design::{focus, Look, StatusbarSetting, ThemeId, WorkspaceSetting};
+use openaec_ui::design::{focus, Look, StatusbarSetting, TextSize, ThemeId, WorkspaceSetting};
 use openaec_ui::iced::widget::{column, container, mouse_area, row, Space};
 use openaec_ui::iced::{self, Element, Length, Point, Subscription, Task};
 use openaec_ui::keyboard::{KeyPress, Navigation};
@@ -93,6 +93,15 @@ struct Named<T> {
 impl<T> std::fmt::Display for Named<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.label)
+    }
+}
+
+/// What a ribbon group is known by in the settings: its first command.
+fn group_key(group: &(&'static str, Vec<RibbonPart>)) -> &'static str {
+    match group.1.first() {
+        Some(RibbonPart::Large(id)) => id,
+        Some(RibbonPart::Smalls(ids)) => ids.first().copied().unwrap_or(""),
+        None => "",
     }
 }
 
@@ -215,6 +224,19 @@ const STATUSBARS: [[Named<StatusbarSetting>; 2]; LANGUAGES] = [
     [named(StatusbarSetting::Theme, "Temayı izler"), named(StatusbarSetting::Dark, "Her zaman koyu")],
 ];
 
+const TEXT_SIZES: [[Named<TextSize>; 3]; LANGUAGES] = [
+    [named(TextSize::Compact, "Compact"), named(TextSize::Standard, "Standaard"), named(TextSize::Large, "Groot")],
+    [named(TextSize::Compact, "Compact"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Large")],
+    [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Groß")],
+    [named(TextSize::Compact, "Compacte"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Compacto"), named(TextSize::Standard, "Estándar"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Compatto"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Compacto"), named(TextSize::Standard, "Padrão"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Kompaktowy"), named(TextSize::Standard, "Standardowy"), named(TextSize::Large, "Duży")],
+    [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Stor")],
+    [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standart"), named(TextSize::Large, "Büyük")],
+];
+
 /// The options of a setting in `language`, and the one that is chosen.
 fn options<T: Copy + PartialEq, const N: usize>(lists: &'static [[Named<T>; N]; LANGUAGES], language: Language, chosen: T) -> (&'static [Named<T>], Option<Named<T>>) {
     let list = &lists[language.index()];
@@ -228,6 +250,8 @@ struct Prefs {
     theme: String,
     workspace: String,
     statusbar: String,
+    /// The size of the interface's texts (Tekstgrootte): compact, standard or large.
+    text_size: String,
     language: Language,
     scale: f64,
     left: bool,
@@ -235,6 +259,8 @@ struct Prefs {
     left_width: f32,
     right_width: f32,
     recent: Vec<PathBuf>,
+    /// The ribbon groups switched off, each by its first command.
+    ribbon_hidden: Vec<String>,
     /// The product shown last.
     product: Product,
 }
@@ -245,6 +271,7 @@ impl Default for Prefs {
             theme: ThemeId::Light.key().into(),
             workspace: WorkspaceSetting::Theme.to_string(),
             statusbar: StatusbarSetting::Theme.to_string(),
+            text_size: "standard".into(),
             language: Language::English,
             scale: 1.0,
             left: true,
@@ -252,6 +279,7 @@ impl Default for Prefs {
             left_width: 260.0,
             right_width: 280.0,
             recent: Vec::new(),
+            ribbon_hidden: Vec::new(),
             product: Product::Viewer,
         }
     }
@@ -279,6 +307,14 @@ impl Prefs {
 
     fn statusbar(&self) -> StatusbarSetting {
         StatusbarSetting::ALL.into_iter().find(|s| s.to_string() == self.statusbar).unwrap_or(StatusbarSetting::Theme)
+    }
+
+    fn text_size(&self) -> TextSize {
+        match self.text_size.as_str() {
+            "compact" => TextSize::Compact,
+            "large" => TextSize::Large,
+            _ => TextSize::Standard,
+        }
     }
 
     fn scale(&self) -> f64 {
@@ -399,6 +435,7 @@ pub enum Page {
     File,
     Settings,
     Shortcuts,
+    Ribbon,
     Feedback,
 }
 
@@ -410,6 +447,7 @@ impl Page {
             "settings" => Page::Settings,
             "shortcuts" => Page::Shortcuts,
             "feedback" => Page::Feedback,
+            "ribbon" => Page::Ribbon,
             _ => return None,
         })
     }
@@ -429,6 +467,7 @@ pub fn theme_from_arg(s: &str) -> Option<ThemeId> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPage {
     General,
+    Ribbon,
     Shortcuts,
 }
 
@@ -463,6 +502,10 @@ pub enum Msg {
     Shortcuts(sc::Message),
     Theme(ThemeId),
     Workspace(WorkspaceSetting),
+    /// A ribbon group (by its first command) shown or not; and all of them shown again.
+    RibbonGroup(&'static str, bool),
+    RibbonReset,
+    TextSize(TextSize),
     Statusbar(StatusbarSetting),
     Language(Language),
     Scale(f64),
@@ -735,11 +778,15 @@ impl Studio {
     pub fn show(&mut self, page: Page) {
         self.backstage = page == Page::File;
         self.dialog = match page {
-            Page::Settings | Page::Shortcuts => Some(Dialog::Settings),
+            Page::Settings | Page::Shortcuts | Page::Ribbon => Some(Dialog::Settings),
             Page::Feedback => Some(Dialog::Feedback),
             _ => None,
         };
-        self.settings_page = if page == Page::Shortcuts { SettingsPage::Shortcuts } else { SettingsPage::General };
+        self.settings_page = match page {
+            Page::Shortcuts => SettingsPage::Shortcuts,
+            Page::Ribbon => SettingsPage::Ribbon,
+            _ => SettingsPage::General,
+        };
     }
 
     /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
@@ -911,7 +958,7 @@ impl Studio {
     }
 
     fn look(&self) -> Look {
-        Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar())
+        Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar()).with_text_size(self.prefs.text_size())
     }
 
     /// The width of the left panel: the Collaborator's lists need more than the explorer's tree.
@@ -1358,6 +1405,26 @@ impl Studio {
                 self.prefs.workspace = setting.to_string();
                 self.save_prefs();
             }
+            Msg::TextSize(size) => {
+                self.prefs.text_size = match size {
+                    TextSize::Compact => "compact",
+                    TextSize::Standard => "standard",
+                    TextSize::Large => "large",
+                }
+                .into();
+                self.save_prefs();
+            }
+            Msg::RibbonGroup(key, shown) => {
+                self.prefs.ribbon_hidden.retain(|k| k != key);
+                if !shown {
+                    self.prefs.ribbon_hidden.push(key.to_string());
+                }
+                self.save_prefs();
+            }
+            Msg::RibbonReset => {
+                self.prefs.ribbon_hidden.clear();
+                self.save_prefs();
+            }
             Msg::Statusbar(setting) => {
                 self.prefs.statusbar = setting.to_string();
                 self.save_prefs();
@@ -1763,7 +1830,9 @@ impl Studio {
             .into()
     }
 
-    fn ribbon(&self, look: Look) -> Element<'_, Msg> {
+    /// The groups of the ribbon tab shown, each its label and its parts, before the user's
+    /// choice of which to show.
+    fn ribbon_groups(&self) -> Vec<(&'static str, Vec<RibbonPart>)> {
         let l = self.l();
         // a group is its label and its parts: a large button, or a column of small ones
         let large = |id: &'static str| RibbonPart::Large(id);
@@ -1830,6 +1899,12 @@ impl Studio {
                 (l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
             ],
         };
+        groups
+    }
+
+    fn ribbon(&self, look: Look) -> Element<'_, Msg> {
+        // without the groups switched off in the settings
+        let groups: Vec<(&'static str, Vec<RibbonPart>)> = self.ribbon_groups().into_iter().filter(|g| !self.prefs.ribbon_hidden.iter().any(|k| k == group_key(g))).collect();
         // drawn to fit the window: where the ribbon is wider, its groups show their small
         // buttons as icons only, from the last group back; narrower still, it scrolls sideways
         let commands = self.commands();
@@ -2082,7 +2157,7 @@ impl Studio {
         match dialog {
             Dialog::Settings => {
                 let tab = |page, label| w::button(look, label, if self.settings_page == page { K::Secondary } else { K::Quiet }, D::Compact, None, Some(Msg::SettingsPage(page)));
-                let tabs = row![tab(SettingsPage::General, l.text("Algemeen", "General")), tab(SettingsPage::Shortcuts, l.text("Sneltoetsen", "Shortcuts"))].spacing(4);
+                let tabs = row![tab(SettingsPage::General, l.text("Algemeen", "General")), tab(SettingsPage::Ribbon, l.text("Lint", "Ribbon")), tab(SettingsPage::Shortcuts, l.text("Sneltoetsen", "Shortcuts"))].spacing(4);
                 let scale = Scale::ALL.into_iter().find(|s| (s.0 - self.prefs.scale()).abs() < 0.01);
                 let groups = [
                     ("file", l.text("Bestand", "File")),
@@ -2095,18 +2170,32 @@ impl Studio {
                 let themes = options(&THEMES, l, self.prefs.theme());
                 let workspaces = options(&WORKSPACES, l, self.prefs.workspace());
                 let statusbars = options(&STATUSBARS, l, self.prefs.statusbar());
+                let text_sizes = options(&TEXT_SIZES, l, self.prefs.text_size());
                 let body: Element<'_, Msg> = match self.settings_page {
                     SettingsPage::General => column![
                         w::mono_label(look, l.text("Weergave", "Appearance")),
                         w::property_row(look, l.text("Thema", "Theme"), w::select(look, themes.0, themes.1, |n| Msg::Theme(n.value), D::Regular)),
                         w::property_row(look, l.text("Werkruimte", "Workspace"), w::select(look, workspaces.0, workspaces.1, |n| Msg::Workspace(n.value), D::Regular)),
                         w::property_row(look, l.text("Statusbalk", "Status bar"), w::select(look, statusbars.0, statusbars.1, |n| Msg::Statusbar(n.value), D::Regular)),
+                        w::property_row(look, l.text("Tekstgrootte", "Text size"), w::select(look, text_sizes.0, text_sizes.1, |n| Msg::TextSize(n.value), D::Regular)),
                         w::property_row(look, l.text("Interfacegrootte", "Interface size"), w::select(look, &Scale::ALL, scale, |s: Scale| Msg::Scale(s.0), D::Regular)),
                         w::mono_label(look, l.text("Taal", "Language")),
                         w::property_row(look, l.text("Taal", "Language"), w::select(look, &Language::ALL, Some(l), Msg::Language, D::Regular)),
                     ]
                     .spacing(6)
                     .into(),
+                    // the groups of the ribbon tab shown: each on or off
+                    SettingsPage::Ribbon => {
+                        let hidden = &self.prefs.ribbon_hidden;
+                        let groups = self.ribbon_groups();
+                        let mut list = column![w::secondary(look, l.text("De groepen van het linttabblad dat nu open staat. Zet uit wat je niet gebruikt.", "The groups of the ribbon tab that is open now. Switch off what you do not use."))].spacing(8);
+                        for group in &groups {
+                            let key = group_key(group);
+                            let shown = !hidden.iter().any(|k| k == key);
+                            list = list.push(w::checkbox(look, group.0, shown, Some(move |on| Msg::RibbonGroup(key, on))));
+                        }
+                        list.push(w::button(look, l.text("Alle groepen tonen", "Show all groups"), K::Secondary, D::Compact, None, (!hidden.is_empty()).then_some(Msg::RibbonReset))).into()
+                    }
                     SettingsPage::Shortcuts => sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts),
                 };
                 w::dialog(

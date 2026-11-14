@@ -747,6 +747,10 @@
     "Date": "Datum",
     "Summary": "Sammanfattning",
     "Clash groups in view": "Kollisionsgrupper i bild",
-    "Shadows": "Skuggor"
+    "Shadows": "Skuggor",
+    "Text size": "Textstorlek",
+    "Ribbon": "Menyfliksområde",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Grupperna på den menyflik som är öppen nu. Stäng av det du inte använder.",
+    "Show all groups": "Visa alla grupper"
   }
 }

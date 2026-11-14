@@ -747,6 +747,10 @@
     "Date": "Data",
     "Summary": "Resumo",
     "Clash groups in view": "Grupos de colisões na vista",
-    "Shadows": "Sombras"
+    "Shadows": "Sombras",
+    "Text size": "Tamanho do texto",
+    "Ribbon": "Friso",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Os grupos do separador do friso que está aberto agora. Desative o que não utiliza.",
+    "Show all groups": "Mostrar todos os grupos"
   }
 }

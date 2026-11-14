@@ -747,6 +747,10 @@
     "Date": "Fecha",
     "Summary": "Resumen",
     "Clash groups in view": "Grupos de colisiones en imagen",
-    "Shadows": "Sombras"
+    "Shadows": "Sombras",
+    "Text size": "Tamaño del texto",
+    "Ribbon": "Cinta",
+    "The groups of the ribbon tab that is open now. Switch off what you do not use.": "Los grupos de la pestaña de la cinta que está abierta ahora. Desactive lo que no use.",
+    "Show all groups": "Mostrar todos los grupos"
   }
 }

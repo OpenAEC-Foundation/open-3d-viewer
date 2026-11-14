@@ -75,7 +75,7 @@ impl App {
                 b: uv(d.line.b),
                 level: match d.kind {
                     crate::annotations::DatumKind::Level(z) => Some(z),
-                    crate::annotations::DatumKind::Grid(_) => None,
+                    crate::annotations::DatumKind::Grid(_) | crate::annotations::DatumKind::Outline => None,
                 },
                 name: d.line.name,
             })

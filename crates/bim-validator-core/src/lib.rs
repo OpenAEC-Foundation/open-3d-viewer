@@ -5,6 +5,7 @@ mod evaluator;
 mod graph;
 mod html;
 mod ils;
+mod rooms;
 mod values;
 pub use html::{report_html, ReportLanguage};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,8 @@ pub enum RuleSource {
     Ids,
     ModelChecks,
     Ils,
+    /// Rooms, doors and fire separations.
+    Rooms,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
@@ -131,6 +134,24 @@ pub struct ValidationOptions {
     /// Built-in model checks modelled on buildingSMART validation-service rules.
     pub model_checks: bool,
     pub ils: Option<IlsOptions>,
+    /// The checks of rooms, doors and fire separations.
+    pub rooms: Option<RoomOptions>,
+}
+
+/// What the checks of rooms and doors ask (metres).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoomOptions {
+    pub door_width: f64,
+    pub door_height: f64,
+    /// The highest threshold of a door (metres).
+    pub threshold: f64,
+    /// The steepest ramp, as the run for a rise of one (12: 1 in 12).
+    pub ramp_run: f64,
+}
+impl Default for RoomOptions {
+    fn default() -> Self {
+        Self { door_width: 0.85, door_height: 2.3, threshold: 0.02, ramp_run: 12.0 }
+    }
 }
 
 /// Validate a complete IFC STEP model against an IDS 1.0 document.
@@ -164,8 +185,8 @@ pub fn validate_model(
     options: &ValidationOptions,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<ValidationReport, String> {
-    if options.ids_xml.is_none() && !options.model_checks && options.ils.is_none() {
-        return Err("Select an IDS, the model checks or the BIM basis ILS profile".into());
+    if options.ids_xml.is_none() && !options.model_checks && options.ils.is_none() && options.rooms.is_none() {
+        return Err("Select an IDS, the model checks, the BIM basis ILS profile or the room checks".into());
     }
     let ids = options.ids_xml.as_deref().map(parse_ids).transpose()?;
     if let Some(ils) = &options.ils {
@@ -188,6 +209,9 @@ pub fn validate_model(
     }
     if let Some(ils) = &options.ils {
         report.specifications.extend(ils::run(&model, ils)?);
+    }
+    if let Some(rooms) = &options.rooms {
+        report.specifications.extend(rooms::run(&model, rooms)?);
     }
     report.model = Some(model.summary()?);
     report.status = report

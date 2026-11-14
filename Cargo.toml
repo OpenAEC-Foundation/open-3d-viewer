@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.46.1"
+version = "2026.46.3"
 description = "Open BIM Suite: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open BIM Suite Contributors"]
 license = "LGPL-3.0-or-later"
@@ -73,6 +73,8 @@ rfd = "0.17"
 web-time = "1"
 # PNG for the window icon and window screenshots (MIT OR Apache-2.0)
 png = "0.18"
+# The widths of the house font's letters, for reports set in it (MIT OR Apache-2.0; already built for the fonts of iced)
+ttf-parser = "0.25"
 # Drawings exported as PNG: their SVG rendered with the app's fonts (Apache-2.0 OR MIT; already built for iced's svg)
 resvg = { version = "0.45", default-features = false, features = ["text"] }
 # PDF drawings laid on a level as underlays: their pages' paths (MIT; without its clock and threads)

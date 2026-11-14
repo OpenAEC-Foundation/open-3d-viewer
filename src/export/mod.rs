@@ -11,6 +11,7 @@ pub mod drawing;
 pub(crate) mod ifc;
 pub(crate) mod ifcx;
 pub mod pdf;
+pub mod report;
 pub mod svg;
 pub mod xlsx;
 

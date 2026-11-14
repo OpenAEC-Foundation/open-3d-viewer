@@ -95,6 +95,8 @@ pub enum Refusal {
     /// A frame cannot be split into prefab units short enough, with their joints clear of its
     /// openings.
     NoUnitJoint,
+    /// Two building systems are joined only butt or apart, and only when both are framed.
+    SystemJoin,
 }
 
 impl Refusal {
@@ -128,6 +130,7 @@ impl Refusal {
             Refusal::TooManyParts => "A system would have more than 50000 parts.",
             Refusal::OpeningNotFramed => "Only a framed system, such as a timber frame, can have openings.",
             Refusal::NoUnitJoint => "The frame cannot be split into prefab units clear of its openings.",
+            Refusal::SystemJoin => "Two framed systems are joined butt or kept apart.",
         }
     }
 }

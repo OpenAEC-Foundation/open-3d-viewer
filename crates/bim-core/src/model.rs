@@ -107,6 +107,9 @@ impl Model {
         if c.kind == ConnectionKind::Cut {
             return None;
         }
+        if self.joins_systems(c) {
+            return crate::system::connection_node(self, c);
+        }
         let (p, s) = (self.member(c.primary).ok()?, self.member(c.secondary).ok()?);
         let near = |q| join::to_segment(q, p.start, p.end);
         Some(if near(s.start) <= near(s.end) { s.start } else { s.end })
@@ -129,7 +132,7 @@ impl Model {
             .values()
             .filter_map(|e| match &e.shape {
                 Shape::Connection(c) if c.kind != ConnectionKind::Cut => {
-                    matches!(self.join(c), Err(Refusal::NotTouching | Refusal::Parallel | Refusal::Missing | Refusal::NotLinear)).then_some(e.id)
+                    matches!(self.join(c), Err(Refusal::NotTouching | Refusal::Parallel | Refusal::Missing | Refusal::NotLinear | Refusal::SystemJoin)).then_some(e.id)
                 }
                 _ => None,
             })
@@ -324,7 +327,7 @@ impl Model {
             return Err(Refusal::SameMember);
         }
         match c.kind {
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => self.join(c).map(|_| ()),
+            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) | ConnectionKind::Apart => self.join(c).map(|_| ()),
             ConnectionKind::Cut => {
                 let target = self.elements.get(&c.secondary).ok_or(Refusal::Missing)?;
                 let parts = self.body(target)?;
@@ -360,6 +363,11 @@ impl Model {
         joined
     }
 
+    /// Whether a connection joins a building system (its other member must be one too).
+    fn joins_systems(&self, c: &ConnectionDef) -> bool {
+        [c.primary, c.secondary].iter().any(|id| matches!(self.elements.get(id).map(|e| &e.shape), Some(Shape::System(_))))
+    }
+
     /// A member of a connection: its definition in the frame of tile (0, 0), so both members
     /// share one frame.
     fn member(&self, id: ElementId) -> Result<LinearDef, Refusal> {
@@ -375,11 +383,25 @@ impl Model {
         if c.primary == c.secondary {
             return Err(Refusal::SameMember);
         }
+        if c.kind == ConnectionKind::Cut {
+            return Ok((Vec::new(), JoinResult::default()));
+        }
+        // two building systems: they end at each other as their corner or T junction says
+        if self.joins_systems(c) {
+            crate::system::connection(self, c)?;
+            return Ok((Vec::new(), JoinResult::default()));
+        }
         let kind = match c.kind {
             ConnectionKind::Cut => return Ok((Vec::new(), JoinResult::default())),
             ConnectionKind::Butt => JoinKind::Butt,
             ConnectionKind::Mitre => JoinKind::Mitre,
             ConnectionKind::EndPlate(plate) => JoinKind::EndPlate(plate),
+            // two members kept apart: no join
+            ConnectionKind::Apart => {
+                self.member(c.primary)?;
+                self.member(c.secondary)?;
+                return Ok((Vec::new(), JoinResult::default()));
+            }
         };
         let members = [Member::of(&self.member(c.primary)?)?, Member::of(&self.member(c.secondary)?)?];
         Ok((vec![c.primary, c.secondary], join::cuts(kind, &members)?))

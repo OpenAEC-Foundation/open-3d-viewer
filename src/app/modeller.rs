@@ -413,17 +413,27 @@ impl App {
         self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() == bim_core::BaseKind::Linear)).count()
     }
 
+    /// Whether two modelled elements that a butt connection can join are selected: two linear
+    /// ones, or two building systems.
+    pub(crate) fn selected_joinable(&self) -> bool {
+        let bases: Vec<bim_core::BaseKind> = self.selected_modelled().into_iter().filter_map(|id| self.modeller.model.get(id).map(|e| e.base())).filter(|b| *b != bim_core::BaseKind::Connection).collect();
+        matches!(bases[..], [a, b] if a == b && matches!(a, bim_core::BaseKind::Linear | bim_core::BaseKind::System))
+    }
+
     /// How many modelled elements with a body (not connections) are selected.
     pub(crate) fn selected_bodies(&self) -> usize {
         self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() != bim_core::BaseKind::Connection)).count()
     }
 
-    /// Joins the two linear elements selected: the first is the primary.
+    /// Joins the two linear elements or the two building systems selected: the first is the
+    /// primary.
     pub(super) fn connect_selected(&mut self, kind: ConnectionKind, name: &str) {
-        // a join takes two linear elements; a cut any two with a body, the first cutting the second
+        // a join takes two linear elements, butt or apart also two building systems (the kernel
+        // refuses a mixed pair); a cut any two with a body, the first cutting the second
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -780,6 +790,7 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Mitre => "Mitre",
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
+                ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
             put("Primary", c.primary.0.to_string());
@@ -1013,6 +1024,41 @@ mod tests {
         let joins: Vec<&Element> = app.modeller.model.iter().filter(|e| e.base() == bim_core::BaseKind::Connection).collect();
         assert_eq!(joins.len(), 1);
         assert!(matches!(&joins[0].shape, Shape::Connection(c) if c.kind == ConnectionKind::Butt));
+    }
+
+    #[test]
+    fn two_timber_frames_are_connected_at_their_corner() {
+        let mut app = modelling();
+        let frame = |a: (f64, f64), b: (f64, f64)| {
+            let s = SystemDef { start: glam::DVec2::new(a.0, a.1), end: glam::DVec2::new(b.0, b.1), base: 0.0, height: 2.7, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new() };
+            Shape::System(s.typed_from(&bim_library::Library::starter(), "system.timber-frame-140").unwrap())
+        };
+        let long = app.add_element("Frame", None, frame((0.0, 0.0), (4.8, 0.0))).unwrap();
+        let short = app.add_element("Frame", None, frame((4.8, 0.0), (4.8, 3.0))).unwrap();
+        let through = |app: &App| bim_core::system::corners(&app.modeller.model, app.modeller.model.get(short).unwrap())[0].map(|m| m.through);
+        assert_eq!(through(&app), Some(false), "the longer one runs through");
+        // the short one picked first: it runs through
+        let scene = app.model.clone().unwrap();
+        app.sel.clear();
+        for id in [short, long] {
+            app.sel.toggle(Pickable::Element(scene.element_with_key(crate::model::ElementKey { model: 0, source: id.0 }).unwrap()));
+        }
+        assert!(app.selected_joinable());
+        app.connect_selected(ConnectionKind::Butt, "Connection");
+        assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
+        assert_eq!(through(&app), Some(true));
+        // its mark at the corner picks it; turned round, the long one runs through again
+        let marks = app.join_marks(iced::Color::BLACK, iced::Color::WHITE).expect("a mark");
+        assert!((marks.marks[0].1 - Vec3::new(4.8, 0.0, 1.35)).length() < 1e-4, "{}", marks.marks[0].1);
+        let _ = app.update(Message::PickJoin(marks.marks[0].0));
+        let _ = app.update(Message::SwapJoin);
+        assert_eq!(through(&app), Some(false));
+        // apart: no corner
+        let _ = app.update(Message::JoinKind(ConnectionKind::Apart));
+        assert_eq!(through(&app), None);
+        // a frame and a beam are not joined
+        app.sel.clear();
+        assert!(!app.selected_joinable());
     }
 
     #[test]

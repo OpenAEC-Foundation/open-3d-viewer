@@ -671,6 +671,8 @@ pub enum Message {
     RemoveOpening(usize),
     /// Give the selected join another kind.
     JoinKind(bim_core::ConnectionKind),
+    /// Turn the selected join round: its other member runs through.
+    SwapJoin,
     /// A click on a join's mark: it is selected.
     PickJoin(bim_core::ElementId),
     /// A finger (`true`) or a mouse button (`false`) went down.
@@ -1567,6 +1569,7 @@ impl App {
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
             Message::JoinKind(kind) => self.set_join_kind(kind),
+            Message::SwapJoin => self.swap_join(),
             Message::PickJoin(id) => self.select_modelled(id),
             Message::SaveDialog => {
                 let Some(model) = &self.model else { return Task::none() };

@@ -1100,18 +1100,6 @@ impl Studio {
                 .icon(small("object.hide"), large("object.hide"))
                 .shortcut(key('h'))
                 .enabled(app.has_selection()),
-            // through the clashes with the keys: the next and the one before, accept, reject, issue
-            Command::new("clash.next", l.text("Volgende clash", "Next clash"), go(Message::Collab(crate::app::collab::Event::Step(1)))).shortcut(key('j')).enabled(!app.collab.clashes.is_empty()),
-            Command::new("clash.previous", l.text("Vorige clash", "Previous clash"), go(Message::Collab(crate::app::collab::Event::Step(-1)))).shortcut(key('k')).enabled(!app.collab.clashes.is_empty()),
-            Command::new("clash.accept", l.text("Clash akkoord", "Accept clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Accepted))))
-                .shortcut(key('a'))
-                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
-            Command::new("clash.reject", l.text("Clash afwijzen", "Reject clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Rejected))))
-                .shortcut(key('r'))
-                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
-            Command::new("clash.issue", l.text("Issue van clash", "Issue of clash"), go(Message::Collab(crate::app::collab::Event::IssueFromPicked)))
-                .shortcut(key('t'))
-                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
             Command::new("object.isolate", l.text("Isoleren", "Isolate"), go(Message::IsolateSelection))
                 .icon(small("object.show"), large("object.show"))
                 .shortcut(key('i'))
@@ -1169,6 +1157,22 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // through the clashes with the keys: the next and the one before, accept, reject, issue
+        // (the Collaborator's, which the web build leaves out)
+        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        list.extend([
+            Command::new("clash.next", l.text("Volgende clash", "Next clash"), go(Message::Collab(crate::app::collab::Event::Step(1)))).shortcut(key('j')).enabled(!app.collab.clashes.is_empty()),
+            Command::new("clash.previous", l.text("Vorige clash", "Previous clash"), go(Message::Collab(crate::app::collab::Event::Step(-1)))).shortcut(key('k')).enabled(!app.collab.clashes.is_empty()),
+            Command::new("clash.accept", l.text("Clash akkoord", "Accept clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Accepted))))
+                .shortcut(key('a'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+            Command::new("clash.reject", l.text("Clash afwijzen", "Reject clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Rejected))))
+                .shortcut(key('r'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+            Command::new("clash.issue", l.text("Issue van clash", "Issue of clash"), go(Message::Collab(crate::app::collab::Event::IssueFromPicked)))
+                .shortcut(key('t'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+        ]);
         // move, copy, turn and mirror what is selected
         list.extend(crate::app::transform::TransformKind::ALL.map(|kind| {
             Command::new(kind.id(), kind.label(l), go(Message::Transform(kind)))
@@ -1396,6 +1400,7 @@ impl Studio {
                 let started = self.dev_opens(id, &message);
                 let task = self.app.update(message).map(move |m| Msg::Project(id, m));
                 // a model changed and the rule set asks for it: the clash tests run again
+                #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
                 let task = if self.app.collab.rerun_due() { Task::batch([task, Task::done(Msg::Project(id, Message::Collab(crate::app::collab::Event::Clash)))]) } else { task };
                 if started {
                     if let Some(&shown) = self.dev.as_mut().and_then(|d| d.tab.take()).and_then(|t| self.tabs.get(t)) {

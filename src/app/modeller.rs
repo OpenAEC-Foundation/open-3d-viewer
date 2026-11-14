@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 mod grids;
 pub mod levels;
+pub(super) mod shape_handles;
 
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -61,6 +61,10 @@ impl App {
         };
         let (mut points, _) = edit_points(&shape);
         points.push((points[0] + points[1]) / 2.0);
+        // a modelled wall or system: the grip of its top, where it shows apart from the middle
+        if self.gripped().is_some() {
+            points.extend(self.height_grip(&shape));
+        }
         Some(EditOverlay {
             picked: vec![false; points.len()],
             points: points.iter().map(|p| p.as_vec3()).collect(),
@@ -82,6 +86,9 @@ impl App {
             }
         }
         let Some(element) = self.gripped() else { return };
+        if index == super::modeller::shape_handles::TOP_GRIP {
+            return self.begin_height_drag(element);
+        }
         let picked = if index < 2 { vec![index] } else { vec![0, 1] };
         self.modeller.edit = Some(Edit { element, picked, grab: None, grips: true });
         self.begin_grab(index, false);

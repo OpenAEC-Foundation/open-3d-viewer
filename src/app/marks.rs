@@ -149,6 +149,9 @@ impl App {
             pick: self.mark_pick,
             palette: p,
             on_paper: self.drawing_on_paper,
+            // on paper the view draws its grid lines and levels itself; over the model the
+            // viewport does
+            datums: if self.drawing_on_paper { self.view_datums(view) } else { Vec::new() },
         })
     }
 
@@ -428,6 +431,9 @@ pub(super) struct ViewMarks {
     palette: Palette,
     /// Drawn as a sheet draws it: on paper, its cut in ink.
     on_paper: bool,
+    /// The grid lines and levels the view draws itself, on its drawing: those of a view shown on
+    /// paper.
+    datums: Vec<crate::drawing2d::Datum2>,
 }
 
 /// The first point of a dimension being made, where the pointer snaps to now, a text being
@@ -702,6 +708,12 @@ impl canvas::Program<Message> for ViewMarks {
             let letter = name.rsplit(' ').next().unwrap_or(name).to_string();
             self.draw_section(&mut frame, &screen, *from, *to, letter, ink);
         }
+        // the grid lines and levels of the view, as its drawing has them
+        for d in &self.datums {
+            if let (Some(a), Some(b)) = (self.px(&screen, d.a), self.px(&screen, d.b)) {
+                draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), ink, if p.dark { Color::from_rgb(0.16, 0.16, 0.18) } else { Color::WHITE });
+            }
+        }
         for (k, d) in self.dimensions.iter().enumerate() {
             let (Some(a), Some(b)) = (self.px(&screen, d.from), self.px(&screen, d.to)) else { continue };
             let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else { ink };
@@ -859,6 +871,56 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
         font: openaec_ui::fonts::MEDIUM,
         ..canvas::Text::default()
     });
+}
+
+/// A grid line or a level of a view on its drawing, from `a` to `b` on screen: a dash-dot line;
+/// a grid line with its name in a bubble past both ends, a level with its name past its end.
+fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, level: bool, ink: Color, paper: Color) {
+    let length = a.distance(b);
+    if length < 1.0 {
+        return;
+    }
+    let (ux, uy) = ((b.x - a.x) / length, (b.y - a.y) / length);
+    let at = |d: f32| Point::new(a.x + ux * d, a.y + uy * d);
+    // a long dash, a gap, a dot, a gap (logical pixels)
+    let line = Path::new(|path| {
+        let mut d = 0.0;
+        while d < length {
+            path.move_to(at(d));
+            path.line_to(at((d + 14.0).min(length)));
+            if d + 17.0 < length {
+                path.move_to(at(d + 17.0));
+                path.line_to(at((d + 18.5).min(length)));
+            }
+            d += 21.5;
+        }
+    });
+    frame.stroke(&line, Stroke::default().with_color(Color { a: 0.75, ..ink }).with_width(0.8));
+    let label = |frame: &mut Frame, position: Point, align: alignment::Horizontal| {
+        frame.fill_text(canvas::Text {
+            content: name.to_string(),
+            position,
+            align_x: align.into(),
+            align_y: alignment::Vertical::Center,
+            size: iced::Pixels(11.0),
+            color: ink,
+            font: openaec_ui::fonts::MEDIUM,
+            ..canvas::Text::default()
+        });
+    };
+    if level {
+        // the level's name past the end on the right
+        let end = if a.x >= b.x { a } else { b };
+        label(frame, Point::new(end.x + 6.0, end.y), alignment::Horizontal::Left);
+        return;
+    }
+    const BUBBLE: f32 = 10.0;
+    for centre in [at(-BUBBLE), at(length + BUBBLE)] {
+        let circle = Path::circle(centre, BUBBLE);
+        frame.fill(&circle, paper);
+        frame.stroke(&circle, Stroke::default().with_color(ink).with_width(1.0));
+        label(frame, centre, alignment::Horizontal::Center);
+    }
 }
 
 /// A text standing on a screen point: its lower left, the middle of its foot or its lower right,

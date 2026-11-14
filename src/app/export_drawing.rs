@@ -59,7 +59,7 @@ impl App {
 
     /// The grid lines and levels a view's tab shows (none while the grid lines are off), on the
     /// view's drawing: a floor plan's in plan, a section's along its line and up.
-    fn view_datums(&self, view: &str) -> Vec<Datum2> {
+    pub(super) fn view_datums(&self, view: &str) -> Vec<Datum2> {
         let Some(model) = self.model.as_ref().filter(|_| self.grids_shown()) else { return Vec::new() };
         if self.document.plan(view).is_some() {
             let flat = |p: [f32; 3]| [f64::from(p[0]), f64::from(p[1])];

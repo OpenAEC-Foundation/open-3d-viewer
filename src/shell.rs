@@ -741,7 +741,15 @@ impl Studio {
                 }
             }
         }
+        // the Modeller's explorer opens on its project browser; elsewhere that tab is not there
+        let (browser, model) = (crate::app::ExplorerTab::Project, crate::app::ExplorerTab::Model);
+        if product == Product::Modeller && self.product() != product && self.app.explorer_tab == model {
+            self.app.explorer_tab = browser;
+        } else if product != Product::Modeller && self.app.explorer_tab == browser {
+            self.app.explorer_tab = model;
+        }
         self.prefs.product = product;
+        self.app.modeller.in_modeller = product == Product::Modeller;
         self.backstage = false;
         self.ribbon_folded = false;
         self.save_prefs();
@@ -1135,7 +1143,10 @@ impl Studio {
             Command::new("model.new", l.text("Nieuw model", "New model"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("object.add"), large("object.add")),
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
-                .enabled(app.selected_linear() == 2),
+                .enabled(app.selected_joinable()),
+            Command::new("model.apart", l.text("Los", "Apart"), go(Message::Connect(bim_core::ConnectionKind::Apart, l.text("Verbinding", "Connection"))))
+                .icon(small("edit.clear-all"), large("edit.clear-all"))
+                .enabled(app.selected_joinable()),
             Command::new("model.end-plate", l.text("Kopplaat", "End plate"), go(Message::Connect(bim_core::ConnectionKind::EndPlate(bim_core::join::EndPlate::default()), l.text("Kopplaat", "End plate"))))
                 .icon(small("frame.combination"), large("frame.combination"))
                 .enabled(app.selected_linear() == 2),
@@ -1166,6 +1177,8 @@ impl Studio {
             Command::new(id, label, go(Message::PickLevelFor((app.views_picker != Some(kind)).then_some(kind)))).icon(small("drawing.plan"), large("drawing.plan")).mode(app.views_picker == Some(kind)).enabled(loaded)
         };
         list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
+        // a grid line of the modelled project: two clicks on the work plane
+        list.push(Command::new("project.grid", l.text("Stramien", "Grid"), go(Message::GridTool)).icon(small("view.grid"), large("view.grid")).mode(app.modeller.grid_tool).enabled(app.modeller.shown.is_some()));
         list.push(plan("project.floor-plan", l.text("Plattegrond", "Floor plan"), PlanKind::Floor));
         list.push(plan("project.structural-plan", l.text("Constructieplan", "Structural plan"), PlanKind::Structural));
         list.push(plan("project.ceiling-plan", l.text("Plafondplan", "Ceiling plan"), PlanKind::Ceiling));
@@ -1912,12 +1925,13 @@ impl Studio {
                 (l.text("Systeem", "System"), vec![large("model.system")]),
                 (l.text("Puntvormig", "Point"), vec![large("model.point")]),
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
-                (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
+                (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
                 (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![
                 (l.text("Niveaus", "Levels"), vec![large("project.level")]),
+                (l.text("Stramien", "Grid"), vec![large("project.grid")]),
                 (l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
                 (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
                 (l.text("Bibliotheek", "Library"), vec![large("project.library")]),

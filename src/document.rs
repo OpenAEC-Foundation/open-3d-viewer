@@ -769,6 +769,26 @@ impl Document {
         Ok(self.levels.iter().position(|l| l.path == path).unwrap_or_default())
     }
 
+    /// Renames the level at `path` and puts it at `elevation`; a path that is no level changes
+    /// nothing.
+    pub fn set_level(&mut self, path: &str, name: &str, elevation: f64) -> Result<(), LevelError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(LevelError::EmptyName);
+        }
+        if self.levels.iter().any(|l| l.path != path && same_name(&l.name, name)) {
+            return Err(LevelError::DuplicateName);
+        }
+        if !elevation.is_finite() {
+            return Err(LevelError::BadElevation);
+        }
+        if let Some(level) = self.levels.iter_mut().find(|l| l.path == path) {
+            (level.name, level.elevation) = (name.to_string(), micrometres(elevation));
+        }
+        self.sort();
+        Ok(())
+    }
+
     /// Removes the added level at `path`; a level of the model stays (false).
     pub fn remove_level(&mut self, path: &str) -> bool {
         let before = self.levels.len();

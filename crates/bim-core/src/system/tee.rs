@@ -100,7 +100,12 @@ pub(super) fn geometric<'a>(model: &'a Model, stands: Framed<'a>, end: usize, ti
             runs = Some(other);
         }
     }
-    between(runs?, stands, end)
+    let runs = runs?;
+    // a connection that keeps them apart makes no T junction
+    if super::corner::apart(model, runs.id, stands.id) {
+        return None;
+    }
+    between(runs, stands, end)
 }
 
 /// The T junctions along `runs`, as the systems lie: every other framed system that stands against

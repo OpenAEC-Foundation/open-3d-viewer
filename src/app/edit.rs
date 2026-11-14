@@ -371,6 +371,10 @@ impl App {
 
     /// Puts a move down: the element takes the moved points, if the kernel can make it.
     fn put_down(&mut self) {
+        // a drag of a wall's top grip changes its height
+        if self.put_height_down() {
+            return;
+        }
         let Some((points, _)) = self.edit_points_now() else { return };
         let moved = self.modeller.edit.as_ref().and_then(|e| e.grab.as_ref()).is_some_and(|g| g.delta != DVec3::ZERO);
         if self.modeller.edit.as_ref().is_some_and(|e| e.grips) {
@@ -409,6 +413,9 @@ impl App {
 
     /// The edit overlay: the edited element's points and the lines between them.
     pub(super) fn edit_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
+        if let Some(overlay) = self.height_drag_overlay(ink, fill) {
+            return Some(overlay);
+        }
         let edit = self.modeller.edit.as_ref()?;
         let (mut points, closed) = self.edit_points_now()?;
         if edit.grips {

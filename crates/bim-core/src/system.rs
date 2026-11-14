@@ -61,7 +61,7 @@ use std::iter::once;
 mod corner;
 mod tee;
 
-pub(crate) use corner::joined_parts;
+pub(crate) use corner::{connection, connection_node, joined_parts};
 pub use corner::{corners, joined_units, Meeting};
 pub use tee::{tees, Abutment, Tees};
 

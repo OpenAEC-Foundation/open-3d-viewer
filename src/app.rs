@@ -1884,11 +1884,11 @@ impl App {
                 }
                 Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
                 Navigate::Context { x, y, width, height } => self.context_click(x, y, width, height),
-                Navigate::Box { x0, y0, x1, y1, width, height, done } => {
+                Navigate::Box { x0, y0, x1, y1, width, height, done, add } => {
                     let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
                     self.box_select = (!done).then_some(rect);
                     if done {
-                        self.select_box(rect, width, height);
+                        self.select_box(rect, width, height, add);
                     }
                 }
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
@@ -2687,9 +2687,10 @@ impl App {
         self.selection_changed();
     }
 
-    /// Adds what the box `rect` (viewport pixels of a viewport of width × height) holds to the
-    /// selection: elements, and layers without elements; nothing hidden or switched off.
-    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32) {
+    /// Selects what the box `rect` (viewport pixels of a viewport of width × height) holds:
+    /// elements, and layers without elements; nothing hidden or switched off. With `add` beside
+    /// the selection, else in its place.
+    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32, add: bool) {
         let (Some(model), Some(index)) = (self.model.clone(), self.explode_index.clone()) else { return };
         // the elements on layers that are switched on; with every layer on, all of them
         let all_on = self.visible.iter().all(|&v| v);
@@ -2737,6 +2738,10 @@ impl App {
                 UnitOwner::LayerRest(l) => Some(Pickable::Layer(l)),
             })
             .collect();
+        if !add {
+            self.sel.clear();
+            self.set_structural_selection(Vec::new());
+        }
         self.sel.extend(items);
         self.selection_changed();
     }
@@ -3619,6 +3624,7 @@ impl App {
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
             looks: &self.unit_looks,
+            drag_selects: self.drag_selects(),
             hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
@@ -4945,7 +4951,7 @@ mod tests {
         let (w, h) = app.viewport_size;
         let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true, add: true }));
         assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
     }
 
@@ -4966,7 +4972,7 @@ mod tests {
         let (ax, ay) = screen_point(&app, Vec3::new(-0.5, 0.0, 5.0));
         let (bx, by) = screen_point(&app, Vec3::new(0.5, 0.0, -1.0));
         let (x0, x1) = (ax.min(bx), ax.max(bx));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true, add: true }));
         let mut got: Vec<u64> = app.sel.items().iter().filter_map(|i| match i { Pickable::Element(id) => Some(*id), _ => None }).collect();
         got.sort_unstable();
         assert_eq!(got, want);
@@ -5031,9 +5037,9 @@ mod tests {
         let (w, h) = app.viewport_size;
         let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false, add: true }));
         assert!(app.box_select.is_some(), "drawn while dragging");
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true, add: true }));
         assert!(app.box_select.is_none());
         assert_eq!(app.sel.len(), 2);
     }

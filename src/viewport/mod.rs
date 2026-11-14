@@ -50,9 +50,10 @@ pub enum Navigate {
     /// Left click at (x, y) in the viewport (logical pixels); `add`: with Ctrl, to add to the
     /// selection.
     Pick { x: f32, y: f32, width: f32, height: f32, add: bool },
-    /// Ctrl + left drag: the box from (x0, y0) to the cursor (x1, y1) in a viewport of width ×
-    /// height; `done` when the button is released.
-    Box { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, height: f32, done: bool },
+    /// A box drag (Ctrl + left drag; in the Modeller's Select tool a left drag): the box from
+    /// (x0, y0) to the cursor (x1, y1) in a viewport of width × height; `done` when the button is
+    /// released; `add`: with Shift or Ctrl, to add to the selection.
+    Box { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, height: f32, done: bool, add: bool },
     /// Right click (or a long press) at (x, y) in a viewport of width × height: the menu of the
     /// selection.
     Context { x: f32, y: f32, width: f32, height: f32 },
@@ -79,6 +80,9 @@ pub struct Viewport3D<'a> {
     /// Report where the cursor is ([`Navigate::Hover`]): while measuring, and over structural
     /// models (their hover highlight).
     pub hover: bool,
+    /// A left drag draws a selection box instead of orbiting (the Modeller's Select tool); then
+    /// Shift + middle drag orbits.
+    pub drag_selects: bool,
     /// Show the crosshair cursor (measuring) instead of the hand.
     pub crosshair: bool,
     /// Structural instances drawn again on top: the selection and the hover.
@@ -194,7 +198,7 @@ where
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let position = cursor.position_in(bounds)?;
                 let drag = match button {
-                    mouse::Button::Left if state.command => Drag::Box,
+                    mouse::Button::Left if state.command || self.drag_selects => Drag::Box,
                     mouse::Button::Left if state.shift => Drag::Pan,
                     mouse::Button::Left => Drag::Orbit,
                     mouse::Button::Middle if state.shift => Drag::Orbit,
@@ -223,7 +227,7 @@ where
                 }
                 if let (Some((Drag::Box, from)), Some(at)) = (drag, cursor.position()) {
                     let (x1, y1) = (at.x - bounds.x, at.y - bounds.y);
-                    return publish(Navigate::Box { x0: from.x, y0: from.y, x1, y1, width: bounds.width, height: bounds.height, done: true });
+                    return publish(Navigate::Box { x0: from.x, y0: from.y, x1, y1, width: bounds.width, height: bounds.height, done: true, add: state.shift || state.command });
                 }
                 if drag.is_some() && self.hover {
                     // after orbiting or panning, what is under the cursor changed
@@ -263,7 +267,7 @@ where
                 }
                 if drag == Drag::Box {
                     // the box keeps where it started
-                    return publish(Navigate::Box { x0: last.x, y0: last.y, x1: position.x, y1: position.y, width: bounds.width, height: bounds.height, done: false });
+                    return publish(Navigate::Box { x0: last.x, y0: last.y, x1: position.x, y1: position.y, width: bounds.width, height: bounds.height, done: false, add: state.shift || state.command });
                 }
                 let (dx, dy) = (position.x - last.x, position.y - last.y);
                 state.drag = Some((drag, position));
@@ -468,6 +472,7 @@ mod tests {
             offsets: &offsets,
             looks: &offsets,
             hover: false,
+            drag_selects: false,
             crosshair: false,
             structural_selected: &marks,
             structural_hovered: &marks,

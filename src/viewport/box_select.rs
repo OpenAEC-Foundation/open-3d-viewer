@@ -1,4 +1,5 @@
-//! Box selection (Ctrl + left drag in the viewport): the units whose bounds lie in the box, and
+//! Box selection (Ctrl + left drag in the viewport; a left drag of the Modeller's Select tool,
+//! Shift adding): the units whose bounds lie in the box, and
 //! the box drawn over the scene while dragging. Dragged to the right it is a window, which takes
 //! what lies wholly inside; dragged to the left a crossing, which takes what it touches.
 

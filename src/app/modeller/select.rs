@@ -31,6 +31,11 @@ impl App {
             && !self.plane_picking
     }
 
+    /// Whether a left drag in the viewport draws a selection box: the Select tool of the Modeller.
+    pub(crate) fn drag_selects(&self) -> bool {
+        self.modeller.in_modeller && self.modeller.shown.is_some() && self.selecting()
+    }
+
     /// The Modeller's Esc when the tools of its own (placing, the grid, a move) have let theirs go:
     /// a tool still on is switched off, back to Select. False when the Select tool was on already.
     pub(in crate::app) fn modeller_escape(&mut self) -> bool {
@@ -133,5 +138,59 @@ mod tests {
         app.modeller.in_modeller = false;
         assert!(app.select_hint(openaec_ui::Language::English).is_none(), "not in the Viewer");
         assert!(line.contains("Select (S)"), "{line}");
+    }
+}
+
+#[cfg(test)]
+mod box_tests {
+    use super::super::tests::modelling;
+    use crate::app::{App, Message};
+    use crate::viewport::Navigate;
+    use bim_core::element::PlanarForm;
+    use bim_core::{PlanarDef, Shape};
+    use glam::{DVec2, DVec3};
+
+    /// The modelling app with two walls 4 m long, on y = 0 and on y = 6, in the Modeller.
+    fn modelling_with_two_walls() -> App {
+        let mut app = modelling();
+        app.modeller.in_modeller = true;
+        for y in [0.0, 6.0] {
+            let form = PlanarForm::Wall { start: DVec2::new(0.0, y), end: DVec2::new(4.0, y), base: 0.0, height: 3.0 };
+            app.add_element("Wall", None, Shape::Planar(PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None })).unwrap();
+        }
+        app
+    }
+
+    fn screen(app: &App, x: f64, y: f64) -> (f32, f32) {
+        app.on_screen(DVec3::new(x, y, 0.0), 1000.0, 800.0).unwrap()
+    }
+
+    /// A box dragged from `a` to `b` on screen, adding to the selection or not.
+    fn boxed(app: &mut App, a: (f32, f32), b: (f32, f32), add: bool) {
+        let _ = app.update(Message::Navigate(Navigate::Box { x0: a.0, y0: a.1, x1: b.0, y1: b.1, width: 1000.0, height: 800.0, done: true, add }));
+    }
+
+    #[test]
+    fn a_box_replaces_the_selection_and_shift_adds() {
+        let mut app = modelling_with_two_walls();
+        let (a, b) = (screen(&app, -1.0, -1.0), screen(&app, 5.0, 1.0));
+        boxed(&mut app, a, b, false);
+        assert_eq!(app.selected_modelled().len(), 1);
+        let (c, d) = (screen(&app, -1.0, 5.0), screen(&app, 5.0, 7.0));
+        boxed(&mut app, c, d, false);
+        assert_eq!(app.selected_modelled().len(), 1, "replaced");
+        boxed(&mut app, a, b, true);
+        assert_eq!(app.selected_modelled().len(), 2, "Shift adds");
+    }
+
+    #[test]
+    fn the_select_tool_drags_boxes_and_other_tools_orbit() {
+        let mut app = modelling_with_two_walls();
+        assert!(app.drag_selects());
+        app.set_model_tool(Some((super::super::ModelTool::Wall, "Wall")));
+        assert!(!app.drag_selects(), "a tool on: a drag orbits");
+        app.select_tool();
+        app.modeller.in_modeller = false;
+        assert!(!app.drag_selects(), "the Viewer orbits");
     }
 }

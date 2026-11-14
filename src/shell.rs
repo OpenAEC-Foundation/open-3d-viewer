@@ -96,6 +96,20 @@ impl<T> std::fmt::Display for Named<T> {
     }
 }
 
+/// A part of a ribbon group: its main command large, or a column of small ones.
+enum RibbonPart {
+    Large(&'static str),
+    Smalls(Vec<&'static str>),
+}
+
+/// From what width of the window the title bar names the products to come, and says how far
+/// along a product is.
+const SOON_WIDTH: f32 = 1250.0;
+const STAGE_WIDTH: f32 = 1000.0;
+
+/// The side of a small ribbon button that shows its icon only (a narrow window).
+const RIBBON_ICON: f32 = 22.0;
+
 const fn named<T>(value: T, label: &'static str) -> Named<T> {
     Named { value, label }
 }
@@ -962,6 +976,7 @@ impl Studio {
             Command::new("view.hidden", l.text("Verborgen lijnen", "Hidden line"), go(Message::Mode(RenderMode::HiddenLine)))
                 .icon(small("drawing.plan"), large("drawing.plan"))
                 .mode(app.mode == RenderMode::HiddenLine),
+            Command::new("view.shadows", l.text("Schaduw", "Shadows"), go(Message::ToggleAmbient)).icon(small("theme.light"), large("theme.light")).toggle(app.ambient),
             Command::new("view.grid", l.text("Raster", "Grid"), go(Message::ToggleGrid)).icon(small("view.grid"), large("view.grid")).shortcut(key('g')).toggle(app.grid),
             Command::new("view.grid-lines", l.text("Stramien", "Grid lines"), go(Message::ToggleGrids))
                 .icon(small("measure.distance"), large("measure.distance"))
@@ -1710,7 +1725,7 @@ impl Studio {
         let segment = move |product: Product, on: bool, message: Msg| -> Element<'_, Msg> {
             let label = text(product.label()).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(if on { c.text } else { c.text_secondary });
             // beside its name: that it is not ready to work with yet
-            let label = row![label].extend(product.stage().map(|stage| text(stage).size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_secondary).into())).spacing(5).align_y(iced::Alignment::Center);
+            let label = row![label].extend(product.stage().filter(|_| self.width >= STAGE_WIDTH).map(|stage| text(stage).size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_secondary).into())).spacing(5).align_y(iced::Alignment::Center);
             let control = button(container(label).height(Length::Fill).align_y(iced::alignment::Vertical::Center))
                 .height(22)
                 .padding([0, 10])
@@ -1735,6 +1750,13 @@ impl Studio {
             return w::with_tooltip(look, segment(shown, true, Msg::Product(next)), next.purpose(l), None);
         }
         let segments = self.products.iter().map(|&p| w::with_tooltip(look, segment(p, p == shown, Msg::Product(p)), p.purpose(l), None));
+        // the products to come: named, not to be chosen yet (names as the products', the same in
+        // every language)
+        let soon = |name: &'static str| -> Element<'_, Msg> { container(text(name).size(font::SIZE_BODY).font(fonts::MEDIUM).color(c.text_disabled)).height(22).padding([0, 8]).align_y(iced::alignment::Vertical::Center).into() };
+        let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
+        // (where the window has room for them beside the title)
+        let room = self.width >= SOON_WIDTH;
+        let segments = segments.chain(["FM", "Analyse", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
@@ -1743,8 +1765,9 @@ impl Studio {
 
     fn ribbon(&self, look: Look) -> Element<'_, Msg> {
         let l = self.l();
-        let large = |id: &str| cm::ribbon_large(look, &self.command(id));
-        let smalls = |ids: &[&str]| -> Element<'_, Msg> { column(ids.iter().map(|id| cm::ribbon_small(look, &self.command(id)))).spacing(2).into() };
+        // a group is its label and its parts: a large button, or a column of small ones
+        let large = |id: &'static str| RibbonPart::Large(id);
+        let smalls = |ids: &[&'static str]| RibbonPart::Smalls(ids.to_vec());
         // One tab: the main command of a group large, the rest small in columns of three
         let tools: Vec<&str> = Tool::ALL.iter().map(|t| Self::tool_id(*t)).collect();
         let (first_tools, more_tools) = tools.split_at(3.min(tools.len()));
@@ -1756,19 +1779,19 @@ impl Studio {
             }
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
-                w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"])]),
-                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
-                w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
-                w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
-                w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
-                w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
-                w::ribbon_group(look, l.text("Meten", "Measure"), measure),
-                w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
+                (l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"]), smalls(&["view.shadows"])]),
+                (l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
+                ("IFC", vec![large("view.ifc")]),
+                (l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+                (l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
+                (l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
+                (l.text("Meten", "Measure"), measure),
+                (l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
             ]
         };
-        let groups = match self.ribbon_page() {
+        let groups: Vec<(&'static str, Vec<RibbonPart>)> = match self.ribbon_page() {
             RibbonPage::Home => {
-                let mut groups = vec![w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
                 groups.extend(view_groups());
                 groups
             }
@@ -1778,36 +1801,74 @@ impl Studio {
             // two selected elements, and changes. New, open and save are on the File page and in
             // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
-                w::ribbon_group(look, l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
-                w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
-                w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
-                w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
-                w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
-                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
-                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
+                (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
+                (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
+                (l.text("Systeem", "System"), vec![large("model.system")]),
+                (l.text("Puntvormig", "Point"), vec![large("model.point")]),
+                (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
+                (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate"])]),
+                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![
-                w::ribbon_group(look, l.text("Niveaus", "Levels"), vec![large("project.level")]),
-                w::ribbon_group(look, l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
-                w::ribbon_group(look, l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
-                w::ribbon_group(look, l.text("Bibliotheek", "Library"), vec![large("project.library")]),
+                (l.text("Niveaus", "Levels"), vec![large("project.level")]),
+                (l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
+                (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
+                (l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
             // in the floor plan, section or sheet shown
             RibbonPage::Annotate => vec![
-                w::ribbon_group(look, l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
-                w::ribbon_group(look, l.text("Tekst", "Text"), vec![large("annotate.text")]),
+                (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
+                (l.text("Tekst", "Text"), vec![large("annotate.text")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
-                w::ribbon_group(look, l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
-                w::ribbon_group(look, l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
-                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
-                w::ribbon_group(look, l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
-                w::ribbon_group(look, l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
+                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
+                (l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
+                (l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
+                (l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
             ],
         };
-        if self.compact() {
+        // drawn to fit the window: where the ribbon is wider, its groups show their small
+        // buttons as icons only, from the last group back; narrower still, it scrolls sideways
+        let commands = self.commands();
+        let command = |id: &str| commands.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("command {id}"));
+        let letters = |id: &str| command(id).label.trim_end_matches('…').chars().count() as f32;
+        let part_width = |part: &RibbonPart, icons: bool| match part {
+            RibbonPart::Large(id) => (letters(id) * 5.8).max(52.0),
+            RibbonPart::Smalls(_) if icons => RIBBON_ICON + 4.0,
+            RibbonPart::Smalls(ids) => ids.iter().map(|id| letters(id) * 6.4 + 21.0).fold(0.0, f32::max),
+        };
+        let group_width = |(label, parts): &(&'static str, Vec<RibbonPart>), icons: bool| {
+            let buttons: f32 = parts.iter().map(|p| part_width(p, icons)).sum::<f32>() + 2.0 * parts.len().saturating_sub(1) as f32;
+            buttons.max(label.chars().count() as f32 * 6.6) + 13.0
+        };
+        let mut icons = vec![false; groups.len()];
+        let width = |icons: &[bool]| groups.iter().zip(icons).map(|(g, i)| group_width(g, *i)).sum::<f32>();
+        for k in (0..groups.len()).rev() {
+            if width(&icons) <= self.width {
+                break;
+            }
+            icons[k] = groups[k].1.iter().any(|p| matches!(p, RibbonPart::Smalls(_)));
+        }
+        let fits = width(&icons) <= self.width;
+        let groups: Vec<Element<'_, Msg>> = groups
+            .iter()
+            .zip(&icons)
+            .map(|((label, parts), icons)| {
+                let parts = parts
+                    .iter()
+                    .map(|part| match part {
+                        RibbonPart::Large(id) => cm::ribbon_large(look, command(id)),
+                        RibbonPart::Smalls(ids) if *icons => column(ids.iter().map(|id| cm::icon_button(look, command(id), RIBBON_ICON))).spacing(1).into(),
+                        RibbonPart::Smalls(ids) => column(ids.iter().map(|id| cm::ribbon_small(look, command(id)))).spacing(2).into(),
+                    })
+                    .collect();
+                w::ribbon_group(look, label, parts)
+            })
+            .collect();
+        if self.compact() || !fits {
             // narrower than the ribbon: it scrolls sideways (a finger drags it)
             use iced::widget::scrollable::{Direction, Scrollbar};
             let c = look.color;

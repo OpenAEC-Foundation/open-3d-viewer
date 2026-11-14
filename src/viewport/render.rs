@@ -29,6 +29,14 @@ use std::sync::Arc;
 pub(crate) const SAMPLES: u32 = 4;
 /// With stencil, for the cut fill of the section box.
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+/// The depth the ambient shadows read: a texture of its own, as a multisampled one cannot be
+/// read everywhere (WebGL2).
+const SHADOW_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// How far an ambient shadow reaches (metres), how dark it gets per unit of depth, and the
+/// darkest it gets.
+const SHADOW_REACH: f32 = 0.45;
+const SHADOW_STRENGTH: f32 = 1.6;
+const SHADOW_DARKEST: f32 = 0.5;
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
@@ -73,6 +81,9 @@ pub struct RenderSettings {
     pub caps: bool,
     /// Draw the model's grid lines (Revit grids).
     pub grids: bool,
+    /// Ambient shadows: surfaces darker in corners, under overhangs and behind what stands in
+    /// front of them (shaded styles only).
+    pub ambient: bool,
     /// World bounds of the model as drawn (pulled apart by the exploded view), for the ground
     /// grid; `None`: the model's own.
     pub bounds: Option<Bounds>,
@@ -191,6 +202,8 @@ struct Targets {
     msaa: wgpu::TextureView,
     resolve: wgpu::TextureView,
     depth: wgpu::TextureView,
+    /// The depth of the opaque surfaces, not multisampled: what the ambient shadows read.
+    shadow_depth: wgpu::TextureView,
     blit_group: wgpu::BindGroup,
 }
 
@@ -209,6 +222,8 @@ pub struct ScenePipeline {
     flat_lines: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
+    /// The opaque surfaces into the depth the ambient shadows read.
+    shadow_depth: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
     blit_uniforms: wgpu::Buffer,
     uniform_layout: wgpu::BindGroupLayout,
@@ -236,6 +251,8 @@ pub struct ScenePipeline {
     /// the chunks in view, without the elements too small to show.
     lit_draws: Vec<(u32, u32, u32)>,
     glass_draws: Vec<(u32, u32, u32)>,
+    /// This frame draws the ambient shadows.
+    shadows: bool,
     /// The exploded view moves elements: everything is drawn then.
     moved: bool,
     grid: Option<(wgpu::Buffer, u32, [i64; 6])>,
@@ -375,6 +392,34 @@ impl ScenePipeline {
                 cache: None,
             })
         };
+        // The depth of the opaque surfaces once more, without multisampling, for the shadows.
+        let shadow_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("o3v.shadow_depth"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout.clone()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: SHADOW_DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_depth"),
+                targets: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
         // Triangles are pushed back a little so edges drawn on top win the depth test.
         let lit = make_pipeline(
             "o3v.lit",
@@ -531,9 +576,17 @@ impl ScenePipeline {
                     },
                     count: None,
                 },
+                // the depth the ambient shadows read
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
             ],
         });
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let blit_shader = device.create_shader_module
+(wgpu::ShaderModuleDescriptor {
             label: Some("o3v.blit.shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
         });
@@ -565,7 +618,7 @@ impl ScenePipeline {
         });
         let blit_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("o3v.blit.uniforms"),
-            size: 16,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -583,6 +636,7 @@ impl ScenePipeline {
             flat_lines,
             points,
             blit,
+            shadow_depth,
             blit_layout,
             blit_uniforms,
             uniform_layout,
@@ -604,6 +658,7 @@ impl ScenePipeline {
             layers: Vec::new(),
             lit_draws: Vec::new(),
             glass_draws: Vec::new(),
+            shadows: false,
             moved: false,
             grid: None,
             datum: None,
@@ -646,15 +701,17 @@ impl ScenePipeline {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         );
         let depth = texture("o3v.depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let shadow_depth = texture("o3v.shadow_depth", SHADOW_DEPTH_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
         let blit_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("o3v.blit.group"),
             layout: &self.blit_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&resolve) },
                 wgpu::BindGroupEntry { binding: 1, resource: self.blit_uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&shadow_depth) },
             ],
         });
-        self.targets = Some(Targets { size, msaa, resolve, depth, blit_group });
+        self.targets = Some(Targets { size, msaa, resolve, depth, shadow_depth, blit_group });
     }
 
     /// Makes room for the offsets of `units` units of the exploded view (all zero) and binds it.
@@ -898,7 +955,25 @@ impl ScenePipeline {
         let h = ((bounds.height * scale).round() as u32).clamp(1, target.height - y);
         self.rect = (x, y, w, h);
         self.ensure_targets(device, (w, h));
-        queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&[x as f32, y as f32, 0.0, 0.0]));
+        // the ambient shadows: in the shaded styles, read from the depth of the model
+        let shaded = matches!(primitive.settings.mode, RenderMode::Solid | RenderMode::SolidEdges);
+        self.shadows = primitive.settings.ambient && shaded && primitive.model.is_some();
+        {
+            let camera = &primitive.camera;
+            let projection = camera.projection(w as f32 / h as f32);
+            // pixels a metre is at depth 1 (perspective) or anywhere (parallel)
+            let per_metre = projection.y_axis.y * h as f32 / 2.0;
+            // the depth range, as `Camera::projection` sets it
+            let (near, far) = if camera.ortho {
+                (0.0, 2.0 * (camera.distance + camera.scene_radius * 4.0 + 1.0))
+            } else {
+                ((camera.distance * 0.002).max(1e-4), camera.distance + camera.scene_radius * 4.0 + 1.0)
+            };
+            let on = if self.shadows { 1.0 } else { 0.0 };
+            let parallel = if camera.ortho { 1.0 } else { 0.0 };
+            let params: [f32; 12] = [x as f32, y as f32, 0.0, 0.0, on, parallel, near, far, per_metre, SHADOW_REACH, SHADOW_STRENGTH, SHADOW_DARKEST];
+            queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&params));
+        }
 
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
         self.upload_datum(device, primitive);
@@ -1037,6 +1112,23 @@ impl ScenePipeline {
         } else {
             wgpu::Color { r: bg[0] as f64, g: bg[1] as f64, b: bg[2] as f64, a: 1.0 }
         };
+        // the depth of the opaque surfaces for the ambient shadows, before the frame itself
+        if self.shadows {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("o3v.shadow_depth.pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.shadow_depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.shadow_depth);
+            pass.set_bind_group(0, &self.model_group, &[]);
+            self.draw_layers(&mut pass, &self.lit_draws);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("o3v.scene.pass"),

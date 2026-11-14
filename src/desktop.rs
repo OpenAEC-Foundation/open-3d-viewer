@@ -369,6 +369,8 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     if let Some(product) = args.product {
         studio.set_product(product);
     }
+    // the window's width, as a real window reports it: what the ribbon and the title bar fit
+    let _ = studio.update(shell::Msg::Resized(w));
     studio.show(args.page);
     for path in args.recent.iter().rev().chain(&args.file) {
         studio.remember(path.clone());

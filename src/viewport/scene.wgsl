@@ -208,6 +208,15 @@ fn fs_glass(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(encode(surface(in)), max(in.color.a, 0.12));
 }
 
+// The depth of the opaque surfaces alone, for the ambient shadows: what is cut away or
+// see-through casts none.
+@fragment
+fn fs_depth(in: VertexOut) {
+    if (clipped(in.world) || in.color.a < 0.99) {
+        discard;
+    }
+}
+
 @fragment
 fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
     if (clipped(in.world)) {

@@ -251,6 +251,8 @@ pub struct App {
     kept_faces: caps::KeptCutFaces,
     /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
     pub views_in_3d: bool,
+    /// The 3D view draws ambient shadows (in its shaded styles).
+    pub ambient: bool,
     views_3d_key: Vec<u64>,
     views_3d_labels: Vec<(String, [f32; 3])>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
@@ -521,6 +523,8 @@ pub enum Message {
     UnderlayScale(usize),
     /// Show the views in the 3D view on their planes, or not.
     ToggleViewsIn3d,
+    /// Ambient shadows in the 3D view on or off.
+    ToggleAmbient,
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -815,6 +819,7 @@ impl Default for App {
             cut_faces_running: false,
             kept_faces: Default::default(),
             views_in_3d: false,
+            ambient: true,
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
             export_menu: false,
@@ -2001,6 +2006,7 @@ impl App {
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
             Message::UnderlayScale(i) => self.next_underlay_scale(i),
             Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
+            Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;
@@ -3528,6 +3534,7 @@ impl App {
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
             grids: self.grids_shown(),
+            ambient: self.ambient,
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them

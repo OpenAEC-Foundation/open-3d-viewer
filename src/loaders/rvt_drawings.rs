@@ -614,12 +614,17 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         marks.lines.extend(drawn.lines.iter().map(|l| json!(l)));
         marks.notes.extend(drawn.texts.iter().map(dimension_note));
     }
-    // a tag: its labels as texts, the lines of its family and its leader, all hanging from its head
+    // a tag: its labels as texts, the lines of its family and its leader, all hanging from its head.
+    // A tag set level or upright is so on the sheet: in a plan whose crop is turned it lies along
+    // the crop, not along the model's x
+    let turns: HashMap<u64, [f64; 2]> = views.iter().filter_map(|v| Some((v.id, view_origin(v)?.1))).filter(|(_, t)| t[1].abs() > 1e-9 || t[0] < 0.0).collect();
     for tag in tags {
         let Some((frame, ..)) = frames.get(&tag.view) else { continue };
         let scale = scales[&tag.view];
         let head = frame.project(tag.head);
-        let on = |p: [f64; 2]| [head[0] + p[0] * scale, head[1] + p[1] * scale];
+        let [cos, sin] = turns.get(&tag.view).copied().filter(|_| !tag.with_model).unwrap_or([1.0, 0.0]);
+        let turned = sin.atan2(cos);
+        let on = |p: [f64; 2]| [head[0] + (p[0] * cos - p[1] * sin) * scale, head[1] + (p[0] * sin + p[1] * cos) * scale];
         let leader = tag.leader_lines(&|p| frame.project(p), scale);
         if !shows(tag.view, &mut std::iter::once(head).chain(tag.texts.iter().map(|t| on(t.at))).chain(tag.lines.iter().flatten().map(|&p| on(p))).chain(leader.iter().flatten().copied())) {
             continue;
@@ -635,8 +640,8 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
                 2 => note["align"] = "right".into(),
                 _ => {}
             }
-            if text.angle != 0.0 {
-                note["angle"] = text.angle.into();
+            if text.angle + turned != 0.0 {
+                note["angle"] = (text.angle + turned).into();
             }
             marks.notes.push(note);
         }

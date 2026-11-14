@@ -741,6 +741,10 @@ impl Studio {
                 }
             }
         }
+        // the Viewer only looks at a view: its bar has no tools to dimension, write or cut
+        for app in std::iter::once(&mut self.app).chain(self.parked.iter_mut().map(|(_, a)| a)) {
+            app.annotates = product != Product::Viewer;
+        }
         // the Modeller's explorer opens on its project browser; elsewhere that tab is not there
         let (browser, model) = (crate::app::ExplorerTab::Project, crate::app::ExplorerTab::Model);
         if product == Product::Modeller && self.product() != product && self.app.explorer_tab == model {
@@ -1054,9 +1058,10 @@ impl Studio {
                 .icon(small("drawing.plan"), large("drawing.plan"))
                 .toggle(app.levels_3d)
                 .enabled(loaded),
+            Command::new("view.3d", "3D", go(Message::SelectTab(0))).icon(small("view.orbit"), large("view.orbit")).enabled(loaded),
             Command::new("view.views-3d", l.text("Weergaven in 3D", "Views in 3D"), go(Message::ToggleViewsIn3d))
                 .icon(small("view.saved"), large("view.saved"))
-                .toggle(app.views_in_3d)
+                .toggle(app.views_in_3d || !app.projected.is_empty())
                 .enabled(loaded),
             Command::new("view.flip-up", l.text("Z-as omdraaien", "Flip up"), go(Message::ToggleFlipUp))
                 .icon(small("transform.flip-vertical"), large("transform.flip-vertical"))
@@ -1330,6 +1335,8 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
+        // the Viewer only looks at a view: its bar has no tools to dimension, write or cut
+        self.app.annotates = self.product() != Product::Viewer;
         #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         {
             self.app.collab.language = self.l();
@@ -1901,7 +1908,7 @@ impl Studio {
                 (l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"]), smalls(&["view.shadows"])]),
                 (l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.grid-dims"]), smalls(&["view.levels-3d", "view.views-3d", "view.flip-up"])]),
                 ("IFC", vec![large("view.ifc")]),
-                (l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+                (l.text("Camera", "Camera"), vec![large("view.3d"), large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
                 (l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
                 (l.text("Meten", "Measure"), measure),

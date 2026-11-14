@@ -64,6 +64,7 @@ pub struct Palette {
     pub frame: Color,
     pub panel: Color,
     pub raised: Color,
+    pub field: Color,
     pub workspace: Color,
     pub workspace_text: Color,
     pub docbar: Color,
@@ -71,9 +72,11 @@ pub struct Palette {
     pub statusbar_text: Color,
     pub text: Color,
     pub text_secondary: Color,
+    pub text_muted: Color,
     pub text_disabled: Color,
     pub border: Color,
     pub border_strong: Color,
+    pub border_subtle: Color,
     pub hover: Color,
     pub pressed: Color,
     pub accent: Color,
@@ -150,19 +153,22 @@ pub const LIGHT: ThemeTokens = ThemeTokens {
     selection_outline: false,
     disabled_dashed: false,
     color: Palette {
-        frame: Color { r: 0.945098039, g: 0.933333333, b: 0.917647059, a: 1.000000000 },
+        frame: Color { r: 0.956862745, g: 0.956862745, b: 0.960784314, a: 1.000000000 },
         panel: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         raised: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
+        field: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         workspace: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         workspace_text: Color { r: 0.164705882, g: 0.164705882, b: 0.196078431, a: 1.000000000 },
-        docbar: Color { r: 0.945098039, g: 0.933333333, b: 0.917647059, a: 1.000000000 },
+        docbar: Color { r: 0.913725490, g: 0.913725490, b: 0.925490196, a: 1.000000000 },
         statusbar: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         statusbar_text: Color { r: 0.372549020, g: 0.372549020, b: 0.396078431, a: 1.000000000 },
-        text: Color { r: 0.164705882, g: 0.164705882, b: 0.196078431, a: 1.000000000 },
+        text: Color { r: 0.164705882, g: 0.164705882, b: 0.192156863, a: 1.000000000 },
         text_secondary: Color { r: 0.372549020, g: 0.372549020, b: 0.396078431, a: 1.000000000 },
+        text_muted: Color { r: 0.411764706, g: 0.411764706, b: 0.435294118, a: 1.000000000 },
         text_disabled: Color { r: 0.666666667, g: 0.666666667, b: 0.678431373, a: 1.000000000 },
-        border: Color { r: 0.917647059, g: 0.917647059, b: 0.917647059, a: 1.000000000 },
+        border: Color { r: 0.831372549, g: 0.831372549, b: 0.847058824, a: 1.000000000 },
         border_strong: Color { r: 0.498039216, g: 0.498039216, b: 0.517647059, a: 1.000000000 },
+        border_subtle: Color { r: 0.917647059, g: 0.917647059, b: 0.917647059, a: 1.000000000 },
         hover: Color { r: 0.949019608, g: 0.949019608, b: 0.952941176, a: 1.000000000 },
         pressed: Color { r: 0.898039216, g: 0.898039216, b: 0.901960784, a: 1.000000000 },
         accent: Color { r: 0.850980392, g: 0.466666667, b: 0.023529412, a: 1.000000000 },
@@ -201,6 +207,7 @@ pub const DARK: ThemeTokens = ThemeTokens {
         frame: Color { r: 0.164705882, g: 0.164705882, b: 0.196078431, a: 1.000000000 },
         panel: Color { r: 0.200000000, g: 0.200000000, b: 0.235294118, a: 1.000000000 },
         raised: Color { r: 0.231372549, g: 0.231372549, b: 0.270588235, a: 1.000000000 },
+        field: Color { r: 0.172549020, g: 0.172549020, b: 0.203921569, a: 1.000000000 },
         workspace: Color { r: 0.149019608, g: 0.149019608, b: 0.176470588, a: 1.000000000 },
         workspace_text: Color { r: 0.929411765, g: 0.921568627, b: 0.909803922, a: 1.000000000 },
         docbar: Color { r: 0.164705882, g: 0.164705882, b: 0.196078431, a: 1.000000000 },
@@ -208,9 +215,11 @@ pub const DARK: ThemeTokens = ThemeTokens {
         statusbar_text: Color { r: 0.741176471, g: 0.729411765, b: 0.709803922, a: 1.000000000 },
         text: Color { r: 0.929411765, g: 0.921568627, b: 0.909803922, a: 1.000000000 },
         text_secondary: Color { r: 0.745098039, g: 0.741176471, b: 0.741176471, a: 1.000000000 },
+        text_muted: Color { r: 0.654901961, g: 0.654901961, b: 0.658823529, a: 1.000000000 },
         text_disabled: Color { r: 0.490196078, g: 0.490196078, b: 0.505882353, a: 1.000000000 },
         border: Color { r: 0.278431373, g: 0.278431373, b: 0.313725490, a: 1.000000000 },
         border_strong: Color { r: 0.529411765, g: 0.525490196, b: 0.537254902, a: 1.000000000 },
+        border_subtle: Color { r: 0.239215686, g: 0.239215686, b: 0.274509804, a: 1.000000000 },
         hover: Color { r: 0.243137255, g: 0.243137255, b: 0.274509804, a: 1.000000000 },
         pressed: Color { r: 0.286274510, g: 0.286274510, b: 0.317647059, a: 1.000000000 },
         accent: Color { r: 0.850980392, g: 0.466666667, b: 0.023529412, a: 1.000000000 },
@@ -249,6 +258,7 @@ pub const BLUEPRINT: ThemeTokens = ThemeTokens {
         frame: Color { r: 0.039215686, g: 0.074509804, b: 0.125490196, a: 1.000000000 },
         panel: Color { r: 0.058823529, g: 0.105882353, b: 0.176470588, a: 1.000000000 },
         raised: Color { r: 0.101960784, g: 0.172549020, b: 0.270588235, a: 1.000000000 },
+        field: Color { r: 0.043137255, g: 0.086274510, b: 0.149019608, a: 1.000000000 },
         workspace: Color { r: 0.039215686, g: 0.074509804, b: 0.125490196, a: 1.000000000 },
         workspace_text: Color { r: 0.878431373, g: 0.905882353, b: 1.000000000, a: 1.000000000 },
         docbar: Color { r: 0.039215686, g: 0.074509804, b: 0.125490196, a: 1.000000000 },
@@ -256,9 +266,11 @@ pub const BLUEPRINT: ThemeTokens = ThemeTokens {
         statusbar_text: Color { r: 0.611764706, g: 0.639215686, b: 0.686274510, a: 1.000000000 },
         text: Color { r: 0.878431373, g: 0.905882353, b: 1.000000000, a: 1.000000000 },
         text_secondary: Color { r: 0.698039216, g: 0.729411765, b: 0.819607843, a: 1.000000000 },
+        text_muted: Color { r: 0.541176471, g: 0.580392157, b: 0.662745098, a: 1.000000000 },
         text_disabled: Color { r: 0.388235294, g: 0.427450980, b: 0.505882353, a: 1.000000000 },
         border: Color { r: 0.121568627, g: 0.215686275, b: 0.337254902, a: 1.000000000 },
         border_strong: Color { r: 0.443137255, g: 0.537254902, b: 0.690196078, a: 1.000000000 },
+        border_subtle: Color { r: 0.090196078, g: 0.160784314, b: 0.258823529, a: 1.000000000 },
         hover: Color { r: 0.109803922, g: 0.152941176, b: 0.227450980, a: 1.000000000 },
         pressed: Color { r: 0.156862745, g: 0.200000000, b: 0.274509804, a: 1.000000000 },
         accent: Color { r: 0.376470588, g: 0.647058824, b: 0.980392157, a: 1.000000000 },
@@ -297,6 +309,7 @@ pub const HIGH_CONTRAST_DARK: ThemeTokens = ThemeTokens {
         frame: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         panel: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         raised: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
+        field: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         workspace: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         workspace_text: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         docbar: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
@@ -304,9 +317,11 @@ pub const HIGH_CONTRAST_DARK: ThemeTokens = ThemeTokens {
         statusbar_text: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         text: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         text_secondary: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
+        text_muted: Color { r: 0.639215686, g: 0.639215686, b: 0.639215686, a: 1.000000000 },
         text_disabled: Color { r: 0.639215686, g: 0.639215686, b: 0.639215686, a: 1.000000000 },
         border: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         border_strong: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
+        border_subtle: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         hover: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         pressed: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         accent: Color { r: 0.960784314, g: 0.619607843, b: 0.043137255, a: 1.000000000 },
@@ -345,6 +360,7 @@ pub const HIGH_CONTRAST_LIGHT: ThemeTokens = ThemeTokens {
         frame: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         panel: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         raised: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
+        field: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         workspace: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         workspace_text: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         docbar: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
@@ -352,9 +368,11 @@ pub const HIGH_CONTRAST_LIGHT: ThemeTokens = ThemeTokens {
         statusbar_text: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         text: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         text_secondary: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
+        text_muted: Color { r: 0.341176471, g: 0.341176471, b: 0.341176471, a: 1.000000000 },
         text_disabled: Color { r: 0.450980392, g: 0.450980392, b: 0.450980392, a: 1.000000000 },
         border: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         border_strong: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
+        border_subtle: Color { r: 0.000000000, g: 0.000000000, b: 0.000000000, a: 1.000000000 },
         hover: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         pressed: Color { r: 1.000000000, g: 1.000000000, b: 1.000000000, a: 1.000000000 },
         accent: Color { r: 0.572549020, g: 0.250980392, b: 0.054901961, a: 1.000000000 },
@@ -422,6 +440,48 @@ impl StatusbarSetting {
 }
 
 impl std::fmt::Display for StatusbarSetting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// User setting Tekstgrootte (issue #27): text sizes and row height together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TextSize {
+    Compact,
+    #[default]
+    Standard,
+    Large,
+}
+
+/// Text sizes in pixels and the height of rows with text, for one Tekstgrootte.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextSizes {
+    pub label: f32,
+    pub body: f32,
+    pub panel_heading: f32,
+    pub dialog_heading: f32,
+    pub page_heading: f32,
+    /// Menu items, property rows and table headers.
+    pub row: f32,
+}
+
+impl TextSize {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Standard, Self::Large];
+    pub fn name(self) -> &'static str {
+        match self { Self::Compact => "Compact", Self::Standard => "Standaard", Self::Large => "Groot" }
+    }
+    pub const fn sizes(self) -> TextSizes {
+        match self {
+            Self::Compact => TextSizes { label: 11.0, body: 11.0, panel_heading: 12.0, dialog_heading: 15.0, page_heading: 20.0, row: 24.0 },
+            Self::Standard => TextSizes { label: 11.0, body: 12.0, panel_heading: 13.0, dialog_heading: 16.0, page_heading: 22.0, row: 28.0 },
+            Self::Large => TextSizes { label: 12.0, body: 14.0, panel_heading: 15.0, dialog_heading: 18.0, page_heading: 26.0, row: 32.0 },
+        }
+    }
+}
+
+impl std::fmt::Display for TextSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
     }

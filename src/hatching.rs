@@ -15,9 +15,19 @@ const INSULATION_SPACING: f64 = 0.06;
 /// Hatches the cut faces of `cut`, a drawing at 1 : `scale`, by what the model says its elements
 /// are made of.
 pub fn hatch(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64) {
+    hatch_with(cut, model, standard, scale, None);
+}
+
+/// [`hatch`], with the looks a view gives its elements otherwise (`looks`, by element: the
+/// filters of a Revit view) over what they are made of.
+pub fn hatch_with(cut: &mut Cut, model: &Model, standard: DrawingStandard, scale: f64, looks: Option<&std::collections::HashMap<u64, Look>>) {
     let mut patterns = Vec::with_capacity(cut.fills.len());
     for fill in &mut cut.fills {
         let pattern = pattern_of(model, fill.layer, fill.element, standard);
+        let pattern = match fill.element.and_then(|e| looks?.get(&e)) {
+            Some(look) => look.apply(pattern),
+            None => pattern,
+        };
         fill.look = Some(pattern.look());
         (fill.rows, fill.apart) = rows(&fill.loops, &pattern, scale);
         patterns.push((fill.layer, pattern));
@@ -176,6 +186,87 @@ impl From<HatchPattern> for Pattern {
     }
 }
 
+/// How a view draws an element otherwise than what it is made of says (a Revit view's filters):
+/// what is not given stays as the material has it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Look {
+    /// Drawn faint (in halftone).
+    pub halftone: bool,
+    /// The pattern of its cut: its grids and whether they are sized on paper; no grids: solid.
+    pub pattern: Option<(Vec<Grid>, bool)>,
+    /// The colour of that pattern.
+    pub color: Option<[u8; 3]>,
+    /// The colour behind the pattern.
+    pub behind: Option<[u8; 3]>,
+    /// The pattern of its cut is not drawn.
+    pub no_pattern: bool,
+    /// Nothing is drawn behind the pattern.
+    pub no_behind: bool,
+    /// The pen of its cut lines, and of its edges beyond the cut.
+    pub cut_line: crate::drawing::Ink,
+    pub seen_line: crate::drawing::Ink,
+    /// The pens (numbers) of those as the file gives them, whose width depends on the view's
+    /// scale: read into their inks per view.
+    pub pens: [Option<i64>; 2],
+    /// The colour of its surfaces as seen (not cut): in a 3D view, where a solid pattern
+    /// covers them.
+    pub surface: Option<[u8; 3]>,
+    /// How transparent its surfaces are, in percent (0: as its material).
+    pub transparency: u8,
+}
+
+impl Look {
+    /// Whether it changes anything.
+    pub fn is_empty(&self) -> bool {
+        *self == Look::default()
+    }
+
+    /// `self` where it gives something, else `under` (a filter lower in the view's list).
+    pub fn over(self, under: &Look) -> Look {
+        Look {
+            halftone: self.halftone || under.halftone,
+            pattern: self.pattern.or_else(|| under.pattern.clone()),
+            color: self.color.or(under.color),
+            behind: self.behind.or(under.behind),
+            no_pattern: self.no_pattern || under.no_pattern,
+            no_behind: self.no_behind || under.no_behind,
+            cut_line: ink_over(self.cut_line, under.cut_line),
+            seen_line: ink_over(self.seen_line, under.seen_line),
+            pens: [self.pens[0].or(under.pens[0]), self.pens[1].or(under.pens[1])],
+            surface: self.surface.or(under.surface),
+            transparency: if self.transparency > 0 { self.transparency } else { under.transparency },
+        }
+    }
+
+    /// `pattern` as this look draws it.
+    pub fn apply(&self, mut pattern: Pattern) -> Pattern {
+        if let Some((grids, on_paper)) = &self.pattern {
+            pattern.solid = grids.is_empty();
+            pattern.grids = grids.clone();
+            pattern.on_paper = *on_paper;
+        }
+        if let Some(color) = self.color {
+            pattern.line = color;
+        }
+        if let Some(behind) = self.behind {
+            pattern.fill = Some(behind);
+        }
+        if self.no_pattern {
+            pattern.solid = false;
+            pattern.grids.clear();
+        }
+        if self.no_behind {
+            pattern.fill = None;
+        }
+        pattern
+    }
+}
+
+/// `ink` where it gives something, else `under`.
+fn ink_over(ink: crate::drawing::Ink, under: crate::drawing::Ink) -> crate::drawing::Ink {
+    crate::drawing::Ink { color: ink.color.or(under.color), width: ink.width.or(under.width) }
+}
+
 impl Pattern {
     /// The colours a face takes: behind its lines, and its lines.
     pub fn look(&self) -> ([u8; 3], [u8; 3]) {
@@ -331,6 +422,31 @@ impl Fill {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A view's filter changes what it gives of a material's hatch, the filter higher in the
+    /// view's list first.
+    #[test]
+    fn a_look_changes_only_what_it_gives() {
+        let brick = Pattern { fill: Some([200, 100, 50]), line: [0; 3], solid: false, grids: vec![Grid { angle: 0.785, offset: 0.003, ..Grid::default() }], on_paper: true };
+        let grey = Look { pattern: Some((Vec::new(), true)), color: Some([192; 3]), ..Look::default() };
+        let solid = grey.apply(brick.clone());
+        assert!(solid.solid && solid.grids.is_empty());
+        assert_eq!(solid.look(), ([192; 3], [192; 3]));
+        let bare = Look { no_behind: true, ..Look::default() }.apply(brick.clone());
+        assert_eq!((bare.fill, bare.grids.len()), (None, 1));
+        assert_eq!(Look::default().apply(brick.clone()), brick);
+        // the higher filter's colour, the lower one's pattern and halftone
+        let lower = Look { halftone: true, pattern: Some((Vec::new(), true)), color: Some([1; 3]), ..Look::default() };
+        let both = Look { color: Some([9; 3]), ..Look::default() }.over(&lower);
+        assert_eq!((both.color, both.halftone, both.pattern.is_some()), (Some([9; 3]), true, true));
+        assert!(Look::default().is_empty() && !both.is_empty());
+        // the pens of its lines: the higher filter's colour, the lower one's width
+        let red = crate::drawing::Ink { color: Some([255, 0, 0]), width: None };
+        let thick = crate::drawing::Ink { color: Some([0; 3]), width: Some(0.5) };
+        let lines = Look { cut_line: red, pens: [None, Some(3)], ..Look::default() }.over(&Look { cut_line: thick, pens: [Some(5), Some(1)], ..Look::default() });
+        assert_eq!((lines.cut_line.color, lines.cut_line.width, lines.pens), (Some([255, 0, 0]), Some(0.5), [Some(5), Some(3)]));
+        assert_eq!(lines.apply(brick.clone()), brick, "a pen leaves the faces as they are");
+    }
     use crate::drawing::{cut_at, section_at, Shown};
     use crate::model::Layer;
     use std::path::PathBuf;

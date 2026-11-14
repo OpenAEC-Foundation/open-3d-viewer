@@ -329,8 +329,9 @@ pub(super) fn symbol_lines(doc: &rvt_read::Document, types: &mut Types, kind: u6
 /// The title of a view placed on a sheet, as the type of its viewport writes it
 /// (`ViewportAttributes`: `m_showLabel`, and `m_familyTagId`, the type of its title family, whose
 /// labels write the view's name and scale): empty when its type shows no title, none when the
-/// viewport tells nothing of it.
-pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewport: u64, view: u64, name: &str, scale: &str, detail: Option<&str>) -> Option<String> {
+/// viewport tells nothing of it. With it the typeface of its first label (its type's, so a
+/// title set in italic stays italic).
+pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewport: u64, view: u64, name: &str, scale: &str, detail: Option<&str>) -> Option<(String, crate::typeface::Face)> {
     /// The view's name, its scale and the number of the view on its sheet.
     const NAME: i64 = -1005203;
     const SCALE: i64 = -1005204;
@@ -338,12 +339,13 @@ pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewpo
     let kind = doc.object(viewport)?.get("m_attrId").and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok())?;
     let kind = doc.object(kind)?;
     if kind.get("m_showLabel").and_then(FieldValue::as_i64) == Some(0) {
-        return Some(String::new());
+        return Some(Default::default());
     }
-    let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(String::new()) };
+    let Some(family) = kind.get("m_familyTagId").and_then(FieldValue::element).and_then(|f| u64::try_from(f).ok()) else { return Some(Default::default()) };
     let o = doc.object(family)?;
     let (mut sources, mut specs, units) = (HashMap::new(), HashMap::new(), Units::of(doc, types.units()));
     let labels = o.get("m_tagNoteData").and_then(FieldValue::as_list).unwrap_or(&[]).iter().filter_map(|v| o.deref(v)).filter_map(|l| label(l, types));
+    let mut face: Option<crate::typeface::Face> = None;
     let written: Vec<String> = labels
         .filter_map(|label| {
             label.write(&mut |part| match part.parameter {
@@ -353,9 +355,12 @@ pub(super) fn viewport_title(doc: &rvt_read::Document, types: &mut Types, viewpo
                 _ => value(doc, &mut sources, &mut specs, &units, viewport, part).or_else(|| value(doc, &mut sources, &mut specs, &units, view, part)),
             })
         })
-        .map(|text| text.wording)
+        .map(|text| {
+            face.get_or_insert_with(|| text.face.clone());
+            text.wording
+        })
         .collect();
-    Some(written.join("  "))
+    Some((written.join("  "), face.unwrap_or_default()))
 }
 
 /// What a tag type draws: its labels and the lines of its family (on paper, metres).
@@ -496,6 +501,9 @@ struct Graphics {
     colors: Vec<Option<[u8; 3]>>,
     fills: Vec<Fill>,
     masks: Vec<Vec<Vec<[f64; 3]>>>,
+    /// The outlines of its regions that a fill pattern fills: what an opaque filled region
+    /// covers.
+    patterned: Vec<Vec<Vec<[f64; 3]>>>,
     /// Of an element of the model: that it has solids and none of them shows as it is looked at
     /// (its family switches them off for that direction or level of detail).
     solids_off: bool,
@@ -599,6 +607,9 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         if family.lines.is_empty() && family.fills.is_empty() && family.masks.is_empty() {
             continue;
         }
+        // a detail component covers what lies under it: its masking regions, and its regions a
+        // pattern fills (a filled region in a family is opaque, as a new one is)
+        let covering = family.masks.iter().chain(family.patterned.iter().filter(|_| !symbol));
         // where it is placed: its origin and the directions of its family's x and y
         let placed = o.path(&["m_pInstanceInfo", "m_Trf"]).and_then(FieldValue::as_object);
         let Some(origin) = vec3(placed.and_then(|t| t.get("m_or"))).or_else(|| vec3(o.get("m_instOrigin"))) else { continue };
@@ -614,7 +625,7 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let side = if mirrored && shared { -1.0 } else { 1.0 };
         let at = |p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|k| origin[k] + p[0] * x[k] + side * p[1] * y[k]) };
         let fills = family.fills.iter().map(|f| Fill { loops: f.loops.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect(), color: f.color }).collect();
-        let masks = family.masks.iter().map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
+        let masks = covering.map(|m| m.iter().map(|l| l.iter().map(|&p| at(p)).collect()).collect()).collect();
         // its texts and labels, with the values of the instance and of its type
         let texts = symbols.entry(kind).or_insert_with(|| doc.object(kind)).as_ref().map_or(Vec::new(), |symbol| family_texts(doc, types, symbol, &mut |part| value(doc, &mut sources, &mut specs, &units, id, part)));
         let texts = texts
@@ -634,7 +645,14 @@ pub(super) fn details(doc: &rvt_read::Document, types: &mut Types) -> Vec<Detail
         let Some(view) = doc.element(id).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
         let scale = types.view_scale(view);
         let seen_as = Seen { detail: types.view_detail(view), model: false, along: Seen::DOWN };
-        let drawn = graphics_lines(doc, id, types, scale, seen_as);
+        let mut drawn = graphics_lines(doc, id, types, scale, seen_as);
+        // its type opaque (`m_background` 0, as a new type is): it covers what lies under its
+        // pattern too
+        let opaque = doc.object(id).and_then(|o| o.get("m_attrId")?.element()).and_then(|t| doc.object(u64::try_from(t).ok()?)).and_then(|t| t.get("m_background")?.as_i64()) == Some(0);
+        if opaque {
+            let patterned = std::mem::take(&mut drawn.patterned);
+            drawn.masks.extend(patterned);
+        }
         if !drawn.lines.is_empty() || !drawn.fills.is_empty() || !drawn.masks.is_empty() {
             out.push(Detail { element: id, view, lines: drawn.lines, colors: drawn.colors, fills: drawn.fills, masks: drawn.masks, texts: Vec::new() });
         }
@@ -917,10 +935,49 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
                 }
             }
             for (at, outline) in &faces {
-                let Some(face) = graph.objects.get(*at) else { continue };
+                        let Some(face) = graph.objects.get(*at) else { continue };
                 let Some((_, plane)) = target(face.get("m_pSurf")) else { continue };
                 let (Some(c), Some(x), Some(y)) = (vector(plane, "m_origin"), vector(plane, "m_xVec"), vector(plane, "m_yVec")) else { continue };
                 let on = |uv: [f64; 2]| -> [f64; 3] { std::array::from_fn(|k| c[k] + uv[0] * x[k] + uv[1] * y[k]) };
+                // the outlines of the face, the outer one first
+                let loops_of = || -> Vec<Vec<[f64; 3]>> {
+                    let mut loops: Vec<Vec<[f64; 3]>> = Vec::new();
+                    let mut next = target(face.get("m_pFirstLoop"));
+                    while let Some((_, edges)) = next.filter(|_| loops.len() < 256) {
+                        let mut points: Vec<[f64; 2]> = Vec::new();
+                        let first_of = |v: Option<&Value>| v.and_then(|n| n.as_ptr().or_else(|| n.as_list()?.iter().find_map(|p| p.as_ptr()))).and_then(|p| graph.objects.get(p));
+                        let mut edge = first_of(edges.get("m_next"));
+                        let mut steps = 0;
+                        while let Some(e) = edge.filter(|e| class(e) == "Edge" && steps < 4096) {
+                            steps += 1;
+                            let run = |name: &str| e.get(name).and_then(|l| l.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_obj()?.get("uv")?.as_list()?.first()?.floats()).filter(|uv| uv.len() >= 2 && uv.iter().all(|v| v.is_finite())).map(|uv| [uv[0], uv[1]]).collect::<Vec<_>>();
+                            let (ends, between) = (run("m_firstAndLastEdgePnts"), run("m_interiorEdgePnts"));
+                            if let [first, last] = ends.as_slice() {
+                                let mut piece: Vec<[f64; 2]> = std::iter::once(*first).chain(between).chain(std::iter::once(*last)).collect();
+                                // each starts where the one before it ended
+                                let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+                                if points.last().is_some_and(|&end| far(end, piece[0]) > far(end, piece[piece.len() - 1])) {
+                                    piece.reverse();
+                                }
+                                points.extend(piece);
+                            }
+                            edge = first_of(e.get("m_next"));
+                        }
+                        points.dedup();
+                        if points.len() >= 3 {
+                            loops.push(points.into_iter().map(on).collect());
+                        }
+                        next = target(edges.get("m_nextLoop"));
+                    }
+                    loops
+                };
+                // a region a pattern fills: its outlines, for a filled region that covers
+                if ["m_oBackgroundFilling", "m_pGFilling"].into_iter().filter_map(|f| target(face.get(f))).any(|f| target(f.1.get("m_data")).is_some()) {
+                    let loops = loops_of();
+                    if !loops.is_empty() {
+                        out.patterned.push(loops);
+                    }
+                }
                 for filling in ["m_oBackgroundFilling", "m_pGFilling"].into_iter().filter_map(|f| target(face.get(f))) {
                     let pattern_id = filling.1.get("m_patternId").and_then(|p| p.element_id());
                     // its own colour, else that of the style of the face (the colour of the type of a
@@ -933,34 +990,7 @@ fn graphics_lines(doc: &rvt_read::Document, id: u64, types: &mut Types, view_sca
                         if !mask && !pattern_id.is_some_and(|p| types.pattern_solid(p)) {
                             continue;
                         }
-                        let mut loops: Vec<Vec<[f64; 3]>> = Vec::new();
-                        let mut next = target(face.get("m_pFirstLoop"));
-                        while let Some((_, edges)) = next.filter(|_| loops.len() < 256) {
-                            let mut points: Vec<[f64; 2]> = Vec::new();
-                            let first_of = |v: Option<&Value>| v.and_then(|n| n.as_ptr().or_else(|| n.as_list()?.iter().find_map(|p| p.as_ptr()))).and_then(|p| graph.objects.get(p));
-                            let mut edge = first_of(edges.get("m_next"));
-                            let mut steps = 0;
-                            while let Some(e) = edge.filter(|e| class(e) == "Edge" && steps < 4096) {
-                                steps += 1;
-                                let run = |name: &str| e.get(name).and_then(|l| l.as_list()).unwrap_or(&[]).iter().filter_map(|p| p.as_obj()?.get("uv")?.as_list()?.first()?.floats()).filter(|uv| uv.len() >= 2 && uv.iter().all(|v| v.is_finite())).map(|uv| [uv[0], uv[1]]).collect::<Vec<_>>();
-                                let (ends, between) = (run("m_firstAndLastEdgePnts"), run("m_interiorEdgePnts"));
-                                if let [first, last] = ends.as_slice() {
-                                    let mut piece: Vec<[f64; 2]> = std::iter::once(*first).chain(between).chain(std::iter::once(*last)).collect();
-                                    // each starts where the one before it ended
-                                    let far = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
-                                    if points.last().is_some_and(|&end| far(end, piece[0]) > far(end, piece[piece.len() - 1])) {
-                                        piece.reverse();
-                                    }
-                                    points.extend(piece);
-                                }
-                                edge = first_of(e.get("m_next"));
-                            }
-                            points.dedup();
-                            if points.len() >= 3 {
-                                loops.push(points.into_iter().map(on).collect());
-                            }
-                            next = target(edges.get("m_nextLoop"));
-                        }
+                        let loops = loops_of();
                         if loops.is_empty() {
                             continue;
                         }

@@ -192,6 +192,48 @@ impl<'a> Types<'a> {
         Some(style)
     }
 
+    /// A value as a type writes it, with its format (`field`, a `FormatOptions`) or, where that
+    /// leaves it to the project (`m_bUseDefault`), the project's format of `spec` (a length or an
+    /// angle): `value` in feet or radians, written in the unit of the format (millimetres,
+    /// centimetres, metres, degrees), to its decimals, without the zeros it leaves out, with a
+    /// plus before what is above zero where it says so, and the project's decimal symbol.
+    pub(super) fn formatted(&self, o: &ObjectView, field: &str, spec: &str, value: f64) -> String {
+        let units = self.units().and_then(|id| self.doc.object(id));
+        let of_project = units.as_ref().and_then(|u| u.get("m_units")?.as_object()?.get("m_formatOptionsMap")?.as_list()).unwrap_or(&[]).iter().filter_map(FieldValue::as_object).find(|pair| pair.get("first").and_then(FieldValue::as_object).and_then(|t| t.get("m_typeId")?.as_str()).is_some_and(|t| t.starts_with(spec))).and_then(|pair| pair.get("second")?.as_object());
+        let own = o.path(&[field, "m_bUseDefault"]) == Some(&FieldValue::Bool(false));
+        let format = |name: &str| if own { o.path(&[field, name]) } else { of_project.and_then(|f| f.get(name)) };
+        let unit = if own { o.path(&[field, "m_unitTypeId", "m_typeId"]) } else { of_project.and_then(|f| f.get("m_unitTypeId")?.as_object()?.get("m_typeId")) }.and_then(FieldValue::as_str).unwrap_or_default();
+        let symbol = if own { o.path(&[field, "m_symbolTypeId", "m_typeId"]) } else { of_project.and_then(|f| f.get("m_symbolTypeId")?.as_object()?.get("m_typeId")) }.and_then(FieldValue::as_str).unwrap_or_default();
+        let on = |name: &str| format(name) == Some(&FieldValue::Bool(true));
+        let decimals = format("m_accuracy").and_then(FieldValue::as_f64).filter(|a| *a > 0.0 && *a <= 1.0).map_or(0, |a| (-a.log10()).round().clamp(0.0, 6.0) as usize);
+        let (number, mark) = match unit {
+            u if u.contains(":degrees") || spec.contains("angle") && u.is_empty() => (value.to_degrees(), if symbol.is_empty() && !own || symbol.contains("degree") { "\u{b0}" } else { "" }),
+            u if u.contains(":meters") => (value * FT, ""),
+            u if u.contains(":centimeters") => (value * FT * 100.0, ""),
+            _ => (value * FT * 1000.0, ""),
+        };
+        let mut figure = format!("{number:.decimals$}");
+        if on("m_bSuppressTrailingZeros") && figure.contains('.') {
+            figure = figure.trim_end_matches('0').trim_end_matches('.').to_string();
+        }
+        if on("m_bSuppressLeadingZeros") {
+            figure = match figure.strip_prefix("-0.") {
+                Some(rest) => format!("-.{rest}"),
+                None => figure.strip_prefix("0.").map_or(figure.clone(), |rest| format!(".{rest}")),
+            };
+        }
+        if figure.trim_start_matches('-').trim_matches(|c| c == '0' || c == '.').is_empty() {
+            figure = figure.trim_start_matches('-').to_string();
+        }
+        if on("m_bUsePlusPrefix") && !figure.starts_with('-') && figure.trim_matches(|c| c == '0' || c == '.').len() > 0 {
+            figure.insert(0, '+');
+        }
+        if self.comma() {
+            figure = figure.replace('.', ",");
+        }
+        format!("{figure}{mark}")
+    }
+
     /// Whether the project writes a comma before the decimals (`UnitsElem`: `m_decimalSymbol` 1).
     pub(super) fn comma(&self) -> bool {
         *self.comma.get_or_init(|| self.units().and_then(|id| self.doc.object(id)).and_then(|o| o.get("m_units")?.as_object()?.get("m_decimalSymbol")?.as_i64()) == Some(1))
@@ -680,6 +722,27 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
         let lines = strokes.iter().filter_map(|w| within(frame.project(w[0]), frame.project(w[1]), crop)).flat_map(|l| uncovered(l, rank, over));
         marks.entry(view).or_default().lines.extend(lines.map(|l| json!(l)));
     }
+    // the grids: in a floor plan along their lines, in a section or elevation square to them
+    // upright where it crosses them; within the view's crop, a bubble with their name at the
+    // ends their type gives one
+    let grids = grids(doc);
+    if !grids.is_empty() {
+        for v in views {
+            let Some((frame, node, _)) = frames.get(&v.id) else { continue };
+            if grids_off(doc, v.id) {
+                continue;
+            }
+            let (crop, scale) = (crop_of(node), scales[&v.id]);
+            // its names upright on the sheet, as the view is turned on it
+            let turn = view_origin(v).map_or(0.0, |(_, t)| t[1].atan2(t[0]));
+            for grid in grids.iter().filter(|g| !types.hidden(v.id, g.id)) {
+                let Some(drawn) = grid.on(frame, crop, scale, turn) else { continue };
+                let marks = marks.entry(v.id).or_default();
+                marks.lines.extend(drawn.lines.iter().map(|l| json!(l)));
+                marks.notes.extend(drawn.texts.iter().map(dimension_note));
+            }
+        }
+    }
     let styles = types.styles_node().map(|node| (uuid(&format!("rvt/{file}/drawings")), node));
     // in the order of the views, so the document lists them as the file does
     let views = views.iter().filter_map(|v| {
@@ -698,6 +761,136 @@ pub(super) fn drawings(doc: &rvt_read::Document, views: &[ViewInfo], file: &str,
 
 /// The category of detail lines.
 const LINES: i64 = -2000051;
+
+/// The category of grids.
+const GRIDS: i64 = -2000220;
+
+/// A grid of the project: its line on the ground (feet), its name, the ends that carry a bubble
+/// in a plan (start, end) and in a section (bottom, top), and the em of its name on paper (metres).
+struct Grid {
+    id: u64,
+    name: String,
+    a: [f64; 2],
+    b: [f64; 2],
+    bubbles: [bool; 2],
+    upright: [bool; 2],
+    em: f64,
+    /// How low and how high it reaches (feet): its plane's extent up.
+    z: [f64; 2],
+}
+
+/// The grids of the project, as their planes and their types say.
+fn grids(doc: &rvt_read::Document) -> Vec<Grid> {
+    let ids = doc.object_ids_of_class("Grid");
+    let mut kinds: HashMap<i64, ([bool; 2], [bool; 2])> = HashMap::new();
+    ids.iter()
+        .copied()
+        .zip(objects(doc, &ids))
+        .filter_map(|(id, o)| {
+            let o = o?;
+            let name = o.get("m_text").and_then(FieldValue::as_str)?.to_string();
+            let plane = o.get("m_pSurface").and_then(|v| o.deref(v)).filter(|p| p.class == "Plane")?;
+            let (origin, x) = (vec3(plane.get("m_origin"))?, vec3(plane.get("m_xVec"))?);
+            let corners = plane.get("m_Envelope").and_then(FieldValue::as_object)?.get("m_corners")?.as_list()?;
+            let u = |i: usize| corners.get(i)?.as_list()?.first()?.as_f64();
+            let at = |u: f64| [origin[0] + u * x[0], origin[1] + u * x[1]];
+            // up along the plane: its second axis, over the second coordinates of its envelope
+            let up = vec3(plane.get("m_yVec")).map_or(1.0, |y| y[2]);
+            let v = |i: usize| corners.get(i)?.as_list()?.get(1)?.as_f64();
+            let z = match (v(0), v(1)) {
+                (Some(a), Some(b)) => {
+                    let (a, b) = (origin[2] + a * up, origin[2] + b * up);
+                    [a.min(b), a.max(b)]
+                }
+                _ => [f64::MIN, f64::MAX],
+            };
+            let kind = o.get("m_attrId").and_then(FieldValue::element).unwrap_or(-1);
+            // where its type puts a bubble: at its ends in a plan; in a section at the bottom,
+            // the top or both
+            let (bubbles, upright) = *kinds.entry(kind).or_insert_with(|| {
+                let t = u64::try_from(kind).ok().and_then(|k| doc.object(k));
+                let on = |name: &str, or: bool| t.as_ref().and_then(|t| t.get(name).map(|v| *v == FieldValue::Bool(true))).unwrap_or(or);
+                let upright = match t.as_ref().and_then(|t| t.get("m_bubbleLocInElev")?.as_i64()) {
+                    Some(0) => [false, true],
+                    Some(1) => [true, false],
+                    Some(2) => [true, true],
+                    _ => [false, true],
+                };
+                ([on("m_bubbleAtEnd1", true), on("m_bubbleAtEnd2", false)], upright)
+            });
+            let em = o.get("m_sheetTextHeight").and_then(FieldValue::as_f64).filter(|h| h.is_finite() && *h > 0.0).map_or(0.0035, |h| h * FT);
+            Some(Grid { id, name, a: at(u(0)?), b: at(u(1)?), bubbles, upright, em, z })
+        })
+        .collect()
+}
+
+/// Whether a view (its view template, when it has one) switches the grids off.
+fn grids_off(doc: &rvt_read::Document, view: u64) -> bool {
+    let Some(o) = doc.object(view) else { return false };
+    let template = o.get("m_viewTemplateId").and_then(|v| v.element()).filter(|t| *t > 0).and_then(|t| doc.object(t as u64));
+    let from = template.as_ref().unwrap_or(&o);
+    from.get("m_oaDrawFilters").and_then(|v| v.as_list()).unwrap_or(&[]).iter().any(|filter| {
+        from.deref(filter).filter(|f| f.class.starts_with("IckyExcludedCategories")).is_some_and(|f| f.get("m_categoryIds").and_then(|v| v.as_list()).unwrap_or(&[]).iter().any(|c| c.element() == Some(GRIDS)))
+    })
+}
+
+impl Grid {
+    /// The grid on a view's drawing (metres), within `crop`: its line in the pattern of a centre
+    /// line, and its bubbles with its name. None where the view does not show it: a section not
+    /// square to it or not crossing it, a plan whose crop it misses. `turn`: how the view is turned on
+    /// its sheet (radians), so its names stand upright there.
+    fn on(&self, frame: &Frame, crop: Option<([f64; 2], [f64; 2])>, scale: f64, turn: f64) -> Option<DimensionMarks> {
+        let (line, bubbles) = match frame {
+            Frame::Plan => (within(frame.project([self.a[0], self.a[1], 0.0]), frame.project([self.b[0], self.b[1], 0.0]), crop)?, self.bubbles),
+            Frame::Section { from, along } => {
+                // square to the section: its line runs along the section's normal
+                let d = [self.b[0] - self.a[0], self.b[1] - self.a[1]];
+                let length = d[0].hypot(d[1]);
+                if length < 1e-9 || ((d[0] * along[0] + d[1] * along[1]) / length).abs() > 0.02 {
+                    return None;
+                }
+                let (lo, hi) = crop?;
+                let u = ((self.a[0] - from[0]) * along[0] + (self.a[1] - from[1]) * along[1]) * FT;
+                // crossing it: the section's line lies between the grid's ends
+                let side = |p: [f64; 2]| (p[0] - from[0]) * -along[1] + (p[1] - from[1]) * along[0];
+                if side(self.a) * side(self.b) > 0.0 || u < lo[0] || u > hi[0] {
+                    return None;
+                }
+                // as high as it reaches, within the crop
+                let (bottom, top) = (lo[1].max(self.z[0] * FT), hi[1].min(self.z[1] * FT));
+                if bottom >= top {
+                    return None;
+                }
+                ([[u, bottom], [u, top]], self.upright)
+            }
+        };
+        let d = [line[1][0] - line[0][0], line[1][1] - line[0][1]];
+        let length = d[0].hypot(d[1]);
+        if length < 1e-9 {
+            return None;
+        }
+        let d = [d[0] / length, d[1] / length];
+        let mut out = DimensionMarks::default();
+        // a centre line: a long dash and a short one, sized on paper
+        const DASHES: [f64; 4] = [0.012, -0.003, 0.003, -0.003];
+        out.lines.extend(dashed(&line, &DASHES, scale));
+        // a bubble stands past its end, its name in the middle
+        let radius = self.em * 1.15 * scale;
+        for (end, way) in [(line[0], -1.0), (line[1], 1.0)].into_iter().zip(bubbles).filter(|(_, on)| *on).map(|(e, _)| e) {
+            let c = [end[0] + d[0] * way * radius, end[1] + d[1] * way * radius];
+            const SIDES: usize = 32;
+            let at = |k: usize| {
+                let t = k as f64 / SIDES as f64 * std::f64::consts::TAU;
+                [c[0] + radius * t.cos(), c[1] + radius * t.sin()]
+            };
+            out.lines.extend((0..SIDES).map(|k| [at(k), at(k + 1)]));
+            let (sin, cos) = turn.sin_cos();
+            let drop = self.em * LINE / 2.0 * scale;
+            out.texts.push(DimensionText { at: [c[0] + sin * drop, c[1] - cos * drop], angle: turn, wording: self.name.clone(), em: self.em, face: crate::typeface::Face::default() });
+        }
+        Some(out)
+    }
+}
 
 /// The colour a masking region is drawn in: that of the paper.
 const PAPER: [u8; 3] = [255, 255, 255];
@@ -1070,10 +1263,7 @@ fn spot_marks(doc: &rvt_read::Document, o: &ObjectView, project: &dyn Fn([f64; 3
     };
     let stored = o.get("m_ArrSegInfo").and_then(FieldValue::as_list).and_then(|s| s.first()?.as_object()?.get("m_values")?.as_list()?.first()?.as_object()?.get("m_value")?.as_f64());
     let height = stored.filter(|v| v.is_finite()).unwrap_or(at[2]);
-    let mut figure = format!("{:.0}", height * FT * 1000.0);
-    if figure == "-0" {
-        figure = "0".into();
-    }
+    let figure = types.formatted(&style, "m_oLinFormatOptions", "autodesk.spec.aec:length-", height);
     let mark = style.get("m_seIndElevation").and_then(FieldValue::as_str).unwrap_or_default().trim().to_string();
     let wording = match (mark.is_empty(), style.get("m_seIndType").and_then(FieldValue::as_i64)) {
         (true, _) => figure,
@@ -1275,8 +1465,8 @@ pub(super) fn radial_marks(o: &ObjectView, project: &dyn Fn([f64; 3]) -> [f64; 2
 
 /// An angular dimension as it is drawn in a view of `scale`: its arc (`AngularDim::m_pDimArc`,
 /// its centre, radius, directions and the angles it runs between), the mark of its style at
-/// both ends, and its figure in degrees where the file has it, outside the arc. Its witness
-/// lines are not drawn, and how many decimals its type writes is not read: two at most.
+/// both ends, and its figure in degrees as its type formats an angle, outside the arc. Its witness
+/// lines are not drawn.
 pub(super) fn angular_marks(o: &ObjectView, project: &dyn Fn([f64; 3]) -> [f64; 2], scale: f64, types: &mut Types) -> Option<DimensionMarks> {
     let arc = o.get("m_pDimArc").and_then(|v| o.deref(v))?;
     let (centre, x, y) = (vec3(arc.get("m_center"))?, vec3(arc.get("m_xVec"))?, vec3(arc.get("m_yVec"))?);
@@ -1326,10 +1516,16 @@ pub(super) fn angular_marks(o: &ObjectView, project: &dyn Fn([f64; 3]) -> [f64; 
     let d = [-out[1], out[0]];
     let t = if d[0] > 1e-9 || d[0].abs() <= 1e-9 && d[1] > 0.0 { d } else { [-d[0], -d[1]] };
     let up = [-t[1], t[0]];
-    let degrees = format!("{:.2}", (to - from).abs().to_degrees());
-    let degrees = degrees.trim_end_matches('0').trim_end_matches('.');
-    let degrees = if types.comma() { degrees.replace('.', ",") } else { degrees.to_string() };
-    let (said, moved, wording) = one_figure(o, project, &format!("{degrees}\u{b0}"));
+    let sweep = (to - from).abs();
+    let kind = o.get("m_styleSymbolId").and_then(FieldValue::element).and_then(|k| u64::try_from(k).ok()).and_then(|k| types.doc.object(k));
+    let degrees = match &kind {
+        Some(kind) => types.formatted(kind, "m_oAngFormatOptions", "autodesk.spec.aec:angle-", sweep),
+        None => {
+            let d = format!("{:.2}", sweep.to_degrees());
+            format!("{}\u{b0}", d.trim_end_matches('0').trim_end_matches('.'))
+        }
+    };
+    let (said, moved, wording) = one_figure(o, project, &degrees);
     let foot = said.unwrap_or(middle);
     let off = FIGURE_OFF * scale + moved[1];
     marks.texts.push(DimensionText { at: [foot[0] + t[0] * moved[0] + up[0] * off, foot[1] + t[1] * moved[0] + up[1] * off], angle: t[1].atan2(t[0]), wording, em: style.size, face });
@@ -1375,12 +1571,9 @@ pub(super) fn rtf_text(rtf: &[u8]) -> String {
                     match word {
                         b"fonttbl" | b"colortbl" | b"stylesheet" | b"info" | b"pict" => *skip.last_mut().unwrap() = true,
                         b"par" | b"line" if !skipping => out.push('\n'),
-                        // to the next stop, eight letters on: the letters are not as wide as a stop
-                        // is, so columns line up roughly
-                        b"tab" if !skipping => {
-                            let column = out.chars().rev().take_while(|c| *c != '\n').count();
-                            out.extend(std::iter::repeat_n(' ', 8 - column % 8));
-                        }
+                        // a tab, kept: where it is drawn it runs to the next stop of the text's type,
+                        // so its columns line up in any typeface
+                        b"tab" if !skipping => out.push('\t'),
                         b"u" => {
                             // a UTF-16 unit (negative above 32767), then one character for readers without Unicode
                             if let Some(ch) = number.and_then(|n| char::from_u32(n.rem_euclid(65536) as u32)).filter(|_| !skipping) {

@@ -17,7 +17,7 @@ use openaec_ui::design::shortcuts::{self as sc, Keymap};
 use openaec_ui::design::tiles as t;
 use openaec_ui::design::update::{self as upd, Available};
 use openaec_ui::design::widgets::{self as w, ButtonKind as K, Density as D, DocumentTab};
-use openaec_ui::design::{focus, Look, StatusbarSetting, ThemeId, WorkspaceSetting};
+use openaec_ui::design::{focus, Look, StatusbarSetting, TextSize, ThemeId, WorkspaceSetting};
 use openaec_ui::iced::widget::{column, container, mouse_area, row, Space};
 use openaec_ui::iced::{self, Element, Length, Point, Subscription, Task};
 use openaec_ui::keyboard::{KeyPress, Navigation};
@@ -96,6 +96,29 @@ impl<T> std::fmt::Display for Named<T> {
     }
 }
 
+/// What a ribbon group is known by in the settings: its first command.
+fn group_key(group: &(&'static str, Vec<RibbonPart>)) -> &'static str {
+    match group.1.first() {
+        Some(RibbonPart::Large(id)) => id,
+        Some(RibbonPart::Smalls(ids)) => ids.first().copied().unwrap_or(""),
+        None => "",
+    }
+}
+
+/// A part of a ribbon group: its main command large, or a column of small ones.
+enum RibbonPart {
+    Large(&'static str),
+    Smalls(Vec<&'static str>),
+}
+
+/// From what width of the window the title bar names the products to come, and says how far
+/// along a product is.
+const SOON_WIDTH: f32 = 1250.0;
+const STAGE_WIDTH: f32 = 1000.0;
+
+/// The side of a small ribbon button that shows its icon only (a narrow window).
+const RIBBON_ICON: f32 = 22.0;
+
 const fn named<T>(value: T, label: &'static str) -> Named<T> {
     Named { value, label }
 }
@@ -103,7 +126,7 @@ const fn named<T>(value: T, label: &'static str) -> Named<T> {
 /// The number of interface languages ([`Language::ALL`]).
 const LANGUAGES: usize = Language::ALL.len();
 
-/// The settings per language, in the order of [`Language::ALL`]: Dutch, English, German, French.
+/// The settings per language, in the order of [`Language::ALL`].
 const THEMES: [[Named<ThemeId>; 5]; LANGUAGES] = [
     [
         named(ThemeId::Light, "Licht"),
@@ -133,18 +156,85 @@ const THEMES: [[Named<ThemeId>; 5]; LANGUAGES] = [
         named(ThemeId::HighContrastDark, "Contraste élevé sombre"),
         named(ThemeId::HighContrastLight, "Contraste élevé clair"),
     ],
+    [
+        named(ThemeId::Light, "Claro"),
+        named(ThemeId::Dark, "Oscuro"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Alto contraste oscuro"),
+        named(ThemeId::HighContrastLight, "Alto contraste claro"),
+    ],
+    [
+        named(ThemeId::Light, "Chiaro"),
+        named(ThemeId::Dark, "Scuro"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Alto contrasto scuro"),
+        named(ThemeId::HighContrastLight, "Alto contrasto chiaro"),
+    ],
+    [
+        named(ThemeId::Light, "Claro"),
+        named(ThemeId::Dark, "Escuro"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Alto contraste escuro"),
+        named(ThemeId::HighContrastLight, "Alto contraste claro"),
+    ],
+    [
+        named(ThemeId::Light, "Jasny"),
+        named(ThemeId::Dark, "Ciemny"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Wysoki kontrast ciemny"),
+        named(ThemeId::HighContrastLight, "Wysoki kontrast jasny"),
+    ],
+    [
+        named(ThemeId::Light, "Ljust"),
+        named(ThemeId::Dark, "Mörkt"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Hög kontrast mörkt"),
+        named(ThemeId::HighContrastLight, "Hög kontrast ljust"),
+    ],
+    [
+        named(ThemeId::Light, "Açık"),
+        named(ThemeId::Dark, "Koyu"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Yüksek karşıtlık koyu"),
+        named(ThemeId::HighContrastLight, "Yüksek karşıtlık açık"),
+    ],
 ];
 const WORKSPACES: [[Named<WorkspaceSetting>; 3]; LANGUAGES] = [
     [named(WorkspaceSetting::Theme, "Volgt thema"), named(WorkspaceSetting::Light, "Altijd licht"), named(WorkspaceSetting::Dark, "Altijd donker")],
     [named(WorkspaceSetting::Theme, "Follows the theme"), named(WorkspaceSetting::Light, "Always light"), named(WorkspaceSetting::Dark, "Always dark")],
     [named(WorkspaceSetting::Theme, "Folgt dem Thema"), named(WorkspaceSetting::Light, "Immer hell"), named(WorkspaceSetting::Dark, "Immer dunkel")],
     [named(WorkspaceSetting::Theme, "Suit le thème"), named(WorkspaceSetting::Light, "Toujours clair"), named(WorkspaceSetting::Dark, "Toujours sombre")],
+    [named(WorkspaceSetting::Theme, "Sigue el tema"), named(WorkspaceSetting::Light, "Siempre claro"), named(WorkspaceSetting::Dark, "Siempre oscuro")],
+    [named(WorkspaceSetting::Theme, "Segue il tema"), named(WorkspaceSetting::Light, "Sempre chiaro"), named(WorkspaceSetting::Dark, "Sempre scuro")],
+    [named(WorkspaceSetting::Theme, "Segue o tema"), named(WorkspaceSetting::Light, "Sempre claro"), named(WorkspaceSetting::Dark, "Sempre escuro")],
+    [named(WorkspaceSetting::Theme, "Zgodnie z motywem"), named(WorkspaceSetting::Light, "Zawsze jasny"), named(WorkspaceSetting::Dark, "Zawsze ciemny")],
+    [named(WorkspaceSetting::Theme, "Följer temat"), named(WorkspaceSetting::Light, "Alltid ljust"), named(WorkspaceSetting::Dark, "Alltid mörkt")],
+    [named(WorkspaceSetting::Theme, "Temayı izler"), named(WorkspaceSetting::Light, "Her zaman açık"), named(WorkspaceSetting::Dark, "Her zaman koyu")],
 ];
 const STATUSBARS: [[Named<StatusbarSetting>; 2]; LANGUAGES] = [
     [named(StatusbarSetting::Theme, "Volgt thema"), named(StatusbarSetting::Dark, "Altijd donker")],
     [named(StatusbarSetting::Theme, "Follows the theme"), named(StatusbarSetting::Dark, "Always dark")],
     [named(StatusbarSetting::Theme, "Folgt dem Thema"), named(StatusbarSetting::Dark, "Immer dunkel")],
     [named(StatusbarSetting::Theme, "Suit le thème"), named(StatusbarSetting::Dark, "Toujours sombre")],
+    [named(StatusbarSetting::Theme, "Sigue el tema"), named(StatusbarSetting::Dark, "Siempre oscuro")],
+    [named(StatusbarSetting::Theme, "Segue il tema"), named(StatusbarSetting::Dark, "Sempre scuro")],
+    [named(StatusbarSetting::Theme, "Segue o tema"), named(StatusbarSetting::Dark, "Sempre escuro")],
+    [named(StatusbarSetting::Theme, "Zgodnie z motywem"), named(StatusbarSetting::Dark, "Zawsze ciemny")],
+    [named(StatusbarSetting::Theme, "Följer temat"), named(StatusbarSetting::Dark, "Alltid mörkt")],
+    [named(StatusbarSetting::Theme, "Temayı izler"), named(StatusbarSetting::Dark, "Her zaman koyu")],
+];
+
+const TEXT_SIZES: [[Named<TextSize>; 3]; LANGUAGES] = [
+    [named(TextSize::Compact, "Compact"), named(TextSize::Standard, "Standaard"), named(TextSize::Large, "Groot")],
+    [named(TextSize::Compact, "Compact"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Large")],
+    [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Groß")],
+    [named(TextSize::Compact, "Compacte"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Compacto"), named(TextSize::Standard, "Estándar"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Compatto"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Compacto"), named(TextSize::Standard, "Padrão"), named(TextSize::Large, "Grande")],
+    [named(TextSize::Compact, "Kompaktowy"), named(TextSize::Standard, "Standardowy"), named(TextSize::Large, "Duży")],
+    [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standard"), named(TextSize::Large, "Stor")],
+    [named(TextSize::Compact, "Kompakt"), named(TextSize::Standard, "Standart"), named(TextSize::Large, "Büyük")],
 ];
 
 /// The options of a setting in `language`, and the one that is chosen.
@@ -160,6 +250,8 @@ struct Prefs {
     theme: String,
     workspace: String,
     statusbar: String,
+    /// The size of the interface's texts (Tekstgrootte): compact, standard or large.
+    text_size: String,
     language: Language,
     scale: f64,
     left: bool,
@@ -167,6 +259,8 @@ struct Prefs {
     left_width: f32,
     right_width: f32,
     recent: Vec<PathBuf>,
+    /// The ribbon groups switched off, each by its first command.
+    ribbon_hidden: Vec<String>,
     /// The product shown last.
     product: Product,
 }
@@ -177,6 +271,7 @@ impl Default for Prefs {
             theme: ThemeId::Light.key().into(),
             workspace: WorkspaceSetting::Theme.to_string(),
             statusbar: StatusbarSetting::Theme.to_string(),
+            text_size: "standard".into(),
             language: Language::English,
             scale: 1.0,
             left: true,
@@ -184,6 +279,7 @@ impl Default for Prefs {
             left_width: 260.0,
             right_width: 280.0,
             recent: Vec::new(),
+            ribbon_hidden: Vec::new(),
             product: Product::Viewer,
         }
     }
@@ -213,6 +309,14 @@ impl Prefs {
         StatusbarSetting::ALL.into_iter().find(|s| s.to_string() == self.statusbar).unwrap_or(StatusbarSetting::Theme)
     }
 
+    fn text_size(&self) -> TextSize {
+        match self.text_size.as_str() {
+            "compact" => TextSize::Compact,
+            "large" => TextSize::Large,
+            _ => TextSize::Standard,
+        }
+    }
+
     fn scale(&self) -> f64 {
         if self.scale.is_finite() { self.scale.clamp(0.75, 2.0) } else { 1.0 }
     }
@@ -223,6 +327,104 @@ pub enum Dialog {
     Settings,
     /// A file of this format (such as Revit) opens only in the desktop app: where to get it.
     DesktopOnly(&'static str),
+    /// The form to send feedback on the app.
+    Feedback,
+}
+
+/// The feedback form: what is written in it, and how sending it goes.
+#[derive(Default)]
+pub struct Feedback {
+    email: String,
+    name: String,
+    /// What it is about (an index into [`FEEDBACK_KINDS`]).
+    kind: usize,
+    message: iced::widget::text_editor::Content,
+    /// How the writer feels (an index into [`FEEDBACK_MOODS`]), if said.
+    mood: Option<usize>,
+    state: FeedbackState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+enum FeedbackState {
+    #[default]
+    Writing,
+    Sending,
+    Sent,
+    Failed(String),
+}
+
+/// A step in the feedback form.
+#[derive(Debug, Clone)]
+pub enum FeedbackMsg {
+    Email(String),
+    Name(String),
+    Kind(usize),
+    Message(iced::widget::text_editor::Action),
+    Mood(usize),
+    Send,
+    Done(Result<(), String>),
+    Again,
+}
+
+/// What feedback can be about, as the feedback service names it, with its label.
+const FEEDBACK_KINDS: [(&str, &str, &str); 3] = [("general", "Algemeen", "General"), ("bug", "Fout", "Bug"), ("feature", "Wens", "Feature")];
+/// How the writer feels, as the feedback service names it, with its label.
+const FEEDBACK_MOODS: [(&str, &str, &str); 3] = [("Frustrated", "Gefrustreerd", "Frustrated"), ("Neutral", "Neutraal", "Neutral"), ("Happy", "Blij", "Happy")];
+/// Where feedback on the OpenAEC apps goes, and what this app is called there.
+#[cfg(not(target_arch = "wasm32"))]
+const FEEDBACK_URL: &str = "https://open-feedback-studio.pages.dev/api/feedback";
+const FEEDBACK_APP: &str = "open-3d-viewer";
+/// The shortest and the longest message the service takes.
+const FEEDBACK_SHORTEST: usize = 10;
+const FEEDBACK_LONGEST: usize = 5000;
+
+impl Feedback {
+    fn wording(&self) -> String {
+        self.message.text().trim().to_string()
+    }
+
+    /// An e-mail address is asked, to answer the writer.
+    fn email_ok(&self) -> bool {
+        let e = self.email.trim();
+        !e.contains(char::is_whitespace) && e.split_once('@').is_some_and(|(name, host)| !name.is_empty() && host.contains('.') && !host.starts_with('.') && !host.ends_with('.'))
+    }
+
+    fn ready(&self) -> bool {
+        let n = self.wording().chars().count();
+        self.email_ok() && (FEEDBACK_SHORTEST..=FEEDBACK_LONGEST).contains(&n) && self.state != FeedbackState::Sending
+    }
+
+    /// What is sent: only what the writer filled in, and the version of the app.
+    fn payload(&self) -> serde_json::Value {
+        let mut out = serde_json::json!({
+            "app": FEEDBACK_APP,
+            "email": self.email.trim(),
+            "category": FEEDBACK_KINDS[self.kind.min(2)].0,
+            "message": self.wording(),
+            "appVersion": env!("CARGO_PKG_VERSION"),
+        });
+        if !self.name.trim().is_empty() {
+            out["fullname"] = self.name.trim().into();
+        }
+        if let Some(mood) = self.mood.and_then(|m| FEEDBACK_MOODS.get(m)) {
+            out["sentiment"] = mood.0.into();
+        }
+        out
+    }
+}
+
+/// Sends feedback to the service; what went wrong as the service says it, else the status.
+#[cfg(not(target_arch = "wasm32"))]
+fn send_feedback(payload: serde_json::Value) -> Result<(), String> {
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(20)).user_agent(concat!("OpenBIMSuite/", env!("CARGO_PKG_VERSION"))).build();
+    match agent.post(FEEDBACK_URL).set("Content-Type", "application/json").send_string(&payload.to_string()) {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, response)) => {
+            let said = response.into_string().ok().and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok()).and_then(|v| v.get("error")?.as_str().map(str::to_string));
+            Err(said.unwrap_or_else(|| format!("HTTP {code}")))
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// What a screenshot shows: the workspace, the Bestand page or a page of the settings.
@@ -233,6 +435,8 @@ pub enum Page {
     File,
     Settings,
     Shortcuts,
+    Ribbon,
+    Feedback,
 }
 
 impl Page {
@@ -242,6 +446,8 @@ impl Page {
             "file" => Page::File,
             "settings" => Page::Settings,
             "shortcuts" => Page::Shortcuts,
+            "feedback" => Page::Feedback,
+            "ribbon" => Page::Ribbon,
             _ => return None,
         })
     }
@@ -261,6 +467,7 @@ pub fn theme_from_arg(s: &str) -> Option<ThemeId> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPage {
     General,
+    Ribbon,
     Shortcuts,
 }
 
@@ -290,10 +497,15 @@ pub enum Msg {
     Backstage(bool),
     OpenRecent(PathBuf),
     Dialog(Option<Dialog>),
+    Feedback(FeedbackMsg),
     SettingsPage(SettingsPage),
     Shortcuts(sc::Message),
     Theme(ThemeId),
     Workspace(WorkspaceSetting),
+    /// A ribbon group (by its first command) shown or not; and all of them shown again.
+    RibbonGroup(&'static str, bool),
+    RibbonReset,
+    TextSize(TextSize),
     Statusbar(StatusbarSetting),
     Language(Language),
     Scale(f64),
@@ -333,6 +545,8 @@ pub struct Studio {
     shortcuts: sc::Editor,
     backstage: bool,
     dialog: Option<Dialog>,
+    /// What the feedback form holds while it is open.
+    feedback: Feedback,
     settings_page: SettingsPage,
     update: Option<Available>,
     maximized: bool,
@@ -403,6 +617,7 @@ impl Studio {
             shortcuts: sc::Editor::default(),
             backstage: false,
             dialog: None,
+            feedback: Feedback::default(),
             settings_page: SettingsPage::General,
             update: None,
             maximized: false,
@@ -562,8 +777,16 @@ impl Studio {
     /// Shows a page over the workspace, for `--screenshot`.
     pub fn show(&mut self, page: Page) {
         self.backstage = page == Page::File;
-        self.dialog = matches!(page, Page::Settings | Page::Shortcuts).then_some(Dialog::Settings);
-        self.settings_page = if page == Page::Shortcuts { SettingsPage::Shortcuts } else { SettingsPage::General };
+        self.dialog = match page {
+            Page::Settings | Page::Shortcuts | Page::Ribbon => Some(Dialog::Settings),
+            Page::Feedback => Some(Dialog::Feedback),
+            _ => None,
+        };
+        self.settings_page = match page {
+            Page::Shortcuts => SettingsPage::Shortcuts,
+            Page::Ribbon => SettingsPage::Ribbon,
+            _ => SettingsPage::General,
+        };
     }
 
     /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
@@ -735,7 +958,7 @@ impl Studio {
     }
 
     fn look(&self) -> Look {
-        Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar())
+        Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar()).with_text_size(self.prefs.text_size())
     }
 
     /// The width of the left panel: the Collaborator's lists need more than the explorer's tree.
@@ -797,6 +1020,10 @@ impl Studio {
                 .icon(small("mesh.closed"), large("mesh.closed"))
                 .shortcut(key('e'))
                 .mode(app.mode == RenderMode::SolidEdges),
+            Command::new("view.hidden", l.text("Verborgen lijnen", "Hidden line"), go(Message::Mode(RenderMode::HiddenLine)))
+                .icon(small("drawing.plan"), large("drawing.plan"))
+                .mode(app.mode == RenderMode::HiddenLine),
+            Command::new("view.shadows", l.text("Schaduw", "Shadows"), go(Message::ToggleAmbient)).icon(small("theme.light"), large("theme.light")).toggle(app.ambient),
             Command::new("view.grid", l.text("Raster", "Grid"), go(Message::ToggleGrid)).icon(small("view.grid"), large("view.grid")).shortcut(key('g')).toggle(app.grid),
             Command::new("view.grid-lines", l.text("Stramien", "Grid lines"), go(Message::ToggleGrids))
                 .icon(small("measure.distance"), large("measure.distance"))
@@ -834,8 +1061,8 @@ impl Studio {
                 .toggle(app.plane.is_some() || app.plane_picking)
                 .enabled(loaded),
             Command::new("section.flip", l.text("Omdraaien", "Flip"), go(Message::FlipPlane)).icon(small("transform.mirror"), large("transform.mirror")).enabled(app.plane.is_some()),
-            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).shortcut(Shortcut::ctrl('z')).enabled(app.can_undo()),
-            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).shortcut(Shortcut::ctrl('y')).enabled(app.can_redo()),
+            Command::new("edit.undo", l.text("Ongedaan maken", "Undo"), go(Message::Undo)).icon(small("edit.undo"), large("edit.undo")).shortcut(Shortcut::ctrl('z')).enabled(app.can_undo()),
+            Command::new("edit.redo", l.text("Opnieuw", "Redo"), go(Message::Redo)).icon(small("edit.redo"), large("edit.redo")).shortcut(Shortcut::ctrl('y')).enabled(app.can_redo()),
             Command::new("selection.layer", l.text("Laag selecteren", "Select layer"), go(Message::SelectLayerOfSelection))
                 .icon(small("view.fit-selection"), large("view.fit-selection"))
                 .enabled(!app.sel.is_empty()),
@@ -1181,6 +1408,26 @@ impl Studio {
                 self.prefs.workspace = setting.to_string();
                 self.save_prefs();
             }
+            Msg::TextSize(size) => {
+                self.prefs.text_size = match size {
+                    TextSize::Compact => "compact",
+                    TextSize::Standard => "standard",
+                    TextSize::Large => "large",
+                }
+                .into();
+                self.save_prefs();
+            }
+            Msg::RibbonGroup(key, shown) => {
+                self.prefs.ribbon_hidden.retain(|k| k != key);
+                if !shown {
+                    self.prefs.ribbon_hidden.push(key.to_string());
+                }
+                self.save_prefs();
+            }
+            Msg::RibbonReset => {
+                self.prefs.ribbon_hidden.clear();
+                self.save_prefs();
+            }
             Msg::Statusbar(setting) => {
                 self.prefs.statusbar = setting.to_string();
                 self.save_prefs();
@@ -1276,6 +1523,22 @@ impl Studio {
                     if let Some(message) = cm::find(&self.commands(), &press.key, press.modifiers) {
                         return self.update(message);
                     }
+                    // no command of its own: W, A, S and D walk through the model in the Viewer, Q
+                    // and E go down and up, faster with Shift
+                    if let (Product::Viewer, false, false, Key::Character(c)) = (self.product(), press.modifiers.control(), press.modifiers.alt(), &press.key) {
+                        let (forward, right, up) = match c.to_lowercase().as_str() {
+                            "w" => (1.0, 0.0, 0.0),
+                            "s" => (-1.0, 0.0, 0.0),
+                            "d" => (0.0, 1.0, 0.0),
+                            "a" => (0.0, -1.0, 0.0),
+                            "e" => (0.0, 0.0, 1.0),
+                            "q" => (0.0, 0.0, -1.0),
+                            _ => (0.0, 0.0, 0.0),
+                        };
+                        if (forward, right, up) != (0.0, 0.0, 0.0) {
+                            return self.update(Msg::App(Message::Walk { forward, right, up, fast: press.modifiers.shift() }));
+                        }
+                    }
                 }
             }
             // Tab on a selected modelled element opens its edit mode, as in Blender; else it moves
@@ -1308,6 +1571,37 @@ impl Studio {
                     } else {
                         return iced::exit();
                     }
+                }
+            }
+            Msg::Feedback(step) => {
+                let form = &mut self.feedback;
+                match step {
+                    FeedbackMsg::Email(e) => form.email = e,
+                    FeedbackMsg::Name(n) => form.name = n,
+                    FeedbackMsg::Kind(k) => form.kind = k,
+                    FeedbackMsg::Message(action) => form.message.perform(action),
+                    FeedbackMsg::Mood(m) => form.mood = if form.mood == Some(m) { None } else { Some(m) },
+                    // another one: who writes stays filled in
+                    FeedbackMsg::Again => *form = Feedback { email: std::mem::take(&mut form.email), name: std::mem::take(&mut form.name), ..Feedback::default() },
+                    FeedbackMsg::Done(result) => {
+                        form.state = match result {
+                            Ok(()) => FeedbackState::Sent,
+                            Err(e) => FeedbackState::Failed(e),
+                        }
+                    }
+                    FeedbackMsg::Send if form.ready() => {
+                        form.state = FeedbackState::Sending;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let payload = form.payload();
+                            let (tx, rx) = iced::futures::channel::oneshot::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(send_feedback(payload));
+                            });
+                            return Task::perform(async move { rx.await.unwrap_or_else(|_| Err("not sent".to_string())) }, |r| Msg::Feedback(FeedbackMsg::Done(r)));
+                        }
+                    }
+                    FeedbackMsg::Send => {}
                 }
             }
             Msg::DownloadDesktop => {
@@ -1446,7 +1740,10 @@ impl Studio {
     }
 
     fn title_bar(&self, look: Look) -> Element<'_, Msg> {
-        let quick: Vec<Element<'_, Msg>> = ["file.new", "file.open", "file.save-as"].iter().map(|id| cm::icon_button(look, &self.command(id), 28.0)).collect();
+        // the Modeller changes the model, so taking a step back or forth is at hand there
+        let modelling = self.product() == Product::Modeller;
+        let ids: &[&str] = if modelling { &["file.new", "file.open", "file.save-as", "edit.undo", "edit.redo"] } else { &["file.new", "file.open", "file.save-as"] };
+        let quick: Vec<Element<'_, Msg>> = ids.iter().map(|id| cm::icon_button(look, &self.command(id), 28.0)).collect();
         let mut extra = Vec::new();
         if let Some(available) = &self.update {
             extra.push(container(upd::notice(look, available, Msg::Update)).padding([0, 8]).into());
@@ -1460,6 +1757,9 @@ impl Studio {
         if self.products.len() > 1 {
             extra.push(self.product_switch(look));
         }
+        // feedback on the app, from the desktop app (it sends it itself)
+        #[cfg(not(target_arch = "wasm32"))]
+        extra.push(w::button(look, self.l().text("Feedback", "Feedback"), K::Quiet, D::Compact, Some(small("ui.feedback")), Some(Msg::Dialog(Some(Dialog::Feedback)))));
         extra.push(cm::icon_button(look, &self.command("app.settings"), 28.0));
         let name = self.title();
         #[cfg(not(target_arch = "wasm32"))]
@@ -1494,6 +1794,8 @@ impl Studio {
         let shown = self.product();
         let segment = move |product: Product, on: bool, message: Msg| -> Element<'_, Msg> {
             let label = text(product.label()).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(if on { c.text } else { c.text_secondary });
+            // beside its name: that it is not ready to work with yet
+            let label = row![label].extend(product.stage().filter(|_| self.width >= STAGE_WIDTH).map(|stage| text(stage).size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_secondary).into())).spacing(5).align_y(iced::Alignment::Center);
             let control = button(container(label).height(Length::Fill).align_y(iced::alignment::Vertical::Center))
                 .height(22)
                 .padding([0, 10])
@@ -1518,16 +1820,26 @@ impl Studio {
             return w::with_tooltip(look, segment(shown, true, Msg::Product(next)), next.purpose(l), None);
         }
         let segments = self.products.iter().map(|&p| w::with_tooltip(look, segment(p, p == shown, Msg::Product(p)), p.purpose(l), None));
+        // the products to come: named, not to be chosen yet (names as the products', the same in
+        // every language)
+        let soon = |name: &'static str| -> Element<'_, Msg> { container(text(name).size(font::SIZE_BODY).font(fonts::MEDIUM).color(c.text_disabled)).height(22).padding([0, 8]).align_y(iced::alignment::Vertical::Center).into() };
+        let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
+        // (where the window has room for them beside the title)
+        let room = self.width >= SOON_WIDTH;
+        let segments = segments.chain(["FM", "Analyse", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
             .into()
     }
 
-    fn ribbon(&self, look: Look) -> Element<'_, Msg> {
+    /// The groups of the ribbon tab shown, each its label and its parts, before the user's
+    /// choice of which to show.
+    fn ribbon_groups(&self) -> Vec<(&'static str, Vec<RibbonPart>)> {
         let l = self.l();
-        let large = |id: &str| cm::ribbon_large(look, &self.command(id));
-        let smalls = |ids: &[&str]| -> Element<'_, Msg> { column(ids.iter().map(|id| cm::ribbon_small(look, &self.command(id)))).spacing(2).into() };
+        // a group is its label and its parts: a large button, or a column of small ones
+        let large = |id: &'static str| RibbonPart::Large(id);
+        let smalls = |ids: &[&'static str]| RibbonPart::Smalls(ids.to_vec());
         // One tab: the main command of a group large, the rest small in columns of three
         let tools: Vec<&str> = Tool::ALL.iter().map(|t| Self::tool_id(*t)).collect();
         let (first_tools, more_tools) = tools.split_at(3.min(tools.len()));
@@ -1539,19 +1851,19 @@ impl Studio {
             }
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
-                w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges"])]),
-                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
-                w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
-                w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
-                w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
-                w::ribbon_group(look, l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
-                w::ribbon_group(look, l.text("Meten", "Measure"), measure),
-                w::ribbon_group(look, l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
+                (l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"]), smalls(&["view.shadows"])]),
+                (l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
+                ("IFC", vec![large("view.ifc")]),
+                (l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+                (l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
+                (l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
+                (l.text("Meten", "Measure"), measure),
+                (l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
             ]
         };
-        let groups = match self.ribbon_page() {
+        let groups: Vec<(&'static str, Vec<RibbonPart>)> = match self.ribbon_page() {
             RibbonPage::Home => {
-                let mut groups = vec![w::ribbon_group(look, l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
                 groups.extend(view_groups());
                 groups
             }
@@ -1561,36 +1873,80 @@ impl Studio {
             // two selected elements, and changes. New, open and save are on the File page and in
             // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
-                w::ribbon_group(look, l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
-                w::ribbon_group(look, l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
-                w::ribbon_group(look, l.text("Systeem", "System"), vec![large("model.system")]),
-                w::ribbon_group(look, l.text("Puntvormig", "Point"), vec![large("model.point")]),
-                w::ribbon_group(look, l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
-                w::ribbon_group(look, l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
-                w::ribbon_group(look, l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
+                (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
+                (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
+                (l.text("Systeem", "System"), vec![large("model.system")]),
+                (l.text("Puntvormig", "Point"), vec![large("model.point")]),
+                (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
+                (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
+                (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![
-                w::ribbon_group(look, l.text("Niveaus", "Levels"), vec![large("project.level")]),
-                w::ribbon_group(look, l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
-                w::ribbon_group(look, l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
-                w::ribbon_group(look, l.text("Bibliotheek", "Library"), vec![large("project.library")]),
+                (l.text("Niveaus", "Levels"), vec![large("project.level")]),
+                (l.text("Weergaven", "Views"), vec![large("project.floor-plan"), smalls(&["project.structural-plan", "project.ceiling-plan", "annotate.section"])]),
+                (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
+                (l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
             // in the floor plan, section or sheet shown
             RibbonPage::Annotate => vec![
-                w::ribbon_group(look, l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
-                w::ribbon_group(look, l.text("Tekst", "Text"), vec![large("annotate.text")]),
+                (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
+                (l.text("Tekst", "Text"), vec![large("annotate.text")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
-                w::ribbon_group(look, l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
-                w::ribbon_group(look, l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
-                w::ribbon_group(look, l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
-                w::ribbon_group(look, l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
-                w::ribbon_group(look, l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
+                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
+                (l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
+                (l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
+                (l.text("Regelset", "Rule set"), vec![smalls(&["collaborate.rules-open", "collaborate.rules-save"])]),
             ],
         };
-        if self.compact() {
+        groups
+    }
+
+    fn ribbon(&self, look: Look) -> Element<'_, Msg> {
+        // without the groups switched off in the settings
+        let groups: Vec<(&'static str, Vec<RibbonPart>)> = self.ribbon_groups().into_iter().filter(|g| !self.prefs.ribbon_hidden.iter().any(|k| k == group_key(g))).collect();
+        // drawn to fit the window: where the ribbon is wider, its groups show their small
+        // buttons as icons only, from the last group back; narrower still, it scrolls sideways
+        let commands = self.commands();
+        let command = |id: &str| commands.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("command {id}"));
+        let letters = |id: &str| command(id).label.trim_end_matches('…').chars().count() as f32;
+        let part_width = |part: &RibbonPart, icons: bool| match part {
+            RibbonPart::Large(id) => (letters(id) * 5.8).max(52.0),
+            RibbonPart::Smalls(_) if icons => RIBBON_ICON + 4.0,
+            RibbonPart::Smalls(ids) => ids.iter().map(|id| letters(id) * 6.4 + 21.0).fold(0.0, f32::max),
+        };
+        let group_width = |(label, parts): &(&'static str, Vec<RibbonPart>), icons: bool| {
+            let buttons: f32 = parts.iter().map(|p| part_width(p, icons)).sum::<f32>() + 2.0 * parts.len().saturating_sub(1) as f32;
+            buttons.max(label.chars().count() as f32 * 6.6) + 13.0
+        };
+        let mut icons = vec![false; groups.len()];
+        let width = |icons: &[bool]| groups.iter().zip(icons).map(|(g, i)| group_width(g, *i)).sum::<f32>();
+        for k in (0..groups.len()).rev() {
+            if width(&icons) <= self.width {
+                break;
+            }
+            icons[k] = groups[k].1.iter().any(|p| matches!(p, RibbonPart::Smalls(_)));
+        }
+        let fits = width(&icons) <= self.width;
+        let groups: Vec<Element<'_, Msg>> = groups
+            .iter()
+            .zip(&icons)
+            .map(|((label, parts), icons)| {
+                let parts = parts
+                    .iter()
+                    .map(|part| match part {
+                        RibbonPart::Large(id) => cm::ribbon_large(look, command(id)),
+                        RibbonPart::Smalls(ids) if *icons => column(ids.iter().map(|id| cm::icon_button(look, command(id), RIBBON_ICON))).spacing(1).into(),
+                        RibbonPart::Smalls(ids) => column(ids.iter().map(|id| cm::ribbon_small(look, command(id)))).spacing(2).into(),
+                    })
+                    .collect();
+                w::ribbon_group(look, label, parts)
+            })
+            .collect();
+        if self.compact() || !fits {
             // narrower than the ribbon: it scrolls sideways (a finger drags it)
             use iced::widget::scrollable::{Direction, Scrollbar};
             let c = look.color;
@@ -1804,7 +2160,7 @@ impl Studio {
         match dialog {
             Dialog::Settings => {
                 let tab = |page, label| w::button(look, label, if self.settings_page == page { K::Secondary } else { K::Quiet }, D::Compact, None, Some(Msg::SettingsPage(page)));
-                let tabs = row![tab(SettingsPage::General, l.text("Algemeen", "General")), tab(SettingsPage::Shortcuts, l.text("Sneltoetsen", "Shortcuts"))].spacing(4);
+                let tabs = row![tab(SettingsPage::General, l.text("Algemeen", "General")), tab(SettingsPage::Ribbon, l.text("Lint", "Ribbon")), tab(SettingsPage::Shortcuts, l.text("Sneltoetsen", "Shortcuts"))].spacing(4);
                 let scale = Scale::ALL.into_iter().find(|s| (s.0 - self.prefs.scale()).abs() < 0.01);
                 let groups = [
                     ("file", l.text("Bestand", "File")),
@@ -1817,18 +2173,32 @@ impl Studio {
                 let themes = options(&THEMES, l, self.prefs.theme());
                 let workspaces = options(&WORKSPACES, l, self.prefs.workspace());
                 let statusbars = options(&STATUSBARS, l, self.prefs.statusbar());
+                let text_sizes = options(&TEXT_SIZES, l, self.prefs.text_size());
                 let body: Element<'_, Msg> = match self.settings_page {
                     SettingsPage::General => column![
                         w::mono_label(look, l.text("Weergave", "Appearance")),
                         w::property_row(look, l.text("Thema", "Theme"), w::select(look, themes.0, themes.1, |n| Msg::Theme(n.value), D::Regular)),
                         w::property_row(look, l.text("Werkruimte", "Workspace"), w::select(look, workspaces.0, workspaces.1, |n| Msg::Workspace(n.value), D::Regular)),
                         w::property_row(look, l.text("Statusbalk", "Status bar"), w::select(look, statusbars.0, statusbars.1, |n| Msg::Statusbar(n.value), D::Regular)),
+                        w::property_row(look, l.text("Tekstgrootte", "Text size"), w::select(look, text_sizes.0, text_sizes.1, |n| Msg::TextSize(n.value), D::Regular)),
                         w::property_row(look, l.text("Interfacegrootte", "Interface size"), w::select(look, &Scale::ALL, scale, |s: Scale| Msg::Scale(s.0), D::Regular)),
                         w::mono_label(look, l.text("Taal", "Language")),
                         w::property_row(look, l.text("Taal", "Language"), w::select(look, &Language::ALL, Some(l), Msg::Language, D::Regular)),
                     ]
                     .spacing(6)
                     .into(),
+                    // the groups of the ribbon tab shown: each on or off
+                    SettingsPage::Ribbon => {
+                        let hidden = &self.prefs.ribbon_hidden;
+                        let groups = self.ribbon_groups();
+                        let mut list = column![w::secondary(look, l.text("De groepen van het linttabblad dat nu open staat. Zet uit wat je niet gebruikt.", "The groups of the ribbon tab that is open now. Switch off what you do not use."))].spacing(8);
+                        for group in &groups {
+                            let key = group_key(group);
+                            let shown = !hidden.iter().any(|k| k == key);
+                            list = list.push(w::checkbox(look, group.0, shown, Some(move |on| Msg::RibbonGroup(key, on))));
+                        }
+                        list.push(w::button(look, l.text("Alle groepen tonen", "Show all groups"), K::Secondary, D::Compact, None, (!hidden.is_empty()).then_some(Msg::RibbonReset))).into()
+                    }
                     SettingsPage::Shortcuts => sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts),
                 };
                 w::dialog(
@@ -1839,6 +2209,76 @@ impl Studio {
                     column![tabs, body].spacing(14).into(),
                     None,
                     vec![w::button(look, l.text("Sluiten", "Close"), K::Primary, D::Regular, None, Some(Msg::Dialog(None)))],
+                    true,
+                )
+            }
+            Dialog::Feedback => {
+                let form = &self.feedback;
+                let send = |m: FeedbackMsg| Msg::Feedback(m);
+                if form.state == FeedbackState::Sent {
+                    return w::dialog(
+                        look,
+                        l.text("Feedback verzenden", "Send feedback"),
+                        close_icon,
+                        Some(Msg::Dialog(None)),
+                        column![w::heading(look, l.text("Bedankt!", "Thank you!"), 16.0), w::body(look, l.text("Je feedback is verzonden.", "Your feedback was sent."))].spacing(6).into(),
+                        None,
+                        vec![
+                            w::button(look, l.text("Nog een verzenden", "Send another"), K::Quiet, D::Regular, None, Some(send(FeedbackMsg::Again))),
+                            w::button(look, l.text("Sluiten", "Close"), K::Primary, D::Regular, None, Some(Msg::Dialog(None))),
+                        ],
+                        false,
+                    );
+                }
+                let sending = form.state == FeedbackState::Sending;
+                let wrong_email = (!form.email.trim().is_empty() && !form.email_ok()).then(|| l.text("Dit is geen e-mailadres.", "This is not an e-mail address."));
+                let kinds = row(FEEDBACK_KINDS.iter().enumerate().map(|(k, kind)| w::radio(look, l.text(kind.1, kind.2), k, Some(form.kind), |k| send(FeedbackMsg::Kind(k))))).spacing(16);
+                let moods = row(FEEDBACK_MOODS.iter().enumerate().map(|(m, mood)| {
+                    w::button(look, l.text(mood.1, mood.2), if form.mood == Some(m) { K::Secondary } else { K::Quiet }, D::Compact, None, Some(send(FeedbackMsg::Mood(m))))
+                }))
+                .spacing(4);
+                let c = look.color;
+                let message = iced::widget::text_editor(&form.message)
+                    .placeholder(l.text("Vertel wat je ervan vindt (minstens 10 tekens)", "Tell us what you think (at least 10 characters)"))
+                    .on_action(|a| Msg::Feedback(FeedbackMsg::Message(a)))
+                    .height(140)
+                    .size(13)
+                    .font(fonts::BODY)
+                    .style(move |_, status| iced::widget::text_editor::Style {
+                        background: c.raised.into(),
+                        border: iced::Border { color: if matches!(status, iced::widget::text_editor::Status::Focused { .. }) { c.accent } else { c.border }, width: 1.0, radius: 4.0.into() },
+                        placeholder: c.text_disabled,
+                        value: c.text,
+                        selection: iced::Color { a: 0.35, ..c.accent },
+                    });
+                let count = form.wording().chars().count();
+                let mut body = column![
+                    w::property_row(look, l.text("E-mail", "E-mail"), w::text_field(look, "naam@voorbeeld.nl", &form.email, Some(|e| Msg::Feedback(FeedbackMsg::Email(e))), D::Regular, wrong_email)),
+                    w::property_row(look, l.text("Naam", "Name"), w::text_field(look, l.text("Je naam (hoeft niet)", "Your name (optional)"), &form.name, Some(|n| Msg::Feedback(FeedbackMsg::Name(n))), D::Regular, None)),
+                    w::property_row(look, l.text("Soort", "Kind"), kinds.into()),
+                    message,
+                    w::secondary(look, format!("{count} / {FEEDBACK_LONGEST}")),
+                    w::property_row(look, l.text("Hoe bevalt het?", "How is it going?"), moods.into()),
+                    w::secondary(look, l.text(
+                        "Verzonden worden: wat je hier invult en de versie van het programma. Niets van je model.",
+                        "Sent are: what you fill in here and the version of the app. Nothing of your model.",
+                    )),
+                ]
+                .spacing(10);
+                if let FeedbackState::Failed(why) = &form.state {
+                    body = body.push(w::body(look, format!("{} ({why})", l.text("Verzenden is niet gelukt.", "Sending failed."))).color(c.error));
+                }
+                w::dialog(
+                    look,
+                    l.text("Feedback verzenden", "Send feedback"),
+                    close_icon,
+                    Some(Msg::Dialog(None)),
+                    body.into(),
+                    None,
+                    vec![
+                        w::button(look, l.text("Annuleren", "Cancel"), K::Quiet, D::Regular, None, Some(Msg::Dialog(None))),
+                        w::button(look, if sending { l.text("Bezig met verzenden…", "Sending…") } else { l.text("Verzenden", "Send") }, K::Primary, D::Regular, None, form.ready().then(|| send(FeedbackMsg::Send))),
+                    ],
                     true,
                 )
             }

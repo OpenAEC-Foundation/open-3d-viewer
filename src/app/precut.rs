@@ -5,7 +5,7 @@
 
 use super::{App, Message};
 use crate::document::PlanKind;
-use crate::drawing::{ceiling_at, plan_at, section_at, structural_at, Cut, Shown};
+use crate::drawing::{ceiling_at, plan_at, section_at, structural_at, Cut, Ink, Shown};
 use crate::explode::ExplodeIndex;
 use crate::model::Model;
 use iced::Task;
@@ -28,18 +28,23 @@ pub(super) struct CutJob {
     pub index: Option<Arc<ExplodeIndex>>,
     pub kind: CutKind,
     pub scale: f64,
+    /// How the view draws its elements otherwise than their materials say (its filters).
+    pub looks: Option<Arc<std::collections::HashMap<u64, crate::hatching::Look>>>,
 }
 
 impl CutJob {
     /// The cut, with its cut faces hatched.
     pub(super) fn run(self) -> Cut {
-        let CutJob { model, layers, units, halftone, index, kind, scale } = self;
-        let index = index.filter(|_| units.iter().chain(&halftone).any(|u| *u));
+        let CutJob { model, layers, units, halftone, index, kind, scale, looks } = self;
+        // the pens the view's filters give the lines of elements: the inks, and per unit which
+        let (inks, unit_ink) = inks(looks.as_deref(), index.as_deref());
+        let inked = |l: usize, v: u32| index.as_ref().and_then(|ix| unit_ink.get(ix.unit(l, v)).copied().flatten());
+        let index = index.clone().filter(|_| units.iter().chain(&halftone).any(|u| *u));
         let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
         let faint = |l: usize, v: u32| index.as_ref().is_some_and(|ix| halftone.get(ix.unit(l, v)).copied().unwrap_or(false));
         // the pieces joined elements of one material make: the seams within one are not drawn
         let pieces = crate::hatching::pieces(&model, bim_library::DrawingStandard::Nen47);
-        let shown = Shown { layers: &layers, hidden: &hidden, faint: halftone.iter().any(|h| *h).then_some(&faint as &dyn Fn(usize, u32) -> bool), pieces: (!pieces.is_empty()).then_some(&pieces) };
+        let shown = Shown { layers: &layers, hidden: &hidden, faint: halftone.iter().any(|h| *h).then_some(&faint as &dyn Fn(usize, u32) -> bool), pieces: (!pieces.is_empty()).then_some(&pieces), inks: (!inks.is_empty()).then_some((&inked as &dyn Fn(usize, u32) -> Option<usize>, inks.as_slice())) };
         let mut cut = match kind {
             CutKind::Section { from, to, depth } => section_at(&model, shown, from, to, depth),
             CutKind::Plan { kind, low, high } if kind.looks_up() => ceiling_at(&model, shown, low as f32, high as f32),
@@ -47,10 +52,32 @@ impl CutJob {
             CutKind::Plan { kind: PlanKind::Structural, low, high } => structural_at(&model, shown, low as f32, high as f32),
             CutKind::Plan { low, high, .. } => plan_at(&model, shown, low as f32, high as f32),
         };
-        // the cut faces in the hatch of what they are made of
-        crate::hatching::hatch(&mut cut, &model, bim_library::DrawingStandard::Nen47, scale);
+        // the cut faces in the hatch of what they are made of, or of what the view's filters say
+        crate::hatching::hatch_with(&mut cut, &model, bim_library::DrawingStandard::Nen47, scale, looks.as_deref());
         cut
     }
+}
+
+/// The inks (cut lines, lines beyond the cut) the looks of a view give its elements' lines, and
+/// per unit of `index` which of them it takes.
+fn inks(looks: Option<&std::collections::HashMap<u64, crate::hatching::Look>>, index: Option<&ExplodeIndex>) -> (Vec<(Ink, Ink)>, Vec<Option<usize>>) {
+    let (Some(looks), Some(index)) = (looks, index) else { return Default::default() };
+    if looks.values().all(|l| l.cut_line.is_empty() && l.seen_line.is_empty()) {
+        return Default::default();
+    }
+    let mut inks: Vec<(Ink, Ink)> = Vec::new();
+    let of_unit = (0..index.len())
+        .map(|unit| {
+            let Some(crate::explode::UnitOwner::Element(id)) = index.owner(unit) else { return None };
+            let look = looks.get(&id).filter(|l| !l.cut_line.is_empty() || !l.seen_line.is_empty())?;
+            let pair = (look.cut_line, look.seen_line);
+            Some(inks.iter().position(|p| *p == pair).unwrap_or_else(|| {
+                inks.push(pair);
+                inks.len() - 1
+            }))
+        })
+        .collect();
+    (inks, of_unit)
 }
 
 /// How many views are cut at a time: half the cores, so the window stays quick.
@@ -101,6 +128,8 @@ impl App {
                 async move {
                     let (tx, rx) = iced::futures::channel::oneshot::channel();
                     std::thread::spawn(move || {
+                        // behind the window: it stays quick while the views are cut
+                        crate::units::work_in_background();
                         let _ = tx.send(job.run());
                     });
                     rx.await.ok().map(Arc::new)

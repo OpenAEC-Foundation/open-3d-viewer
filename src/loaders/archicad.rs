@@ -862,6 +862,8 @@ fn layout_sheets(records: &Records) -> Vec<crate::model::Sheet> {
                     turn: [1.0, 0.0],
                     draft: None,
                     written: None,
+                    face: Default::default(),
+                    split: None,
                 });
             }
             let drawing = viewports.first().map_or("", |v| v.title.as_str()).to_string();

@@ -74,6 +74,8 @@ pub struct Viewport3D<'a> {
     /// The exploded view: the units of the model and the offset (world) of each.
     pub explode: Option<&'a Arc<ExplodeIndex>>,
     pub offsets: &'a Arc<Vec<[f32; 4]>>,
+    /// How every unit looks otherwise than its material (a view's overrides).
+    pub looks: &'a Arc<Vec<[f32; 4]>>,
     /// Report where the cursor is ([`Navigate::Hover`]): while measuring, and over structural
     /// models (their hover highlight).
     pub hover: bool,
@@ -301,6 +303,7 @@ where
             settings: self.settings,
             explode: self.explode.cloned(),
             offsets: self.offsets.clone(),
+            looks: self.looks.clone(),
             structural_selected: self.structural_selected.clone(),
             structural_hovered: self.structural_hovered.clone(),
             structural_shown: self.structural_shown.cloned(),
@@ -453,6 +456,7 @@ mod tests {
             plane: None,
             caps: false,
             grids: false,
+            ambient: false,
             bounds: None,
         };
         let view = Viewport3D {
@@ -462,6 +466,7 @@ mod tests {
             settings,
             explode: None,
             offsets: &offsets,
+            looks: &offsets,
             hover: false,
             crosshair: false,
             structural_selected: &marks,

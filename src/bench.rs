@@ -232,6 +232,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             plane: None,
             caps: false,
             grids: true,
+            ambient: false,
             bounds: None,
         };
         // the units of every element, as the app uploads them, so their flags work
@@ -244,6 +245,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 settings,
                 explode: Some(index.clone()),
                 offsets: units.clone(),
+                looks: Default::default(),
                 structural_selected: marked.clone(),
                 structural_hovered: Arc::default(),
                 structural_shown: None,
@@ -386,6 +388,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             plane: None,
             caps: section.is_some(),
             grids: true,
+            ambient: false,
             bounds: None,
         };
         let selected_marks: Arc<Marks> = selected.clone().unwrap_or_default();
@@ -397,6 +400,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 settings,
                 explode: None,
                 offsets: Arc::default(),
+                looks: Default::default(),
                 structural_selected: selected_marks.clone(),
                 structural_hovered: Arc::default(),
                 structural_shown: None,
@@ -672,10 +676,12 @@ mod tests {
                 plane: None,
                 caps: false,
                 grids: false,
+                ambient: false,
                 bounds: None,
             },
             explode: Some(index.clone()),
             offsets,
+            looks: Default::default(),
             structural_selected: Arc::default(),
             structural_hovered: Arc::default(),
             structural_shown: None,
@@ -820,6 +826,7 @@ mod tests {
             plane: None,
             caps: false,
             grids: false,
+            ambient: false,
             bounds: None,
         };
         // the last member selected
@@ -834,6 +841,7 @@ mod tests {
                 settings,
                 explode: None,
                 offsets: Arc::default(),
+                looks: Default::default(),
                 structural_selected: Arc::new(selected),
                 structural_hovered: Arc::new(hovered),
                 structural_shown: None,

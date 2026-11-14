@@ -35,7 +35,7 @@ macro_rules! icons {
 icons! {
     "window.minimize", "window.maximize", "window.restore", "window.close",
     "file.new", "file.open", "file.import", "file.save-as", "file.examples",
-    "ui.settings", "ui.about", "ui.close", "ui.help",
+    "ui.settings", "ui.about", "ui.close", "ui.help", "ui.feedback", "theme.light",
     "panel.left", "panel.right", "panel.schedules", "panel.model-tree", "panel.measurements",
     "view.fit", "view.fit-selection", "view.isometric", "view.top", "view.front", "view.right",
     "view.orbit", "view.zoom-in", "view.zoom-out", "view.grid", "view.saved", "view.reset-camera",
@@ -43,7 +43,7 @@ icons! {
     "section.box", "section.plane-z", "section.fit-selection", "section.reset-box", "section.clear",
     "transform.mirror", "transform.flip-vertical", "transform.explode",
     "measure.distance", "measure.angle", "measure.area", "measure.perimeter", "measure.takeoff",
-    "edit.clear-all",
+    "edit.clear-all", "edit.undo", "edit.redo",
     "status.success", "status.error", "status.warning", "status.info",
     "object.show", "object.hide", "project.folder", "data.table",
     // the modeller

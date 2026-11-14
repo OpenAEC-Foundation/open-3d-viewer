@@ -90,7 +90,7 @@ impl App {
                 *kept = (Some(of), KeptFaces::new());
             }
             let hidden = |l: usize, v: u32| index.as_ref().is_some_and(|ix| units.get(ix.unit(l, v)).copied().unwrap_or(false));
-            cut_faces_kept(&model, Shown { layers: &layers, hidden: &hidden, faint: None, pieces: None }, section.as_ref(), plane.as_ref(), bim_library::DrawingStandard::Nen47, &mut kept.1)
+            cut_faces_kept(&model, Shown { layers: &layers, hidden: &hidden, faint: None, pieces: None, inks: None }, section.as_ref(), plane.as_ref(), bim_library::DrawingStandard::Nen47, &mut kept.1)
         })
     }
 

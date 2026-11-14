@@ -10,6 +10,7 @@
 pub mod a11y;
 pub mod chrome;
 pub mod command;
+pub mod display;
 pub mod document;
 pub mod focus;
 pub mod history;
@@ -19,6 +20,7 @@ pub mod site;
 pub mod tiles;
 pub mod tokens;
 pub mod update;
+mod update_core;
 pub mod widgets;
 pub mod workflow;
 
@@ -35,6 +37,10 @@ pub struct Look {
     pub color: Palette,
     /// Accent text that keeps its contrast on the current workspace.
     pub workspace_accent_text: Color,
+    /// The Tekstgrootte setting (issue #27).
+    pub text_size: TextSize,
+    /// Text sizes and row height for that setting; use these instead of `font::SIZE_*`.
+    pub text: TextSizes,
 }
 
 impl Look {
@@ -45,7 +51,14 @@ impl Look {
             tokens,
             color: tokens.palette(workspace, statusbar),
             workspace_accent_text: tokens.workspace_accent_text(workspace),
+            text_size: TextSize::Standard,
+            text: TextSize::Standard.sizes(),
         }
+    }
+
+    /// The same look with another Tekstgrootte.
+    pub fn with_text_size(self, size: TextSize) -> Self {
+        Self { text_size: size, text: size.sizes(), ..self }
     }
 
     pub fn high_contrast(&self) -> bool {

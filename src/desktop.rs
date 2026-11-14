@@ -4,10 +4,10 @@
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--product viewer|modeller|collaborator] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...]
-//!                  [--page workspace|file|settings|shortcuts] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
+//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
@@ -44,6 +44,8 @@ struct Args {
     sheet: Option<String>,
     /// For `--screenshot`: a plan, section or elevation of the document (by name) to show in its tab.
     drawing: Option<String>,
+    /// A view saved in the file to show, by its name (`--saved-view`).
+    saved_view: Option<String>,
     /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
     draft: Option<String>,
     /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
@@ -92,10 +94,11 @@ fn parse_args() -> Result<Args, String> {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
             "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|collaborator")?),
-            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts")?,
+            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
             "--drawing" => args.drawing = Some(value()?),
+            "--saved-view" => args.saved_view = Some(value()?),
             "--draft" => args.draft = Some(value()?),
             "--pick" => args.pick = Some(value()?.parse().map_err(|_| "--pick takes an element id")?),
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
@@ -114,7 +117,8 @@ fn parse_args() -> Result<Args, String> {
                     "solid" => RenderMode::Solid,
                     "wireframe" => RenderMode::Wireframe,
                     "edges" => RenderMode::SolidEdges,
-                    _ => return Err("--mode solid|wireframe|edges".into()),
+                    "hidden" => RenderMode::HiddenLine,
+                    _ => return Err("--mode solid|wireframe|edges|hidden".into()),
                 })
             }
             "--view" => {
@@ -365,6 +369,8 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     if let Some(product) = args.product {
         studio.set_product(product);
     }
+    // the window's width, as a real window reports it: what the ribbon and the title bar fit
+    let _ = studio.update(shell::Msg::Resized(w));
     studio.show(args.page);
     for path in args.recent.iter().rev().chain(&args.file) {
         studio.remember(path.clone());
@@ -412,6 +418,12 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let model = app.model.clone().ok_or("no model")?;
             let i = model.project.sheets.iter().position(|s| &s.number == number).ok_or(format!("no sheet {number} in the file"))?;
             let _ = app.update(Message::OpenSheet(i));
+        }
+        if let Some(name) = &args.saved_view {
+            let model = app.model.clone().ok_or("no model")?;
+            let i = model.views.iter().position(|v| &v.name == name).ok_or(format!("no view {name} in the file"))?;
+            let _ = app.update(Message::ApplyView(i));
+            app.finish_animation();
         }
         if let Some(name) = &args.draft {
             let model = app.model.clone().ok_or("no model")?;

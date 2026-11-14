@@ -353,7 +353,8 @@ impl Drawing2d {
                     }
                 }
             }
-            for (pen, segments) in [(Pen::Beyond, &cut.faint_below), (Pen::Beyond, &cut.faint_segments), (Pen::Beyond, &cut.below), (Pen::Cut, &cut.segments)] {
+            let inked = cut.inked.iter().map(|i| (if i.cut { Pen::Cut } else { Pen::Beyond }, &i.lines));
+            for (pen, segments) in [(Pen::Beyond, &cut.faint_below), (Pen::Beyond, &cut.faint_segments), (Pen::Beyond, &cut.below), (Pen::Cut, &cut.segments)].into_iter().chain(inked) {
                 for [a, b] in segments {
                     let (a, b) = ([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]);
                     let piece = match crop {
@@ -445,7 +446,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
             }
             (None, None) => ([v.at[0] - 0.02, v.at[1] - 0.015], [v.at[0] + 0.02, v.at[1] + 0.015]),
         };
-        let drawn = c.as_ref().is_some_and(|c| !c.segments.is_empty() || !c.below.is_empty());
+        let drawn = c.as_ref().is_some_and(|c| crate::drawing::drawn(c).next().is_some());
         d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, notes), &to, 1.0, v.scale);
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);

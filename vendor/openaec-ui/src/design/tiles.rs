@@ -4,7 +4,7 @@
 use super::widgets::{bar, border, fill, glyph, mono_label, Tone};
 use super::a11y::{self, Node, Role};
 use super::focus::{focusable, group, Axis};
-use super::{font, mix, radius, Look, Shadows};
+use super::{mix, radius, Look, Shadows};
 use crate::fonts;
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, row, text, Space};
@@ -48,11 +48,11 @@ pub fn tile_style(look: Look, status: button::Status, chosen: bool, r: f32) -> b
 }
 
 fn title<'a>(look: Look, content: impl text::IntoFragment<'a>, disabled: bool) -> text::Text<'a> {
-    text(content).size(font::SIZE_PANEL_HEADING).font(fonts::STRONG).color(if disabled { look.color.text_disabled } else { look.color.text })
+    text(content).size(look.text.panel_heading).font(fonts::STRONG).color(if disabled { look.color.text_disabled } else { look.color.text })
 }
 
 fn description<'a>(look: Look, content: impl text::IntoFragment<'a>, disabled: bool) -> text::Text<'a> {
-    text(content).size(font::SIZE_BODY).font(fonts::BODY).color(if disabled { look.color.text_disabled } else { look.color.text_secondary })
+    text(content).size(look.text.body).font(fonts::BODY).color(if disabled { look.color.text_disabled } else { look.color.text_secondary })
 }
 
 /// A task tile (variant B): icon tile on the left, title and description beside it.
@@ -90,9 +90,9 @@ pub fn recent_files<'a, M: Clone + 'a>(look: Look, files: Vec<RecentFile<'a, M>>
     for (i, file) in files.into_iter().enumerate() {
         let line = row![
             glyph(file.icon, 18.0, c.text_secondary, c.accent_text),
-            text(file.name).size(font::SIZE_BODY).font(fonts::MEDIUM).color(c.text),
-            text(file.path).size(font::SIZE_LABEL).font(fonts::BODY).color(c.text_secondary).width(Length::Fill),
-            text(file.date).size(font::SIZE_LABEL).font(fonts::MONO).color(c.text_secondary),
+            text(file.name).size(look.text.body).font(fonts::MEDIUM).color(c.text),
+            text(file.path).size(look.text.label).font(fonts::BODY).color(c.text_secondary).width(Length::Fill),
+            text(file.date).size(look.text.label).font(fonts::MONO).color(c.text_secondary),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
@@ -133,7 +133,7 @@ pub fn recent_files<'a, M: Clone + 'a>(look: Look, files: Vec<RecentFile<'a, M>>
 pub fn status_label<'a, M: 'a>(look: Look, tone: Tone, label: &'a str) -> Element<'a, M> {
     let fg = tone.color(look);
     let tint = if look.high_contrast() { look.color.panel } else { tone.tint(look) };
-    container(text(label).size(font::SIZE_LABEL).font(fonts::MONO).color(fg))
+    container(text(label).size(look.text.label).font(fonts::MONO).color(fg))
         .padding([1, 8])
         .style(move |_| container::Style { background: fill(tint), border: border(fg, 1.0, radius::FULL), ..Default::default() })
         .into()
@@ -161,8 +161,8 @@ pub fn project_card<'a, M: Clone + 'a>(
             ..Default::default()
         });
     let mut info = column![
-        text(name).size(font::SIZE_PANEL_HEADING).font(fonts::STRONG).color(c.text),
-        text(meta).size(font::SIZE_LABEL).font(fonts::MONO).color(c.text_secondary),
+        text(name).size(look.text.panel_heading).font(fonts::STRONG).color(c.text),
+        text(meta).size(look.text.label).font(fonts::MONO).color(c.text_secondary),
     ]
     .spacing(4);
     let status_text = status.map(|(_, label)| label);
@@ -220,8 +220,8 @@ pub fn info_card<'a, M: 'a>(look: Look, heading: &str, rows: Vec<(&'a str, Strin
     for (key, value) in rows {
         content = content.push(
             row![
-                text(key).size(font::SIZE_BODY).font(fonts::BODY).color(c.text_secondary).width(Length::FillPortion(2)),
-                text(value).size(font::SIZE_BODY).font(fonts::MEDIUM).color(c.text).width(Length::FillPortion(3)),
+                text(key).size(look.text.body).font(fonts::BODY).color(c.text_secondary).width(Length::FillPortion(2)),
+                text(value).size(look.text.body).font(fonts::MEDIUM).color(c.text).width(Length::FillPortion(3)),
             ]
             .spacing(8),
         );
@@ -243,7 +243,7 @@ pub fn figure_tile<'a, M: 'a>(look: Look, value: impl text::IntoFragment<'a>, la
     let c = look.color;
     container(
         column![
-            text(value).size(font::SIZE_PAGE_HEADING).font(fonts::HEADING).color(if accent { c.accent_text } else { c.text }),
+            text(value).size(look.text.page_heading).font(fonts::HEADING).color(if accent { c.accent_text } else { c.text }),
             mono_label(look, label),
         ]
         .spacing(4),
@@ -266,7 +266,7 @@ pub fn file_nav_row<'a, M: Clone + 'a>(look: Look, icon: &'static str, label: &'
     let control = button(
         row![
             lead,
-            row![glyph(icon, 16.0, fg, if disabled { fg } else { c.accent_text }), text(label).size(font::SIZE_BODY).font(if active { fonts::STRONG } else { fonts::MEDIUM }).color(fg)]
+            row![glyph(icon, 16.0, fg, if disabled { fg } else { c.accent_text }), text(label).size(look.text.body).font(if active { fonts::STRONG } else { fonts::MEDIUM }).color(fg)]
                 .spacing(10)
                 .padding([0, 13])
                 .align_y(Alignment::Center),

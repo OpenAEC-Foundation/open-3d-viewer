@@ -11,7 +11,7 @@
 use super::a11y::{self, Node, Role};
 use super::focus;
 use super::widgets::{self as w, Tone};
-use super::{font, mix, Look, ThemeId};
+use super::{mix, Look, ThemeId};
 use crate::fonts;
 use iced::widget::{self, column, container, row, text, tooltip, Space};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Shadow, Vector};
@@ -180,7 +180,7 @@ pub fn round_icon<'a, M: Clone + 'a>(look: Look, icon: &'static str, tip: impl I
         }
     });
     let control = a11y::node(focus::focusable(look, control, true, 17.0), Node::new(Role::Button, tip.clone()));
-    let bubble = |tip: String| container(text(tip).size(font::SIZE_LABEL).font(fonts::BODY).color(c.text)).padding([4, 8]).style(move |_| w::surface(look, look.tokens.shadow.popup, 3.0));
+    let bubble = |tip: String| container(text(tip).size(look.text.label).font(fonts::BODY).color(c.text)).padding([4, 8]).style(move |_| w::surface(look, look.tokens.shadow.popup, 3.0));
     tooltip(focus::tip(control, bubble(tip.clone())), bubble(tip), tooltip::Position::Bottom).gap(4).into()
 }
 

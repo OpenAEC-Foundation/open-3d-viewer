@@ -82,9 +82,49 @@ pub fn unit_state(offsets: &[[f32; 4]], flags: &[u8]) -> Vec<[f32; 4]> {
         .collect()
 }
 
+/// Lowers the priority of the thread that calls it: for work done ahead (cutting the views of
+/// the drawings, finding the edges of a model), so the window and its drawing come first. On
+/// Windows the thread runs below normal; elsewhere it stays as it is.
+pub fn work_in_background() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
+        }
+        const THREAD_PRIORITY_BELOW_NORMAL: i32 = -1;
+        // SAFETY: the pseudo-handle of the calling thread is always valid, and the call only
+        // changes that thread's own priority.
+        unsafe {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
+    }
+}
+
+/// How the renderer draws a unit a view gives a look (`crate::hatching::Look`): the colour of its
+/// surfaces and of its lines as 0xRRGGBB + 1 (0: as its material), its transparency (0..1) and
+/// halftone (1).
+pub fn unit_look(look: &crate::hatching::Look) -> [f32; 4] {
+    let packed = |c: Option<[u8; 3]>| c.map_or(0.0, |[r, g, b]| ((u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) + 1) as f32);
+    [packed(look.surface), packed(look.seen_line.color), f32::from(look.transparency.min(100)) / 100.0, if look.halftone { 1.0 } else { 0.0 }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_look_packs_its_colours_exactly() {
+        let look = crate::hatching::Look { surface: Some([255, 255, 255]), halftone: true, transparency: 20, ..Default::default() };
+        let [surface, line, transparency, halftone] = unit_look(&look);
+        // white is the largest colour; one more is still a whole number in an f32
+        assert_eq!(surface as u32, 0x00ff_ffff + 1);
+        assert_eq!(line, 0.0);
+        assert!((transparency - 0.2).abs() < 1e-6);
+        assert_eq!(halftone, 1.0);
+        assert_eq!(unit_look(&Default::default()), [0.0; 4]);
+    }
 
     #[test]
     fn unit_state_puts_flags_in_w() {

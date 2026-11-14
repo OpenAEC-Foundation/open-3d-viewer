@@ -55,7 +55,7 @@ pub fn document_views(doc: &Document, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, bo
         let extent = c.as_ref().and_then(|c| c.extent).map(|(lo, hi)| ([f64::from(lo[0]), f64::from(lo[1])], [f64::from(hi[0]), f64::from(hi[1])]));
         let Some((lo, hi)) = plan.crop.or(extent).or(model.map(|(lo, hi)| ([lo[0], lo[1]], [hi[0], hi[1]]))) else { continue };
         if let Some(c) = &c {
-            for [a, b] in &c.segments {
+            for [a, b] in c.segments.iter().chain(c.inked.iter().filter(|i| i.cut).flat_map(|i| &i.lines)) {
                 let (a, b) = ([f64::from(a[0]), f64::from(a[1])], [f64::from(b[0]), f64::from(b[1])]);
                 let piece = match plan.crop {
                     Some((lo, hi)) => clip(a, b, lo, hi),
@@ -80,7 +80,7 @@ pub fn document_views(doc: &Document, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, bo
             None => ((0.0, low), (run, high)),
         };
         if let Some(c) = cut(&section.path) {
-            for [a, b] in &c.segments {
+            for [a, b] in c.segments.iter().chain(c.inked.iter().filter(|i| i.cut).flat_map(|i| &i.lines)) {
                 let (a, b) = ([f64::from(a[0]), f64::from(a[1])], [f64::from(b[0]), f64::from(b[1])]);
                 if let Some((a, b)) = clip(a, b, [u0, v0], [u1, v1]) {
                     out.lines.push(([at(a[0], a[1]), at(b[0], b[1])], CUT));
@@ -129,6 +129,13 @@ pub fn projected(doc: &Document, path: &str, cut: Option<&Cut>) -> Views3d {
         }
         for (segments, color) in cut.iter().flat_map(|c| [(&c.below, BEYOND), (&c.segments, CUT)]) {
             for [a, b] in segments {
+                line(wide(*a), wide(*b), color);
+            }
+        }
+        // the lines the view's filters give a pen of their own, in its colour
+        for inked in cut.iter().flat_map(|c| &c.inked) {
+            let color = inked.ink.color.map_or(if inked.cut { CUT } else { BEYOND }, |c| [c[0], c[1], c[2], 255]);
+            for [a, b] in &inked.lines {
                 line(wide(*a), wide(*b), color);
             }
         }
@@ -273,7 +280,7 @@ mod tests {
     #[test]
     fn revit_views_show_their_frames() {
         let plan = SavedView {
-            folder: Vec::new(),
+            folder: Vec::new(), style: None, drawing: None,
             name: "Level 1".into(),
             kind: ViewKind::Plan,
             camera: None,
@@ -283,8 +290,8 @@ mod tests {
         };
         // a section looking north (+y) from y = -1, 8 m wide and 3 m high
         let crop = SectionBox::from_frame(Vec3::new(0.0, -1.0, 0.0), [Vec3::X, Vec3::Z, Vec3::Y], Vec3::new(0.0, 0.0, 0.0), Vec3::new(8.0, 3.0, 6.0)).unwrap();
-        let section = SavedView { folder: Vec::new(), name: "Section 1".into(), kind: ViewKind::Section, camera: None, clip: Some(crop), plan: None, level: None };
-        let three_d = SavedView { folder: Vec::new(), name: "{3D}".into(), kind: ViewKind::ThreeD, camera: None, clip: None, plan: None, level: None };
+        let section = SavedView { folder: Vec::new(), style: None, drawing: None, name: "Section 1".into(), kind: ViewKind::Section, camera: None, clip: Some(crop), plan: None, level: None };
+        let three_d = SavedView { folder: Vec::new(), style: None, drawing: None, name: "{3D}".into(), kind: ViewKind::ThreeD, camera: None, clip: None, plan: None, level: None };
         let v = saved_views(&[plan, section, three_d], Some(&bounds()));
         let frame = of(&v, FRAME);
         assert_eq!(frame.len(), 8, "two frames: {frame:?}");

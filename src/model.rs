@@ -207,6 +207,9 @@ pub struct ProjectData {
     /// Per view (its path) the elements it leaves out because their family shows none of their
     /// solids as the view looks at them (Revit): a pile in a plan that draws only its symbol.
     pub switched_off: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+    /// Per view (its path) how it draws elements otherwise than their materials say (Revit: the
+    /// filters of the view or of its template), by element.
+    pub looks: std::collections::HashMap<String, std::sync::Arc<std::collections::HashMap<u64, crate::hatching::Look>>>,
     /// The pairs of elements joined in the file (Revit), the smaller id first: a drawing leaves
     /// out the line between two of them of one material.
     pub joins: std::collections::HashSet<(u64, u64)>,
@@ -247,6 +250,7 @@ pub struct Drawings {
     pub drafts: Vec<Draft>,
     pub phasing: crate::phasing::Phasing,
     pub switched_off: std::collections::HashMap<String, std::collections::HashSet<u64>>,
+    pub looks: std::collections::HashMap<String, std::sync::Arc<std::collections::HashMap<u64, crate::hatching::Look>>>,
     pub joins: std::collections::HashSet<(u64, u64)>,
     pub drawn: crate::app::drawn_props::Drawn,
     pub drawings: Vec<(String, serde_json::Value)>,
@@ -259,6 +263,7 @@ impl ProjectData {
         self.drafts = drawings.drafts;
         self.phasing = drawings.phasing;
         self.switched_off = drawings.switched_off;
+        self.looks = drawings.looks;
         self.joins = drawings.joins;
         self.drawn = drawings.drawn;
         self.drawings = drawings.drawings;
@@ -585,6 +590,19 @@ pub struct SheetViewport {
     /// Its title as the type of its viewport writes it (its name and scale in one line; empty: the
     /// type shows none), when the file tells.
     pub written: Option<String>,
+    /// The typeface its type writes that title in (bold, italic, its family).
+    pub face: crate::typeface::Face,
+    /// Its crop split in pieces, when the view's is: parts left out and the pieces moved together.
+    pub split: Option<CropSplit>,
+}
+
+/// A crop split in pieces along one of the drawing's axes (0: across, 1: up): per piece the part
+/// of the crop it shows (from and to, as fractions of the crop along that axis) and how far it is
+/// moved along it (metres of the drawing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CropSplit {
+    pub axis: u8,
+    pub pieces: Vec<[f64; 3]>,
 }
 
 /// The kinds of drawing without a model.
@@ -715,6 +733,22 @@ pub struct SavedView {
     pub level: Option<String>,
     /// The folders it lies in where its file orders its views in folders, the outer one first.
     pub folder: Vec<String>,
+    /// How it draws the model, where its file says (a 3D view's visual style).
+    pub style: Option<ViewStyle>,
+    /// Its drawing in the project document, where the file's drawings are read: a floor plan,
+    /// section, elevation or detail then opens as that drawing, as its sheets show it.
+    pub drawing: Option<String>,
+}
+
+/// How a saved view draws the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewStyle {
+    Wireframe,
+    /// White surfaces that hide what lies behind them, and their edges.
+    HiddenLine,
+    Shaded,
+    /// Shaded, with the edges drawn over it.
+    ShadedEdges,
 }
 
 /// Under what name what belongs to a 3D view of the file is kept beside that of the document's

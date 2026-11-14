@@ -128,6 +128,8 @@ impl App {
                 async move {
                     let (tx, rx) = iced::futures::channel::oneshot::channel();
                     std::thread::spawn(move || {
+                        // behind the window: it stays quick while the views are cut
+                        crate::units::work_in_background();
                         let _ = tx.send(job.run());
                     });
                     rx.await.ok().map(Arc::new)

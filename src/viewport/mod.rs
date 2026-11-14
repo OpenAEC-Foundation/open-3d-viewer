@@ -456,6 +456,7 @@ mod tests {
             plane: None,
             caps: false,
             grids: false,
+            ambient: false,
             bounds: None,
         };
         let view = Viewport3D {

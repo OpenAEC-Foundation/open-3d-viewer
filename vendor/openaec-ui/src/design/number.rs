@@ -17,7 +17,7 @@ use iced::widget::{row, text};
 use iced::{Alignment, Element, Length};
 
 use super::widgets::{self as w, Density};
-use super::{font, Look};
+use super::Look;
 use crate::fonts;
 
 /// Which sign separates the decimals.
@@ -263,7 +263,7 @@ pub fn number_field<'a, M: Clone + 'a>(
     match f.unit {
         Some(unit) => row![
             iced::widget::container(field).width(Length::Fill),
-            text(unit).size(font::SIZE_BODY).font(fonts::MONO).color(look.color.text_secondary).width(Length::Shrink),
+            text(unit).size(look.text.body).font(fonts::MONO).color(look.color.text_secondary).width(Length::Shrink),
         ]
         .spacing(6)
         .align_y(Alignment::Start)

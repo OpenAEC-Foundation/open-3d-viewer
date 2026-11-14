@@ -158,11 +158,12 @@ impl UnitSettings {
 
 /// A number with a fixed number of decimals and thousands separators.
 pub fn format_number(l: Language, value: f64, decimals: u8) -> String {
-    // French groups thousands with a (no-break) space, Dutch and German with a point
+    // French, Polish and Swedish group thousands with a (no-break) space; Dutch, German,
+    // Spanish, Italian, Portuguese and Turkish with a point
     let (decimal, thousands) = match l {
         Language::English => ('.', ','),
-        Language::French => (',', '\u{a0}'),
-        Language::Dutch | Language::German => (',', '.'),
+        Language::French | Language::Polish | Language::Swedish => (',', '\u{a0}'),
+        Language::Dutch | Language::German | Language::Spanish | Language::Italian | Language::Portuguese | Language::Turkish => (',', '.'),
     };
     let mut s = format!("{:.*}", decimals as usize, value.abs());
     // never "-0,0"

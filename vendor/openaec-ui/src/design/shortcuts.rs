@@ -14,7 +14,7 @@ use iced::{Alignment, Element, Length};
 
 use super::command::{Command, Shortcut, ShortcutKey};
 use super::widgets::{self as w, ButtonKind, Density};
-use super::{font, Look};
+use super::Look;
 use crate::fonts;
 use crate::keyboard::KeyPress;
 
@@ -187,6 +187,11 @@ impl Keymap {
 /// on Windows, `~/Library/Application Support/OpenAEC/<app>/` on macOS and
 /// `$XDG_CONFIG_HOME/openaec/<app>/` (or `~/.config/openaec/<app>/`) on Linux.
 pub fn keymap_path(app: &str) -> Option<PathBuf> {
+    app_dir(app).map(|dir| dir.join("sneltoetsen.json"))
+}
+
+/// The folder for an app's own settings, see [`keymap_path`].
+pub fn app_dir(app: &str) -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("OpenAEC"))
     } else if cfg!(target_os = "macos") {
@@ -197,7 +202,7 @@ pub fn keymap_path(app: &str) -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
             .map(|d| d.join("openaec"))
     };
-    base.map(|b| b.join(app).join("sneltoetsen.json"))
+    base.map(|b| b.join(app))
 }
 
 /// A message of the shortcuts page.
@@ -388,8 +393,8 @@ pub fn page<'a, M: Clone + 'a>(
                 Some(icon) => w::glyph(icon, 16.0, c.text, c.accent_text),
                 None => Space::new().width(16).into(),
             },
-            text(cmd.label.trim_end_matches('…')).size(font::SIZE_BODY).font(fonts::BODY).color(c.text).width(Length::Fill),
-            container(text(keys).size(font::SIZE_LABEL).font(fonts::MONO).color(if recording { c.accent_text } else { c.text_secondary })).width(120),
+            text(cmd.label.trim_end_matches('…')).size(look.text.body).font(fonts::BODY).color(c.text).width(Length::Fill),
+            container(text(keys).size(look.text.label).font(fonts::MONO).color(if recording { c.accent_text } else { c.text_secondary })).width(120),
             w::button(look, if recording { "Stoppen" } else { "Wijzigen" }, ButtonKind::Secondary, Density::Compact, None, Some(on_message(if recording { Message::Cancel } else { Message::Record(cmd.id) }))),
         ]
         .spacing(10)
@@ -406,7 +411,7 @@ pub fn page<'a, M: Clone + 'a>(
         page = page.push(
             container(
                 row![
-                    text(&conflict.text).size(font::SIZE_BODY).font(fonts::BODY).color(c.text).width(Length::Fill),
+                    text(&conflict.text).size(look.text.body).font(fonts::BODY).color(c.text).width(Length::Fill),
                     w::button(look, "Annuleren", ButtonKind::Quiet, Density::Compact, None, Some(on_message(Message::Cancel))),
                     w::button(look, "Wisselen", ButtonKind::Primary, Density::Compact, None, Some(on_message(Message::Swap))),
                 ]

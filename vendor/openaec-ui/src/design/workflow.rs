@@ -4,7 +4,7 @@
 use super::a11y::{self, Node, Role};
 use super::focus::{focusable, group, Axis};
 use super::widgets::{bar, border, fill, glyph, mono_label};
-use super::{font, mix, radius, shell, Look};
+use super::{mix, radius, shell, Look};
 use crate::fonts;
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, row, stack, text, Space};
@@ -66,7 +66,7 @@ pub fn sidebar<'a, M: Clone + 'a>(look: Look, heading: &str, sections: &[Section
             button(
                 row![
                     lead,
-                    row![glyph(section.icon, 16.0, fg, c.accent_text), text(section.label).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(fg)]
+                    row![glyph(section.icon, 16.0, fg, c.accent_text), text(section.label).size(look.text.body).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(fg)]
                         .spacing(10)
                         .padding([0, 9])
                         .align_y(Alignment::Center),
@@ -117,7 +117,7 @@ fn step_circle<'a, M: 'a>(look: Look, number: usize, done: bool, on: bool, check
     let label: Element<'a, M> = if done && !on {
         glyph(check, 12.0, fg, fg)
     } else {
-        text(number.to_string()).size(font::SIZE_LABEL).font(fonts::MONO).color(fg).into()
+        text(number.to_string()).size(look.text.label).font(fonts::MONO).color(fg).into()
     };
     container(label)
         .center(22)
@@ -134,7 +134,7 @@ pub fn step_bar<'a, M: Clone + 'a>(look: Look, steps: &[Section<'a>], active: us
         let on = i == active;
         let finished = done.get(i).copied().unwrap_or(false);
         let label = text(step.label)
-            .size(font::SIZE_BODY)
+            .size(look.text.body)
             .font(if on { fonts::STRONG } else { fonts::MEDIUM })
             .color(if on { c.text } else { c.text_secondary });
         let tab = stack![
@@ -167,9 +167,9 @@ pub fn step_bar<'a, M: Clone + 'a>(look: Look, steps: &[Section<'a>], active: us
 /// A page heading of 22 px in Space Grotesk with an optional explanation.
 pub fn page_heading<'a, M: 'a>(look: Look, heading: &'a str, explanation: Option<&'a str>) -> Element<'a, M> {
     let c = look.color;
-    let mut content = column![text(heading).size(font::SIZE_PAGE_HEADING).font(fonts::HEADING).color(c.text)].spacing(4);
+    let mut content = column![text(heading).size(look.text.page_heading).font(fonts::HEADING).color(c.text)].spacing(4);
     if let Some(e) = explanation {
-        content = content.push(text(e).size(font::SIZE_BODY).font(fonts::BODY).color(c.text_secondary));
+        content = content.push(text(e).size(look.text.body).font(fonts::BODY).color(c.text_secondary));
     }
     content.into()
 }

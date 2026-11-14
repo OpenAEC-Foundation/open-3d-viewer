@@ -105,6 +105,10 @@ impl Loader for RvtLoader {
         // the drawings (the annotated views, the legends and drafting views, the sheets) take far
         // longer than the model on a large project: read once the model shows
         let file = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        // each plan, section, elevation and detail under the name its drawing gets
+        for (view, &id) in views.iter_mut().zip(&view_ids).filter(|(v, _)| v.kind != ViewKind::ThreeD) {
+            view.drawing = Some(crate::document::uuid(&format!("rvt/{file}/view/{id}")));
+        }
         let elements: Vec<u64> = layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
         // the type and family name of every element, for the filters of the views
         let names: super::rvt_filters::Names = layers
@@ -721,7 +725,7 @@ fn saved_views(infos: &[rvt_export::views::ViewInfo]) -> Vec<(u64, SavedView)> {
                 K::Detail => ViewKind::Detail,
                 _ => return None,
             };
-            let mut out = SavedView { folder: Vec::new(), style: None, name: v.name.clone(), kind, camera: None, clip: None, plan: None, level: v.level_name.clone() };
+            let mut out = SavedView { folder: Vec::new(), style: None, drawing: None, name: v.name.clone(), kind, camera: None, clip: None, plan: None, level: v.level_name.clone() };
             match kind {
                 ViewKind::ThreeD => {
                     out.camera = v.camera.as_ref().map(|c| ViewCamera {

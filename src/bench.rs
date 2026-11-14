@@ -232,6 +232,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             plane: None,
             caps: false,
             grids: true,
+            ambient: false,
             bounds: None,
         };
         // the units of every element, as the app uploads them, so their flags work
@@ -387,6 +388,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             plane: None,
             caps: section.is_some(),
             grids: true,
+            ambient: false,
             bounds: None,
         };
         let selected_marks: Arc<Marks> = selected.clone().unwrap_or_default();
@@ -674,6 +676,7 @@ mod tests {
                 plane: None,
                 caps: false,
                 grids: false,
+                ambient: false,
                 bounds: None,
             },
             explode: Some(index.clone()),
@@ -823,6 +826,7 @@ mod tests {
             plane: None,
             caps: false,
             grids: false,
+            ambient: false,
             bounds: None,
         };
         // the last member selected

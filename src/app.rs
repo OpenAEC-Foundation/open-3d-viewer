@@ -251,6 +251,8 @@ pub struct App {
     kept_faces: caps::KeptCutFaces,
     /// The views stand in the 3D view on their planes; what they were drawn from, and their names.
     pub views_in_3d: bool,
+    /// The 3D view draws ambient shadows (in its shaded styles).
+    pub ambient: bool,
     views_3d_key: Vec<u64>,
     views_3d_labels: Vec<(String, [f32; 3])>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
@@ -473,6 +475,9 @@ pub enum Message {
     MoveOnSheet(Arc<str>, usize, [f64; 2]),
     /// Switch the dimension tool of the sheets on or off.
     DimensionTool(bool),
+    /// A step through the model as the camera looks (W, A, S, D; Q and E down and up):
+    /// forward, to the right and up, in steps; `fast` with Shift.
+    Walk { forward: f32, right: f32, up: f32, fast: bool },
     /// A view's tab draws it as on a sheet, or over the model.
     DrawingOnPaper(bool),
     /// Crop a floor plan (its path) to a rectangle in plan, or show all of it (`None`).
@@ -518,6 +523,8 @@ pub enum Message {
     UnderlayScale(usize),
     /// Show the views in the 3D view on their planes, or not.
     ToggleViewsIn3d,
+    /// Ambient shadows in the 3D view on or off.
+    ToggleAmbient,
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -812,6 +819,7 @@ impl Default for App {
             cut_faces_running: false,
             kept_faces: Default::default(),
             views_in_3d: false,
+            ambient: true,
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
             export_menu: false,
@@ -1159,6 +1167,13 @@ impl App {
     /// box.
     pub fn apply_view(&mut self, i: usize) {
         let Some(view) = self.model.as_ref().and_then(|m| m.views.get(i).cloned()) else { return };
+        // a plan, section, elevation or detail whose drawing is read opens as that drawing, as
+        // its sheets show it (until then, and for a 3D view: the model as the view cuts it)
+        if let Some(path) = view.drawing.as_deref().filter(|p| self.document.plan(p).is_some() || self.document.section(p).is_some()) {
+            self.active_view = Some(i);
+            self.open_plan(path);
+            return;
+        }
         // the view shown chosen again: the whole model again, as its materials draw it
         if self.active_view == Some(i) && self.active_plan.is_none() {
             self.active_view = None;
@@ -1251,6 +1266,23 @@ impl App {
         }
         self.anim = Some((self.camera, to, Instant::now()));
         true
+    }
+
+    /// A step through the model in the 3D view: level, the way the camera looks (`forward`) and
+    /// to its right, or straight up. The camera turns to perspective, as one walks in a
+    /// building; the eye and what it looks at move together, so the view keeps its direction.
+    fn walk(&mut self, forward: f32, right: f32, up: f32, fast: bool) {
+        if self.model.is_none() || self.shown_view().is_some() || self.active_sheet.is_some() || self.active_doc_sheet.is_some() {
+            return;
+        }
+        self.anim = None;
+        self.camera.ortho = false;
+        // a pace, or three with Shift
+        let step = if fast { 1.8 } else { 0.6 };
+        let (sin, cos) = self.camera.yaw.sin_cos();
+        let ahead = Vec3::new(-cos, -sin, 0.0);
+        let aside = Vec3::new(-sin, cos, 0.0);
+        self.camera.target += (ahead * forward + aside * right + Vec3::Z * up) * step;
     }
 
     /// Turns the camera to (yaw, pitch) and frames the model, animated.
@@ -1384,6 +1416,8 @@ impl App {
     }
 
     fn set_scene(&mut self, model: Arc<Model>) {
+        // its edges are found ahead, so wireframe and hidden lines show at once
+        crate::viewport::render::precompute_edges(&model);
         // the views' tabs close: the 3D view's layers and undo come back first
         self.load_view(None);
         self.parked_histories.clear();
@@ -1709,6 +1743,7 @@ impl App {
             },
             Message::Ortho(o) => self.camera.ortho = o,
             Message::Fit => self.fit(),
+            Message::Walk { forward, right, up, fast } => self.walk(forward, right, up, fast),
             Message::ToggleLayersPanel => self.show_layers = !self.show_layers,
             Message::TogglePropertiesPanel => self.show_properties = !self.show_properties,
             Message::Layer(i, v) => self.switch_layers(&[i], v),
@@ -1971,6 +2006,7 @@ impl App {
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
             Message::UnderlayScale(i) => self.next_underlay_scale(i),
             Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
+            Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;
@@ -3498,6 +3534,7 @@ impl App {
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
             grids: self.grids_shown(),
+            ambient: self.ambient,
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them
@@ -3538,8 +3575,8 @@ impl App {
             )
         } else {
             l.text(
-                "Klik: selecteren · Rechtsklik: menu · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend",
-                "Click: select · Right click: menu · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit",
+                "Klik: selecteren · Rechtsklik: menu · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend · W A S D: lopen",
+                "Click: select · Right click: menu · Esc: clear · Middle drag: pan · Shift + middle or left drag: orbit · Wheel: zoom · F: fit · W A S D: walk",
             )
         };
         let hint = container(

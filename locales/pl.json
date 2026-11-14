@@ -804,6 +804,13 @@
     "Shared through": "Udostępniane przez",
     "Sync": "Synchronizuj",
     "Share issues and clash decisions through a shared folder.": "Udostępniaj issue i decyzje o kolizjach przez folder współdzielony.",
-    "Choose folder": "Wybierz folder"
+    "Choose folder": "Wybierz folder",
+    "Own rules": "Własne reguły",
+    "Add rule": "Dodaj regułę",
+    "Name of the rule": "Nazwa reguły",
+    "property": "właściwość",
+    "The rules are checked as an IDS.": "Reguły są sprawdzane jako IDS.",
+    "Save as IDS": "Zapisz jako IDS",
+    "Find again when a model changes": "Szukaj ponownie, gdy model się zmieni"
   }
 }

@@ -1440,6 +1440,7 @@ impl App {
         ));
         self.document.recognise(&model);
         self.model = Some(model);
+        self.collab.model_changed();
         self.section = None;
         self.section_on = false;
         self.plane = None;

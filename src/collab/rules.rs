@@ -258,6 +258,38 @@ pub struct ClashRun {
     pub open: usize,
 }
 
+/// A rule of the project's own on what its elements say: the elements of a class have a
+/// property, with a value when one is asked. The rules are checked as an IDS made of them
+/// ([`RuleSet::own_ids`]), so they hold for every model the IDS check reads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InfoRule {
+    pub name: String,
+    /// The IFC class its elements are of (`IfcWall`).
+    pub class: String,
+    /// The property set (empty: any) and the property.
+    pub set: String,
+    pub property: String,
+    /// The value asked: empty for any, a text for that value, with `*` for a pattern.
+    pub value: String,
+    pub on: bool,
+}
+
+impl Default for InfoRule {
+    fn default() -> Self {
+        InfoRule { name: String::new(), class: "IfcWall".into(), set: String::new(), property: String::new(), value: String::new(), on: true }
+    }
+}
+
+fn xml(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// A value with `*` as an XSD pattern: the stars any text, the rest as it is.
+fn star_pattern(value: &str) -> String {
+    value.split('*').map(|part| part.chars().map(|c| if "\\.[]{}()+?|^$-".contains(c) { format!("\\{c}") } else { c.to_string() }).collect::<String>()).collect::<Vec<_>>().join(".*")
+}
+
 /// A rule set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -287,6 +319,10 @@ pub struct RuleSet {
     /// decisions over and tells what is new and what is solved. And the runs so far.
     pub clash_memory: Vec<ClashMemo>,
     pub clash_runs: Vec<ClashRun>,
+    /// The project's own rules on properties.
+    pub info_rules: Vec<InfoRule>,
+    /// Whether the clash tests run again when a model changes.
+    pub auto_rerun: bool,
     /// The room checks: what they ask, in the units the rules give them.
     pub rooms: RoomRules,
 }
@@ -337,6 +373,8 @@ impl Default for RuleSet {
             takeoffs: Vec::new(),
             clash_memory: Vec::new(),
             clash_runs: Vec::new(),
+            info_rules: Vec::new(),
+            auto_rerun: false,
             rooms: RoomRules::default(),
         }
     }
@@ -347,6 +385,37 @@ pub const SERVICES: [&str; 12] = ["IfcDuct*", "IfcPipe*", "IfcCable*", "IfcFlow*
 pub const ARCHITECTURE: [&str; 9] = ["IfcDoor", "IfcWindow", "IfcCovering", "IfcCurtainWall", "IfcRailing", "IfcRoof", "IfcRamp*", "IfcFurnishingElement", "IfcFurniture"];
 
 impl RuleSet {
+    /// The rule set's own rules as an IDS; none when no rule is on and complete.
+    pub fn own_ids(&self) -> Option<String> {
+        let rules: Vec<&InfoRule> = self.info_rules.iter().filter(|r| r.on && !r.class.trim().is_empty() && !r.property.trim().is_empty()).collect();
+        if rules.is_empty() {
+            return None;
+        }
+        let simple = |v: &str| format!("<simpleValue>{}</simpleValue>", xml(v));
+        let pattern = |v: &str| format!("<xs:restriction base=\"xs:string\"><xs:pattern value=\"{}\"/></xs:restriction>", xml(v));
+        let mut out = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<ids xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns=\"http://standards.buildingsmart.org/IDS\"><info><title>{}</title></info><specifications>",
+            xml(if self.name.is_empty() { "Rules" } else { &self.name })
+        );
+        for (k, r) in rules.iter().enumerate() {
+            let name = if r.name.trim().is_empty() { format!("{} · {}", r.class.trim(), r.property.trim()) } else { r.name.trim().to_string() };
+            let set = if r.set.trim().is_empty() { pattern(".*") } else { simple(r.set.trim()) };
+            let value = match r.value.trim() {
+                "" | "*" => String::new(),
+                v if v.contains('*') => format!("<value>{}</value>", pattern(&star_pattern(v))),
+                v => format!("<value>{}</value>", simple(v)),
+            };
+            out += &format!(
+                "<specification name=\"{}\" ifcVersion=\"IFC2X3 IFC4 IFC4X3_ADD2\" identifier=\"OWN-{}\"><applicability minOccurs=\"0\" maxOccurs=\"unbounded\"><entity><name>{}</name></entity></applicability><requirements><property cardinality=\"required\"><propertySet>{set}</propertySet><baseName>{}</baseName>{value}</property></requirements></specification>",
+                xml(&name),
+                k + 1,
+                simple(&r.class.trim().to_ascii_uppercase()),
+                simple(r.property.trim()),
+            );
+        }
+        Some(out + "</specifications></ids>\n")
+    }
+
     /// Whether discipline `a` is tested against `b` in the matrix (either way round).
     pub fn in_matrix(&self, a: &str, b: &str) -> bool {
         self.matrix.iter().any(|[x, y]| (x == a && y == b) || (x == b && y == a))
@@ -547,6 +616,22 @@ mod tests {
         assert_eq!(rule.pair_tolerance("IfcBeam", "IfcPipeSegment"), None);
         assert!(rule.takes_storey("00 begane grond") && rule.takes_storey("01 eerste verdieping") && !rule.takes_storey("02 dak"));
         assert!(ClashRule::default().takes_storey("anything"));
+    }
+
+    #[test]
+    fn own_rules_become_an_ids() {
+        let mut set = RuleSet { name: "Project".into(), ..RuleSet::default() };
+        assert_eq!(set.own_ids(), None);
+        set.info_rules = vec![
+            InfoRule { class: "IfcWall".into(), set: "Pset_WallCommon".into(), property: "FireRating".into(), value: "60".into(), ..InfoRule::default() },
+            InfoRule { class: "IfcDoor".into(), property: "Reference".into(), value: "D-*".into(), ..InfoRule::default() },
+            InfoRule { class: "IfcSlab".into(), property: "LoadBearing".into(), on: false, ..InfoRule::default() },
+            InfoRule { class: "IfcBeam".into(), ..InfoRule::default() },
+        ];
+        let ids = set.own_ids().unwrap();
+        assert_eq!(ids.matches("<specification ").count(), 2, "{ids}");
+        assert!(ids.contains("<simpleValue>IFCWALL</simpleValue>") && ids.contains("<propertySet><simpleValue>Pset_WallCommon</simpleValue></propertySet>") && ids.contains("<value><simpleValue>60</simpleValue></value>"), "{ids}");
+        assert!(ids.contains("<xs:pattern value=\"D\\-.*\"/>") && ids.contains("<xs:pattern value=\".*\"/>"), "{ids}");
     }
 
     #[test]

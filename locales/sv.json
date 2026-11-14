@@ -804,6 +804,13 @@
     "Shared through": "Delas via",
     "Sync": "Synkronisera",
     "Share issues and clash decisions through a shared folder.": "Dela issues och krockbeslut via en delad mapp.",
-    "Choose folder": "Välj mapp"
+    "Choose folder": "Välj mapp",
+    "Own rules": "Egna regler",
+    "Add rule": "Lägg till regel",
+    "Name of the rule": "Regelns namn",
+    "property": "egenskap",
+    "The rules are checked as an IDS.": "Reglerna kontrolleras som en IDS.",
+    "Save as IDS": "Spara som IDS",
+    "Find again when a model changes": "Sök igen när en modell ändras"
   }
 }

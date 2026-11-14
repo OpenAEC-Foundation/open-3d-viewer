@@ -120,6 +120,7 @@ impl App {
         self.camera = camera;
         self.anim = None;
         self.collab.tab = tab;
+        self.collab.same_model();
     }
 
     pub(super) fn cloud_handle(&mut self, event: Event) -> Task<Message> {

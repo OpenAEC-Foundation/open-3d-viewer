@@ -1313,6 +1313,8 @@ impl Studio {
                 let id = self.project;
                 let started = self.dev_opens(id, &message);
                 let task = self.app.update(message).map(move |m| Msg::Project(id, m));
+                // a model changed and the rule set asks for it: the clash tests run again
+                let task = if self.app.collab.rerun_due() { Task::batch([task, Task::done(Msg::Project(id, Message::Collab(crate::app::collab::Event::Clash)))]) } else { task };
                 if started {
                     if let Some(&shown) = self.dev.as_mut().and_then(|d| d.tab.take()).and_then(|t| self.tabs.get(t)) {
                         self.show_project(shown);

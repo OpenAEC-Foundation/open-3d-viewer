@@ -360,6 +360,8 @@ pub struct State {
     pub cloud: super::cloud::State,
     /// The PDF report being made.
     pub report_job: Option<ReportJob>,
+    /// A model changed and the rule set asks for the clash tests to run again.
+    rerun: bool,
     /// The folder the project is shared through; the issues removed here since the last sync;
     /// what the folder said of the clashes then; and the issues as they were then.
     pub share_folder: Option<PathBuf>,
@@ -464,6 +466,7 @@ impl Default for State {
             inform: Default::default(),
             cloud: Default::default(),
             report_job: None,
+            rerun: false,
             share_folder: share_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| PathBuf::from(s.trim())).filter(|p| p.is_dir()),
             share_removed: Vec::new(),
             share_known: HashMap::new(),
@@ -600,6 +603,24 @@ impl State {
         }
     }
 
+    /// A model changed: the clash tests run again when the rule set asks for it and there are
+    /// clashes of the models as they were.
+    pub fn model_changed(&mut self) {
+        if !self.clashes.is_empty() && self.rules().is_some_and(|r| r.auto_rerun) {
+            self.rerun = true;
+        }
+    }
+
+    /// Whether the clash tests are to run again; asked once.
+    pub fn rerun_due(&mut self) -> bool {
+        std::mem::take(&mut self.rerun)
+    }
+
+    /// The model was only drawn again (its points recoloured): no new run.
+    pub fn same_model(&mut self) {
+        self.rerun = false;
+    }
+
     /// How many issues are not closed.
     pub fn open_issues(&self) -> usize {
         self.issues.topics.iter().filter(|t| !closed(&t.status)).count()
@@ -635,6 +656,8 @@ pub enum Report {
     Xlsx,
     /// The issues alone as a PDF.
     IssuesPdf,
+    /// The rule set's own rules as an IDS file.
+    OwnIds,
 }
 
 /// A picture a report takes.
@@ -759,6 +782,14 @@ pub enum Event {
     IssuesFromClashes,
     GroupBy(GroupChoice),
     ShowResolved(bool),
+    /// The rule set's own rules: one more, one less, switched, a field of one typed (0 its
+    /// name, 1 its class, 2 its property set, 3 its property, 4 its value).
+    AddInfoRule,
+    RemoveInfoRule(usize),
+    InfoRuleOn(usize, bool),
+    InfoRuleField(usize, u8, String),
+    /// Whether the clash tests run again when a model changes.
+    AutoRerun(bool),
     /// The folder the project is shared through: asked for, chosen (none: not shared), synced.
     ShareFolder,
     ShareFolderIs(Option<PathBuf>),
@@ -1063,6 +1094,8 @@ fn check_file(path: &std::path::Path, rules: &RuleSet, cancel: &AtomicBool) -> R
     for ids in &rules.ids {
         runs.push(Some(crate::collab::rules::ids_text(ids)?));
     }
+    // the rule set's own rules, as an IDS made of them
+    runs.extend(rules.own_ids().map(Some));
     if runs.is_empty() {
         runs.push(None);
     }
@@ -1867,6 +1900,7 @@ impl App {
                 }
                 out
             }
+            Report::OwnIds => self.collab.rules().and_then(|r| r.own_ids()).unwrap_or_default(),
             Report::Pdf | Report::Xlsx | Report::IssuesPdf => String::new(),
         }
     }
@@ -2320,6 +2354,7 @@ impl App {
                     Report::IssuesHtml => ("issues", "html"),
                     Report::Pdf => ("report", "pdf"),
                     Report::IssuesPdf => ("issues", "pdf"),
+                    Report::OwnIds => ("rules", "ids"),
                     Report::Xlsx => ("report", "xlsx"),
                 };
                 return ask_file(move || rfd::AsyncFileDialog::new().add_filter(extension, &[extension]).set_file_name(format!("{name}.{extension}")), true, move |path| Message::Collab(Event::ExportTo(kind, path)));
@@ -2553,6 +2588,31 @@ impl App {
             }
             Event::ShowTests(on) => self.collab.show_tests = on,
             Event::ShowResolved(on) => self.collab.show_resolved = on,
+            Event::AddInfoRule => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    rules.info_rules.push(crate::collab::rules::InfoRule::default());
+                }
+            }
+            Event::RemoveInfoRule(k) => {
+                if let Some(rules) = self.collab.rules_mut().filter(|r| k < r.info_rules.len()) {
+                    rules.info_rules.remove(k);
+                }
+            }
+            Event::InfoRuleOn(k, on) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.info_rules.get_mut(k)) {
+                    rule.on = on;
+                }
+            }
+            Event::InfoRuleField(k, field, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.info_rules.get_mut(k)) {
+                    *[&mut rule.name, &mut rule.class, &mut rule.set, &mut rule.property, &mut rule.value][usize::from(field.min(4))] = typed;
+                }
+            }
+            Event::AutoRerun(on) => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    rules.auto_rerun = on;
+                }
+            }
             Event::ShareFolder => {
                 self.collab.dialog_open = true;
                 return Task::perform(async { rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().to_path_buf()) }, |folder| Message::Collab(Event::ShareFolderIs(folder)));
@@ -3016,6 +3076,28 @@ impl App {
                     );
                 }
             }
+            // the project's own rules: a class, a property and, when asked, its value
+            list = list.push(row![w::heading(look, l.text("Eigen regels", "Own rules"), 13.0).width(Length::Fill), w::button(look, l.text("Regel toevoegen", "Add rule"), K::Secondary, D::Compact, None, Some(go(Event::AddInfoRule)))].align_y(Alignment::Center));
+            for (k, rule) in rules.info_rules.iter().enumerate() {
+                let field = |n: u8, hint: &'a str, value: &'a str, portion: u16| container(w::text_field(look, hint, value, Some(move |t| go(Event::InfoRuleField(k, n, t))), D::Compact, None)).width(Length::FillPortion(portion));
+                list = list.push(
+                    column![
+                        row![
+                            w::checkbox(look, "", rule.on, Some(move |on| go(Event::InfoRuleOn(k, on)))),
+                            field(0, l.text("Naam van de regel", "Name of the rule"), &rule.name, 5),
+                            w::button(look, l.text("Weg", "Remove"), K::Quiet, D::Compact, None, Some(go(Event::RemoveInfoRule(k)))),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                        row![field(1, "IfcWall", &rule.class, 3), field(2, "Pset_WallCommon", &rule.set, 4)].spacing(4),
+                        row![field(3, l.text("eigenschap", "property"), &rule.property, 4), field(4, l.text("waarde, * voor iets", "value, * for any"), &rule.value, 3)].spacing(4),
+                    ]
+                    .spacing(3),
+                );
+            }
+            if rules.own_ids().is_some() {
+                list = list.push(row![w::secondary(look, l.text("De regels worden als IDS gecontroleerd.", "The rules are checked as an IDS.")).width(Length::Fill), w::button(look, l.text("Als IDS opslaan", "Save as IDS"), K::Quiet, D::Compact, None, Some(go(Event::Export(Report::OwnIds))))].align_y(Alignment::Center));
+            }
             for (k, ids) in rules.ids.iter().enumerate() {
                 let name = crate::collab::rules::ids_name(ids);
                 list = list.push(row![w::body(look, format!("IDS · {name}")).width(Length::Fill), w::button(look, l.text("Weg", "Remove"), K::Quiet, D::Compact, None, Some(go(Event::RemoveIds(k))))].align_y(Alignment::Center));
@@ -3271,6 +3353,9 @@ impl App {
             }
             let (first, latest) = (last[0], last[last.len() - 1]);
             list = list.push(row![bars, w::secondary(look, format!("{} {} · {} → {} {}", last.len(), l.text("runs", "runs"), first.open, latest.open, l.text("open", "open")))].spacing(8).align_y(Alignment::End));
+        }
+        if let Some(rules) = state.rules() {
+            list = list.push(w::checkbox(look, l.text("Opnieuw zoeken als een model verandert", "Find again when a model changes"), rules.auto_rerun, Some(|on| go(Event::AutoRerun(on)))));
         }
         let grouped = state.groupings.iter().find(|c| c.0 == state.grouping).cloned();
         let accepted = state.clashes.iter().filter(|c| c.decision == Decision::Accepted).count();
@@ -4214,6 +4299,39 @@ mod tests {
         // half may be without sight of it: then it passes; and without the wall too
         let lenient = ClashRule { sight_blocked_pct: 60.0, ..rule.clone() };
         assert!(run_clashes(&model, &models, &[lenient], &AtomicBool::new(false)).is_empty());
+    }
+
+    #[test]
+    fn own_rules_are_checked_by_the_ids_check() {
+        use crate::collab::rules::InfoRule;
+        // two walls: one rated 60, one without a rating
+        let ifc = [
+            "ISO-10303-21;",
+            "HEADER;",
+            "FILE_SCHEMA(('IFC4'));",
+            "ENDSEC;",
+            "DATA;",
+            "#1=IFCPROJECT('0000000000000000000001',$,'P',$,$,$,$,$,$);",
+            "#30=IFCWALL('0000000000000000000030',$,'Rated',$,$,$,$,$,.NOTDEFINED.);",
+            "#31=IFCWALL('0000000000000000000031',$,'Bare',$,$,$,$,$,.NOTDEFINED.);",
+            "#40=IFCPROPERTYSET('0000000000000000000040',$,'Pset_WallCommon',$,(#41));",
+            "#41=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('60'),$);",
+            "#42=IFCRELDEFINESBYPROPERTIES('0000000000000000000042',$,$,$,(#30),#40);",
+            "ENDSEC;",
+            "END-ISO-10303-21;",
+        ]
+        .join("\n");
+        let mut set = RuleSet { name: "Project".into(), model_checks: false, ..RuleSet::default() };
+        set.info_rules.push(InfoRule { class: "IfcWall".into(), set: "Pset_WallCommon".into(), property: "FireRating".into(), value: "6*".into(), ..InfoRule::default() });
+        let folder = std::env::temp_dir().join(format!("o3v-own-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("walls.ifc");
+        std::fs::write(&path, ifc).unwrap();
+        let report = check_file(&path, &set, &AtomicBool::new(false)).unwrap();
+        let spec = &report.specifications[0];
+        assert_eq!((spec.applicable_count, spec.passed_count, spec.failed_count), (2, 1, 1), "{spec:?}");
+        assert_eq!(spec.findings.iter().filter(|f| f.status == ValidationStatus::Failed).map(|f| f.express_id).collect::<Vec<_>>(), [31]);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

@@ -804,6 +804,13 @@
     "Shared through": "Şuradan paylaşılıyor",
     "Sync": "Eşitle",
     "Share issues and clash decisions through a shared folder.": "Issue'ları ve çakışma kararlarını paylaşılan bir klasörle paylaşın.",
-    "Choose folder": "Klasör seç"
+    "Choose folder": "Klasör seç",
+    "Own rules": "Kendi kuralları",
+    "Add rule": "Kural ekle",
+    "Name of the rule": "Kuralın adı",
+    "property": "özellik",
+    "The rules are checked as an IDS.": "Kurallar bir IDS olarak denetlenir.",
+    "Save as IDS": "IDS olarak kaydet",
+    "Find again when a model changes": "Bir model değişince yeniden ara"
   }
 }

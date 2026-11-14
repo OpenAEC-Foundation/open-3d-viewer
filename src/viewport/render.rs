@@ -120,6 +120,10 @@ pub struct ScenePrimitive {
     /// The state of every unit (`crate::units`): its offset (world) in the exploded view and
     /// its flags (hidden, selected); written when it is another vector.
     pub offsets: Arc<Vec<[f32; 4]>>,
+    /// How every unit looks otherwise than its material (`crate::units::unit_looks`): the
+    /// colour of its surfaces and of its lines, its transparency and halftone; written when it
+    /// is another vector.
+    pub looks: Arc<Vec<[f32; 4]>>,
     /// Structural instances drawn again on top: the selection and the hover.
     pub structural_selected: Arc<Marks>,
     pub structural_hovered: Arc<Marks>,
@@ -219,6 +223,11 @@ pub struct ScenePipeline {
     offsets: wgpu::Texture,
     offsets_len: usize,
     offsets_written: Option<Arc<Vec<[f32; 4]>>>,
+    /// How every unit looks (a float texture beside the offsets), and the vector last written.
+    looks: wgpu::Texture,
+    looks_written: Option<Arc<Vec<[f32; 4]>>>,
+    /// A unit is see-through: the opaque surfaces are drawn in the glass pass too.
+    see_through: bool,
     targets: Option<Targets>,
     model_id: u64,
     model: Option<Arc<Model>>,
@@ -292,6 +301,17 @@ impl ScenePipeline {
                     },
                     count: None,
                 },
+                // how every unit looks
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let make_uniforms = |label| {
@@ -306,9 +326,10 @@ impl ScenePipeline {
         let world_uniforms = make_uniforms("o3v.uniforms.world");
         let edge_uniforms = make_uniforms("o3v.uniforms.edges");
         let offsets = offsets_texture(device, 1);
-        let model_group = uniform_group(device, &uniform_layout, &model_uniforms, &offsets);
-        let world_group = uniform_group(device, &uniform_layout, &world_uniforms, &offsets);
-        let edge_group = uniform_group(device, &uniform_layout, &edge_uniforms, &offsets);
+        let looks = offsets_texture(device, 1);
+        let model_group = uniform_group(device, &uniform_layout, &model_uniforms, &offsets, &looks);
+        let world_group = uniform_group(device, &uniform_layout, &world_uniforms, &offsets, &looks);
+        let edge_group = uniform_group(device, &uniform_layout, &edge_uniforms, &offsets, &looks);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("o3v.scene.shader"),
@@ -574,6 +595,9 @@ impl ScenePipeline {
             offsets,
             offsets_len: 1,
             offsets_written: None,
+            looks,
+            looks_written: None,
+            see_through: false,
             targets: None,
             model_id: 0,
             model: None,
@@ -636,11 +660,14 @@ impl ScenePipeline {
     /// Makes room for the offsets of `units` units of the exploded view (all zero) and binds it.
     fn resize_offsets(&mut self, device: &wgpu::Device, units: usize) {
         self.offsets = offsets_texture(device, units);
+        self.looks = offsets_texture(device, units);
         self.offsets_len = units.max(1);
         self.offsets_written = None;
-        self.model_group = uniform_group(device, &self.uniform_layout, &self.model_uniforms, &self.offsets);
-        self.world_group = uniform_group(device, &self.uniform_layout, &self.world_uniforms, &self.offsets);
-        self.edge_group = uniform_group(device, &self.uniform_layout, &self.edge_uniforms, &self.offsets);
+        self.looks_written = None;
+        self.see_through = false;
+        self.model_group = uniform_group(device, &self.uniform_layout, &self.model_uniforms, &self.offsets, &self.looks);
+        self.world_group = uniform_group(device, &self.uniform_layout, &self.world_uniforms, &self.offsets, &self.looks);
+        self.edge_group = uniform_group(device, &self.uniform_layout, &self.edge_uniforms, &self.offsets, &self.looks);
     }
 
     fn upload_model(&mut self, device: &wgpu::Device, model: Option<&Arc<Model>>, explode: Option<&ExplodeIndex>) {
@@ -898,6 +925,14 @@ impl ScenePipeline {
             self.offsets_written = Some(primitive.offsets.clone());
             self.moved = primitive.offsets.iter().any(|o| o[0] != 0.0 || o[1] != 0.0 || o[2] != 0.0);
         }
+        if !self.looks_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.looks)) {
+            // all zero where it was written longer before: as its material
+            let mut looks = primitive.looks.as_ref().clone();
+            looks.resize(self.offsets_len, [0.0; 4]);
+            write_offsets(queue, &self.looks, &looks);
+            self.see_through = primitive.looks.iter().any(|l| l[2] > 0.0);
+            self.looks_written = Some(primitive.looks.clone());
+        }
         let settings = &primitive.settings;
         if settings.mode != RenderMode::Solid {
             self.ensure_edges(device, &primitive.visible, settings.mode == RenderMode::Wireframe);
@@ -947,6 +982,10 @@ impl ScenePipeline {
             if primitive.visible.get(l).copied().unwrap_or(true) && layer.index_count > 0 {
                 chunks::draws(&layer.chunks, &sight, false, l as u32, &mut self.lit_draws);
                 chunks::draws(&layer.chunks, &sight, true, l as u32, &mut self.glass_draws);
+                // a unit made see-through by the view: its opaque surfaces blend in the glass pass
+                if self.see_through {
+                    chunks::draws(&layer.chunks, &sight, false, l as u32, &mut self.glass_draws);
+                }
             }
         }
         // the edges darker than their colour; black in hidden lines
@@ -1214,14 +1253,16 @@ fn write_offsets(queue: &wgpu::Queue, texture: &wgpu::Texture, offsets: &[[f32; 
 }
 
 /// A bind group of the scene shader: its uniforms and the offsets of the exploded view.
-fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: &wgpu::Buffer, offsets: &wgpu::Texture) -> wgpu::BindGroup {
+fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: &wgpu::Buffer, offsets: &wgpu::Texture, looks: &wgpu::Texture) -> wgpu::BindGroup {
     let offsets = offsets.create_view(&wgpu::TextureViewDescriptor::default());
+    let looks = looks.create_view(&wgpu::TextureViewDescriptor::default());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("o3v.uniforms"),
         layout,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&offsets) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&looks) },
         ],
     })
 }

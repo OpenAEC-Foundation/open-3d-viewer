@@ -198,7 +198,7 @@ impl App {
         if let Some(plan) = self.document.plan(path) {
             let (low, high) = self.document.plan_range(plan)?;
             return Some(SavedView {
-                folder: Vec::new(),
+                folder: Vec::new(), style: None,
                 name: plan.name.clone(),
                 kind: ViewKind::Plan,
                 camera: None,
@@ -217,7 +217,7 @@ impl App {
             perspective: false,
             fov_y: None,
         };
-        Some(SavedView { folder: Vec::new(), name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
+        Some(SavedView { folder: Vec::new(), style: None, name: section.name.clone(), kind: ViewKind::Section, camera: Some(camera), clip: self.section_box(path), plan: None, level: None })
     }
 
     /// The box a section or elevation shows: beyond its line up to its depth, within its crop

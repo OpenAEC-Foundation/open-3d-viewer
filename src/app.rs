@@ -320,6 +320,9 @@ pub struct App {
     pub explode_offsets: Arc<Vec<[f32; 4]>>,
     /// What the renderer gets per unit: the explode offset and the flags (`crate::units`).
     pub units: Arc<Vec<[f32; 4]>>,
+    /// How the renderer draws each unit otherwise than its material: as the 3D view of the file
+    /// shown says (`crate::units::unit_look`); empty: all as their materials.
+    pub unit_looks: Arc<Vec<[f32; 4]>>,
     /// Elements (and the rest of layers) hidden with Hide or Isolate, by keys that stay when a
     /// model is added.
     pub hidden: Arc<UnitKeySet>,
@@ -841,6 +844,7 @@ impl Default for App {
             explode_index: None,
             explode_offsets: Arc::default(),
             units: Arc::default(),
+            unit_looks: Arc::default(),
             hidden: Arc::default(),
             history: History::new(),
             undo_trail: Vec::new(),
@@ -1119,6 +1123,25 @@ impl App {
         b.is_valid().then_some(b)
     }
 
+    /// The world bounds of what is shown when some of the model is hidden; None when nothing is.
+    fn shown_bounds(&self) -> Option<Bounds> {
+        let index = self.explode_index.as_ref()?;
+        let hidden = |u: usize| self.units.get(u).is_some_and(|s| (s[3] as u8) & UNIT_HIDDEN != 0);
+        if !(1..index.len()).any(hidden) {
+            return None;
+        }
+        let m = self.model_matrix();
+        let mut out = Bounds::empty();
+        for u in (1..index.len()).filter(|&u| !hidden(u)) {
+            if let Some(b) = index.unit_bounds(u as u32) {
+                let w = transform_bounds(&b, &m);
+                out.extend(w.min);
+                out.extend(w.max);
+            }
+        }
+        out.is_valid().then_some(out)
+    }
+
     /// The section box when it is on.
     pub fn active_section(&self) -> Option<SectionBox> {
         self.section.filter(|_| self.section_on)
@@ -1130,10 +1153,30 @@ impl App {
     /// box.
     pub fn apply_view(&mut self, i: usize) {
         let Some(view) = self.model.as_ref().and_then(|m| m.views.get(i).cloned()) else { return };
-        // a saved view of the model shows in the 3D view's tab
+        // the view shown chosen again: the whole model again, as its materials draw it
+        if self.active_view == Some(i) && self.active_plan.is_none() {
+            self.active_view = None;
+            self.update_units();
+            return;
+        }
+        // a saved view of the model shows in the 3D view's tab, with what it leaves out (so
+        // the camera frames what it shows)
         self.load_view(None);
-        if self.show_view(&view) {
-            self.active_view = Some(i);
+        let before = self.active_view.replace(i);
+        self.update_units();
+        if !self.show_view(&view) {
+            self.active_view = before;
+            self.update_units();
+        } else {
+            // in its visual style
+            if let Some(style) = view.style {
+                self.mode = match style {
+                    crate::model::ViewStyle::Wireframe => RenderMode::Wireframe,
+                    crate::model::ViewStyle::HiddenLine => RenderMode::HiddenLine,
+                    crate::model::ViewStyle::Shaded => RenderMode::Solid,
+                    crate::model::ViewStyle::ShadedEdges => RenderMode::SolidEdges,
+                };
+            }
         }
     }
 
@@ -1164,7 +1207,8 @@ impl App {
             self.section = clip;
         }
         self.section_on = clip.is_some();
-        let frame = clip.map(|c| c.world_bounds()).unwrap_or(world);
+        // what it shows: its box, else what it does not leave out
+        let frame = clip.map(|c| c.world_bounds()).or_else(|| self.shown_bounds()).unwrap_or(world);
 
         let max_pitch = 89.9f32.to_radians();
         let (yaw, pitch) = match (view.plan, view.camera) {
@@ -2449,6 +2493,7 @@ impl App {
     fn update_units(&mut self) {
         let Some(index) = self.explode_index.clone() else {
             self.units = Arc::default();
+            self.unit_looks = Arc::default();
             return;
         };
         let mut flags = vec![0u8; index.len()];
@@ -2484,6 +2529,28 @@ impl App {
                 }
             }
         }
+        // the 3D view of the file shown: what it leaves out (its categories, filters, phase and
+        // discipline), and how it draws the rest (colours, halftone, transparency)
+        let mut looks = Vec::new();
+        let shown_3d = self.active_view.filter(|_| self.active_plan.is_none()).zip(self.model.as_ref()).filter(|(i, m)| m.views.get(*i).is_some_and(|v| v.kind == ViewKind::ThreeD));
+        if let Some((i, model)) = shown_3d {
+            let key = crate::model::view3d_key(i);
+            let element = |u: usize| match index.owner(u) {
+                Some(UnitOwner::Element(id)) => Some(id),
+                _ => None,
+            };
+            if let Some(off) = model.project.switched_off.get(&key) {
+                for (u, f) in flags.iter_mut().enumerate().skip(1) {
+                    if element(u).is_some_and(|id| off.contains(&id)) {
+                        *f |= UNIT_HIDDEN;
+                    }
+                }
+            }
+            if let Some(view) = model.project.looks.get(&key) {
+                looks = (0..index.len()).map(|u| if u == 0 { [0.0; 4] } else { element(u).and_then(|id| view.get(&id)).map_or([0.0; 4], crate::units::unit_look) }).collect();
+            }
+        }
+        self.unit_looks = Arc::new(looks);
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
     }
 
@@ -3435,6 +3502,7 @@ impl App {
             settings,
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
+            looks: &self.unit_looks,
             hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some()) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,

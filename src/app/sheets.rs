@@ -344,6 +344,30 @@ impl Fit {
 
 /// A text of a drawing on the canvas: `on` places its points, `scale` is what a metre of the
 /// drawing is on screen. Left out when its letters are too small to see or it lies off the canvas.
+/// An outline cut to the box `lo`..`hi` (Sutherland-Hodgman): what of the region lies in it.
+fn clip_outline(outline: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> Vec<[f64; 2]> {
+    let mut out = outline.to_vec();
+    // each side of the box in turn: the axis, the bound, and whether inside is above it
+    for (k, bound, above) in [(0, lo[0], true), (0, hi[0], false), (1, lo[1], true), (1, hi[1], false)] {
+        let inside = |p: &[f64; 2]| if above { p[k] >= bound } else { p[k] <= bound };
+        let points = std::mem::take(&mut out);
+        for (i, p) in points.iter().enumerate() {
+            let q = points[(i + 1) % points.len()];
+            if inside(p) {
+                out.push(*p);
+            }
+            if inside(p) != inside(&q) {
+                let t = (bound - p[k]) / (q[k] - p[k]);
+                out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]);
+            }
+        }
+        if out.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
 fn draw_text(frame: &mut Frame, t: &crate::model::DraftText, on: &dyn Fn([f32; 2]) -> Point, scale: f32, color: Color, canvas: Size) {
     let size = t.size * scale;
     let x = [t.at[0], t.at[0] + t.width / 2.0, t.at[0] + t.width][t.align.min(2) as usize];
@@ -732,21 +756,18 @@ impl canvas::Program<Message> for SheetDrawing {
                             // the regions the view fills in one colour, under its own lines (black is
                             // the ink of the sheet), cut to its crop: a masking region that reaches
                             // past it still covers what lies under it within
-                            let clip = crop.map(|(lo, hi)| {
-                                let (a, b, c, d) = (on(lo), on(hi), on([lo[0], hi[1]]), on([hi[0], lo[1]]));
-                                let (x0, x1) = (a.x.min(b.x).min(c.x).min(d.x), a.x.max(b.x).max(c.x).max(d.x));
-                                let (y0, y1) = (a.y.min(b.y).min(c.y).min(d.y), a.y.max(b.y).max(c.y).max(d.y));
-                                iced::Rectangle { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
-                            });
-                            let all = iced::Rectangle { x: 0.0, y: 0.0, width: bounds.width, height: bounds.height };
-                            frame.with_clip(clip.unwrap_or(all), |frame| {
-                                let at = |q: [f64; 2]| { let p = on(q); Point::new(p.x - clip.map_or(0.0, |c| c.x), p.y - clip.map_or(0.0, |c| c.y)) };
+                            // (each outline cut to the crop itself: a clipped frame of the canvas is
+                            // drawn under all its parent draws, the paper too)
                             for f in fills.iter() {
                                 let outlines = Path::new(|path| {
-                                    for outline in f.loops.iter().filter(|l| l.len() >= 3) {
-                                        path.move_to(at(outline[0]));
-                                        for &q in &outline[1..] {
-                                            path.line_to(at(q));
+                                    for outline in f.loops.iter().map(|l| match crop {
+                                        Some((lo, hi)) => clip_outline(l, *lo, *hi),
+                                        None => l.clone(),
+                                    }) {
+                                        let Some((&first, rest)) = outline.split_first().filter(|_| outline.len() >= 3) else { continue };
+                                        path.move_to(on(first));
+                                        for &q in rest {
+                                            path.line_to(on(q));
                                         }
                                         path.close();
                                     }
@@ -754,7 +775,6 @@ impl canvas::Program<Message> for SheetDrawing {
                                 let color = if f.color == [0, 0, 0] { ink } else { Color::from_rgb8(f.color[0], f.color[1], f.color[2]) };
                                 frame.fill(&outlines, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
                             }
-                            });
                             // the lines of its dimensions and tags reach past its crop, as its texts do;
                             // its detail lines are cut to it where they are read
                             let marks = Path::new(|path| {
@@ -850,7 +870,7 @@ mod tests {
             ..Default::default()
         };
         let mut model = Model::new("house.rvt".into(), "Revit", vec![layer]);
-        model.views = vec![SavedView { folder: Vec::new(), name: "Level 1".into(), kind: ViewKind::Plan, camera: None, clip: None, plan: None, level: None }];
+        model.views = vec![SavedView { folder: Vec::new(), style: None, name: "Level 1".into(), kind: ViewKind::Plan, camera: None, clip: None, plan: None, level: None }];
         let viewport = |view| SheetViewport {
             title: "Level 1".into(),
             view,
@@ -876,6 +896,16 @@ mod tests {
         let mut app = App::default();
         app.set_model(Arc::new(model));
         app
+    }
+
+    #[test]
+    fn a_region_is_cut_to_the_crop() {
+        // a square half over the right side of the box keeps its left half
+        let cut = super::clip_outline(&[[0.5, 0.0], [1.5, 0.0], [1.5, 1.0], [0.5, 1.0]], [0.0, 0.0], [1.0, 1.0]);
+        let xs: Vec<f64> = cut.iter().map(|p| p[0]).collect();
+        assert_eq!(cut.len(), 4);
+        assert!(xs.iter().all(|x| (0.5..=1.0).contains(x)), "{cut:?}");
+        assert!(super::clip_outline(&[[2.0, 2.0], [3.0, 2.0], [3.0, 3.0]], [0.0, 0.0], [1.0, 1.0]).is_empty());
     }
 
     #[test]

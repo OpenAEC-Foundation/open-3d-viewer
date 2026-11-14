@@ -208,6 +208,11 @@ pub struct Look {
     /// The pens (numbers) of those as the file gives them, whose width depends on the view's
     /// scale: read into their inks per view.
     pub pens: [Option<i64>; 2],
+    /// The colour of its surfaces as seen (not cut): in a 3D view, where a solid pattern
+    /// covers them.
+    pub surface: Option<[u8; 3]>,
+    /// How transparent its surfaces are, in percent (0: as its material).
+    pub transparency: u8,
 }
 
 impl Look {
@@ -228,6 +233,8 @@ impl Look {
             cut_line: ink_over(self.cut_line, under.cut_line),
             seen_line: ink_over(self.seen_line, under.seen_line),
             pens: [self.pens[0].or(under.pens[0]), self.pens[1].or(under.pens[1])],
+            surface: self.surface.or(under.surface),
+            transparency: if self.transparency > 0 { self.transparency } else { under.transparency },
         }
     }
 

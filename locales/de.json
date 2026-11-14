@@ -811,6 +811,7 @@
     "property": "Eigenschaft",
     "The rules are checked as an IDS.": "Die Regeln werden als IDS geprüft.",
     "Save as IDS": "Als IDS speichern",
-    "Find again when a model changes": "Erneut suchen, wenn sich ein Modell ändert"
+    "Find again when a model changes": "Erneut suchen, wenn sich ein Modell ändert",
+    "properties added as rules (off); tick the ones you ask.": "Eigenschaften als Regeln hinzugefügt (aus); haken Sie an, was Sie verlangen."
   }
 }

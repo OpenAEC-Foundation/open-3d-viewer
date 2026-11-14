@@ -785,6 +785,9 @@ pub enum Event {
     /// The rule set's own rules: one more, one less, switched, a field of one typed (0 its
     /// name, 1 its class, 2 its property set, 3 its property, 4 its value).
     AddInfoRule,
+    /// The properties the data dictionary has for the class of a rule: asked for, and given.
+    Bsdd(usize),
+    BsddGave(String, Result<Vec<crate::collab::bsdd::Property>, String>),
     RemoveInfoRule(usize),
     InfoRuleOn(usize, bool),
     InfoRuleField(usize, u8, String),
@@ -2593,6 +2596,35 @@ impl App {
                     rules.info_rules.push(crate::collab::rules::InfoRule::default());
                 }
             }
+            Event::Bsdd(k) => {
+                let Some(class) = self.collab.rules().and_then(|r| r.info_rules.get(k)).map(|r| r.class.clone()) else { return Task::none() };
+                self.collab.running = true;
+                return job(move || {
+                    let found = crate::collab::bsdd::class_properties(&class);
+                    Event::BsddGave(class, found)
+                });
+            }
+            Event::BsddGave(class, found) => {
+                self.collab.running = false;
+                match found {
+                    Err(e) => self.collab_note(Tone::Error, format!("bSDD: {e}")),
+                    Ok(properties) => {
+                        // a rule for each property the rule set has none for yet, switched off:
+                        // the project ticks the ones it asks
+                        let mut added = 0;
+                        if let Some(rules) = self.collab.rules_mut() {
+                            for p in properties {
+                                let has = rules.info_rules.iter().any(|r| r.class.eq_ignore_ascii_case(&class) && r.property == p.code);
+                                if !has {
+                                    rules.info_rules.push(crate::collab::rules::InfoRule { name: format!("{} · {}", class.trim(), p.name), class: class.trim().to_string(), set: p.set, property: p.code, value: String::new(), on: false });
+                                    added += 1;
+                                }
+                            }
+                        }
+                        self.collab_note(Tone::Success, format!("bSDD · {}: {added} {}", class.trim(), l.text("eigenschappen als regel toegevoegd (uit); vink aan wat je vraagt.", "properties added as rules (off); tick the ones you ask.")));
+                    }
+                }
+            }
             Event::RemoveInfoRule(k) => {
                 if let Some(rules) = self.collab.rules_mut().filter(|r| k < r.info_rules.len()) {
                     rules.info_rules.remove(k);
@@ -3089,7 +3121,7 @@ impl App {
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
-                        row![field(1, "IfcWall", &rule.class, 3), field(2, "Pset_WallCommon", &rule.set, 4)].spacing(4),
+                        row![field(1, "IfcWall", &rule.class, 3), field(2, "Pset_WallCommon", &rule.set, 4), w::button(look, "bSDD", K::Quiet, D::Compact, None, (!state.running && !rule.class.trim().is_empty()).then(|| go(Event::Bsdd(k))))].spacing(4).align_y(Alignment::Center),
                         row![field(3, l.text("eigenschap", "property"), &rule.property, 4), field(4, l.text("waarde, * voor iets", "value, * for any"), &rule.value, 3)].spacing(4),
                     ]
                     .spacing(3),

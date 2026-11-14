@@ -811,6 +811,7 @@
     "property": "özellik",
     "The rules are checked as an IDS.": "Kurallar bir IDS olarak denetlenir.",
     "Save as IDS": "IDS olarak kaydet",
-    "Find again when a model changes": "Bir model değişince yeniden ara"
+    "Find again when a model changes": "Bir model değişince yeniden ara",
+    "properties added as rules (off); tick the ones you ask.": "özellik kural olarak eklendi (kapalı); istediklerinizi işaretleyin."
   }
 }

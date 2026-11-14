@@ -273,6 +273,9 @@ pub struct App {
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
+    /// The view's bar offers its tools to dimension, write and cut (the Modeller and the
+    /// Collaborator; the Viewer only looks).
+    pub annotates: bool,
     /// A view's tab draws it as a sheet does: on paper, its cut in ink (else over the model
     /// as the 3D view shows it).
     pub drawing_on_paper: bool,
@@ -854,6 +857,7 @@ impl Default for App {
             views_3d_labels: Vec::new(),
             export_menu: false,
             dimension_tool: false,
+            annotates: true,
             drawing_on_paper: true,
             section_tool: false,
             sheet_pick: None,
@@ -2041,7 +2045,15 @@ impl App {
             Message::ToggleUnderlay(i) => self.toggle_underlay(i),
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
             Message::UnderlayScale(i) => self.next_underlay_scale(i),
-            Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
+            Message::ToggleViewsIn3d => {
+                // off: also the views laid in the 3D view one by one go
+                if self.views_in_3d || !self.projected.is_empty() {
+                    self.views_in_3d = false;
+                    self.projected.clear();
+                } else {
+                    self.views_in_3d = true;
+                }
+            }
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,

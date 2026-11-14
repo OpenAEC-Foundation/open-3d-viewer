@@ -165,6 +165,17 @@ impl App {
             button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(message)
         };
         let hint = |line: &'static str| text(line).size(12).color(p.text_secondary);
+        let (on_paper, laid) = (self.drawing_on_paper, self.projected.contains(view));
+        if !self.annotates {
+            // the Viewer only looks: how the view shows, and its export
+            let bar = Row::new()
+                .spacing(6)
+                .align_y(Center)
+                .push(tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)))
+                .push(tool(l.text("In 3D", "In 3D"), laid, Message::ProjectView(Arc::from(view))))
+                .push(self.export_control(p, l));
+            return Some(container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()).into());
+        }
         let mut bar = Row::new()
             .spacing(6)
             .align_y(Center)
@@ -174,7 +185,6 @@ impl App {
             bar = bar.push(tool(l.text("Doorsnede", "Section"), cutting, Message::SectionTool(!cutting)));
         }
         // as on a sheet, or over the model; and laid in the 3D view where it is taken
-        let (on_paper, laid) = (self.drawing_on_paper, self.projected.contains(view));
         bar = bar
             .push(tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)))
             .push(tool(l.text("In 3D", "In 3D"), laid, Message::ProjectView(Arc::from(view))));

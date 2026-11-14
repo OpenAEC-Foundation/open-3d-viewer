@@ -3,10 +3,14 @@
 //! bottom.
 
 mod caps;
+mod cloud;
 mod export_drawing;
 mod grids;
 mod hatch;
 mod ifc;
+mod inform;
+mod room_checks;
+mod reports;
 mod layers;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 pub mod collab;
@@ -253,6 +257,16 @@ pub struct App {
     pub views_in_3d: bool,
     /// The 3D view draws ambient shadows (in its shaded styles).
     pub ambient: bool,
+    /// In the 3D view: the heads of the grid lines that stand behind the model are left out;
+    /// the distances between the grid lines are drawn; the levels are drawn as outlines with
+    /// their marks.
+    pub grid_heads_hidden: bool,
+    pub grid_dims: bool,
+    pub levels_3d: bool,
+    /// Which heads are seen (per grid, its two ends), and for what view they were worked out.
+    pub(crate) heads_seen: (Option<(Camera, u64, (f32, f32), usize, usize)>, Vec<[bool; 2]>),
+    /// As seen: each dimension between the grids, and each level's two marks.
+    pub(crate) marks_seen: (Vec<bool>, Vec<[bool; 2]>),
     views_3d_key: Vec<u64>,
     views_3d_labels: Vec<(String, [f32; 3])>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
@@ -525,6 +539,9 @@ pub enum Message {
     ToggleViewsIn3d,
     /// Ambient shadows in the 3D view on or off.
     ToggleAmbient,
+    ToggleGridHeadsHidden,
+    ToggleGridDims,
+    ToggleLevels3d,
     /// Open or close the bar's Export button.
     ExportMenu(bool),
     /// Export the drawing of the view or sheet shown in this format.
@@ -820,6 +837,11 @@ impl Default for App {
             kept_faces: Default::default(),
             views_in_3d: false,
             ambient: true,
+            grid_heads_hidden: true,
+            grid_dims: false,
+            levels_3d: false,
+            heads_seen: (None, Vec::new()),
+            marks_seen: (Vec::new(), Vec::new()),
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
             export_menu: false,
@@ -1430,6 +1452,7 @@ impl App {
         ));
         self.document.recognise(&model);
         self.model = Some(model);
+        self.collab.model_changed();
         self.section = None;
         self.section_on = false;
         self.plane = None;
@@ -2007,6 +2030,9 @@ impl App {
             Message::UnderlayScale(i) => self.next_underlay_scale(i),
             Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
             Message::ToggleAmbient => self.ambient = !self.ambient,
+            Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
+            Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
+            Message::ToggleLevels3d => self.levels_3d = !self.levels_3d,
             Message::ExportMenu(open) => self.export_menu = open,
             Message::ExportDrawing(format) => {
                 self.export_menu = false;
@@ -2184,6 +2210,7 @@ impl App {
                         self.anim = None;
                     }
                 }
+                self.update_heads_seen();
                 self.update_hover();
             }
             Message::TogglePlane => {
@@ -2327,6 +2354,7 @@ impl App {
         let ticks = if matches!(self.status, Status::Loading { .. } | Status::Saving { .. })
             || self.anim.is_some()
             || self.hover_request.is_some()
+            || self.heads_stale()
         {
             window::frames().map(|_| Message::Tick)
         } else {
@@ -2593,6 +2621,20 @@ impl App {
             if let Some(view) = model.project.looks.get(&key) {
                 looks = (0..index.len()).map(|u| if u == 0 { [0.0; 4] } else { element(u).and_then(|id| view.get(&id)).map_or([0.0; 4], crate::units::unit_look) }).collect();
             }
+        }
+        // coloured by a property: each element in the colour of its value
+        if let Some(painted) = self.painted_looks(index.len(), |u| index.owner(u)) {
+            looks = painted;
+        }
+        // a picture of clashes: their elements red and blue, the rest see-through
+        if let Some(shown) = self.clash_looks(index.len(), |u| index.owner(u)) {
+            // what is far from them is left out (its look says so: wholly see-through)
+            for (f, look) in flags.iter_mut().zip(&shown).skip(1) {
+                if look[2] >= 1.0 {
+                    *f |= UNIT_HIDDEN;
+                }
+            }
+            looks = shown;
         }
         self.unit_looks = Arc::new(looks);
         self.units = Arc::new(unit_state(&self.explode_offsets, &flags));
@@ -3523,9 +3565,11 @@ impl App {
 
     /// The 3D viewport with its overlays; the shell's workspace.
     pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        // a picture for a report: the model alone, without the cube, the grids and the hints
+        let clean = self.collab.report_job.is_some();
         let settings = RenderSettings {
             mode: self.mode,
-            grid: self.grid,
+            grid: self.grid && !clean,
             background: srgb3(p.viewport),
             grid_minor: srgb4(p.grid_minor),
             grid_major: srgb4(p.grid_major),
@@ -3533,12 +3577,12 @@ impl App {
             section: self.active_section(),
             plane: self.plane.zip(self.world_bounds()).map(|(p, w)| p.uniform(&w)),
             caps: self.section_fill,
-            grids: self.grids_shown(),
+            grids: self.grids_shown() || (self.levels_3d && !clean),
             ambient: self.ambient,
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them
-        let datums = self.datums();
+        let datums = if clean { Vec::new() } else { self.datums() };
         let segments = Arc::new(datums.iter().map(|d| [d.line.a, d.line.b]).collect::<Vec<_>>());
         let scene = shader(Viewport3D {
             model: self.model.as_ref(),
@@ -3580,20 +3624,20 @@ impl App {
             )
         };
         let hint = container(
-            text(hint)
+            text(if clean { "" } else { hint })
                 .size(11)
                 .color(p.text_muted),
         )
         .padding(8)
         .align_bottom(Fill)
         .align_left(Fill);
-        let cube = (self.model.is_some() && overlay.is_none()).then(|| {
+        let cube = (self.model.is_some() && overlay.is_none() && !clean).then(|| {
             canvas(CubeOverlay { yaw: self.camera.yaw, pitch: self.camera.pitch, ortho: self.camera.ortho })
                 .width(Fill)
                 .height(Fill)
         });
         // under the cube and its lens button: how the model is drawn
-        let style = (self.model.is_some() && overlay.is_none()).then(|| {
+        let style = (self.model.is_some() && overlay.is_none() && !clean).then(|| {
             let styles = [
                 Look(RenderMode::Wireframe, l.text("Draadmodel", "Wireframe")),
                 Look(RenderMode::HiddenLine, l.text("Verborgen lijnen", "Hidden line")),
@@ -3702,12 +3746,16 @@ impl App {
                     ink: p.text_secondary,
                     picked: self.picked_grid,
                     accent: p.accent,
+                    seen: if self.shown_view().is_none() { self.heads_seen.1.clone() } else { Vec::new() },
+                    dims: self.grid_dimensions(),
+                    dims_seen: if self.shown_view().is_none() { self.marks_seen.0.clone() } else { Vec::new() },
+                    levels_seen: if self.shown_view().is_none() { self.marks_seen.1.clone() } else { Vec::new() },
                 })
                 .width(Fill)
                 .height(Fill)
             });
         // the zero point of each model, over everything it could hide behind
-        let zero_points = overlay.is_none().then(|| self.zero_points()).filter(|marks| !marks.is_empty()).map(|marks| {
+        let zero_points = (overlay.is_none() && !clean).then(|| self.zero_points()).filter(|marks| !marks.is_empty()).map(|marks| {
             canvas(origin::ZeroPoints { marks, view_proj: self.camera.view_proj(self.aspect()), ink: p.text, fill: p.surface, accent: p.accent })
                 .width(Fill)
                 .height(Fill)

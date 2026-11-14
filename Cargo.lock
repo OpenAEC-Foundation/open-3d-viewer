@@ -3695,6 +3695,7 @@ dependencies = [
  "stl_io",
  "tekla-reader",
  "tobj",
+ "ttf-parser",
  "ureq",
  "wasm-bindgen",
  "wasm-bindgen-futures",

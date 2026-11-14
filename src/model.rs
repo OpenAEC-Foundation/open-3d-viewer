@@ -759,6 +759,11 @@ pub fn view3d_key(view: usize) -> String {
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// An id no model has yet: a model changed in place (its points recoloured) is drawn again.
+pub fn fresh_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 impl Model {
     /// Compose loaded files in the app. The first file keeps its element ids; the elements of
     /// the others are numbered after the highest id so far that a JSON number holds exactly

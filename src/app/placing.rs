@@ -43,6 +43,9 @@ impl App {
     /// The preview over the viewport: the faces of the element [`App::placing`] gives, the points
     /// clicked so far and the cursor's point. `None` when no tool is on or the cursor is away.
     pub(super) fn placing_overlay(&self, ink: Color) -> Option<PlacingOverlay> {
+        if self.modeller.grid_tool {
+            return self.grid_overlay(ink);
+        }
         self.modeller.tool?;
         let cursor = self.modeller.cursor?;
         let mut faces = Vec::new();

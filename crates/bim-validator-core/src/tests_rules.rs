@@ -59,6 +59,7 @@ fn run(bytes: &[u8], checks: bool, ils: Option<IlsOptions>) -> ValidationReport 
         ids_xml: None,
         model_checks: checks,
         ils,
+        rooms: None,
     };
     validate_model(bytes, &options, &AtomicBool::new(false)).unwrap()
 }
@@ -412,6 +413,7 @@ fn ids_and_built_in_rules_share_one_report() {
         ids_xml: Some(ids.into()),
         model_checks: true,
         ils: None,
+        rooms: None,
     };
     let report = validate_model(&model(&clean()), &options, &AtomicBool::new(false)).unwrap();
     assert_eq!(report.specifications[0].source, RuleSource::Ids);
@@ -460,4 +462,51 @@ fn html_report_is_self_contained_escaped_and_deterministic() {
     }
     let english = report_html(&report, "", ReportLanguage::English);
     assert!(english.contains("Model quality") && english.contains("without storey"));
+}
+
+#[test]
+fn rooms_doors_and_fire_separations_are_checked() {
+    // two rooms with one number on the ground floor, a slab on the first floor without rooms, a
+    // narrow door without a fire rating in the 60-minute wall, and an opening in it left open
+    let rooms = "#50=IFCSPACE(G,$,'0.01',$,$,$,$,'Woonkamer',.ELEMENT.,.SPACE.,$);
+#51=IFCSPACE(G,$,'0.01',$,$,$,$,'Keuken',.ELEMENT.,.SPACE.,$);
+#52=IFCRELAGGREGATES(G,$,$,$,#12,(#50,#51));
+#60=IFCSLAB(G,$,'Vloer',$,$,$,$,$,.FLOOR.);
+#61=IFCRELCONTAINEDINSPATIALSTRUCTURE(G,$,$,$,(#60),#13);
+#70=IFCDOOR(G,$,'D1',$,$,$,$,$,2315.,800.,.DOOR.,.SINGLE_SWING_LEFT.,$);
+#71=IFCRELCONTAINEDINSPATIALSTRUCTURE(G,$,$,$,(#70),#12);
+#72=IFCOPENINGELEMENT(G,$,'O1',$,$,$,$,$,.OPENING.);
+#73=IFCRELVOIDSELEMENT(G,$,$,$,#30,#72);
+#74=IFCRELFILLSELEMENT(G,$,$,$,#72,#70);
+#75=IFCOPENINGELEMENT(G,$,'O2',$,$,$,$,$,.OPENING.);
+#76=IFCRELVOIDSELEMENT(G,$,$,$,#30,#75);";
+    let options = ValidationOptions { rooms: Some(RoomOptions::default()), ..Default::default() };
+    let report = validate_model(&model(&format!("{}\n{rooms}", clean())), &options, &AtomicBool::new(false)).unwrap();
+    assert!(report.specifications.iter().all(|s| s.source == RuleSource::Rooms && s.severity == Severity::Warning));
+    assert_eq!(failed_ids(&report, "RMT-ROOMS"), vec![13]);
+    assert_eq!(failed_ids(&report, "RMT-NUMBER"), vec![50, 51]);
+    assert_eq!(failed_ids(&report, "RMT-DOOR"), vec![70]);
+    assert!(spec(&report, "RMT-DOOR").findings[0].reason.contains("800 mm"), "{:?}", spec(&report, "RMT-DOOR").findings);
+    assert_eq!(failed_ids(&report, "RMT-FIREDOOR"), vec![70]);
+    assert_eq!(failed_ids(&report, "RMT-FIREOPENING"), vec![75]);
+    // a threshold of 35 mm and a ramp of 1 in 8 (7.1 degrees) are flagged; 1 in 14 passes
+    let access = "#80=IFCPROPERTYSET(G,$,'Deur',$,(#81));
+#81=IFCPROPERTYSINGLEVALUE('ThresholdHeight',$,IFCLENGTHMEASURE(35.),$);
+#82=IFCRELDEFINESBYPROPERTIES(G,$,$,$,(#70),#80);
+#83=IFCRAMPFLIGHT(G,$,'Steil',$,$,$,$,$,.STRAIGHT.);
+#84=IFCRAMPFLIGHT(G,$,'Flauw',$,$,$,$,$,.STRAIGHT.);
+#85=IFCRELCONTAINEDINSPATIALSTRUCTURE(G,$,$,$,(#83,#84),#12);
+#86=IFCPROPERTYSET(G,$,'Pset_RampFlightCommon',$,(#87));
+#87=IFCPROPERTYSINGLEVALUE('Slope',$,IFCPLANEANGLEMEASURE(7.125),$);
+#88=IFCRELDEFINESBYPROPERTIES(G,$,$,$,(#83),#86);
+#89=IFCPROPERTYSET(G,$,'Pset_RampFlightCommon',$,(#90));
+#90=IFCPROPERTYSINGLEVALUE('Slope',$,IFCPLANEANGLEMEASURE(0.0713),$);
+#91=IFCRELDEFINESBYPROPERTIES(G,$,$,$,(#84),#89);";
+    let report = validate_model(&model(&format!("{}\n{rooms}\n{access}", clean())), &options, &AtomicBool::new(false)).unwrap();
+    assert_eq!(failed_ids(&report, "RMT-THRESHOLD"), vec![70]);
+    assert_eq!((failed_ids(&report, "RMT-RAMP"), spec(&report, "RMT-RAMP").applicable_count), (vec![83], 2));
+    // a rated door as wide as asked passes
+    let fixed = rooms.replace("800.,.DOOR.", "900.,.DOOR.").replace("#74=", "#77=IFCPROPERTYSET(G,$,'Pset_DoorCommon',$,(#78));\n#78=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('EI 60'),$);\n#79=IFCRELDEFINESBYPROPERTIES(G,$,$,$,(#70),#77);\n#74=");
+    let report = validate_model(&model(&format!("{}\n{fixed}", clean())), &options, &AtomicBool::new(false)).unwrap();
+    assert!(failed_ids(&report, "RMT-DOOR").is_empty() && failed_ids(&report, "RMT-FIREDOOR").is_empty());
 }

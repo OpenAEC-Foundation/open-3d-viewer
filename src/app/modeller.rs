@@ -17,6 +17,11 @@ use openaec_ui::Language;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod grids;
+pub mod browser;
+pub mod levels;
+pub(super) mod shape_handles;
+
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelTool {
@@ -149,6 +154,10 @@ pub struct Modeller {
     pub model: bim_core::Model,
     /// The tool placing elements, and the name its elements get (in the interface language).
     pub tool: Option<(ModelTool, &'static str)>,
+    /// The level being renamed or moved in the Levels tab (see `levels`).
+    pub level_edit: Option<levels::LevelEdit>,
+    /// The Grid tool is on: two clicks draw a grid line (see `grids`).
+    pub grid_tool: bool,
     /// The points clicked so far for the tool (scene coordinates).
     pub points: Vec<DVec3>,
     /// The viewer model that shows the elements (its id), an entry of `App::models`.
@@ -177,11 +186,26 @@ pub struct Modeller {
     /// The model before each step that changed it, to take the step back (`super::undo`).
     /// A move, copy, turn or mirror of the selected elements under way (`super::transform`).
     pub transform: Option<super::transform::Transform>,
-    pub history: crate::history::History<Arc<bim_core::Model>>,
-    /// The model as its last step left it: what a change is measured against.
-    pub base: Arc<bim_core::Model>,
+    pub history: crate::history::History<Step>,
+    /// The project as its last step left it: what a change is measured against.
+    pub base: Step,
+    /// The walls taken over from opened files: the file (the id of its model as it was opened)
+    /// and the wall's id in it (see `super::take_over`).
+    pub taken: Arc<Vec<(u64, u64)>>,
+    /// The opened files a wall was taken over from, by the id of their model as it was opened:
+    /// that model, and the id of the model shown in its place (it without the walls taken over).
+    pub files: std::collections::HashMap<u64, (Arc<Model>, u64)>,
     /// The elements were shown again since the history last looked: they may have changed.
     pub touched: bool,
+}
+
+/// The modelled project at one step of its history: the elements, the walls taken over from
+/// opened files, and the IFCX document the project became when it took over its first wall.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Step {
+    pub model: Arc<bim_core::Model>,
+    pub taken: Arc<Vec<(u64, u64)>>,
+    pub project_file: Option<PathBuf>,
 }
 
 impl App {
@@ -192,7 +216,12 @@ impl App {
             return;
         }
         for definition in &model.project.elements {
-            if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
+            // a grid line comes under its own key, an element as it is
+            if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
+                if let Ok(grid) = serde_json::from_value::<bim_core::GridDef>(grid.clone()) {
+                    let _ = self.modeller.model.insert_grid(grid);
+                }
+            } else if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
                 self.modeller.model.insert(element);
             }
         }
@@ -207,7 +236,7 @@ impl App {
     pub(super) fn new_model(&mut self, level: &str) {
         let empty = Arc::new(Model::new(PathBuf::from("model.ifcx"), "IFCX", Vec::new()));
         self.set_model(empty.clone());
-        self.modeller = Modeller { shown: Some(empty.id), ..Modeller::default() };
+        self.modeller = Modeller { shown: Some(empty.id), in_modeller: self.modeller.in_modeller, ..Modeller::default() };
         let _ = self.document.add_level(level, 0.0);
         self.grid = true;
         // nothing to fit yet: look at the work plane from above and aside, 20 m around
@@ -220,6 +249,7 @@ impl App {
     pub(super) fn set_model_tool(&mut self, tool: Option<(ModelTool, &'static str)>) {
         let same = tool.map(|t| t.0) == self.modeller.tool.map(|t| t.0);
         self.modeller.tool = if same { None } else { tool };
+        self.modeller.grid_tool = false;
         self.modeller.points.clear();
         self.modeller.cursor = None;
         self.modeller.aim = None;
@@ -301,6 +331,7 @@ impl App {
                 Shape::Connection(_) => {}
             }
         }
+        points.extend(self.grid_snap_points());
         points
     }
 
@@ -413,17 +444,27 @@ impl App {
         self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() == bim_core::BaseKind::Linear)).count()
     }
 
+    /// Whether two modelled elements that a butt connection can join are selected: two linear
+    /// ones, or two building systems.
+    pub(crate) fn selected_joinable(&self) -> bool {
+        let bases: Vec<bim_core::BaseKind> = self.selected_modelled().into_iter().filter_map(|id| self.modeller.model.get(id).map(|e| e.base())).filter(|b| *b != bim_core::BaseKind::Connection).collect();
+        matches!(bases[..], [a, b] if a == b && matches!(a, bim_core::BaseKind::Linear | bim_core::BaseKind::System))
+    }
+
     /// How many modelled elements with a body (not connections) are selected.
     pub(crate) fn selected_bodies(&self) -> usize {
         self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() != bim_core::BaseKind::Connection)).count()
     }
 
-    /// Joins the two linear elements selected: the first is the primary.
+    /// Joins the two linear elements or the two building systems selected: the first is the
+    /// primary.
     pub(super) fn connect_selected(&mut self, kind: ConnectionKind, name: &str) {
-        // a join takes two linear elements; a cut any two with a body, the first cutting the second
+        // a join takes two linear elements, butt or apart also two building systems (the kernel
+        // refuses a mixed pair); a cut any two with a body, the first cutting the second
         let fits = |e: &Element| match kind {
             ConnectionKind::Cut => e.base() != bim_core::BaseKind::Connection,
-            ConnectionKind::Butt | ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
+            ConnectionKind::Butt | ConnectionKind::Apart => matches!(e.base(), bim_core::BaseKind::Linear | bim_core::BaseKind::System),
+            ConnectionKind::Mitre | ConnectionKind::EndPlate(_) => e.base() == bim_core::BaseKind::Linear,
         };
         let picked: Vec<ElementId> = self.selected_modelled().into_iter().filter(|id| self.modeller.model.get(*id).is_some_and(fits)).collect();
         let [primary, secondary] = picked[..] else {
@@ -469,7 +510,9 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let built = Arc::new(viewer_model(&self.modeller.model, &levels, &self.library));
+        let mut built = viewer_model(&self.modeller.model, &levels, &self.library);
+        built.project.grids = self.modelled_grid_lines();
+        let built = Arc::new(built);
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {
             if let Some(m) = self.model.clone().filter(|m| Some(m.id) != before) {
@@ -780,6 +823,7 @@ fn properties(model: &bim_core::Model, e: &Element, parts: &[bim_core::Part], le
                 ConnectionKind::Mitre => "Mitre",
                 ConnectionKind::Cut => "Cut",
                 ConnectionKind::EndPlate(_) => "End plate",
+                ConnectionKind::Apart => "Apart",
             };
             put("Kind", kind.into());
             put("Primary", c.primary.0.to_string());
@@ -801,7 +845,7 @@ mod tests {
 
     /// An app with a new model, seen from the top, the viewport 1000 × 800 with the origin in
     /// its middle and 10 px per metre.
-    fn modelling() -> App {
+    pub(super) fn modelling() -> App {
         let mut app = App::default();
         app.new_model("Level 0");
         app.viewport_size = (1000.0, 800.0);
@@ -814,7 +858,7 @@ mod tests {
     }
 
     /// Clicks at scene point (x, y) on the work plane.
-    fn click(app: &mut App, x: f64, y: f64) {
+    pub(super) fn click(app: &mut App, x: f64, y: f64) {
         let (sx, sy) = app.on_screen(DVec3::new(x, y, 0.0), 1000.0, 800.0).unwrap();
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
     }
@@ -1013,6 +1057,41 @@ mod tests {
         let joins: Vec<&Element> = app.modeller.model.iter().filter(|e| e.base() == bim_core::BaseKind::Connection).collect();
         assert_eq!(joins.len(), 1);
         assert!(matches!(&joins[0].shape, Shape::Connection(c) if c.kind == ConnectionKind::Butt));
+    }
+
+    #[test]
+    fn two_timber_frames_are_connected_at_their_corner() {
+        let mut app = modelling();
+        let frame = |a: (f64, f64), b: (f64, f64)| {
+            let s = SystemDef { start: glam::DVec2::new(a.0, a.1), end: glam::DVec2::new(b.0, b.1), base: 0.0, height: 2.7, spacing: SYSTEM_SPACING, member: SYSTEM_MEMBER, panel: SYSTEM_PANEL, system_type: None, openings: Vec::new() };
+            Shape::System(s.typed_from(&bim_library::Library::starter(), "system.timber-frame-140").unwrap())
+        };
+        let long = app.add_element("Frame", None, frame((0.0, 0.0), (4.8, 0.0))).unwrap();
+        let short = app.add_element("Frame", None, frame((4.8, 0.0), (4.8, 3.0))).unwrap();
+        let through = |app: &App| bim_core::system::corners(&app.modeller.model, app.modeller.model.get(short).unwrap())[0].map(|m| m.through);
+        assert_eq!(through(&app), Some(false), "the longer one runs through");
+        // the short one picked first: it runs through
+        let scene = app.model.clone().unwrap();
+        app.sel.clear();
+        for id in [short, long] {
+            app.sel.toggle(Pickable::Element(scene.element_with_key(crate::model::ElementKey { model: 0, source: id.0 }).unwrap()));
+        }
+        assert!(app.selected_joinable());
+        app.connect_selected(ConnectionKind::Butt, "Connection");
+        assert!(app.modeller.refusal.is_none(), "{:?}", app.modeller.refusal);
+        assert_eq!(through(&app), Some(true));
+        // its mark at the corner picks it; turned round, the long one runs through again
+        let marks = app.join_marks(iced::Color::BLACK, iced::Color::WHITE).expect("a mark");
+        assert!((marks.marks[0].1 - Vec3::new(4.8, 0.0, 1.35)).length() < 1e-4, "{}", marks.marks[0].1);
+        let _ = app.update(Message::PickJoin(marks.marks[0].0));
+        let _ = app.update(Message::SwapJoin);
+        assert_eq!(through(&app), Some(false));
+        // apart: no corner
+        let _ = app.update(Message::JoinKind(ConnectionKind::Apart));
+        assert_eq!(through(&app), None);
+        // a frame and a beam are not joined
+        app.sel.clear();
+        assert!(!app.selected_joinable());
     }
 
     #[test]

@@ -48,6 +48,8 @@ pub enum Kind {
     Inside,
     /// They are nearer than the clearance.
     Near,
+    /// The second stands in the line of sight to the first (a sight-line test).
+    Hidden,
 }
 
 /// A clash of element `a` of the first set with element `b` of the second.
@@ -103,6 +105,31 @@ pub fn clashes_but(first: &[Solid], second: &[Solid], within: bool, test: Test, 
         }
     }
     out
+}
+
+/// Whether the straight line from `p` to `q` goes through the surface of a solid: something
+/// standing between an eye and what it looks at.
+pub fn segment_hits(solid: &Solid, p: Vec3, q: Vec3) -> bool {
+    let (lo, hi) = (p.min(q), p.max(q));
+    if lo.cmpgt(solid.max).any() || hi.cmplt(solid.min).any() {
+        return false;
+    }
+    let dir = q - p;
+    solid.triangles.iter().any(|t| {
+        // Möller–Trumbore, for 0 < s < 1 along the line
+        let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+        let h = dir.cross(e2);
+        let det = e1.dot(h);
+        if det.abs() < 1e-12 {
+            return false;
+        }
+        let w = p - t[0];
+        let u = w.dot(h) / det;
+        let k = w.cross(e1);
+        let v = dir.dot(k) / det;
+        let s = e2.dot(k) / det;
+        u >= 0.0 && v >= 0.0 && u + v <= 1.0 && s > 1e-6 && s < 1.0 - 1e-6
+    })
 }
 
 /// The triangles of a solid that reach into a box.
@@ -229,7 +256,7 @@ fn hard(a: &Solid, b: &Solid, tolerance: f32) -> Option<(Kind, Vec3, f32)> {
 }
 
 /// The nearest points of a point and a triangle.
-fn nearest_on(p: Vec3, t: &Triangle) -> Vec3 {
+pub(crate) fn nearest_on(p: Vec3, t: &Triangle) -> Vec3 {
     // Ericson, Real-Time Collision Detection 5.1.5
     let (a, b, c) = (t[0], t[1], t[2]);
     let (ab, ac, ap) = (b - a, c - a, p - a);
@@ -401,6 +428,16 @@ mod tests {
         assert!(run(pipe(), wall(), Test::Clearance { distance: 0.02 }).is_empty());
         // far apart: no hard clash either
         assert!(run(pipe(), wall(), Test::Hard { tolerance: 0.002 }).is_empty());
+    }
+
+    #[test]
+    fn a_wall_between_an_eye_and_a_sign_stands_in_the_line_of_sight() {
+        let wall = block([2.0, -2.0, 0.0], [2.2, 2.0, 3.0]);
+        assert!(segment_hits(&wall, Vec3::new(0.0, 0.0, 1.6), Vec3::new(5.0, 0.0, 2.4)));
+        // over the wall, beside it, and a line that ends before it
+        assert!(!segment_hits(&wall, Vec3::new(0.0, 0.0, 3.5), Vec3::new(5.0, 0.0, 3.5)));
+        assert!(!segment_hits(&wall, Vec3::new(0.0, 3.0, 1.6), Vec3::new(5.0, 3.0, 2.4)));
+        assert!(!segment_hits(&wall, Vec3::new(0.0, 0.0, 1.6), Vec3::new(1.5, 0.0, 1.6)));
     }
 
     #[test]

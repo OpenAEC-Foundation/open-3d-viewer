@@ -6,8 +6,10 @@
 //!   other's, no third framed system ending there, on one base, as high as each other and square
 //!   to each other. An end against another's side is a T junction ([`super::tee`]). Anything else
 //!   is left as it is: three at a point, a corner that is not square.
-//! - **Which runs through.** The longer one; of two as long as each other, the one made first. Its
-//!   frame runs on to the outer face of the other's frame, which stops against its inner face.
+//! - **Which runs through.** The primary of a butt connection between the two, where the model
+//!   has one; else the longer one; of two as long as each other, the one made first. Its frame
+//!   runs on to the outer face of the other's frame, which stops against its inner face. Two
+//!   systems with a connection that keeps them apart make no corner (nor a T junction).
 //! - **The layers.** On the outside of the corner the layers of the one that runs through run on
 //!   around it, each as far out as it lies from its own frame, and the other's stop against them.
 //!   On the inside a layer of the one that runs through stops against what the other has between
@@ -24,7 +26,7 @@
 
 use super::tee::{self, Tee};
 use super::{build, faces, parts, plan, units, Ends, FaceEnd};
-use crate::element::{Element, ElementId, PartSolid, Shape, SystemDef};
+use crate::element::{ConnectionDef, ConnectionKind, Element, ElementId, PartSolid, Shape, SystemDef};
 use crate::model::{Model, JOIN_TOLERANCE};
 use crate::tile::TileKey;
 use crate::{Refusal, LINEAR_TOLERANCE};
@@ -174,7 +176,7 @@ pub(super) struct Join<'a> {
 
 /// The corner of end `end` of `me` and end `other_end` of `other`, which lie at one point; `None`
 /// when they are not on one base, not as high as each other or not square to each other.
-fn join<'a>(me: &Framed<'_>, end: usize, other: Framed<'a>, other_end: usize) -> Option<Join<'a>> {
+fn join<'a>(model: &Model, me: &Framed<'_>, end: usize, other: Framed<'a>, other_end: usize) -> Option<Join<'a>> {
     let tol = LINEAR_TOLERANCE;
     if (me.def.base - other.def.base).abs() > tol || (me.def.height - other.def.height).abs() > tol {
         return None;
@@ -184,7 +186,11 @@ fn join<'a>(me: &Framed<'_>, end: usize, other: Framed<'a>, other_end: usize) ->
         return None;
     }
     let (mine, theirs) = (me.length(), other.length());
-    let through = mine > theirs + tol || (mine >= theirs - tol && me.id < other.id);
+    // a butt connection between the two says which; else the longer, of two alike the first made
+    let through = match connected(model, me.id, other.id) {
+        Some(c) if c.kind == ConnectionKind::Butt => c.primary == me.id,
+        _ => mine > theirs + tol || (mine >= theirs - tol && me.id < other.id),
+    };
     // the outside of the corner is the side away from the other system
     let outer = usize::from(me.right().dot(b) > 0.0);
     let other_outer = usize::from(other.right().dot(a) > 0.0);
@@ -196,10 +202,66 @@ fn join<'a>(me: &Framed<'_>, end: usize, other: Framed<'a>, other_end: usize) ->
 fn geometric<'a>(model: &'a Model, me: &Framed<'_>, end: usize, tile: TileKey) -> Option<Join<'a>> {
     let (other, other_end) = at_end(model, me, end, tile)?;
     let (back, back_end) = at_end(model, &other, other_end, tile)?;
-    if back.id != me.id || back_end != end {
+    if back.id != me.id || back_end != end || apart(model, me.id, other.id) {
         return None;
     }
-    join(me, end, other, other_end)
+    join(model, me, end, other, other_end)
+}
+
+/// The connection (not a cut) the model has between elements `a` and `b`, either way round.
+fn connected(model: &Model, a: ElementId, b: ElementId) -> Option<&ConnectionDef> {
+    model.iter().find_map(|e| match &e.shape {
+        Shape::Connection(c) if c.kind != ConnectionKind::Cut && ((c.primary, c.secondary) == (a, b) || (c.primary, c.secondary) == (b, a)) => Some(c),
+        _ => None,
+    })
+}
+
+/// Whether a connection keeps systems `a` and `b` apart.
+pub(super) fn apart(model: &Model, a: ElementId, b: ElementId) -> bool {
+    connected(model, a, b).is_some_and(|c| c.kind == ConnectionKind::Apart)
+}
+
+/// The two framed systems of connection `c`, in the frame of tile (0, 0).
+fn pair<'a>(model: &'a Model, c: &ConnectionDef) -> Result<[Framed<'a>; 2], Refusal> {
+    let framed = |id: ElementId| -> Result<Framed<'a>, Refusal> {
+        let e = model.get(id).ok_or(Refusal::Missing)?;
+        Framed::of(model, e, TileKey::default()).ok_or(Refusal::SystemJoin)
+    };
+    Ok([framed(c.primary)?, framed(c.secondary)?])
+}
+
+/// Where framed systems `a` and `b` meet: an end of one at the other's end or on its line.
+fn meeting(a: &Framed, b: &Framed) -> Option<DVec2> {
+    for (x, y) in [(a, b), (b, a)] {
+        let (p, q) = (y.ends[0], y.ends[1]);
+        for end in x.ends {
+            let t = ((end - p).dot(q - p) / (q - p).length_squared()).clamp(0.0, 1.0);
+            if (end - (p + (q - p) * t)).length() <= JOIN_TOLERANCE {
+                return Some(end);
+            }
+        }
+    }
+    None
+}
+
+/// Whether connection `c` between two building systems can be made: both framed, joined butt or
+/// apart, and meeting at an edge (a corner or a T junction).
+pub(crate) fn connection(model: &Model, c: &ConnectionDef) -> Result<(), Refusal> {
+    if c.primary == c.secondary {
+        return Err(Refusal::SameMember);
+    }
+    let [a, b] = pair(model, c)?;
+    if !matches!(c.kind, ConnectionKind::Butt | ConnectionKind::Apart) {
+        return Err(Refusal::SystemJoin);
+    }
+    meeting(&a, &b).map(|_| ()).ok_or(Refusal::NotTouching)
+}
+
+/// Where the systems of connection `c` meet, in the project frame, half way up.
+pub(crate) fn connection_node(model: &Model, c: &ConnectionDef) -> Option<glam::DVec3> {
+    let [a, b] = pair(model, c).ok()?;
+    let p = meeting(&a, &b)?;
+    Some(glam::DVec3::new(p.x, p.y, a.def.base + a.def.height / 2.0))
 }
 
 /// What a framed system meets: a corner at its start and at its end, or the system against whose
@@ -297,7 +359,7 @@ fn fits(s: &SystemDef, joins: &Joins) -> bool {
 /// systems, and both can be made without it too, so that each stays when the other goes.
 fn candidates<'a>(model: &'a Model, me: &Framed<'a>, tile: TileKey) -> Joins<'a> {
     let makes = |s: &SystemDef, joins: Joins| fits(s, &Joins::default()) && fits(s, &joins);
-    let corners = [0, 1].map(|end| geometric(model, me, end, tile).filter(|j| makes(me.def, Joins::corner(*j)) && join(&j.other, j.other_end, *me, j.end).is_some_and(|back| makes(j.other.def, Joins::corner(back)))));
+    let corners = [0, 1].map(|end| geometric(model, me, end, tile).filter(|j| makes(me.def, Joins::corner(*j)) && join(model, &j.other, j.other_end, *me, j.end).is_some_and(|back| makes(j.other.def, Joins::corner(back)))));
     let made = |t: &Tee| makes(t.runs.def, Joins::side(*t)) && makes(t.stands.def, Joins::butt(*t));
     let butts = [0, 1].map(|end| tee::geometric(model, *me, end, tile).filter(|t| made(t)));
     let sides = tee::standing(model, *me, tile).into_iter().filter(|t| made(t)).collect();
@@ -470,6 +532,49 @@ pub(super) mod tests {
         let made: Vec<_> = m.evaluate(id).unwrap().iter().map(|p| p.solid.bounds()).collect();
         let alone: Vec<_> = parts(system(m, id)).unwrap().iter().map(|p| p.solid.bounds()).collect();
         made == alone && corners(m, m.get(id).unwrap()) == [None, None] && tees(m, m.get(id).unwrap()) == Tees::default()
+    }
+
+    #[test]
+    fn a_connection_between_two_frames_says_how_they_meet() {
+        use crate::element::{ConnectionDef, ConnectionKind};
+        let (mut m, x, y) = corner();
+        let grid = m.grid;
+        let joined = |kind, primary, secondary| Element::in_project(&grid, "c", None, Shape::Connection(ConnectionDef { kind, primary, secondary }));
+        // butt, the shorter one first: it runs through, and the frames end as that corner says
+        let c = m.add(joined(ConnectionKind::Butt, y, x)).unwrap();
+        assert_eq!(corners(&m, m.get(x).unwrap()), [None, Some(Meeting { with: y, through: false })]);
+        assert_eq!(corners(&m, m.get(y).unwrap()), [Some(Meeting { with: x, through: true }), None]);
+        let (xs, ys) = (pieces(&m, x), pieces(&m, y));
+        assert!(close(extent(&ys, "timber", 1, Some((0, 0.14))), (-0.07, 3.0)), "{:?}", extent(&ys, "timber", 1, Some((0, 0.14))));
+        assert_eq!(overlap(&xs, &ys), None);
+        // it has no body, and a mark where the two meet, half way up
+        assert!(m.evaluate(c).unwrap().is_empty());
+        assert!((m.join_node(c).unwrap() - DVec3::new(L, 0.0, 1.35)).length() < 1e-9);
+        // it stays as the joins of linear elements are kept up to date
+        assert!(m.update_joins("Joint", None).1.is_empty());
+        // apart: no corner, each frame as it is alone
+        let mut apart = m.get(c).unwrap().clone();
+        apart.shape = Shape::Connection(ConnectionDef { kind: ConnectionKind::Apart, primary: y, secondary: x });
+        m.replace(apart).unwrap();
+        assert!(plain(&m, x) && plain(&m, y));
+        // without the connection the longer runs through again
+        m.remove(c);
+        assert_eq!(corners(&m, m.get(x).unwrap()), [None, Some(Meeting { with: y, through: true })]);
+        // a frame against the side of another: apart makes no T junction
+        let t = add(&mut m, frame((2.4, 0.0), (2.4, -3.0)));
+        assert_eq!(tees(&m, m.get(t).unwrap()).ends, [Some(x), None]);
+        let c = m.add(joined(ConnectionKind::Apart, x, t)).unwrap();
+        assert!(plain(&m, t) && tees(&m, m.get(x).unwrap()).sides.is_empty());
+        // what cannot be: a mitre between frames, frames that do not meet, a frame and itself
+        assert_eq!(m.add(joined(ConnectionKind::Mitre, x, y)), Err(Refusal::SystemJoin));
+        let far = add(&mut m, frame((20.0, 20.0), (24.0, 20.0)));
+        assert_eq!(m.add(joined(ConnectionKind::Butt, x, far)), Err(Refusal::NotTouching));
+        assert_eq!(m.add(joined(ConnectionKind::Butt, x, x)), Err(Refusal::SameMember));
+        // a connection whose frames parted goes with the joins that broke
+        let mut moved = m.get(t).unwrap().clone();
+        moved.shape = frame((2.4, -1.0), (2.4, -4.0));
+        m.replace(moved).unwrap();
+        assert_eq!(m.update_joins("Joint", None).1, [c]);
     }
 
     #[test]

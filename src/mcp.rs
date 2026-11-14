@@ -212,10 +212,10 @@ pub fn tools() -> Vec<Value> {
             }), &[], false),
         tool("zoom_to", "Frame the model, the selection or elements from the current direction.",
             json!({ "target": target_schema("What to frame") }), &[], false),
-        tool("set_display", "Display settings: render mode (solid, wireframe, edges, hidden: hidden lines), ground grid, the model's grid lines, flip up axis (for files with Y up), fill of cut faces.",
+        tool("set_display", "Display settings: render mode (solid, wireframe, edges, hidden: hidden lines), ground grid, the model's grid lines, the dimensions between them in 3D, the levels in 3D with their marks, hiding the grid heads behind the model, flip up axis (for files with Y up), fill of cut faces.",
             json!({
                 "mode": { "type": "string", "enum": ["solid", "wireframe", "edges", "hidden"] },
-                "grid": { "type": "boolean" }, "grid_lines": { "type": "boolean" },
+                "grid": { "type": "boolean" }, "grid_lines": { "type": "boolean" }, "grid_dimensions": { "type": "boolean" }, "levels_3d": { "type": "boolean" }, "grid_heads_hidden": { "type": "boolean" },
                 "flip_up": { "type": "boolean" }, "section_fill": { "type": "boolean" }
             }), &[], false),
         tool("explode", "The exploded view: pull the model apart per storey (Revit levels) or per element, by a percentage per axis, and switch it on or off. Frame it afterwards with zoom_to.",
@@ -293,8 +293,8 @@ pub fn tools() -> Vec<Value> {
                 "text": { "type": "string", "description": "comment: its text" },
                 "viewpoint": { "type": "integer", "description": "show: which viewpoint (from 0)" }
             }), &["action"], false),
-        tool("collab_bcf", "Open a BCF file (.bcfzip / .bcf, BCF 2.0, 2.1 or 3.0) as the project's issues, or save the issues as BCF 2.1.",
-            json!({ "action": { "type": "string", "enum": ["open", "save"] }, "path": { "type": "string" } }), &["action", "path"], false),
+        tool("collab_bcf", "Open a BCF file (.bcfzip / .bcf, BCF 2.0, 2.1 or 3.0) as the project's issues, or save the issues as BCF 2.1 (or 3.0 with version).",
+            json!({ "action": { "type": "string", "enum": ["open", "save"] }, "path": { "type": "string" }, "version": { "type": "string", "enum": ["2.1", "3.0"] } }), &["action", "path"], false),
         tool("collab_rules", "Rule sets: list them (checks and clash tests), select one (NL BIM Basis ILS, RVB BIM-norm 1.1, basic check, coordination of structure and services, or one opened), open or save a rule set file (.rules.json), load an IDS into it, or set the built-in model checks, the BIM basis ILS profile and who you are.",
             json!({
                 "action": { "type": "string", "enum": ["list", "select", "open", "save", "load_ids", "set"] },
@@ -303,19 +303,39 @@ pub fn tools() -> Vec<Value> {
                 "model_checks": { "type": "boolean" }, "ils": { "type": "boolean" },
                 "user": { "type": "string", "description": "set: your name or e-mail, the author of what you make" }
             }), &["action"], false),
-        tool("collab_check", "Check the open IFC models on the rule set in use (IDS, model checks, BIM basis ILS) and wait for the outcome: per model and per rule passed, failed or not checkable, with counts.", json!({}), &[], false),
-        tool("collab_clashes", "Clash tests: run those of the rule set on the open models and wait for them, list the clashes found, pick one (select both elements and frame them), decide on one (accepted, rejected, open), make an issue of one or of all.",
+        tool("collab_check", "Check the open IFC models on the rule set in use (IDS, model checks, BIM basis ILS, rooms/doors/escape routes/fire when on) and wait for the outcome: per model and per rule passed, failed or not checkable, with counts.", json!({}), &[], false),
+        tool("collab_share", "Share the project through a folder (a network drive or a synced folder): the issues, each as a BCF file of its own, and the decisions on clashes. set names the folder and syncs, sync brings both sides to the same (the last change of an issue stands, with the comments of both), off stops sharing.",
+            json!({ "action": { "type": "string", "enum": ["set", "sync", "off"] }, "folder": { "type": "string" } }), &[], false),
+        tool("collab_cloud", "A point cloud against the model (both open together): the distance of each point to the model's surfaces. Colours the points (green within the tolerance, red at twice it, grey with no surface within half a metre) and answers with the counts, the mean and worst distance and the places where the most points are off. action off gives the cloud its own colours back.",
+            json!({ "tolerance_mm": { "type": "number" }, "action": { "type": "string", "enum": ["compare", "align", "off"], "description": "align moves the scan onto the model (a move, no turn) and compares" } }), &[], false),
+        tool("collab_colours", "Colour the model by a property: each value its own colour, elements without one grey. Gives the legend (value, colour, count). Property: model, layer, class, type or any property key of the elements; none switches the colours off.",
+            json!({ "property": { "type": "string" } }), &[], false),
+        tool("collab_sets", "Selection sets of the rule set: list them, save the selection as one (by the elements' GlobalIds), add one by property value (* for any), select, isolate or hide one, remove one.",
             json!({
-                "action": { "type": "string", "enum": ["run", "list", "pick", "decide", "issue", "issues"] },
+                "action": { "type": "string", "enum": ["list", "save", "add", "select", "isolate", "hide", "remove"] },
+                "name": { "type": "string" }, "property": { "type": "string" }, "value": { "type": "string" }, "index": { "type": "integer" }
+            }), &[], false),
+        tool("collab_takeoff", "Information takeoff: the elements (by class, e.g. [\"IfcWall*\"], and/or a property value) grouped by up to two properties (model, layer, class, type or a property key), with count, length, area and volume from the geometry. make shows it as a table under the 3D view (Excel from there) and returns its rows; keep stores it in the rule set; list gives those kept.",
+            json!({
+                "action": { "type": "string", "enum": ["make", "keep", "list"] },
+                "name": { "type": "string" }, "classes": { "type": "array", "items": { "type": "string" } },
+                "property": { "type": "string" }, "value": { "type": "string" },
+                "group_by": { "type": "array", "items": { "type": "string" } }
+            }), &[], false),
+        tool("collab_clashes", "Clash tests: run those of the rule set (its list and its discipline matrix) on the open models and wait for them, list the clashes found, group them (by the element they share or by place), open a group, pick one (select both elements and frame them), decide on one (accepted, rejected, open), make an issue of one or of all (one per group).",
+            json!({
+                "action": { "type": "string", "enum": ["run", "list", "group", "open_group", "pick", "decide", "issue", "issues"] },
                 "index": { "type": "integer" },
+                "by": { "type": "string", "enum": ["off", "element", "place"], "description": "group: how the clashes are grouped" },
+                "group": { "type": "integer", "description": "open_group: the group's number, as list gives it" },
                 "decision": { "type": "string", "enum": ["open", "accepted", "rejected"] },
                 "selection": { "type": "boolean", "description": "run: the selected elements against the rest" },
                 "offset": { "type": "integer" }, "limit": { "type": "integer" }
             }), &["action"], false),
         tool("collab_compare", "Compare two versions of a model open together (by their place among the open models): elements added, removed and changed (properties, place or size), known by their GlobalId.",
             json!({ "old": { "type": "integer" }, "new": { "type": "integer" } }), &[], false),
-        tool("collab_export", "Save a report: the issues as a page with pictures (issues), the check as HTML, CSV or JSON, or the clashes as CSV.",
-            json!({ "kind": { "type": "string", "enum": ["issues", "html", "csv", "json", "clashes"] }, "path": { "type": "string" } }), &["path"], false),
+        tool("collab_export", "Save a report: the issues as a page with pictures (issues), the check as HTML, CSV or JSON, the clashes as CSV, or as PDF in the house style: the checks, the clashes (each group with a picture of the view on it) and the issues with their pictures (pdf; it answers at once and is written when its pictures are taken: wait until collab_state says report false), the issues alone (issues_pdf), or all as an Excel workbook (xlsx: rules, findings, clash groups, clashes, issues).",
+            json!({ "kind": { "type": "string", "enum": ["issues", "html", "csv", "json", "clashes", "pdf", "issues_pdf", "xlsx"] }, "path": { "type": "string" } }), &["path"], false),
     ]
 }
 
@@ -351,7 +371,7 @@ pub fn tool_list(prefixed: bool) -> Vec<Value> {
 
 /// How long a command may take: opening and saving a large model takes minutes.
 pub fn timeout_of(command: &str) -> Duration {
-    Duration::from_secs(if matches!(command, "open_file" | "save_file" | "collab_check" | "collab_clashes" | "collab_compare") { 900 } else { 60 })
+    Duration::from_secs(if matches!(command, "open_file" | "save_file" | "collab_check" | "collab_clashes" | "collab_compare" | "collab_takeoff" | "collab_cloud") { 900 } else { 60 })
 }
 
 /// How a tool call reaches the viewer: command, arguments, time-out; the viewer's answer.

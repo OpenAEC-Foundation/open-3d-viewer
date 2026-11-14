@@ -426,6 +426,11 @@ impl Scene {
             }
             return;
         }
+        // a grid line this viewer wrote: its definition comes back under its key
+        if let Some(grid) = node.attribute(crate::export::ifcx::GRID) {
+            self.definitions.push(serde_json::json!({ crate::export::ifcx::GRID: grid }));
+            return;
+        }
         let world = transform(node).map_or(parent, |m| parent * m);
         let color = self::color(node).or(color);
         let own;

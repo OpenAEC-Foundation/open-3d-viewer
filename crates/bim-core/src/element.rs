@@ -214,10 +214,14 @@ pub enum ConnectionKind {
     /// A steel end plate: the secondary stops a plate's thickness short of the primary's face,
     /// and a plate against that face is bolted to the primary (see [`crate::join::EndPlate`]).
     EndPlate(crate::join::EndPlate),
+    /// The two are not joined where they meet: two building systems that would meet at a corner
+    /// or a T junction are each made as they are alone, and two linear members get no join.
+    Apart,
 }
 
-/// A connection between two elements: two linear ones joined (butt, mitre), or any two with a
-/// body where one cuts the other.
+/// A connection between two elements: two linear ones joined (butt, mitre), any two with a body
+/// where one cuts the other, or two framed building systems where they meet at an edge (a corner
+/// or a T junction): butt, the primary running through at a corner, or apart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionDef {
     pub kind: ConnectionKind,

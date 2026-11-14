@@ -24,6 +24,8 @@ pub enum DatumKind {
     Grid(usize),
     /// A level at this elevation (metres): its name and height past both ends.
     Level(f64),
+    /// A line of a level's outline in 3D: drawn, without a head.
+    Outline,
 }
 
 /// A grid line or a level where the view shown draws it (world): in a floor plan at its cut, in a
@@ -44,6 +46,15 @@ pub struct GridOverlay {
     /// The picked grid (of the model), drawn over in `accent`.
     pub picked: Option<usize>,
     pub accent: Color,
+    /// Per grid of the model, whether the head at its first and at its second end is seen (not
+    /// behind the model); a grid it does not hold shows both.
+    pub seen: Vec<[bool; 2]>,
+    /// The dimensions between the grid lines: two points and the distance.
+    pub dims: Vec<Measurement>,
+    /// Whether each of them is seen, and each level's mark at its first and second end (in
+    /// the order the levels are drawn); what these do not hold shows.
+    pub dims_seen: Vec<bool>,
+    pub levels_seen: Vec<[bool; 2]>,
 }
 
 fn project(view_proj: &Mat4, size: (f32, f32), world: Vec3) -> Option<Point> {
@@ -185,11 +196,51 @@ impl<Message> canvas::Program<Message> for GridOverlay {
             })
             .collect();
         let named = named_levels(&levels.iter().map(|l| l.0.y).collect::<Vec<_>>(), LEVEL_GAP);
-        for ((a, b, datum, elevation), named) in levels.into_iter().zip(named) {
+        for (k, ((a, b, datum, elevation), named)) in levels.into_iter().zip(named).enumerate() {
             let len = a.distance(b);
             let out = ((b.x - a.x) / len, (b.y - a.y) / len);
-            draw_level_head(&mut frame, a, (-out.0, -out.1), &datum.line.name, elevation, named, self.ink, self.fill);
-            draw_level_head(&mut frame, b, out, &datum.line.name, elevation, named, self.ink, self.fill);
+            let seen = self.levels_seen.get(k).copied().unwrap_or([true; 2]);
+            if seen[0] {
+                draw_level_head(&mut frame, a, (-out.0, -out.1), &datum.line.name, elevation, named, self.ink, self.fill);
+            }
+            if seen[1] {
+                draw_level_head(&mut frame, b, out, &datum.line.name, elevation, named, self.ink, self.fill);
+            }
+        }
+        // the dimensions between the grids: a thin line, a tick at each end, the distance on it
+        for (k, dim) in self.dims.iter().enumerate() {
+            if self.dims_seen.get(k) == Some(&false) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (dim.points.first().and_then(|p| project(&self.view_proj, size, *p)), dim.points.last().and_then(|p| project(&self.view_proj, size, *p))) else { continue };
+            let len = a.distance(b);
+            if len < 24.0 {
+                continue;
+            }
+            let (ux, uy) = ((b.x - a.x) / len, (b.y - a.y) / len);
+            let stroke = canvas::Stroke::default().with_color(self.ink).with_width(1.0);
+            frame.stroke(&Path::line(a, b), stroke);
+            for p in [a, b] {
+                // a tick across the line, slanted as on a drawing
+                let (tx, ty) = ((ux - uy) * 4.0, (uy + ux) * 4.0);
+                frame.stroke(&Path::line(Point::new(p.x - tx, p.y - ty), Point::new(p.x + tx, p.y + ty)), stroke.with_width(1.5));
+            }
+            let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+            let width = 6.0 * dim.label.chars().count() as f32 + 6.0;
+            if width + 8.0 > len {
+                continue;
+            }
+            frame.fill(&Path::rectangle(Point::new(mid.x - width / 2.0, mid.y - 7.0), iced::Size::new(width, 14.0)), self.fill);
+            frame.fill_text(canvas::Text {
+                content: dim.label.clone(),
+                position: mid,
+                align_x: alignment::Horizontal::Center.into(),
+                align_y: alignment::Vertical::Center,
+                size: iced::Pixels(10.0),
+                color: self.ink,
+                font: openaec_ui::fonts::MEDIUM,
+                ..canvas::Text::default()
+            });
         }
         // the grids, the picked one last, over the others
         let is_picked = |d: &Datum| matches!(d.kind, DatumKind::Grid(g) if Some(g) == self.picked);
@@ -208,7 +259,11 @@ impl<Message> canvas::Program<Message> for GridOverlay {
                     frame.stroke(&Path::line(a, b), canvas::Stroke::default().with_color(ink).with_width(width));
                 }
             }
-            for c in ends {
+            let hidden = |end: usize| !picked && matches!(datum.kind, DatumKind::Grid(g) if self.seen.get(g).is_some_and(|s| !s[end]));
+            for (end, c) in ends.into_iter().enumerate() {
+                if hidden(end) {
+                    continue;
+                }
                 if c.x < -RADIUS || c.y < -RADIUS || c.x > size.0 + RADIUS || c.y > size.1 + RADIUS {
                     continue;
                 }

@@ -2,6 +2,7 @@
 //! and the modelled elements (every step that changes the model: placing, moving, joining,
 //! deleting, typing a size). Ctrl+Z takes back the last of either, in the order they were made.
 
+use super::modeller::Step;
 use super::App;
 use std::sync::Arc;
 
@@ -19,12 +20,20 @@ impl App {
             return;
         }
         self.modeller.touched = false;
-        if self.modeller.model == *self.modeller.base {
+        let base = &self.modeller.base;
+        if self.modeller.model == *base.model && self.modeller.taken == base.taken && self.modeller.project_file == base.project_file {
             return;
         }
-        let before = std::mem::replace(&mut self.modeller.base, Arc::new(self.modeller.model.clone()));
+        let now = self.modelled_step();
+        let before = std::mem::replace(&mut self.modeller.base, now);
         self.modeller.history.record(before);
         self.note_step(true);
+    }
+
+    /// The modelled project as it is now: its elements, the walls taken over from opened files
+    /// and the document it became.
+    fn modelled_step(&self) -> Step {
+        Step { model: Arc::new(self.modeller.model.clone()), taken: self.modeller.taken.clone(), project_file: self.modeller.project_file.clone() }
     }
 
     /// A step went into a history (`modelled`: the model's, else the view's): it is the next to
@@ -42,7 +51,7 @@ impl App {
     /// The model as it is now is what later changes are measured against, with nothing to take
     /// back: after a file gave its elements.
     pub(super) fn settle_modelled(&mut self) {
-        self.modeller.base = Arc::new(self.modeller.model.clone());
+        self.modeller.base = self.modelled_step();
         self.modeller.history.clear();
         self.modeller.touched = false;
     }
@@ -71,10 +80,13 @@ impl App {
         }
     }
 
-    /// Shows the modelled elements as `model` has them, out of edit mode and with no step begun.
-    fn restore_modelled(&mut self, model: Arc<bim_core::Model>) {
-        self.modeller.model = (*model).clone();
-        self.modeller.base = model;
+    /// Shows the modelled project as `step` has it, out of edit mode and with no step begun: its
+    /// elements, and of the opened files the walls that were not taken over yet.
+    fn restore_modelled(&mut self, step: Step) {
+        self.modeller.model = (*step.model).clone();
+        self.modeller.project_file = step.project_file.clone();
+        self.show_files_without(step.taken.clone());
+        self.modeller.base = step;
         self.modeller.edit = None;
         self.modeller.points.clear();
         self.modeller.aim = None;

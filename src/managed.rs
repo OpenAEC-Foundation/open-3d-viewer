@@ -266,6 +266,7 @@ mod tests {
         assert_eq!(language_from("de"), Some(Language::German));
         assert_eq!(language_from("fr-FR"), Some(Language::French));
         assert_eq!(language_from("es"), Some(Language::Spanish));
+        // a language the interface does not have: English
         assert_eq!(language_from("ja"), Some(Language::English));
         assert_eq!(language_from(" "), None);
     }

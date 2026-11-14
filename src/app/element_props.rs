@@ -265,6 +265,17 @@ impl App {
         self.change_element(changed);
     }
 
+    /// Turns the selected join round: its other member becomes the primary (the one that runs
+    /// through).
+    pub(super) fn swap_join(&mut self) {
+        let Some(e) = self.defined().cloned() else { return };
+        let Shape::Connection(c) = &e.shape else { return };
+        let mut changed = e.clone();
+        changed.shape = Shape::Connection(ConnectionDef { kind: c.kind, primary: c.secondary, secondary: c.primary });
+        self.modeller.refusal = None;
+        self.change_element(changed);
+    }
+
     /// Removes opening `index` of the selected wall or timber frame.
     pub(super) fn remove_opening(&mut self, index: usize) {
         let Some(e) = self.defined().cloned() else { return };
@@ -375,14 +386,27 @@ impl App {
                         .style(move |_, s| if on { p.primary_button(s) } else { p.row_button(s) })
                         .on_press(Message::JoinKind(kind))
                 };
-                rows = rows.push(
-                    row![
-                        choice(l.text("Verstek", "Mitre"), ConnectionKind::Mitre),
-                        choice(l.text("Stomp", "Butt"), ConnectionKind::Butt),
-                        choice(l.text("Kopplaat", "End plate"), ConnectionKind::EndPlate(bim_core::join::EndPlate::default())),
-                    ]
-                    .spacing(6),
-                );
+                let name = |id: bim_core::ElementId| self.modeller.model.get(id).map_or_else(String::new, |e| e.name.clone());
+                let systems = [c.primary, c.secondary].iter().any(|id| self.modeller.model.get(*id).is_some_and(|e| e.base() == bim_core::BaseKind::System));
+                rows = if systems {
+                    // two building systems: joined butt (the first runs through a corner) or apart
+                    let turn = button(text(l.text("Andere loopt door", "Other runs through").to_string()).size(12)).padding([3, 10]).style(move |_, s| p.row_button(s)).on_press(Message::SwapJoin);
+                    let rows = rows.push(row![choice(l.text("Stomp", "Butt"), ConnectionKind::Butt), choice(l.text("Los", "Apart"), ConnectionKind::Apart)].spacing(6));
+                    if c.kind == ConnectionKind::Butt {
+                        rows.push(prop_row(p, l.text("Loopt door", "Runs through").to_string(), name(c.primary))).push(prop_row(p, l.text("Stopt ertegen", "Stops against it").to_string(), name(c.secondary))).push(turn)
+                    } else {
+                        rows
+                    }
+                } else {
+                    rows.push(
+                        row![
+                            choice(l.text("Verstek", "Mitre"), ConnectionKind::Mitre),
+                            choice(l.text("Stomp", "Butt"), ConnectionKind::Butt),
+                            choice(l.text("Kopplaat", "End plate"), ConnectionKind::EndPlate(bim_core::join::EndPlate::default())),
+                        ]
+                        .spacing(6),
+                    )
+                };
             }
             if matches!(c.kind, ConnectionKind::EndPlate(_)) {
                 rows = rows

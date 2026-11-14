@@ -268,6 +268,8 @@ struct Prefs {
     grid_heads_hidden: bool,
     grid_dims: bool,
     levels_3d: bool,
+    /// The 3D view draws ambient shadows in its shaded styles.
+    ambient: bool,
 }
 
 impl Default for Prefs {
@@ -289,6 +291,7 @@ impl Default for Prefs {
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
+            ambient: false,
         }
     }
 }
@@ -776,7 +779,7 @@ impl Studio {
     pub fn with_settings_in(mut self, dir: PathBuf) -> Self {
         let prefs = dir.join("preferences.json");
         self.prefs = Prefs::load(&prefs);
-        (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d);
+        (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient);
         self.prefs_path = Some(prefs);
         let keymap = dir.join("shortcuts.json");
         self.keymap = Keymap::load(&keymap);
@@ -1362,9 +1365,9 @@ impl Studio {
             Msg::App(Message::Remote(call)) if call.cmd.starts_with("ui_") => return self.ui_command(call),
             Msg::App(message) => {
                 // how the 3D view draws its grids and levels is kept between sessions
-                let kept = (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d);
-                if kept != (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d) {
-                    (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d) = kept;
+                let kept = (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient);
+                if kept != (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient) {
+                    (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient) = kept;
                     self.save_prefs();
                 }
                 // what opens in the explorer shows it
@@ -2243,6 +2246,7 @@ impl Studio {
                         w::property_row(look, l.text("Tekstgrootte", "Text size"), w::select(look, text_sizes.0, text_sizes.1, |n| Msg::TextSize(n.value), D::Regular)),
                         w::property_row(look, l.text("Interfacegrootte", "Interface size"), w::select(look, &Scale::ALL, scale, |s: Scale| Msg::Scale(s.0), D::Regular)),
                         w::mono_label(look, l.text("3D-weergave", "3D view")),
+                        w::checkbox(look, l.text("Omgevingsschaduw tonen", "Show ambient shadows"), self.app.ambient, Some(|_| Msg::App(Message::ToggleAmbient))),
                         w::checkbox(look, l.text("Stramienbollen achter het model verbergen", "Hide grid heads behind the model"), self.app.grid_heads_hidden, Some(|_| Msg::App(Message::ToggleGridHeadsHidden))),
                         w::checkbox(look, l.text("Maten tussen de stramienen tonen", "Show the dimensions between grid lines"), self.app.grid_dims, Some(|_| Msg::App(Message::ToggleGridDims))),
                         w::checkbox(look, l.text("Peilen met peilmaten tonen", "Show the levels with their marks"), self.app.levels_3d, Some(|_| Msg::App(Message::ToggleLevels3d))),

@@ -834,6 +834,7 @@
     "The rules are checked as an IDS.": "Reglerna kontrolleras som en IDS.",
     "Save as IDS": "Spara som IDS",
     "Find again when a model changes": "Sök igen när en modell ändras",
-    "properties added as rules (off); tick the ones you ask.": "egenskaper tillagda som regler (av); bocka för dem du kräver."
+    "properties added as rules (off); tick the ones you ask.": "egenskaper tillagda som regler (av); bocka för dem du kräver.",
+    "Show ambient shadows": "Visa omgivningsskuggor"
   }
 }

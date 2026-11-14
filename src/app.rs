@@ -851,7 +851,7 @@ impl Default for App {
             cut_faces_running: false,
             kept_faces: Default::default(),
             views_in_3d: false,
-            ambient: true,
+            ambient: false,
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
@@ -1343,6 +1343,8 @@ impl App {
         app.show_properties = self.show_properties;
         app.explorer_open = self.explorer_open;
         app.measure.units = self.measure.units.clone();
+        // how the 3D view draws is set for the app, not for a project
+        (app.ambient, app.grid_heads_hidden, app.grid_dims, app.levels_3d) = (self.ambient, self.grid_heads_hidden, self.grid_dims, self.levels_3d);
         app
     }
 

@@ -834,6 +834,7 @@
     "The rules are checked as an IDS.": "As regras são verificadas como um IDS.",
     "Save as IDS": "Guardar como IDS",
     "Find again when a model changes": "Procurar de novo quando um modelo mudar",
-    "properties added as rules (off); tick the ones you ask.": "propriedades adicionadas como regras (desligadas); assinale as que pede."
+    "properties added as rules (off); tick the ones you ask.": "propriedades adicionadas como regras (desligadas); assinale as que pede.",
+    "Show ambient shadows": "Mostrar sombras ambientes"
   }
 }

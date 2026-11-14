@@ -365,6 +365,7 @@ impl App {
                 call.answer(answer);
                 return task;
             }
+            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
             "collab_export" if matches!(call.args.get("kind").and_then(|v| v.as_str()), Some("pdf" | "issues_pdf")) => {
                 let (answer, task) = self.collab_pdf_remote(&call.args);
                 call.answer(answer);

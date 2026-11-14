@@ -7,6 +7,26 @@ use crate::app::{App, Message};
 use openaec_ui::Language;
 
 impl App {
+    /// Steps the level worked on to the next one up (or down); with a floor plan shown, that
+    /// level's floor plan opens, made when it has none. At the highest (lowest) level nothing
+    /// changes.
+    pub(in crate::app) fn step_level(&mut self, up: bool) {
+        let (_, _, now) = self.work_plane();
+        let levels = self.document.levels();
+        let at = now.as_deref().and_then(|p| levels.iter().position(|l| l.path == p));
+        let next = match (at, up) {
+            (Some(i), true) => levels.get(i + 1),
+            (Some(i), false) => i.checked_sub(1).and_then(|i| levels.get(i)),
+            (None, _) => levels.first(),
+        };
+        let Some(next) = next.map(|l| l.path.clone()) else { return };
+        self.modeller.level = Some(next.clone());
+        let plan_shown = self.active_plan.as_deref().is_some_and(|p| self.document.plan(p).is_some());
+        if plan_shown {
+            let _ = self.update(Message::Browser(super::browser::BrowserMessage::Level(std::sync::Arc::from(next.as_str()))));
+        }
+    }
+
     /// The command of key `key`, in the interface language `l`.
     pub(in crate::app) fn model_key(&mut self, key: ModelKey, l: Language) {
         let tool = |t: ModelTool| Some((t, t.label(l)));
@@ -35,8 +55,8 @@ impl App {
             ModelKey::Delete => {
                 let _ = self.update(Message::DeletePicked);
             }
-            // the levels are stepped through once the Modeller keeps a level of its own
-            ModelKey::LevelUp | ModelKey::LevelDown => {}
+            ModelKey::LevelUp => self.step_level(true),
+            ModelKey::LevelDown => self.step_level(false),
         }
     }
 }
@@ -109,5 +129,42 @@ mod tests {
         escape(&mut studio);
         assert_eq!(studio.keys.pending(), None);
         assert!(studio.app.modeller.tool.is_some(), "the Wall tool stays on");
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::super::tests::modelling;
+    use crate::app::Message;
+
+    #[test]
+    fn page_up_and_down_step_through_the_levels() {
+        let mut app = modelling();
+        app.modeller.in_modeller = true;
+        let _ = app.document.add_level("Level 1", 3.0);
+        app.step_level(true);
+        assert_eq!(app.work_plane().0, 3.0);
+        app.step_level(true);
+        assert_eq!(app.work_plane().0, 3.0, "no level above the highest");
+        app.step_level(false);
+        app.step_level(false);
+        assert_eq!(app.work_plane().0, 0.0, "none below the lowest");
+        // the keys do the same, and the status line names the level
+        let _ = app.update(Message::ModelKey(super::ModelKey::LevelUp, openaec_ui::Language::English));
+        assert_eq!(app.work_plane().0, 3.0);
+        assert!(app.select_hint(openaec_ui::Language::English).unwrap_or_default().contains("Level 1"));
+    }
+
+    #[test]
+    fn with_a_floor_plan_shown_the_levels_floor_plan_opens() {
+        let mut app = modelling();
+        app.modeller.in_modeller = true;
+        let _ = app.document.add_level("Level 1", 3.0);
+        let ground = app.document.levels()[0].path.clone();
+        app.new_plan(&ground);
+        app.step_level(true);
+        let shown = app.active_plan.clone().and_then(|p| app.document.plan(&p).map(|p| p.level.clone()));
+        assert_eq!(shown, Some(app.document.levels()[1].path.clone()), "Level 1's plan, made for it");
+        assert_eq!(app.work_plane().0, 3.0);
     }
 }

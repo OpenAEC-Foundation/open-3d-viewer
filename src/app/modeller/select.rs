@@ -49,7 +49,14 @@ impl App {
     /// The status line of the Select tool in the Modeller; none elsewhere or with a tool on.
     pub(in crate::app) fn select_hint(&self, l: Language) -> Option<String> {
         (self.modeller.in_modeller && self.modeller.shown.is_some() && self.selecting())
-            .then(|| l.text("Selecteren (S): klik of sleep een kader · Shift: erbij · Esc: niets", "Select (S): click or drag a box · Shift: add · Esc: nothing").to_string())
+            .then(|| {
+                let level = self.work_plane().2.and_then(|p| self.document.level(&p).map(|l| l.name.clone()));
+                let select = l.text("Selecteren (S): klik of sleep een kader · Shift: erbij · Esc: niets", "Select (S): click or drag a box · Shift: add · Esc: nothing");
+                match level {
+                    Some(name) => format!("{select} · {name} (PgUp/PgDn)"),
+                    None => select.to_string(),
+                }
+            })
     }
 }
 

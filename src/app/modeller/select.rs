@@ -31,6 +31,17 @@ impl App {
             && !self.plane_picking
     }
 
+    /// The mouse gestures under the viewport while the Select tool of the Modeller is on, where a
+    /// drag draws a box; none elsewhere.
+    pub(crate) fn modeller_gestures(&self, l: Language) -> Option<&'static str> {
+        self.drag_selects().then(|| {
+            l.text(
+                "Klik: selecteren · Slepen: kader (rechts: binnen, links: raakt) · Shift: erbij · Rechtsklik: menu · Middelste knop: pannen · Shift + middelste: orbit · Wiel: zoomen · F: passend",
+                "Click: select · Drag: box (right: inside, left: touching) · Shift: add · Right click: menu · Middle drag: pan · Shift + middle: orbit · Wheel: zoom · F: fit",
+            )
+        })
+    }
+
     /// Whether a left drag in the viewport draws a selection box: the Select tool of the Modeller.
     pub(crate) fn drag_selects(&self) -> bool {
         self.modeller.in_modeller && self.modeller.shown.is_some() && self.selecting()
@@ -199,5 +210,25 @@ mod box_tests {
         app.select_tool();
         app.modeller.in_modeller = false;
         assert!(!app.drag_selects(), "the Viewer orbits");
+    }
+}
+
+#[cfg(test)]
+mod gesture_tests {
+    use super::super::tests::modelling;
+    use openaec_ui::Language;
+
+    #[test]
+    fn the_gestures_line_of_the_modeller_says_a_drag_draws_a_box() {
+        let mut app = modelling();
+        app.modeller.in_modeller = true;
+        let line = app.modeller_gestures(Language::English).unwrap();
+        assert!(line.contains("Drag: box") && !line.contains("walk") && !line.contains("left drag: orbit"), "{line}");
+        // with a tool on, or in the Viewer, the Viewer's line stays
+        app.set_model_tool(Some((super::super::ModelTool::Wall, "Wall")));
+        assert!(app.modeller_gestures(Language::English).is_none());
+        app.select_tool();
+        app.modeller.in_modeller = false;
+        assert!(app.modeller_gestures(Language::English).is_none());
     }
 }

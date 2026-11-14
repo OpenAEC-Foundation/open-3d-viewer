@@ -3650,6 +3650,8 @@ impl App {
                 "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken: menu, en slepen: pannen",
                 "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press: menu, then drag: pan",
             )
+        } else if let Some(gestures) = self.modeller_gestures(l) {
+            gestures
         } else {
             l.text(
                 "Klik: selecteren · Rechtsklik: menu · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend · W A S D: lopen",

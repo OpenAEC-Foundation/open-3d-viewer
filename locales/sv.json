@@ -796,6 +796,14 @@
     "To be seen": "Ska synas",
     "% out of sight": "% utan sikt",
     "Largest": "Största",
-    "Place (x, y, z)": "Plats (x, y, z)"
+    "Place (x, y, z)": "Plats (x, y, z)",
+    "Sharing failed": "Delningen misslyckades",
+    "Shared folder": "Delad mapp",
+    "taken over": "hämtade",
+    "written": "skrivna",
+    "Shared through": "Delas via",
+    "Sync": "Synkronisera",
+    "Share issues and clash decisions through a shared folder.": "Dela issues och krockbeslut via en delad mapp.",
+    "Choose folder": "Välj mapp"
   }
 }

@@ -37,6 +37,7 @@ impl Boxed {
 
 /// How far each room is from a way out at its worst corner, walking through doors; None for a
 /// room no way out is reached from.
+#[cfg(test)]
 pub fn escape_distances(rooms: &[Boxed], doors: &[Boxed], stairs: &[Boxed]) -> Vec<Option<f32>> {
     escape_routes(rooms, doors, stairs).into_iter().map(|r| r.map(|(far, _)| far)).collect()
 }

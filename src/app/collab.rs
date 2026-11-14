@@ -146,6 +146,11 @@ pub fn compare_models(model: &Model, old: u32, new: u32) -> Comparison {
 }
 
 /// Where the Collaborator keeps who you are: beside the preferences.
+/// Where the Collaborator keeps the folder the project is shared through.
+fn share_file() -> Option<PathBuf> {
+    Some(crate::remote_link::settings_dir()?.join("collaborator-share.txt"))
+}
+
 fn user_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-user.txt"))
 }
@@ -355,6 +360,12 @@ pub struct State {
     pub cloud: super::cloud::State,
     /// The PDF report being made.
     pub report_job: Option<ReportJob>,
+    /// The folder the project is shared through; the issues removed here since the last sync;
+    /// what the folder said of the clashes then; and the issues as they were then.
+    pub share_folder: Option<PathBuf>,
+    share_removed: Vec<String>,
+    share_known: HashMap<String, String>,
+    share_seen: u64,
     /// The walk of each room to its way out (by the room's element), and the room whose walk
     /// the 3D view draws.
     pub routes: HashMap<u64, Vec<[f32; 3]>>,
@@ -453,6 +464,10 @@ impl Default for State {
             inform: Default::default(),
             cloud: Default::default(),
             report_job: None,
+            share_folder: share_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|s| PathBuf::from(s.trim())).filter(|p| p.is_dir()),
+            share_removed: Vec::new(),
+            share_known: HashMap::new(),
+            share_seen: 0,
             routes: HashMap::new(),
             route_shown: None,
             bcf3: false,
@@ -744,6 +759,11 @@ pub enum Event {
     IssuesFromClashes,
     GroupBy(GroupChoice),
     ShowResolved(bool),
+    /// The folder the project is shared through: asked for, chosen (none: not shared), synced.
+    ShareFolder,
+    ShareFolderIs(Option<PathBuf>),
+    Unshare,
+    Sync,
     /// Whether the issues are written as BCF 3.0 (else 2.1).
     Bcf3(bool),
     /// The clash picked, or else the group open: decided on, or made an issue of.
@@ -1496,6 +1516,60 @@ impl App {
         }
     }
 
+    /// What the issues and the decisions on the clashes are now, as one number: a change in them
+    /// changes it.
+    fn collab_share_mark(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for t in &self.collab.issues.topics {
+            (&t.guid, &t.modified_date, &t.status, &t.title, t.comments.len(), t.viewpoints.len()).hash(&mut h);
+        }
+        for c in &self.collab.clashes {
+            (&c.key, c.decision.key()).hash(&mut h);
+        }
+        self.collab.share_removed.hash(&mut h);
+        h.finish()
+    }
+
+    /// Brings the issues and the decisions on clashes here and in the shared folder to the
+    /// same; `say` tells what it did also when that is nothing.
+    pub(super) fn collab_sync(&mut self, say: bool) {
+        let Some(folder) = self.collab.share_folder.clone() else { return };
+        let l = self.collab.language;
+        let removed = std::mem::take(&mut self.collab.share_removed);
+        let mut done = match crate::collab::share::sync_issues(&folder, &mut self.collab.issues, &removed) {
+            Ok(done) => done,
+            Err(e) => {
+                self.collab.share_removed = removed;
+                self.collab.share_seen = self.collab_share_mark();
+                self.collab_note(Tone::Error, format!("{}: {e}", l.text("Delen lukt niet", "Sharing failed")));
+                return;
+            }
+        };
+        let mine: Vec<(String, String)> = self.collab.clashes.iter().map(|c| (c.key.clone(), c.decision.key().to_string())).collect();
+        let now = bim_bcf::issues::now();
+        let author = self.collab.author.clone();
+        match crate::collab::share::sync_decisions(&folder, &mine, &mut self.collab.share_known, &author, &now, &mut done) {
+            Ok(take) => {
+                for (key, decision) in take {
+                    if let (Some(c), Some(d)) = (self.collab.clashes.iter_mut().find(|c| c.key == key), Decision::parse(&decision)) {
+                        c.decision = d;
+                    }
+                }
+            }
+            Err(e) => self.collab_note(Tone::Error, format!("{}: {e}", l.text("Delen lukt niet", "Sharing failed"))),
+        }
+        if self.collab.topic.as_ref().is_some_and(|g| !self.collab.issues.topics.iter().any(|t| &t.guid == g)) {
+            self.collab.topic = None;
+        }
+        self.collab.share_seen = self.collab_share_mark();
+        if say || done.pulled + done.removed + done.decisions_pulled > 0 {
+            let got = done.pulled + done.removed + done.decisions_pulled;
+            let sent = done.pushed + done.decisions_pushed;
+            self.collab_note(Tone::Success, format!("{}: {got} {} · {sent} {}", l.text("Gedeelde map", "Shared folder"), l.text("opgehaald", "taken over"), l.text("weggeschreven", "written")));
+        }
+    }
+
     /// The groups of the clashes, each as the places of its rows, in their order.
     fn collab_groups(&self) -> Vec<Vec<usize>> {
         let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -1798,6 +1872,7 @@ impl App {
     }
 
     pub(super) fn collab_update(&mut self, event: Event) -> Task<Message> {
+        let looked = matches!(event, Event::Tab(Tab::Issues | Tab::Clashes));
         self.collab.refresh();
         if let Event::ClashAmount(k, typed) = &event {
             if let Some(kept) = self.collab.amounts.get_mut(*k) {
@@ -1821,6 +1896,11 @@ impl App {
         self.collab.refresh();
         self.collab_refresh_sides();
         self.inform_refresh();
+        // a project shared through a folder: what changed here goes to it, and what the others
+        // wrote comes in when the issues or the clashes are looked at
+        if self.collab.share_folder.is_some() && !self.collab.running && (self.collab_share_mark() != self.collab.share_seen || looked) {
+            self.collab_sync(false);
+        }
         task
     }
 
@@ -2114,6 +2194,7 @@ impl App {
             }
             Event::RemoveTopic => {
                 if let Some(guid) = self.collab.topic.take() {
+                    self.collab.share_removed.push(guid.clone());
                     self.collab.issues.topics.retain(|t| t.guid != guid);
                     self.collab.issues_changed = true;
                 }
@@ -2472,6 +2553,28 @@ impl App {
             }
             Event::ShowTests(on) => self.collab.show_tests = on,
             Event::ShowResolved(on) => self.collab.show_resolved = on,
+            Event::ShareFolder => {
+                self.collab.dialog_open = true;
+                return Task::perform(async { rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().to_path_buf()) }, |folder| Message::Collab(Event::ShareFolderIs(folder)));
+            }
+            Event::ShareFolderIs(folder) => {
+                self.collab.dialog_open = false;
+                if let Some(folder) = folder {
+                    if let Some(file) = share_file() {
+                        let _ = std::fs::write(file, folder.display().to_string());
+                    }
+                    self.collab.share_folder = Some(folder);
+                    self.collab.share_known.clear();
+                    self.collab_sync(true);
+                }
+            }
+            Event::Unshare => {
+                self.collab.share_folder = None;
+                if let Some(file) = share_file() {
+                    let _ = std::fs::remove_file(file);
+                }
+            }
+            Event::Sync => self.collab_sync(true),
             Event::DecidePicked(decision) => match (self.collab.clash, self.collab.open_group) {
                 (Some(k), _) => {
                     let now = self.collab.clashes.get(k).map(|c| c.decision);
@@ -2744,6 +2847,22 @@ impl App {
         .spacing(6)
         .wrap()]
         .spacing(6);
+        // the project shared through a folder
+        list = list.push(match &state.share_folder {
+            Some(folder) => row![
+                w::secondary(look, format!("{}: {}", l.text("Gedeeld via", "Shared through"), folder.display())).width(Length::Fill),
+                w::button(look, l.text("Synchroniseren", "Sync"), K::Secondary, D::Compact, None, Some(go(Event::Sync))),
+                w::button(look, l.text("Stoppen", "Stop"), K::Quiet, D::Compact, None, Some(go(Event::Unshare))),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+            None => row![
+                w::secondary(look, l.text("Deel issues en clashbesluiten via een gedeelde map.", "Share issues and clash decisions through a shared folder.")).width(Length::Fill),
+                w::button(look, l.text("Map kiezen", "Choose folder"), K::Secondary, D::Compact, None, Some(go(Event::ShareFolder))),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        });
         if state.issues.topics.is_empty() {
             return list
                 .push(w::secondary(
@@ -3488,6 +3607,19 @@ impl App {
         self.collab.refresh();
         self.collab_refresh_sides();
         self.inform_refresh();
+        if cmd == "collab_share" {
+            match a.get("action").and_then(|v| v.as_str()).unwrap_or("sync") {
+                "set" => {
+                    let folder = a.get("folder").and_then(|v| v.as_str()).map(PathBuf::from).filter(|p| p.is_dir()).ok_or("give an existing folder")?;
+                    let _ = self.collab_handle(Event::ShareFolderIs(Some(folder)));
+                }
+                "off" => {
+                    let _ = self.collab_handle(Event::Unshare);
+                }
+                _ => self.collab_sync(true),
+            }
+            return Ok(serde_json::json!({ "folder": self.collab.share_folder.as_ref().map(|p| p.display().to_string()), "issues": self.collab.issues.topics.len(), "notice": self.collab.notice.as_ref().map(|(_, m)| m.clone()) }));
+        }
         if cmd == "collab_cloud" {
             return self.cloud_command(a);
         }

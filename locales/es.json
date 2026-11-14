@@ -796,6 +796,14 @@
     "To be seen": "A la vista",
     "% out of sight": "% sin visión",
     "Largest": "La mayor",
-    "Place (x, y, z)": "Lugar (x, y, z)"
+    "Place (x, y, z)": "Lugar (x, y, z)",
+    "Sharing failed": "Error al compartir",
+    "Shared folder": "Carpeta compartida",
+    "taken over": "recibidos",
+    "written": "escritos",
+    "Shared through": "Compartido mediante",
+    "Sync": "Sincronizar",
+    "Share issues and clash decisions through a shared folder.": "Comparta issues y decisiones de colisiones mediante una carpeta compartida.",
+    "Choose folder": "Elegir carpeta"
   }
 }

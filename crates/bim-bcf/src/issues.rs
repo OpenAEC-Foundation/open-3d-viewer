@@ -136,6 +136,12 @@ impl Topic {
     }
 
     /// Marks it changed by `author`: it is written from its values from now on.
+    /// Has the topic written from its values as they are now, not as it was read: for a copy
+    /// that goes elsewhere.
+    pub fn written_anew(&mut self) {
+        self.original = None;
+    }
+
     pub fn touch(&mut self, author: &str) {
         self.original = None;
         self.modified_date = now();

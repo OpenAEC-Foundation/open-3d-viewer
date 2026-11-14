@@ -796,6 +796,14 @@
     "To be seen": "Zu sehen",
     "% out of sight": "% ohne Sicht",
     "Largest": "Größte",
-    "Place (x, y, z)": "Ort (x, y, z)"
+    "Place (x, y, z)": "Ort (x, y, z)",
+    "Sharing failed": "Teilen fehlgeschlagen",
+    "Shared folder": "Gemeinsamer Ordner",
+    "taken over": "übernommen",
+    "written": "geschrieben",
+    "Shared through": "Geteilt über",
+    "Sync": "Synchronisieren",
+    "Share issues and clash decisions through a shared folder.": "Issues und Kollisionsentscheidungen über einen gemeinsamen Ordner teilen.",
+    "Choose folder": "Ordner wählen"
   }
 }

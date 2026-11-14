@@ -796,6 +796,14 @@
     "To be seen": "Görünmeli",
     "% out of sight": "% görüş dışı",
     "Largest": "En büyük",
-    "Place (x, y, z)": "Yer (x, y, z)"
+    "Place (x, y, z)": "Yer (x, y, z)",
+    "Sharing failed": "Paylaşım başarısız",
+    "Shared folder": "Paylaşılan klasör",
+    "taken over": "alındı",
+    "written": "yazıldı",
+    "Shared through": "Şuradan paylaşılıyor",
+    "Sync": "Eşitle",
+    "Share issues and clash decisions through a shared folder.": "Issue'ları ve çakışma kararlarını paylaşılan bir klasörle paylaşın.",
+    "Choose folder": "Klasör seç"
   }
 }

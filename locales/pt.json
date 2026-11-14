@@ -796,6 +796,14 @@
     "To be seen": "A ver",
     "% out of sight": "% sem visão",
     "Largest": "A maior",
-    "Place (x, y, z)": "Local (x, y, z)"
+    "Place (x, y, z)": "Local (x, y, z)",
+    "Sharing failed": "Falha ao partilhar",
+    "Shared folder": "Pasta partilhada",
+    "taken over": "recebidos",
+    "written": "escritos",
+    "Shared through": "Partilhado através de",
+    "Sync": "Sincronizar",
+    "Share issues and clash decisions through a shared folder.": "Partilhe issues e decisões de colisões através de uma pasta partilhada.",
+    "Choose folder": "Escolher pasta"
   }
 }

@@ -305,7 +305,7 @@ pub fn tools() -> Vec<Value> {
             }), &["action"], false),
         tool("collab_check", "Check the open IFC models on the rule set in use (IDS, model checks, BIM basis ILS, rooms/doors/escape routes/fire when on) and wait for the outcome: per model and per rule passed, failed or not checkable, with counts.", json!({}), &[], false),
         tool("collab_cloud", "A point cloud against the model (both open together): the distance of each point to the model's surfaces. Colours the points (green within the tolerance, red at twice it, grey with no surface within half a metre) and answers with the counts, the mean and worst distance and the places where the most points are off. action off gives the cloud its own colours back.",
-            json!({ "tolerance_mm": { "type": "number" }, "action": { "type": "string", "enum": ["compare", "off"] } }), &[], false),
+            json!({ "tolerance_mm": { "type": "number" }, "action": { "type": "string", "enum": ["compare", "align", "off"], "description": "align moves the scan onto the model (a move, no turn) and compares" } }), &[], false),
         tool("collab_colours", "Colour the model by a property: each value its own colour, elements without one grey. Gives the legend (value, colour, count). Property: model, layer, class, type or any property key of the elements; none switches the colours off.",
             json!({ "property": { "type": "string" } }), &[], false),
         tool("collab_sets", "Selection sets of the rule set: list them, save the selection as one (by the elements' GlobalIds), add one by property value (* for any), select, isolate or hide one, remove one.",

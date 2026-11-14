@@ -786,6 +786,16 @@
     "mean": "ortalama",
     "largest": "en büyük",
     "Places that are off": "Sapma olan yerler",
-    "Place": "Yer"
+    "Place": "Yer",
+    "Less than half of the points lie within a metre of the model: lay the scan about in its place first.": "Noktaların yarısından azı modele bir metre mesafede: önce taramayı yaklaşık yerine koyun.",
+    "The scan and the model are one file: aligning needs the scan as a model of its own.": "Tarama ve model tek dosya: hizalama için tarama ayrı bir model olmalı.",
+    "Scan moved by": "Tarama kaydırıldı:",
+    "Align": "Hizala",
+    "Property": "Özellik",
+    "name, e.g. LoadBearing": "ad, örn. LoadBearing",
+    "To be seen": "Görünmeli",
+    "% out of sight": "% görüş dışı",
+    "Largest": "En büyük",
+    "Place (x, y, z)": "Yer (x, y, z)"
   }
 }

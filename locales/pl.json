@@ -786,6 +786,16 @@
     "mean": "średnio",
     "largest": "największa",
     "Places that are off": "Miejsca z odchyłką",
-    "Place": "Miejsce"
+    "Place": "Miejsce",
+    "Less than half of the points lie within a metre of the model: lay the scan about in its place first.": "Mniej niż połowa punktów leży w odległości metra od modelu: najpierw ułóż skan mniej więcej na miejscu.",
+    "The scan and the model are one file: aligning needs the scan as a model of its own.": "Skan i model to jeden plik: wyrównanie wymaga skanu jako osobnego modelu.",
+    "Scan moved by": "Skan przesunięty o",
+    "Align": "Wyrównaj",
+    "Property": "Właściwość",
+    "name, e.g. LoadBearing": "nazwa, np. LoadBearing",
+    "To be seen": "Do zobaczenia",
+    "% out of sight": "% bez widoku",
+    "Largest": "Największa",
+    "Place (x, y, z)": "Miejsce (x, y, z)"
   }
 }

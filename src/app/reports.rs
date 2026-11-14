@@ -175,6 +175,34 @@ impl App {
             self.report_checks(l, &mut blocks);
             self.report_clashes(l, pictures, &mut blocks);
         }
+        // the scan against the model, when they were compared
+        if let Some(s) = self.collab.cloud.summary.as_ref().filter(|_| scope == Scope::All) {
+            let near = (s.within + s.off).max(1);
+            blocks.push(Block::PageBreak);
+            blocks.push(Block::Heading(l.text("Puntenwolk tegen model", "Point cloud against model").to_string()));
+            blocks.push(Block::Counts(vec![
+                (format!("{:.0}%", 100.0 * s.within as f32 / near as f32), l.text("binnen tolerantie", "within tolerance").to_string(), if s.off * 20 <= near { Mark::Pass } else { Mark::Warning }),
+                (s.off.to_string(), l.text("punten erbuiten", "points off").to_string(), if s.off == 0 { Mark::Pass } else { Mark::Fail }),
+                (format!("{:.0} mm", s.worst * 1000.0), l.text("grootste", "largest").to_string(), Mark::Neutral),
+                (s.far.to_string(), l.text("zonder model", "without model").to_string(), Mark::Neutral),
+            ]));
+            blocks.push(Block::Note(format!("{} {} · {} {} mm · {} {:.0} mm", s.points, l.text("punten", "points"), l.text("Tolerantie", "Tolerance"), self.collab.cloud.tolerance.trim(), l.text("gemiddeld", "mean"), s.mean * 1000.0)));
+            if !s.hot_spots.is_empty() {
+                blocks.push(Block::Table {
+                    widths: vec![0.6, 1.2, 1.2, 3.0],
+                    headings: vec!["#".into(), l.text("Punten", "Points").into(), l.text("Grootste", "Largest").into(), l.text("Plaats (x, y, z)", "Place (x, y, z)").into()],
+                    rows: s
+                        .hot_spots
+                        .iter()
+                        .enumerate()
+                        .map(|(k, h)| {
+                            let at = self.collab_to_world(h.at);
+                            Row { cells: vec![(k + 1).to_string(), h.points.to_string(), format!("{:.0} mm", h.worst * 1000.0), format!("{:.2}, {:.2}, {:.2}", at[0], at[1], at[2])], mark: Some(Mark::Fail) }
+                        })
+                        .collect(),
+                });
+            }
+        }
         self.report_issues(l, issue_pictures, &mut blocks);
         blocks
     }

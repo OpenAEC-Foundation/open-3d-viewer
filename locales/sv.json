@@ -786,6 +786,16 @@
     "mean": "medel",
     "largest": "största",
     "Places that are off": "Platser med avvikelse",
-    "Place": "Plats"
+    "Place": "Plats",
+    "Less than half of the points lie within a metre of the model: lay the scan about in its place first.": "Mindre än hälften av punkterna ligger inom en meter från modellen: lägg först skanningen ungefär på plats.",
+    "The scan and the model are one file: aligning needs the scan as a model of its own.": "Skanningen och modellen är en fil: justering kräver skanningen som egen modell.",
+    "Scan moved by": "Skanning flyttad",
+    "Align": "Justera",
+    "Property": "Egenskap",
+    "name, e.g. LoadBearing": "namn, t.ex. LoadBearing",
+    "To be seen": "Ska synas",
+    "% out of sight": "% utan sikt",
+    "Largest": "Största",
+    "Place (x, y, z)": "Plats (x, y, z)"
   }
 }

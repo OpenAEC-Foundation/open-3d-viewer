@@ -147,8 +147,10 @@ impl App {
     /// What the heads seen depend on: the camera, the model and what of it is shown. None where
     /// no heads are left out (the option off, no grids, a view's tab, the exploded view).
     fn heads_key(&self) -> Option<(crate::viewport::camera::Camera, u64, (f32, f32), usize, usize)> {
-        let model = self.model.as_ref().filter(|m| self.grid_heads_hidden && self.grids_shown() && self.shown_view().is_none() && !self.explode_on && !m.project.grids.is_empty())?;
-        Some((self.camera, model.id, self.viewport_size, std::sync::Arc::as_ptr(&self.hidden) as usize, self.visible.iter().filter(|v| **v).count()))
+        let model = self.model.as_ref().filter(|m| self.grid_heads_hidden && (self.grids_shown() || self.levels_3d) && self.shown_view().is_none() && !self.explode_on && (!m.project.grids.is_empty() || self.levels_3d))?;
+        // what is drawn is part of it: the dimensions and the levels switch on and off
+        let drawn = self.visible.iter().filter(|v| **v).count() * 4 + usize::from(self.grid_dims) * 2 + usize::from(self.levels_3d);
+        Some((self.camera, model.id, self.viewport_size, std::sync::Arc::as_ptr(&self.hidden) as usize, drawn))
     }
 
     /// Whether the heads seen are to be worked out again: the view changed since.
@@ -161,6 +163,7 @@ impl App {
     pub(super) fn update_heads_seen(&mut self) {
         let Some(key) = self.heads_key() else {
             self.heads_seen = (None, Vec::new());
+            self.marks_seen = (Vec::new(), Vec::new());
             return;
         };
         let Some(model) = self.model.clone().filter(|_| self.heads_seen.0 != Some(key)) else { return };
@@ -170,28 +173,30 @@ impl App {
         let eye = self.camera.eye();
         let forward = (self.camera.target - eye).normalize_or_zero();
         let margin = 0.01 * self.camera.distance;
-        let mut seen = Vec::with_capacity(model.project.grids.len());
-        for grid in &model.project.grids {
-            let mut ends = [true; 2];
-            for (k, end) in [grid.a, grid.b].into_iter().enumerate() {
-                let world = Vec3::from_array(end);
-                let clip = view_proj * world.extend(1.0);
-                if clip.w <= 1e-6 {
-                    continue;
-                }
-                let (x, y) = ((clip.x / clip.w + 1.0) * 0.5 * width, (1.0 - clip.y / clip.w) * 0.5 * height);
-                if x < 0.0 || y < 0.0 || x > width || y > height {
-                    continue;
-                }
-                let (origin, dir, hit) = self.cast(&model, x, y, width, height);
-                let Some((l, t, s)) = hit else { continue };
-                let Some((point, _)) = super::face_at(&model.layers[l], t, origin - s, dir) else { continue };
-                let in_front = (mm.transform_point3(point + s) - eye).dot(forward) < (world - eye).dot(forward) - margin;
-                ends[k] = !in_front;
+        // whether a place (world) is seen: nothing of the model lies before it as the camera looks
+        let seen_at = |app: &mut App, world: Vec3| -> bool {
+            let clip = view_proj * world.extend(1.0);
+            if clip.w <= 1e-6 {
+                return true;
             }
-            seen.push(ends);
-        }
+            let (x, y) = ((clip.x / clip.w + 1.0) * 0.5 * width, (1.0 - clip.y / clip.w) * 0.5 * height);
+            if x < 0.0 || y < 0.0 || x > width || y > height {
+                return true;
+            }
+            let (origin, dir, hit) = app.cast(&model, x, y, width, height);
+            let Some((l, t, s)) = hit else { return true };
+            let Some((point, _)) = super::face_at(&model.layers[l], t, origin - s, dir) else { return true };
+            (mm.transform_point3(point + s) - eye).dot(forward) >= (world - eye).dot(forward) - margin
+        };
+        let grids: Vec<[Vec3; 2]> = if self.grids_shown() { model.project.grids.iter().map(|g| [Vec3::from_array(g.a), Vec3::from_array(g.b)]).collect() } else { Vec::new() };
+        let seen: Vec<[bool; 2]> = grids.iter().map(|ends| ends.map(|p| seen_at(self, p))).collect();
+        // a dimension by its middle, a level's marks by the ends of its line
+        let dims: Vec<Vec3> = self.grid_dimensions().iter().filter_map(|d| Some((*d.points.first()? + *d.points.last()?) / 2.0)).collect();
+        let dims_seen = dims.into_iter().map(|p| seen_at(self, p)).collect();
+        let levels: Vec<[Vec3; 2]> = self.level_outlines().iter().filter(|d| matches!(d.kind, DatumKind::Level(_))).map(|d| [Vec3::from_array(d.line.a), Vec3::from_array(d.line.b)]).collect();
+        let levels_seen = levels.iter().map(|ends| ends.map(|p| seen_at(self, p))).collect();
         self.heads_seen = (Some(key), seen);
+        self.marks_seen = (dims_seen, levels_seen);
     }
 
     /// A section's datum lines, just in front of its cut: the grids it crosses (within their

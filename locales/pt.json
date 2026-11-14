@@ -786,6 +786,16 @@
     "mean": "média",
     "largest": "a maior",
     "Places that are off": "Locais com desvio",
-    "Place": "Local"
+    "Place": "Local",
+    "Less than half of the points lie within a metre of the model: lay the scan about in its place first.": "Menos de metade dos pontos está a menos de um metro do modelo: coloque primeiro a digitalização aproximadamente no lugar.",
+    "The scan and the model are one file: aligning needs the scan as a model of its own.": "A digitalização e o modelo são um só ficheiro: alinhar requer a digitalização como modelo próprio.",
+    "Scan moved by": "Digitalização movida",
+    "Align": "Alinhar",
+    "Property": "Propriedade",
+    "name, e.g. LoadBearing": "nome, p. ex. LoadBearing",
+    "To be seen": "A ver",
+    "% out of sight": "% sem visão",
+    "Largest": "A maior",
+    "Place (x, y, z)": "Local (x, y, z)"
   }
 }

@@ -48,8 +48,13 @@ impl Surface {
 
     /// How far `p` is from the nearest surface, when that is within `reach`.
     pub fn distance(&self, p: Vec3, reach: f32) -> Option<f32> {
+        self.nearest(p, reach).map(|q| q.distance(p))
+    }
+
+    /// The place on the surfaces nearest to `p`, when that is within `reach`.
+    pub fn nearest(&self, p: Vec3, reach: f32) -> Option<Vec3> {
         let mut best = reach * reach;
-        let mut found = false;
+        let mut found: Option<Vec3> = None;
         let mut stack: Vec<usize> = Vec::with_capacity(64);
         if !self.nodes.is_empty() {
             stack.push(0);
@@ -63,10 +68,11 @@ impl Surface {
             }
             if node.count > 0 {
                 for t in &self.triangles[node.first as usize..(node.first + node.count) as usize] {
-                    let d = nearest_on(p, t).distance_squared(p);
+                    let q = nearest_on(p, t);
+                    let d = q.distance_squared(p);
                     if d <= best {
                         best = d;
-                        found = true;
+                        found = Some(q);
                     }
                 }
                 continue;
@@ -81,7 +87,7 @@ impl Surface {
                 stack.push(b);
             }
         }
-        found.then(|| best.sqrt())
+        found
     }
 
     /// The distance of each point, on all cores; `None` where no surface is within `reach`.
@@ -121,6 +127,37 @@ fn build(triangles: &mut [Triangle], from: usize, to: usize, nodes: &mut Vec<Nod
     nodes[at].first = right as u32;
     nodes[at].count = 0;
     at
+}
+
+/// How a scan is to be moved to lie on the model: the points are moved, time and again, by the
+/// mean of what brings each to the nearest surface, looking nearer by each time (from `reach`
+/// down to a tenth of it), until they lie still. Only a move, no turn: a scan that is turned is
+/// to be laid right first. Gives the move and how many points had a surface near at the end.
+pub fn fit_shift(surface: &Surface, points: &[Vec3], reach: f32) -> (Vec3, usize) {
+    let mut shift = Vec3::ZERO;
+    let mut near = 0;
+    let mut within = reach;
+    for _ in 0..40 {
+        let (mut sum, mut count) = (Vec3::ZERO, 0usize);
+        for p in points {
+            let moved = *p + shift;
+            if let Some(q) = surface.nearest(moved, within) {
+                sum += q - moved;
+                count += 1;
+            }
+        }
+        near = count;
+        if count == 0 {
+            break;
+        }
+        let step = sum / count as f32;
+        shift += step;
+        within = (within * 0.7).max(reach * 0.1);
+        if step.length() < 0.0002 {
+            break;
+        }
+    }
+    (shift, near)
 }
 
 /// A place where many points lie further from the model than allowed.
@@ -230,6 +267,27 @@ mod tests {
         let all = s.distances(&points, 0.5);
         assert!(points.iter().zip(&all).all(|(p, d)| s.distance(*p, 0.5) == *d));
         assert!(Surface::new(Vec::new()).distance(Vec3::ZERO, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_scan_laid_a_little_off_is_moved_onto_the_model() {
+        let s = room();
+        // the floor and the wall scanned, laid 30 mm up and 20 mm off the wall
+        let off = Vec3::new(0.0, 0.02, 0.03);
+        let mut points = Vec::new();
+        for i in 0..60 {
+            for j in 0..60 {
+                let (u, v) = (i as f32 * 0.15 + 0.4, j as f32 * 0.15 + 0.4);
+                points.push(Vec3::new(u, v, 0.0) + off);
+                if j < 18 {
+                    points.push(Vec3::new(u, 0.0, v) + off);
+                }
+            }
+        }
+        let (shift, near) = fit_shift(&s, &points, 0.5);
+        assert!(near > points.len() * 9 / 10, "{near} of {}", points.len());
+        // back onto the floor and the wall; along them nothing says where it belongs
+        assert!((shift.z + 0.03).abs() < 0.002 && (shift.y + 0.02).abs() < 0.004 && shift.x.abs() < 0.004, "{shift:?}");
     }
 
     #[test]

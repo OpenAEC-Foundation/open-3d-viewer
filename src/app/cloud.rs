@@ -8,7 +8,7 @@
 
 use super::collab::Event as CollabEvent;
 use super::{App, Message};
-use crate::collab::deviation::{colour, summarise, HotSpot, Summary, Surface};
+use crate::collab::deviation::{colour, fit_shift, summarise, HotSpot, Summary, Surface};
 use crate::model::Model;
 use bim_bcf::issues::Topic;
 use glam::Vec3;
@@ -29,6 +29,8 @@ const SPOTS: usize = 25;
 pub enum Event {
     Tolerance(String),
     Compare,
+    /// Moves the scan onto the model, then compares.
+    Align,
     /// The colours of the points per layer of the scene, and the summary.
     Done(u64, Arc<Vec<(usize, Vec<[u8; 4]>)>>, Summary),
     Off,
@@ -159,6 +161,45 @@ impl App {
                     },
                 );
             }
+            Event::Align => {
+                let Some(model) = self.model.clone().filter(|_| self.cloud_ready()) else { return Task::none() };
+                let (triangles, clouds) = split(&model, &self.visible);
+                let surface = Surface::new(triangles);
+                // a sample of the points is enough to see where the scan belongs
+                let all: Vec<Vec3> = clouds.iter().flat_map(|(_, points)| points.iter().copied()).collect();
+                let stride = (all.len() / 30_000).max(1);
+                let sample: Vec<Vec3> = all.iter().step_by(stride).copied().collect();
+                let (shift, near) = fit_shift(&surface, &sample, 1.0);
+                if near * 2 < sample.len() {
+                    self.collab_note(Tone::Warning, l.text("Minder dan de helft van de punten ligt binnen een meter van het model: leg de scan eerst ongeveer op zijn plek.", "Less than half of the points lie within a metre of the model: lay the scan about in its place first."));
+                    return Task::none();
+                }
+                // the points move in the open models that hold them
+                let mut moved = false;
+                for (layer, _) in &clouds {
+                    let Some(k) = self.models.iter().position(|e| e.layers.contains(layer)) else { continue };
+                    let entry = &mut self.models[k];
+                    let own = layer - entry.layers.start;
+                    let mut cloud = (*entry.model).clone();
+                    if let Some(points) = cloud.layers.get_mut(own).filter(|l| l.points) {
+                        for p in points.positions.chunks_exact_mut(3) {
+                            p[0] += shift.x;
+                            p[1] += shift.y;
+                            p[2] += shift.z;
+                        }
+                        cloud.id = crate::model::fresh_id();
+                        entry.model = Arc::new(cloud);
+                        moved = true;
+                    }
+                }
+                if !moved {
+                    self.collab_note(Tone::Warning, l.text("De scan en het model zijn één bestand: uitlijnen kan alleen met de scan als eigen model.", "The scan and the model are one file: aligning needs the scan as a model of its own."));
+                    return Task::none();
+                }
+                self.cloud_redraw();
+                self.collab_note(Tone::Success, format!("{} {:.0} mm (x {:.0}, y {:.0}, z {:.0})", l.text("Scan verschoven over", "Scan moved by"), shift.length() * 1000.0, shift.x * 1000.0, shift.y * 1000.0, shift.z * 1000.0));
+                return self.cloud_handle(Event::Compare);
+            }
             Event::Done(run, colours, summary) => {
                 if run != self.collab.cloud.run {
                     return Task::none();
@@ -232,6 +273,7 @@ impl App {
                 w::secondary(look, "mm"),
                 Space::new().width(Length::Fill),
                 w::button(look, l.text("Vergelijken", "Compare"), K::Primary, D::Compact, None, (self.cloud_ready() && !state.running).then(|| go(Event::Compare))),
+                w::button(look, l.text("Uitlijnen", "Align"), K::Secondary, D::Compact, None, (self.cloud_ready() && !state.running && self.models.len() > 1).then(|| go(Event::Align))),
                 w::button(look, l.text("Uit", "Off"), K::Quiet, D::Compact, None, state.summary.is_some().then(|| go(Event::Off))),
             ]
             .spacing(4)
@@ -291,6 +333,10 @@ impl App {
     /// The remote's command: compares at once and answers with the summary.
     pub(crate) fn cloud_command(&mut self, a: &serde_json::Value) -> Result<serde_json::Value, String> {
         use serde_json::json;
+        if a.get("action").and_then(|v| v.as_str()) == Some("align") {
+            let _ = self.cloud_handle(Event::Align);
+            return Ok(json!({ "notice": self.collab.notice.as_ref().map(|(_, m)| m.clone()), "note": "the comparison runs after it; ask again with action compare" }));
+        }
         if a.get("action").and_then(|v| v.as_str()) == Some("off") {
             let _ = self.cloud_handle(Event::Off);
             return Ok(json!({ "off": true }));

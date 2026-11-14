@@ -147,11 +147,14 @@ pub struct ClashRule {
     /// the places looked from that may be without sight of it (percent).
     pub sight_m: f32,
     pub sight_blocked_pct: f32,
+    /// A sight-line test: only the elements whose name fits one of these have to be seen
+    /// (`*exit*, *vlucht*`; several with a comma between; empty: all the first side takes).
+    pub sight_names: String,
 }
 
 impl Default for ClashRule {
     fn default() -> Self {
-        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false, storeys: String::new(), property: String::new(), value: String::new(), pair_tolerances: String::new(), sight_m: 20.0, sight_blocked_pct: 50.0 }
+        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false, storeys: String::new(), property: String::new(), value: String::new(), pair_tolerances: String::new(), sight_m: 20.0, sight_blocked_pct: 50.0, sight_names: String::new() }
     }
 }
 
@@ -175,6 +178,12 @@ impl ClashRule {
             let fits = (matches(x, a) && matches(y, b)) || (matches(x, b) && matches(y, a));
             fits.then(|| mm.trim().replace(',', ".").parse::<f32>().ok()).flatten().map(|mm| mm.max(0.0) / 1000.0)
         })
+    }
+
+    /// Whether an element of this name is one a sight-line test wants seen.
+    pub fn takes_sight_name(&self, name: &str) -> bool {
+        let wanted: Vec<&str> = self.sight_names.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        wanted.is_empty() || wanted.iter().any(|pattern| matches(pattern, name))
     }
 
     /// Whether a storey of this name is in the test's scope.
@@ -412,7 +421,7 @@ impl RuleSet {
                     ClashRule {
                         on: false,
                         kind: ClashKind::Sight,
-                        a: Selector { names: ["*vlucht*", "*nooduitgang*", "*exit*", "*emergency*"].map(String::from).to_vec(), ..Selector::default() },
+                        sight_names: "*vlucht*, *nooduitgang*, *exit*, *emergency*".into(),
                         ..rule(t("Vluchtwegaanduiding zichtbaar", "Escape route signs in sight"), &[], &[], ClashKind::Sight)
                     },
                 ],

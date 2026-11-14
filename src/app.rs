@@ -263,6 +263,8 @@ pub struct App {
     pub levels_3d: bool,
     /// Which heads are seen (per grid, its two ends), and for what view they were worked out.
     pub(crate) heads_seen: (Option<(Camera, u64, (f32, f32), usize, usize)>, Vec<[bool; 2]>),
+    /// As seen: each dimension between the grids, and each level's two marks.
+    pub(crate) marks_seen: (Vec<bool>, Vec<[bool; 2]>),
     views_3d_key: Vec<u64>,
     views_3d_labels: Vec<(String, [f32; 3])>,
     /// The bar's Export button is open: the formats to export the drawing shown in follow it.
@@ -834,6 +836,7 @@ impl Default for App {
             grid_dims: false,
             levels_3d: false,
             heads_seen: (None, Vec::new()),
+            marks_seen: (Vec::new(), Vec::new()),
             views_3d_key: Vec::new(),
             views_3d_labels: Vec::new(),
             export_menu: false,
@@ -3730,6 +3733,8 @@ impl App {
                     accent: p.accent,
                     seen: if self.shown_view().is_none() { self.heads_seen.1.clone() } else { Vec::new() },
                     dims: self.grid_dimensions(),
+                    dims_seen: if self.shown_view().is_none() { self.marks_seen.0.clone() } else { Vec::new() },
+                    levels_seen: if self.shown_view().is_none() { self.marks_seen.1.clone() } else { Vec::new() },
                 })
                 .width(Fill)
                 .height(Fill)

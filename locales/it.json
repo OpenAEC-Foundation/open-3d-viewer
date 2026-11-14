@@ -786,6 +786,16 @@
     "mean": "media",
     "largest": "la maggiore",
     "Places that are off": "Punti con scostamento",
-    "Place": "Punto"
+    "Place": "Punto",
+    "Less than half of the points lie within a metre of the model: lay the scan about in its place first.": "Meno della metà dei punti è entro un metro dal modello: posiziona prima la scansione più o meno al suo posto.",
+    "The scan and the model are one file: aligning needs the scan as a model of its own.": "La scansione e il modello sono un unico file: per allineare serve la scansione come modello a sé.",
+    "Scan moved by": "Scansione spostata di",
+    "Align": "Allinea",
+    "Property": "Proprietà",
+    "name, e.g. LoadBearing": "nome, ad es. LoadBearing",
+    "To be seen": "Da vedere",
+    "% out of sight": "% senza vista",
+    "Largest": "La maggiore",
+    "Place (x, y, z)": "Posizione (x, y, z)"
   }
 }

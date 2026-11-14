@@ -51,6 +51,10 @@ pub struct GridOverlay {
     pub seen: Vec<[bool; 2]>,
     /// The dimensions between the grid lines: two points and the distance.
     pub dims: Vec<Measurement>,
+    /// Whether each of them is seen, and each level's mark at its first and second end (in
+    /// the order the levels are drawn); what these do not hold shows.
+    pub dims_seen: Vec<bool>,
+    pub levels_seen: Vec<[bool; 2]>,
 }
 
 fn project(view_proj: &Mat4, size: (f32, f32), world: Vec3) -> Option<Point> {
@@ -192,14 +196,22 @@ impl<Message> canvas::Program<Message> for GridOverlay {
             })
             .collect();
         let named = named_levels(&levels.iter().map(|l| l.0.y).collect::<Vec<_>>(), LEVEL_GAP);
-        for ((a, b, datum, elevation), named) in levels.into_iter().zip(named) {
+        for (k, ((a, b, datum, elevation), named)) in levels.into_iter().zip(named).enumerate() {
             let len = a.distance(b);
             let out = ((b.x - a.x) / len, (b.y - a.y) / len);
-            draw_level_head(&mut frame, a, (-out.0, -out.1), &datum.line.name, elevation, named, self.ink, self.fill);
-            draw_level_head(&mut frame, b, out, &datum.line.name, elevation, named, self.ink, self.fill);
+            let seen = self.levels_seen.get(k).copied().unwrap_or([true; 2]);
+            if seen[0] {
+                draw_level_head(&mut frame, a, (-out.0, -out.1), &datum.line.name, elevation, named, self.ink, self.fill);
+            }
+            if seen[1] {
+                draw_level_head(&mut frame, b, out, &datum.line.name, elevation, named, self.ink, self.fill);
+            }
         }
         // the dimensions between the grids: a thin line, a tick at each end, the distance on it
-        for dim in &self.dims {
+        for (k, dim) in self.dims.iter().enumerate() {
+            if self.dims_seen.get(k) == Some(&false) {
+                continue;
+            }
             let (Some(a), Some(b)) = (dim.points.first().and_then(|p| project(&self.view_proj, size, *p)), dim.points.last().and_then(|p| project(&self.view_proj, size, *p))) else { continue };
             let len = a.distance(b);
             if len < 24.0 {

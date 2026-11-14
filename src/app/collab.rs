@@ -373,6 +373,8 @@ pub struct State {
     boxes: Option<(u64, Arc<HashMap<u64, crate::model::Bounds>>)>,
     /// The amounts of the room checks as typed.
     room_amounts: Vec<String>,
+    /// Per clash test, the share of places that may be without sight, as typed.
+    sight_shares: Vec<String>,
     /// The tolerance of the matrix as typed, and the ways to group in the list to choose from.
     matrix_amount: String,
     groupings: Vec<GroupChoice>,
@@ -457,6 +459,7 @@ impl Default for State {
             clash_shared: None,
             boxes: None,
             room_amounts: Vec::new(),
+            sight_shares: Vec::new(),
             groupings: Vec::new(),
             running: false,
             search: String::new(),
@@ -557,6 +560,10 @@ impl State {
         let same = |typed: &String, amount: f32| typed.trim().replace(',', ".").parse::<f32>().ok() == Some(amount);
         if amounts.len() != self.amounts.len() || !self.amounts.iter().zip(&amounts).all(|(t, a)| same(t, *a) || t.trim().is_empty() || t.ends_with(['.', ','])) {
             self.amounts = amounts.iter().map(|a| a.to_string()).collect();
+        }
+        let shares: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| c.sight_blocked_pct).collect()).unwrap_or_default();
+        if shares.len() != self.sight_shares.len() || !self.sight_shares.iter().zip(&shares).all(|(t, v)| same(t, *v) || t.trim().is_empty() || t.ends_with(['.', ','])) {
+            self.sight_shares = shares.iter().map(|v| v.to_string()).collect();
         }
         if let Some(r) = self.rules().map(|r| r.rooms.clone()) {
             let values = [r.room_height, r.door_width, r.door_height, r.escape_distance, r.threshold, r.ramp_run, r.turning_circle];
@@ -704,6 +711,12 @@ pub enum Event {
     /// The storeys a clash test is of, and its tolerances per pair of classes, as typed.
     ClashStoreys(usize, String),
     ClashPairs(usize, String),
+    /// Its property and the value it asks, the names a sight-line test wants seen, and the
+    /// share of places that may be without sight, as typed.
+    ClashProperty(usize, String),
+    ClashValue(usize, String),
+    ClashSightNames(usize, String),
+    ClashSightShare(usize, String),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
     /// The first (true) or second side of a clash test.
@@ -885,6 +898,9 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
             for &t in &a {
                 if cancel.load(Ordering::Relaxed) {
                     break;
+                }
+                if !rule.takes_sight_name(model.props.get(&items[t].id).and_then(|p| field(p, "Name")).unwrap_or("")) {
+                    continue;
                 }
                 let target = &items[t].solid;
                 let centre = (target.min + target.max) / 2.0;
@@ -1611,6 +1627,14 @@ impl App {
     fn collab_show_clashes(&mut self, g: usize) {
         let Some(model) = self.model.clone() else { return };
         let rows: Vec<ClashRow> = self.collab.clashes.iter().filter(|c| c.group == g).cloned().collect();
+        // clashes spread over the building make a picture of nothing: of such a group the
+        // picture shows those within a few metres of the one with the most others near it
+        let near = |c: &ClashRow, d: &ClashRow| Vec3::from_array(c.at).distance(Vec3::from_array(d.at)) <= 4.0;
+        let middle = rows.iter().max_by_key(|c| rows.iter().filter(|d| near(c, d)).count()).cloned();
+        let rows: Vec<ClashRow> = match middle {
+            Some(m) if rows.iter().any(|c| !near(&m, c)) => rows.into_iter().filter(|c| near(&m, c)).collect(),
+            _ => rows,
+        };
         let mut bounds = crate::model::Bounds::empty();
         for c in &rows {
             // the smaller of the two is what to look at: the pipe, not the floor it goes through
@@ -1764,6 +1788,11 @@ impl App {
         self.collab.refresh();
         if let Event::ClashAmount(k, typed) = &event {
             if let Some(kept) = self.collab.amounts.get_mut(*k) {
+                *kept = typed.clone();
+            }
+        }
+        if let Event::ClashSightShare(k, typed) = &event {
+            if let Some(kept) = self.collab.sight_shares.get_mut(*k) {
                 *kept = typed.clone();
             }
         }
@@ -2222,6 +2251,28 @@ impl App {
             Event::ClashStoreys(k, typed) => {
                 if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
                     rule.storeys = typed;
+                }
+            }
+            Event::ClashProperty(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.property = typed.trim().to_string();
+                }
+            }
+            Event::ClashValue(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.value = typed;
+                }
+            }
+            Event::ClashSightNames(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.sight_names = typed;
+                }
+            }
+            Event::ClashSightShare(k, typed) => {
+                if let (Some(rule), Ok(pct)) = (self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)), typed.trim().trim_end_matches('%').replace(',', ".").parse::<f32>()) {
+                    if (0.0..=100.0).contains(&pct) {
+                        rule.sight_blocked_pct = pct;
+                    }
                 }
             }
             Event::ClashPairs(k, typed) => {
@@ -2995,6 +3046,21 @@ impl App {
                         row![
                             w::secondary(look, l.text("Bouwlagen", "Storeys")).width(96),
                             container(w::text_field(look, l.text("alle; bijv. 00*, 01*", "all; e.g. 00*, 01*"), &rule.storeys, Some(move |t| go(Event::ClashStoreys(k, t))), D::Compact, None)).width(Length::Fill),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                        row![
+                            w::secondary(look, l.text("Eigenschap", "Property")).width(96),
+                            container(w::text_field(look, l.text("naam, bijv. LoadBearing", "name, e.g. LoadBearing"), &rule.property, Some(move |t| go(Event::ClashProperty(k, t))), D::Compact, None)).width(Length::FillPortion(3)),
+                            container(w::text_field(look, l.text("waarde, * voor iets", "value, * for any"), &rule.value, Some(move |t| go(Event::ClashValue(k, t))), D::Compact, None)).width(Length::FillPortion(2)),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                        row![
+                            w::secondary(look, l.text("Te zien", "To be seen")).width(96),
+                            container(w::text_field(look, "*exit*, *vlucht*", &rule.sight_names, (rule.kind == ClashKind::Sight).then_some(move |t| go(Event::ClashSightNames(k, t))), D::Compact, None)).width(Length::FillPortion(3)),
+                            container(w::text_field(look, "%", state.sight_shares.get(k).map(String::as_str).unwrap_or(""), (rule.kind == ClashKind::Sight).then_some(move |t| go(Event::ClashSightShare(k, t))), D::Compact, None)).width(Length::FillPortion(1)),
+                            w::secondary(look, l.text("% zonder zicht", "% out of sight")),
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
@@ -3988,7 +4054,7 @@ mod tests {
         }
         let model = Model::new(PathBuf::from("room.ifc"), "IFC", vec![layer]);
         let models = vec![("room.ifc".to_string(), 0..1)];
-        let rule = ClashRule { name: "signs".into(), kind: ClashKind::Sight, a: Selector { names: vec!["*vlucht*".into()], ..Selector::default() }, sight_blocked_pct: 40.0, ..ClashRule::default() };
+        let rule = ClashRule { name: "signs".into(), kind: ClashKind::Sight, sight_names: "*exit*, *vlucht*".into(), sight_blocked_pct: 40.0, ..ClashRule::default() };
         let found = run_clashes(&model, &models, std::slice::from_ref(&rule), &AtomicBool::new(false));
         // from the half of the room before the wall the sign is not seen
         assert_eq!(found.len(), 1, "{found:?}");

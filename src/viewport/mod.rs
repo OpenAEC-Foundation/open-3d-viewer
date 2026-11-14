@@ -222,7 +222,9 @@ where
                 }
                 if let (Some((Drag::Orbit | Drag::Box, _)), Some(start), Some(at)) = (drag, press, cursor.position_in(bounds)) {
                     if start.distance(at) < 4.0 {
-                        return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add: state.command });
+                        // in the Select tool of the Modeller Shift adds too
+                        let add = state.command || (self.drag_selects && state.shift);
+                        return publish(Navigate::Pick { x: at.x, y: at.y, width: bounds.width, height: bounds.height, add });
                     }
                 }
                 if let (Some((Drag::Box, from)), Some(at)) = (drag, cursor.position()) {
@@ -447,6 +449,11 @@ mod tests {
 
     /// A mouse event at window point `at`, through the viewport program.
     fn mouse_event(state: &mut State, event: mouse::Event, at: Point) -> Option<Navigate> {
+        mouse_event_with(state, event, at, false)
+    }
+
+    /// A mouse event in a viewport whose left drag draws a box when `drag_selects`.
+    fn mouse_event_with(state: &mut State, event: mouse::Event, at: Point, drag_selects: bool) -> Option<Navigate> {
         let offsets = Arc::default();
         let marks = Arc::default();
         let settings = RenderSettings {
@@ -472,7 +479,7 @@ mod tests {
             offsets: &offsets,
             looks: &offsets,
             hover: false,
-            drag_selects: false,
+            drag_selects,
             crosshair: false,
             structural_selected: &marks,
             structural_hovered: &marks,
@@ -501,6 +508,29 @@ mod tests {
         mouse_event(&mut state, mouse::Event::ButtonPressed(mouse::Button::Left), Point::new(200.0, 150.0));
         let pick = mouse_event(&mut state, mouse::Event::ButtonReleased(mouse::Button::Left), Point::new(200.0, 150.0));
         assert!(matches!(pick, Some(Navigate::Pick { .. })), "{pick:?}");
+    }
+
+    #[test]
+    fn the_select_tools_drag_draws_a_box_and_shift_adds_to_a_click_and_a_box() {
+        let mut state = State::default();
+        let (down, up) = (mouse::Event::ButtonPressed(mouse::Button::Left), mouse::Event::ButtonReleased(mouse::Button::Left));
+        let drag = |state: &mut State, to: f32| mouse_event_with(state, mouse::Event::CursorMoved { position: Point::new(to, 150.0) }, Point::new(to, 150.0), true);
+        // a drag: a box that replaces
+        mouse_event_with(&mut state, down, Point::new(200.0, 150.0), true);
+        assert!(matches!(drag(&mut state, 260.0), Some(Navigate::Box { add: false, done: false, .. })));
+        assert!(matches!(mouse_event_with(&mut state, up, Point::new(260.0, 150.0), true), Some(Navigate::Box { add: false, done: true, .. })));
+        // with Shift: a click and a box add
+        state.shift = true;
+        mouse_event_with(&mut state, down, Point::new(200.0, 150.0), true);
+        let pick = mouse_event_with(&mut state, up, Point::new(201.0, 150.0), true);
+        assert!(matches!(pick, Some(Navigate::Pick { add: true, .. })), "{pick:?}");
+        mouse_event_with(&mut state, down, Point::new(200.0, 150.0), true);
+        drag(&mut state, 260.0);
+        assert!(matches!(mouse_event_with(&mut state, up, Point::new(260.0, 150.0), true), Some(Navigate::Box { add: true, .. })));
+        // in the Viewer a plain click does not add (Shift and a left drag pan there)
+        state.shift = false;
+        mouse_event(&mut state, down, Point::new(200.0, 150.0));
+        assert!(matches!(mouse_event(&mut state, up, Point::new(200.0, 150.0)), Some(Navigate::Pick { add: false, .. })));
     }
 
     #[test]

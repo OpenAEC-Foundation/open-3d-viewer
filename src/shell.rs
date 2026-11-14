@@ -617,9 +617,24 @@ impl DevSession {
 impl Studio {
     /// The time is `now`: a letter that waited too long for its pair does what it does alone.
     pub(crate) fn expire_keys(&mut self, now: Instant) {
-        if let Some(key) = self.keys.expire(now) {
-            let l = self.l();
-            let _ = self.update(Msg::App(Message::ModelKey(key, l)));
+        if let Some(step) = self.keys.expire_step(now) {
+            let _ = self.key_step(step);
+        }
+    }
+
+    /// What a letter typed in the Modeller came to: its command, or, when the Modeller has no use
+    /// for the letter, the app's own shortcut on it (F fits, H hides).
+    fn key_step(&mut self, step: crate::app::modeller::keys::Step) -> Task<Msg> {
+        use crate::app::modeller::keys::Step;
+        match step {
+            Step::Key(key) => {
+                let l = self.l();
+                self.update(Msg::App(Message::ModelKey(key, l)))
+            }
+            Step::Letter(c) => match cm::find(&self.commands(), &iced::keyboard::Key::Character(c.to_string().into()), iced::keyboard::Modifiers::empty()) {
+                Some(message) => self.update(message),
+                None => Task::none(),
+            },
         }
     }
 
@@ -1592,22 +1607,17 @@ impl Studio {
                 }
                 // in the Modeller a plain letter is a key of its own (see `app::modeller::keys`),
                 // and PageUp / PageDown step through the levels
-                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && !press.modifiers.control() && !press.modifiers.alt() {
-                    use crate::app::modeller::keys::ModelKey;
-                    let keys: Vec<ModelKey> = match &press.key {
-                        Key::Character(c) => match c.chars().next().filter(|c| c.is_ascii_alphabetic() && c.len_utf8() == 1) {
-                            Some(c) => self.keys.press(c, Instant::now()),
-                            None => Vec::new(),
-                        },
-                        Key::Named(Named::PageUp) => vec![ModelKey::LevelUp],
-                        Key::Named(Named::PageDown) => vec![ModelKey::LevelDown],
-                        _ => Vec::new(),
+                // (not in edit mode, whose own keys came before; its other letters stay the app's)
+                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !press.modifiers.control() && !press.modifiers.alt() {
+                    use crate::app::modeller::keys::{ModelKey, Step};
+                    let steps: Option<Vec<Step>> = match &press.key {
+                        Key::Character(c) => c.chars().next().filter(|c| c.is_ascii_alphabetic()).map(|c| self.keys.steps(c, Instant::now())),
+                        Key::Named(Named::PageUp) => Some(vec![Step::Key(ModelKey::LevelUp)]),
+                        Key::Named(Named::PageDown) => Some(vec![Step::Key(ModelKey::LevelDown)]),
+                        _ => None,
                     };
-                    let letter = matches!(&press.key, Key::Character(c) if c.chars().next().is_some_and(|c| c.is_ascii_alphabetic()));
-                    let paged = matches!(press.key, Key::Named(Named::PageUp | Named::PageDown));
-                    if letter || paged {
-                        let l = self.l();
-                        let tasks: Vec<Task<Msg>> = keys.into_iter().map(|key| self.update(Msg::App(Message::ModelKey(key, l)))).collect();
+                    if let Some(steps) = steps {
+                        let tasks: Vec<Task<Msg>> = steps.into_iter().map(|step| self.key_step(step)).collect();
                         return Task::batch(tasks);
                     }
                 }

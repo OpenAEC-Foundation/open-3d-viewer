@@ -142,7 +142,7 @@ mod tests {
         // a letter that waits does what it does alone once its time is up
         press(&mut studio, "d");
         assert!(studio.keys.pending().is_some());
-        studio.expire_keys(std::time::Instant::now() + std::time::Duration::from_secs(1));
+        studio.expire_keys(web_time::Instant::now() + web_time::Duration::from_secs(1));
         assert_eq!(studio.app.modeller.tool.map(|t| t.0), Some(ModelTool::Door));
         press(&mut studio, "s");
         assert!(studio.app.modeller.tool.is_none(), "s selects");
@@ -159,6 +159,36 @@ mod tests {
         press_with(&mut studio, "w", Modifiers::CTRL);
         press_with(&mut studio, "w", Modifiers::ALT);
         assert!(studio.app.modeller.tool.is_none());
+    }
+
+    #[test]
+    fn the_apps_own_letters_still_work_in_the_modeller() {
+        let mut studio = modelling_studio();
+        studio.app.camera.ortho = true;
+        // p: perspective, a shortcut of the app the Modeller has no use for
+        press(&mut studio, "p");
+        assert!(!studio.app.camera.ortho);
+        // f: fit, after the Modeller waited for fl (a wall to fit to)
+        let form = bim_core::element::PlanarForm::Wall { start: glam::DVec2::ZERO, end: glam::DVec2::new(4.0, 0.0), base: 0.0, height: 3.0 };
+        studio.app.add_element("Wall", None, bim_core::Shape::Planar(bim_core::PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None })).unwrap();
+        studio.app.camera.distance = 1.0e6;
+        press(&mut studio, "f");
+        studio.expire_keys(web_time::Instant::now() + web_time::Duration::from_secs(1));
+        assert!(studio.app.camera.distance < 1.0e6, "fitted");
+    }
+
+    #[test]
+    fn in_edit_mode_letters_start_no_tool_and_select_leaves_it() {
+        let mut studio = modelling_studio();
+        let form = bim_core::element::PlanarForm::Wall { start: glam::DVec2::ZERO, end: glam::DVec2::new(4.0, 0.0), base: 0.0, height: 3.0 };
+        let wall = studio.app.add_element("Wall", None, bim_core::Shape::Planar(bim_core::PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None })).unwrap();
+        studio.app.select_modelled(wall);
+        let _ = studio.update(Msg::App(crate::app::Message::EditMode));
+        assert!(studio.app.modeller.edit.is_some());
+        press(&mut studio, "w");
+        assert!(studio.app.modeller.tool.is_none(), "no Wall tool while editing");
+        let _ = studio.update(Msg::App(crate::app::Message::SelectTool));
+        assert!(studio.app.modeller.edit.is_none() && studio.app.selecting(), "Select leaves edit mode");
     }
 
     #[test]

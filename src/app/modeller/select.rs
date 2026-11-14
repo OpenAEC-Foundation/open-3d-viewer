@@ -12,6 +12,8 @@ impl App {
         self.modeller.points.clear();
         self.modeller.cursor = None;
         self.modeller.transform = None;
+        // edit mode too: a move under way in it is dropped, as Esc drops it
+        self.modeller.edit = None;
         self.measure.tool = None;
         self.dimension_tool = false;
         self.note_tool = false;

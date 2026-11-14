@@ -43,6 +43,10 @@ pub enum Tab {
     Clashes,
     /// Two versions of a model side by side: what was added, removed and changed.
     Compare,
+    /// The model coloured by a property, and the sets of elements kept.
+    Colours,
+    /// Takeoffs of the elements' information and quantities.
+    Takeoff,
 }
 
 /// What a person decided on a clash.
@@ -146,6 +150,51 @@ fn user_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-user.txt"))
 }
 
+/// How far a hard clash goes: the one only scrapes the other, goes partly into it, or goes
+/// right through it (a pipe through a wall). The worst sorts first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Reach {
+    /// Elements too near (a clearance test): nothing crosses.
+    #[default]
+    Near,
+    Graze,
+    Partly,
+    Through,
+}
+
+impl Reach {
+    pub fn key(self) -> &'static str {
+        match self {
+            Reach::Near => "clearance",
+            Reach::Graze => "graze",
+            Reach::Partly => "partly",
+            Reach::Through => "through",
+        }
+    }
+
+    /// How far a clash of this kind goes: `depth` is how far the elements cross, the boxes are
+    /// those of the two elements (min, max).
+    pub fn of(kind: Kind, depth: f32, a: (Vec3, Vec3), b: (Vec3, Vec3)) -> Reach {
+        match kind {
+            Kind::Near => Reach::Near,
+            Kind::Hidden => Reach::Partly,
+            Kind::Inside => Reach::Through,
+            Kind::Crossing => {
+                let size = |x: (Vec3, Vec3)| x.1 - x.0;
+                let (small, large) = if size(a).length_squared() <= size(b).length_squared() { (a, b) } else { (b, a) };
+                // the thinnest side of the smaller one: a clash less deep than a little of it scrapes
+                let thin = size(small).min_element().max(0.001);
+                if depth < 0.01 || depth < 0.15 * thin {
+                    return Reach::Graze;
+                }
+                // through: along some axis the smaller one sticks out of the larger on both sides
+                let through = (0..3).any(|k| small.0[k] < large.0[k] - 0.005 && small.1[k] > large.1[k] + 0.005);
+                if through { Reach::Through } else { Reach::Partly }
+            }
+        }
+    }
+}
+
 /// A clash as the list shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClashRow {
@@ -159,6 +208,108 @@ pub struct ClashRow {
     /// How far they cross or are apart (metres).
     pub distance: f32,
     pub decision: Decision,
+    /// The group it is in (see [`group_clashes`]): the rows of a group follow each other.
+    pub group: usize,
+    /// The two are one element twice: of one class, in one place, of one size.
+    pub copy: bool,
+    /// Its two elements by the keys they keep between versions (see [`App::collab_take_clashes`]).
+    pub key: String,
+    /// The run before did not have it.
+    pub fresh: bool,
+    /// How far it goes.
+    pub reach: Reach,
+}
+
+/// What a group of clashes is called: the element most of them have.
+pub(super) fn group_title(rows: &[&ClashRow]) -> String {
+    let mut count: Vec<(&str, usize)> = Vec::new();
+    for r in rows {
+        for name in [r.a_name.as_str(), r.b_name.as_str()] {
+            match count.iter_mut().find(|(n, _)| *n == name) {
+                Some(c) => c.1 += 1,
+                None => count.push((name, 1)),
+            }
+        }
+    }
+    // the first of those most named
+    count.iter().rev().max_by_key(|(_, c)| *c).map(|(n, _)| n.to_string()).unwrap_or_default()
+}
+
+/// How the clashes of a test are put together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Grouping {
+    /// Each clash on its own.
+    Off,
+    /// By the element they share: a duct through ten beams is one group.
+    #[default]
+    Element,
+    /// By where they are: the clashes within a few metres of each other.
+    Place,
+}
+
+/// A way to group in a list to choose from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupChoice(Grouping, String);
+
+impl std::fmt::Display for GroupChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+/// The ways to group, in the language of the interface.
+fn groupings(l: Language) -> Vec<GroupChoice> {
+    vec![
+        GroupChoice(Grouping::Off, l.text("Niet groeperen", "No groups").to_string()),
+        GroupChoice(Grouping::Element, l.text("Per element", "By element").to_string()),
+        GroupChoice(Grouping::Place, l.text("Per plek", "By place").to_string()),
+    ]
+}
+
+/// The size of the cells clashes are grouped by place in (metres).
+const PLACE: f32 = 3.0;
+
+/// Puts the clashes of each test in groups, and the rows of a group after each other: the tests
+/// keep their order, and so do the groups and the clashes in a group. By element, a clash goes
+/// with the one of its two elements that clashes most in its test, so one element with many
+/// clashes is one group, not a chain of everything that touches; by place, with the clashes of
+/// its test in the same cell of a few metres.
+pub fn group_clashes(rows: &mut Vec<ClashRow>, by: Grouping) {
+    let mut count: HashMap<(&str, u64), usize> = HashMap::new();
+    for r in rows.iter() {
+        for id in [r.a, r.b] {
+            *count.entry((r.rule.as_str(), id)).or_default() += 1;
+        }
+    }
+    let rule_order: HashMap<&str, usize> = rows.iter().enumerate().rev().map(|(k, r)| (r.rule.as_str(), k)).collect();
+    let keys: Vec<(usize, [i64; 3])> = rows
+        .iter()
+        .enumerate()
+        .map(|(k, r)| match by {
+            Grouping::Off => (rule_order[r.rule.as_str()], [k as i64, 0, 0]),
+            Grouping::Element => {
+                let (ca, cb) = (count[&(r.rule.as_str(), r.a)], count[&(r.rule.as_str(), r.b)]);
+                (rule_order[r.rule.as_str()], [if cb > ca { r.b } else { r.a } as i64, 0, 0])
+            }
+            Grouping::Place => (rule_order[r.rule.as_str()], r.at.map(|v| (v / PLACE).floor() as i64)),
+        })
+        .collect();
+    // the groups in the order their first clash comes
+    let mut first: HashMap<(usize, [i64; 3]), usize> = HashMap::new();
+    for (k, key) in keys.iter().enumerate() {
+        first.entry(*key).or_insert(k);
+    }
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&k| (keys[k].0, first[&keys[k]], k));
+    let mut sorted: Vec<ClashRow> = order.iter().map(|&k| rows[k].clone()).collect();
+    let mut group = 0;
+    for (n, &k) in order.iter().enumerate() {
+        if n > 0 && keys[k] != keys[order[n - 1]] {
+            group += 1;
+        }
+        sorted[n].group = group;
+    }
+    *rows = sorted;
 }
 
 /// What a check of one model gave.
@@ -193,6 +344,38 @@ pub struct State {
     pub open_spec: Option<(usize, usize)>,
     pub clashes: Vec<ClashRow>,
     pub clash: Option<usize>,
+    /// How the clashes are grouped, and the group opened in the list.
+    pub grouping: Grouping,
+    /// Whether the clash tests and the matrix show above the clashes.
+    pub show_tests: bool,
+    pub open_group: Option<usize>,
+    /// Colours, sets and takeoffs.
+    pub inform: super::inform::State,
+    /// A point cloud against the model.
+    pub cloud: super::cloud::State,
+    /// The PDF report being made.
+    pub report_job: Option<ReportJob>,
+    /// The issues are written as BCF 3.0, not 2.1.
+    pub bcf3: bool,
+    /// The clashes of the run before that this run no longer found, and whether the list shows
+    /// them; whether this run was compared with one before; whether it is of a selection only.
+    pub resolved: Vec<crate::collab::rules::ClashMemo>,
+    pub show_resolved: bool,
+    pub compared: bool,
+    partial_run: bool,
+    /// The clashing elements a picture shows: the first of each clash and the second.
+    pub clash_shown: Option<(std::collections::HashSet<u64>, std::collections::HashSet<u64>)>,
+    /// With them: the elements near enough to show as their surroundings, and the element most
+    /// of the clashes share (a floor many pipes go through), drawn lighter.
+    clash_near: std::collections::HashSet<u64>,
+    clash_shared: Option<u64>,
+    /// The boxes of the elements, for the model with this id: worked out once for a report.
+    boxes: Option<(u64, Arc<HashMap<u64, crate::model::Bounds>>)>,
+    /// The amounts of the room checks as typed.
+    room_amounts: Vec<String>,
+    /// The tolerance of the matrix as typed, and the ways to group in the list to choose from.
+    matrix_amount: String,
+    groupings: Vec<GroupChoice>,
     pub running: bool,
     /// What the list of issues is narrowed to, and whether closed ones show.
     pub search: String,
@@ -257,6 +440,24 @@ impl Default for State {
             open_spec: None,
             clashes: Vec::new(),
             clash: None,
+            grouping: Grouping::default(),
+            show_tests: true,
+            open_group: None,
+            matrix_amount: String::new(),
+            inform: Default::default(),
+            cloud: Default::default(),
+            report_job: None,
+            bcf3: false,
+            resolved: Vec::new(),
+            show_resolved: false,
+            compared: false,
+            partial_run: false,
+            clash_shown: None,
+            clash_near: Default::default(),
+            clash_shared: None,
+            boxes: None,
+            room_amounts: Vec::new(),
+            groupings: Vec::new(),
             running: false,
             search: String::new(),
             show_closed: true,
@@ -292,7 +493,7 @@ impl State {
         self.rule_sets.get(self.rule_set)
     }
 
-    fn rules_mut(&mut self) -> Option<&mut RuleSet> {
+    pub(super) fn rules_mut(&mut self) -> Option<&mut RuleSet> {
         self.rule_sets.get_mut(self.rule_set)
     }
 
@@ -333,6 +534,7 @@ impl State {
         if self.labelled != Some(l) {
             self.statuses = STATUSES.iter().map(|&s| Label(s, status_label(s, l))).collect();
             self.priorities = PRIORITIES.iter().map(|&s| Label(s, priority_label(s, l))).collect();
+            self.groupings = groupings(l);
             self.labelled = Some(l);
         }
         let mut people: Vec<String> = std::iter::once(self.author.clone())
@@ -350,11 +552,23 @@ impl State {
         if names != self.rule_names {
             self.rule_names = names;
         }
-        let amounts: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| if c.kind == ClashKind::Hard { c.tolerance_mm } else { c.clearance_mm }).collect()).unwrap_or_default();
+        let amounts: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| match c.kind { ClashKind::Hard => c.tolerance_mm, ClashKind::Clearance => c.clearance_mm, ClashKind::Sight => c.sight_m }).collect()).unwrap_or_default();
         // what is typed stays as typed while it says the same amount
         let same = |typed: &String, amount: f32| typed.trim().replace(',', ".").parse::<f32>().ok() == Some(amount);
         if amounts.len() != self.amounts.len() || !self.amounts.iter().zip(&amounts).all(|(t, a)| same(t, *a) || t.trim().is_empty() || t.ends_with(['.', ','])) {
             self.amounts = amounts.iter().map(|a| a.to_string()).collect();
+        }
+        if let Some(r) = self.rules().map(|r| r.rooms.clone()) {
+            let values = [r.room_height, r.door_width, r.door_height, r.escape_distance, r.threshold, r.ramp_run, r.turning_circle];
+            if self.room_amounts.len() != 7 || !self.room_amounts.iter().zip(values).all(|(t, v)| same(t, v) || t.trim().is_empty() || t.ends_with(['.', ','])) {
+                self.room_amounts = values.iter().map(|v| v.to_string()).collect();
+            }
+        }
+        if let Some(mm) = self.rules().map(|r| r.matrix_tolerance_mm) {
+            let typed = &self.matrix_amount;
+            if !(same(typed, mm) || (!typed.is_empty() && typed.ends_with(['.', ',']))) {
+                self.matrix_amount = mm.to_string();
+            }
         }
     }
 
@@ -388,6 +602,41 @@ pub enum Report {
     Json,
     ClashesCsv,
     IssuesHtml,
+    /// The checks and the clashes as a PDF to read, and as an Excel workbook.
+    Pdf,
+    Xlsx,
+    /// The issues alone as a PDF.
+    IssuesPdf,
+}
+
+/// A picture a report takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shot {
+    /// The view as it is, for the cover.
+    Cover,
+    /// A group of clashes, shown.
+    Group(usize),
+    /// An issue without a picture of its own, from its viewpoint.
+    Issue(usize),
+}
+
+/// A PDF report being made: the pictures still to take and those taken, and the view as it
+/// was, to come back to.
+pub struct ReportJob {
+    path: PathBuf,
+    scope: super::reports::Scope,
+    todo: Vec<Shot>,
+    pictures: HashMap<usize, crate::export::report::Jpeg>,
+    issue_pictures: HashMap<usize, crate::export::report::Jpeg>,
+    cover: Option<crate::export::report::Jpeg>,
+    camera: crate::viewport::camera::Camera,
+    selection: Vec<Pickable>,
+    hidden: Arc<crate::units::UnitKeySet>,
+    plane: Option<SectionPlane>,
+    measured: Vec<crate::measure::Measurement>,
+    open_group: Option<usize>,
+    clash: Option<usize>,
+    started: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -437,6 +686,10 @@ pub enum Event {
     RuleSet(usize),
     ModelChecks(bool),
     Ils(bool),
+    /// The checks of rooms, doors, escape routes and fire separations.
+    Rooms(bool),
+    /// One of their amounts as typed: room height, door width, door height, escape distance.
+    RoomAmount(usize, String),
     RemoveIds(usize),
     Check,
     Checked(u64, Vec<Checked>),
@@ -448,6 +701,9 @@ pub enum Event {
     ClashOn(usize, bool),
     /// Whether a clash test is only between models.
     ClashBetween(usize, bool),
+    /// The storeys a clash test is of, and its tolerances per pair of classes, as typed.
+    ClashStoreys(usize, String),
+    ClashPairs(usize, String),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
     /// The first (true) or second side of a clash test.
@@ -459,8 +715,35 @@ pub enum Event {
     Clash,
     Clashed(u64, Vec<ClashRow>),
     PickClash(usize),
+    /// A picture of the view for the report being made.
+    ReportShot(Arc<iced::window::Screenshot>),
+    /// Colours, sets and takeoffs.
+    Inform(super::inform::Event),
+    /// A point cloud against the model.
+    Cloud(super::cloud::Event),
     IssueFromClash(usize),
     IssuesFromClashes,
+    GroupBy(GroupChoice),
+    ShowResolved(bool),
+    /// Whether the issues are written as BCF 3.0 (else 2.1).
+    Bcf3(bool),
+    /// The clash picked, or else the group open: decided on, or made an issue of.
+    DecidePicked(Decision),
+    IssueFromPicked,
+    /// The clash tests and the matrix shown (true) or folded away.
+    ShowTests(bool),
+    /// A group of clashes: opens it in the list (or closes it) and selects its elements.
+    PickGroup(usize),
+    DecideGroup(usize, Decision),
+    IssueFromGroup(usize),
+    /// The pair of disciplines (by their places) ticked in the matrix, or taken out.
+    MatrixCell(usize, usize),
+    AddDiscipline,
+    RemoveDiscipline(usize),
+    DisciplineName(usize, String),
+    DisciplineSide(usize, Side),
+    MatrixAmount(String),
+    MatrixBetween(bool),
     Cancel,
     Dismiss,
 }
@@ -508,7 +791,7 @@ fn job(work: impl FnOnce() -> Event + Send + 'static) -> Task<Message> {
 }
 
 /// The value of a text field of an element's flat JSON properties.
-fn field<'a>(props: &'a str, key: &str) -> Option<&'a str> {
+pub(super) fn field<'a>(props: &'a str, key: &str) -> Option<&'a str> {
     let start = props.find(&format!("\"{key}\":\""))? + key.len() + 4;
     let rest = &props[start..];
     let mut end = 0;
@@ -532,7 +815,8 @@ fn element_name(model: &Model, id: u64) -> String {
 }
 
 /// The clash tests of a rule set on a model: its elements as solids, each rule's two sides, the
-/// clashes found, each pair once.
+/// clashes found, each pair once over all the tests (with the first that finds it), each on its
+/// own until [`group_clashes`] puts them together.
 fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules: &[ClashRule], cancel: &AtomicBool) -> Vec<ClashRow> {
     struct Item {
         id: u64,
@@ -566,15 +850,99 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
             }
         }
     }
+    let levels = &model.project.levels;
     let mut rows: Vec<ClashRow> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for rule in rules.iter().filter(|r| r.on) {
         let side = |s: &Selector| -> Vec<usize> {
-            let takes = |item: &Item| s.takes_element(item.id, &models[item.model.min(models.len().saturating_sub(1))].0, &model.layers[item.layer].name, &item.class);
+            let takes = |item: &Item| {
+                s.takes_element(item.id, &models[item.model.min(models.len().saturating_sub(1))].0, &model.layers[item.layer].name, &item.class)
+                    && (s.names.is_empty() || s.takes_name(model.props.get(&item.id).and_then(|p| field(p, "Name")).unwrap_or("")))
+            };
             (0..items.len()).filter(|&k| models.is_empty() || takes(&items[k])).collect()
         };
-        let (a, b) = (side(&rule.a), side(&rule.b));
+        // the test's scope: its storeys and its property, on both sides
+        let storey = |item: &Item| -> &str {
+            let foot = item.solid.min.z + 0.3;
+            let under = levels.iter().filter(|l| l.1 <= foot).max_by(|x, y| x.1.total_cmp(&y.1));
+            under.or_else(|| levels.iter().min_by(|x, y| x.1.total_cmp(&y.1))).map_or("", |l| l.0.as_str())
+        };
+        let in_scope = |k: &usize| {
+            let item = &items[*k];
+            (rule.storeys.trim().is_empty() || rule.takes_storey(storey(item)))
+                && (rule.property.is_empty() || model.props.get(&item.id).and_then(|p| field(p, &rule.property)).is_some_and(|v| crate::collab::rules::matches(&rule.value, v)))
+        };
+        let (a, b): (Vec<usize>, Vec<usize>) = (side(&rule.a).into_iter().filter(in_scope).collect(), side(&rule.b).into_iter().filter(in_scope).collect());
         let solids = |side: &[usize]| side.iter().map(|&k| items[k].solid.clone()).collect::<Vec<_>>();
+        if rule.kind == ClashKind::Sight {
+            // each element of the first side has to be seen from the room it is in: from places
+            // at eye height all over it (or, without a room, around it), no further off than the
+            // test says; what of the second side stands in more of those lines than the test
+            // allows hides it. What an eye sees through is no hindrance.
+            let lower = |k: usize| items[k].class.to_ascii_lowercase();
+            let open = |k: usize| ["ifcspace", "ifcopening", "ifcwindow", "ifcvirtual", "ifccurtainwall", "ifcrailing"].iter().any(|c| lower(k).starts_with(c));
+            let rooms: Vec<usize> = (0..items.len()).filter(|&k| lower(k) == "ifcspace").collect();
+            for &t in &a {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let target = &items[t].solid;
+                let centre = (target.min + target.max) / 2.0;
+                let room = rooms.iter().map(|&k| &items[k].solid).filter(|s| centre.cmpge(s.min - Vec3::splat(0.3)).all() && centre.cmple(s.max + Vec3::splat(0.3)).all()).min_by(|x, y| (x.max - x.min).length_squared().total_cmp(&(y.max - y.min).length_squared()));
+                let reach = rule.sight_m.max(1.0);
+                let (lo, hi, floor) = match room {
+                    Some(r) => (r.min, r.max, r.min.z),
+                    None => (centre - Vec3::splat(reach), centre + Vec3::splat(reach), centre.z - 2.2),
+                };
+                let eye = floor + 1.6;
+                let (mut places, mut hidden) = (0usize, 0usize);
+                let mut by: HashMap<usize, usize> = HashMap::new();
+                const GRID: usize = 6;
+                for i in 0..GRID {
+                    for j in 0..GRID {
+                        let at = |lo: f32, hi: f32, k: usize| lo + (hi - lo) * (k as f32 + 0.5) / GRID as f32;
+                        let from = Vec3::new(at(lo.x, hi.x, i), at(lo.y, hi.y, j), eye);
+                        let far = from.distance(centre);
+                        if far > reach || far < 0.5 {
+                            continue;
+                        }
+                        places += 1;
+                        // up to just before it: it does not hide itself
+                        let to = centre + (from - centre) / far * 0.1;
+                        if let Some(&k) = b.iter().find(|&&k| k != t && !open(k) && clash::segment_hits(&items[k].solid, from, to)) {
+                            hidden += 1;
+                            *by.entry(k).or_default() += 1;
+                        }
+                    }
+                }
+                let Some((&most, _)) = by.iter().max_by_key(|(k, n)| (**n, std::cmp::Reverse(**k))) else { continue };
+                if places == 0 || (hidden * 100) as f32 <= rule.sight_blocked_pct * places as f32 {
+                    continue;
+                }
+                let (ia, ib) = (&items[t], &items[most]);
+                if !seen.insert((ia.id.min(ib.id), ia.id.max(ib.id))) {
+                    continue;
+                }
+                rows.push(ClashRow {
+                    rule: rule.name.clone(),
+                    a: ia.id,
+                    b: ib.id,
+                    a_name: element_name(model, ia.id),
+                    b_name: element_name(model, ib.id),
+                    kind: Kind::Hidden,
+                    at: centre.to_array(),
+                    // the share of the places it is not seen from
+                    distance: hidden as f32 / places as f32,
+                    decision: Decision::Open,
+                    group: rows.len(),
+                    copy: false,
+                    key: String::new(),
+                    fresh: false,
+                    reach: Reach::Partly,
+                });
+            }
+            continue;
+        }
         let (sa, sb) = (solids(&a), if rule.within() { Vec::new() } else { solids(&b) });
         // a test between models leaves the pairs of one model out, when there is more than one
         let apart = rule.between_models && models.len() > 1;
@@ -582,10 +950,32 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         let found = clash::clashes_but(&sa, if rule.within() { &sa } else { &sb }, rule.within(), rule.test(), &skip, cancel);
         for c in found {
             let (ia, ib) = (&items[a[c.a]], &items[b[c.b]]);
-            if ia.id == ib.id || !seen.insert((rule.name.clone(), ia.id.min(ib.id), ia.id.max(ib.id))) {
+            // a pair two tests find is one clash: it stays with the first
+            // their classes may cross further than the test allows
+            if c.kind == Kind::Crossing && rule.pair_tolerance(&ia.class, &ib.class).is_some_and(|t| c.distance <= t) {
                 continue;
             }
-            rows.push(ClashRow { rule: rule.name.clone(), a: ia.id, b: ib.id, a_name: element_name(model, ia.id), b_name: element_name(model, ib.id), kind: c.kind, at: c.at.to_array(), distance: c.distance, decision: Decision::Open });
+            if ia.id == ib.id || !seen.insert((ia.id.min(ib.id), ia.id.max(ib.id))) {
+                continue;
+            }
+            let same = |p: Vec3, q: Vec3| (p - q).abs().max_element() < 0.005;
+            let copy = c.kind != Kind::Near && ia.class == ib.class && same(ia.solid.min, ib.solid.min) && same(ia.solid.max, ib.solid.max);
+            rows.push(ClashRow {
+                rule: rule.name.clone(),
+                a: ia.id,
+                b: ib.id,
+                a_name: element_name(model, ia.id),
+                b_name: element_name(model, ib.id),
+                kind: c.kind,
+                at: c.at.to_array(),
+                distance: c.distance,
+                decision: Decision::Open,
+                group: rows.len(),
+                copy,
+                key: String::new(),
+                fresh: false,
+                reach: if copy { Reach::Through } else { Reach::of(c.kind, c.distance, (ia.solid.min, ia.solid.max), (ib.solid.min, ib.solid.max)) },
+            });
             if rows.len() >= MOST_CLASHES {
                 return rows;
             }
@@ -637,7 +1027,8 @@ fn check_file(path: &std::path::Path, rules: &RuleSet, cancel: &AtomicBool) -> R
     let mut whole: Option<ValidationReport> = None;
     for (k, ids_xml) in runs.into_iter().enumerate() {
         let first = k == 0;
-        let options = ValidationOptions { ids_xml, model_checks: first && rules.model_checks, ils: ils.clone().filter(|_| first) };
+        let rooms = rules.rooms.on.then(|| bim_validator_core::RoomOptions { door_width: f64::from(rules.rooms.door_width), door_height: f64::from(rules.rooms.door_height), threshold: f64::from(rules.rooms.threshold), ramp_run: f64::from(rules.rooms.ramp_run) });
+        let options = ValidationOptions { ids_xml, model_checks: first && rules.model_checks, ils: ils.clone().filter(|_| first), rooms: rooms.filter(|_| first) };
         let report = bim_validator_core::validate_model(&bytes, &options, cancel)?;
         match &mut whole {
             None => whole = Some(report),
@@ -652,6 +1043,23 @@ fn check_file(path: &std::path::Path, rules: &RuleSet, cancel: &AtomicBool) -> R
         }
     }
     whole.ok_or_else(|| "Nothing to check".to_string())
+}
+
+/// The quality of what was checked as a number from 0 to 100 and a letter (A from 90, B from 80,
+/// C from 70, D from 60, else E): of each rule the share of its elements that pass, a rule that
+/// fails the report counting twice as much as a warning. None when nothing was checked.
+pub fn quality_score<'a>(specs: impl Iterator<Item = &'a SpecificationResult>) -> Option<(u8, char)> {
+    let (mut sum, mut weight) = (0.0f64, 0.0f64);
+    for s in specs.filter(|s| s.status != ValidationStatus::NotCheckable) {
+        let w = if s.severity == Severity::Warning { 1.0 } else { 2.0 };
+        let share = if s.applicable_count > 0 { s.passed_count as f64 / s.applicable_count as f64 } else if s.status == ValidationStatus::Passed { 1.0 } else { 0.0 };
+        sum += w * share;
+        weight += w;
+    }
+    (weight > 0.0).then(|| {
+        let score = (100.0 * sum / weight).round().clamp(0.0, 100.0) as u8;
+        (score, match score { 90.. => 'A', 80.. => 'B', 70.. => 'C', 60.. => 'D', _ => 'E' })
+    })
 }
 
 /// The findings of a report as CSV.
@@ -746,7 +1154,7 @@ impl App {
         index
     }
 
-    fn collab_guid_of(&self, id: u64) -> Option<String> {
+    pub(super) fn collab_guid_of(&self, id: u64) -> Option<String> {
         self.model.as_ref()?.props.get(&id).and_then(|p| field(p, "GlobalId")).map(str::to_string)
     }
 
@@ -756,7 +1164,7 @@ impl App {
         self.model.as_ref().and_then(|m| m.origins.first().copied()).map_or(world, |o| o.display(world)).as_vec3()
     }
 
-    fn collab_to_world(&self, display: Vec3) -> [f64; 3] {
+    pub(super) fn collab_to_world(&self, display: Vec3) -> [f64; 3] {
         let display = display.as_dvec3();
         self.model.as_ref().and_then(|m| m.origins.first().copied()).map_or(display, |o| o.world(display)).to_array()
     }
@@ -959,7 +1367,7 @@ impl App {
     }
 
     /// A viewpoint that looks at a place from where the camera looks now, with elements selected.
-    fn collab_viewpoint_at(&self, at: Vec3, reach: f32, ids: &[u64]) -> Viewpoint {
+    pub(super) fn collab_viewpoint_at(&self, at: Vec3, reach: f32, ids: &[u64]) -> Viewpoint {
         let mut view = Viewpoint::new();
         let f = (self.camera.target - self.camera.eye()).try_normalize().unwrap_or(Vec3::new(-0.5, 0.6, -0.6).normalize());
         let up = (Vec3::Z - f * Vec3::Z.dot(f)).try_normalize().unwrap_or(Vec3::Y);
@@ -975,7 +1383,7 @@ impl App {
         self.collab.issues.topics.iter_mut().find(|t| t.guid == guid)
     }
 
-    fn collab_note(&mut self, tone: Tone, message: impl Into<String>) {
+    pub(super) fn collab_note(&mut self, tone: Tone, message: impl Into<String>) {
         self.collab.notice = Some((tone, message.into()));
     }
 
@@ -989,10 +1397,367 @@ impl App {
             Kind::Crossing => format!("{} {mm} mm", l.text("De elementen doorsnijden elkaar over", "The elements cross by")),
             Kind::Inside => l.text("Het ene element ligt binnen het andere", "One element lies inside the other").to_string(),
             Kind::Near => format!("{} {mm} mm", l.text("De elementen liggen op", "The elements are apart by")),
+            Kind::Hidden => format!("{} {:.0}% {}", l.text("Het eerste element is vanaf", "The first element is out of sight from"), row.distance * 100.0, l.text("van de plekken in zijn ruimte niet te zien: het tweede staat ervoor", "of the places in its room: the second stands before it")),
         };
         let reach = self.model.as_ref().and_then(|m| Some(m.element_bounds(row.a)?.radius().max(m.element_bounds(row.b)?.radius()))).unwrap_or(2.0);
         topic.viewpoints.push(self.collab_viewpoint_at(Vec3::from_array(row.at), reach.min(6.0), &[row.a, row.b]));
         topic
+    }
+
+    /// The key of a clash that lasts from one run to the next: its two elements by GlobalId
+    /// (else by their number), the lesser first.
+    fn collab_clash_key(&self, c: &ClashRow) -> String {
+        let of = |id: u64| self.collab_guid_of(id).filter(|g| !g.is_empty()).unwrap_or_else(|| format!("#{id}"));
+        let (a, b) = (of(c.a), of(c.b));
+        if a <= b { format!("{a}|{b}") } else { format!("{b}|{a}") }
+    }
+
+    /// Keeps the clashes as they are now in the rule set, with what was decided on them, for the
+    /// next run to compare with. Nothing when there are none: what was remembered stays.
+    fn collab_remember(&mut self) {
+        if self.collab.clashes.is_empty() || self.collab.partial_run {
+            return;
+        }
+        let memory: Vec<crate::collab::rules::ClashMemo> = self
+            .collab
+            .clashes
+            .iter()
+            .map(|c| crate::collab::rules::ClashMemo { key: if c.key.is_empty() { self.collab_clash_key(c) } else { c.key.clone() }, decision: c.decision.key().into(), rule: c.rule.clone(), a: c.a_name.clone(), b: c.b_name.clone() })
+            .collect();
+        if let Some(rules) = self.collab.rules_mut() {
+            rules.clash_memory = memory;
+        }
+    }
+
+    /// Takes the clashes a run found: each gets its lasting key and, where the run before had
+    /// it, the decision made on it then; the others are new. What the run before had and this one
+    /// has not is solved. The run is added to the runs so far. A run of a selection only takes
+    /// the decisions over.
+    fn collab_take_clashes(&mut self, rows: &mut [ClashRow]) {
+        let memory: Vec<crate::collab::rules::ClashMemo> = self.collab.rules().map(|r| r.clash_memory.clone()).unwrap_or_default();
+        let known: HashMap<&str, &crate::collab::rules::ClashMemo> = memory.iter().map(|m| (m.key.as_str(), m)).collect();
+        let compared = !memory.is_empty() && !self.collab.partial_run;
+        let mut found = std::collections::HashSet::new();
+        for c in rows.iter_mut() {
+            c.key = self.collab_clash_key(c);
+            match known.get(c.key.as_str()) {
+                Some(memo) => c.decision = Decision::parse(&memo.decision).unwrap_or_default(),
+                None => c.fresh = compared,
+            }
+            found.insert(c.key.clone());
+        }
+        if self.collab.partial_run {
+            return;
+        }
+        self.collab.compared = compared;
+        self.collab.resolved = memory.iter().filter(|m| !found.contains(&m.key)).cloned().collect();
+        let date = crate::export::ifcx::timestamp();
+        let run = crate::collab::rules::ClashRun {
+            date: date.get(..16).unwrap_or(&date).replace('T', " "),
+            total: rows.len(),
+            new: rows.iter().filter(|c| c.fresh).count(),
+            resolved: self.collab.resolved.len(),
+            open: rows.iter().filter(|c| c.decision != Decision::Accepted).count(),
+        };
+        if let Some(rules) = self.collab.rules_mut() {
+            rules.clash_runs.push(run);
+            // the last hundred are enough to see where it goes
+            let extra = rules.clash_runs.len().saturating_sub(100);
+            rules.clash_runs.drain(..extra);
+        }
+    }
+
+    /// The groups of the clashes, each as the places of its rows, in their order.
+    fn collab_groups(&self) -> Vec<Vec<usize>> {
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for (k, c) in self.collab.clashes.iter().enumerate() {
+            match groups.last_mut() {
+                Some(last) if self.collab.clashes[last[0]].group == c.group => last.push(k),
+                _ => groups.push(vec![k]),
+            }
+        }
+        groups
+    }
+
+    /// The topic of a group of clashes: what they share, each clash in the description, and a
+    /// viewpoint on all of them.
+    fn collab_group_topic(&self, rows: &[&ClashRow], l: Language) -> Topic {
+        let title = group_title(rows);
+        let mut topic = Topic::new(&format!("{}: {title} ({} {})", rows[0].rule, rows.len(), l.text("clashes", "clashes")), &self.collab.author);
+        topic.kind = "Clash".into();
+        topic.priority = "Normal".into();
+        topic.description = rows
+            .iter()
+            .take(30)
+            .map(|r| format!("{} × {}: {} mm", r.a_name, r.b_name, (r.distance * 1000.0).round()))
+            .chain((rows.len() > 30).then(|| format!("+ {}", rows.len() - 30)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let middle = rows.iter().map(|r| Vec3::from_array(r.at)).sum::<Vec3>() / rows.len() as f32;
+        let reach = rows.iter().map(|r| Vec3::from_array(r.at).distance(middle)).fold(1.0f32, f32::max);
+        let mut ids: Vec<u64> = rows.iter().flat_map(|r| [r.a, r.b]).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        topic.viewpoints.push(self.collab_viewpoint_at(middle, reach.min(30.0), &ids));
+        topic
+    }
+
+    /// The viewport out of a picture of the window, as a JPEG at most 1600 pixels wide.
+    fn viewport_picture(&self, shot: &iced::window::Screenshot) -> Option<crate::export::report::Jpeg> {
+        let s = shot.scale_factor;
+        let (w, h) = (shot.size.width, shot.size.height);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let x = ((self.viewport_origin.0 * s).round().max(0.0) as u32).min(w - 1);
+        let y = ((self.viewport_origin.1 * s).round().max(0.0) as u32).min(h - 1);
+        let (cw, ch) = (((self.viewport_size.0 * s).round() as u32).clamp(1, w - x), ((self.viewport_size.1 * s).round() as u32).clamp(1, h - y));
+        let mut rgb = Vec::with_capacity((cw * ch * 3) as usize);
+        for row in y..y + ch {
+            let from = ((row * w + x) * 4) as usize;
+            for px in shot.rgba.get(from..from + (cw * 4) as usize).unwrap_or(&[]).chunks_exact(4) {
+                rgb.extend_from_slice(&px[..3]);
+            }
+        }
+        if rgb.len() != (cw * ch * 3) as usize {
+            return None;
+        }
+        super::reports::jpeg(cw, ch, rgb, 1600)
+    }
+
+    /// Begins a PDF report: with the checks and clashes, the pictures are taken first (the view
+    /// as it is for the cover, then each group of clashes shown); the issues alone have theirs.
+    fn report_begin(&mut self, path: PathBuf, scope: super::reports::Scope) -> Task<Message> {
+        let mut todo: Vec<Shot> = Vec::new();
+        if self.model.is_some() {
+            if scope == super::reports::Scope::All {
+                todo.push(Shot::Cover);
+                todo.extend(self.report_pictured().into_iter().map(Shot::Group));
+            }
+            // the issues without a picture of their own: one from their viewpoint
+            let bare = self.collab.issues.topics.iter().enumerate().filter(|(_, t)| t.viewpoints.first().is_some_and(|v| v.snapshot.is_none())).map(|(k, _)| Shot::Issue(k));
+            todo.extend(bare.take(super::reports::PICTURED));
+        }
+        self.collab.report_job = Some(ReportJob {
+            path,
+            scope,
+            todo,
+            pictures: HashMap::new(),
+            issue_pictures: HashMap::new(),
+            cover: None,
+            camera: self.camera,
+            selection: self.sel.items().to_vec(),
+            hidden: self.hidden.clone(),
+            plane: self.plane,
+            measured: self.measure.results.clone(),
+            open_group: self.collab.open_group,
+            clash: self.collab.clash,
+            started: Instant::now(),
+        });
+        self.collab.running = true;
+        self.report_next()
+    }
+
+    /// The next picture of the report, or, when they are all taken, the report written.
+    fn report_next(&mut self) -> Task<Message> {
+        let Some(job) = self.collab.report_job.as_ref() else { return Task::none() };
+        let Some(&target) = job.todo.first() else {
+            self.report_finish();
+            return Task::none();
+        };
+        match target {
+            // the cover: the view as it was, nothing selected
+            Shot::Cover => {
+                self.collab.clash_shown = None;
+                self.camera = job.camera;
+                self.anim = None;
+                self.collab.open_group = None;
+                self.collab.clash = None;
+                self.sel.clear();
+                self.selection_changed();
+            }
+            // a group: its elements selected and framed
+            Shot::Group(g) => {
+                self.collab.open_group = Some(g);
+                self.collab.clash = None;
+                self.sel.clear();
+                self.selection_changed();
+                self.collab_show_clashes(g);
+            }
+            // an issue: its viewpoint
+            Shot::Issue(k) => {
+                self.collab.clash_shown = None;
+                let view = self.collab.issues.topics.get(k).and_then(|t| t.viewpoints.first().cloned());
+                self.collab.open_group = None;
+                self.collab.clash = None;
+                if let Some(view) = view {
+                    self.collab_show_viewpoint(&view);
+                }
+                self.finish_animation();
+            }
+        }
+        self.refresh_overlay();
+        // a few frames for the window to draw the view as it is now, then the picture
+        #[cfg(not(target_arch = "wasm32"))]
+        let wait = Task::perform(async { std::thread::sleep(std::time::Duration::from_millis(60)) }, |_| ());
+        #[cfg(target_arch = "wasm32")]
+        let wait = Task::done(());
+        wait.then(|_| iced::window::latest().and_then(iced::window::screenshot)).map(|shot| Message::Collab(Event::ReportShot(Arc::new(shot))))
+    }
+
+    /// Shows the clashes of group `g` as an issue of them shows: the camera on where they
+    /// clash, as near as their smaller elements ask, looking the way it looked; their elements
+    /// red (the first of each clash) and blue, everything else see-through.
+    fn collab_show_clashes(&mut self, g: usize) {
+        let Some(model) = self.model.clone() else { return };
+        let rows: Vec<ClashRow> = self.collab.clashes.iter().filter(|c| c.group == g).cloned().collect();
+        let mut bounds = crate::model::Bounds::empty();
+        for c in &rows {
+            // the smaller of the two is what to look at: the pipe, not the floor it goes through
+            let (a, b) = (model.element_bounds(c.a), model.element_bounds(c.b));
+            let small = match (a, b) {
+                (Some(a), Some(b)) => Some(if a.radius() <= b.radius() { a } else { b }),
+                (a, b) => a.or(b),
+            };
+            let at = Vec3::from_array(c.at);
+            let reach = small.map_or(0.5, |s| s.radius()).clamp(0.4, 4.0);
+            bounds.extend((at - Vec3::splat(reach)).to_array());
+            bounds.extend((at + Vec3::splat(reach)).to_array());
+        }
+        // what stands within reach shows as the surroundings; the rest is left out
+        if self.collab.boxes.as_ref().map(|b| b.0) != Some(model.id) {
+            let mut boxes = HashMap::new();
+            for layer in &model.layers {
+                for &(id, ..) in &layer.elements {
+                    if !boxes.contains_key(&id) {
+                        if let Some(b) = model.element_bounds(id) {
+                            boxes.insert(id, b);
+                        }
+                    }
+                }
+            }
+            self.collab.boxes = Some((model.id, Arc::new(boxes)));
+        }
+        let grow = bounds.radius() * 0.5;
+        let (lo, hi) = (Vec3::from_array(bounds.min) - Vec3::splat(grow), Vec3::from_array(bounds.max) + Vec3::splat(grow));
+        let reach = bounds.radius() * 4.0;
+        self.collab.clash_near = self
+            .collab
+            .boxes
+            .as_ref()
+            .map(|(_, boxes)| boxes.iter().filter(|(_, b)| Vec3::from_array(b.min).cmple(hi).all() && Vec3::from_array(b.max).cmpge(lo).all() && b.radius() <= reach.max(6.0)).map(|(&id, _)| id).collect())
+            .unwrap_or_default();
+        // the element most clashes of a group share
+        let mut count: HashMap<u64, usize> = HashMap::new();
+        for id in rows.iter().flat_map(|c| [c.a, c.b]) {
+            *count.entry(id).or_default() += 1;
+        }
+        self.collab.clash_shared = count.into_iter().filter(|(_, n)| rows.len() > 1 && *n * 2 > rows.len()).max_by_key(|(_, n)| *n).map(|(id, _)| id);
+        self.collab.clash_shown = Some((rows.iter().map(|c| c.a).collect(), rows.iter().map(|c| c.b).collect()));
+        self.update_units();
+        let mut to = self.camera;
+        to.fit(&bounds, self.aspect());
+        self.camera = to;
+        self.anim = None;
+    }
+
+    /// The look of each unit while a picture of clashes is taken; None otherwise.
+    pub(crate) fn clash_looks(&self, units: usize, owner: impl Fn(usize) -> Option<crate::explode::UnitOwner>) -> Option<Vec<[f32; 4]>> {
+        let (first, second) = self.collab.clash_shown.as_ref()?;
+        let (near, shared) = (&self.collab.clash_near, self.collab.clash_shared);
+        let pack = |[r, g, b]: [u8; 3]| ((u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) + 1) as f32;
+        Some(
+            (0..units)
+                .map(|u| match owner(u).filter(|_| u > 0) {
+                    Some(crate::explode::UnitOwner::Element(id)) if shared == Some(id) => [pack([0xE8, 0x9A, 0x94]), 0.0, 0.7, 0.0],
+                    Some(crate::explode::UnitOwner::Element(id)) if first.contains(&id) => [pack([0xD0, 0x34, 0x2C]), 0.0, 0.0, 0.0],
+                    Some(crate::explode::UnitOwner::Element(id)) if second.contains(&id) => [pack([0x2F, 0x6F, 0xDE]), 0.0, 0.0, 0.0],
+                    Some(crate::explode::UnitOwner::Element(id)) if near.contains(&id) => [pack([0xC8, 0xC8, 0xC8]), 0.0, 0.8, 0.0],
+                    _ if u > 0 => [pack([0xFF, 0xFF, 0xFF]), 0.0, 1.0, 0.0],
+                    _ => [0.0; 4],
+                })
+                .collect(),
+        )
+    }
+
+    /// The remote's PDF report: it begins, and the answer says so; the pictures and the file
+    /// follow, while `collab_state` says `report: true`.
+    pub(crate) fn collab_pdf_remote(&mut self, a: &serde_json::Value) -> (Result<serde_json::Value, String>, Task<Message>) {
+        let Some(path) = a.get("path").and_then(|v| v.as_str()).map(PathBuf::from) else { return (Err("give the path".into()), Task::none()) };
+        let kind = if a.get("kind").and_then(|v| v.as_str()) == Some("issues_pdf") { Report::IssuesPdf } else { Report::Pdf };
+        self.collab.refresh();
+        let task = self.collab_handle(Event::ExportTo(kind, Some(path.clone())));
+        let pictures = self.collab.report_job.as_ref().map_or(0, |j| j.todo.len());
+        (Ok(serde_json::json!({ "started": true, "path": path.display().to_string(), "pictures": pictures, "note": "the report is written when its pictures are taken; ask collab_state until report is false" })), task)
+    }
+
+    /// Writes the report with the pictures taken, and brings the view back as it was.
+    fn report_finish(&mut self) {
+        let Some(job) = self.collab.report_job.take() else { return };
+        let l = self.collab.language;
+        self.collab.running = false;
+        self.collab.clash_shown = None;
+        self.camera = job.camera;
+        self.anim = None;
+        self.collab.open_group = job.open_group;
+        self.collab.clash = job.clash;
+        self.hidden = job.hidden.clone();
+        self.plane = job.plane;
+        self.measure.results = job.measured.clone();
+        self.update_units();
+        self.sel.clear();
+        self.sel.extend(job.selection.iter().copied());
+        self.selection_changed();
+        self.refresh_overlay();
+        let taken = job.pictures.len() + job.issue_pictures.len() + usize::from(job.cover.is_some());
+        let cover = self.report_cover(job.scope, l, job.cover);
+        let blocks = self.report_blocks(job.scope, l, &job.pictures, &job.issue_pictures);
+        let title = self.report_title(job.scope, l);
+        let date = self.report_date();
+        let pdf = crate::export::report::report_pdf(&cover, &title, &date, &blocks);
+        match std::fs::write(&job.path, pdf) {
+            Ok(()) => self.collab_note(
+                Tone::Success,
+                format!("{} {} · {} {} · {:.1} s", l.text("Opgeslagen:", "Saved:"), job.path.display(), taken, l.text("beelden", "pictures"), job.started.elapsed().as_secs_f32()),
+            ),
+            Err(e) => self.collab_note(Tone::Error, e.to_string()),
+        }
+    }
+
+    /// A report as text: the checks as HTML, CSV or JSON, the issues as HTML, the clashes as CSV.
+    fn collab_text_report(&self, kind: Report, l: Language) -> String {
+        let reports = || self.collab.checked.iter().filter_map(|c| Some((c.name.as_str(), c.report.as_ref().ok()?)));
+        match kind {
+            Report::Csv => report_csv(&self.collab.checked),
+            Report::Json => serde_json::to_string_pretty(&reports().map(|(name, r)| serde_json::json!({"model": name, "report": **r})).collect::<Vec<_>>()).unwrap_or_default(),
+            Report::Html => {
+                let language = if l == Language::Dutch { bim_validator_core::ReportLanguage::Dutch } else { bim_validator_core::ReportLanguage::English };
+                // one model: its report; more: the reports one after the other
+                reports().map(|(name, r)| bim_validator_core::report_html(r, name, language)).collect::<Vec<_>>().join("
+")
+            }
+            Report::IssuesHtml => issues_html(&self.collab.issues, l),
+            Report::ClashesCsv => {
+                let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+                let mut out = "rule,group,kind,distance_mm,decision,a,b,a_global_id,b_global_id,x,y,z
+".to_string();
+                for c in &self.collab.clashes {
+                    let kind = match c.kind {
+                        _ if c.copy => "double",
+                        Kind::Crossing => "crossing",
+                        Kind::Inside => "inside",
+                        Kind::Near => "clearance",
+                        Kind::Hidden => "out of sight",
+                    };
+                    let at = self.collab_to_world(Vec3::from_array(c.at));
+                    let guid = |id| self.collab_guid_of(id).unwrap_or_default();
+                    out.push_str(&format!("{},{},{kind},{:.0},{},{},{},{},{},{:.3},{:.3},{:.3}
+", quote(&c.rule), c.group + 1, c.distance * 1000.0, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
+                }
+                out
+            }
+            Report::Pdf | Report::Xlsx | Report::IssuesPdf => String::new(),
+        }
     }
 
     pub(super) fn collab_update(&mut self, event: Event) -> Task<Message> {
@@ -1002,9 +1767,18 @@ impl App {
                 *kept = typed.clone();
             }
         }
+        if let Event::RoomAmount(k, typed) = &event {
+            if let Some(kept) = self.collab.room_amounts.get_mut(*k) {
+                *kept = typed.clone();
+            }
+        }
+        if let Event::MatrixAmount(typed) = &event {
+            self.collab.matrix_amount = typed.clone();
+        }
         let task = self.collab_handle(event);
         self.collab.refresh();
         self.collab_refresh_sides();
+        self.inform_refresh();
         task
     }
 
@@ -1086,7 +1860,8 @@ impl App {
                 };
                 return ask_file(make, true, |path| Message::Collab(Event::SaveIssuesTo(path)));
             }
-            Event::SaveIssuesTo(Some(path)) => match self.collab.issues.write().and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())) {
+            Event::Bcf3(on) => self.collab.bcf3 = on,
+            Event::SaveIssuesTo(Some(path)) => match self.collab.issues.write_as(self.collab.bcf3).and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())) {
                 Ok(()) => {
                     self.collab_note(Tone::Success, format!("{} {}", l.text("Opgeslagen:", "Saved:"), path.display()));
                     self.collab.issues_path = Some(path);
@@ -1099,6 +1874,8 @@ impl App {
                 return ask_file(move || rfd::AsyncFileDialog::new().add_filter("Rule set", &["json"]).set_file_name(format!("{name}.rules.json")), true, |path| Message::Collab(Event::SaveRulesTo(path)));
             }
             Event::SaveRulesTo(Some(path)) => {
+                // the decisions on the clashes as they are now go with the file
+                self.collab_remember();
                 if let Some(Err(e)) = self.collab.rules().map(|r| r.write(&path)) {
                     self.collab_note(Tone::Error, e);
                 } else {
@@ -1263,6 +2040,16 @@ impl App {
                     self.isolate_selection();
                 }
             }
+            Event::Step(by) if self.collab.grouping != Grouping::Off && self.collab.clash.is_none() => {
+                // through the groups: the one after (or before) the one open
+                let groups: Vec<usize> = self.collab_groups().iter().map(|g| self.collab.clashes[g[0]].group).collect();
+                if !groups.is_empty() {
+                    let at = self.collab.open_group.and_then(|g| groups.iter().position(|x| *x == g));
+                    let next = at.map_or(0, |k| (k as i32 + by).rem_euclid(groups.len() as i32) as usize);
+                    self.collab.open_group = None;
+                    return self.collab_handle(Event::PickGroup(groups[next]));
+                }
+            }
             Event::Step(by) => {
                 let count = self.collab.clashes.len() as i32;
                 if count > 0 {
@@ -1304,6 +2091,19 @@ impl App {
                     rules.ils = on;
                 }
             }
+            Event::Rooms(on) => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    rules.rooms.on = on;
+                }
+            }
+            Event::RoomAmount(k, typed) => {
+                if let (Some(rules), Ok(v)) = (self.collab.rules_mut(), typed.trim().replace(',', ".").parse::<f32>()) {
+                    if v.is_finite() && (0.0..=1000.0).contains(&v) {
+                        let r = &mut rules.rooms;
+                        *[&mut r.room_height, &mut r.door_width, &mut r.door_height, &mut r.escape_distance, &mut r.threshold, &mut r.ramp_run, &mut r.turning_circle][k.min(6)] = v;
+                    }
+                }
+            }
             Event::RemoveIds(k) => {
                 if let Some(rules) = self.collab.rules_mut().filter(|r| k < r.ids.len()) {
                     rules.ids.remove(k);
@@ -1338,9 +2138,13 @@ impl App {
                     Event::Checked(run, check_files(files, &rules, &cancel))
                 });
             }
-            Event::Checked(run, checked) => {
+            Event::Checked(run, mut checked) => {
                 if run == self.collab.run {
                     self.collab.running = false;
+                    // the checks that need the rooms' shapes, on the model as it is drawn
+                    if let Some(rooms) = self.collab.rules().map(|r| r.rooms.clone()).filter(|r| r.on) {
+                        self.room_shape_checks(&mut checked, &rooms);
+                    }
                     self.collab.checked = checked;
                 }
             }
@@ -1385,35 +2189,25 @@ impl App {
                     Report::Json => ("check", "json"),
                     Report::ClashesCsv => ("clashes", "csv"),
                     Report::IssuesHtml => ("issues", "html"),
+                    Report::Pdf => ("report", "pdf"),
+                    Report::IssuesPdf => ("issues", "pdf"),
+                    Report::Xlsx => ("report", "xlsx"),
                 };
                 return ask_file(move || rfd::AsyncFileDialog::new().add_filter(extension, &[extension]).set_file_name(format!("{name}.{extension}")), true, move |path| Message::Collab(Event::ExportTo(kind, path)));
             }
             Event::ExportTo(kind, Some(path)) => {
-                let reports = || self.collab.checked.iter().filter_map(|c| Some((c.name.as_str(), c.report.as_ref().ok()?)));
-                let body = match kind {
-                    Report::Csv => report_csv(&self.collab.checked),
-                    Report::Json => serde_json::to_string_pretty(&reports().map(|(name, r)| serde_json::json!({"model": name, "report": **r})).collect::<Vec<_>>()).unwrap_or_default(),
-                    Report::Html => {
-                        let language = if l == Language::Dutch { bim_validator_core::ReportLanguage::Dutch } else { bim_validator_core::ReportLanguage::English };
-                        // one model: its report; more: the reports one after the other
-                        reports().map(|(name, r)| bim_validator_core::report_html(r, name, language)).collect::<Vec<_>>().join("\n")
-                    }
-                    Report::IssuesHtml => issues_html(&self.collab.issues, l),
-                    Report::ClashesCsv => {
-                        let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-                        let mut out = "rule,kind,distance_mm,decision,a,b,a_global_id,b_global_id,x,y,z\r\n".to_string();
-                        for c in &self.collab.clashes {
-                            let kind = match c.kind {
-                                Kind::Crossing => "crossing",
-                                Kind::Inside => "inside",
-                                Kind::Near => "clearance",
-                            };
-                            let at = self.collab_to_world(Vec3::from_array(c.at));
-                            let guid = |id| self.collab_guid_of(id).unwrap_or_default();
-                            out.push_str(&format!("{},{kind},{:.0},{},{},{},{},{},{:.3},{:.3},{:.3}\r\n", quote(&c.rule), c.distance * 1000.0, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
+                let body: Vec<u8> = match kind {
+                    // the pictures are taken first, one frame each; the file is written then
+                    Report::Pdf => return self.report_begin(path, super::reports::Scope::All),
+                    Report::IssuesPdf => return self.report_begin(path, super::reports::Scope::Issues),
+                    Report::Xlsx => match crate::export::xlsx::workbook(&self.report_sheets(l).iter().collect::<Vec<_>>()) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            self.collab_note(Tone::Error, e.to_string());
+                            return Task::none();
                         }
-                        out
-                    }
+                    },
+                    _ => self.collab_text_report(kind, l).into_bytes(),
                 };
                 match std::fs::write(&path, body) {
                     Ok(()) => self.collab_note(Tone::Success, format!("{} {}", l.text("Opgeslagen:", "Saved:"), path.display())),
@@ -1423,6 +2217,16 @@ impl App {
             Event::ClashOn(k, on) => {
                 if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
                     rule.on = on;
+                }
+            }
+            Event::ClashStoreys(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.storeys = typed;
+                }
+            }
+            Event::ClashPairs(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.pair_tolerances = typed;
                 }
             }
             Event::ClashBetween(k, on) => {
@@ -1441,6 +2245,7 @@ impl App {
                         match rule.kind {
                             ClashKind::Hard => rule.tolerance_mm = mm,
                             ClashKind::Clearance => rule.clearance_mm = mm,
+                            ClashKind::Sight => rule.sight_m = mm,
                         }
                     }
                 }
@@ -1481,6 +2286,8 @@ impl App {
                 };
                 let models: Vec<(String, std::ops::Range<usize>)> = self.models.iter().map(|e| (e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.layers.clone())).collect();
                 self.collab.tab = Tab::Clashes;
+                self.collab_remember();
+                self.collab.partial_run = true;
                 self.collab.cancel = Arc::new(AtomicBool::new(false));
                 self.collab.run += 1;
                 self.collab.running = true;
@@ -1507,11 +2314,14 @@ impl App {
                     return Task::none();
                 };
                 self.collab.tab = Tab::Clashes;
-                if !rules.clashes.iter().any(|r| r.on) {
+                let tests = rules.clash_rules();
+                if tests.is_empty() {
                     self.collab_note(Tone::Warning, l.text("De regelset heeft geen clashtest die aan staat.", "The rule set has no clash test switched on."));
                     return Task::none();
                 }
                 let models: Vec<(String, std::ops::Range<usize>)> = self.models.iter().map(|e| (e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.layers.clone())).collect();
+                self.collab_remember();
+                self.collab.partial_run = false;
                 self.collab.cancel = Arc::new(AtomicBool::new(false));
                 self.collab.run += 1;
                 self.collab.running = true;
@@ -1519,21 +2329,26 @@ impl App {
                 self.collab.clash = None;
                 self.collab.notice = None;
                 let (run, cancel) = (self.collab.run, self.collab.cancel.clone());
-                return job(move || Event::Clashed(run, std::panic::catch_unwind(|| run_clashes(&model, &models, &rules.clashes, &cancel)).unwrap_or_default()));
+                return job(move || Event::Clashed(run, std::panic::catch_unwind(|| run_clashes(&model, &models, &tests, &cancel)).unwrap_or_default()));
             }
-            Event::Clashed(run, rows) => {
+            Event::Clashed(run, mut rows) => {
                 if run == self.collab.run {
                     self.collab.running = false;
                     if rows.len() >= MOST_CLASHES {
                         self.collab_note(Tone::Warning, format!("{} {MOST_CLASHES} {}", l.text("Alleen de eerste", "Only the first"), l.text("clashes zijn bewaard: maak de test strenger.", "clashes are kept: make the test narrower.")));
                     }
+                    self.collab_take_clashes(&mut rows);
+                    group_clashes(&mut rows, self.collab.grouping);
+                    self.collab.show_tests = rows.is_empty();
                     self.collab.clashes = rows;
+                    self.collab.open_group = None;
                     self.refresh_overlay();
                 }
             }
             Event::PickClash(k) => {
                 let Some(row) = self.collab.clashes.get(k).cloned() else { return Task::none() };
                 self.collab.clash = Some(k);
+                self.collab.open_group = Some(row.group);
                 self.collab_go_to([row.a, row.b]);
                 self.refresh_overlay();
             }
@@ -1549,12 +2364,146 @@ impl App {
                 self.collab.tab = Tab::Issues;
             }
             Event::IssuesFromClashes => {
-                let topics: Vec<Topic> = self.collab.clashes.iter().take(1000).map(|row| self.collab_clash_topic(row, l)).collect();
+                // one issue for each group: the accepted clashes are left out
+                let mut topics: Vec<Topic> = Vec::new();
+                for group in self.collab_groups().into_iter().take(1000) {
+                    let rows: Vec<&ClashRow> = group.iter().map(|&k| &self.collab.clashes[k]).filter(|c| c.decision != Decision::Accepted).collect();
+                    match rows.as_slice() {
+                        [] => {}
+                        [one] => topics.push(self.collab_clash_topic(one, l)),
+                        more => topics.push(self.collab_group_topic(more, l)),
+                    }
+                }
                 let made = topics.len();
                 self.collab.issues.topics.extend(topics);
                 self.collab.issues_changed |= made > 0;
                 self.collab.tab = Tab::Issues;
                 self.collab_note(Tone::Success, format!("{made} {}", l.text("issues gemaakt", "issues made")));
+            }
+            Event::Inform(e) => return self.inform_handle(e),
+            Event::Cloud(e) => return self.cloud_handle(e),
+            Event::ReportShot(shot) => {
+                let picture = self.viewport_picture(&shot);
+                if let Some(job) = self.collab.report_job.as_mut() {
+                    if !job.todo.is_empty() {
+                        match (job.todo.remove(0), picture) {
+                            (Shot::Cover, picture) => job.cover = picture,
+                            (Shot::Group(g), Some(p)) => {
+                                job.pictures.insert(g, p);
+                            }
+                            (Shot::Issue(k), Some(p)) => {
+                                job.issue_pictures.insert(k, p);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                return self.report_next();
+            }
+            Event::ShowTests(on) => self.collab.show_tests = on,
+            Event::ShowResolved(on) => self.collab.show_resolved = on,
+            Event::DecidePicked(decision) => match (self.collab.clash, self.collab.open_group) {
+                (Some(k), _) => {
+                    let now = self.collab.clashes.get(k).map(|c| c.decision);
+                    return self.collab_handle(Event::Decide(k, if now == Some(decision) { Decision::Open } else { decision }));
+                }
+                (None, Some(g)) => {
+                    let all = self.collab.clashes.iter().filter(|c| c.group == g).all(|c| c.decision == decision);
+                    return self.collab_handle(Event::DecideGroup(g, if all { Decision::Open } else { decision }));
+                }
+                _ => {}
+            },
+            Event::IssueFromPicked => match (self.collab.clash, self.collab.open_group) {
+                (Some(k), _) => return self.collab_handle(Event::IssueFromClash(k)),
+                (None, Some(g)) => return self.collab_handle(Event::IssueFromGroup(g)),
+                _ => {}
+            },
+            Event::GroupBy(choice) => {
+                self.collab.grouping = choice.0;
+                group_clashes(&mut self.collab.clashes, choice.0);
+                self.collab.clash = None;
+                self.collab.open_group = None;
+                self.refresh_overlay();
+            }
+            Event::PickGroup(g) => {
+                let ids: Vec<u64> = self.collab.clashes.iter().filter(|c| c.group == g).flat_map(|c| [c.a, c.b]).collect();
+                self.collab.open_group = if self.collab.open_group == Some(g) { None } else { Some(g) };
+                self.collab.clash = None;
+                if !ids.is_empty() {
+                    self.collab_go_to(ids);
+                }
+                self.refresh_overlay();
+            }
+            Event::DecideGroup(g, decision) => {
+                for c in self.collab.clashes.iter_mut().filter(|c| c.group == g) {
+                    c.decision = decision;
+                }
+            }
+            Event::IssueFromGroup(g) => {
+                let rows: Vec<ClashRow> = self.collab.clashes.iter().filter(|c| c.group == g).cloned().collect();
+                if rows.is_empty() {
+                    return Task::none();
+                }
+                let topic = self.collab_group_topic(&rows.iter().collect::<Vec<_>>(), l);
+                for c in self.collab.clashes.iter_mut().filter(|c| c.group == g) {
+                    c.decision = Decision::Rejected;
+                }
+                self.collab.topic = Some(topic.guid.clone());
+                self.collab.issues.topics.push(topic);
+                self.collab.issues_changed = true;
+                self.collab.tab = Tab::Issues;
+            }
+            Event::MatrixCell(i, j) => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    if let (Some(a), Some(b)) = (rules.disciplines.get(i).map(|d| d.name.clone()), rules.disciplines.get(j).map(|d| d.name.clone())) {
+                        rules.toggle_matrix(&a, &b);
+                    }
+                }
+            }
+            Event::AddDiscipline => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    // a name not taken yet
+                    let base = l.text("Discipline", "Discipline");
+                    let name = (1..).map(|n| format!("{base} {n}")).find(|n| !rules.disciplines.iter().any(|d| &d.name == n)).unwrap_or_default();
+                    rules.disciplines.push(crate::collab::rules::Discipline { name, take: Selector::default() });
+                }
+            }
+            Event::RemoveDiscipline(k) => {
+                if let Some(rules) = self.collab.rules_mut().filter(|r| k < r.disciplines.len()) {
+                    let gone = rules.disciplines.remove(k).name;
+                    rules.matrix.retain(|pair| !pair.contains(&gone));
+                }
+            }
+            Event::DisciplineName(k, name) => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    // a name another discipline has would join their pairs
+                    let taken = rules.disciplines.iter().enumerate().any(|(i, d)| i != k && d.name == name);
+                    if let (false, Some(old)) = (taken, rules.disciplines.get(k).map(|d| d.name.clone())) {
+                        for pair in &mut rules.matrix {
+                            for side in pair.iter_mut().filter(|s| **s == old) {
+                                *side = name.clone();
+                            }
+                        }
+                        rules.disciplines[k].name = name;
+                    }
+                }
+            }
+            Event::DisciplineSide(k, side) => {
+                if let Some(d) = self.collab.rules_mut().and_then(|r| r.disciplines.get_mut(k)) {
+                    d.take = side.selector;
+                }
+            }
+            Event::MatrixAmount(amount) => {
+                if let (Some(rules), Ok(mm)) = (self.collab.rules_mut(), amount.trim().replace(',', ".").parse::<f32>()) {
+                    if mm.is_finite() && (0.0..=10_000.0).contains(&mm) {
+                        rules.matrix_tolerance_mm = mm;
+                    }
+                }
+            }
+            Event::MatrixBetween(on) => {
+                if let Some(rules) = self.collab.rules_mut() {
+                    rules.matrix_between_models = on;
+                }
             }
         }
         Task::none()
@@ -1581,9 +2530,11 @@ impl App {
                 let rules = self.collab.rules().cloned().ok_or("no rule set")?;
                 let cancel = AtomicBool::new(false);
                 let files = self.models.iter().enumerate().filter(|(_, e)| e.model.path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc")));
-                self.collab.checked = check_files(files.map(|(model, e)| (model, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone())).collect(), &rules, &cancel)
-                    .into_iter()
-                    .collect();
+                let mut checked: Vec<Checked> = check_files(files.map(|(model, e)| (model, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone())).collect(), &rules, &cancel);
+                if rules.rooms.on {
+                    self.room_shape_checks(&mut checked, &rules.rooms);
+                }
+                self.collab.checked = checked;
                 let failed = self.collab.checked.first().and_then(|c| c.report.as_ref().ok()).and_then(|r| r.specifications.iter().position(|s| s.status == ValidationStatus::Failed));
                 self.collab.open_spec = failed.map(|s| (0, s));
                 self.collab.tab = Tab::Checks;
@@ -1593,7 +2544,13 @@ impl App {
                 let (model, rules) = (self.model.clone().ok_or("no model")?, self.collab.rules().cloned().ok_or("no rule set")?);
                 let models: Vec<(String, std::ops::Range<usize>)> = self.models.iter().map(|e| (e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.layers.clone())).collect();
                 let started = Instant::now();
-                self.collab.clashes = run_clashes(&model, &models, &rules.clashes, &AtomicBool::new(false));
+                self.collab_remember();
+                self.collab.partial_run = false;
+                let mut rows = run_clashes(&model, &models, &rules.clash_rules(), &AtomicBool::new(false));
+                self.collab_take_clashes(&mut rows);
+                self.collab.clashes = rows;
+                group_clashes(&mut self.collab.clashes, self.collab.grouping);
+                self.collab.show_tests = self.collab.clashes.is_empty();
                 eprintln!("{} clashes in {:.2} s", self.collab.clashes.len(), started.elapsed().as_secs_f32());
                 self.collab.tab = Tab::Clashes;
                 if !self.collab.clashes.is_empty() {
@@ -1622,8 +2579,11 @@ impl App {
             tab(Tab::Checks, format!("{}{}", l.text("Controles", "Checks"), count(failed))),
             tab(Tab::Clashes, format!("{}{}", l.text("Clashes", "Clashes"), count(state.clashes.iter().filter(|c| c.decision != Decision::Accepted).count()))),
             tab(Tab::Compare, l.text("Vergelijken", "Compare").to_string()),
+            tab(Tab::Colours, l.text("Kleuren", "Colours").to_string()),
+            tab(Tab::Takeoff, l.text("Staat", "Takeoff").to_string()),
         ]
-        .spacing(2);
+        .spacing(2)
+        .wrap();
         // the models of the project, as the viewer's explorer has them: shown or not, and more to add
         let mut models = column![row![
             w::heading(look, format!("{} · {}", l.text("Modellen", "Models"), self.models.len()), 13.0).width(Length::Fill),
@@ -1674,7 +2634,9 @@ impl App {
             Tab::Issues => self.collab_issues(look, l),
             Tab::Checks => self.collab_checks(look, l),
             Tab::Clashes => self.collab_clashes(look, l),
-            Tab::Compare => self.collab_compare(look, l),
+            Tab::Compare => column![self.collab_compare(look, l), w::divider(look), self.cloud_view(look, l)].spacing(8).into(),
+            Tab::Colours => self.inform_colours(look, l),
+            Tab::Takeoff => self.inform_takeoffs(look, l, &state.sides),
         };
         body.push(scrollable(container(content).padding(iced::Padding { right: 10.0, ..iced::Padding::ZERO })).height(Length::Fill)).height(Length::Fill).into()
     }
@@ -1705,7 +2667,9 @@ impl App {
             w::button(look, l.text("Nieuw issue", "New issue"), K::Primary, D::Compact, None, Some(go(Event::NewIssue))),
             w::button(look, l.text("BCF openen", "Open BCF"), K::Secondary, D::Compact, None, Some(go(Event::Open(File::Bcf)))),
             w::button(look, l.text("BCF opslaan", "Save BCF"), K::Secondary, D::Compact, None, (!state.issues.topics.is_empty()).then(|| go(Event::SaveIssues))),
+            w::checkbox(look, "BCF 3.0", state.bcf3, Some(|on| go(Event::Bcf3(on)))),
             w::button(look, l.text("Rapport", "Report"), K::Quiet, D::Compact, None, (!state.issues.topics.is_empty()).then(|| go(Event::ExportIssues))),
+            w::button(look, "PDF", K::Quiet, D::Compact, None, (!state.issues.topics.is_empty()).then(|| go(Event::Export(Report::IssuesPdf)))),
         ]
         .spacing(6)
         .wrap()]
@@ -1852,6 +2816,17 @@ impl App {
         if let Some(rules) = state.rules() {
             list = list.push(w::checkbox(look, l.text("Modelcontroles", "Model checks"), rules.model_checks, Some(|on| go(Event::ModelChecks(on)))));
             list = list.push(w::checkbox(look, l.text("BIM basis ILS", "BIM basis ILS"), rules.ils, Some(|on| go(Event::Ils(on)))));
+            list = list.push(w::checkbox(look, l.text("Ruimtes, deuren, vluchtwegen en brand", "Rooms, doors, escape routes and fire"), rules.rooms.on, Some(|on| go(Event::Rooms(on)))));
+            if rules.rooms.on {
+                let names = [l.text("Vrije hoogte ruimte", "Free height of a room"), l.text("Breedte deur", "Width of a door"), l.text("Hoogte deur", "Height of a door"), l.text("Loopafstand tot uitgang", "Walk to a way out"), l.text("Drempel deur", "Threshold of a door"), l.text("Helling 1 op", "Ramp 1 in"), l.text("Draaicirkel", "Turning circle")];
+                for (k, name) in names.into_iter().enumerate() {
+                    let typed = state.room_amounts.get(k).map(String::as_str).unwrap_or("");
+                    list = list.push(
+                        container(row![w::secondary(look, name).width(Length::Fill), container(w::text_field(look, "m", typed, Some(move |t| go(Event::RoomAmount(k, t))), D::Compact, None)).width(64), w::secondary(look, "m")].spacing(4).align_y(Alignment::Center))
+                            .padding(iced::Padding { left: 24.0, ..iced::Padding::ZERO }),
+                    );
+                }
+            }
             for (k, ids) in rules.ids.iter().enumerate() {
                 let name = crate::collab::rules::ids_name(ids);
                 list = list.push(row![w::body(look, format!("IDS · {name}")).width(Length::Fill), w::button(look, l.text("Weg", "Remove"), K::Quiet, D::Compact, None, Some(go(Event::RemoveIds(k))))].align_y(Alignment::Center));
@@ -1876,6 +2851,10 @@ impl App {
         let unknown = count(&|s| s.status == ValidationStatus::NotCheckable);
         let passed = count(&|s| s.status == ValidationStatus::Passed);
         let mut summary = row![].spacing(4);
+        // the models' quality as one number: how much of what was checked passes
+        if let Some((score, letter)) = quality_score(specs()) {
+            summary = summary.push(site::chip(look, &format!("{} {score} · {letter}", l.text("Kwaliteit", "Quality")), Some(if score >= 80 { Tone::Success } else if score >= 60 { Tone::Warning } else { Tone::Error })));
+        }
         for (n, label, tone) in [
             (failed, l.text("voldoen niet", "failed"), Tone::Error),
             (warned, l.text("waarschuwingen", "warnings"), Tone::Warning),
@@ -1890,6 +2869,8 @@ impl App {
         list = list.push(
             row![
                 w::button(look, l.text("Issues maken", "Make issues"), K::Secondary, D::Compact, None, (failed + warned > 0).then(|| go(Event::IssuesFromChecks))),
+                w::button(look, "PDF", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Pdf)))),
+                w::button(look, "Excel", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Xlsx)))),
                 w::button(look, "HTML", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Html)))),
                 w::button(look, "CSV", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Csv)))),
                 w::button(look, "JSON", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Json)))),
@@ -1966,7 +2947,11 @@ impl App {
         let p = self.theme.palette();
         let everything = l.text("alles", "everything");
         let mut list = column![self.collab_rule_set(look, l)].spacing(6);
-        if let Some(rules) = state.rules() {
+        // the tests and the matrix fold away, so the clashes found show
+        let open = state.show_tests;
+        let fold = row![text(if open { "▾" } else { "▸" }).size(12).color(p.text_secondary), w::heading(look, l.text("Clashtests en disciplinematrix", "Clash tests and discipline matrix"), 13.0)].spacing(6).align_y(Alignment::Center);
+        list = list.push(named(button(fold).width(Length::Fill).padding([3, 0]).style(move |_, s| p.row_button(s)).on_press(go(Event::ShowTests(!open))), Node::new(Role::Button, l.text("Clashtests en disciplinematrix", "Clash tests and discipline matrix")).value(if open { "open" } else { "closed" })));
+        if let Some(rules) = state.rules().filter(|_| open) {
             for (k, rule) in rules.clashes.iter().enumerate() {
                 let hard = rule.kind == ClashKind::Hard;
                 let amount = state.amounts.get(k).map(String::as_str).unwrap_or("");
@@ -1995,10 +2980,11 @@ impl App {
                         },
                         row![
                             kind(l.text("Doorsnijding", "Crossing"), hard, ClashKind::Hard),
-                            kind(l.text("Vrije ruimte", "Clearance"), !hard, ClashKind::Clearance),
+                            kind(l.text("Vrije ruimte", "Clearance"), rule.kind == ClashKind::Clearance, ClashKind::Clearance),
+                            kind(l.text("Zichtlijn", "Sight line"), rule.kind == ClashKind::Sight, ClashKind::Sight),
                             Space::new().width(Length::Fill),
-                            container(w::text_field(look, "mm", amount, Some(move |t| go(Event::ClashAmount(k, t))), D::Compact, None)).width(64),
-                            w::secondary(look, "mm"),
+                            container(w::text_field(look, "", amount, Some(move |t| go(Event::ClashAmount(k, t))), D::Compact, None)).width(64),
+                            w::secondary(look, if rule.kind == ClashKind::Sight { "m" } else { "mm" }),
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
@@ -2006,10 +2992,25 @@ impl App {
                             w::checkbox(look, l.text("Alleen tussen modellen", "Only between models"), rule.between_models, Some(move |on| go(Event::ClashBetween(k, on)))),
                             Node::new(Role::CheckBox, format!("{} {}", rule.name, l.text("Alleen tussen modellen", "Only between models"))).checked(rule.between_models),
                         ),
+                        row![
+                            w::secondary(look, l.text("Bouwlagen", "Storeys")).width(96),
+                            container(w::text_field(look, l.text("alle; bijv. 00*, 01*", "all; e.g. 00*, 01*"), &rule.storeys, Some(move |t| go(Event::ClashStoreys(k, t))), D::Compact, None)).width(Length::Fill),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                        row![
+                            w::secondary(look, l.text("Per typepaar", "Per pair of types")).width(96),
+                            container(w::text_field(look, "IfcPipe* x IfcWall* = 25; …", &rule.pair_tolerances, Some(move |t| go(Event::ClashPairs(k, t))), D::Compact, None)).width(Length::Fill),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
                     ]
                     .spacing(3),
                 );
             }
+        }
+        if open {
+            list = list.push(w::divider(look)).push(self.collab_matrix(look, l)).push(w::divider(look));
         }
         list = list.push(
             row![
@@ -2030,46 +3031,83 @@ impl App {
                 w::icon_button(look, crate::b2::small("page.next"), 16.0, false, l.text("Volgende clash", "Next clash"), Some(go(Event::Step(1)))),
                 w::secondary(look, format!("{place}{} {}", state.clashes.len(), l.text("clashes", "clashes"))).width(Length::Fill),
                 w::button(look, l.text("Issues maken", "Make issues"), K::Secondary, D::Compact, None, Some(go(Event::IssuesFromClashes))),
+                w::button(look, "PDF", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Pdf)))),
+                w::button(look, "Excel", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Xlsx)))),
                 w::button(look, "CSV", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::ClashesCsv)))),
             ]
             .spacing(4)
             .align_y(Alignment::Center),
         );
-        let accepted = state.clashes.iter().filter(|c| c.decision == Decision::Accepted).count();
-        if accepted > 0 {
-            list = list.push(w::checkbox(look, l.text("Geaccepteerde tonen", "Show accepted"), state.show_accepted, Some(|on| go(Event::ShowAccepted(on)))));
+        // against the run before: what is new, what stayed, what is solved; and the runs so far
+        if state.compared {
+            let new = state.clashes.iter().filter(|c| c.fresh).count();
+            list = list.push(
+                row![
+                    site::chip(look, &format!("{new} {}", l.text("nieuw", "new")), Some(if new > 0 { Tone::Error } else { Tone::Success })),
+                    site::chip(look, &format!("{} {}", state.clashes.len() - new, l.text("gebleven", "stayed")), None),
+                    site::chip(look, &format!("{} {}", state.resolved.len(), l.text("opgelost", "solved")), Some(Tone::Success)),
+                ]
+                .spacing(4)
+                .wrap(),
+            );
         }
-        let mut rule: Option<&str> = None;
-        for (k, clash) in state.clashes.iter().enumerate().take(SHOWN) {
-            // the clashes of one test under its name
-            if rule != Some(clash.rule.as_str()) {
-                rule = Some(clash.rule.as_str());
-                let of_rule = state.clashes.iter().filter(|c| c.rule == clash.rule).count();
-                list = list.push(w::heading(look, format!("{} · {of_rule}", clash.rule), 13.0));
+        let runs = state.rules().map(|r| r.clash_runs.as_slice()).unwrap_or(&[]);
+        if runs.len() > 1 {
+            // the last runs as bars of how many clashes are open, the latest at the right
+            let last: Vec<&crate::collab::rules::ClashRun> = runs.iter().rev().take(12).rev().collect();
+            let most = last.iter().map(|r| r.open).max().unwrap_or(1).max(1) as f32;
+            let mut bars = row![].spacing(3).align_y(Alignment::End).height(36);
+            for r in &last {
+                let h = (r.open as f32 / most * 30.0).max(2.0);
+                let fill = if std::ptr::eq(*r, *last.last().unwrap_or(r)) { p.accent } else { p.text_muted };
+                bars = bars.push(named(
+                    container(Space::new().width(10).height(h)).style(move |_| container::Style { background: Some(iced::Background::Color(fill)), ..Default::default() }),
+                    Node::new(Role::Row, format!("{}: {} {}", r.date, r.open, l.text("open", "open"))),
+                ));
             }
-            let picked = state.clash == Some(k);
+            let (first, latest) = (last[0], last[last.len() - 1]);
+            list = list.push(row![bars, w::secondary(look, format!("{} {} · {} → {} {}", last.len(), l.text("runs", "runs"), first.open, latest.open, l.text("open", "open")))].spacing(8).align_y(Alignment::End));
+        }
+        let grouped = state.groupings.iter().find(|c| c.0 == state.grouping).cloned();
+        let accepted = state.clashes.iter().filter(|c| c.decision == Decision::Accepted).count();
+        let mut options = row![container(w::select(look, &state.groupings, grouped, |c| go(Event::GroupBy(c)), D::Compact)).width(150)].spacing(8).align_y(Alignment::Center);
+        if accepted > 0 {
+            options = options.push(w::checkbox(look, l.text("Geaccepteerde tonen", "Show accepted"), state.show_accepted, Some(|on| go(Event::ShowAccepted(on)))));
+        }
+        list = list.push(options);
+        // how a clash is said: how far, or that it lies inside, or that it is one element twice
+        let says = |clash: &ClashRow| -> (String, Tone) {
             let mm = (clash.distance * 1000.0).round();
             let (what, tone) = match clash.kind {
-                Kind::Crossing => (format!("{mm} mm"), Tone::Error),
+                _ if clash.copy => (l.text("dubbel element", "double element").to_string(), Tone::Error),
+                Kind::Crossing => match clash.reach {
+                    Reach::Graze => (format!("{} · {mm} mm", l.text("schampt", "grazes")), Tone::Warning),
+                    Reach::Through => (format!("{} · {mm} mm", l.text("erdoorheen", "through")), Tone::Error),
+                    _ => (format!("{mm} mm"), Tone::Error),
+                },
                 Kind::Inside => (l.text("ligt erin", "lies inside").to_string(), Tone::Error),
                 Kind::Near => (format!("{mm} mm {}", l.text("ertussen", "apart")), Tone::Warning),
+                Kind::Hidden => (format!("{:.0}% {}", clash.distance * 100.0, l.text("niet te zien", "out of sight")), Tone::Error),
             };
-            if !state.show_accepted && clash.decision == Decision::Accepted && !picked {
-                continue;
-            }
-            let (what, tone) = match clash.decision {
+            let what = if clash.fresh { format!("{} · {what}", l.text("nieuw", "new")) } else { what };
+            match clash.decision {
                 Decision::Accepted => (l.text("akkoord", "accepted").to_string(), Tone::Success),
                 Decision::Rejected => (format!("{what} · {}", l.text("afgewezen", "rejected")), tone),
                 Decision::Open => (what, tone),
-            };
+            }
+        };
+        let clash_row = |k: usize, indent: f32| -> Element<'a, Message> {
+            let clash = &state.clashes[k];
+            let picked = state.clash == Some(k);
+            let (what, tone) = says(clash);
             let line = row![column![w::body(look, clash.a_name.clone()), w::secondary(look, format!("× {}", clash.b_name))].spacing(1).width(Length::Fill), site::chip(look, &what, Some(tone))].spacing(6).align_y(Alignment::Center);
-            list = list.push(named(button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(picked, st)).on_press(go(Event::PickClash(k))), Node::new(Role::Row, format!("{} {}: {} × {}", l.text("Clash", "Clash"), k + 1, clash.a_name, clash.b_name)).selected(picked).value(clash.decision.key())));
+            let mut out = column![named(button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(picked, st)).on_press(go(Event::PickClash(k))), Node::new(Role::Row, format!("{} {}: {} × {}", l.text("Clash", "Clash"), k + 1, clash.a_name, clash.b_name)).selected(picked).value(clash.decision.key()))].spacing(4);
             if picked {
                 let decide = |label: &'static str, d: Decision| {
                     let active = clash.decision == d;
                     named(button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::Decide(k, if active { Decision::Open } else { d }))), Node::new(Role::ToggleButton, label).selected(active))
                 };
-                list = list.push(
+                out = out.push(
                     container(
                         row![
                             w::button(look, l.text("Issue maken", "Make issue"), K::Secondary, D::Compact, None, Some(go(Event::IssueFromClash(k)))),
@@ -2083,11 +3121,160 @@ impl App {
                     .padding(iced::Padding { left: 8.0, ..iced::Padding::ZERO }),
                 );
             }
+            container(out).padding(iced::Padding { left: indent, ..iced::Padding::ZERO }).into()
+        };
+        let hidden = |k: usize| !state.show_accepted && state.clashes[k].decision == Decision::Accepted && state.clash != Some(k);
+        let groups = self.collab_groups();
+        let (mut rule, mut shown, mut covered): (Option<&str>, usize, usize) = (None, 0, 0);
+        for group in &groups {
+            if shown >= SHOWN {
+                break;
+            }
+            covered += group.len();
+            let first = &state.clashes[group[0]];
+            // the clashes of one test under its name
+            if rule != Some(first.rule.as_str()) {
+                rule = Some(first.rule.as_str());
+                let of_rule = state.clashes.iter().filter(|c| c.rule == first.rule).count();
+                list = list.push(w::heading(look, format!("{} · {of_rule}", first.rule), 13.0));
+            }
+            let visible: Vec<usize> = group.iter().copied().filter(|&k| !hidden(k)).collect();
+            if visible.is_empty() {
+                continue;
+            }
+            if group.len() == 1 {
+                list = list.push(clash_row(group[0], 0.0));
+                shown += 1;
+                continue;
+            }
+            // a group: what it shares, how many, the worst of them; open, its clashes under it
+            let g = first.group;
+            let open = state.open_group == Some(g);
+            let rows: Vec<&ClashRow> = group.iter().map(|&k| &state.clashes[k]).collect();
+            let title = group_title(&rows);
+            let undecided = rows.iter().filter(|c| c.decision == Decision::Open).count();
+            let worst = rows.iter().filter(|c| c.decision != Decision::Accepted).max_by(|x, y| x.reach.cmp(&y.reach).then(x.distance.total_cmp(&y.distance))).copied().unwrap_or(first);
+            let (what, tone) = if undecided == 0 && rows.iter().all(|c| c.decision == Decision::Accepted) { (l.text("akkoord", "accepted").to_string(), Tone::Success) } else { says(worst) };
+            let count = format!("{} {}{}", rows.len(), l.text("clashes", "clashes"), if undecided < rows.len() { format!(" · {undecided} {}", l.text("open", "open")) } else { String::new() });
+            let line = row![
+                text(if open { "▾" } else { "▸" }).size(12).color(p.text_secondary),
+                column![w::body(look, title.clone()), w::secondary(look, count)].spacing(1).width(Length::Fill),
+                site::chip(look, &what, Some(tone)),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            let picked = open && state.clash.is_none();
+            list = list.push(named(
+                button(line).width(Length::Fill).padding([4, 6]).style(move |_, st| p.ribbon_button(picked, st)).on_press(go(Event::PickGroup(g))),
+                Node::new(Role::Row, format!("{} {title}: {} {}", l.text("Groep", "Group"), rows.len(), l.text("clashes", "clashes"))).selected(open),
+            ));
+            shown += 1;
+            if open {
+                let all = |d: Decision| rows.iter().all(|c| c.decision == d);
+                let decide = |label: &'static str, d: Decision| {
+                    let active = all(d);
+                    named(button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(go(Event::DecideGroup(g, if active { Decision::Open } else { d }))), Node::new(Role::ToggleButton, format!("{label} ({})", l.text("groep", "group"))).selected(active))
+                };
+                list = list.push(
+                    container(
+                        row![
+                            w::button(look, l.text("Eén issue", "One issue"), K::Secondary, D::Compact, None, Some(go(Event::IssueFromGroup(g)))),
+                            decide(l.text("Alle akkoord", "Accept all"), Decision::Accepted),
+                            decide(l.text("Alle afwijzen", "Reject all"), Decision::Rejected),
+                            w::button(look, l.text("Doorsnede", "Section"), K::Quiet, D::Compact, None, Some(go(Event::SectionAround))),
+                        ]
+                        .spacing(4)
+                        .wrap(),
+                    )
+                    .padding(iced::Padding { left: 16.0, ..iced::Padding::ZERO }),
+                );
+                for &k in &visible {
+                    list = list.push(clash_row(k, 16.0));
+                    shown += 1;
+                }
+            }
         }
-        if state.clashes.len() > SHOWN {
-            list = list.push(w::secondary(look, format!("+ {} {}", state.clashes.len() - SHOWN, l.text("meer, zie het CSV-bestand", "more, see the CSV file"))));
+        if covered < state.clashes.len() {
+            list = list.push(w::secondary(look, format!("+ {} {}", state.clashes.len() - covered, l.text("meer, zie het CSV-bestand", "more, see the CSV file"))));
+        }
+        // what the run before had and this one no longer finds
+        if !state.resolved.is_empty() {
+            let open = state.show_resolved;
+            let fold = row![text(if open { "▾" } else { "▸" }).size(12).color(p.text_secondary), w::heading(look, format!("{} · {}", l.text("Opgelost sinds de vorige run", "Solved since the run before"), state.resolved.len()), 13.0)].spacing(6).align_y(Alignment::Center);
+            list = list.push(w::divider(look)).push(named(button(fold).width(Length::Fill).padding([3, 0]).style(move |_, s| p.row_button(s)).on_press(go(Event::ShowResolved(!open))), Node::new(Role::Button, l.text("Opgelost sinds de vorige run", "Solved since the run before")).value(if open { "open" } else { "closed" })));
+            if open {
+                for memo in state.resolved.iter().take(SHOWN) {
+                    list = list.push(row![column![w::body(look, memo.a.clone()), w::secondary(look, format!("× {}", memo.b))].spacing(1).width(Length::Fill), site::chip(look, l.text("opgelost", "solved"), Some(Tone::Success))].spacing(6).align_y(Alignment::Center));
+                }
+            }
         }
         list.into()
+    }
+
+    /// The matrix of the rule set: its disciplines, each with what it takes, and which of them
+    /// are tested against which, one tick for each pair.
+    fn collab_matrix<'a>(&'a self, look: Look, l: Language) -> Element<'a, Message> {
+        let state = &self.collab;
+        let Some(rules) = state.rules() else { return column![].into() };
+        let mut out = column![w::heading(look, l.text("Disciplinematrix", "Discipline matrix"), 13.0)].spacing(4);
+        for (k, d) in rules.disciplines.iter().enumerate() {
+            let picked = state.sides.iter().find(|s| s.selector == d.take).cloned();
+            let mut side = column![container(w::select(look, &state.sides, picked.clone(), move |s: Side| go(Event::DisciplineSide(k, s)), D::Compact)).width(Length::Fill)].spacing(1).width(Length::FillPortion(3));
+            if picked.is_none() {
+                side = side.push(w::secondary(look, d.take.summary(l.text("alles", "everything"))));
+            }
+            out = out.push(
+                row![
+                    container(w::text_field(look, l.text("Naam", "Name"), &d.name, Some(move |t: String| go(Event::DisciplineName(k, t))), D::Compact, None)).width(Length::FillPortion(2)),
+                    side,
+                    w::button(look, l.text("Weg", "Remove"), K::Quiet, D::Compact, None, Some(go(Event::RemoveDiscipline(k)))),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Start),
+            );
+        }
+        // the pairs: each discipline against those before it and itself
+        if !rules.disciplines.is_empty() {
+            // the rows by name and number, the columns by number: names would not fit above
+            let cell = 32.0;
+            let mut head = row![Space::new().width(Length::Fill)].spacing(2);
+            for k in 0..rules.disciplines.len() {
+                head = head.push(container(w::secondary(look, (k + 1).to_string())).width(cell).center_x(cell));
+            }
+            let mut grid = column![head].spacing(4);
+            for (i, a) in rules.disciplines.iter().enumerate() {
+                let mut line = row![container(w::body(look, format!("{} {}", i + 1, a.name))).width(Length::Fill)].spacing(2).align_y(Alignment::Center);
+                for (j, b) in rules.disciplines.iter().enumerate() {
+                    if j > i {
+                        line = line.push(Space::new().width(cell));
+                        continue;
+                    }
+                    let on = rules.in_matrix(&a.name, &b.name);
+                    line = line.push(named(
+                        container(w::checkbox(look, "", on, Some(move |_| go(Event::MatrixCell(i, j))))).width(cell).center_x(cell),
+                        Node::new(Role::CheckBox, format!("{} × {}", a.name, b.name)).checked(on),
+                    ));
+                }
+                grid = grid.push(line);
+            }
+            out = out.push(grid);
+        }
+        out = out.push(
+            row![
+                w::button(look, l.text("Discipline toevoegen", "Add discipline"), K::Secondary, D::Compact, None, Some(go(Event::AddDiscipline))),
+                Space::new().width(Length::Fill),
+                w::secondary(look, l.text("Tolerantie", "Tolerance")),
+                container(w::text_field(look, "mm", &state.matrix_amount, Some(|t: String| go(Event::MatrixAmount(t))), D::Compact, None)).width(64),
+                w::secondary(look, "mm"),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        );
+        out.push(named(
+            w::checkbox(look, l.text("Matrix alleen tussen modellen", "Matrix only between models"), rules.matrix_between_models, Some(|on| go(Event::MatrixBetween(on)))),
+            Node::new(Role::CheckBox, l.text("Matrix alleen tussen modellen", "Matrix only between models")).checked(rules.matrix_between_models),
+        ))
+        .into()
     }
 }
 
@@ -2095,7 +3282,7 @@ impl App {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Side {
     label: String,
-    selector: Selector,
+    pub(super) selector: Selector,
 }
 
 impl std::fmt::Display for Side {
@@ -2215,6 +3402,13 @@ impl App {
         use serde_json::json;
         self.collab.refresh();
         self.collab_refresh_sides();
+        self.inform_refresh();
+        if cmd == "collab_cloud" {
+            return self.cloud_command(a);
+        }
+        if matches!(cmd, "collab_colours" | "collab_sets" | "collab_takeoff") {
+            return self.inform_command(cmd, a);
+        }
         let text = |k: &str| a.get(k).and_then(|v| v.as_str()).map(str::to_string);
         let action = text("action").unwrap_or_default();
         let topic_json = |t: &Topic, full: bool| {
@@ -2244,7 +3438,7 @@ impl App {
                     "tab": format!("{:?}", self.collab.tab),
                     "rule_set": rules.map(|r| r.name.clone()),
                     "rule_sets": self.collab.rule_sets.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
-                    "issues": self.collab.issues.topics.len(), "open_issues": self.collab.open_issues(),
+                    "issues": self.collab.issues.topics.len(), "open_issues": self.collab.open_issues(), "report": self.collab.report_job.is_some(),
                     "issues_file": self.collab.issues_path.as_ref().map(|p| p.display().to_string()), "issues_changed": self.collab.issues_changed,
                     "shown_issue": self.collab.topic,
                     "checked_models": self.collab.checked.len(), "clashes": self.collab.clashes.len(), "picked_clash": self.collab.clash,
@@ -2307,6 +3501,9 @@ impl App {
                         }
                     }
                     "save" => {
+                        if let Some(version) = text("version") {
+                            self.collab.bcf3 = version.starts_with('3');
+                        }
                         let _ = self.collab_handle(Event::SaveIssuesTo(Some(path.clone())));
                         match &self.collab.notice {
                             Some((Tone::Error, e)) => Err(e.clone()),
@@ -2354,6 +3551,9 @@ impl App {
                     if let Some(on) = a.get("ils").and_then(|v| v.as_bool()) {
                         let _ = self.collab_handle(Event::Ils(on));
                     }
+                    if let Some(on) = a.get("rooms").and_then(|v| v.as_bool()) {
+                        let _ = self.collab_handle(Event::Rooms(on));
+                    }
                     if let Some(name) = text("user") {
                         let _ = self.collab_handle(Event::User(name));
                     }
@@ -2385,7 +3585,7 @@ impl App {
                         *by_rule.entry(c.rule.as_str()).or_default() += 1;
                     }
                     // at the most kept, the tests after it did not run
-                    Ok(json!({ "clashes": self.collab.clashes.len(), "by_rule": by_rule, "capped": self.collab.clashes.len() >= MOST_CLASHES, "seconds": started.elapsed().as_secs_f32() }))
+                    Ok(json!({ "clashes": self.collab.clashes.len(), "groups": self.collab.clashes.last().map_or(0, |c| c.group + 1), "compared": self.collab.compared, "new": self.collab.clashes.iter().filter(|c| c.fresh).count(), "solved": self.collab.resolved.len(), "runs": self.collab.rules().map_or(0, |r| r.clash_runs.len()), "by_rule": by_rule, "capped": self.collab.clashes.len() >= MOST_CLASHES, "seconds": started.elapsed().as_secs_f32() }))
                 }
                 "list" => {
                     let offset = a.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -2393,7 +3593,23 @@ impl App {
                     Ok(json!({ "total": self.collab.clashes.len(), "clashes": self.collab.clashes.iter().enumerate().skip(offset).take(limit).map(|(k, c)| json!({
                         "index": k, "rule": c.rule, "a": c.a, "b": c.b, "a_name": c.a_name, "b_name": c.b_name,
                         "kind": format!("{:?}", c.kind), "distance_mm": (c.distance * 1000.0).round(), "decision": c.decision.key(),
+                        "group": c.group, "double": c.copy, "new": c.fresh, "reach": c.reach.key(),
                     })).collect::<Vec<_>>() }))
+                }
+                "group" => {
+                    let by = match text("by").as_deref().unwrap_or("element") {
+                        "off" | "none" => Grouping::Off,
+                        "element" => Grouping::Element,
+                        "place" => Grouping::Place,
+                        other => return Err(format!("group by off, element or place, not {other}")),
+                    };
+                    let _ = self.collab_handle(Event::GroupBy(GroupChoice(by, String::new())));
+                    Ok(json!({ "groups": self.collab.clashes.last().map_or(0, |c| c.group + 1), "clashes": self.collab.clashes.len() }))
+                }
+                "open_group" => {
+                    let g = a.get("group").and_then(|v| v.as_u64()).ok_or("give the group")? as usize;
+                    let _ = self.collab_handle(Event::PickGroup(g));
+                    Ok(json!({ "open": self.collab.open_group, "selected": self.sel.len() }))
                 }
                 "pick" => {
                     let k = a.get("index").and_then(|v| v.as_u64()).ok_or("give the clash's index")? as usize;
@@ -2415,7 +3631,7 @@ impl App {
                     let _ = self.collab_handle(Event::IssuesFromClashes);
                     Ok(json!({ "issues": self.collab.issues.topics.len() }))
                 }
-                other => Err(format!("collab_clashes: unknown action {other} (run, list, pick, decide, issue, issues)")),
+                other => Err(format!("collab_clashes: unknown action {other} (run, list, group, open_group, pick, decide, issue, issues)")),
             },
             "collab_compare" => {
                 let pick = |k: &str| a.get(k).and_then(|v| v.as_u64()).map(|n| n as usize);
@@ -2438,6 +3654,8 @@ impl App {
                     "csv" => Report::Csv,
                     "json" => Report::Json,
                     "clashes" => Report::ClashesCsv,
+                    "pdf" => Report::Pdf,
+                    "xlsx" | "excel" => Report::Xlsx,
                     _ => Report::IssuesHtml,
                 };
                 let _ = self.collab_handle(Event::ExportTo(kind, Some(path.clone())));
@@ -2577,6 +3795,230 @@ mod tests {
         // the pipe changed in name and place; the wall's new express id is no change
         assert_eq!(c.changed.len(), 1, "{c:?}");
         assert!(c.changed[0].2.contains("geometry") && c.changed[0].2.contains("Name"), "{c:?}");
+    }
+
+    fn row(rule: &str, a: u64, b: u64, at: [f32; 3]) -> ClashRow {
+        ClashRow { rule: rule.into(), a, b, a_name: format!("E{a}"), b_name: format!("E{b}"), kind: Kind::Crossing, at, distance: 0.01, decision: Decision::Open, group: 0, copy: false, key: String::new(), fresh: false, reach: Reach::Partly }
+    }
+
+    #[test]
+    fn clashes_group_by_the_element_they_share_or_by_where_they_are() {
+        // a duct (9) through three beams, a pipe (7) through one of them, and another test
+        let found = vec![row("S×I", 1, 9, [0.0; 3]), row("S×I", 7, 2, [40.0, 0.0, 0.0]), row("other", 1, 9, [0.0; 3]), row("S×I", 2, 9, [1.0, 0.0, 0.0]), row("S×I", 3, 9, [2.0, 0.0, 0.0])];
+        let mut rows = found.clone();
+        group_clashes(&mut rows, Grouping::Element);
+        let seen: Vec<(&str, u64, u64, usize)> = rows.iter().map(|r| (r.rule.as_str(), r.a, r.b, r.group)).collect();
+        // the duct's three clashes together, then the pipe's (its beam clashes twice, the pipe once,
+        // but the duct took that beam's other clash), each test apart, in their order
+        assert_eq!(seen, [("S×I", 1, 9, 0), ("S×I", 2, 9, 0), ("S×I", 3, 9, 0), ("S×I", 7, 2, 1), ("other", 1, 9, 2)]);
+        let title = group_title(&rows[..3].iter().collect::<Vec<_>>());
+        assert_eq!(title, "E9");
+        // by place: the three near each other, the one far away apart
+        let mut rows = found.clone();
+        group_clashes(&mut rows, Grouping::Place);
+        assert_eq!(rows.iter().map(|r| r.group).collect::<Vec<_>>(), [0, 0, 0, 1, 2]);
+        // not grouped: each on its own, the tests still together
+        let mut rows = found;
+        group_clashes(&mut rows, Grouping::Off);
+        assert_eq!(rows.iter().map(|r| (r.a, r.group)).collect::<Vec<_>>(), [(1, 0), (7, 1), (2, 2), (3, 3), (1, 4)]);
+    }
+
+    #[test]
+    fn a_group_decides_and_makes_one_issue_and_a_pair_two_tests_find_is_one_clash() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let _ = app.collab_update(Event::Tab(Tab::Clashes));
+        // two tests that find the same pair: one clash, with the first
+        let model = app.model.clone().unwrap();
+        let models = vec![("house.ifc".to_string(), 0..1)];
+        let all = ClashRule { name: "all".into(), ..ClashRule::default() };
+        let walls = ClashRule { name: "walls".into(), a: Selector::classes(&["IfcWall"]), ..ClashRule::default() };
+        let found = run_clashes(&model, &models, &[all, walls], &AtomicBool::new(false));
+        assert_eq!(found.iter().map(|c| c.rule.as_str()).collect::<Vec<_>>(), ["all"]);
+        assert!(!found[0].copy);
+        app.collab.clashes = vec![row("t", 1, 2, [0.0; 3]), row("t", 1, 3, [0.5, 0.0, 0.0]), row("t", 4, 5, [9.0, 0.0, 0.0])];
+        let _ = app.collab_update(Event::GroupBy(GroupChoice(Grouping::Element, String::new())));
+        let _ = app.collab_update(Event::DecideGroup(0, Decision::Accepted));
+        assert_eq!(app.collab.clashes.iter().map(|c| c.decision).collect::<Vec<_>>(), [Decision::Accepted, Decision::Accepted, Decision::Open]);
+        let _ = app.collab_update(Event::DecideGroup(0, Decision::Open));
+        let before = app.collab.issues.topics.len();
+        let _ = app.collab_update(Event::IssuesFromClashes);
+        // one issue for the group of two, one for the clash on its own
+        assert_eq!(app.collab.issues.topics.len(), before + 2);
+        let group = &app.collab.issues.topics[before];
+        assert!(group.title.contains("(2 clashes)") && group.description.lines().count() == 2, "{} / {}", group.title, group.description);
+    }
+
+    #[test]
+    fn the_model_colours_by_a_property_keeps_sets_and_makes_a_takeoff() {
+        use super::super::inform::{Event as I, CLASS};
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let _ = app.collab_update(Event::Tab(Tab::Colours));
+        let class = app.collab.inform.keys.iter().find(|k| k.key == CLASS).cloned().unwrap();
+        let _ = app.collab_update(Event::Inform(I::ColourBy(class)));
+        let legend: Vec<(String, usize)> = app.collab.inform.legend.iter().map(|r| (r.value.clone(), r.ids.len())).collect();
+        assert_eq!(legend.len(), 2, "{legend:?}");
+        assert_eq!(app.collab.inform.painted.len(), 2);
+        assert!(app.unit_looks.iter().skip(1).any(|l| l[0] > 0.0), "the units take the colours");
+        // a value of the legend as a set, and the selection as another
+        let _ = app.collab_update(Event::Inform(I::LegendSet(0)));
+        let _ = app.collab_update(Event::Inform(I::LegendPick(1)));
+        let _ = app.collab_update(Event::Inform(I::SetName("Pick".into())));
+        let _ = app.collab_update(Event::Inform(I::SaveSet));
+        let sets = app.collab.rules().unwrap().selection_sets.clone();
+        assert_eq!(sets.len(), 2);
+        assert_eq!(app.set_elements(&sets[0]), app.collab.inform.legend[0].ids);
+        assert_eq!((sets[1].name.as_str(), app.set_elements(&sets[1])), ("Pick", app.collab.inform.legend[1].ids.clone()));
+        // off: as it was
+        let _ = app.collab_update(Event::Inform(I::ColourBy(app.collab.inform.keys[0].clone())));
+        assert!(app.collab.inform.painted.is_empty());
+        // a takeoff of all, by class: a row per class and a total of the two
+        let _ = app.collab_update(Event::Inform(I::TakeoffGroup(0, app.collab.inform.keys.iter().find(|k| k.key == CLASS).cloned().unwrap())));
+        let takeoff = app.collab.inform.draft.clone();
+        let table = app.takeoff_schedule(&takeoff).unwrap();
+        assert_eq!(table.rows.len(), 3);
+        let total = table.rows.last().unwrap();
+        assert!(total.total && total.cells[1].as_deref() == Some("2"), "{:?}", total.cells);
+        // the wall: 4 × 0.2 × 3 m, its side 12 m², its volume 2.4 m³
+        let wall = table.rows.iter().find(|r| r.cells[0].as_deref() == Some("IfcWall")).unwrap();
+        assert_eq!(wall.cells[2..].iter().map(|c| c.clone().unwrap()).collect::<Vec<_>>(), ["4.00", "12.00", "2.400"]);
+        let _ = app.collab_update(Event::Inform(I::MakeTakeoff));
+        assert!(app.schedules.iter().any(|s| s.computed && s.columns[0] == "Class"));
+    }
+
+    #[test]
+    fn the_report_holds_the_clashes_as_pdf_and_as_a_workbook() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let model = app.model.clone().unwrap();
+        let models = vec![("house.ifc".to_string(), 0..1)];
+        app.collab.clashes = run_clashes(&model, &models, &[ClashRule { name: "all".into(), ..ClashRule::default() }], &AtomicBool::new(false));
+        group_clashes(&mut app.collab.clashes, Grouping::Element);
+        use super::super::reports::Scope;
+        use crate::export::report::{Block, Jpeg};
+        // the group pictured: a picture of it, and its clash in a table under it
+        assert_eq!(app.report_pictured(), [0]);
+        let picture = Jpeg { bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], width: 64, height: 48 };
+        let pictures = HashMap::from([(0, picture.clone())]);
+        let blocks = app.report_blocks(Scope::All, Language::English, &pictures, &HashMap::new());
+        assert!(blocks.iter().any(|b| matches!(b, Block::Picture { .. })));
+        assert!(blocks.iter().any(|b| matches!(b, Block::Table { rows, .. } if rows.iter().any(|r| r.cells.iter().any(|c| c == "E1 (IfcWall)")))));
+        let cover = app.report_cover(Scope::All, Language::English, Some(picture));
+        assert!(cover.title == "Check and clash report" && cover.facts.iter().any(|(k, v)| k == "Clashes" && v.starts_with("1 in 1")), "{cover:?}");
+        let pdf = crate::export::report::report_pdf(&cover, &app.report_title(Scope::All, Language::English), &app.report_date(), &blocks);
+        let text: String = pdf.iter().map(|&b| b as char).collect();
+        assert!(text.starts_with("%PDF-1.4") && text.contains("/Im2 ") && text.contains("/DCTDecode"));
+        let sheets = app.report_sheets(Language::English);
+        assert_eq!(sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Rules", "Findings", "Clash groups", "Clashes", "Issues"]);
+        assert_eq!(sheets[3].rows.len(), 1);
+        let book = crate::export::xlsx::workbook(&sheets.iter().collect::<Vec<_>>()).unwrap();
+        assert!(book.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn a_second_run_keeps_the_decisions_and_tells_what_is_new_and_what_is_solved() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let _ = app.collab_update(Event::Tab(Tab::Clashes));
+        // the first run: one clash, accepted
+        let mut first = vec![row("t", 1, 2, [0.0; 3])];
+        app.collab_take_clashes(&mut first);
+        assert!(!app.collab.compared && !first[0].fresh && first[0].key == "guid-1|guid-2", "{:?}", first[0].key);
+        app.collab.clashes = first;
+        let _ = app.collab_update(Event::Decide(0, Decision::Accepted));
+        // the second: that one again (the other way round) and one more
+        app.collab_remember();
+        let mut second = vec![row("t", 2, 1, [0.0; 3]), row("t", 1, 7, [1.0, 0.0, 0.0])];
+        app.collab_take_clashes(&mut second);
+        assert_eq!(second.iter().map(|c| (c.decision, c.fresh)).collect::<Vec<_>>(), [(Decision::Accepted, false), (Decision::Open, true)]);
+        assert!(app.collab.compared && app.collab.resolved.is_empty());
+        app.collab.clashes = second;
+        // the third finds only the new one: the first is solved
+        app.collab_remember();
+        let mut third = vec![row("t", 1, 7, [1.0, 0.0, 0.0])];
+        app.collab_take_clashes(&mut third);
+        assert_eq!((third[0].fresh, app.collab.resolved.len(), app.collab.resolved[0].a.as_str()), (false, 1, "E2"));
+        let runs = app.collab.rules().unwrap().clash_runs.clone();
+        assert_eq!(runs.iter().map(|r| (r.total, r.new, r.resolved, r.open)).collect::<Vec<_>>(), [(1, 0, 0, 1), (2, 1, 0, 1), (1, 0, 1, 1)]);
+    }
+
+    #[test]
+    fn a_clash_scrapes_goes_partly_in_or_goes_through() {
+        let b = |lo: [f32; 3], hi: [f32; 3]| (Vec3::from_array(lo), Vec3::from_array(hi));
+        let wall = b([0.0, 0.0, 0.0], [5.0, 0.2, 3.0]);
+        // a pipe through the wall, one ending in it, one that only scrapes it
+        assert_eq!(Reach::of(Kind::Crossing, 0.05, b([1.0, -1.0, 1.0], [1.1, 1.0, 1.1]), wall), Reach::Through);
+        assert_eq!(Reach::of(Kind::Crossing, 0.05, b([1.0, -1.0, 1.0], [1.1, 0.1, 1.1]), wall), Reach::Partly);
+        assert_eq!(Reach::of(Kind::Crossing, 0.004, b([1.0, -1.0, 1.0], [1.1, 0.004, 1.1]), wall), Reach::Graze);
+        assert_eq!((Reach::of(Kind::Near, 0.03, wall, wall), Reach::of(Kind::Inside, 0.1, wall, wall)), (Reach::Near, Reach::Through));
+        assert!(Reach::Through > Reach::Partly && Reach::Partly > Reach::Graze);
+        // the keys step through the groups and decide on the one open
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        app.collab.clashes = vec![row("t", 1, 2, [0.0; 3]), row("t", 1, 3, [0.5, 0.0, 0.0]), row("t", 4, 5, [9.0, 0.0, 0.0])];
+        let _ = app.collab_update(Event::GroupBy(GroupChoice(Grouping::Element, String::new())));
+        let _ = app.collab_update(Event::Step(1));
+        assert_eq!(app.collab.open_group, Some(0));
+        let _ = app.collab_update(Event::DecidePicked(Decision::Accepted));
+        assert_eq!(app.collab.clashes.iter().map(|c| c.decision).collect::<Vec<_>>(), [Decision::Accepted, Decision::Accepted, Decision::Open]);
+        let _ = app.collab_update(Event::Step(1));
+        assert_eq!(app.collab.open_group, Some(1));
+        let _ = app.collab_update(Event::Step(-1));
+        assert_eq!(app.collab.open_group, Some(0));
+    }
+
+    #[test]
+    fn a_sign_behind_a_wall_is_out_of_sight() {
+        // a room of 8 × 6 m; a wall across it at x = 4; a sign at x = 7 on the far side wall
+        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false };
+        let boxes: [(u64, &str, &str, [f32; 3], [f32; 3]); 3] = [(1, "IfcSpace", "0.01", [0.0, 0.0, 0.0], [8.0, 6.0, 3.0]), (2, "IfcWall", "Wand", [4.0, 0.0, 0.0], [4.1, 6.0, 3.0]), (3, "IfcBuildingElementProxy", "Vluchtwegbord", [7.9, 2.8, 2.2], [7.95, 3.2, 2.4])];
+        for (id, class, name, lo, hi) in boxes {
+            let first = layer.indices.len() as u32;
+            let base = (layer.positions.len() / 3) as u32;
+            for i in 0..8 {
+                layer.positions.extend([if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]);
+                layer.normals.extend([0.0, 0.0, 1.0]);
+            }
+            for q in [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]] {
+                layer.indices.extend([q[0], q[1], q[2], q[0], q[2], q[3]].map(|i: u32| base + i));
+            }
+            layer.elements.push((id, first, layer.indices.len() as u32 - first));
+            layer.props.push((id, format!("{{\"IfcType\":\"{class}\",\"Name\":\"{name}\",\"GlobalId\":\"g{id}\"}}")));
+        }
+        let model = Model::new(PathBuf::from("room.ifc"), "IFC", vec![layer]);
+        let models = vec![("room.ifc".to_string(), 0..1)];
+        let rule = ClashRule { name: "signs".into(), kind: ClashKind::Sight, a: Selector { names: vec!["*vlucht*".into()], ..Selector::default() }, sight_blocked_pct: 40.0, ..ClashRule::default() };
+        let found = run_clashes(&model, &models, std::slice::from_ref(&rule), &AtomicBool::new(false));
+        // from the half of the room before the wall the sign is not seen
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].a, found[0].b, found[0].kind), (3, 2, Kind::Hidden));
+        assert!((found[0].distance - 0.5).abs() < 0.01, "{}", found[0].distance);
+        // half may be without sight of it: then it passes; and without the wall too
+        let lenient = ClashRule { sight_blocked_pct: 60.0, ..rule.clone() };
+        assert!(run_clashes(&model, &models, &[lenient], &AtomicBool::new(false)).is_empty());
+    }
+
+    #[test]
+    fn the_matrix_is_edited_in_the_panel() {
+        let mut app = App::default();
+        app.set_model(Arc::new(two_blocks()));
+        let _ = app.collab_update(Event::RuleSet(3));
+        let count = |app: &App| app.collab.rules().unwrap().disciplines.len();
+        let n = count(&app);
+        let _ = app.collab_update(Event::AddDiscipline);
+        assert_eq!(count(&app), n + 1);
+        let _ = app.collab_update(Event::DisciplineName(n, "Gevel".into()));
+        let _ = app.collab_update(Event::MatrixCell(n, 0));
+        let first = app.collab.rules().unwrap().disciplines[0].name.clone();
+        assert!(app.collab.rules().unwrap().in_matrix("Gevel", &first));
+        // renamed, its pairs go with it; removed, they go
+        let _ = app.collab_update(Event::DisciplineName(n, "Façade".into()));
+        assert!(app.collab.rules().unwrap().in_matrix("Façade", &first));
+        let _ = app.collab_update(Event::MatrixAmount("12,5".into()));
+        assert_eq!(app.collab.rules().unwrap().matrix_tolerance_mm, 12.5);
+        let _ = app.collab_update(Event::RemoveDiscipline(n));
+        assert!(!app.collab.rules().unwrap().matrix.iter().any(|p| p.contains(&"Façade".to_string())));
     }
 
     #[test]

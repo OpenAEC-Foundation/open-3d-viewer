@@ -177,8 +177,8 @@ struct GpuLayer {
     index_count: u32,
     /// The points of a point cloud layer (no indices); 0 for a mesh.
     points: u32,
-    /// Line lists, built on first use: all triangle edges (wireframe) and feature edges.
-    wire: Option<(wgpu::Buffer, u32)>,
+    /// The feature edges as a line list, uploaded on first use: what wireframe, edges and
+    /// hidden lines draw.
     features: Option<(wgpu::Buffer, u32)>,
     /// Triangles that enclose volume (cut fill), built on first use.
     solid: Option<(wgpu::Buffer, u32)>,
@@ -729,7 +729,6 @@ impl ScenePipeline {
                 indices,
                 index_count: layer.indices.len() as u32,
                 points: 0,
-                wire: None,
                 features: None,
                 solid: None,
                 chunks: chunked.chunks,
@@ -763,31 +762,20 @@ impl ScenePipeline {
     }
 
     /// Builds the line index buffers for visible layers on first use.
-    fn ensure_edges(&mut self, device: &wgpu::Device, visible: &[bool], all_triangle_edges: bool) {
+    fn ensure_edges(&mut self, device: &wgpu::Device, visible: &[bool]) {
         let Some(model) = self.model.clone() else { return };
         for (i, (gpu, layer)) in self.layers.iter_mut().zip(&model.layers).enumerate() {
-            if !visible.get(i).copied().unwrap_or(true) || layer.points {
+            if !visible.get(i).copied().unwrap_or(true) || layer.points || gpu.features.is_some() {
                 continue;
             }
-            let slot = if all_triangle_edges { &mut gpu.wire } else { &mut gpu.features };
-            if slot.is_some() {
-                continue;
-            }
-            let lines = if all_triangle_edges {
-                let mut lines = Vec::with_capacity(layer.indices.len() * 2);
-                for t in layer.indices.chunks_exact(3) {
-                    lines.extend_from_slice(&[t[0], t[1], t[1], t[2], t[2], t[0]]);
-                }
-                lines
-            } else {
-                feature_edges(&layer.positions, &layer.indices, 25.0)
-            };
+            // found ahead when the model came in, else here
+            let lines = layer_edges(&model, i);
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("o3v.layer.edges"),
                 contents: bytemuck::cast_slice(&lines),
                 usage: wgpu::BufferUsages::INDEX,
             });
-            *slot = Some((buffer, lines.len() as u32));
+            gpu.features = Some((buffer, lines.len() as u32));
         }
     }
 
@@ -935,7 +923,7 @@ impl ScenePipeline {
         }
         let settings = &primitive.settings;
         if settings.mode != RenderMode::Solid {
-            self.ensure_edges(device, &primitive.visible, settings.mode == RenderMode::Wireframe);
+            self.ensure_edges(device, &primitive.visible);
         }
         if (settings.section.is_some() || settings.plane.is_some()) && settings.caps && settings.mode != RenderMode::Wireframe {
             self.ensure_solids(device);
@@ -1136,8 +1124,7 @@ impl ScenePipeline {
             if mode != RenderMode::Solid {
                 pass.set_bind_group(0, &self.edge_group, &[]);
                 for (i, layer) in self.layers.iter().enumerate() {
-                    let edges = if mode == RenderMode::Wireframe { &layer.wire } else { &layer.features };
-                    if let (true, Some((edges, count))) = (visible(i), edges) {
+                    if let (true, Some((edges, count))) = (visible(i), &layer.features) {
                         pass.set_vertex_buffer(0, layer.vertices.slice(..));
                         pass.set_index_buffer(edges.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..*count, 0, 0..1);
@@ -1211,7 +1198,7 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
         usage: wgpu::BufferUsages::INDEX,
         mapped_at_creation: false,
     });
-    GpuLayer { vertices, indices, index_count: 0, points: n as u32, wire: None, features: None, solid: None, chunks: Vec::new() }
+    GpuLayer { vertices, indices, index_count: 0, points: n as u32, features: None, solid: None, chunks: Vec::new() }
 }
 
 /// Units per row of the offsets texture; `OFFSETS_WIDTH` in scene.wgsl. With WebGL2's 2048 rows
@@ -1363,17 +1350,63 @@ pub fn transform_bounds(b: &Bounds, m: &Mat4) -> Bounds {
     out
 }
 
+/// The feature edges of each layer of the model shown, found once: ahead on a thread of its own
+/// when the model comes in ([`precompute_edges`]), so wireframe and hidden lines show without
+/// the window waiting for them (a large model takes seconds). Of one model at a time.
+type LayerEdges = Arc<std::sync::OnceLock<Arc<Vec<u32>>>>;
+static EDGES: std::sync::Mutex<Option<(u64, Vec<LayerEdges>)>> = std::sync::Mutex::new(None);
+
+/// The place the edges of each layer of `model` are kept.
+fn edge_slots(model: &Model) -> Vec<LayerEdges> {
+    let mut kept = EDGES.lock().unwrap_or_else(|e| e.into_inner());
+    match &*kept {
+        Some((id, slots)) if *id == model.id && slots.len() == model.layers.len() => slots.clone(),
+        _ => {
+            let slots: Vec<LayerEdges> = model.layers.iter().map(|_| LayerEdges::default()).collect();
+            *kept = Some((model.id, slots.clone()));
+            slots
+        }
+    }
+}
+
+/// The feature edges of layer `i` of `model`: as found ahead, else found now (waiting for the
+/// thread that is at it).
+fn layer_edges(model: &Model, i: usize) -> Arc<Vec<u32>> {
+    let Some(slot) = edge_slots(model).get(i).cloned() else { return Arc::default() };
+    let layer = &model.layers[i];
+    slot.get_or_init(|| Arc::new(if layer.points { Vec::new() } else { feature_edges(&layer.positions, &layer.indices, 25.0) })).clone()
+}
+
+/// Finds the feature edges of a model's layers ahead, on a thread of its own (in the browser
+/// they are found when first drawn).
+pub fn precompute_edges(model: &Arc<Model>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let model = model.clone();
+        // the slots now, so a model that came in later is not overtaken by this one
+        let slots = edge_slots(&model);
+        std::thread::spawn(move || {
+            for (slot, layer) in slots.iter().zip(&model.layers) {
+                slot.get_or_init(|| Arc::new(if layer.points { Vec::new() } else { feature_edges(&layer.positions, &layer.indices, 25.0) }));
+            }
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = model;
+}
+
 /// Edges where the faces meet at more than `angle_deg`, plus open borders, as a line index
 /// list. Vertices are welded by exact position, so flat-shaded meshes work.
 pub fn feature_edges(positions: &[f32], indices: &[u32], angle_deg: f32) -> Vec<u32> {
-    use std::collections::HashMap;
+    // the keys come by the million: the default hasher takes several times as long
+    use crate::units::FastHashMap as HashMap;
     let vertex_count = positions.len() / 3;
     let at = |i: u32| {
         let i = i as usize * 3;
         Vec3::new(positions[i], positions[i + 1], positions[i + 2])
     };
     // Weld: position bits -> canonical id
-    let mut weld: HashMap<[u32; 3], u32> = HashMap::with_capacity(vertex_count);
+    let mut weld: HashMap<[u32; 3], u32> = HashMap::with_capacity_and_hasher(vertex_count, Default::default());
     let canon: Vec<u32> = (0..vertex_count)
         .map(|i| {
             let key = [positions[3 * i].to_bits(), positions[3 * i + 1].to_bits(), positions[3 * i + 2].to_bits()];
@@ -1390,7 +1423,7 @@ pub fn feature_edges(positions: &[f32], indices: &[u32], angle_deg: f32) -> Vec<
         crease: bool,
     }
     let cos_limit = angle_deg.to_radians().cos();
-    let mut edges: HashMap<(u32, u32), Edge> = HashMap::with_capacity(indices.len());
+    let mut edges: HashMap<(u32, u32), Edge> = HashMap::with_capacity_and_hasher(indices.len(), Default::default());
     for t in indices.chunks_exact(3) {
         if t.iter().any(|&i| i as usize >= vertex_count) {
             continue;

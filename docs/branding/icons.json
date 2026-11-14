@@ -2,7 +2,7 @@
   {
     "name": "Open 3D Viewer",
     "source": "docs/branding/open-3d-viewer.png",
-    "sha256": "cd1a896a87dfa559a144633d9479330ae36a2e30c240fee0236e27902100874d",
+    "sha256": "331204e28a97cced92c84a6778a6cc5a657d9441f73100e4b1f43cb0ad52eaa9",
     "source_url": "https://dashboard.snapcraft.io/site_media/appmedia/2026/11/open-3d-viewer-logo-afgerond.png",
     "outputs": [
       {
@@ -52,7 +52,7 @@
           192
         ],
         "scale": 1.0,
-        "background": "#E89F17"
+        "background": "#E78A08"
       },
       {
         "path": "web/icons/maskable-512.png",
@@ -61,7 +61,7 @@
           512
         ],
         "scale": 1.0,
-        "background": "#E89F17"
+        "background": "#E78A08"
       },
       {
         "path": "packaging/android/app/src/main/res/mipmap-mdpi/ic_launcher.png",
@@ -77,7 +77,7 @@
           108
         ],
         "scale": 0.7,
-        "background": "#E89F17"
+        "background": "#E78A08"
       },
       {
         "path": "packaging/android/app/src/main/res/mipmap-hdpi/ic_launcher.png",
@@ -93,7 +93,7 @@
           162
         ],
         "scale": 0.7,
-        "background": "#E89F17"
+        "background": "#E78A08"
       },
       {
         "path": "packaging/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
@@ -109,7 +109,7 @@
           216
         ],
         "scale": 0.7,
-        "background": "#E89F17"
+        "background": "#E78A08"
       },
       {
         "path": "packaging/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png",
@@ -125,7 +125,7 @@
           324
         ],
         "scale": 0.7,
-        "background": "#E89F17"
+        "background": "#E78A08"
       },
       {
         "path": "packaging/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
@@ -141,7 +141,7 @@
           432
         ],
         "scale": 0.7,
-        "background": "#E89F17"
+        "background": "#E78A08"
       }
     ]
   }

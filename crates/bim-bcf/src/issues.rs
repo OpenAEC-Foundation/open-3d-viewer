@@ -1,5 +1,5 @@
 //! The issues of a BCF archive as values: topics with their comments and viewpoints, read from
-//! BCF 2.0, 2.1 and 3.0 and written as BCF 2.1.
+//! BCF 2.0, 2.1 and 3.0 and written as BCF 2.1 or, when asked, as BCF 3.0.
 //!
 //! A topic that is not changed is written back as it was read, byte for byte; a changed or new
 //! one is written from its values. Files of the archive that belong to no topic (the project
@@ -374,17 +374,22 @@ fn read_notes(bytes: &[u8]) -> (Vec<([f64; 3], String)>, Vec<(String, Vec<[f64; 
     (notes, marks)
 }
 
-/// A viewpoint as its BCF 2.1 file.
-fn write_viewpoint(view: &Viewpoint) -> String {
+/// A viewpoint as its BCF 2.1 file, or (`three`) its BCF 3.0 file: there the hints are under
+/// the visibility and a camera says how wide its picture is.
+fn write_viewpoint(view: &Viewpoint, three: bool) -> String {
     let mut out = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<VisualizationInfo Guid=\"{}\">", escape(&view.guid));
-    out += &format!(
-        "<Components><ViewSetupHints SpacesVisible=\"{}\" SpaceBoundariesVisible=\"{}\" OpeningsVisible=\"{}\"/>",
-        view.spaces_visible, view.space_boundaries_visible, view.openings_visible
-    );
+    let hints = format!("<ViewSetupHints SpacesVisible=\"{}\" SpaceBoundariesVisible=\"{}\" OpeningsVisible=\"{}\"/>", view.spaces_visible, view.space_boundaries_visible, view.openings_visible);
+    out += "<Components>";
+    if !three {
+        out += &hints;
+    }
     if !view.selection.is_empty() {
         out += &format!("<Selection>{}</Selection>", components(&view.selection));
     }
     out += &format!("<Visibility DefaultVisibility=\"{}\">", view.default_visibility);
+    if three {
+        out += &hints;
+    }
     if !view.exceptions.is_empty() {
         out += &format!("<Exceptions>{}</Exceptions>", components(&view.exceptions));
     }
@@ -402,14 +407,21 @@ fn write_viewpoint(view: &Viewpoint) -> String {
             Lens::Perspective { field_of_view } => ("PerspectiveCamera", format!("<FieldOfView>{field_of_view}</FieldOfView>")),
             Lens::Orthogonal { view_to_world_scale } => ("OrthogonalCamera", format!("<ViewToWorldScale>{view_to_world_scale}</ViewToWorldScale>")),
         };
-        out += &format!("<{name}>{}{}{}{lens}</{name}>", point("CameraViewPoint", c.position), point("CameraDirection", c.direction), point("CameraUpVector", c.up));
+        let aspect = if three { "<AspectRatio>1.5</AspectRatio>" } else { "" };
+        out += &format!("<{name}>{}{}{}{lens}{aspect}</{name}>", point("CameraViewPoint", c.position), point("CameraDirection", c.direction), point("CameraUpVector", c.up));
     }
-    if !view.lines.is_empty() {
-        out += "<Lines>";
-        for (from, to) in &view.lines {
-            out += &format!("<Line>{}{}</Line>", point("StartPoint", *from), point("EndPoint", *to));
+    // 3.0 has the lines after the planes
+    let lines = |out: &mut String| {
+        if !view.lines.is_empty() {
+            *out += "<Lines>";
+            for (from, to) in &view.lines {
+                *out += &format!("<Line>{}{}</Line>", point("StartPoint", *from), point("EndPoint", *to));
+            }
+            *out += "</Lines>";
         }
-        out += "</Lines>";
+    };
+    if !three {
+        lines(&mut out);
     }
     if !view.clipping_planes.is_empty() {
         out += "<ClippingPlanes>";
@@ -418,11 +430,15 @@ fn write_viewpoint(view: &Viewpoint) -> String {
         }
         out += "</ClippingPlanes>";
     }
+    if three {
+        lines(&mut out);
+    }
     out + "</VisualizationInfo>\n"
 }
 
-/// The files of a topic's folder, written from its values.
-fn write_topic(topic: &Topic) -> BTreeMap<String, Vec<u8>> {
+/// The files of a topic's folder, written from its values: as BCF 2.1, or (`three`) as BCF 3.0,
+/// where the labels, the comments and the viewpoints are lists inside the topic.
+fn write_topic(topic: &Topic, three: bool) -> BTreeMap<String, Vec<u8>> {
     let mut files = topic.attachments.clone();
     let tag = |name: &str, value: &str| if value.is_empty() { String::new() } else { format!("<{name}>{}</{name}>", escape(value)) };
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Markup>");
@@ -431,7 +447,13 @@ fn write_topic(topic: &Topic) -> BTreeMap<String, Vec<u8>> {
     out += &format!("<Title>{}</Title>", escape(&topic.title));
     out += &tag("Priority", &topic.priority);
     out += &topic.index.map(|i| format!("<Index>{i}</Index>")).unwrap_or_default();
-    out += &topic.labels.iter().map(|l| tag("Labels", l)).collect::<String>();
+    if three {
+        if !topic.labels.is_empty() {
+            out += &format!("<Labels>{}</Labels>", topic.labels.iter().map(|l| tag("Label", l)).collect::<String>());
+        }
+    } else {
+        out += &topic.labels.iter().map(|l| tag("Labels", l)).collect::<String>();
+    }
     out += &format!("<CreationDate>{}</CreationDate><CreationAuthor>{}</CreationAuthor>", escape(&topic.creation_date), escape(&topic.creation_author));
     out += &tag("ModifiedDate", &topic.modified_date);
     out += &tag("ModifiedAuthor", &topic.modified_author);
@@ -439,7 +461,12 @@ fn write_topic(topic: &Topic) -> BTreeMap<String, Vec<u8>> {
     out += &tag("AssignedTo", &topic.assigned_to);
     out += &tag("Stage", &topic.stage);
     out += &tag("Description", &topic.description);
-    out += "</Topic>";
+    if !three {
+        out += "</Topic>";
+    }
+    if three && !topic.comments.is_empty() {
+        out += "<Comments>";
+    }
     for c in &topic.comments {
         out += &format!("<Comment Guid=\"{}\"><Date>{}</Date><Author>{}</Author><Comment>{}</Comment>", escape(&c.guid), escape(&c.date), escape(&c.author), escape(&c.text));
         if let Some(v) = &c.viewpoint {
@@ -449,21 +476,34 @@ fn write_topic(topic: &Topic) -> BTreeMap<String, Vec<u8>> {
         out += &tag("ModifiedAuthor", &c.modified_author);
         out += "</Comment>";
     }
+    if three && !topic.comments.is_empty() {
+        out += "</Comments>";
+    }
+    if three && !topic.viewpoints.is_empty() {
+        out += "<Viewpoints>";
+    }
+    let listed = if three { "ViewPoint" } else { "Viewpoints" };
     for (k, view) in topic.viewpoints.iter().enumerate() {
         // the first under the names every reader knows
         let file = if k == 0 { "viewpoint.bcfv".to_string() } else { format!("{}.bcfv", view.guid) };
-        out += &format!("<Viewpoints Guid=\"{}\"><Viewpoint>{}</Viewpoint>", escape(&view.guid), escape(&file));
+        out += &format!("<{listed} Guid=\"{}\"><Viewpoint>{}</Viewpoint>", escape(&view.guid), escape(&file));
         if let Some((name, bytes)) = &view.snapshot {
             let extension = if name.to_ascii_lowercase().ends_with(".jpg") || name.to_ascii_lowercase().ends_with(".jpeg") { "jpg" } else { "png" };
             let picture = if k == 0 { format!("snapshot.{extension}") } else { format!("{}.{extension}", view.guid) };
             out += &format!("<Snapshot>{}</Snapshot>", escape(&picture));
             files.insert(picture, bytes.clone());
         }
-        out += "</Viewpoints>";
+        out += &format!("</{listed}>");
         if !(view.notes.is_empty() && view.marks.is_empty()) {
             files.insert(notes_file(&file), write_notes(view).into_bytes());
         }
-        files.insert(file, write_viewpoint(view).into_bytes());
+        files.insert(file, write_viewpoint(view, three).into_bytes());
+    }
+    if three {
+        if !topic.viewpoints.is_empty() {
+            out += "</Viewpoints>";
+        }
+        out += "</Topic>";
     }
     out += "</Markup>\n";
     files.insert("markup.bcf".into(), out.into_bytes());
@@ -537,6 +577,51 @@ impl Issues {
     /// Writes the archive as BCF 2.1; a topic read from 2.1 and not changed since goes back as
     /// it was.
     pub fn write(&self) -> Result<Vec<u8>, String> {
+        self.write_as(false)
+    }
+
+    /// Writes the archive as BCF 3.0: its version, the project, the lists of what the topics
+    /// use (their types, statuses, priorities, labels, people and stages), and each topic.
+    fn write_three(&self) -> Result<Vec<u8>, String> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        let mut put = |name: &str, bytes: &[u8]| -> Result<(), String> {
+            zip.start_file(name, options).map_err(|e| e.to_string())?;
+            zip.write_all(bytes).map_err(|e| e.to_string())
+        };
+        put("bcf.version", b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Version VersionId=\"3.0\"/>\n")?;
+        let (id, name) = self.project.clone().unwrap_or_else(|| (new_guid(), String::new()));
+        put("project.bcfp", format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ProjectInfo><Project ProjectId=\"{}\"><Name>{}</Name></Project></ProjectInfo>\n", escape(&id), escape(&name)).as_bytes())?;
+        let list = |outer: &str, inner: &str, values: Vec<&str>| {
+            let mut values: Vec<&str> = values.into_iter().filter(|v| !v.is_empty()).collect();
+            values.sort_unstable();
+            values.dedup();
+            format!("<{outer}>{}</{outer}>", values.iter().map(|v| format!("<{inner}>{}</{inner}>", escape(v))).collect::<String>())
+        };
+        let t = &self.topics;
+        let extensions = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Extensions>{}{}{}{}{}{}</Extensions>\n",
+            list("TopicTypes", "TopicType", t.iter().map(|x| x.kind.as_str()).collect()),
+            list("TopicStatuses", "TopicStatus", t.iter().map(|x| x.status.as_str()).collect()),
+            list("Priorities", "Priority", t.iter().map(|x| x.priority.as_str()).collect()),
+            list("TopicLabels", "TopicLabel", t.iter().flat_map(|x| x.labels.iter().map(String::as_str)).collect()),
+            list("Users", "User", t.iter().flat_map(|x| [x.creation_author.as_str(), x.assigned_to.as_str(), x.modified_author.as_str()]).chain(t.iter().flat_map(|x| x.comments.iter().map(|c| c.author.as_str()))).collect()),
+            list("Stages", "Stage", t.iter().map(|x| x.stage.as_str()).collect()),
+        );
+        put("extensions.xml", extensions.as_bytes())?;
+        for topic in &self.topics {
+            for (name, bytes) in &write_topic(topic, true) {
+                put(&format!("{}/{name}", topic.guid), bytes)?;
+            }
+        }
+        Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
+    }
+
+    /// Writes the archive as BCF 2.1 or (`three`) as BCF 3.0.
+    pub fn write_as(&self, three: bool) -> Result<Vec<u8>, String> {
+        if three {
+            return self.write_three();
+        }
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default();
         let mut put = |name: &str, bytes: &[u8]| -> Result<(), String> {
@@ -558,7 +643,7 @@ impl Issues {
         for topic in &self.topics {
             let files = match topic.original.as_ref().filter(|_| as_read) {
                 Some(files) => files.clone(),
-                None => write_topic(topic),
+                None => write_topic(topic, false),
             };
             for (name, bytes) in &files {
                 put(&format!("{}/{name}", topic.guid), bytes)?;
@@ -571,6 +656,32 @@ impl Issues {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issues_written_as_bcf_3_read_back_the_same() {
+        let mut issues = Issues::new();
+        let mut topic = Topic::new("Leiding door wand", "an");
+        topic.kind = "Clash".into();
+        topic.labels = vec!["MEP".into(), "Constructie".into()];
+        topic.comment("Graag verleggen", "bo", None);
+        let mut view = Viewpoint::new();
+        view.selection = vec!["G1".into(), "G2".into()];
+        view.camera = Some(ViewCamera { position: [1.0, 2.0, 3.0], direction: [0.0, 1.0, 0.0], up: [0.0, 0.0, 1.0], lens: Lens::Perspective { field_of_view: 45.0 } });
+        view.lines.push(([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
+        view.snapshot = Some(("snapshot.png".into(), vec![1, 2, 3]));
+        topic.viewpoints.push(view);
+        issues.topics.push(topic);
+        let bytes = issues.write_as(true).unwrap();
+        let again = Issues::read(&bytes).unwrap();
+        assert_eq!(again.version, "3.0");
+        let (a, b) = (&issues.topics[0], &again.topics[0]);
+        assert_eq!((&a.title, &a.kind, &a.labels, &a.comments, &a.viewpoints), (&b.title, &b.kind, &b.labels, &b.comments, &b.viewpoints));
+        // the lists every 3.0 archive has
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut extensions = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("extensions.xml").unwrap(), &mut extensions).unwrap();
+        assert!(extensions.contains("<TopicType>Clash</TopicType>") && extensions.contains("<User>bo</User>"), "{extensions}");
+    }
 
     fn sample() -> Issues {
         let mut issues = Issues::new();

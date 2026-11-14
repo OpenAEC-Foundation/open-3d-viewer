@@ -75,6 +75,8 @@ pub fn lang(l: Language) -> Lang {
         Language::English => Lang::En,
         Language::German => Lang::De,
         Language::French => Lang::Fr,
+        // the library has no texts in the other languages: English
+        _ => Lang::En,
     }
 }
 

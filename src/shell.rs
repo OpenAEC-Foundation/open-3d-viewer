@@ -103,7 +103,7 @@ const fn named<T>(value: T, label: &'static str) -> Named<T> {
 /// The number of interface languages ([`Language::ALL`]).
 const LANGUAGES: usize = Language::ALL.len();
 
-/// The settings per language, in the order of [`Language::ALL`]: Dutch, English, German, French.
+/// The settings per language, in the order of [`Language::ALL`].
 const THEMES: [[Named<ThemeId>; 5]; LANGUAGES] = [
     [
         named(ThemeId::Light, "Licht"),
@@ -133,18 +133,72 @@ const THEMES: [[Named<ThemeId>; 5]; LANGUAGES] = [
         named(ThemeId::HighContrastDark, "Contraste élevé sombre"),
         named(ThemeId::HighContrastLight, "Contraste élevé clair"),
     ],
+    [
+        named(ThemeId::Light, "Claro"),
+        named(ThemeId::Dark, "Oscuro"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Alto contraste oscuro"),
+        named(ThemeId::HighContrastLight, "Alto contraste claro"),
+    ],
+    [
+        named(ThemeId::Light, "Chiaro"),
+        named(ThemeId::Dark, "Scuro"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Alto contrasto scuro"),
+        named(ThemeId::HighContrastLight, "Alto contrasto chiaro"),
+    ],
+    [
+        named(ThemeId::Light, "Claro"),
+        named(ThemeId::Dark, "Escuro"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Alto contraste escuro"),
+        named(ThemeId::HighContrastLight, "Alto contraste claro"),
+    ],
+    [
+        named(ThemeId::Light, "Jasny"),
+        named(ThemeId::Dark, "Ciemny"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Wysoki kontrast ciemny"),
+        named(ThemeId::HighContrastLight, "Wysoki kontrast jasny"),
+    ],
+    [
+        named(ThemeId::Light, "Ljust"),
+        named(ThemeId::Dark, "Mörkt"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Hög kontrast mörkt"),
+        named(ThemeId::HighContrastLight, "Hög kontrast ljust"),
+    ],
+    [
+        named(ThemeId::Light, "Açık"),
+        named(ThemeId::Dark, "Koyu"),
+        named(ThemeId::Blueprint, "Blueprint"),
+        named(ThemeId::HighContrastDark, "Yüksek karşıtlık koyu"),
+        named(ThemeId::HighContrastLight, "Yüksek karşıtlık açık"),
+    ],
 ];
 const WORKSPACES: [[Named<WorkspaceSetting>; 3]; LANGUAGES] = [
     [named(WorkspaceSetting::Theme, "Volgt thema"), named(WorkspaceSetting::Light, "Altijd licht"), named(WorkspaceSetting::Dark, "Altijd donker")],
     [named(WorkspaceSetting::Theme, "Follows the theme"), named(WorkspaceSetting::Light, "Always light"), named(WorkspaceSetting::Dark, "Always dark")],
     [named(WorkspaceSetting::Theme, "Folgt dem Thema"), named(WorkspaceSetting::Light, "Immer hell"), named(WorkspaceSetting::Dark, "Immer dunkel")],
     [named(WorkspaceSetting::Theme, "Suit le thème"), named(WorkspaceSetting::Light, "Toujours clair"), named(WorkspaceSetting::Dark, "Toujours sombre")],
+    [named(WorkspaceSetting::Theme, "Sigue el tema"), named(WorkspaceSetting::Light, "Siempre claro"), named(WorkspaceSetting::Dark, "Siempre oscuro")],
+    [named(WorkspaceSetting::Theme, "Segue il tema"), named(WorkspaceSetting::Light, "Sempre chiaro"), named(WorkspaceSetting::Dark, "Sempre scuro")],
+    [named(WorkspaceSetting::Theme, "Segue o tema"), named(WorkspaceSetting::Light, "Sempre claro"), named(WorkspaceSetting::Dark, "Sempre escuro")],
+    [named(WorkspaceSetting::Theme, "Zgodnie z motywem"), named(WorkspaceSetting::Light, "Zawsze jasny"), named(WorkspaceSetting::Dark, "Zawsze ciemny")],
+    [named(WorkspaceSetting::Theme, "Följer temat"), named(WorkspaceSetting::Light, "Alltid ljust"), named(WorkspaceSetting::Dark, "Alltid mörkt")],
+    [named(WorkspaceSetting::Theme, "Temayı izler"), named(WorkspaceSetting::Light, "Her zaman açık"), named(WorkspaceSetting::Dark, "Her zaman koyu")],
 ];
 const STATUSBARS: [[Named<StatusbarSetting>; 2]; LANGUAGES] = [
     [named(StatusbarSetting::Theme, "Volgt thema"), named(StatusbarSetting::Dark, "Altijd donker")],
     [named(StatusbarSetting::Theme, "Follows the theme"), named(StatusbarSetting::Dark, "Always dark")],
     [named(StatusbarSetting::Theme, "Folgt dem Thema"), named(StatusbarSetting::Dark, "Immer dunkel")],
     [named(StatusbarSetting::Theme, "Suit le thème"), named(StatusbarSetting::Dark, "Toujours sombre")],
+    [named(StatusbarSetting::Theme, "Sigue el tema"), named(StatusbarSetting::Dark, "Siempre oscuro")],
+    [named(StatusbarSetting::Theme, "Segue il tema"), named(StatusbarSetting::Dark, "Sempre scuro")],
+    [named(StatusbarSetting::Theme, "Segue o tema"), named(StatusbarSetting::Dark, "Sempre escuro")],
+    [named(StatusbarSetting::Theme, "Zgodnie z motywem"), named(StatusbarSetting::Dark, "Zawsze ciemny")],
+    [named(StatusbarSetting::Theme, "Följer temat"), named(StatusbarSetting::Dark, "Alltid mörkt")],
+    [named(StatusbarSetting::Theme, "Temayı izler"), named(StatusbarSetting::Dark, "Her zaman koyu")],
 ];
 
 /// The options of a setting in `language`, and the one that is chosen.
@@ -169,6 +223,11 @@ struct Prefs {
     recent: Vec<PathBuf>,
     /// The product shown last.
     product: Product,
+    /// In 3D: the heads of grid lines behind the model are left out; the distances between the
+    /// grid lines and the levels are drawn.
+    grid_heads_hidden: bool,
+    grid_dims: bool,
+    levels_3d: bool,
 }
 
 impl Default for Prefs {
@@ -185,6 +244,9 @@ impl Default for Prefs {
             right_width: 280.0,
             recent: Vec::new(),
             product: Product::Viewer,
+            grid_heads_hidden: true,
+            grid_dims: false,
+            levels_3d: false,
         }
     }
 }
@@ -645,6 +707,7 @@ impl Studio {
     pub fn with_settings_in(mut self, dir: PathBuf) -> Self {
         let prefs = dir.join("preferences.json");
         self.prefs = Prefs::load(&prefs);
+        (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d);
         self.prefs_path = Some(prefs);
         let keymap = dir.join("shortcuts.json");
         self.keymap = Keymap::load(&keymap);
@@ -913,6 +976,14 @@ impl Studio {
                 .icon(small("measure.distance"), large("measure.distance"))
                 .toggle(app.show_grids && has_grids)
                 .enabled(has_grids),
+            Command::new("view.grid-dims", l.text("Stramienmaten", "Grid dimensions"), go(Message::ToggleGridDims))
+                .icon(small("measure.distance"), large("measure.distance"))
+                .toggle(app.grid_dims && has_grids)
+                .enabled(has_grids),
+            Command::new("view.levels-3d", l.text("Peilen in 3D", "Levels in 3D"), go(Message::ToggleLevels3d))
+                .icon(small("drawing.plan"), large("drawing.plan"))
+                .toggle(app.levels_3d)
+                .enabled(loaded),
             Command::new("view.views-3d", l.text("Weergaven in 3D", "Views in 3D"), go(Message::ToggleViewsIn3d))
                 .icon(small("view.saved"), large("view.saved"))
                 .toggle(app.views_in_3d)
@@ -954,6 +1025,18 @@ impl Studio {
                 .icon(small("object.hide"), large("object.hide"))
                 .shortcut(key('h'))
                 .enabled(app.has_selection()),
+            // through the clashes with the keys: the next and the one before, accept, reject, issue
+            Command::new("clash.next", l.text("Volgende clash", "Next clash"), go(Message::Collab(crate::app::collab::Event::Step(1)))).shortcut(key('j')).enabled(!app.collab.clashes.is_empty()),
+            Command::new("clash.previous", l.text("Vorige clash", "Previous clash"), go(Message::Collab(crate::app::collab::Event::Step(-1)))).shortcut(key('k')).enabled(!app.collab.clashes.is_empty()),
+            Command::new("clash.accept", l.text("Clash akkoord", "Accept clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Accepted))))
+                .shortcut(key('a'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+            Command::new("clash.reject", l.text("Clash afwijzen", "Reject clash"), go(Message::Collab(crate::app::collab::Event::DecidePicked(crate::app::collab::Decision::Rejected))))
+                .shortcut(key('r'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
+            Command::new("clash.issue", l.text("Issue van clash", "Issue of clash"), go(Message::Collab(crate::app::collab::Event::IssueFromPicked)))
+                .shortcut(key('t'))
+                .enabled(app.collab.clash.is_some() || app.collab.open_group.is_some()),
             Command::new("object.isolate", l.text("Isoleren", "Isolate"), go(Message::IsolateSelection))
                 .icon(small("object.show"), large("object.show"))
                 .shortcut(key('i'))
@@ -1192,6 +1275,12 @@ impl Studio {
             #[cfg(not(target_arch = "wasm32"))]
             Msg::App(Message::Remote(call)) if call.cmd.starts_with("ui_") => return self.ui_command(call),
             Msg::App(message) => {
+                // how the 3D view draws its grids and levels is kept between sessions
+                let kept = (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d);
+                if kept != (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d) {
+                    (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d) = kept;
+                    self.save_prefs();
+                }
                 // what opens in the explorer shows it
                 if matches!(message, Message::NewLevel(_) | Message::PickLevelFor(Some(_)) | Message::ExplorerTab(_)) && !self.prefs.left {
                     self.prefs.left = true;
@@ -1383,6 +1472,22 @@ impl Studio {
                 if self.dialog.is_none() {
                     if let Some(message) = cm::find(&self.commands(), &press.key, press.modifiers) {
                         return self.update(message);
+                    }
+                    // no command of its own: W, A, S and D walk through the model in the Viewer, Q
+                    // and E go down and up, faster with Shift
+                    if let (Product::Viewer, false, false, Key::Character(c)) = (self.product(), press.modifiers.control(), press.modifiers.alt(), &press.key) {
+                        let (forward, right, up) = match c.to_lowercase().as_str() {
+                            "w" => (1.0, 0.0, 0.0),
+                            "s" => (-1.0, 0.0, 0.0),
+                            "d" => (0.0, 1.0, 0.0),
+                            "a" => (0.0, -1.0, 0.0),
+                            "e" => (0.0, 0.0, 1.0),
+                            "q" => (0.0, 0.0, -1.0),
+                            _ => (0.0, 0.0, 0.0),
+                        };
+                        if (forward, right, up) != (0.0, 0.0, 0.0) {
+                            return self.update(Msg::App(Message::Walk { forward, right, up, fast: press.modifiers.shift() }));
+                        }
                     }
                 }
             }
@@ -1639,6 +1744,8 @@ impl Studio {
         let shown = self.product();
         let segment = move |product: Product, on: bool, message: Msg| -> Element<'_, Msg> {
             let label = text(product.label()).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(if on { c.text } else { c.text_secondary });
+            // beside its name: that it is not ready to work with yet
+            let label = row![label].extend(product.stage().map(|stage| text(stage).size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_secondary).into())).spacing(5).align_y(iced::Alignment::Center);
             let control = button(container(label).height(Length::Fill).align_y(iced::alignment::Vertical::Center))
                 .height(22)
                 .padding([0, 10])
@@ -1685,7 +1792,7 @@ impl Studio {
             measure.push(smalls(&["measure.clear", "measure.clear-saved"]));
             vec![
                 w::ribbon_group(look, l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"])]),
-                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.views-3d", "view.flip-up"])]),
+                w::ribbon_group(look, l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.grid-dims", "view.levels-3d", "view.views-3d", "view.flip-up"])]),
                 w::ribbon_group(look, "IFC", vec![large("view.ifc")]),
                 w::ribbon_group(look, l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
                 w::ribbon_group(look, l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
@@ -1969,6 +2076,10 @@ impl Studio {
                         w::property_row(look, l.text("Werkruimte", "Workspace"), w::select(look, workspaces.0, workspaces.1, |n| Msg::Workspace(n.value), D::Regular)),
                         w::property_row(look, l.text("Statusbalk", "Status bar"), w::select(look, statusbars.0, statusbars.1, |n| Msg::Statusbar(n.value), D::Regular)),
                         w::property_row(look, l.text("Interfacegrootte", "Interface size"), w::select(look, &Scale::ALL, scale, |s: Scale| Msg::Scale(s.0), D::Regular)),
+                        w::mono_label(look, l.text("3D-weergave", "3D view")),
+                        w::checkbox(look, l.text("Stramienbollen achter het model verbergen", "Hide grid heads behind the model"), self.app.grid_heads_hidden, Some(|_| Msg::App(Message::ToggleGridHeadsHidden))),
+                        w::checkbox(look, l.text("Maten tussen de stramienen tonen", "Show the dimensions between grid lines"), self.app.grid_dims, Some(|_| Msg::App(Message::ToggleGridDims))),
+                        w::checkbox(look, l.text("Peilen met peilmaten tonen", "Show the levels with their marks"), self.app.levels_3d, Some(|_| Msg::App(Message::ToggleLevels3d))),
                         w::mono_label(look, l.text("Taal", "Language")),
                         w::property_row(look, l.text("Taal", "Language"), w::select(look, &Language::ALL, Some(l), Msg::Language, D::Regular)),
                     ]

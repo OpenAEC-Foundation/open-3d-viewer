@@ -48,6 +48,8 @@ pub struct Selector {
     pub models: Vec<String>,
     pub layers: Vec<String>,
     pub classes: Vec<String>,
+    /// Elements whose name fits one of these (`*exit*`): a sign has no class of its own.
+    pub names: Vec<String>,
     /// For a test of the moment, not kept in a file: only these elements, and all but these.
     #[serde(skip)]
     pub only: Vec<u64>,
@@ -63,7 +65,7 @@ impl Selector {
 
     /// Whether it takes every element.
     pub fn is_all(&self) -> bool {
-        self.models.is_empty() && self.layers.is_empty() && self.classes.is_empty() && self.only.is_empty() && self.except.is_empty()
+        self.models.is_empty() && self.layers.is_empty() && self.classes.is_empty() && self.names.is_empty() && self.only.is_empty() && self.except.is_empty()
     }
 
     /// Whether it takes element `id` of this model, layer and class.
@@ -77,9 +79,14 @@ impl Selector {
         any(&self.models, model) && any(&self.layers, layer) && any(&self.classes, class)
     }
 
+    /// Whether it takes an element of this name: any, unless it names some.
+    pub fn takes_name(&self, name: &str) -> bool {
+        self.names.is_empty() || self.names.iter().any(|pattern| matches(pattern, name))
+    }
+
     /// What it takes, in words: `IfcBeam, IfcColumn`, or `everything`.
     pub fn summary(&self, everything: &str) -> String {
-        let parts: Vec<&str> = self.models.iter().chain(&self.layers).chain(&self.classes).map(String::as_str).collect();
+        let parts: Vec<&str> = self.models.iter().chain(&self.layers).chain(&self.classes).chain(&self.names).map(String::as_str).collect();
         if parts.is_empty() { everything.to_string() } else { parts.join(", ") }
     }
 }
@@ -104,6 +111,9 @@ pub enum ClashKind {
     Hard,
     /// Elements that come too near.
     Clearance,
+    /// Elements that have to be seen (signs, or what a camera watches from: the camera) with
+    /// something standing in the line of sight to them.
+    Sight,
 }
 
 /// A clash test: the elements of `a` against those of `b`.
@@ -123,11 +133,25 @@ pub struct ClashRule {
     /// Only between models: with several models open, the elements of one model are not tested
     /// against each other (the parts of one supplier's assembly touch by design).
     pub between_models: bool,
+    /// Only the elements of these storeys, by name (`00*, 01*`; several with a comma between;
+    /// empty: all). An element is of the highest storey that begins at or under its foot.
+    pub storeys: String,
+    /// Only the elements whose property `property` has the value `value` (`*` at an end
+    /// stands for anything); no property: all.
+    pub property: String,
+    pub value: String,
+    /// How far two classes may cross, where that is more than the test allows:
+    /// `IfcPipe* x IfcWall* = 25; IfcCovering x IfcDuct* = 40` (millimetres).
+    pub pair_tolerances: String,
+    /// A sight-line test: from how far the element has to be seen (metres), and the share of
+    /// the places looked from that may be without sight of it (percent).
+    pub sight_m: f32,
+    pub sight_blocked_pct: f32,
 }
 
 impl Default for ClashRule {
     fn default() -> Self {
-        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false }
+        ClashRule { name: String::new(), a: Selector::default(), b: Selector::default(), kind: ClashKind::Hard, tolerance_mm: 2.0, clearance_mm: 50.0, on: true, between_models: false, storeys: String::new(), property: String::new(), value: String::new(), pair_tolerances: String::new(), sight_m: 20.0, sight_blocked_pct: 50.0 }
     }
 }
 
@@ -137,13 +161,92 @@ impl ClashRule {
         match self.kind {
             ClashKind::Hard => super::clash::Test::Hard { tolerance: self.tolerance_mm.max(0.0) / 1000.0 },
             ClashKind::Clearance => super::clash::Test::Clearance { distance: self.clearance_mm.max(0.0) / 1000.0 },
+            // a sight-line test looks along lines, not at crossings
+            ClashKind::Sight => super::clash::Test::Hard { tolerance: 0.0 },
         }
+    }
+
+    /// How far classes `a` and `b` may cross by the tolerances of their pair (metres), where
+    /// one is given for them, either way round.
+    pub fn pair_tolerance(&self, a: &str, b: &str) -> Option<f32> {
+        self.pair_tolerances.split(';').find_map(|part| {
+            let (pair, mm) = part.split_once('=')?;
+            let (x, y) = pair.split_once(" x ").or_else(|| pair.split_once('×'))?;
+            let fits = (matches(x, a) && matches(y, b)) || (matches(x, b) && matches(y, a));
+            fits.then(|| mm.trim().replace(',', ".").parse::<f32>().ok()).flatten().map(|mm| mm.max(0.0) / 1000.0)
+        })
+    }
+
+    /// Whether a storey of this name is in the test's scope.
+    pub fn takes_storey(&self, storey: &str) -> bool {
+        let wanted: Vec<&str> = self.storeys.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        wanted.is_empty() || wanted.iter().any(|pattern| matches(pattern, storey))
     }
 
     /// Whether both sides take the same elements: each pair is then tested once.
     pub fn within(&self) -> bool {
         self.a == self.b
     }
+}
+
+/// A discipline of the project: what it is called and which elements are its own (its model, its
+/// layers or its classes).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Discipline {
+    pub name: String,
+    pub take: Selector,
+}
+
+/// A set of elements kept under a name: those of a selection, by the keys they keep from one
+/// version of a model to the next (GlobalId, else the file's own id), or those whose property
+/// `property` has the value `value` (`*` at an end stands for anything).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SelectionSet {
+    pub name: String,
+    pub keys: Vec<String>,
+    pub property: String,
+    pub value: String,
+}
+
+/// An information takeoff: which elements (what they are, and a property with a value when
+/// `property` is set), grouped by up to two properties, with how many there are and their
+/// length, area and volume.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Takeoff {
+    pub name: String,
+    pub take: Selector,
+    pub property: String,
+    pub value: String,
+    /// The properties the rows are grouped by; none: a row for each element.
+    pub group_by: Vec<String>,
+}
+
+/// A clash as the rule set remembers it from the last run: the two elements by the keys they
+/// keep from one version of a model to the next, what was decided on it, and what it was called.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClashMemo {
+    pub key: String,
+    /// open, accepted or rejected.
+    pub decision: String,
+    pub rule: String,
+    pub a: String,
+    pub b: String,
+}
+
+/// A run of the clash tests: when, how many clashes it found, how many of them the run before
+/// did not have, how many of that run's it no longer found, and how many are not accepted.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClashRun {
+    pub date: String,
+    pub total: usize,
+    pub new: usize,
+    pub resolved: usize,
+    pub open: usize,
 }
 
 /// A rule set.
@@ -161,18 +264,110 @@ pub struct RuleSet {
     /// The pattern storey names must fit for the ILS profile; empty: the profile's own.
     pub storey_pattern: String,
     pub clashes: Vec<ClashRule>,
+    /// The disciplines of the matrix, and which of them are tested against which: each pair by
+    /// the names of its two disciplines, a discipline against itself too.
+    pub disciplines: Vec<Discipline>,
+    pub matrix: Vec<[String; 2]>,
+    /// How far the elements of the matrix may cross (millimetres), and whether a pair of the
+    /// matrix is only tested between models.
+    pub matrix_tolerance_mm: f32,
+    pub matrix_between_models: bool,
+    pub selection_sets: Vec<SelectionSet>,
+    pub takeoffs: Vec<Takeoff>,
+    /// The clashes of the last run, with what was decided on them: the next run takes the
+    /// decisions over and tells what is new and what is solved. And the runs so far.
+    pub clash_memory: Vec<ClashMemo>,
+    pub clash_runs: Vec<ClashRun>,
+    /// The room checks: what they ask, in the units the rules give them.
+    pub rooms: RoomRules,
+}
+
+/// What the checks of rooms, doors, escape routes and fire separations ask. The values are those
+/// the Dutch building regulations ask of a dwelling or a building of most uses; a project sets
+/// its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoomRules {
+    pub on: bool,
+    /// The least free height of a room (metres).
+    pub room_height: f32,
+    /// The least free width and height of a door (metres).
+    pub door_width: f32,
+    pub door_height: f32,
+    /// The longest walk from a point of a room to a way out of its storey: a door to outside or
+    /// a stair (metres).
+    pub escape_distance: f32,
+    /// The highest threshold of a door (metres), the steepest ramp (the run for a rise of one)
+    /// and the circle a wheelchair turns in, that each room has to hold (metres).
+    pub threshold: f32,
+    pub ramp_run: f32,
+    pub turning_circle: f32,
+}
+
+impl Default for RoomRules {
+    fn default() -> Self {
+        RoomRules { on: false, room_height: 2.6, door_width: 0.85, door_height: 2.3, escape_distance: 30.0, threshold: 0.02, ramp_run: 12.0, turning_circle: 1.5 }
+    }
 }
 
 impl Default for RuleSet {
     fn default() -> Self {
-        RuleSet { name: String::new(), description: String::new(), ids: Vec::new(), model_checks: true, ils: false, storey_pattern: String::new(), clashes: Vec::new() }
+        RuleSet {
+            name: String::new(),
+            description: String::new(),
+            ids: Vec::new(),
+            model_checks: true,
+            ils: false,
+            storey_pattern: String::new(),
+            clashes: Vec::new(),
+            disciplines: Vec::new(),
+            matrix: Vec::new(),
+            matrix_tolerance_mm: 2.0,
+            matrix_between_models: true,
+            selection_sets: Vec::new(),
+            takeoffs: Vec::new(),
+            clash_memory: Vec::new(),
+            clash_runs: Vec::new(),
+            rooms: RoomRules::default(),
+        }
     }
 }
 
 pub const STRUCTURE: [&str; 9] = ["IfcBeam", "IfcColumn", "IfcSlab", "IfcWall*", "IfcFooting", "IfcPile", "IfcMember", "IfcPlate", "IfcStair*"];
 pub const SERVICES: [&str; 12] = ["IfcDuct*", "IfcPipe*", "IfcCable*", "IfcFlow*", "IfcDistribution*", "IfcAirTerminal*", "IfcValve*", "IfcPump*", "IfcFan*", "IfcTank*", "IfcSanitaryTerminal*", "IfcEnergyConversionDevice*"];
+pub const ARCHITECTURE: [&str; 9] = ["IfcDoor", "IfcWindow", "IfcCovering", "IfcCurtainWall", "IfcRailing", "IfcRoof", "IfcRamp*", "IfcFurnishingElement", "IfcFurniture"];
 
 impl RuleSet {
+    /// Whether discipline `a` is tested against `b` in the matrix (either way round).
+    pub fn in_matrix(&self, a: &str, b: &str) -> bool {
+        self.matrix.iter().any(|[x, y]| (x == a && y == b) || (x == b && y == a))
+    }
+
+    /// Ticks the pair of disciplines `a` and `b` in the matrix, or takes it out.
+    pub fn toggle_matrix(&mut self, a: &str, b: &str) {
+        if self.in_matrix(a, b) {
+            self.matrix.retain(|[x, y]| !((x == a && y == b) || (x == b && y == a)));
+        } else {
+            self.matrix.push([a.to_string(), b.to_string()]);
+        }
+    }
+
+    /// The clash tests to run: those of the list that are on, then one for each pair of the
+    /// matrix, in the order of the disciplines.
+    pub fn clash_rules(&self) -> Vec<ClashRule> {
+        let mut rules: Vec<ClashRule> = self.clashes.iter().filter(|r| r.on).cloned().collect();
+        for (i, a) in self.disciplines.iter().enumerate() {
+            for b in &self.disciplines[i..] {
+                if !self.in_matrix(&a.name, &b.name) {
+                    continue;
+                }
+                let name = if a.name == b.name { a.name.clone() } else { format!("{} × {}", a.name, b.name) };
+                rules.push(ClashRule { name, a: a.take.clone(), b: b.take.clone(), tolerance_mm: self.matrix_tolerance_mm, between_models: self.matrix_between_models, ..ClashRule::default() });
+            }
+        }
+        rules
+    }
+
     /// The rule sets the app comes with: `dutch` gives their names and descriptions in Dutch.
     pub fn built_in(dutch: bool) -> Vec<RuleSet> {
         let t = |nl: &str, en: &str| if dutch { nl.to_string() } else { en.to_string() };
@@ -213,7 +408,20 @@ impl RuleSet {
                     between(rule(t("Constructie onderling", "Structure with itself"), &STRUCTURE, &STRUCTURE, ClashKind::Hard)),
                     between(rule(t("Installaties onderling", "Services with each other"), &SERVICES, &SERVICES, ClashKind::Hard)),
                     ClashRule { on: false, ..rule(t("Vrije ruimte rond installaties", "Clearance around services"), &SERVICES, &STRUCTURE, ClashKind::Clearance) },
+                    // the escape route signs: seen from most of their room
+                    ClashRule {
+                        on: false,
+                        kind: ClashKind::Sight,
+                        a: Selector { names: ["*vlucht*", "*nooduitgang*", "*exit*", "*emergency*"].map(String::from).to_vec(), ..Selector::default() },
+                        ..rule(t("Vluchtwegaanduiding zichtbaar", "Escape route signs in sight"), &[], &[], ClashKind::Sight)
+                    },
                 ],
+                disciplines: vec![
+                    Discipline { name: t("Bouwkundig", "Architecture"), take: Selector::classes(&ARCHITECTURE) },
+                    Discipline { name: t("Constructie", "Structure"), take: Selector::classes(&STRUCTURE) },
+                    Discipline { name: t("Installaties", "Services"), take: Selector::classes(&SERVICES) },
+                ],
+                matrix: vec![[t("Bouwkundig", "Architecture"), t("Installaties", "Services")]],
                 ..RuleSet::default()
             },
         ]
@@ -299,6 +507,37 @@ mod tests {
         sets[2].write(&path).unwrap();
         assert_eq!(RuleSet::read(&path).unwrap().ids, sets[2].ids);
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_matrix_makes_a_test_for_each_pair_ticked() {
+        let mut set = RuleSet::built_in(false).remove(3);
+        let tests = |set: &RuleSet| set.clash_rules().into_iter().map(|r| r.name).collect::<Vec<_>>();
+        // the list's tests that are on, then the matrix
+        assert_eq!(tests(&set), ["Structure against services", "Structure with itself", "Services with each other", "Architecture × Services"]);
+        set.toggle_matrix("Services", "Architecture");
+        set.toggle_matrix("Structure", "Structure");
+        set.matrix_tolerance_mm = 10.0;
+        let rules = set.clash_rules();
+        assert_eq!(rules.last().map(|r| (r.name.as_str(), r.within(), r.tolerance_mm, r.between_models)), Some(("Structure", true, 10.0, true)));
+        assert!(!set.in_matrix("Architecture", "Services") && set.in_matrix("Structure", "Structure"));
+        // the matrix goes with the file
+        let folder = std::env::temp_dir().join(format!("o3v-matrix-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("m.rules.json");
+        set.write(&path).unwrap();
+        assert_eq!(RuleSet::read(&path).unwrap(), set);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_test_has_tolerances_per_pair_of_classes_and_a_scope_of_storeys() {
+        let rule = ClashRule { pair_tolerances: "IfcPipe* x IfcWall* = 25; IfcCovering × IfcDuct*=40,5".into(), storeys: "00*, 01 eerste".into(), ..ClashRule::default() };
+        assert_eq!(rule.pair_tolerance("IfcWallStandardCase", "IfcPipeSegment"), Some(0.025));
+        assert_eq!(rule.pair_tolerance("IfcCovering", "IfcDuctFitting"), Some(0.0405));
+        assert_eq!(rule.pair_tolerance("IfcBeam", "IfcPipeSegment"), None);
+        assert!(rule.takes_storey("00 begane grond") && rule.takes_storey("01 eerste verdieping") && !rule.takes_storey("02 dak"));
+        assert!(ClashRule::default().takes_storey("anything"));
     }
 
     #[test]

@@ -365,6 +365,11 @@ impl App {
                 call.answer(answer);
                 return task;
             }
+            "collab_export" if matches!(call.args.get("kind").and_then(|v| v.as_str()), Some("pdf" | "issues_pdf")) => {
+                let (answer, task) = self.collab_pdf_remote(&call.args);
+                call.answer(answer);
+                return task;
+            }
             "screenshot" => {
                 // a wrong save_to is refused before the capture
                 if let Some(Err(e)) = call.args.get("save_to").map(|p| shot_target(p, &call.args)) {
@@ -1411,6 +1416,15 @@ impl App {
         }
         if let Some(v) = flag(a, "grid_lines") {
             self.show_grids = v;
+        }
+        if let Some(v) = flag(a, "grid_dimensions") {
+            self.grid_dims = v;
+        }
+        if let Some(v) = flag(a, "levels_3d") {
+            self.levels_3d = v;
+        }
+        if let Some(v) = flag(a, "grid_heads_hidden") {
+            self.grid_heads_hidden = v;
         }
         if let Some(v) = flag(a, "section_fill") {
             self.section_fill = v;

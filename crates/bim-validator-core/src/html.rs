@@ -65,6 +65,7 @@ fn source(s: RuleSource, l: ReportLanguage) -> &'static str {
         RuleSource::Ids => "IDS",
         RuleSource::ModelChecks => l.t("Model checks", "Modelcontroles"),
         RuleSource::Ils => "BIM basis ILS",
+        RuleSource::Rooms => l.t("Rooms and fire", "Ruimtes en brand"),
     }
 }
 

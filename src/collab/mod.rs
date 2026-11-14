@@ -4,4 +4,5 @@
 //! `bim-validator-core`.
 
 pub mod clash;
+pub mod deviation;
 pub mod rules;

@@ -11,7 +11,7 @@ const POINTS: f64 = 72.0 / 25.4;
 const CAPITALS: f64 = 0.718;
 
 /// A number with at most `decimals` decimals and no trailing zeros.
-fn num_to(v: f64, decimals: usize) -> String {
+pub(crate) fn num_to(v: f64, decimals: usize) -> String {
     let s = format!("{v:.decimals$}");
     let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
     if s == "-0" { "0".to_string() } else { s.to_string() }
@@ -36,7 +36,7 @@ fn win_ansi(c: char) -> u8 {
 
 /// A PDF string literal of `text` in WinAnsi, brackets and backslashes escaped, other than
 /// printable ASCII as octal.
-fn literal(text: &str) -> String {
+pub(crate) fn literal(text: &str) -> String {
     let mut s = String::from("(");
     for b in text.chars().map(win_ansi) {
         match b {
@@ -102,7 +102,7 @@ const HELVETICA: [u16; 95] = [
 
 /// How wide `text` is in Helvetica at `size`: a letter with an accent as its letter, other
 /// characters as an average one.
-fn width(text: &str, size: f64) -> f64 {
+pub(crate) fn width(text: &str, size: f64) -> f64 {
     let em: u32 = text
         .chars()
         .map(|c| {
@@ -124,7 +124,7 @@ fn unaccented(c: char) -> char {
 }
 
 /// A PDF text string of `text` in UTF-16BE, for the document's information (any language).
-fn utf16(text: &str) -> String {
+pub(crate) fn utf16(text: &str) -> String {
     let mut s = String::from("<FEFF");
     for unit in text.encode_utf16() {
         let _ = write!(s, "{unit:04X}");

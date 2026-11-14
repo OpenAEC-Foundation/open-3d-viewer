@@ -56,7 +56,7 @@ The table, from the reference modeller (lower-case letters):
 | d | Door | cl | Column |
 | o | Window | bm | Beam |
 | c | Section | di | Dimension |
-| | | sb | Slab |
+| | | fl | Slab |
 | | | cw | System |
 | | | ob | Object |
 

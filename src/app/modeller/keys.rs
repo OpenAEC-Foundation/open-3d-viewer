@@ -57,7 +57,7 @@ pub const PAIRS: &[(&str, ModelKey)] = &[
     ("cl", ModelKey::Column),
     ("bm", ModelKey::Beam),
     ("di", ModelKey::Dimension),
-    ("sb", ModelKey::Slab),
+    ("fl", ModelKey::Slab),
     ("cw", ModelKey::System),
     ("ob", ModelKey::Object),
 ];

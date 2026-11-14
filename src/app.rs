@@ -707,6 +707,10 @@ pub enum Message {
     LevelEdit(modeller::levels::LevelEditMessage),
     /// Switch the Modeller's Grid tool on or off.
     GridTool,
+    /// The Modeller's Select tool: every other tool off.
+    SelectTool,
+    /// A key of the Modeller (see modeller::keys), with the interface language its tools are named in.
+    ModelKey(modeller::keys::ModelKey, openaec_ui::Language),
     /// Give the selected join another kind.
     JoinKind(bim_core::ConnectionKind),
     /// Turn the selected join round: its other member runs through.
@@ -1691,6 +1695,8 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::GridTool => self.toggle_grid_tool(),
+            Message::SelectTool => self.select_tool(),
+            Message::ModelKey(key, l) => self.model_key(key, l),
             Message::LevelEdit(message) => self.level_edit_message(message),
             Message::Browser(message) => self.browser_message(message),
             Message::Connect(kind, name) => self.connect_selected(kind, name),

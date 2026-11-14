@@ -487,6 +487,8 @@ pub enum Side {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// While a letter waits for its pair: the time to look at.
+    KeyWindow,
     /// The window's size changed (layout units).
     Sized(iced::Size),
     /// The window's size, asked for before a remote command on the window runs.
@@ -540,6 +542,8 @@ pub enum Msg {
 pub struct Studio {
     /// The project shown.
     pub app: App,
+    /// The Modeller's letters typed so far (one waiting for its pair).
+    pub(crate) keys: crate::app::modeller::keys::KeySequence,
     /// Its id, the other open projects with theirs, and the order of the project tabs.
     project: u64,
     parked: Vec<(u64, App)>,
@@ -611,8 +615,17 @@ impl DevSession {
 }
 
 impl Studio {
+    /// The time is `now`: a letter that waited too long for its pair does what it does alone.
+    pub(crate) fn expire_keys(&mut self, now: Instant) {
+        if let Some(key) = self.keys.expire(now) {
+            let l = self.l();
+            let _ = self.update(Msg::App(Message::ModelKey(key, l)));
+        }
+    }
+
     pub fn new(app: App) -> Self {
         Self {
+            keys: Default::default(),
             app,
             project: 0,
             parked: Vec::new(),
@@ -1546,9 +1559,15 @@ impl Studio {
             // the 3D view (tab 0) stays open
             Msg::CloseTab(i) => return self.update(Msg::App(Message::CloseTab(i))),
             Msg::Key(press) if self.shortcuts.recording() => return self.update(Msg::Shortcuts(sc::Message::Key(press))),
+            Msg::KeyWindow => self.expire_keys(Instant::now()),
             Msg::Key(press) => {
                 use iced::keyboard::{key::Named, Key};
                 if press.key == Key::Named(Named::Escape) {
+                    // a letter waiting for its pair goes, and nothing else
+                    if self.keys.pending().is_some() {
+                        self.keys.clear();
+                        return Task::none();
+                    }
                     if self.dialog.is_some() {
                         return self.update(Msg::Dialog(None));
                     }
@@ -1564,6 +1583,27 @@ impl Studio {
                         if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c)) {
                             return self.update(Msg::App(Message::EditKey(c)));
                         }
+                    }
+                }
+                // in the Modeller a plain letter is a key of its own (see `app::modeller::keys`),
+                // and PageUp / PageDown step through the levels
+                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && !press.modifiers.control() && !press.modifiers.alt() {
+                    use crate::app::modeller::keys::ModelKey;
+                    let keys: Vec<ModelKey> = match &press.key {
+                        Key::Character(c) => match c.chars().next().filter(|c| c.is_ascii_alphabetic() && c.len_utf8() == 1) {
+                            Some(c) => self.keys.press(c, Instant::now()),
+                            None => Vec::new(),
+                        },
+                        Key::Named(Named::PageUp) => vec![ModelKey::LevelUp],
+                        Key::Named(Named::PageDown) => vec![ModelKey::LevelDown],
+                        _ => Vec::new(),
+                    };
+                    let letter = matches!(&press.key, Key::Character(c) if c.chars().next().is_some_and(|c| c.is_ascii_alphabetic()));
+                    let paged = matches!(press.key, Key::Named(Named::PageUp | Named::PageDown));
+                    if letter || paged {
+                        let l = self.l();
+                        let tasks: Vec<Task<Msg>> = keys.into_iter().map(|key| self.update(Msg::App(Message::ModelKey(key, l)))).collect();
+                        return Task::batch(tasks);
                     }
                 }
                 if self.dialog.is_none() {
@@ -1689,6 +1729,8 @@ impl Studio {
             open.map(Msg::App),
             drag,
             openaec_ui::keyboard::presses().map(Msg::Key),
+            // while a letter waits for its pair, the time is looked at every frame
+            if self.keys.pending().is_some() { iced::window::frames().map(|_| Msg::KeyWindow) } else { Subscription::none() },
             openaec_ui::keyboard::navigation().map(Msg::Navigate),
             iced::window::close_requests().map(|_| Msg::CloseWindow),
         ])

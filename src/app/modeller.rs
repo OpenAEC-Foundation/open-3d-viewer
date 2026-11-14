@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 mod grids;
 pub mod browser;
+pub mod key_actions;
 pub mod keys;
+pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 

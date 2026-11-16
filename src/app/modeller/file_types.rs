@@ -117,7 +117,9 @@ pub(in crate::app) fn file_build_up(library: &mut Library, type_name: &str, thic
         None => {
             let base = format!("wall.{}", Some(slug(type_name)).filter(|s| !s.is_empty()).unwrap_or_else(|| "file".into()));
             let id = free(&base, |i| library.buildup(i).is_some());
-            library.add_buildup(BuildUp { id: id.clone(), ..wanted }).ok()?;
+            // the type keeps the name the file gives it
+            let name = Some(type_name.trim().to_string()).filter(|n| !n.is_empty());
+            library.add_buildup(BuildUp { id: id.clone(), name, ..wanted }).ok()?;
             id
         }
     };

@@ -61,6 +61,8 @@ pub enum LibraryMessage {
     /// Give the selected modelled systems this system type (its id).
     AssignSystem(String),
     Import,
+    /// Add the types of the INB template to the project's library.
+    AddInb,
     /// The name and bytes of the library file picked.
     Imported(Option<(String, Vec<u8>)>),
     Export,
@@ -143,6 +145,14 @@ impl App {
                 self.assign_system_type(&id);
             }
             LibraryMessage::Import => return import_task(),
+            LibraryMessage::AddInb => {
+                let added = self.library.merge(&bim_library::inb::library());
+                self.status = Status::Loaded(format!("INB: {added} added to the library"));
+                // what the model shows of its types (their names) is made again
+                if added > 0 && self.modeller.shown.is_some() && self.modeller.model.iter().next().is_some() {
+                    self.show_modelled();
+                }
+            }
             LibraryMessage::Imported(None) => {}
             LibraryMessage::Imported(Some((name, bytes))) => self.status = self.import_library(&name, &bytes),
             LibraryMessage::Export => return export_task(&self.library),
@@ -272,6 +282,7 @@ impl App {
         let actions = row![
             button(text(l.text("Importeren…", "Import…")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::Import)),
             button(text(l.text("Exporteren…", "Export…")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::Export)),
+            button(text(l.text("INB-types toevoegen", "Add INB types")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::AddInb)),
         ]
         .spacing(6);
         let mut body = Column::new().spacing(1).push(container(actions).padding([2, 4]));

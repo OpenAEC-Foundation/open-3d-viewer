@@ -356,6 +356,10 @@ impl App {
                 choices.extend(self.library.names(role, lang).into_iter().map(|(id, name)| Choice { id: Some(id.to_string()), name }));
             }
             ModelTool::Column | ModelTool::Beam => {
+                // the library's own columns or beams (a catalogue's among them), then the steel table
+                let role = if tool == ModelTool::Column { bim_library::LinearRole::Column } else { bim_library::LinearRole::Beam };
+                let steel = |id: &str| self.library.linear_type(id).is_some_and(|t| t.designation.is_some());
+                choices.extend(self.library.linear_names(role, lang).into_iter().filter(|(id, _)| !steel(id)).map(|(id, name)| Choice { id: Some(id.to_string()), name }));
                 choices.extend(bim_library::profile::steel_profiles().iter().map(|p| Choice { id: Some(p.designation.clone()), name: p.designation.clone() }));
             }
             ModelTool::System => {
@@ -443,6 +447,38 @@ mod tests {
         click(&mut app, 4.0, 0.0);
         let w = wall(&app, 1);
         assert_eq!(w.build_up.map(|b| b.id), Some(id));
+    }
+
+    #[test]
+    fn a_wall_and_a_column_of_an_inb_type_are_placed_and_say_what_they_are_made_of() {
+        let mut app = modelling();
+        let _ = app.update(Message::Library(crate::app::library::LibraryMessage::AddInb));
+        // the wall tool lists the catalogue's types under the names the template gives them
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        let kinds = app.kinds(ModelTool::Wall, Language::Dutch).unwrap();
+        let kzst = kinds.iter().find(|k| k.id.as_deref() == Some("inb.wall.kzst_100")).expect("the INB sand-lime wall");
+        assert_eq!(kzst.name, "kzst_100");
+        place(&mut app, PlaceMessage::Kind(kzst.id.clone()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        let w = wall(&app, 1);
+        assert!((w.total_thickness() - 0.1).abs() < 1e-12);
+        let props = app.model.as_ref().unwrap().element_props(1);
+        let said = |key: &str| props.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!((said("Type"), said("Layers")), (Some("kzst_100"), Some("sand-lime brick 100")));
+        // and a concrete column of the catalogue
+        app.set_model_tool(None);
+        app.set_model_tool(Some((ModelTool::Column, "Column")));
+        let kinds = app.kinds(ModelTool::Column, Language::Dutch).unwrap();
+        let bk = kinds.iter().find(|k| k.id.as_deref() == Some("inb.column.bk-300x300")).expect("the INB concrete column");
+        assert_eq!(bk.name, "BK 300x300");
+        place(&mut app, PlaceMessage::Kind(bk.id.clone()));
+        click(&mut app, 8.0, 3.0);
+        let column = app.modeller.model.iter().find(|e| e.class() == "IfcColumn").expect("a column");
+        let Shape::Linear(c) = &column.shape else { panic!() };
+        assert_eq!(c.profile.name(), "BK 300x300");
+        let outline = c.profile.profile().unwrap();
+        assert!((outline.area() - 0.09).abs() < 1e-9, "300 × 300");
     }
 
     #[test]

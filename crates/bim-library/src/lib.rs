@@ -21,6 +21,7 @@
 
 pub mod buildup;
 pub mod ifcx;
+pub mod inb;
 pub mod library;
 pub mod material;
 pub mod profile;

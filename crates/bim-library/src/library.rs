@@ -142,7 +142,7 @@ impl Library {
     /// The linear type this library already has with the role, material, profile and designation
     /// of `linear` (the profile within 0.01 mm).
     pub fn matching_linear(&self, linear: &LinearType) -> Option<&LinearType> {
-        self.linear_types_of(linear.role).find(|t| t.material == linear.material && t.designation == linear.designation && t.profile.same(&linear.profile))
+        self.linear_types_of(linear.role).find(|t| t.name == linear.name && t.material == linear.material && t.designation == linear.designation && t.profile.same(&linear.profile))
     }
 
     pub fn system_type(&self, id: &str) -> Option<&SystemType> {
@@ -210,6 +210,18 @@ impl Library {
         self.buildups_of(buildup.role).find(|b| same(b))
     }
 
+    /// As [`Library::matching`], and of the same name of its own (or both without one): what a
+    /// library taken in whole must not add twice. A named type of a catalogue is a type of its
+    /// own beside an unnamed one of the same layers.
+    pub fn matching_named(&self, buildup: &BuildUp) -> Option<&BuildUp> {
+        let same = |a: &BuildUp| {
+            a.name == buildup.name
+                && a.layers.len() == buildup.layers.len()
+                && a.layers.iter().zip(&buildup.layers).all(|(x, y)| x.material == y.material && (x.thickness - y.thickness).abs() <= SAME_THICKNESS)
+        };
+        self.buildups_of(buildup.role).find(|b| same(b))
+    }
+
     /// Adds what `other` has and this library lacks, as Open BIM Studio imports a library:
     /// materials by key, build-ups by role and layers ([`Library::matching`]), linear types by
     /// role, material and profile ([`Library::matching_linear`]), system types by what they make
@@ -224,7 +236,7 @@ impl Library {
             }
         }
         for b in &other.buildups {
-            if self.matching(b).is_some() {
+            if self.matching_named(b).is_some() {
                 continue;
             }
             let mut fresh = b.clone();

@@ -84,11 +84,15 @@ pub struct BuildUp {
     pub role: Role,
     /// From the exterior face in (wall) or from the top face down (floor, roof, ceiling).
     pub layers: Vec<Layer>,
+    /// A name of its own, shown in place of the rule's: a type of a catalogue or of an opened
+    /// file keeps the name it had there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl BuildUp {
     pub fn new(id: &str, role: Role, layers: Vec<Layer>) -> Self {
-        Self { id: id.into(), role, layers }
+        Self { id: id.into(), role, layers, name: None }
     }
 
     /// The total thickness.
@@ -134,6 +138,9 @@ impl BuildUp {
     /// thickness in millimetres. "Metselwerk-spouw-isolatie PIR-kalkzandsteen 360". A material
     /// missing from `materials` is named by its key.
     pub fn rule_name(&self, materials: &[Material], lang: Lang) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
         let mut parts: Vec<&str> = Vec::new();
         for layer in &self.layers {
             let name = materials.iter().find(|m| m.key == layer.material).map_or(layer.material.as_str(), |m| m.name(lang));

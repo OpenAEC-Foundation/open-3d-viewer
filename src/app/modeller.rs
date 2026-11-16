@@ -673,7 +673,14 @@ impl App {
 pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64, s: &Settings, library: &bim_library::Library) -> Shape {
     // up to the next level, unless a height was typed
     let up_to = |base: f64| s.height.unwrap_or(z + storey - base);
-    let profile = || s.kind.as_deref().and_then(ProfileDef::steel).unwrap_or(ProfileDef::Rectangle { width: s.width, height: s.depth });
+    // a steel profile by its designation, else a linear type of the library, named as the library
+    // names it and whole without it
+    let typed = |id: &str| {
+        let t = library.linear_type(id)?;
+        let designation = library.linear_name(id, bim_library::Lang::En).unwrap_or_else(|| id.to_string());
+        Some(ProfileDef::Catalogue { designation, shape: t.profile.clone() })
+    };
+    let profile = || s.kind.as_deref().and_then(|id| ProfileDef::steel(id).or_else(|| typed(id))).unwrap_or(ProfileDef::Rectangle { width: s.width, height: s.depth });
     let build_up = |id: &Option<String>| id.as_deref().and_then(|id| bim_core::BuildUpDef::from_library(library, id));
     match tool {
         // an opening tool places none of its own (see `openings`): an object stands for it

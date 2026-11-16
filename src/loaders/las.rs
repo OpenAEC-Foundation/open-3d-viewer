@@ -88,7 +88,7 @@ fn read(mut reader: ::las::Reader, stem: &str, max: usize) -> Result<(Vec<Layer>
                     class_color(class).map(|c| (c * shade * 255.0).round() as u8)
                 }
             };
-            cloud.push(layer, [x, y, z], color);
+            cloud.push_lit(layer, [x, y, z], color, ((i as f32 * intensity_scale).min(1.0) * 255.0).round() as u8);
         }
     }
     let mut info = cloud.info("LAS", total);
@@ -238,7 +238,7 @@ mod tests {
         assert!(model.layers.iter().all(|l| l.points));
         // 16-bit RGB to 8 bits
         assert_eq!(model.layers[1].colors.as_ref().unwrap()[0], [255, 0, 0, 255]);
-        assert_eq!(model.layers[0].colors.as_ref().unwrap()[0], [156, 117, 78, 255]);
+        assert_eq!(model.layers[0].colors.as_ref().unwrap()[0], [156, 117, 78, 51]); // the fourth byte is its intensity
         // millimetres survive the move to the low corner of the header's bounds
         assert_eq!(origin_of(&model.project.info), Some("155000, 463000, 1"));
         assert_eq!(model.bounds.min, [0.0, 0.0, 0.5]);

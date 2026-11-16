@@ -1,4 +1,4 @@
-# Three products from one code base
+# Four products from one code base
 
 **Status:** proposal of 2026-11-09, built in small steps. The switch is in the app, and each
 product builds on its own; per module the owner decides where it belongs (the questions at the end).
@@ -6,12 +6,17 @@ product builds on its own; per module the owner decides where it belongs (the qu
 ## Intent
 
 Open BIM Suite is turning from a viewer into a modeller. The owner wants one code base
-that is three products, each with its own build and its own interface:
+that is several products, each with its own build and its own interface:
 
 - **Viewer**: open any BIM or CAD file, look at it, measure it, cut it, read its properties.
 - **Modeller**: make a BIM model from the five base elements of `bim-core` (wall, slab, column,
   beam, curtain wall, object, connection), with levels, views and sheets.
 - **BIM Collaborator**: where a team checks models together and agrees on what to change.
+- **Pointcloud** (added 2026-11-16): open point clouds, look at them, measure and cut them, and
+  make meshes of them. Its meshing is the library of Open Pointcloud Studio (`pointcloud-core`,
+  LGPL-3.0-or-later), a dependency behind the feature `pointcloud` on the desktop; the interface of
+  that app is not taken over. The mesh of a cloud is read from the cloud's own file, written as
+  a file of its own and added to the project as a model over the cloud.
 
 Not three repositories, not three apps glued together: one `App`, one window, one project. The
 switch at the top right of the window moves between the three; each shows its own ribbon, panels
@@ -54,6 +59,7 @@ Cargo features say which products a build holds; binaries say which product a bu
 | Viewer only | `cargo build --release --no-default-features --features viewer` | the Viewer, no switch |
 | Modeller | `cargo build --release --bin open-bim-modeller` | the Modeller only |
 | BIM Collaborator | `cargo build --release --bin open-bim-collaborator` | the Collaborator only |
+| Pointcloud | `cargo build --release --bin open-bim-pointcloud` | Pointcloud only |
 | Web | `trunk build` | all three; `?product=modeller` starts in that product |
 
 - Features `viewer`, `modeller` and `collaborator` are all on by default. A product binary needs

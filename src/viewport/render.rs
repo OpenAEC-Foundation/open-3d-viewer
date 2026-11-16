@@ -5,7 +5,7 @@
 //! is uploaded once per model (keyed by `Model::id`); each frame only writes the uniforms, and
 //! the offsets of the exploded view when they change.
 //!
-//! Point clouds are drawn as squares of [`POINT_SIZE`] pixels, whatever their distance: each
+//! Point clouds are drawn as squares of the size the settings give (2.5 pixels unless set), whatever their distance: each
 //! point is an instance of a four-vertex triangle strip that the vertex shader spreads round the
 //! point on screen. Instanced quads rather than `PointList`, whose points are one pixel on every
 //! backend that matters (WebGL2 and WebGPU have no point size).
@@ -40,8 +40,6 @@ const SHADOW_DARKEST: f32 = 0.5;
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
-/// The size of a point of a point cloud, in logical pixels.
-const POINT_SIZE: f32 = 2.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
@@ -84,6 +82,10 @@ pub struct RenderSettings {
     /// Ambient shadows: surfaces darker in corners, under overhangs and behind what stands in
     /// front of them (shaded styles only).
     pub ambient: bool,
+    /// The size a point of a cloud is drawn at (logical pixels).
+    pub point_size: f32,
+    /// How the points of a cloud are coloured.
+    pub cloud_color: crate::cloud_color::CloudColor,
     /// World bounds of the model as drawn (pulled apart by the exploded view), for the ground
     /// grid; `None`: the model's own.
     pub bounds: Option<Bounds>,
@@ -245,6 +247,8 @@ pub struct ScenePipeline {
     see_through: bool,
     targets: Option<Targets>,
     model_id: u64,
+    /// How the points of the uploaded model are coloured.
+    cloud_color: crate::cloud_color::CloudColor,
     model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
     /// What this frame draws of the layers (layer, first index, end), opaque and transparent:
@@ -654,6 +658,7 @@ impl ScenePipeline {
             see_through: false,
             targets: None,
             model_id: 0,
+            cloud_color: Default::default(),
             model: None,
             layers: Vec::new(),
             lit_draws: Vec::new(),
@@ -750,11 +755,14 @@ impl ScenePipeline {
         // the grid of cells the layers' triangles are put in
         let (low, high) = (Vec3::from(model.bounds.min), Vec3::from(model.bounds.max));
         let cell = ((high - low).max_element() / chunks::CELLS).max(1e-3);
+        // the heights of the model's clouds, for colouring them by height
+        let heights = model.layers.iter().filter(|l| l.points).flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
+        let (floor, top) = heights.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), z| (lo.min(z), hi.max(z)));
         for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
             if layer.points {
-                self.layers.push(upload_points(device, layer, base));
+                self.layers.push(upload_points(device, layer, base, self.cloud_color, (floor, top)));
                 continue;
             }
             let units = explode.and_then(|e| e.vertex_units.get(l));
@@ -975,6 +983,13 @@ impl ScenePipeline {
             queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&params));
         }
 
+        // another way to colour a cloud: its points are sent again
+        if primitive.settings.cloud_color != self.cloud_color {
+            self.cloud_color = primitive.settings.cloud_color;
+            if self.model.as_ref().is_some_and(|m| m.layers.iter().any(|l| l.points)) {
+                self.model_id = 0;
+            }
+        }
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
         self.upload_datum(device, primitive);
         self.upload_overlay(device, primitive);
@@ -1018,7 +1033,7 @@ impl ScenePipeline {
         let clip = settings.section.map(|s| s.uniform()).unwrap_or([[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]]);
         let plane = settings.plane.unwrap_or([[0.0; 4]; 2]);
         // half the point size in clip units (x, y), for `vs_point`
-        let point = POINT_SIZE * scale;
+        let point = settings.point_size.clamp(0.5, 32.0) * scale;
         // eye.w: 2 draws the faces white and unlit (hidden lines)
         let faces = if settings.mode == RenderMode::HiddenLine { 2.0 } else { 1.0 };
         let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3], plane: [[f32; 4]; 2]| Uniforms {
@@ -1265,8 +1280,10 @@ impl ScenePipeline {
 }
 
 /// The points of a point cloud layer as an instance buffer, written straight into the mapped
-/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`.
-fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4]) -> GpuLayer {
+/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`;
+/// `color` says how they are coloured, `heights` the lowest and highest point of their cloud.
+fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4], color: crate::cloud_color::CloudColor, heights: (f32, f32)) -> GpuLayer {
+    let span = (heights.1 - heights.0).max(1e-6);
     let n = layer.vertex_count();
     let size = std::mem::size_of::<PointVertex>();
     let vertices = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1279,8 +1296,8 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
         let mut view = vertices.slice(..).get_mapped_range_mut();
         let out: &mut [PointVertex] = bytemuck::cast_slice_mut(&mut view[..n * size]);
         for (i, (p, v)) in layer.positions.chunks_exact(3).zip(out.iter_mut()).enumerate() {
-            let color = layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base);
-            *v = PointVertex { position: [p[0], p[1], p[2]], color: [color[0], color[1], color[2], 255] };
+            let stored = layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base);
+            *v = PointVertex { position: [p[0], p[1], p[2]], color: color.of(stored, (p[2] - heights.0) / span, base) };
         }
     }
     vertices.unmap();

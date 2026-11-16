@@ -6,6 +6,8 @@ mod caps;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod cloud;
 mod export_drawing;
+#[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+pub mod pointcloud;
 mod grids;
 mod hatch;
 mod ifc;
@@ -13,7 +15,9 @@ mod ifc;
 mod inform;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod clash_words;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod room_checks;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod shape_checks;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod reports;
@@ -267,6 +271,12 @@ pub struct App {
     pub views_in_3d: bool,
     /// The 3D view draws ambient shadows (in its shaded styles).
     pub ambient: bool,
+    /// The size a point of a cloud is drawn at (pixels).
+    pub point_size: f32,
+    /// How the points of a cloud are coloured.
+    pub cloud_color: crate::cloud_color::CloudColor,
+    /// A cloud is being meshed.
+    pub meshing: bool,
     /// In the 3D view: the heads of the grid lines that stand behind the model are left out;
     /// the distances between the grid lines are drawn; the levels are drawn as outlines with
     /// their marks.
@@ -467,6 +477,8 @@ pub enum Message {
     Library(library::LibraryMessage),
     #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
+    #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+    Pointcloud(pointcloud::Event),
     /// Open the form of a new level, named after this word ("Level") and a number.
     NewLevel(&'static str),
     LevelName(String),
@@ -554,6 +566,8 @@ pub enum Message {
     ToggleViewsIn3d,
     /// Ambient shadows in the 3D view on or off.
     ToggleAmbient,
+    /// Colour the points of the clouds another way.
+    CloudColor(crate::cloud_color::CloudColor),
     ToggleGridHeadsHidden,
     ToggleGridDims,
     ToggleLevels3d,
@@ -872,6 +886,9 @@ impl Default for App {
             kept_faces: Default::default(),
             views_in_3d: false,
             ambient: false,
+            point_size: 2.5,
+            cloud_color: Default::default(),
+            meshing: false,
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
@@ -1365,6 +1382,8 @@ impl App {
         app.measure.units = self.measure.units.clone();
         // how the 3D view draws is set for the app, not for a project
         (app.ambient, app.grid_heads_hidden, app.grid_dims, app.levels_3d) = (self.ambient, self.grid_heads_hidden, self.grid_dims, self.levels_3d);
+        app.point_size = self.point_size;
+        app.cloud_color = self.cloud_color;
         app
     }
 
@@ -1976,6 +1995,8 @@ impl App {
             Message::Library(message) => return self.library_update(message),
             #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            Message::Pointcloud(event) => return self.pointcloud_update(event),
             Message::NewLevel(word) => {
                 // the form is in the Levels tab
                 self.explorer_tab = ExplorerTab::Levels;
@@ -2083,6 +2104,7 @@ impl App {
                 }
             }
             Message::ToggleAmbient => self.ambient = !self.ambient,
+            Message::CloudColor(color) => self.cloud_color = color,
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
             Message::ToggleLevels3d => self.levels_3d = !self.levels_3d,
@@ -3679,6 +3701,8 @@ impl App {
             caps: self.section_fill,
             grids: self.grids_shown() || (self.levels_3d && !clean),
             ambient: self.ambient,
+            point_size: self.point_size,
+            cloud_color: self.cloud_color,
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them

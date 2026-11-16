@@ -197,7 +197,7 @@ impl Loader for TbpLoader {
                 continue;
             };
             let model = Source::Bytes { name: format!("{}.ifczip", r.name), data: Arc::new(bytes.clone()) };
-            let one = match IfcLoader.load_with(&model, &Progress::default()) {
+            let one = match IfcLoader.read(&model, &Progress::default(), true) {
                 Ok(one) => one,
                 Err(e) => {
                     failed.push(format!("{}: {e}", r.name));
@@ -250,7 +250,7 @@ impl Loader for TbpLoader {
             }
             read += 1;
         }
-        if read == 0 {
+        if read == 0 || loaded.layers.is_empty() {
             return Err(format!("TBP: no model could be read ({})", failed.join("; ")));
         }
         levels.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
@@ -312,6 +312,9 @@ mod tests {
         let loaded = TbpLoader.load_with(&Source::File(path.into()), &Progress::default()).unwrap();
         assert!(!loaded.layers.is_empty());
         eprintln!("{:?}", loaded.project.info);
+        eprintln!("grids {:?}", loaded.project.grids.iter().map(|g| &g.name).collect::<Vec<_>>());
+        eprintln!("levels {:?}", loaded.project.levels);
+        assert!(!loaded.project.info.iter().any(|(k, _)| k == "Models not read"), "{:?}", loaded.project.info);
         for layer in &loaded.layers {
             eprintln!("{} · {} triangles", layer.name, layer.triangle_count());
         }

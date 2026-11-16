@@ -6,8 +6,8 @@
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
-//!                  [--product ...] [--mesh terrain|surface]
-//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
+//!                  [--product ...] [--mesh terrain|surface|closed]
+//!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
@@ -100,7 +100,7 @@ fn parse_args() -> Result<Args, String> {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
             "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|collaborator|pointcloud")?),
-            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback")?,
+            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback|cloud")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
             "--drawing" => args.drawing = Some(value()?),
@@ -414,6 +414,11 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         );
         app.initial_view = args.view;
         app.set_model(Arc::new(model));
+        // the card of a cloud shows what its file holds: read here, as no message runs
+        #[cfg(feature = "pointcloud")]
+        if args.page == shell::Page::Cloud {
+            app.cloud.details = app.cloud().map(|cloud| (cloud.file.clone(), crate::app::pointcloud::details(&cloud.file)));
+        }
         // the mesh of the cloud, added over it as the Pointcloud product does
         #[cfg(feature = "pointcloud")]
         if let Some(kind) = &args.mesh {
@@ -421,10 +426,12 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let kind = match kind.as_str() {
                 "terrain" => Mesh::Terrain,
                 "surface" => Mesh::Surface,
-                _ => return Err("--mesh terrain|surface".into()),
+                "closed" => Mesh::Closed,
+                _ => return Err("--mesh terrain|surface|closed".into()),
             };
-            let done = crate::app::pointcloud::mesh(file, kind)?;
-            eprintln!("meshed {}: {} vertices, {} triangles in {:.2} s", done.file.display(), done.vertices, done.triangles, done.seconds);
+            let cloud = app.cloud().ok_or("--mesh: the file is not a point cloud")?;
+            let done = crate::app::pointcloud::mesh(&cloud, kind, &app.cloud.settings, None, &std::sync::atomic::AtomicBool::new(false))?;
+            eprintln!("meshed {}: {} in {:.2} s", done.file.display(), done.figures(), done.seconds);
             app.add_model(Arc::new(loaders::load(&done.file)?));
             app.fit();
         }

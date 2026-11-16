@@ -55,7 +55,7 @@ impl Loader for SamLoader {
 
 /// The anchor subtracted for display: the file's origin, or, when that is zero (or left out) and
 /// the nodes lie far from it, the middle of the nodes rounded to whole metres.
-fn anchor(doc: &bim_structural::SamDocument) -> DVec3 {
+pub(super) fn anchor(doc: &bim_structural::SamDocument) -> DVec3 {
     if doc.origin != DVec3::ZERO {
         return doc.origin;
     }
@@ -72,7 +72,7 @@ fn anchor(doc: &bim_structural::SamDocument) -> DVec3 {
 }
 
 /// The file's summary and model notes for the project information.
-fn info(doc: &bim_structural::SamDocument, anchor: DVec3) -> Vec<(String, String)> {
+pub(super) fn info(doc: &bim_structural::SamDocument, anchor: DVec3) -> Vec<(String, String)> {
     let mut info = vec![("Format".to_string(), bim_structural::exchange::FORMAT.to_string())];
     if let Some(app) = &doc.source.application {
         info.push(("Source application".into(), app.clone()));

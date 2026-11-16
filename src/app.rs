@@ -8,6 +8,8 @@ mod cloud;
 mod export_drawing;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
 pub mod pointcloud;
+#[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+pub mod scan_project;
 mod grids;
 mod hatch;
 mod ifc;
@@ -281,6 +283,9 @@ pub struct App {
     pub cloud_color: crate::cloud_color::CloudColor,
     /// A cloud is being meshed.
     pub meshing: bool,
+    /// What the Pointcloud product keeps: its settings, the mesh made last, the details read.
+    #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+    pub cloud: pointcloud::State,
     /// In the 3D view: the heads of the grid lines that stand behind the model are left out;
     /// the distances between the grid lines are drawn; the levels are drawn as outlines with
     /// their marks.
@@ -929,6 +934,8 @@ impl Default for App {
             cloud_depth: true,
             cloud_color: Default::default(),
             meshing: false,
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            cloud: pointcloud::State::default(),
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
@@ -1058,6 +1065,9 @@ fn pick_model_task(add: bool) -> Task<Message> {
     exts.sort_unstable();
     Task::perform(
         async move {
+            // a scan project file opens as the scans it lists
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            exts.push(scan_project::PROJECT_EXTENSION);
             let dialog = rfd::AsyncFileDialog::new()
                 .set_title(if add { "Add 3D model" } else { "Open 3D model" })
                 .add_filter("3D models", &exts)
@@ -1426,6 +1436,10 @@ impl App {
         app.point_size = self.point_size;
         app.cloud_depth = self.cloud_depth;
         app.cloud_color = self.cloud_color;
+        #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+        {
+            app.cloud.settings = self.cloud.settings;
+        }
         app
     }
 
@@ -1612,6 +1626,24 @@ impl App {
         self.pending_open = None;
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
+        }
+        // a scan project file or a folder of scans: the scans it lists or holds, one after another
+        #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+        if let loaders::Source::File(path) = &source {
+            if path.is_dir() || path.extension().is_some_and(|e| e.eq_ignore_ascii_case(scan_project::PROJECT_EXTENSION)) {
+                let open: Vec<PathBuf> = if add { self.models.iter().map(|entry| entry.model.path.clone()).collect() } else { Vec::new() };
+                let found = scan_project::expand(std::slice::from_ref(path), &open);
+                let mut scans = found.files.iter().cloned().map(loaders::Source::File);
+                let Some(first) = scans.next() else {
+                    self.status = Status::Error(found.summary());
+                    return Task::none();
+                };
+                self.add_queue.extend(scans);
+                if found.has_notes() {
+                    eprintln!("{}", found.summary());
+                }
+                return self.open(first, add);
+            }
         }
         // an IFCX file added to an IFCX model layers over it: the files load again as one model
         let last = self.models.last().map(|entry| entry.model.id).or(self.model.as_ref().map(|m| m.id));

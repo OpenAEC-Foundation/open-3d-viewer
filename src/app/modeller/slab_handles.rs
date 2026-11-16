@@ -129,7 +129,7 @@ pub fn pushed(shape: &Shape, handle: SlabHandle, along: f64) -> Option<Shape> {
 impl App {
     /// The selected floor with grips: one slab alone, outside edit mode and with no tool on.
     fn slab_gripped(&self) -> Option<ElementId> {
-        if self.modeller.edit.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
+        if self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
             return None;
         }
         let [id] = self.selected_modelled()[..] else { return None };
@@ -193,7 +193,7 @@ impl App {
             picked: shown.iter().map(|(h, _, _)| Some(*h) == dragged).collect(),
             points: shown.iter().map(|(_, at, _)| at.as_vec3()).collect(),
             closed: false,
-            outline: Some(outline.iter().map(|p| p.extend(top).as_vec3()).collect()),
+            lines: Some((0..outline.len()).map(|i| [outline[i], outline[(i + 1) % outline.len()]].map(|p| p.extend(top).as_vec3())).collect()),
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,
@@ -344,7 +344,7 @@ mod tests {
         assert!((grips[1].1 - DVec3::new(4.0, 1.5, 2.875)).length() < 1e-9);
         let overlay = app.grip_overlay(Color::BLACK, Color::WHITE).expect("grips");
         assert_eq!(overlay.points.len(), 4);
-        assert_eq!(overlay.outline.as_ref().map(Vec::len), Some(4));
+        assert_eq!(overlay.lines.as_ref().map(Vec::len), Some(4));
         // the east edge a metre out; the cursor off its line counts for nothing
         drag(&mut app, id, SlabHandle::Edge(1), DVec3::new(5.0, 2.6, 0.0));
         assert!(close(&now(&app, id).0, &[(0.0, 0.0), (5.0, 0.0), (5.0, 3.0), (0.0, 3.0)]), "{:?}", now(&app, id).0);

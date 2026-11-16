@@ -45,7 +45,7 @@ pub(super) fn crossing(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<DVec2> 
 impl App {
     /// The selected element with grips: one alone, outside edit mode and with no tool on.
     fn gripped(&self) -> Option<ElementId> {
-        if self.modeller.edit.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
+        if self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
             return None;
         }
         let [id] = self.selected_modelled()[..] else { return None };
@@ -73,7 +73,7 @@ impl App {
             picked: vec![false; points.len()],
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,
-            outline: None,
+            lines: None,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,

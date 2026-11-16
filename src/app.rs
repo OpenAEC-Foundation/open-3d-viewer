@@ -1929,6 +1929,7 @@ impl App {
                         self.select_box(rect, width, height, add);
                     }
                 }
+                Navigate::Hover { x, y, width, height } if self.sketch_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) || self.grid_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } => {
@@ -2119,8 +2120,10 @@ impl App {
             Message::DeletePicked => {
                 if self.edit_backspace() {
                     // a distance being typed: its last character goes
-                } else if self.edit_delete() {
-                    // in edit mode: the picked corners go
+                } else if self.sketch_delete() {
+                    // in the sketch of a floor: the picked line goes
+                } else if self.modeller.edit.is_some() {
+                    // in edit mode Delete takes nothing: the element stays
                 } else if self.delete_modelled() {
                     // modelled elements selected: they go
                 } else if self.delete_picked_grid() {
@@ -2399,6 +2402,9 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.sketch.is_some() => {
+                self.sketch_escape();
+            }
             Message::Escape if self.modeller.slab_drag.is_some() => {
                 self.slab_escape();
             }
@@ -2529,6 +2535,9 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        if self.sketch_click(x, y, width, height) {
+            return;
+        }
         if self.modeller.transform.is_some() {
             return self.transform_click(x, y, width, height);
         }
@@ -3724,7 +3733,7 @@ impl App {
             offsets: &self.units,
             looks: &self.unit_looks,
             drag_selects: self.drag_selects(),
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3794,7 +3803,9 @@ impl App {
             canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let editing = self.modeller.edit.as_ref().and_then(|e| Some((e, self.modeller.model.get(e.element)?)));
-        let banner = if let Some((edit, element)) = editing {
+        let banner = if let Some(hint) = self.sketch_hint(l) {
+            Some(hint)
+        } else if let Some((edit, element)) = editing {
             let hint = match &edit.grab {
                 Some(g) if g.by_key => l.text("Klik: neerzetten · X, Y, Z: as · Esc: annuleren", "Click: put down · X, Y, Z: axis · Esc: cancel"),
                 Some(_) => l.text("Sleep naar de nieuwe plek · X, Y, Z: as", "Drag to the new place · X, Y, Z: axis"),

@@ -138,7 +138,7 @@ impl App {
             picked: (0..points.len()).map(|i| i == TOP_GRIP).collect(),
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,
-            outline: None,
+            lines: None,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,

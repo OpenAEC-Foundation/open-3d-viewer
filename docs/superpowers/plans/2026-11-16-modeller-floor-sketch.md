@@ -55,4 +55,4 @@ Arcs (a segment with a bulge, kept by the kernel) and floor openings by two clic
 Keys in the sketch: L line (chained clicks), R rectangle (two clicks), T trim (a click takes the stretch of a segment between its two nearest crossings with other segments, or the whole segment), Del removes the picked segment, Tab finishes (one step), Esc: a point clicked goes first, then the sketch leaves with the floor unchanged.
 
 - [ ] Tests in `sketch.rs`: `closed_loop` on a rectangle in any segment order and direction, with a gap, a branch, two loops; `trimmed` on two crossing lines and on a lone segment; an app test: Tab on a slab, R with two clicks beside it, T on the stretches inside, Tab → the slab is the union outline; Esc leaves it unchanged.
-- [ ] Run to fail; implement; run to pass; translations; whole suite; screenshot of the sketch; commit; push.
+- [x] Run to fail; implement; run to pass; translations; whole suite; commit; push.

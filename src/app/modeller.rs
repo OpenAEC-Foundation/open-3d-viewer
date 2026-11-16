@@ -26,6 +26,7 @@ pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 pub mod slab_handles;
+pub mod sketch;
 pub mod tops;
 pub mod typed_move;
 
@@ -183,6 +184,8 @@ pub struct Modeller {
     pub edit: Option<super::edit::Edit>,
     /// A grip of a selected floor being dragged (see `slab_handles`).
     pub slab_drag: Option<slab_handles::SlabDrag>,
+    /// The sketch of a floor outline, open (see `sketch`).
+    pub sketch: Option<sketch::Sketch>,
     /// Where the next click of the tool would place a point (snapped, scene coordinates), while
     /// the cursor is over the viewport: the preview runs to it.
     pub cursor: Option<DVec3>,

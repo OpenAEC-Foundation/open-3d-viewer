@@ -5,7 +5,8 @@
 //! - Drag a point to move it, and the other picked points with it; a click picks a point, Ctrl adds.
 //! - G grabs the picked points: they follow the cursor until a click puts them down. X, Y or Z holds
 //!   the move to that axis.
-//! - A picks every point; Delete removes the picked corners of a slab.
+//! - A picks every point. A slab has no points here: Tab opens the sketch of its outline
+//!   (`modeller::sketch`).
 //! - Tab leaves; Esc drops a move under way, else leaves.
 //!
 //! A move snaps to the points of the other modelled elements and is rounded to 10 mm. It is
@@ -148,11 +149,18 @@ impl App {
 
     /// Whether Tab means edit mode now: in it, or with one modelled element selected.
     pub(crate) fn wants_tab(&self) -> bool {
-        self.modeller.edit.is_some() || self.editable().is_some()
+        self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.editable().is_some()
     }
 
     /// Tab: into edit mode on the selected element, or out of it.
     pub(super) fn toggle_edit(&mut self) {
+        // the sketch of a floor: Tab finishes it, and Tab on a floor opens it
+        if self.modeller.sketch.is_some() {
+            return self.finish_sketch();
+        }
+        if let Some(floor) = self.editable().filter(|id| self.modeller.edit.is_none() && self.sketchable(*id)) {
+            return self.open_sketch(floor);
+        }
         if self.modeller.edit.is_some() {
             self.modeller.edit = None;
             return;
@@ -191,8 +199,8 @@ impl App {
 
     /// Something the edit overlay reports.
     pub(super) fn edit_event(&mut self, event: EditEvent) {
-        // a floor with grips, or one of them dragged
-        if self.modeller.edit.is_none() && self.slab_event(event) {
+        // the sketch of a floor; a floor with grips, or one of them dragged
+        if self.sketch_event(event) || (self.modeller.edit.is_none() && self.slab_event(event)) {
             return;
         }
         if self.modeller.edit.is_none() {
@@ -238,6 +246,9 @@ impl App {
     /// A key in edit mode: G grabs the picked points, X, Y and Z hold the move to an axis, A picks
     /// every point.
     pub(super) fn edit_key(&mut self, key: char) {
+        if self.modeller.sketch.is_some() {
+            return self.sketch_key(key);
+        }
         // a digit, a point, a comma or a minus: the distance of the move under way
         if super::modeller::typed_move::DIGITS.contains(key) {
             return self.edit_type(key);
@@ -303,28 +314,6 @@ impl App {
         let Some(edit) = self.modeller.edit.as_mut() else { return false };
         if edit.grab.take().is_none() || edit.grips {
             self.modeller.edit = None;
-        }
-        true
-    }
-
-    /// Delete in edit mode: removes the picked corners of a slab (three stay at least). False when
-    /// not in edit mode.
-    pub(super) fn edit_delete(&mut self) -> bool {
-        let Some(edit) = self.modeller.edit.clone() else { return false };
-        let Some((_, shape)) = self.edited() else { return true };
-        let (points, closed) = edit_points(&shape);
-        if !closed || edit.picked.is_empty() {
-            return true;
-        }
-        let kept: Vec<DVec3> = points.iter().enumerate().filter(|(i, _)| !edit.picked.contains(i)).map(|(_, p)| *p).collect();
-        if kept.len() < 3 {
-            self.modeller.refusal = Some(Refusal::TooFewPoints);
-            return true;
-        }
-        if self.change_edited(with_points(&shape, &kept)) {
-            if let Some(edit) = self.modeller.edit.as_mut() {
-                edit.picked.clear();
-            }
         }
         true
     }
@@ -430,6 +419,9 @@ impl App {
 
     /// The edit overlay: the edited element's points and the lines between them.
     pub(super) fn edit_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
+        if let Some(overlay) = self.sketch_overlay(ink, fill) {
+            return Some(overlay);
+        }
         if let Some(overlay) = self.height_drag_overlay(ink, fill) {
             return Some(overlay);
         }
@@ -443,7 +435,7 @@ impl App {
         Some(EditOverlay {
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed,
-            outline: None,
+            lines: None,
             picked,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
@@ -466,8 +458,9 @@ pub struct EditOverlay {
     /// The points (a grip's middle last).
     pub points: Vec<Vec3>,
     pub closed: bool,
-    /// A loop drawn in place of the lines between the points (a floor with grips: its outline).
-    pub outline: Option<Vec<Vec3>>,
+    /// Lines drawn in place of those between the points (a floor with grips: its outline; a
+    /// sketch: its lines).
+    pub lines: Option<Vec<[Vec3; 2]>>,
     pub picked: Vec<bool>,
     /// Model to clip space.
     pub view_proj: Mat4,
@@ -539,17 +532,21 @@ impl<M: From<EditEvent>> canvas::Program<M> for EditOverlay {
     fn draw(&self, state: &EditState, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let shown: Vec<Option<Point>> = self.points.iter().map(|p| project(&self.view_proj, bounds.size(), *p)).collect();
-        // the lines: between the points, or the loop given in their place
-        let given: Option<Vec<Option<Point>>> = self.outline.as_ref().map(|o| o.iter().map(|p| project(&self.view_proj, bounds.size(), *p)).collect());
-        let (linked, closed) = match &given {
-            Some(o) => (o, true),
-            None => (&shown, self.closed),
-        };
-        let n = linked.len();
+        let n = shown.len();
         let lines = Path::new(|path| {
-            let pairs = if closed { n } else { n.saturating_sub(1) };
+            // the lines given, else those between the points
+            if let Some(lines) = &self.lines {
+                for [a, b] in lines {
+                    if let (Some(a), Some(b)) = (project(&self.view_proj, bounds.size(), *a), project(&self.view_proj, bounds.size(), *b)) {
+                        path.move_to(a);
+                        path.line_to(b);
+                    }
+                }
+                return;
+            }
+            let pairs = if self.closed { n } else { n.saturating_sub(1) };
             for i in 0..pairs {
-                if let (Some(a), Some(b)) = (linked[i], linked[(i + 1) % n]) {
+                if let (Some(a), Some(b)) = (shown[i], shown[(i + 1) % n]) {
                     path.move_to(a);
                     path.line_to(b);
                 }
@@ -709,27 +706,6 @@ mod tests {
         drag(&mut app, 1, 6.2, 4.2, 0.0);
         let Shape::Planar(PlanarDef { form: PlanarForm::Wall { end, .. }, .. }) = app.modeller.model.get(wall).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
         assert_eq!(end, DVec2::new(6.0, 4.0));
-    }
-
-    #[test]
-    fn a_slab_loses_its_picked_corners_down_to_three() {
-        let mut app = modelling();
-        app.set_model_tool(Some((ModelTool::Slab, "Slab")));
-        click(&mut app, 0.0, 0.0);
-        click(&mut app, 4.0, 3.0);
-        app.set_model_tool(None);
-        app.select_modelled(ElementId(1));
-        let _ = app.update(Message::EditMode);
-        let _ = app.update(Message::Edit(EditEvent::Press { index: 2, add: false }));
-        let _ = app.update(Message::Edit(EditEvent::Release));
-        let _ = app.update(Message::DeletePicked);
-        let corners = |app: &App| edit_points(&app.modeller.model.get(ElementId(1)).unwrap().shape).0.len();
-        assert_eq!(corners(&app), 3);
-        assert!(app.modeller.edit.is_some(), "the slab stays in edit mode");
-        let _ = app.update(Message::EditKey('a'));
-        let _ = app.update(Message::DeletePicked);
-        assert_eq!(app.modeller.refusal, Some(Refusal::TooFewPoints));
-        assert_eq!(corners(&app), 3);
     }
 
     #[test]

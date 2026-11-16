@@ -1187,7 +1187,7 @@ impl Studio {
                 .enabled(app.selected_linear() == 2),
             Command::new("model.edit", l.text("Bewerken", "Edit"), go(Message::EditMode))
                 .icon(small("object.edit"), large("object.edit"))
-                .toggle(app.modeller.edit.is_some())
+                .toggle(app.modeller.edit.is_some() || app.modeller.sketch.is_some())
                 .enabled(app.wants_tab()),
             Command::new("model.delete", l.text("Verwijderen", "Delete"), go(Message::DeletePicked))
                 .icon(small("edit.delete"), large("edit.delete"))
@@ -1613,6 +1613,15 @@ impl Studio {
                     return self.update(Msg::App(Message::Escape));
                 }
                 // in edit mode G, X, Y, Z and A are its own keys
+                // and in the sketch of a floor L, R and T are its tools
+                let sketching = self.app.modeller.sketch.is_some();
+                if self.dialog.is_none() && sketching && !press.modifiers.control() && !press.modifiers.alt() {
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| "lrtLRT".contains(*c)) {
+                            return self.update(Msg::App(Message::EditKey(c)));
+                        }
+                    }
+                }
                 if self.dialog.is_none() && self.app.modeller.edit.is_some() && !press.modifiers.control() && !press.modifiers.alt() {
                     if let Key::Character(c) = &press.key {
                         // and while a point is grabbed, the digits of a typed distance
@@ -1625,7 +1634,7 @@ impl Studio {
                 // in the Modeller a plain letter is a key of its own (see `app::modeller::keys`),
                 // and PageUp / PageDown step through the levels
                 // (not in edit mode, whose own keys came before; its other letters stay the app's)
-                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !press.modifiers.control() && !press.modifiers.alt() {
+                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !sketching && !press.modifiers.control() && !press.modifiers.alt() {
                     use crate::app::modeller::keys::{ModelKey, Step};
                     let steps: Option<Vec<Step>> = match &press.key {
                         Key::Character(c) => c.chars().next().filter(|c| c.is_ascii_alphabetic()).map(|c| self.keys.steps(c, Instant::now())),

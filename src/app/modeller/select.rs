@@ -26,6 +26,7 @@ impl App {
             && !self.modeller.grid_tool
             && self.modeller.transform.is_none()
             && self.modeller.edit.is_none()
+            && self.modeller.sketch.is_none()
             && self.measure.tool.is_none()
             && !self.dimension_tool
             && !self.note_tool

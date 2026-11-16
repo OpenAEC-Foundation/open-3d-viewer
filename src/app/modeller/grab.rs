@@ -2,8 +2,9 @@
 //!
 //! - **G** with modelled elements selected (outside edit mode, where G grabs points) starts the
 //!   grab. Where the cursor is then is where the move starts from; the elements move as far as the
-//!   cursor goes from there, on the level worked on, rounded to 10 mm, and show where they would
-//!   stand.
+//!   cursor goes from there, rounded to 10 mm, and show where they would stand. In a view from
+//!   above they move over the floor; in an elevation or a section they move along the view and
+//!   up and down.
 //! - **X** or **Y** holds the move to that axis (the same key again lets it go).
 //! - **Digits** type the distance along the axis held, in metres (a point or a comma, a minus
 //!   in front); while a distance is typed the cursor moves nothing. Backspace takes a character
@@ -97,17 +98,19 @@ impl App {
         if !grab.typed.is_empty() {
             return true;
         }
-        let (z, ..) = self.work_plane();
-        let Some(p) = self.plane_point(x, y, width.max(1.0), height.max(1.0), z) else { return true };
+        // the plane the move runs in passes through the first element grabbed (from above: its
+        // level; from the side: its distance from the view)
+        let grid = self.modeller.model.grid;
+        let through = grab.origin.or_else(|| grab.before.get(*grab.elements.first()?)?.shape_in_project(&grid).placement()).unwrap_or(DVec3::ZERO);
+        let Some(p) = self.drag_plane_point(x, y, width.max(1.0), height.max(1.0), through) else { return true };
         let Some(grab) = self.modeller.grab.as_mut() else { return true };
         let origin = *grab.origin.get_or_insert(p);
         let round = |v: f64| (v / ROUND).round() * ROUND;
-        let mut delta = DVec3::new(round(p.x - origin.x), round(p.y - origin.y), 0.0);
+        let mut delta = DVec3::new(round(p.x - origin.x), round(p.y - origin.y), round(p.z - origin.z));
         match grab.axis {
-            Some(Axis::X) => delta.y = 0.0,
-            Some(Axis::Y) => delta.x = 0.0,
-            // up and down is typed: the cursor moves on the level
-            Some(Axis::Z) => delta = DVec3::ZERO,
+            Some(Axis::X) => (delta.y, delta.z) = (0.0, 0.0),
+            Some(Axis::Y) => (delta.x, delta.z) = (0.0, 0.0),
+            Some(Axis::Z) => (delta.x, delta.y) = (0.0, 0.0),
             None => {}
         }
         if delta != grab.delta {
@@ -130,9 +133,10 @@ impl App {
                 };
                 grab.axis = if grab.axis == Some(axis) { None } else { Some(axis) };
                 match grab.axis {
-                    Some(Axis::X) => grab.delta.y = 0.0,
-                    Some(Axis::Y) => grab.delta.x = 0.0,
-                    _ => {}
+                    Some(Axis::X) => (grab.delta.y, grab.delta.z) = (0.0, 0.0),
+                    Some(Axis::Y) => (grab.delta.x, grab.delta.z) = (0.0, 0.0),
+                    Some(Axis::Z) => (grab.delta.x, grab.delta.y) = (0.0, 0.0),
+                    None => {}
                 }
             }
             c => {
@@ -305,6 +309,47 @@ mod tests {
         assert!(near(ends(&app, 1), [(-1.5, 0.0), (2.5, 0.0)]), "{:?}", ends(&app, 1));
         let _ = app.update(Message::Undo);
         assert!(near(ends(&app, 1), [(0.0, 0.0), (4.0, 0.0)]));
+    }
+
+    #[test]
+    fn in_an_elevation_the_grab_moves_along_the_view_and_up_and_down() {
+        let mut app = wall_selected();
+        // from the front: x runs across the view, z up; y is the view's depth
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Front);
+        let at = |app: &App, x: f64, z: f64| app.on_screen(DVec3::new(x, 0.0, z), 1000.0, 800.0).unwrap();
+        let _ = app.update(Message::ModelKey(ModelKey::Grab, Language::English));
+        for (x, z) in [(1.0, 0.5), (2.5, 1.7)] {
+            let (sx, sy) = at(&app, x, z);
+            let _ = app.update(Message::Navigate(Navigate::Hover { x: sx, y: sy, width: 1000.0, height: 800.0 }));
+        }
+        let base = |app: &App| match app.modeller.model.get(ElementId(1)).unwrap().shape_in_project(&app.modeller.model.grid) {
+            Shape::Planar(bim_core::PlanarDef { form: bim_core::element::PlanarForm::Wall { base, .. }, .. }) => base,
+            _ => panic!(),
+        };
+        assert!(near(ends(&app, 1), [(1.5, 0.0), (5.5, 0.0)]), "{:?}", ends(&app, 1));
+        assert!((base(&app) - 1.2).abs() < 1e-9, "{}", base(&app));
+        // held to z: only up and down
+        let _ = app.update(Message::EditKey('z'));
+        let (sx, sy) = at(&app, 4.0, 0.9);
+        let _ = app.update(Message::Navigate(Navigate::Hover { x: sx, y: sy, width: 1000.0, height: 800.0 }));
+        assert!(near(ends(&app, 1), [(0.0, 0.0), (4.0, 0.0)]) && (base(&app) - 0.4).abs() < 1e-9, "{:?} {}", ends(&app, 1), base(&app));
+        let _ = app.update(Message::MeasureFinish);
+        let _ = app.update(Message::Undo);
+        assert!((base(&app)).abs() < 1e-9, "one step back");
+    }
+
+    #[test]
+    fn in_an_elevation_a_walls_end_grip_moves_along_the_view_and_keeps_its_height() {
+        use crate::app::edit::EditEvent;
+        let mut app = wall_selected();
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Front);
+        let (sx, sy) = app.on_screen(DVec3::new(6.0, 0.0, 2.0), 1000.0, 800.0).unwrap();
+        let _ = app.update(Message::Edit(EditEvent::Press { index: 1, add: false }));
+        let _ = app.update(Message::Edit(EditEvent::Drag { x: sx, y: sy, width: 1000.0, height: 800.0 }));
+        let _ = app.update(Message::Edit(EditEvent::Release));
+        assert!(near(ends(&app, 1), [(0.0, 0.0), (6.0, 0.0)]), "{:?}", ends(&app, 1));
+        let (p, _) = edit_points(&app.modeller.model.get(ElementId(1)).unwrap().shape_in_project(&app.modeller.model.grid));
+        assert!(p[0].z.abs() < 1e-9 && p[1].z.abs() < 1e-9, "the wall stays on its base");
     }
 
     #[test]

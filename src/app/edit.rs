@@ -362,14 +362,9 @@ impl App {
             let t = (c * w.dot(r) - b * dir.dot(r)) / denom;
             anchor + w * ((t / ROUND).round() * ROUND)
         } else {
-            if dir.z.abs() < 1e-12 {
-                return;
-            }
-            let t = (anchor.z - a.z) / dir.z;
-            if t < 0.0 {
-                return;
-            }
-            let p = a + dir * t;
+            // over the floor in a view from above; along the view in an elevation or a section,
+            // where the point keeps its height
+            let Some(p) = self.drag_plane_point(x, y, width, height, anchor) else { return };
             let near = self
                 .snap_points_except(edit.element)
                 .into_iter()

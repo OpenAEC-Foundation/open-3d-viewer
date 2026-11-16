@@ -356,6 +356,28 @@ impl App {
         (t >= 0.0).then(|| a + d * t)
     }
 
+    /// Where the cursor's ray meets the plane a drag runs in, through `through`: the level plane
+    /// when the view looks down on it, else (an elevation, a section) the upright plane that
+    /// faces the view. So what is dragged in a floor plan moves over the floor, and what is
+    /// dragged in a section moves along the section and up and down.
+    pub(super) fn drag_plane_point(&self, x: f32, y: f32, width: f32, height: f32, through: DVec3) -> Option<DVec3> {
+        /// A view looks from the side when its rays rise or fall less than this (the sine of
+        /// their slope).
+        const FROM_THE_SIDE: f64 = 0.2;
+        let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
+        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        let a = inv.project_point3(Vec3::new(nx, ny, 0.0)).as_dvec3();
+        let d = inv.project_point3(Vec3::new(nx, ny, 1.0)).as_dvec3() - a;
+        let along = d.try_normalize()?;
+        let normal = if along.z.abs() >= FROM_THE_SIDE { DVec3::Z } else { DVec3::new(along.x, along.y, 0.0).try_normalize()? };
+        let denom = d.dot(normal);
+        if denom.abs() < 1e-12 {
+            return None;
+        }
+        let t = (through - a).dot(normal) / denom;
+        (t >= 0.0).then(|| a + d * t)
+    }
+
     /// Where a scene point shows in the viewport (logical pixels), if in front of the camera.
     pub(crate) fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
         let c = (self.camera.view_proj(width / height) * self.model_matrix()).project_point3(p.as_vec3());

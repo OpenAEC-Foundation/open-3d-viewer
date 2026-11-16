@@ -3967,20 +3967,22 @@ impl App {
         let temp_fields = self.temp_dim_fields(p).filter(|_| overlay.is_none());
         let cursor3d = self.cursor3d_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
-            .push(cursor3d)
             .push(grids)
             .push(view_labels)
             .push(zero_points)
-            .push(placing)
-            .push(joins)
-            .push(temp_marks)
-            .push(editing)
-            .push(temp_fields)
             .push(section)
             .push(plane)
             .push(measures)
             .push(measurements)
             .push(marks)
+            // what the Modeller works with lies over a view drawn as on a sheet too, so elements
+            // are picked, gripped and moved there as in the 3D view
+            .push(cursor3d)
+            .push(placing)
+            .push(joins)
+            .push(temp_marks)
+            .push(editing)
+            .push(temp_fields)
             .push(boxed)
             .push(picking)
             .push(cube)

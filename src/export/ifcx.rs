@@ -45,6 +45,8 @@ pub const DEFINITION: &str = "OpenAEC_definition";
 /// space, from its walls): written as the node's `openaec::derived` attribute, by which the
 /// reader leaves its mesh out, the project making it again.
 pub const DERIVED: &str = "OpenAEC_derived";
+/// The attribute of the node that holds the names given to a modelled project's spaces.
+pub const ROOMS: &str = "openaec::rooms";
 
 /// The attribute of a grid line's node that holds its definition: its name and its ends in plan
 /// (`start`, `end`: x, y in metres). The reader gives it back among the project's definitions,

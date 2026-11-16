@@ -718,6 +718,9 @@ pub enum Message {
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
     ElementFieldDone,
+    /// The name typed for the space selected, and Enter in its field.
+    SpaceName(String),
+    SpaceNameDone,
     /// Something the placement strip over the view sends.
     Place(placement::PlaceMessage),
     /// Add a door (`true`) or a window to the selected wall.
@@ -1756,6 +1759,8 @@ impl App {
             Message::TempDim(message) => self.temp_dim_message(message),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
+            Message::SpaceName(typed) => self.type_space_name(typed),
+            Message::SpaceNameDone => self.modeller.space_typing = None,
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
@@ -3459,6 +3464,10 @@ impl App {
         // a modelled element's definition, typed in
         if let Some(rows) = self.element_properties(p, l) {
             content = content.push(section(l.text("Definitie", "Definition"))).push(rows).push(rule::horizontal(1));
+        }
+
+        if let Some(rows) = self.space_properties(p, l) {
+            content = content.push(section(l.text("Definitie", "Definition"))).push(container(rows).padding([2, 8])).push(rule::horizontal(1));
         }
 
         // the selection

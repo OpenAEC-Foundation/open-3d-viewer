@@ -379,6 +379,7 @@ impl App {
                     notes: self.document.view_notes(&v.plan).unwrap_or(&[]).iter().chain(self.document.view_tags(&v.plan)).cloned().collect(),
                     lines: self.document.view_lines(&v.plan).iter().chain(self.document.view_symbols(&v.plan)).copied().collect(),
                     crop: marks.and_then(|(_, c)| c),
+                    datums: self.view_datums(&v.plan),
                     is_plan: self.document.plan(&v.plan).is_some(),
                 }
             })
@@ -520,6 +521,8 @@ struct Placed {
     /// The lines of the view's tags: their shapes and leaders.
     lines: Vec<[[f64; 2]; 2]>,
     crop: Option<([f64; 2], [f64; 2])>,
+    /// The grid lines and levels of the view, as its own tab shows them.
+    datums: Vec<crate::drawing2d::Datum2>,
     /// A floor plan (sections are drawn on these), not a section or elevation.
     is_plan: bool,
 }
@@ -980,6 +983,10 @@ impl canvas::Program<Message> for PaperDrawing {
                     }
                 });
                 frame.stroke(&lines, Stroke::default().with_color(ink).with_width(0.8));
+            }
+            for d in &placed.datums {
+                let (a, b) = (fit.point(self.to_paper(i, d.a)), fit.point(self.to_paper(i, d.b)));
+                super::marks::draw_datum(&mut frame, a, b, &d.name, d.level.is_some(), ink, Color::WHITE);
             }
             for (k, note) in placed.notes.iter().enumerate() {
                 let picked = self.pick == Some(SheetPick::Note(i, k));

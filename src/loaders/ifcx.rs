@@ -676,6 +676,10 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
             }
         }
     }
+    // and the names given to its spaces
+    if let Some(rooms) = flat.values().find_map(|node| node.attributes.get(crate::export::ifcx::ROOMS)) {
+        definitions.push(serde_json::json!({ crate::export::ifcx::ROOMS: (**rooms).clone() }));
+    }
     let project = ProjectData { info, levels, level_paths, drawings, elements: definitions, ..ProjectData::default() };
     Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }

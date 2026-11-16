@@ -890,7 +890,7 @@ pub(super) fn draw_dimension_px(frame: &mut Frame, a: Point, b: Point, length: f
 
 /// A grid line or a level of a view on its drawing, from `a` to `b` on screen: a dash-dot line;
 /// a grid line with its name in a bubble past both ends, a level with its name past its end.
-fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, level: bool, ink: Color, paper: Color) {
+pub(super) fn draw_datum(frame: &mut Frame, a: Point, b: Point, name: &str, level: bool, ink: Color, paper: Color) {
     let length = a.distance(b);
     if length < 1.0 {
         return;

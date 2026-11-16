@@ -188,6 +188,10 @@ pub struct Modeller {
     pub join_word: &'static str,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
+    /// The names given to spaces, each at a point of its space (see `spaces`).
+    pub rooms: Vec<spaces::Room>,
+    /// The name being typed for a space: which one, and the text.
+    pub space_typing: Option<(usize, String)>,
     /// Edit mode (Tab) on an element, or a drag of a selected element's grip.
     pub edit: Option<super::edit::Edit>,
     /// The value being typed in a temporary dimension's field: which one, and the text (see
@@ -262,6 +266,8 @@ impl App {
                 if let Ok(library) = serde_json::from_value::<bim_library::Library>(library.clone()) {
                     self.library.merge(&library);
                 }
+            } else if let Some(rooms) = definition.get(crate::export::ifcx::ROOMS) {
+                self.modeller.rooms = serde_json::from_value(rooms.clone()).unwrap_or_default();
             } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
                 if let Ok(grid) = serde_json::from_value::<bim_core::GridDef>(grid.clone()) {
                     let _ = self.modeller.model.insert_grid(grid);
@@ -547,7 +553,8 @@ impl App {
             .filter_map(|item| match item {
                 Pickable::Element(id) => {
                     let key = model.element_key(*id);
-                    (key.model == entry).then_some(ElementId(key.source))
+                    // a space is made from the walls: no element of the modelled project
+                    (key.model == entry && key.source < spaces::SPACE_IDS).then_some(ElementId(key.source))
                 }
                 Pickable::Layer(_) => None,
             })
@@ -633,6 +640,10 @@ impl App {
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
+        // and the names given to its spaces
+        if !self.modeller.rooms.is_empty() {
+            built.project.types.push(serde_json::json!({ "path": "openaec-rooms", "attributes": { crate::export::ifcx::ROOMS: self.modeller.rooms } }));
+        }
         if let Some(file) = &self.modeller.file {
             built.path = file.clone();
         }
@@ -854,6 +865,8 @@ fn class_colour(class: &str) -> [f32; 3] {
         "IfcMember" => [0.45, 0.47, 0.52],
         "IfcPlate" => [0.62, 0.80, 0.92],
         "IfcCurtainWall" => [0.62, 0.80, 0.92],
+        "IfcDoor" => [0.72, 0.55, 0.38],
+        "IfcWindow" => [0.95, 0.95, 0.93],
         _ => [0.90, 0.60, 0.30],
     }
 }

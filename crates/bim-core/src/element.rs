@@ -511,6 +511,43 @@ pub fn point_solid(p: &PointDef) -> Result<Solid, Refusal> {
     Solid::extrude(&Profile::rectangle(p.size.x, p.size.y)?, &axes, p.size.z)
 }
 
+/// How wide the members of a door or window frame are, how deep at least, and how thick a pane.
+pub const FRAME_WIDTH: f64 = 0.06;
+pub const FRAME_DEPTH: f64 = 0.09;
+pub const PANE: f64 = 0.02;
+
+/// The solids of a door or a window: its frame (a door has none under its leaf) and what fills
+/// it, a leaf or a pane of glass (marked true). One too small for a frame is a single block.
+pub fn opening_solids(p: &PointDef) -> Result<Vec<(Solid, bool)>, Refusal> {
+    let (w, h, f) = (p.size.x, p.size.z, FRAME_WIDTH);
+    let Some(kind) = p.opening.filter(|_| w > 3.0 * f && h > 3.0 * f) else { return Ok(vec![(point_solid(p)?, false)]) };
+    let depth = p.size.y.max(FRAME_DEPTH);
+    let (sin, cos) = p.rotation.sin_cos();
+    let along = DVec3::new(cos, sin, 0.0);
+    // a block: its middle along the width, its foot above the sill, and its sizes
+    let block = |x: f64, z: f64, size: DVec3| point_solid(&PointDef { at: p.at + along * x + DVec3::Z * z, rotation: p.rotation, size, opening: None });
+    let side = w / 2.0 - f / 2.0;
+    let mut solids = Vec::new();
+    match kind {
+        OpeningKind::Window => {
+            solids.push((block(0.0, 0.0, DVec3::new(w, depth, f))?, false));
+            solids.push((block(0.0, h - f, DVec3::new(w, depth, f))?, false));
+            for x in [-side, side] {
+                solids.push((block(x, f, DVec3::new(f, depth, h - 2.0 * f))?, false));
+            }
+            solids.push((block(0.0, f, DVec3::new(w - 2.0 * f, PANE, h - 2.0 * f))?, true));
+        }
+        OpeningKind::Door => {
+            solids.push((block(0.0, h - f, DVec3::new(w, depth, f))?, false));
+            for x in [-side, side] {
+                solids.push((block(x, 0.0, DVec3::new(f, depth, h - f))?, false));
+            }
+            solids.push((block(0.0, 0.0, DVec3::new(w - 2.0 * f, p.size.y.min(depth), h - f))?, false));
+        }
+    }
+    Ok(solids)
+}
+
 /// The solids of a planar element, each through all its layers: one, or one per piece of a wall
 /// that openings through its whole height (or width) split.
 pub fn planar_solids(p: &PlanarDef) -> Result<Vec<Solid>, Refusal> {

@@ -46,6 +46,38 @@ pub struct Space {
     pub z: f64,
 }
 
+/// A name given to a space: it stands at a point, and the space around that point on its level
+/// carries it, however its walls move.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Room {
+    pub level: Option<String>,
+    pub at: [f64; 2],
+    pub name: String,
+}
+
+/// Whether `p` lies inside `ring`.
+fn inside(ring: &[DVec2], p: DVec2) -> bool {
+    let n = ring.len();
+    let mut within = false;
+    for k in 0..n {
+        let (a, b) = (ring[k], ring[(k + 1) % n]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            within = !within;
+        }
+    }
+    within
+}
+
+/// A point surely inside `ring`: the middle of one of its ears (its corners' middle may lie
+/// outside an L).
+fn within(ring: &[DVec2]) -> DVec2 {
+    let flat: Vec<f64> = ring.iter().flat_map(|p| [p.x, p.y]).collect();
+    match earcutr::earcut(&flat, &[], 2).unwrap_or_default().chunks_exact(3).next() {
+        Some(t) => (ring[t[0]] + ring[t[1]] + ring[t[2]]) / 3.0,
+        None => ring.iter().sum::<DVec2>() / ring.len().max(1) as f64,
+    }
+}
+
 /// The layer the spaces stand on in the model shown: switched off until asked for.
 pub const SPACE_LAYER: &str = "IfcSpace";
 /// Where the ids of the spaces start in the model shown: far above those of modelled elements.
@@ -280,10 +312,74 @@ impl App {
             });
             for (k, outline) in found.into_iter().enumerate() {
                 let area = signed_area(&outline);
-                out.push(Space { name: format!("{} {}", if self.modeller.space_word.is_empty() { "Space" } else { self.modeller.space_word }, k + 1), level: level.clone(), outline, area, z });
+                // the name given to it, else what a space is called and its number
+                let given = self.modeller.rooms.iter().find(|r| r.level == level && inside(&outline, DVec2::from_array(r.at))).map(|r| r.name.clone());
+                let name = given.unwrap_or_else(|| format!("{} {}", if self.modeller.space_word.is_empty() { "Space" } else { self.modeller.space_word }, k + 1));
+                out.push(Space { name, level: level.clone(), outline, area, z });
             }
         }
         out
+    }
+
+    /// The one space selected: its place in the list.
+    pub(in crate::app) fn selected_space(&self) -> Option<usize> {
+        let (model, shown) = (self.model.as_ref()?, self.modeller.shown?);
+        let entry = self.models.iter().position(|e| e.model.id == shown)?;
+        let entry = if self.models.len() == 1 { 0 } else { entry as u32 };
+        let [crate::app::Pickable::Element(id)] = self.sel.items()[..] else { return None };
+        let key = model.element_key(id);
+        (key.model == entry && key.source >= SPACE_IDS).then(|| (key.source - SPACE_IDS) as usize)
+    }
+
+    /// Selects space `k` alone.
+    pub(in crate::app) fn select_space(&mut self, k: usize) {
+        let Some(scene) = self.model.clone() else { return };
+        let entry = if self.models.len() == 1 { 0 } else { self.models.iter().position(|e| Some(e.model.id) == self.modeller.shown).unwrap_or(0) as u32 };
+        let key = crate::model::ElementKey { model: entry, source: SPACE_IDS + k as u64 };
+        self.pick_grid(None);
+        self.sel.set(scene.element_with_key(key).map(crate::app::Pickable::Element));
+        self.selection_changed();
+    }
+
+    /// Gives space `k` a name of its own; an empty one gives it its number back.
+    pub(in crate::app) fn name_space(&mut self, k: usize, name: &str) {
+        let Some(space) = self.spaces().into_iter().nth(k) else { return };
+        let name = name.trim();
+        let rooms = &mut self.modeller.rooms;
+        rooms.retain(|r| !(r.level == space.level && inside(&space.outline, DVec2::from_array(r.at))));
+        if !name.is_empty() {
+            rooms.push(Room { level: space.level.clone(), at: within(&space.outline).to_array(), name: name.to_string() });
+        }
+        self.show_modelled();
+    }
+
+    /// The Definition section for the one space selected: its name, typed in.
+    pub(in crate::app) fn space_properties(&self, p: crate::theme::Palette, l: openaec_ui::Language) -> Option<iced::Element<'_, crate::app::Message>> {
+        use iced::widget::{row, text, text_input};
+        let k = self.selected_space()?;
+        let space = self.spaces().into_iter().nth(k)?;
+        let shown = match &self.modeller.space_typing {
+            Some((of, typed)) if *of == k => typed.clone(),
+            _ => space.name,
+        };
+        Some(
+            row![
+                text(l.text("Naam", "Name")).size(12).color(p.text_secondary).width(iced::Length::FillPortion(2)),
+                text_input("", &shown).on_input(crate::app::Message::SpaceName).on_submit(crate::app::Message::SpaceNameDone).size(12).padding([2, 6]).width(iced::Length::FillPortion(3)),
+            ]
+            .spacing(8)
+            .align_y(iced::Center)
+            .into(),
+        )
+    }
+
+    /// The name typed for the space selected: in use at once.
+    pub(in crate::app) fn type_space_name(&mut self, typed: String) {
+        let Some(k) = self.selected_space() else { return };
+        self.name_space(k, &typed);
+        // the model shown was made again: the space is selected in it as it was
+        self.select_space(k);
+        self.modeller.space_typing = Some((k, typed));
     }
 
     /// What every floor plan says and draws by itself, made again from the model: the name and
@@ -461,6 +557,15 @@ mod tests {
         let picked = app.sel.primary();
         assert!(matches!(picked, Some(crate::app::Pickable::Element(e)) if scene.element_props(e).iter().any(|(k, v)| k == "Name" && v == "Space 1")), "{picked:?}");
         app.sel.set(None);
+        // a name typed for it is its own: the plan, the list and the files say it
+        let _ = app.update(crate::app::Message::Browser(super::super::browser::BrowserMessage::Space(0)));
+        assert_eq!(app.selected_space(), Some(0));
+        assert!(app.selected_modelled().is_empty() && app.space_properties(crate::theme::ThemeKind::Light.palette(), openaec_ui::Language::English).is_some());
+        let _ = app.update(crate::app::Message::SpaceName("Living room".into()));
+        let _ = app.update(crate::app::Message::SpaceNameDone);
+        assert_eq!(app.spaces()[0].name, "Living room");
+        assert_eq!(app.selected_space(), Some(0), "it stays selected while its name is typed");
+        let scene = app.model.clone().unwrap();
         // an IFC file says it as a space, an IFCX file too; read again, the project makes it anew
         let ifc = String::from_utf8(crate::export::to_bytes(&scene, &app.document, "house.ifc").unwrap()).unwrap();
         assert!(ifc.contains("IFCSPACE("), "the space is in the IFC file");
@@ -469,6 +574,14 @@ mod tests {
         let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: std::sync::Arc::new(ifcx) };
         let read = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).unwrap();
         assert!(read.layers.iter().all(|l| l.indices.is_empty()), "a space is no mesh of the file's own");
+        assert!(ifc.contains("Living room"));
+        let mut back = App::default();
+        back.set_model(std::sync::Arc::new(read));
+        assert_eq!(back.spaces().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Living room"], "the file keeps the name");
+        // without a name it has its number again
+        app.name_space(0, "");
+        assert_eq!(app.spaces()[0].name, "Space 1");
+        app.sel.set(None);
         // a floor plan says its spaces itself, and draws the swing of a door standing on it
         let level = app.document.levels()[0].path.clone();
         let plan = app.document.add_plan(&level).unwrap();

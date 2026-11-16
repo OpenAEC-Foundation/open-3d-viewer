@@ -6,7 +6,7 @@
 //! bolts) are its body. A connection that cannot be made is refused by its own evaluation and
 //! leaves its members as they are.
 
-use crate::element::{planar_parts, point_solid, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Opening, PlanarDef, PlanarForm, PointDef, Shape};
+use crate::element::{opening_solids, planar_parts, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Opening, PlanarDef, PlanarForm, PointDef, Shape};
 use glam::DVec2;
 use crate::join::{self, JoinKind, JoinResult, Member, MemberEnd};
 use crate::solid::{Plane, Solid};
@@ -334,7 +334,11 @@ impl Model {
         let class = element.class();
         let part = |solid: Solid| Part { class, tile: element.tile, solid, material: None };
         match &element.shape {
-            Shape::Point(p) => Ok(vec![part(point_solid(p)?)]),
+            // a door or a window: its frame, and its leaf or its pane of glass
+            Shape::Point(p) => Ok(opening_solids(p)?
+                .into_iter()
+                .map(|(solid, glass)| if glass { Part { class: "IfcPlate", tile: element.tile, solid, material: Some("glass".into()) } } else { part(solid) })
+                .collect()),
             Shape::Planar(p) => {
                 // a wall meeting other walls is cut to its corners; when that cannot be made, it is
                 // made as it is
@@ -860,6 +864,15 @@ mod tests {
         let volume = |m: &Model, id| m.evaluate(id).unwrap().iter().map(|p| p.solid.volume()).sum::<f64>();
         let id = add(&mut m, door(2.0, 0.05, 0.0));
         assert_eq!(m.get(id).unwrap().class(), "IfcDoor");
+        // the door is a frame of three members and a leaf; a window a frame of four and a pane of glass
+        let parts = m.evaluate(id).unwrap();
+        assert_eq!((parts.len(), parts.iter().filter(|p| p.material.is_some()).count()), (4, 0));
+        let window = add(&mut m, Shape::Point(PointDef { at: DVec3::new(4.5, 0.0, 0.9), rotation: 0.0, size: DVec3::new(1.2, 0.04, 1.2), opening: Some(OpeningKind::Window) }));
+        let parts = m.evaluate(window).unwrap();
+        assert_eq!(parts.len(), 5);
+        let glass: Vec<_> = parts.iter().filter(|p| p.material.as_deref() == Some("glass")).collect();
+        assert!(glass.len() == 1 && glass[0].class == "IfcPlate" && (glass[0].solid.volume() - 1.08 * 1.08 * 0.02).abs() < 1e-9);
+        m.remove(window);
         assert!((volume(&m, south) - (whole - hole)).abs() < 1e-9 && (volume(&m, north) - whole).abs() < 1e-9);
         assert_eq!(m.openings_of(south), vec![Opening { along: 1.55, sill: 0.0, width: 0.9, height: 2.1 }]);
         // moved into the north wall: the south wall closes, the north one opens

@@ -90,14 +90,7 @@ impl App {
                 self.pick_grid(shown);
             }
             BrowserMessage::Class(class) => self.select_class(class),
-            BrowserMessage::Space(k) => {
-                let Some(scene) = self.model.clone() else { return };
-                let entry = if self.models.len() == 1 { 0 } else { self.models.iter().position(|e| Some(e.model.id) == self.modeller.shown).unwrap_or(0) as u32 };
-                let key = crate::model::ElementKey { model: entry, source: super::spaces::SPACE_IDS + k as u64 };
-                self.pick_grid(None);
-                self.sel.set(scene.element_with_key(key).map(Pickable::Element));
-                self.selection_changed();
-            }
+            BrowserMessage::Space(k) => self.select_space(k),
         }
     }
 

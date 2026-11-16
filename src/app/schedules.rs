@@ -184,7 +184,9 @@ impl App {
             return self.draft_view_element(p, l, draft);
         }
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i)) {
-            return self.sheet_view_element(p, l, sheet);
+            // over the sheet: its export (DWG, DXF, PDF and the others)
+            let bar = iced::widget::container(self.export_control(p, l)).padding([6, 10]).width(iced::Fill).style(move |_| p.ribbon());
+            return iced::widget::column![bar, self.sheet_view_element(p, l, sheet)].into();
         }
         let viewport = self.viewport_view(p, l);
         // a view's tab: its tools over it

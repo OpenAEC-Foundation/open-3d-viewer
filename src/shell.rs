@@ -268,6 +268,8 @@ struct Prefs {
     grid_heads_hidden: bool,
     grid_dims: bool,
     levels_3d: bool,
+    /// The 3D view draws ambient shadows in its shaded styles.
+    ambient: bool,
 }
 
 impl Default for Prefs {
@@ -289,6 +291,7 @@ impl Default for Prefs {
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
+            ambient: false,
         }
     }
 }
@@ -769,6 +772,10 @@ impl Studio {
                 }
             }
         }
+        // the Viewer only looks at a view: its bar has no tools to dimension, write or cut
+        for app in std::iter::once(&mut self.app).chain(self.parked.iter_mut().map(|(_, a)| a)) {
+            app.annotates = product != Product::Viewer;
+        }
         // the Modeller's explorer opens on its project browser; elsewhere that tab is not there
         let (browser, model) = (crate::app::ExplorerTab::Project, crate::app::ExplorerTab::Model);
         if product == Product::Modeller && self.product() != product && self.app.explorer_tab == model {
@@ -800,7 +807,7 @@ impl Studio {
     pub fn with_settings_in(mut self, dir: PathBuf) -> Self {
         let prefs = dir.join("preferences.json");
         self.prefs = Prefs::load(&prefs);
-        (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d);
+        (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient);
         self.prefs_path = Some(prefs);
         let keymap = dir.join("shortcuts.json");
         self.keymap = Keymap::load(&keymap);
@@ -1082,9 +1089,10 @@ impl Studio {
                 .icon(small("drawing.plan"), large("drawing.plan"))
                 .toggle(app.levels_3d)
                 .enabled(loaded),
+            Command::new("view.3d", "3D", go(Message::SelectTab(0))).icon(small("view.orbit"), large("view.orbit")).enabled(loaded),
             Command::new("view.views-3d", l.text("Weergaven in 3D", "Views in 3D"), go(Message::ToggleViewsIn3d))
                 .icon(small("view.saved"), large("view.saved"))
-                .toggle(app.views_in_3d)
+                .toggle(app.views_in_3d || !app.projected.is_empty())
                 .enabled(loaded),
             Command::new("view.flip-up", l.text("Z-as omdraaien", "Flip up"), go(Message::ToggleFlipUp))
                 .icon(small("transform.flip-vertical"), large("transform.flip-vertical"))
@@ -1367,6 +1375,8 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
+        // the Viewer only looks at a view: its bar has no tools to dimension, write or cut
+        self.app.annotates = self.product() != Product::Viewer;
         #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         {
             self.app.collab.language = self.l();
@@ -1388,9 +1398,9 @@ impl Studio {
             Msg::App(Message::Remote(call)) if call.cmd.starts_with("ui_") => return self.ui_command(call),
             Msg::App(message) => {
                 // how the 3D view draws its grids and levels is kept between sessions
-                let kept = (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d);
-                if kept != (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d) {
-                    (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d) = kept;
+                let kept = (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient);
+                if kept != (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient) {
+                    (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient) = kept;
                     self.save_prefs();
                 }
                 // what opens in the explorer shows it
@@ -1758,8 +1768,8 @@ impl Studio {
 
     pub fn title(&self) -> String {
         let title = match &self.app.model {
-            Some(m) => format!("{} · {}", m.file_name(), self.edition.name()),
-            None => self.edition.name().into(),
+            Some(m) => format!("{} · {} {VERSION}", m.file_name(), self.edition.name()),
+            None => format!("{} {VERSION}", self.edition.name()),
         };
         match self.dev.as_ref().and_then(|d| d.label.as_deref()) {
             Some(label) => format!("{title} · {label}"),
@@ -1963,7 +1973,7 @@ impl Studio {
                 (l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"]), smalls(&["view.shadows"])]),
                 (l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.grid-dims"]), smalls(&["view.levels-3d", "view.views-3d", "view.flip-up"])]),
                 ("IFC", vec![large("view.ifc")]),
-                (l.text("Camera", "Camera"), vec![large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
+                (l.text("Camera", "Camera"), vec![large("view.3d"), large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
                 (l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
                 (l.text("Meten", "Measure"), measure),
@@ -2294,6 +2304,7 @@ impl Studio {
                         w::property_row(look, l.text("Tekstgrootte", "Text size"), w::select(look, text_sizes.0, text_sizes.1, |n| Msg::TextSize(n.value), D::Regular)),
                         w::property_row(look, l.text("Interfacegrootte", "Interface size"), w::select(look, &Scale::ALL, scale, |s: Scale| Msg::Scale(s.0), D::Regular)),
                         w::mono_label(look, l.text("3D-weergave", "3D view")),
+                        w::checkbox(look, l.text("Omgevingsschaduw tonen", "Show ambient shadows"), self.app.ambient, Some(|_| Msg::App(Message::ToggleAmbient))),
                         w::checkbox(look, l.text("Stramienbollen achter het model verbergen", "Hide grid heads behind the model"), self.app.grid_heads_hidden, Some(|_| Msg::App(Message::ToggleGridHeadsHidden))),
                         w::checkbox(look, l.text("Maten tussen de stramienen tonen", "Show the dimensions between grid lines"), self.app.grid_dims, Some(|_| Msg::App(Message::ToggleGridDims))),
                         w::checkbox(look, l.text("Peilen met peilmaten tonen", "Show the levels with their marks"), self.app.levels_3d, Some(|_| Msg::App(Message::ToggleLevels3d))),
@@ -3084,8 +3095,8 @@ mod tests {
         assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
         // a product binary: its own name in the title and About
         let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
-        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, "Open BIM Collaborator".to_string()));
-        assert_eq!(Studio::new(App::default()).title(), "Open BIM Suite");
+        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, format!("Open BIM Collaborator {VERSION}")));
+        assert_eq!(Studio::new(App::default()).title(), format!("Open BIM Suite {VERSION}"));
     }
 
     #[test]

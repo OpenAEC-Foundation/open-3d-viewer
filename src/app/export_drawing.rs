@@ -39,6 +39,14 @@ impl App {
             }
             return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned());
         }
+        // a sheet read from the file, with the views it places cut first
+        if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i).cloned()) {
+            let views: Vec<String> = sheet.viewports.iter().filter_map(|v| v.drawing.clone()).collect();
+            for view in &views {
+                self.cut_view(view);
+            }
+            return Some(crate::drawing2d::model_sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned()));
+        }
         let view = self.shown_view()?.to_string();
         self.cut_view(&view);
         let mut drawing = view_drawing(&self.document, &view, self.cuts.get(&view)?)?;

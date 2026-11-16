@@ -38,10 +38,13 @@ pub enum Pen {
     Frame,
     /// Grid lines and levels, with their bubbles and names.
     Grids,
+    /// What a view draws itself beside the model: detail lines, detail components, the shapes
+    /// and leaders of its tags.
+    Detail,
 }
 
 impl Pen {
-    pub const ALL: [Pen; 7] = [Pen::Cut, Pen::Beyond, Pen::Hatch, Pen::Dimension, Pen::Text, Pen::Frame, Pen::Grids];
+    pub const ALL: [Pen; 8] = [Pen::Cut, Pen::Beyond, Pen::Hatch, Pen::Dimension, Pen::Text, Pen::Frame, Pen::Grids, Pen::Detail];
 
     /// The CAD layer name.
     pub fn name(self) -> &'static str {
@@ -53,6 +56,7 @@ impl Pen {
             Pen::Text => "O3V-Text",
             Pen::Frame => "O3V-Frame",
             Pen::Grids => "O3V-Grids",
+            Pen::Detail => "O3V-Detail",
         }
     }
 
@@ -62,7 +66,7 @@ impl Pen {
             Pen::Cut => 0.50,
             Pen::Beyond | Pen::Dimension | Pen::Grids => 0.18,
             Pen::Hatch => 0.13,
-            Pen::Text => 0.25,
+            Pen::Text | Pen::Detail => 0.25,
             Pen::Frame => 0.35,
         }
     }
@@ -303,6 +307,13 @@ impl Drawing2d {
         self.texts.push(Text2d { pen: Pen::Text, at, height, text: text.into(), align });
     }
 
+    /// The lines a view draws itself (they are cut to its crop where they are read), through `to`.
+    fn detail(&mut self, lines: &[[[f64; 2]; 2]], to: &dyn Fn([f64; 2]) -> [f64; 2]) {
+        for [a, b] in lines {
+            self.line(Pen::Detail, to(*a), to(*b));
+        }
+    }
+
     /// A view's lines (cut back to its crop), dimensions and texts, through `to` (a point of the
     /// view's drawing to this drawing), `unit` drawing metres per paper metre, `per_metre` metres
     /// of the view's drawing per paper metre (its scale).
@@ -417,6 +428,7 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut) -> Option<Drawing2d> 
     let (dimensions, notes, crop) = marks(doc, path);
     let mut d = Drawing2d { name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
     d.view(Some(cut), crop, (dimensions, notes), &|q| q, scale, scale);
+    d.detail(doc.view_lines(path), &|q| q);
     Some(d)
 }
 
@@ -464,6 +476,67 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
     Some(d)
 }
 
+/// The drawing of a sheet read from a file (a Revit sheet), on its paper in metres from the
+/// paper's lower left corner: its title block (lines and texts), and each viewport that shows a
+/// view of the document with that view's lines, its own detail lines, dimensions and texts, where
+/// the sheet has it, turned as it lies. Legends, drafting views, schedules and images are left
+/// out. `cut` gives a view's cut by its path.
+pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dyn Fn(&str) -> Option<Arc<Cut>>) -> Drawing2d {
+    let covers = sheet.paper.or_else(|| sheet.extent()).unwrap_or(crate::model::SheetRect { min: [0.0, 0.0], max: [0.42, 0.297] });
+    let zero = [f64::from(covers.min[0]), f64::from(covers.min[1])];
+    let size = [f64::from(covers.max[0]) - zero[0], f64::from(covers.max[1]) - zero[1]];
+    let on_paper = |p: [f32; 2]| [f64::from(p[0]) - zero[0], f64::from(p[1]) - zero[1]];
+    let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(size), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
+    d.rectangle(Pen::Frame, [0.0, 0.0], size);
+    for line in &sheet.lines {
+        d.line(Pen::Frame, on_paper(line[0]), on_paper(line[1]));
+    }
+    for t in sheet.texts.iter().filter(|t| !t.text.trim().is_empty()) {
+        let align = match t.align {
+            1 => Align::Center,
+            2 => Align::Right,
+            _ => Align::Left,
+        };
+        // each of its lines, the first at the top of its box
+        let leading = f64::from(t.size) * 1.3;
+        for (k, row) in t.text.lines().enumerate() {
+            let at = on_paper(t.at);
+            d.texts.push(Text2d { pen: Pen::Text, at: [at[0], at[1] - k as f64 * leading], height: f64::from(t.size) * 0.7, text: row.to_string(), align });
+        }
+    }
+    for v in &sheet.viewports {
+        let Some(path) = v.drawing.as_deref() else { continue };
+        let c = cut(path);
+        let (dimensions, notes, crop) = marks(doc, path);
+        let extent = c.as_ref().and_then(|c| c.extent).map(|(lo, hi)| (lo.map(f64::from), hi.map(f64::from)));
+        // the point of the view's drawing that the sheet holds, and where: as the sheet's tab
+        let anchor = match (v.anchor, crop, extent) {
+            (Some(anchor), ..) => Some((anchor, v.origin)),
+            (None, Some((lo, _)), _) => Some((lo, v.rect.min)),
+            (None, None, Some((lo, hi))) => Some(([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], v.rect.center())),
+            (None, None, None) => None,
+        };
+        let Some((from, at)) = anchor else { continue };
+        let (ratio, [cx, cy]) = (f64::from(v.ratio), v.turn);
+        let at = on_paper(at);
+        let to = |q: [f64; 2]| {
+            let (dx, dy) = (q[0] - from[0], q[1] - from[1]);
+            [at[0] + (dx * cx + dy * cy) * ratio, at[1] + (dy * cx - dx * cy) * ratio]
+        };
+        let per_metre = if ratio > 0.0 { 1.0 / ratio } else { SHEET_SCALE };
+        d.view(c.as_deref(), crop, (dimensions, notes), &to, 1.0, per_metre);
+        d.detail(doc.view_lines(path), &to);
+        // its title, where the sheet has it
+        if let Some(label) = v.label {
+            let title = v.written.clone().unwrap_or_else(|| format!("{}  {}", v.title, v.scale));
+            if !title.trim().is_empty() {
+                d.text(on_paper(label), 0.0025, title, Align::Left);
+            }
+        }
+    }
+    d
+}
+
 /// A section's mark on a floor plan (paper): its line, an arrow at each end the way it looks and
 /// its letter past them.
 fn section_mark(d: &mut Drawing2d, from: [f64; 2], to: [f64; 2], letter: String) {
@@ -484,6 +557,22 @@ fn section_mark(d: &mut Drawing2d, from: [f64; 2], to: [f64; 2], letter: String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sheet_of_a_file_is_drawn_from_its_papers_corner() {
+        use crate::model::{DraftText, Sheet, SheetRect};
+        let mut sheet = Sheet::new("A-01".into(), "Plans".into(), Some(SheetRect { min: [-0.5, 0.25], max: [-0.08, 0.547] }), Vec::new());
+        sheet.lines.push([[-0.5, 0.25], [-0.4, 0.25]]);
+        sheet.texts.push(DraftText { element: 1, at: [-0.4, 0.3], width: 0.1, height: 0.01, size: 0.004, align: 0, angle: 0.0, text: "Project\nNumber".into(), face: Default::default() });
+        let d = model_sheet_drawing(&Document::default(), &sheet, &|_| None);
+        let paper = d.paper.expect("a paper");
+        assert!((paper[0] - 0.42).abs() < 1e-6 && (paper[1] - 0.297).abs() < 1e-6, "{paper:?}");
+        // the title block's line starts at the paper's corner, and its text is written line by line
+        assert!(d.lines.iter().any(|l| l.pen == Pen::Frame && l.a[0].abs() < 1e-6 && l.a[1].abs() < 1e-6 && (l.b[0] - 0.1).abs() < 1e-6));
+        let texts: Vec<&str> = d.texts.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["Project", "Number"]);
+        assert!(d.texts[1].at[1] < d.texts[0].at[1]);
+    }
     use crate::document::A3_LANDSCAPE;
 
     /// The walls of a room of 8 × 5 m (its lower left at 0, 0) as a plan's cut, and one line seen
@@ -617,8 +706,8 @@ mod tests {
 
     #[test]
     fn pens_have_their_layer_and_weight() {
-        assert_eq!(Pen::ALL.map(Pen::name), ["O3V-Cut", "O3V-Beyond", "O3V-Hatch", "O3V-Dimensions", "O3V-Text", "O3V-Frame", "O3V-Grids"]);
-        assert_eq!(Pen::ALL.map(Pen::weight_mm), [0.50, 0.18, 0.13, 0.18, 0.25, 0.35, 0.18]);
+        assert_eq!(Pen::ALL.map(Pen::name), ["O3V-Cut", "O3V-Beyond", "O3V-Hatch", "O3V-Dimensions", "O3V-Text", "O3V-Frame", "O3V-Grids", "O3V-Detail"]);
+        assert_eq!(Pen::ALL.map(Pen::weight_mm), [0.50, 0.18, 0.13, 0.18, 0.25, 0.35, 0.18, 0.25]);
     }
 
     #[test]

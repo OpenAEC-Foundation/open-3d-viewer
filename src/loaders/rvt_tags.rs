@@ -40,6 +40,8 @@ pub(super) struct Tag {
     pub leader: Vec<[f64; 3]>,
     /// The mark at the leader's end.
     pub arrow: Option<Arrow>,
+    /// It lies as the model does (its own angle is the model's), not as its view is turned.
+    pub with_model: bool,
 }
 
 /// The mark at the end of a leader, as its style says (sizes on paper, metres).
@@ -397,18 +399,22 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
     let mut specs: HashMap<i64, String> = HashMap::new();
     let units = Units::of(doc, types.units());
     let mut out = Vec::new();
-    for id in doc.object_ids_of_class("IndependentTag") {
+    // the tags of elements, and those of rooms (a class of their own, built alike)
+    let ids: Vec<u64> = doc.object_ids_of_class("IndependentTag").into_iter().chain(doc.object_ids_of_class("RoomTag")).collect();
+    for id in ids {
         let Some(view) = doc.element(id).and_then(|e| e.view).and_then(|v| u64::try_from(v).ok()).filter(|v| !types.hidden(*v, id)) else { continue };
         let Some(o) = doc.object(id) else { continue };
         let Some(head) = vec3(o.path(&["m_oTagOrientationCell", "m_headLocation"])) else { continue };
         let Some(kind) = o.get("m_symbolId").and_then(FieldValue::element) else { continue };
         let shape = shapes.entry(kind).or_insert_with(|| Arc::new(shape(doc, kind, types).unwrap_or_default())).clone();
         // what it tags, and whether a leader runs to it
-        let reference = o.objects.iter().find(|x| x.class == "TagReferenceWithLeader");
-        let tagged = reference.and_then(|r| r.get("m_referenceIdKey")?.as_object()?.get("m_hostOrLinkElemId")?.as_object()?.get("m_linkInstOrHostId")?.element()).and_then(|e| u64::try_from(e).ok());
+        let reference = tag_reference(&o);
+        let room = || u64::try_from(o.path(&["m_taggedRoomElemId", "m_linkInstOrHostId"])?.element()?).ok();
+        let tagged = reference.and_then(tagged_element).or_else(room);
         // a tag set upright stands a quarter turn, another as it is turned
         let turned = o.path(&["m_oTagOrientationCell", "m_rotationAngle"]).and_then(FieldValue::as_f64).filter(|a| a.is_finite()).unwrap_or(0.0);
-        let upright = o.path(&["m_oTagOrientationCell", "m_orientation"]).and_then(FieldValue::as_i64) == Some(1);
+        let orientation = o.path(&["m_oTagOrientationCell", "m_orientation"]).and_then(FieldValue::as_i64);
+        let upright = orientation == Some(1);
         let angle = if upright { std::f64::consts::FRAC_PI_2 } else { turned };
         let (sin, cos) = angle.sin_cos();
         let turn = |p: [f64; 2]| [p[0] * cos - p[1] * sin, p[0] * sin + p[1] * cos];
@@ -440,9 +446,22 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
                 leader.push(end);
             }
         }
-        out.push(Tag { element: id, view, head, texts, lines, leader, arrow: shape.arrow });
+        out.push(Tag { element: id, view, head, texts, lines, leader, arrow: shape.arrow, with_model: orientation == Some(2) });
     }
     out
+}
+
+/// What a tag says of what it tags, with its leader: a `TagReferenceWithLeader` in newer files,
+/// a `TaggedElem` in older ones (2024 and before); both hold the leader's offsets alike.
+fn tag_reference(tag: &rvt_model::ObjectView) -> Option<&NestedObject> {
+    tag.objects.iter().find(|x| x.class == "TagReferenceWithLeader").or_else(|| tag.objects.iter().find(|x| x.class == "TaggedElem"))
+}
+
+/// The element a tag's reference names.
+fn tagged_element(reference: &NestedObject) -> Option<u64> {
+    let newer = || reference.get("m_referenceIdKey")?.as_object()?.get("m_hostOrLinkElemId")?.as_object()?.get("m_linkInstOrHostId")?.element();
+    let older = || reference.get("m_taggedId")?.as_object()?.get("m_linkInstOrHostId")?.element();
+    newer().or_else(older).and_then(|e| u64::try_from(e).ok())
 }
 
 /// A detail component in a view: the lines of its family where it is placed (feet, in the
@@ -1239,8 +1258,7 @@ mod tests {
         for id in doc.object_ids_of_class("IndependentTag") {
             let Some(o) = doc.object(id) else { continue };
             let Some(shape) = o.get("m_symbolId").and_then(FieldValue::element).and_then(|k| shape(&doc, k, &mut types)) else { continue };
-            let reference = o.objects.iter().find(|x| x.class == "TagReferenceWithLeader");
-            let Some(tagged) = reference.and_then(|r| r.get("m_referenceIdKey")?.as_object()?.get("m_hostOrLinkElemId")?.as_object()?.get("m_linkInstOrHostId")?.element()).and_then(|e| u64::try_from(e).ok()) else { continue };
+            let Some(tagged) = tag_reference(&o).and_then(tagged_element) else { continue };
             for part in shape.labels.iter().flat_map(|l| &l.parts) {
                 let count = missing.entry(part.parameter).or_default();
                 count.1 += 1;

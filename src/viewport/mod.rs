@@ -326,7 +326,6 @@ where
             Some((Drag::Pan, _)) => mouse::Interaction::Move,
             Some((Drag::Box, _)) => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) && self.crosshair => mouse::Interaction::Crosshair,
-            None if cursor.is_over(bounds) => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
         }
     }

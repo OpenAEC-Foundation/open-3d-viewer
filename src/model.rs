@@ -190,6 +190,10 @@ pub const ALIGN_LIMIT: f64 = 10_000.0;
 /// sheets.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectData {
+    /// How the file's browser can order its views (Revit): each of its organizations, with the
+    /// folders of each of [`Model::views`] of this file; and the one it is taken to show.
+    pub view_orders: Vec<ViewOrder>,
+    pub view_order: Option<usize>,
     /// Sheets (Revit, beta): the paper and the views placed on it.
     pub sheets: Vec<Sheet>,
     /// Drawings without a model (Revit, beta): legends and drafting views, with their lines,
@@ -738,6 +742,14 @@ pub struct SavedView {
     /// Its drawing in the project document, where the file's drawings are read: a floor plan,
     /// section, elevation or detail then opens as that drawing, as its sheets show it.
     pub drawing: Option<String>,
+}
+
+/// A way the browser of a file orders its views: its name and, for each view of the file in
+/// order, the folders it lies in (outer first), or none where the organization leaves it out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewOrder {
+    pub name: String,
+    pub folders: Vec<Option<Vec<String>>>,
 }
 
 /// How a saved view draws the model.

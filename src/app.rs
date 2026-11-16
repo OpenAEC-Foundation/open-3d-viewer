@@ -160,6 +160,10 @@ pub struct App {
     /// The folders of views in the explorer that are not as they start: an outer folder starts
     /// open, the folders in it closed. A folder is named by its path, its parts joined by U+001F.
     pub folded: std::collections::BTreeSet<String>,
+    /// How the views of a file are ordered in the explorer: by the browser organization of this
+    /// name where the file has it, by their kinds (an empty name), or (none) as the file's browser
+    /// is taken to show them.
+    pub view_order: Option<String>,
     /// The views (by path) laid in the 3D view in full: their lines and texts on their plane.
     pub projected: std::collections::BTreeSet<String>,
     /// The models whose content is folded away in the explorer.
@@ -277,6 +281,9 @@ pub struct App {
     pub export_menu: bool,
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
+    /// The view's bar offers its tools to dimension, write and cut (the Modeller and the
+    /// Collaborator; the Viewer only looks).
+    pub annotates: bool,
     /// A view's tab draws it as a sheet does: on paper, its cut in ink (else over the model
     /// as the 3D view shows it).
     pub drawing_on_paper: bool,
@@ -409,6 +416,8 @@ pub enum Message {
     PickModel(usize),
     /// Open or close a folder of views in the explorer (by its path).
     ToggleFolder(String),
+    /// Order the views of the files in the explorer: see [`App::view_order`].
+    ViewOrder(Option<String>),
     /// The place of the picked model or of its zero point, typed in.
     Origin(origin::Message),
     /// Lay a view (by path) in the 3D view in full, or take it out again.
@@ -769,6 +778,17 @@ const CUBE_RIGHT: f32 = 73.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Look(RenderMode, &'static str);
 
+/// A way to order the views in the explorer: its label and the name of its browser organization
+/// (empty: by kind).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrderChoice(String, String);
+
+impl std::fmt::Display for OrderChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl std::fmt::Display for Look {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.1)
@@ -802,6 +822,7 @@ impl Default for App {
             side_tab: SideTab::default(),
             picked_model: None,
             folded: std::collections::BTreeSet::new(),
+            view_order: None,
             projected: std::collections::BTreeSet::new(),
             closed_models: std::collections::BTreeSet::new(),
             had_selection: false,
@@ -852,7 +873,7 @@ impl Default for App {
             cut_faces_running: false,
             kept_faces: Default::default(),
             views_in_3d: false,
-            ambient: true,
+            ambient: false,
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
@@ -862,6 +883,7 @@ impl Default for App {
             views_3d_labels: Vec::new(),
             export_menu: false,
             dimension_tool: false,
+            annotates: true,
             drawing_on_paper: true,
             section_tool: false,
             sheet_pick: None,
@@ -1343,6 +1365,8 @@ impl App {
         app.show_properties = self.show_properties;
         app.explorer_open = self.explorer_open;
         app.measure.units = self.measure.units.clone();
+        // how the 3D view draws is set for the app, not for a project
+        (app.ambient, app.grid_heads_hidden, app.grid_dims, app.levels_3d) = (self.ambient, self.grid_heads_hidden, self.grid_dims, self.levels_3d);
         app
     }
 
@@ -1800,6 +1824,7 @@ impl App {
                 }
             }
             Message::Origin(m) => return self.update_origin(m),
+            Message::ViewOrder(order) => self.view_order = order,
             Message::ToggleFolder(path) => {
                 if !self.folded.remove(&path) {
                     self.folded.insert(path);
@@ -2052,7 +2077,15 @@ impl App {
             Message::ToggleUnderlay(i) => self.toggle_underlay(i),
             Message::RemoveUnderlay(i) => self.remove_underlay(i),
             Message::UnderlayScale(i) => self.next_underlay_scale(i),
-            Message::ToggleViewsIn3d => self.views_in_3d = !self.views_in_3d,
+            Message::ToggleViewsIn3d => {
+                // off: also the views laid in the 3D view one by one go
+                if self.views_in_3d || !self.projected.is_empty() {
+                    self.views_in_3d = false;
+                    self.projected.clear();
+                } else {
+                    self.views_in_3d = true;
+                }
+            }
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
@@ -3114,11 +3147,45 @@ impl App {
                     (ViewKind::Elevation, l.text("Aanzichten", "Elevations")),
                     (ViewKind::Detail, l.text("Details", "Details")),
                 ];
+                // the folders of each view under the browser organization chosen (none: by kind),
+                // or none where it leaves the view out
+                let orders = &own.project.view_orders;
+                let order = match self.view_order.as_deref() {
+                    Some("") => None,
+                    Some(name) => orders.iter().position(|o| o.name == name).or(own.project.view_order),
+                    None => own.project.view_order,
+                };
+                let start = views.start;
+                let folders: Vec<Option<Vec<String>>> = views.clone()
+                    .map(|v| match order {
+                        Some(k) => orders[k].folders.get(v - start).cloned().unwrap_or(Some(Vec::new())),
+                        None => Some(Vec::new()),
+                    })
+                    .collect();
+                let folder_of = |v: usize| -> &[String] { folders[v - start].as_deref().unwrap_or(&[]) };
                 let listed: Vec<usize> = views.clone()
-                    .filter(|&v| hit(&model.views[v].name) || model.views[v].level.as_deref().is_some_and(|lv| hit(lv)) || model.views[v].folder.iter().any(|f| hit(f)))
+                    .filter(|&v| folders[v - start].is_some())
+                    .filter(|&v| hit(&model.views[v].name) || model.views[v].level.as_deref().is_some_and(|lv| hit(lv)) || folder_of(v).iter().any(|f| hit(f)))
                     .collect();
                 let unfolded = self.explorer_open[0] || searching;
                 inner = inner.push(group_header(p, l.text("Weergaven", "Views"), Some("beta"), listed.len(), unfolded, Message::ToggleExplorer(0)));
+                // which way to order them: each organization of the file's browser, or by kind
+                if unfolded && !orders.is_empty() {
+                    let by_kind = l.text("Op soort", "By kind");
+                    let mut choices = vec![OrderChoice(by_kind.to_string(), String::new())];
+                    for o in orders {
+                        if !choices.iter().any(|c| c.1 == o.name) {
+                            choices.push(OrderChoice(o.name.clone(), o.name.clone()));
+                        }
+                    }
+                    let picked = match order {
+                        Some(k) => choices.iter().find(|c| c.1 == orders[k].name).cloned(),
+                        None => choices.first().cloned(),
+                    };
+                    let pick = iced::widget::pick_list(choices, picked, |c: OrderChoice| Message::ViewOrder(Some(c.1))).text_size(11).padding([2, 6]).width(Fill);
+                    let row = row![text(l.text("Ordenen", "Order")).size(11).color(p.text_secondary), pick].spacing(6).align_y(Center);
+                    inner = inner.push(container(row).padding(Padding { top: 2.0, right: 4.0, bottom: 4.0, left: 14.0 }).width(Fill));
+                }
                 // a view's row, set in as deep as its folder lies
                 let item = |v: usize, depth: usize| -> Element<'static, Message> {
                     let active = self.active_view == Some(v);
@@ -3135,16 +3202,16 @@ impl App {
                     .on_press(Message::ApplyView(v));
                     container(open).padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 14.0 + 10.0 * depth as f32 }).width(Fill).into()
                 };
-                if unfolded && listed.iter().any(|&v| !model.views[v].folder.is_empty()) {
+                if unfolded && listed.iter().any(|&v| !folder_of(v).is_empty()) {
                     let mut ordered = listed.clone();
-                    ordered.sort_by(|&a, &b| (&model.views[a].folder, &model.views[a].name).cmp(&(&model.views[b].folder, &model.views[b].name)));
+                    ordered.sort_by(|&a, &b| (folder_of(a), &model.views[a].name).cmp(&(folder_of(b), &model.views[b].name)));
                     // a folder by its path; an outer folder starts open, those in it closed, and a
                     // search opens them all
                     let key = |folder: &[String]| folder.join("\u{1f}");
                     let unfolds = |folder: &[String]| searching || (folder.len() == 1) != self.folded.contains(&key(folder));
                     let mut last: &[String] = &[];
                     for v in ordered {
-                        let folder = &model.views[v].folder;
+                        let folder = folder_of(v);
                         // how far down this view shows: as long as every folder above is open
                         let shown = (0..folder.len()).take_while(|&d| unfolds(&folder[..=d])).count();
                         // the folders this view opens: those it does not share with the one before

@@ -53,19 +53,25 @@ impl Loader for RvtLoader {
                 crop.active = active;
             }
         }
-        // each view in the folders the file's browser orders it in
-        let folders = super::rvt_browser::folders(&doc, &infos);
-        let in_folder = |(id, mut view): (u64, SavedView)| {
-            view.folder = folders.get(&id).cloned().unwrap_or_default();
-            (id, view)
-        };
-        let (view_ids, mut views): (Vec<u64>, Vec<SavedView>) = saved_views(&infos).into_iter().map(in_folder).unzip();
+        // the ways the file's browser orders its views, each view in the folders of the one shown
+        let (mut orders, shown) = super::rvt_browser::organizations(&doc, &infos);
+        let (view_ids, mut views): (Vec<u64>, Vec<SavedView>) = saved_views(&infos).into_iter().unzip();
+        let at: HashMap<u64, usize> = infos.iter().enumerate().map(|(k, v)| (v.id, k)).collect();
+        for order in &mut orders {
+            order.folders = view_ids.iter().map(|id| at.get(id).and_then(|&k| order.folders.get(k).cloned().flatten())).collect();
+        }
+        if let Some(order) = shown.and_then(|k| orders.get(k)) {
+            for (view, folder) in views.iter_mut().zip(&order.folders) {
+                view.folder = folder.clone().unwrap_or_default();
+            }
+        }
         // how each 3D view draws the model
         for (view, &id) in views.iter_mut().zip(&view_ids).filter(|(v, _)| v.kind == ViewKind::ThreeD) {
             view.style = view_style(&doc, id);
         }
         let mut project = project_data(&doc, &scene.levels);
         project.walls = walls;
+        (project.view_orders, project.view_order) = (orders, shown);
         // how a cut through each material is hatched
         project.cut_patterns = super::rvt_materials::cut_patterns(&doc);
         // down to where a section fills the earth under the terrain, and as what material

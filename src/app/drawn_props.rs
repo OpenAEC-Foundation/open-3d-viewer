@@ -74,6 +74,12 @@ impl App {
         let rows = |rows: &[(Word, Word)]| -> Element<'static, Message> {
             rows.iter().fold(column![].spacing(5), |c, (label, value)| c.push(prop_row(p, label.text(l), value.text(l)))).into()
         };
+        // what a reader wrote of the part itself: its names and values as they are
+        let pairs = self.model.as_ref().and_then(|m| m.project.drawn_pairs.get(&element)).and_then(|json| serde_json::from_str::<Vec<(String, String)>>(json).ok());
+        if let Some(pairs) = pairs.filter(|p| !p.is_empty()) {
+            let body = pairs.into_iter().fold(column![].spacing(5), |c, (name, value)| c.push(prop_row(p, name, value)));
+            return Some(vec![(l.text("Selectie", "Selection").to_string(), body.into())]);
+        }
         let groups = self.model.as_ref().and_then(|m| m.project.drawn.get(&element));
         let Some(groups) = groups.filter(|g| !g.is_empty()) else {
             // nothing read of it: what was clicked, and its element

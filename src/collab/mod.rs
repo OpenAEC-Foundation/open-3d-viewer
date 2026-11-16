@@ -3,6 +3,7 @@
 //! in `crate::app::collab`; issues are in the `bim-bcf` crate, information checks in
 //! `bim-validator-core`.
 
+pub mod bcf_api;
 pub mod bsdd;
 pub mod clash;
 pub mod deviation;

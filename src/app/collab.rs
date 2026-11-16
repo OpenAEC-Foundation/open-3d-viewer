@@ -156,6 +156,11 @@ fn house_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-house.json"))
 }
 
+/// Where the Collaborator keeps the BCF server of the project.
+fn server_file() -> Option<PathBuf> {
+    Some(crate::remote_link::settings_dir()?.join("collaborator-server.json"))
+}
+
 fn user_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-user.txt"))
 }
@@ -376,6 +381,12 @@ pub struct State {
     /// The house the reports are in the style of, and only the issues given to the person shown.
     pub house: crate::export::report::House,
     pub only_mine: bool,
+    /// The BCF server of the project, the projects it offers to choose from, and the issues
+    /// removed here since it was last brought to the same.
+    pub server: crate::collab::bcf_api::Server,
+    pub server_projects: Vec<(String, String)>,
+    server_removed: Vec<String>,
+    server_seen: crate::collab::bcf_api::Seen,
     /// The walk of each room to its way out (by the room's element), and the room whose walk
     /// the 3D view draws.
     pub routes: HashMap<u64, Vec<[f32; 3]>>,
@@ -485,6 +496,10 @@ impl Default for State {
                 house
             },
             only_mine: false,
+            server: server_file().and_then(|f| std::fs::read(f).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default(),
+            server_projects: Vec::new(),
+            server_removed: Vec::new(),
+            server_seen: Default::default(),
             routes: HashMap::new(),
             route_shown: None,
             bcf3: false,
@@ -815,6 +830,16 @@ pub enum Event {
     HouseLogoOff,
     /// Only the issues given to the person.
     OnlyMine(bool),
+    /// The BCF server: its address (0) or token (1) typed, asked for its projects, what it
+    /// answered (the version it speaks and its projects), a project chosen, brought to the same,
+    /// what that gave (the issues as they are now), and let go.
+    Server(u8, String),
+    ServerConnect,
+    ServerSaid(Result<(String, Vec<(String, String)>), String>),
+    ServerProject(String, String),
+    ServerSync,
+    ServerSynced(Box<Result<(Issues, crate::collab::share::Synced, crate::collab::bcf_api::Seen), String>>),
+    ServerOff,
     ShareFolder,
     ShareFolderIs(Option<PathBuf>),
     Unshare,
@@ -2281,6 +2306,9 @@ impl App {
             Event::RemoveTopic => {
                 if let Some(guid) = self.collab.topic.take() {
                     self.collab.share_removed.push(guid.clone());
+                    if self.collab.server.ready() {
+                        self.collab.server_removed.push(guid.clone());
+                    }
                     self.collab.issues.topics.retain(|t| t.guid != guid);
                     self.collab.issues_changed = true;
                 }
@@ -2720,6 +2748,85 @@ impl App {
                 return Task::perform(async { rfd::AsyncFileDialog::new().add_filter("Logo", &["svg", "png", "jpg", "jpeg"]).pick_file().await.map(|f| f.path().to_path_buf()) }, |file| Message::Collab(Event::HouseLogoIs(file)));
             }
             Event::OnlyMine(on) => self.collab.only_mine = on,
+            Event::Server(0, typed) => self.collab.server.base = typed,
+            Event::Server(_, typed) => self.collab.server.token = typed,
+            Event::ServerConnect => {
+                let (base, token) = (self.collab.server.base.clone(), self.collab.server.token.clone());
+                if base.trim().is_empty() {
+                    return Task::none();
+                }
+                self.collab.running = true;
+                return job(move || {
+                    Event::ServerSaid(crate::collab::bcf_api::version(&base, &token).and_then(|version| {
+                        let server = crate::collab::bcf_api::Server { base, token, version: version.clone(), ..Default::default() };
+                        Ok((version, crate::collab::bcf_api::projects(&server)?))
+                    }))
+                });
+            }
+            Event::ServerSaid(said) => {
+                self.collab.running = false;
+                match said {
+                    Ok((version, projects)) => {
+                        self.collab.server.version = version;
+                        if projects.is_empty() {
+                            self.collab_note(Tone::Warning, l.text("De server heeft geen projecten voor dit token.", "The server has no projects for this token."));
+                        }
+                        self.collab.server_projects = projects;
+                    }
+                    Err(e) => self.collab_note(Tone::Error, format!("{}: {e}", l.text("BCF-server", "BCF server"))),
+                }
+            }
+            Event::ServerProject(id, name) => {
+                self.collab.server.project = id;
+                self.collab.server.project_name = name;
+                self.collab.server_projects.clear();
+                self.collab.server_removed.clear();
+                self.collab.server_seen.clear();
+                if let (Some(file), Ok(bytes)) = (server_file(), serde_json::to_vec_pretty(&self.collab.server)) {
+                    let _ = file.parent().map(std::fs::create_dir_all);
+                    let _ = std::fs::write(file, bytes);
+                }
+                return self.collab_handle(Event::ServerSync);
+            }
+            Event::ServerSync => {
+                if !self.collab.server.ready() || self.collab.running {
+                    return Task::none();
+                }
+                self.collab.running = true;
+                let (server, mut issues, removed, mut seen) = (self.collab.server.clone(), self.collab.issues.clone(), std::mem::take(&mut self.collab.server_removed), self.collab.server_seen.clone());
+                return job(move || Event::ServerSynced(Box::new(crate::collab::bcf_api::sync(&server, &mut issues, &removed, &mut seen).map(|done| (issues, done, seen)))));
+            }
+            Event::ServerSynced(done) => {
+                self.collab.running = false;
+                match *done {
+                    Ok((issues, done, seen)) => {
+                        self.collab.server_seen = seen;
+                        // what was written here while it ran stays: the next time brings it over
+                        let mut issues = issues;
+                        for mine in &self.collab.issues.topics {
+                            match issues.topics.iter_mut().find(|t| t.guid == mine.guid) {
+                                Some(theirs) if mine.modified_date > theirs.modified_date => *theirs = mine.clone(),
+                                None => issues.topics.push(mine.clone()),
+                                _ => {}
+                            }
+                        }
+                        self.collab.issues = issues;
+                        if self.collab.topic.as_ref().is_some_and(|g| !self.collab.issues.topics.iter().any(|t| &t.guid == g)) {
+                            self.collab.topic = None;
+                        }
+                        self.collab.issues_changed |= done.pulled > 0;
+                        self.collab_note(Tone::Success, format!("{}: {} {} · {} {}", l.text("BCF-server", "BCF server"), done.pulled, l.text("opgehaald", "taken over"), done.pushed, l.text("weggeschreven", "written")));
+                    }
+                    Err(e) => self.collab_note(Tone::Error, format!("{}: {e}", l.text("BCF-server", "BCF server"))),
+                }
+            }
+            Event::ServerOff => {
+                self.collab.server = Default::default();
+                self.collab.server_projects.clear();
+                if let Some(file) = server_file() {
+                    let _ = std::fs::remove_file(file);
+                }
+            }
             Event::ShareFolder => {
                 self.collab.dialog_open = true;
                 return Task::perform(async { rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().to_path_buf()) }, |folder| Message::Collab(Event::ShareFolderIs(folder)));
@@ -3027,6 +3134,35 @@ impl App {
             ]
             .spacing(6)
             .align_y(Alignment::Center),
+        });
+        // the project on a BCF server
+        list = list.push(if state.server.ready() {
+            let name = if state.server.project_name.is_empty() { state.server.project.clone() } else { state.server.project_name.clone() };
+            Element::from(
+                row![
+                    w::secondary(look, format!("{}: {name} (BCF {})", l.text("Server", "Server"), state.server.version)).width(Length::Fill),
+                    w::button(look, l.text("Synchroniseren", "Sync"), K::Secondary, D::Compact, None, (!state.running).then(|| go(Event::ServerSync))),
+                    w::button(look, l.text("Stoppen", "Stop"), K::Quiet, D::Compact, None, Some(go(Event::ServerOff))),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+        } else {
+            let mut server = column![
+                w::secondary(look, l.text("Of deel issues via een BCF-server: het adres en je token.", "Or share issues through a BCF server: its address and your token.")),
+                row![
+                    container(w::text_field(look, "https://…", &state.server.base, Some(|t| go(Event::Server(0, t))), D::Compact, None)).width(Length::FillPortion(3)),
+                    container(w::text_field(look, l.text("Token", "Token"), &state.server.token, Some(|t| go(Event::Server(1, t))), D::Compact, None)).width(Length::FillPortion(2)),
+                    w::button(look, l.text("Verbinden", "Connect"), K::Secondary, D::Compact, None, (!state.running && !state.server.base.trim().is_empty()).then(|| go(Event::ServerConnect))),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(4);
+            for (id, name) in &state.server_projects {
+                server = server.push(w::button(look, if name.is_empty() { id.as_str() } else { name.as_str() }, K::Quiet, D::Compact, None, Some(go(Event::ServerProject(id.clone(), name.clone())))));
+            }
+            Element::from(server)
         });
         // the house the reports are in the style of
         let logo = state.house.logo.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -3852,6 +3988,34 @@ impl App {
         self.collab.refresh();
         self.collab_refresh_sides();
         self.inform_refresh();
+        if cmd == "collab_server" {
+            match a.get("action").and_then(|v| v.as_str()).unwrap_or("sync") {
+                "set" => {
+                    let text = |key: &str| a.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let mut server = crate::collab::bcf_api::Server { base: text("base"), token: text("token"), ..Default::default() };
+                    server.version = crate::collab::bcf_api::version(&server.base, &server.token)?;
+                    let projects = crate::collab::bcf_api::projects(&server)?;
+                    let wanted = text("project");
+                    let (id, name) = projects.iter().find(|(id, name)| wanted.is_empty() || *id == wanted || *name == wanted).cloned().ok_or("the server has no such project")?;
+                    self.collab.server = server;
+                    self.collab.server.project = id;
+                    self.collab.server.project_name = name;
+                }
+                "off" => {
+                    let _ = self.collab_handle(Event::ServerOff);
+                }
+                _ => {}
+            }
+            let mut synced = None;
+            if self.collab.server.ready() {
+                let removed = std::mem::take(&mut self.collab.server_removed);
+                let mut seen = std::mem::take(&mut self.collab.server_seen);
+                let done = crate::collab::bcf_api::sync(&self.collab.server, &mut self.collab.issues, &removed, &mut seen);
+                self.collab.server_seen = seen;
+                synced = Some(done?);
+            }
+            return Ok(serde_json::json!({ "project": self.collab.server.project_name, "version": self.collab.server.version, "issues": self.collab.issues.topics.len(), "pulled": synced.map(|s| s.pulled), "pushed": synced.map(|s| s.pushed) }));
+        }
         if cmd == "collab_house" {
             if let Some(v) = a.get("company").and_then(|v| v.as_str()) {
                 let _ = self.collab_handle(Event::House(0, v.to_string()));

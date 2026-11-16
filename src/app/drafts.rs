@@ -71,7 +71,7 @@ impl App {
     pub(super) fn drafts_groups<'a>(&self, p: Palette, l: Language, query: &str, of: std::ops::Range<usize>, mut body: Column<'a, Message>) -> Column<'a, Message> {
         let drafts = self.drafts();
         let of = of.start.min(drafts.len())..of.end.min(drafts.len());
-        for (kind, slot, title) in [(DraftKind::Legend, 5, l.text("Legenda's", "Legends")), (DraftKind::Drafting, 6, l.text("Detailtekeningen", "Drafting views"))] {
+        for (kind, slot, title) in [(DraftKind::Legend, 5, l.text("Legenda's", "Legends")), (DraftKind::Drafting, 6, l.text("Detailtekeningen", "Drafting views")), (DraftKind::Drawing, 6, l.text("2D-tekeningen", "2D drawings"))] {
             let shown: Vec<usize> = of.clone().filter(|&i| drafts[i].kind == kind && (query.is_empty() || drafts[i].name.to_lowercase().contains(query))).collect();
             if !drafts[of.clone()].iter().any(|d| d.kind == kind) {
                 continue;

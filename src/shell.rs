@@ -340,6 +340,8 @@ pub enum Dialog {
     DesktopOnly(&'static str),
     /// The form to send feedback on the app.
     Feedback,
+    /// The card of the Pointcloud product: what the cloud's file holds and how its jobs are done.
+    Cloud,
 }
 
 /// The feedback form: what is written in it, and how sending it goes.
@@ -448,6 +450,8 @@ pub enum Page {
     Shortcuts,
     Ribbon,
     Feedback,
+    /// The card of the Pointcloud product.
+    Cloud,
 }
 
 impl Page {
@@ -458,6 +462,7 @@ impl Page {
             "settings" => Page::Settings,
             "shortcuts" => Page::Shortcuts,
             "feedback" => Page::Feedback,
+            "cloud" => Page::Cloud,
             "ribbon" => Page::Ribbon,
             _ => return None,
         })
@@ -810,8 +815,14 @@ impl Studio {
         self.dialog = match page {
             Page::Settings | Page::Shortcuts | Page::Ribbon => Some(Dialog::Settings),
             Page::Feedback => Some(Dialog::Feedback),
+            Page::Cloud => Some(Dialog::Cloud),
             _ => None,
         };
+        // the card of a cloud shows what its file holds: read here, as no message runs
+        #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+        if page == Page::Cloud {
+            self.app.cloud.details = self.app.cloud().map(|cloud| (cloud.file.clone(), crate::app::pointcloud::details(&cloud.file)));
+        }
         self.settings_page = match page {
             Page::Shortcuts => SettingsPage::Shortcuts,
             Page::Ribbon => SettingsPage::Ribbon,
@@ -1261,23 +1272,43 @@ impl Studio {
             list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
         // the Collaborator's commands: issues, checks, clashes and the rule set
-        // Pointcloud: the size of the points and the meshes made of a cloud (on the desktop)
+        // Pointcloud: how the points show, the meshes, exports and drawing made of a cloud (on the
+        // desktop) and the card with what the file holds and how the jobs are done
         {
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
-            let (cloud, event) = (app.cloud_file().is_some() && !app.meshing, |e: crate::app::pointcloud::Event| Some(go(Message::Pointcloud(e))));
+            let (cloud, idle, last, running) = (app.cloud_file().is_some(), !app.meshing, app.cloud.last.is_some(), app.meshing);
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
-            use crate::app::pointcloud::{Event as Cloud, Mesh};
+            let event = |e: crate::app::pointcloud::Event| Some(go(Message::Pointcloud(e)));
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
-            let (terrain, surface, smaller, larger) = (event(Cloud::Mesh(Mesh::Terrain)), event(Cloud::Mesh(Mesh::Surface)), event(Cloud::PointSize(false)), event(Cloud::PointSize(true)));
+            use crate::app::pointcloud::{Event as Cloud, Export, Mesh};
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            let (terrain, surface, closed, smaller, larger) = (event(Cloud::Mesh(Mesh::Terrain)), event(Cloud::Mesh(Mesh::Surface)), event(Cloud::Mesh(Mesh::Closed)), event(Cloud::PointSize(false)), event(Cloud::PointSize(true)));
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            let (points, mesh, drawing, cancel) = (event(Cloud::Export(Export::Points)), event(Cloud::Export(Export::Mesh)), event(Cloud::Export(Export::Drawing)), event(Cloud::Cancel));
             #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
-            let (cloud, terrain, surface, smaller, larger): (bool, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>) = (false, None, None, None, None);
+            let (cloud, idle, last, running) = (false, false, false, false);
+            #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
+            let (terrain, surface, closed, smaller, larger, points, mesh, drawing, cancel): (Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>) = (None, None, None, None, None, None, None, None, None);
+            let boxed = app.active_section().is_some();
             let mut add = |id: &'static str, label: &'static str, icon: &'static str, message: Option<Msg>, on: bool, detail: &'static str| {
                 list.push(Command::new(id, label, message.clone().unwrap_or(Msg::Dialog(None))).icon(small(icon), large(icon)).enabled(message.is_some() && on).detail(detail));
             };
-            add("cloud.mesh-terrain", l.text("Terreinmesh", "Terrain mesh"), "mesh.surface", terrain, cloud, l.text("Maakt een oppervlak over de punten, van boven gezien: maaiveld, een terrein, een dakvlak. Wanden en overstekken komen er niet in.", "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out."));
-            add("cloud.mesh-surface", l.text("Oppervlakmesh", "Surface mesh"), "mesh.faces", surface, cloud, l.text("Maakt een oppervlak door de punten in alle richtingen: wanden, plafonds, objecten.", "Makes a surface through the points in all directions: walls, ceilings, objects."));
+            add("cloud.mesh-terrain", l.text("Terreinmesh", "Terrain mesh"), "mesh.surface", terrain, cloud && idle, l.text("Maakt een oppervlak over de punten, van boven gezien: maaiveld, een terrein, een dakvlak. Wanden en overstekken komen er niet in.", "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out."));
+            add("cloud.mesh-surface", l.text("Oppervlakmesh", "Surface mesh"), "mesh.faces", surface, cloud && idle, l.text("Maakt een oppervlak door de punten in alle richtingen: wanden, plafonds, objecten.", "Makes a surface through the points in all directions: walls, ceilings, objects."));
+            add("cloud.mesh-closed", l.text("Gesloten mesh", "Closed mesh"), "mesh.closed", closed, cloud && idle, l.text("Past een oppervlak op de punten, dicht kleine gaten en vereenvoudigt vlakke delen. Het langzaamst en het best voor gebouwen; zet de doorsnedebox om het deel dat je nodig hebt.", "Fits a surface to the points, closes small gaps and simplifies flat parts. The slowest and the best for buildings; put the section box around the part you need."));
             add("cloud.points-smaller", l.text("Punten kleiner", "Smaller points"), "view.zoom-out", smaller, loaded, l.text("Tekent de punten van een puntenwolk een stap kleiner.", "Draws the points of a cloud a step smaller."));
             add("cloud.points-larger", l.text("Punten groter", "Larger points"), "view.zoom-in", larger, loaded, l.text("Tekent de punten van een puntenwolk een stap groter.", "Draws the points of a cloud a step larger."));
+            add("cloud.export-points", l.text("Punten exporteren…", "Export points…"), "file.save-as", points, cloud && idle, l.text("Schrijft de punten van de wolk als LAS, LAZ, E57, PLY, XYZ, PTS of CSV: alle punten, een aandeel ervan, of wat in de doorsnedebox ligt.", "Writes the points of the cloud as LAS, LAZ, E57, PLY, XYZ, PTS or CSV: all of them, a share of them, or what lies in the section box."));
+            add("cloud.export-mesh", l.text("Mesh exporteren…", "Export mesh…"), "bcf.export", mesh, last && idle, l.text("Schrijft de laatst gemaakte mesh als OBJ, PLY, STL, DXF, DWG of IFC, op de coördinaten van de puntenwolk.", "Writes the mesh made last as OBJ, PLY, STL, DXF, DWG or IFC, at the coordinates of the point cloud."));
+            add("cloud.drawing", l.text("Doorsnedetekening…", "Section drawing…"), "drawing.section", drawing, cloud && idle && boxed, l.text("Tekent de punten in een plak bij een vlak van de doorsnedebox als DXF of DWG: de plattegrond bij het bovenvlak, of een aanzicht.", "Draws the points in a slab at a face of the section box as DXF or DWG: the plan at the top face, or an elevation."));
+            add("cloud.cancel", l.text("Stoppen", "Stop"), "edit.clear-all", cancel, running, l.text("Stopt de mesh, de export of de tekening die wordt gemaakt.", "Stops the mesh, the export or the drawing that is being made."));
+            list.push(
+                Command::new("cloud.details", l.text("Gegevens", "Details"), Msg::Dialog(Some(Dialog::Cloud)))
+                    .icon(small("status.info"), large("status.info"))
+                    .enabled(cfg!(all(feature = "pointcloud", not(target_arch = "wasm32"))))
+                    .detail(l.text("Wat het bestand van de puntenwolk bevat, en hoe de meshes, de export en de tekening worden gemaakt.", "What the file of the point cloud holds, and how the meshes, the export and the drawing are made."))
+                    .dialog(),
+            );
         }
         list.push(Command::new("cloud.depth", l.text("Diepte", "Depth"), go(Message::ToggleCloudDepth)).icon(small("view.isometric"), large("view.isometric")).toggle(app.cloud_depth).enabled(loaded).detail(l.text("Maakt punten donkerder waar ze achter hun buren liggen, zodat de vorm van een wolk te zien is.", "Darkens points where they lie behind their neighbours, so the shape of a cloud shows.")));
         // how the points of a cloud are coloured
@@ -1480,14 +1511,23 @@ impl Studio {
             Msg::Dialog(dialog) => {
                 let opening = dialog.is_some() && self.dialog.is_none();
                 self.dialog = dialog;
+                // the card of a cloud reads what its file holds when it opens
+                #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+                let read = match dialog {
+                    Some(Dialog::Cloud) => self.update(Msg::App(Message::Pointcloud(crate::app::pointcloud::Event::Inspect))),
+                    _ => Task::none(),
+                };
+                #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
+                let read: Task<Msg> = Task::none();
                 if dialog.is_none() {
                     self.shortcuts = sc::Editor::default();
                 } else {
                     self.backstage = false;
                 }
                 if opening {
-                    return openaec_ui::keyboard::navigate(Navigation::Next);
+                    return Task::batch([read, openaec_ui::keyboard::navigate(Navigation::Next)]);
                 }
+                return read;
             }
             Msg::SettingsPage(page) => self.settings_page = page,
             Msg::Shortcuts(message) => {
@@ -2009,10 +2049,12 @@ impl Studio {
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Cloud => vec![
-                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
                 (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
-                (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface")]),
+                (l.text("Doorsnede", "Section"), vec![large("section.box"), large("cloud.drawing")]),
+                (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface"), large("cloud.mesh-closed"), smalls(&["cloud.cancel"])]),
+                (l.text("Exporteren", "Export"), vec![large("cloud.export-points"), large("cloud.export-mesh")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
@@ -2411,6 +2453,22 @@ impl Studio {
                         w::button(look, l.text("Annuleren", "Cancel"), K::Quiet, D::Regular, None, Some(Msg::Dialog(None))),
                         w::button(look, if sending { l.text("Bezig met verzenden…", "Sending…") } else { l.text("Verzenden", "Send") }, K::Primary, D::Regular, None, form.ready().then(|| send(FeedbackMsg::Send))),
                     ],
+                    true,
+                )
+            }
+            Dialog::Cloud => {
+                #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+                let body: Element<'_, Msg> = self.app.cloud_card(look, l).map(Msg::App);
+                #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
+                let body: Element<'_, Msg> = w::body(look, desktop_only_text(l, "LAS")).into();
+                w::dialog(
+                    look,
+                    l.text("Puntenwolk", "Point cloud"),
+                    close_icon,
+                    Some(Msg::Dialog(None)),
+                    body,
+                    None,
+                    vec![w::button(look, l.text("Sluiten", "Close"), K::Primary, D::Regular, None, Some(Msg::Dialog(None)))],
                     true,
                 )
             }

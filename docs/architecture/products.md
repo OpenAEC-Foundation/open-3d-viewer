@@ -12,11 +12,16 @@ that is several products, each with its own build and its own interface:
 - **Modeller**: make a BIM model from the five base elements of `bim-core` (wall, slab, column,
   beam, curtain wall, object, connection), with levels, views and sheets.
 - **BIM Collaborator**: where a team checks models together and agrees on what to change.
-- **Pointcloud** (added 2026-11-16): open point clouds, look at them, measure and cut them, and
-  make meshes of them. Its meshing is the library of Open Pointcloud Studio (`pointcloud-core`,
-  LGPL-3.0-or-later), a dependency behind the feature `pointcloud` on the desktop; the interface of
-  that app is not taken over. The mesh of a cloud is read from the cloud's own file, written as
-  a file of its own and added to the project as a model over the cloud.
+- **Pointcloud** (added 2026-11-16): open point clouds, look at them, measure and cut them, make
+  meshes of them (terrain, surface, closed), export their points (LAS, LAZ, E57, PLY, XYZ, PTS,
+  CSV; all, a share, or what lies in the section box) and their meshes (OBJ, PLY, STL, DXF, DWG,
+  IFC), draw a slab at a face of the section box as DXF or DWG, and read what a file holds. These
+  jobs are done by the library of Open Pointcloud Studio (`pointcloud-core`, LGPL-3.0-or-later,
+  at the tag of a release and without its network feature), a dependency behind the feature
+  `pointcloud` on the desktop; the interface of that app is not taken over. Every job reads the
+  cloud's own file, not the thinned points of the view, and works in the coordinates of that
+  file; a mesh is added to the project as a model over the cloud, in a copy moved to where the
+  view draws the cloud. The code is `src/app/pointcloud.rs`.
 
 Not three repositories, not three apps glued together: one `App`, one window, one project. The
 switch at the top right of the window moves between the three; each shows its own ribbon, panels

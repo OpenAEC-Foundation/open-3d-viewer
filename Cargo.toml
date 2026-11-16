@@ -132,7 +132,7 @@ ifc-lite-geometry = "=25.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The library of Open Pointcloud Studio: reads a cloud from its file and meshes it (LGPL-3.0-or-later)
-pointcloud-core = { git = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio", rev = "cf209fe7a265aea7d692d710d70709c35b5b2b2c", optional = true }
+pointcloud-core = { git = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio", tag = "v2026.45.1", default-features = false, optional = true }
 # decodes the images of Revit title blocks
 image = "0.25"
 # fetches the map tiles of a georeferenced model (MIT OR Apache-2.0)

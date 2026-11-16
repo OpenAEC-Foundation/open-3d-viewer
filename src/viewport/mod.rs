@@ -457,6 +457,7 @@ mod tests {
             grids: false,
             ambient: false,
             point_size: 2.5,
+            point_colors: Default::default(),
             bounds: None,
         };
         let view = Viewport3D {

@@ -84,9 +84,23 @@ pub struct RenderSettings {
     pub ambient: bool,
     /// The size a point of a cloud is drawn at (logical pixels).
     pub point_size: f32,
+    /// What the points of a cloud take their colour from.
+    pub point_colors: PointColors,
     /// World bounds of the model as drawn (pulled apart by the exploded view), for the ground
     /// grid; `None`: the model's own.
     pub bounds: Option<Bounds>,
+}
+
+/// What the points of a cloud take their colour from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PointColors {
+    /// What the file gives: the colour of the scan, or its intensity, or what the reader made.
+    #[default]
+    Scan,
+    /// Their height: blue low to red high, over the clouds of the project together.
+    Height,
+    /// Their layer: the class of a classified cloud, the scan of a file with several.
+    Layer,
 }
 
 #[repr(C)]
@@ -221,6 +235,8 @@ pub struct ScenePipeline {
     flat: wgpu::RenderPipeline,
     flat_lines: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
+    /// What the point layers on the device are coloured by.
+    point_colors: PointColors,
     blit: wgpu::RenderPipeline,
     /// The opaque surfaces into the depth the ambient shadows read.
     shadow_depth: wgpu::RenderPipeline,
@@ -544,7 +560,7 @@ impl ScenePipeline {
             multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_point"),
+                entry_point: Some("fs_cloud"),
                 targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
@@ -635,6 +651,7 @@ impl ScenePipeline {
             flat,
             flat_lines,
             points,
+            point_colors: PointColors::default(),
             blit,
             shadow_depth,
             blit_layout,
@@ -750,11 +767,11 @@ impl ScenePipeline {
         // the grid of cells the layers' triangles are put in
         let (low, high) = (Vec3::from(model.bounds.min), Vec3::from(model.bounds.max));
         let cell = ((high - low).max_element() / chunks::CELLS).max(1e-3);
+        let heights = point_heights(model);
         for (l, layer) in model.layers.iter().enumerate() {
-            let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-            let base = [base[0], base[1], base[2], 255];
+            let base = layer_base(layer);
             if layer.points {
-                self.layers.push(upload_points(device, layer, base));
+                self.layers.push(upload_points(device, layer, base, self.point_colors, heights));
                 continue;
             }
             let units = explode.and_then(|e| e.vertex_units.get(l));
@@ -975,7 +992,17 @@ impl ScenePipeline {
             queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&params));
         }
 
+        let recolour = self.point_colors != primitive.settings.point_colors;
+        self.point_colors = primitive.settings.point_colors;
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
+        // the points on the device carry their colour: another choice writes them again
+        if let Some(model) = self.model.clone().filter(|_| recolour) {
+            let heights = point_heights(&model);
+            let drawn = self.layers.len();
+            for (l, layer) in model.layers.iter().enumerate().filter(|(l, layer)| layer.points && *l < drawn) {
+                self.layers[l] = upload_points(device, layer, layer_base(layer), self.point_colors, heights);
+            }
+        }
         self.upload_datum(device, primitive);
         self.upload_overlay(device, primitive);
         self.upload_cut_faces(device, primitive);
@@ -1264,9 +1291,22 @@ impl ScenePipeline {
     }
 }
 
+/// The colour of a layer as bytes.
+fn layer_base(layer: &crate::model::Layer) -> [u8; 4] {
+    let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    [base[0], base[1], base[2], 255]
+}
+
+/// The lowest and highest point of the point layers of a model.
+fn point_heights(model: &Model) -> (f32, f32) {
+    let z = model.layers.iter().filter(|l| l.points).flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
+    z.fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), z| (low.min(z), high.max(z)))
+}
+
 /// The points of a point cloud layer as an instance buffer, written straight into the mapped
-/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`.
-fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4]) -> GpuLayer {
+/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`; by
+/// height they take the colour of where they lie between `heights` (low, high), by layer `base`.
+fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4], colors: PointColors, heights: (f32, f32)) -> GpuLayer {
     let n = layer.vertex_count();
     let size = std::mem::size_of::<PointVertex>();
     let vertices = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1279,7 +1319,11 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
         let mut view = vertices.slice(..).get_mapped_range_mut();
         let out: &mut [PointVertex] = bytemuck::cast_slice_mut(&mut view[..n * size]);
         for (i, (p, v)) in layer.positions.chunks_exact(3).zip(out.iter_mut()).enumerate() {
-            let color = layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base);
+            let color = match colors {
+                PointColors::Scan => layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base),
+                PointColors::Height => crate::loaders::pointcloud::height_color((p[2] - heights.0) / (heights.1 - heights.0).max(1e-6)),
+                PointColors::Layer => base,
+            };
             *v = PointVertex { position: [p[0], p[1], p[2]], color: [color[0], color[1], color[2], 255] };
         }
     }

@@ -234,6 +234,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             grids: true,
             ambient: false,
             point_size: 2.5,
+            point_colors: Default::default(),
             bounds: None,
         };
         // the units of every element, as the app uploads them, so their flags work
@@ -391,6 +392,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             grids: true,
             ambient: false,
             point_size: 2.5,
+            point_colors: Default::default(),
             bounds: None,
         };
         let selected_marks: Arc<Marks> = selected.clone().unwrap_or_default();
@@ -680,6 +682,7 @@ mod tests {
                 grids: false,
                 ambient: false,
             point_size: 2.5,
+            point_colors: Default::default(),
                 bounds: None,
             },
             explode: Some(index.clone()),
@@ -831,6 +834,7 @@ mod tests {
             grids: false,
             ambient: false,
             point_size: 2.5,
+            point_colors: Default::default(),
             bounds: None,
         };
         // the last member selected

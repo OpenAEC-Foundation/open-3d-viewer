@@ -269,8 +269,13 @@ pub struct App {
     pub ambient: bool,
     /// The size a point of a cloud is drawn at (pixels).
     pub point_size: f32,
-    /// A cloud is being meshed.
+    /// What the points of a cloud take their colour from.
+    pub point_colors: crate::viewport::render::PointColors,
+    /// A job of the Pointcloud product runs (a mesh, an export, a drawing).
     pub meshing: bool,
+    /// What the Pointcloud product keeps: its settings, the mesh made last, the details read.
+    #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+    pub cloud: pointcloud::State,
     /// In the 3D view: the heads of the grid lines that stand behind the model are left out;
     /// the distances between the grid lines are drawn; the levels are drawn as outlines with
     /// their marks.
@@ -879,7 +884,10 @@ impl Default for App {
             views_in_3d: false,
             ambient: false,
             point_size: 2.5,
+            point_colors: Default::default(),
             meshing: false,
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            cloud: pointcloud::State::default(),
             grid_heads_hidden: true,
             grid_dims: false,
             levels_3d: false,
@@ -1374,6 +1382,11 @@ impl App {
         // how the 3D view draws is set for the app, not for a project
         (app.ambient, app.grid_heads_hidden, app.grid_dims, app.levels_3d) = (self.ambient, self.grid_heads_hidden, self.grid_dims, self.levels_3d);
         app.point_size = self.point_size;
+        app.point_colors = self.point_colors;
+        #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+        {
+            app.cloud.settings = self.cloud.settings;
+        }
         app
     }
 
@@ -3691,6 +3704,7 @@ impl App {
             grids: self.grids_shown() || (self.levels_3d && !clean),
             ambient: self.ambient,
             point_size: self.point_size,
+            point_colors: self.point_colors,
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them

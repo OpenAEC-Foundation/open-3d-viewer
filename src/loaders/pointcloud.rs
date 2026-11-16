@@ -97,23 +97,24 @@ impl Cloud {
     }
 }
 
+/// The colour of a height: `t` from 0 (low, blue) over green and yellow to 1 (high, red), muted.
+pub fn height_color(t: f32) -> [u8; 4] {
+    const RAMP: [[f32; 3]; 4] = [[0.23, 0.42, 0.78], [0.35, 0.72, 0.45], [0.93, 0.80, 0.30], [0.86, 0.32, 0.22]];
+    let t = t.clamp(0.0, 1.0) * (RAMP.len() - 1) as f32;
+    let k = (t as usize).min(RAMP.len() - 2);
+    let f = t - k as f32;
+    let c = [0, 1, 2].map(|i| ((RAMP[k][i] * (1.0 - f) + RAMP[k + 1][i] * f) * 255.0).round() as u8);
+    [c[0], c[1], c[2], 255]
+}
+
 /// Colours the points of `layers` by their height, blue low to red high, for clouds without colour
 /// or intensity (a flat grey cloud shows no shape, as points are not shaded).
 pub fn color_by_height(layers: &mut [Layer]) {
     let z = || layers.iter().flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
     let (low, high) = z().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), z| (lo.min(z), hi.max(z)));
     let span = (high - low).max(1e-6);
-    // a muted blue, green, yellow, red ramp
-    const RAMP: [[f32; 3]; 4] = [[0.23, 0.42, 0.78], [0.35, 0.72, 0.45], [0.93, 0.80, 0.30], [0.86, 0.32, 0.22]];
     for layer in layers.iter_mut() {
-        let colors = layer.positions.chunks_exact(3).map(|p| {
-            let t = ((p[2] - low) / span).clamp(0.0, 1.0) * (RAMP.len() - 1) as f32;
-            let k = (t as usize).min(RAMP.len() - 2);
-            let f = t - k as f32;
-            let c = [0, 1, 2].map(|i| ((RAMP[k][i] * (1.0 - f) + RAMP[k + 1][i] * f) * 255.0).round() as u8);
-            [c[0], c[1], c[2], 255]
-        });
-        layer.colors = Some(colors.collect());
+        layer.colors = Some(layer.positions.chunks_exact(3).map(|p| height_color((p[2] - low) / span)).collect());
     }
 }
 

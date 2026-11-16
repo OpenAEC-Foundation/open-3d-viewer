@@ -2,11 +2,11 @@
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
-//!                  [--language en|nl] [--product viewer|modeller|collaborator] [--no-remote]
+//!                  [--language en|nl] [--product viewer|modeller|collaborator|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
-//!                  [--product ...]
+//!                  [--product ...] [--mesh terrain|surface]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
@@ -46,6 +46,8 @@ struct Args {
     drawing: Option<String>,
     /// A view saved in the file to show, by its name (`--saved-view`).
     saved_view: Option<String>,
+    /// For `--screenshot`: mesh the cloud opened (terrain or surface) and show the mesh over it.
+    mesh: Option<String>,
     /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
     draft: Option<String>,
     /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
@@ -61,6 +63,10 @@ struct Args {
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
     mode: Option<RenderMode>,
+    /// For `--screenshot`: how the points of a cloud are coloured.
+    cloud_color: Option<crate::cloud_color::CloudColor>,
+    /// For `--screenshot`: the clouds without their depth shading.
+    flat_clouds: bool,
     view: Option<ViewPreset>,
     bench: Option<PathBuf>,
     ortho: bool,
@@ -93,12 +99,13 @@ fn parse_args() -> Result<Args, String> {
             "--language" => {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
-            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|collaborator")?),
+            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|collaborator|pointcloud")?),
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
             "--drawing" => args.drawing = Some(value()?),
             "--saved-view" => args.saved_view = Some(value()?),
+            "--mesh" => args.mesh = Some(value()?),
             "--draft" => args.draft = Some(value()?),
             "--pick" => args.pick = Some(value()?.parse().map_err(|_| "--pick takes an element id")?),
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
@@ -111,6 +118,17 @@ fn parse_args() -> Result<Args, String> {
                 let v = value()?;
                 let (w, h) = v.split_once('x').ok_or("--size WxH")?;
                 args.size = Some((w.parse().map_err(|_| "--size WxH")?, h.parse().map_err(|_| "--size WxH")?));
+            }
+            "--flat-clouds" => args.flat_clouds = true,
+            "--cloud-color" => {
+                use crate::cloud_color::CloudColor as C;
+                args.cloud_color = Some(match value()?.as_str() {
+                    "stored" => C::Stored,
+                    "elevation" => C::Elevation,
+                    "intensity" => C::Intensity,
+                    "class" => C::Class,
+                    _ => return Err("--cloud-color stored|elevation|intensity|class".into()),
+                });
             }
             "--mode" => {
                 args.mode = Some(match value()?.as_str() {
@@ -235,6 +253,12 @@ fn initial_state(args: &Args) -> App {
     }
     if let Some(m) = args.mode {
         app.mode = m;
+    }
+    if let Some(c) = args.cloud_color {
+        app.cloud_color = c;
+    }
+    if args.flat_clouds {
+        app.cloud_depth = false;
     }
     app.camera.ortho = args.ortho;
     if args.view_tab {
@@ -390,6 +414,20 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         );
         app.initial_view = args.view;
         app.set_model(Arc::new(model));
+        // the mesh of the cloud, added over it as the Pointcloud product does
+        #[cfg(feature = "pointcloud")]
+        if let Some(kind) = &args.mesh {
+            use crate::app::pointcloud::Mesh;
+            let kind = match kind.as_str() {
+                "terrain" => Mesh::Terrain,
+                "surface" => Mesh::Surface,
+                _ => return Err("--mesh terrain|surface".into()),
+            };
+            let done = crate::app::pointcloud::mesh(file, kind)?;
+            eprintln!("meshed {}: {} vertices, {} triangles in {:.2} s", done.file.display(), done.vertices, done.triangles, done.seconds);
+            app.add_model(Arc::new(loaders::load(&done.file)?));
+            app.fit();
+        }
         // the model pulled apart, framed as F would
         if let Some(amount) = args.explode {
             app.explode_mode = args.explode_mode.unwrap_or_default();

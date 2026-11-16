@@ -19,9 +19,12 @@ pub mod desktop;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 pub mod collab;
 pub mod document;
+#[cfg(windows)]
+mod dpi_drag;
 pub mod drawing;
 pub mod drawing2d;
 pub mod caps;
+pub mod cloud_color;
 pub mod hatching;
 pub mod phasing;
 pub mod element_class;
@@ -43,6 +46,7 @@ pub mod model;
 pub mod product;
 mod remote;
 pub mod remote_link;
+mod resize_frame;
 pub mod section;
 mod selection;
 pub mod shell;

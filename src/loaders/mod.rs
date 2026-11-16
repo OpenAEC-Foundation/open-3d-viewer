@@ -43,6 +43,7 @@ mod skp;
 #[cfg(not(target_arch = "wasm32"))]
 mod smc;
 mod tekla;
+mod tbp;
 mod ply;
 mod cityjson;
 mod landxml;
@@ -299,6 +300,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &vertex::BtlLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &smc::SmcLoader,
+        &tbp::TbpLoader,
         &ifc::IfcLoader,
         // last: `.txt` and `.csv` are only point clouds when nothing else claims them
         &xyz::XyzLoader,

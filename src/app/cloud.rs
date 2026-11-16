@@ -8,7 +8,7 @@
 
 use super::collab::Event as CollabEvent;
 use super::{App, Message};
-use crate::collab::deviation::{colour, fit_shift, summarise, HotSpot, Summary, Surface};
+use crate::collab::deviation::{colour, fit_turn, summarise, HotSpot, Summary, Surface};
 use crate::model::Model;
 use bim_bcf::issues::Topic;
 use glam::Vec3;
@@ -170,7 +170,8 @@ impl App {
                 let all: Vec<Vec3> = clouds.iter().flat_map(|(_, points)| points.iter().copied()).collect();
                 let stride = (all.len() / 30_000).max(1);
                 let sample: Vec<Vec3> = all.iter().step_by(stride).copied().collect();
-                let (shift, near) = fit_shift(&surface, &sample, 1.0);
+                let (fit, near) = fit_turn(&surface, &sample, 1.0);
+                let shift = fit.point(Vec3::ZERO);
                 if near * 2 < sample.len() {
                     self.collab_note(Tone::Warning, l.text("Minder dan de helft van de punten ligt binnen een meter van het model: leg de scan eerst ongeveer op zijn plek.", "Less than half of the points lie within a metre of the model: lay the scan about in its place first."));
                     return Task::none();
@@ -184,9 +185,7 @@ impl App {
                     let mut cloud = (*entry.model).clone();
                     if let Some(points) = cloud.layers.get_mut(own).filter(|l| l.points) {
                         for p in points.positions.chunks_exact_mut(3) {
-                            p[0] += shift.x;
-                            p[1] += shift.y;
-                            p[2] += shift.z;
+                            p.copy_from_slice(&fit.point(Vec3::new(p[0], p[1], p[2])).to_array());
                         }
                         cloud.id = crate::model::fresh_id();
                         entry.model = Arc::new(cloud);
@@ -198,7 +197,10 @@ impl App {
                     return Task::none();
                 }
                 self.cloud_redraw();
-                self.collab_note(Tone::Success, format!("{} {:.0} mm (x {:.0}, y {:.0}, z {:.0})", l.text("Scan verschoven over", "Scan moved by"), shift.length() * 1000.0, shift.x * 1000.0, shift.y * 1000.0, shift.z * 1000.0));
+                self.collab_note(
+                    Tone::Success,
+                    format!("{} {:.2}° · {} {:.0} mm (x {:.0}, y {:.0}, z {:.0})", l.text("Scan gedraaid over", "Scan turned by"), fit.turn.to_degrees(), l.text("verschoven over", "moved by"), shift.length() * 1000.0, shift.x * 1000.0, shift.y * 1000.0, shift.z * 1000.0),
+                );
                 return self.cloud_handle(Event::Compare);
             }
             Event::Done(run, colours, summary) => {

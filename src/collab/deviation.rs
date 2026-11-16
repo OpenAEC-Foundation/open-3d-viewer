@@ -160,6 +160,61 @@ pub fn fit_shift(surface: &Surface, points: &[Vec3], reach: f32) -> (Vec3, usize
     (shift, near)
 }
 
+/// How a scan is laid onto the model: turned about the vertical by `turn` (radians), then moved
+/// by `shift`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fit {
+    pub turn: f32,
+    pub shift: Vec3,
+}
+
+impl Fit {
+    pub fn point(&self, p: Vec3) -> Vec3 {
+        let (s, c) = self.turn.sin_cos();
+        Vec3::new(c * p.x - s * p.y, s * p.x + c * p.y, p.z) + self.shift
+    }
+}
+
+/// As [`fit_shift`], with a turn about the vertical too: a scan stands level (the scanner sees
+/// to that) but its north is its own. Each time the points are turned and moved by what brings
+/// them, taken together, nearest to the surfaces they lie near.
+pub fn fit_turn(surface: &Surface, points: &[Vec3], reach: f32) -> (Fit, usize) {
+    let mut fit = Fit { turn: 0.0, shift: Vec3::ZERO };
+    let mut near = 0;
+    let mut within = reach;
+    for _ in 0..60 {
+        let pairs: Vec<(Vec3, Vec3)> = points.iter().filter_map(|p| {
+            let moved = fit.point(*p);
+            surface.nearest(moved, within).map(|q| (moved, q))
+        }).collect();
+        near = pairs.len();
+        if pairs.len() < 3 {
+            break;
+        }
+        let n = pairs.len() as f32;
+        let (mc, qc) = pairs.iter().fold((Vec3::ZERO, Vec3::ZERO), |(m, q), (a, b)| (m + *a, q + *b));
+        let (mc, qc) = (mc / n, qc / n);
+        // the turn that brings the points, seen from above around their middle, nearest to theirs
+        let (mut cross, mut dot) = (0.0f64, 0.0f64);
+        for (m, q) in &pairs {
+            let (a, b) = ((*m - mc).truncate(), (*q - qc).truncate());
+            cross += f64::from(a.perp_dot(b));
+            dot += f64::from(a.dot(b));
+        }
+        let turn = cross.atan2(dot) as f32;
+        let step = Fit { turn, shift: Vec3::ZERO };
+        // moved' = turned(moved - mc) + qc
+        let shift = step.point(fit.shift - mc) + qc;
+        let moved = (shift - fit.shift).length() + turn.abs();
+        fit = Fit { turn: fit.turn + turn, shift };
+        within = (within * 0.8).max(reach * 0.1);
+        if moved < 0.0002 {
+            break;
+        }
+    }
+    (fit, near)
+}
+
 /// A place where many points lie further from the model than allowed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HotSpot {
@@ -267,6 +322,36 @@ mod tests {
         let all = s.distances(&points, 0.5);
         assert!(points.iter().zip(&all).all(|(p, d)| s.distance(*p, 0.5) == *d));
         assert!(Surface::new(Vec::new()).distance(Vec3::ZERO, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_scan_turned_and_moved_is_laid_back_onto_the_model() {
+        // a floor and two walls square to each other: together they say where a scan belongs
+        let quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3| vec![[a, b, c], [a, c, d]];
+        let v = Vec3::new;
+        let mut triangles = quad(v(0.0, 0.0, 0.0), v(10.0, 0.0, 0.0), v(10.0, 8.0, 0.0), v(0.0, 8.0, 0.0));
+        triangles.extend(quad(v(0.0, 0.0, 0.0), v(10.0, 0.0, 0.0), v(10.0, 0.0, 3.0), v(0.0, 0.0, 3.0)));
+        triangles.extend(quad(v(0.0, 0.0, 0.0), v(0.0, 8.0, 0.0), v(0.0, 8.0, 3.0), v(0.0, 0.0, 3.0)));
+        let s = Surface::new(triangles);
+        let mut points = Vec::new();
+        for i in 0..40 {
+            for j in 0..40 {
+                let (a, b) = (i as f32 * 0.24 + 0.2, j as f32 * 0.19 + 0.2);
+                points.push(v(a, b, 0.0));
+                if j < 15 {
+                    points.push(v(a, 0.0, b));
+                    points.push(v(0.0, b * 2.0, a.min(2.9)));
+                }
+            }
+        }
+        // the scan as it came: turned 1.5 degrees and moved 60 mm, 40 mm and 20 mm
+        let off = Fit { turn: 1.5f32.to_radians(), shift: v(0.06, -0.04, 0.02) };
+        let scanned: Vec<Vec3> = points.iter().map(|p| off.point(*p)).collect();
+        let (fit, near) = fit_turn(&s, &scanned, 1.0);
+        assert!(near > scanned.len() * 9 / 10, "{near} of {}", scanned.len());
+        assert!((fit.turn.to_degrees() + 1.5).abs() < 0.05, "{}", fit.turn.to_degrees());
+        let worst = points.iter().zip(&scanned).map(|(p, q)| fit.point(*q).distance(*p)).fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "{worst}");
     }
 
     #[test]

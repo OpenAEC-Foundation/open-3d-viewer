@@ -479,6 +479,9 @@ mod tests {
             caps: false,
             grids: false,
             ambient: false,
+            point_size: 2.5,
+            cloud_depth: false,
+            cloud_color: Default::default(),
             bounds: None,
         };
         let view = Viewport3D {

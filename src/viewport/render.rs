@@ -5,7 +5,7 @@
 //! is uploaded once per model (keyed by `Model::id`); each frame only writes the uniforms, and
 //! the offsets of the exploded view when they change.
 //!
-//! Point clouds are drawn as squares of [`POINT_SIZE`] pixels, whatever their distance: each
+//! Point clouds are drawn as squares of the size the settings give (2.5 pixels unless set), whatever their distance: each
 //! point is an instance of a four-vertex triangle strip that the vertex shader spreads round the
 //! point on screen. Instanced quads rather than `PointList`, whose points are one pixel on every
 //! backend that matters (WebGL2 and WebGPU have no point size).
@@ -37,11 +37,13 @@ const SHADOW_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Flo
 const SHADOW_REACH: f32 = 0.45;
 const SHADOW_STRENGTH: f32 = 1.6;
 const SHADOW_DARKEST: f32 = 0.5;
+/// The depth shading of point clouds: how strong, and how far the neighbours it compares a
+/// point with lie (logical pixels).
+const DOME_STRENGTH: f32 = 60.0;
+const DOME_RADIUS: f32 = 1.5;
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
-/// The size of a point of a point cloud, in logical pixels.
-const POINT_SIZE: f32 = 2.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
@@ -84,6 +86,12 @@ pub struct RenderSettings {
     /// Ambient shadows: surfaces darker in corners, under overhangs and behind what stands in
     /// front of them (shaded styles only).
     pub ambient: bool,
+    /// The size a point of a cloud is drawn at (logical pixels).
+    pub point_size: f32,
+    /// Depth shading of point clouds: a point is darker where it lies behind its neighbours.
+    pub cloud_depth: bool,
+    /// How the points of a cloud are coloured.
+    pub cloud_color: crate::cloud_color::CloudColor,
     /// World bounds of the model as drawn (pulled apart by the exploded view), for the ground
     /// grid; `None`: the model's own.
     pub bounds: Option<Bounds>,
@@ -204,6 +212,8 @@ struct Targets {
     depth: wgpu::TextureView,
     /// The depth of the opaque surfaces, not multisampled: what the ambient shadows read.
     shadow_depth: wgpu::TextureView,
+    /// The same with the points of the clouds over it: what their depth shading reads.
+    cloud_depth: wgpu::TextureView,
     blit_group: wgpu::BindGroup,
 }
 
@@ -224,6 +234,8 @@ pub struct ScenePipeline {
     blit: wgpu::RenderPipeline,
     /// The opaque surfaces into the depth the ambient shadows read.
     shadow_depth: wgpu::RenderPipeline,
+    /// The points of the clouds into the depth their shading reads.
+    points_depth: wgpu::RenderPipeline,
     blit_layout: wgpu::BindGroupLayout,
     blit_uniforms: wgpu::Buffer,
     uniform_layout: wgpu::BindGroupLayout,
@@ -245,6 +257,8 @@ pub struct ScenePipeline {
     see_through: bool,
     targets: Option<Targets>,
     model_id: u64,
+    /// How the points of the uploaded model are coloured.
+    cloud_color: crate::cloud_color::CloudColor,
     model: Option<Arc<Model>>,
     layers: Vec<GpuLayer>,
     /// What this frame draws of the layers (layer, first index, end), opaque and transparent:
@@ -253,6 +267,8 @@ pub struct ScenePipeline {
     glass_draws: Vec<(u32, u32, u32)>,
     /// This frame draws the ambient shadows.
     shadows: bool,
+    /// This frame shades the clouds by depth.
+    dome: bool,
     /// The exploded view moves elements: everything is drawn then.
     moved: bool,
     grid: Option<(wgpu::Buffer, u32, [i64; 6])>,
@@ -414,6 +430,38 @@ impl ScenePipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_depth"),
+                targets: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+        // The points of the clouds into a depth of their own kind, for their depth shading.
+        let points_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("o3v.points_depth"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_point"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<PointVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: SHADOW_DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_point_depth"),
                 targets: &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
@@ -583,6 +631,13 @@ impl ScenePipeline {
                     ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
                     count: None,
                 },
+                // the depth the shading of the clouds reads
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
             ],
         });
         let blit_shader = device.create_shader_module
@@ -618,7 +673,7 @@ impl ScenePipeline {
         });
         let blit_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("o3v.blit.uniforms"),
-            size: 48,
+            size: 64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -637,6 +692,7 @@ impl ScenePipeline {
             points,
             blit,
             shadow_depth,
+            points_depth,
             blit_layout,
             blit_uniforms,
             uniform_layout,
@@ -654,11 +710,13 @@ impl ScenePipeline {
             see_through: false,
             targets: None,
             model_id: 0,
+            cloud_color: Default::default(),
             model: None,
             layers: Vec::new(),
             lit_draws: Vec::new(),
             glass_draws: Vec::new(),
             shadows: false,
+            dome: false,
             moved: false,
             grid: None,
             datum: None,
@@ -702,6 +760,7 @@ impl ScenePipeline {
         );
         let depth = texture("o3v.depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
         let shadow_depth = texture("o3v.shadow_depth", SHADOW_DEPTH_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
+        let cloud_depth = texture("o3v.cloud_depth", SHADOW_DEPTH_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
         let blit_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("o3v.blit.group"),
             layout: &self.blit_layout,
@@ -709,9 +768,10 @@ impl ScenePipeline {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&resolve) },
                 wgpu::BindGroupEntry { binding: 1, resource: self.blit_uniforms.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&shadow_depth) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&cloud_depth) },
             ],
         });
-        self.targets = Some(Targets { size, msaa, resolve, depth, shadow_depth, blit_group });
+        self.targets = Some(Targets { size, msaa, resolve, depth, shadow_depth, cloud_depth, blit_group });
     }
 
     /// Makes room for the offsets of `units` units of the exploded view (all zero) and binds it.
@@ -750,11 +810,14 @@ impl ScenePipeline {
         // the grid of cells the layers' triangles are put in
         let (low, high) = (Vec3::from(model.bounds.min), Vec3::from(model.bounds.max));
         let cell = ((high - low).max_element() / chunks::CELLS).max(1e-3);
+        // the heights of the model's clouds, for colouring them by height
+        let heights = model.layers.iter().filter(|l| l.points).flat_map(|l| l.positions.chunks_exact(3).map(|p| p[2]));
+        let (floor, top) = heights.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), z| (lo.min(z), hi.max(z)));
         for (l, layer) in model.layers.iter().enumerate() {
             let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             let base = [base[0], base[1], base[2], 255];
             if layer.points {
-                self.layers.push(upload_points(device, layer, base));
+                self.layers.push(upload_points(device, layer, base, self.cloud_color, (floor, top)));
                 continue;
             }
             let units = explode.and_then(|e| e.vertex_units.get(l));
@@ -958,6 +1021,8 @@ impl ScenePipeline {
         // the ambient shadows: in the shaded styles, read from the depth of the model
         let shaded = matches!(primitive.settings.mode, RenderMode::Solid | RenderMode::SolidEdges);
         self.shadows = primitive.settings.ambient && shaded && primitive.model.is_some();
+        // the depth shading of the clouds, where the model has one
+        self.dome = primitive.settings.cloud_depth && primitive.model.as_ref().is_some_and(|m| m.layers.iter().any(|l| l.points));
         {
             let camera = &primitive.camera;
             let projection = camera.projection(w as f32 / h as f32);
@@ -971,10 +1036,18 @@ impl ScenePipeline {
             };
             let on = if self.shadows { 1.0 } else { 0.0 };
             let parallel = if camera.ortho { 1.0 } else { 0.0 };
-            let params: [f32; 12] = [x as f32, y as f32, 0.0, 0.0, on, parallel, near, far, per_metre, SHADOW_REACH, SHADOW_STRENGTH, SHADOW_DARKEST];
+            let dome = if self.dome { 1.0 } else { 0.0 };
+            let params: [f32; 16] = [x as f32, y as f32, 0.0, 0.0, on, parallel, near, far, per_metre, SHADOW_REACH, SHADOW_STRENGTH, SHADOW_DARKEST, dome, DOME_STRENGTH, (DOME_RADIUS * scale).max(1.0), 0.0];
             queue.write_buffer(&self.blit_uniforms, 0, bytemuck::cast_slice(&params));
         }
 
+        // another way to colour a cloud: its points are sent again
+        if primitive.settings.cloud_color != self.cloud_color {
+            self.cloud_color = primitive.settings.cloud_color;
+            if self.model.as_ref().is_some_and(|m| m.layers.iter().any(|l| l.points)) {
+                self.model_id = 0;
+            }
+        }
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
         self.upload_datum(device, primitive);
         self.upload_overlay(device, primitive);
@@ -1018,7 +1091,7 @@ impl ScenePipeline {
         let clip = settings.section.map(|s| s.uniform()).unwrap_or([[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]]);
         let plane = settings.plane.unwrap_or([[0.0; 4]; 2]);
         // half the point size in clip units (x, y), for `vs_point`
-        let point = POINT_SIZE * scale;
+        let point = settings.point_size.clamp(0.5, 32.0) * scale;
         // eye.w: 2 draws the faces white and unlit (hidden lines)
         let faces = if settings.mode == RenderMode::HiddenLine { 2.0 } else { 1.0 };
         let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3], plane: [[f32; 4]; 2]| Uniforms {
@@ -1113,7 +1186,7 @@ impl ScenePipeline {
             wgpu::Color { r: bg[0] as f64, g: bg[1] as f64, b: bg[2] as f64, a: 1.0 }
         };
         // the depth of the opaque surfaces for the ambient shadows, before the frame itself
-        if self.shadows {
+        if self.shadows || self.dome {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("o3v.shadow_depth.pass"),
                 color_attachments: &[],
@@ -1128,6 +1201,31 @@ impl ScenePipeline {
             pass.set_pipeline(&self.shadow_depth);
             pass.set_bind_group(0, &self.model_group, &[]);
             self.draw_layers(&mut pass, &self.lit_draws);
+        }
+        // the same with the points of the clouds over it, for their depth shading
+        if self.dome {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("o3v.cloud_depth.pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.cloud_depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.shadow_depth);
+            pass.set_bind_group(0, &self.model_group, &[]);
+            self.draw_layers(&mut pass, &self.lit_draws);
+            pass.set_pipeline(&self.points_depth);
+            pass.set_bind_group(0, &self.model_group, &[]);
+            for (i, layer) in self.layers.iter().enumerate() {
+                if primitive.visible.get(i).copied().unwrap_or(true) && layer.points > 0 {
+                    pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                    pass.draw(0..4, 0..layer.points);
+                }
+            }
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1265,8 +1363,10 @@ impl ScenePipeline {
 }
 
 /// The points of a point cloud layer as an instance buffer, written straight into the mapped
-/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`.
-fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4]) -> GpuLayer {
+/// buffer (no second copy of a large cloud in memory). Points without a colour take `base`;
+/// `color` says how they are coloured, `heights` the lowest and highest point of their cloud.
+fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 4], color: crate::cloud_color::CloudColor, heights: (f32, f32)) -> GpuLayer {
+    let span = (heights.1 - heights.0).max(1e-6);
     let n = layer.vertex_count();
     let size = std::mem::size_of::<PointVertex>();
     let vertices = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1279,8 +1379,8 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
         let mut view = vertices.slice(..).get_mapped_range_mut();
         let out: &mut [PointVertex] = bytemuck::cast_slice_mut(&mut view[..n * size]);
         for (i, (p, v)) in layer.positions.chunks_exact(3).zip(out.iter_mut()).enumerate() {
-            let color = layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base);
-            *v = PointVertex { position: [p[0], p[1], p[2]], color: [color[0], color[1], color[2], 255] };
+            let stored = layer.colors.as_ref().and_then(|c| c.get(i).copied()).unwrap_or(base);
+            *v = PointVertex { position: [p[0], p[1], p[2]], color: color.of(stored, (p[2] - heights.0) / span, base) };
         }
     }
     vertices.unmap();

@@ -65,6 +65,14 @@ impl Loader for IfcLoader {
     }
 
     fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
+        self.read(source, progress, false)
+    }
+}
+
+impl IfcLoader {
+    /// Reads an IFC file; `bare` lets a file without shapes through for its grids and storeys
+    /// (a grid model of a project package), otherwise such a file is an error.
+    pub(super) fn read(&self, source: &Source, progress: &Progress, bare: bool) -> Result<Loaded, String> {
         progress.set(Phase::Read);
         let data = source.read()?;
         let data = if data.starts_with(b"PK\x03\x04") { std::borrow::Cow::Owned(unzip_ifc(&data)?) } else { data };
@@ -157,7 +165,7 @@ impl Loader for IfcLoader {
             }
             layer.props.push((id, serde_json::to_string(&props).map_err(|e| format!("IFC properties: {e}"))?));
         }
-        if layers.is_empty() {
+        if layers.is_empty() && !bare {
             return Err(format!("IFC: no supported geometry found ({})", result.metadata.schema_version));
         }
         let has_other_geometry = layers.values().any(|layer| !layer.hidden);

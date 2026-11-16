@@ -9,6 +9,9 @@ use crate::model::{Draft, DraftKind, DraftLine, DraftText, Layer, ProjectData};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+/// The height of a capital letter to that of a line of letters.
+const CAPITALS: f32 = 0.72;
+
 /// The interface version this adapter understands.
 const ABI_VERSION: u32 = 1;
 
@@ -177,40 +180,60 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
         layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false, points: false });
     }
     // the drawings of a project, after the layers: per drawing its lines (x and y of both ends,
-    // metres) and the widths of their pens; its texts are in the header
+    // metres), the widths of their pens and, when the header says so, their colours; its texts
+    // are in the header
     for (k, d) in header["drawings"].as_array().into_iter().flatten().enumerate() {
         let count = d["lines"].as_u64().ok_or_else(bad)? as usize;
         let ends = floats(take(count.checked_mul(16).ok_or_else(bad)?)?);
         let _weights = take(count * 4)?;
+        let colours: Vec<[u8; 3]> = match d["colors"].as_bool() {
+            Some(true) => take(count * 3)?.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            _ => Vec::new(),
+        };
         let id = k as u64 + 1;
         let kind = d["kind"].as_str().unwrap_or_default();
         let name = d["name"].as_str().unwrap_or("Drawing");
         let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
-        let lines = ends.chunks_exact(4).filter(|l| finite(l)).map(|l| DraftLine { element: id, a: [l[0], l[1]], b: [l[2], l[3]] }).collect();
+        // a line that is no number is left out, with its colour
+        let kept: Vec<usize> = (0..count).filter(|&i| finite(&ends[i * 4..i * 4 + 4])).collect();
+        let lines: Vec<DraftLine> = kept.iter().map(|&i| DraftLine { element: id, a: [ends[i * 4], ends[i * 4 + 1]], b: [ends[i * 4 + 2], ends[i * 4 + 3]] }).collect();
+        // black is the ink of the drawing
+        let line_colors: Vec<Option<[u8; 3]>> = if colours.iter().any(|c| *c != [0, 0, 0]) { kept.iter().map(|&i| colours.get(i).copied().filter(|c| *c != [0, 0, 0])).collect() } else { Vec::new() };
         let texts = d["texts"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|t| {
                 let number = |i: usize| t.get(i).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).map(|v| v as f32);
-                let size = number(2)?.max(0.0);
+                // the height of its capital letters; a line of letters is higher
+                let capitals = number(2)?.max(0.0);
+                let size = capitals / CAPITALS;
+                let mut face = crate::typeface::Face::default();
+                if let Some(family) = t.get(6).and_then(|v| v.as_str()).filter(|f| !f.is_empty()) {
+                    face.family = family.into();
+                }
+                let rgb = t.get(7).and_then(|v| v.as_array()).filter(|c| c.len() == 3).map(|c| [0, 1, 2].map(|i| c[i].as_u64().unwrap_or(0).min(255) as u8));
+                face.color = rgb.filter(|c| *c != [0, 0, 0]);
+                if let Some(width) = number(8).filter(|w| (0.2..=3.0).contains(w)) {
+                    face.width = width;
+                }
                 Some(DraftText {
                     element: id,
                     at: [number(0)?, number(1)?],
                     width: 0.0,
-                    height: size,
+                    height: capitals,
                     size,
                     align: t.get(4).and_then(|v| v.as_u64()).unwrap_or(0).min(2) as u8,
                     angle: number(3)?.to_radians(),
                     text: t.get(5)?.as_str()?.to_string(),
-                    face: Default::default(),
+                    face,
                 })
             })
             .collect();
         // a sheet and a panel drawing are on paper already; the others are the model at full size
         let scale = if matches!(kind, "Sheet" | "Panel") { 1.0 } else { 50.0 };
         let name = if kind.is_empty() { name.to_string() } else { format!("{name} ({kind})") };
-        project.drafts.push(Draft { id, name, kind: DraftKind::Drawing, scale, lines, texts, dimensions: Vec::new(), line_colors: Vec::new(), fills: Vec::new() });
+        project.drafts.push(Draft { id, name, kind: DraftKind::Drawing, scale, lines, texts, dimensions: Vec::new(), line_colors, fills: Vec::new() });
     }
     Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
@@ -247,20 +270,24 @@ mod tests {
     /// A scene with one drawing: a line and a text.
     #[test]
     fn decodes_the_drawings_of_a_project() {
-        let header = r#"{"format":"Vertex BD","info":[],"layers":[],"drawings":[{"name":"SECT-A","kind":"View","lines":1,"texts":[[1.5,-0.5,0.1,90.0,1,"6900"]]}]}"#;
+        let header = r#"{"format":"Vertex BD","info":[],"layers":[],"drawings":[{"name":"SECT-A","kind":"View","lines":1,"colors":true,"texts":[[1.5,-0.5,0.072,90.0,1,"6900","Courier New",[0,36,170],0.7]]}]}"#;
         let mut buf = b"VXS1".to_vec();
         buf.extend((header.len() as u32).to_le_bytes());
         buf.extend(header.as_bytes());
         for v in [0f32, 0., 3., 0., 0.18] { buf.extend(v.to_le_bytes()); }
+        buf.extend([182u8, 145, 0]);
         let loaded = decode(&buf).unwrap();
         let draft = &loaded.project.drafts[0];
         assert_eq!((draft.name.as_str(), draft.kind, draft.scale), ("SECT-A (View)", DraftKind::Drawing, 50.0));
         assert_eq!(draft.lines, [DraftLine { element: 1, a: [0.0, 0.0], b: [3.0, 0.0] }]);
         let text = &draft.texts[0];
-        assert_eq!((text.text.as_str(), text.at, text.size, text.align), ("6900", [1.5, -0.5], 0.1, 1));
+        assert_eq!((text.text.as_str(), text.at, text.align), ("6900", [1.5, -0.5], 1));
+        assert!((text.size - 0.1).abs() < 1e-6 && (text.height - 0.072).abs() < 1e-6);
+        assert_eq!((&*text.face.family, text.face.color, text.face.width), ("Courier New", Some([0, 36, 170]), 0.7));
+        assert_eq!(draft.line_colors, [Some([182, 145, 0])]);
         assert!((text.angle - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
         // lines the header promises but the buffer lacks
-        assert!(decode(&buf[..buf.len() - 8]).is_err());
+        assert!(decode(&buf[..buf.len() - 2]).is_err());
     }
 
     #[test]

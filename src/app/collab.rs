@@ -590,8 +590,8 @@ impl State {
             self.sight_shares = shares.iter().map(|v| v.to_string()).collect();
         }
         if let Some(r) = self.rules().map(|r| r.rooms.clone()) {
-            let values = [r.room_height, r.door_width, r.door_height, r.escape_distance, r.threshold, r.ramp_run, r.turning_circle];
-            if self.room_amounts.len() != 7 || !self.room_amounts.iter().zip(values).all(|(t, v)| same(t, v) || t.trim().is_empty() || t.ends_with(['.', ','])) {
+            let values = [r.room_height, r.door_width, r.door_height, r.escape_distance, r.threshold, r.ramp_run, r.turning_circle, r.door_space, r.compartment_area];
+            if self.room_amounts.len() != 9 || !self.room_amounts.iter().zip(values).all(|(t, v)| same(t, v) || t.trim().is_empty() || t.ends_with(['.', ','])) {
                 self.room_amounts = values.iter().map(|v| v.to_string()).collect();
             }
         }
@@ -2258,9 +2258,9 @@ impl App {
             }
             Event::RoomAmount(k, typed) => {
                 if let (Some(rules), Ok(v)) = (self.collab.rules_mut(), typed.trim().replace(',', ".").parse::<f32>()) {
-                    if v.is_finite() && (0.0..=1000.0).contains(&v) {
+                    if v.is_finite() && (0.0..=100000.0).contains(&v) {
                         let r = &mut rules.rooms;
-                        *[&mut r.room_height, &mut r.door_width, &mut r.door_height, &mut r.escape_distance, &mut r.threshold, &mut r.ramp_run, &mut r.turning_circle][k.min(6)] = v;
+                        *[&mut r.room_height, &mut r.door_width, &mut r.door_height, &mut r.escape_distance, &mut r.threshold, &mut r.ramp_run, &mut r.turning_circle, &mut r.door_space, &mut r.compartment_area][k.min(8)] = v;
                     }
                 }
             }
@@ -2279,11 +2279,17 @@ impl App {
                     .map(|(k, e)| (k, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone()))
                     .collect();
                 self.collab.tab = Tab::Checks;
-                if files.is_empty() {
-                    self.collab_note(Tone::Warning, l.text("Open een IFC-model om het te controleren: de controles lezen het IFC-bestand zelf.", "Open an IFC model to check it: the checks read the IFC file itself."));
+                if self.model.is_none() {
+                    self.collab_note(Tone::Warning, l.text("Open een model om het te controleren.", "Open a model to check it."));
                     return Task::none();
                 }
-                if rules.ids.is_empty() && !rules.model_checks && !rules.ils {
+                // a model that is no IFC file is checked as it is drawn: its rooms and the places
+                // of its elements; the IDS and the checks of the file itself need the IFC
+                if files.is_empty() && !rules.rooms.on && !rules.model_checks {
+                    self.collab_note(Tone::Warning, l.text("Open een IFC-model voor deze controles: ze lezen het IFC-bestand zelf.", "Open an IFC model for these checks: they read the IFC file itself."));
+                    return Task::none();
+                }
+                if rules.ids.is_empty() && !rules.model_checks && !rules.ils && !rules.rooms.on {
                     self.collab_note(Tone::Warning, l.text("De regelset heeft geen controles: laad een IDS of zet de modelcontroles aan.", "The rule set has no checks: load an IDS or switch the model checks on."));
                     return Task::none();
                 }
@@ -2302,8 +2308,8 @@ impl App {
                 if run == self.collab.run {
                     self.collab.running = false;
                     // the checks that need the rooms' shapes, on the model as it is drawn
-                    if let Some(rooms) = self.collab.rules().map(|r| r.rooms.clone()).filter(|r| r.on) {
-                        self.collab.routes = self.room_shape_checks(&mut checked, &rooms);
+                    if let Some(rules) = self.collab.rules().cloned() {
+                        self.collab.routes = self.shape_checks(&mut checked, &rules);
                     }
                     self.collab.route_shown = None;
                     self.collab.checked = checked;
@@ -2796,9 +2802,7 @@ impl App {
                 let cancel = AtomicBool::new(false);
                 let files = self.models.iter().enumerate().filter(|(_, e)| e.model.path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ifc")));
                 let mut checked: Vec<Checked> = check_files(files.map(|(model, e)| (model, e.model.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), e.model.path.clone())).collect(), &rules, &cancel);
-                if rules.rooms.on {
-                    self.collab.routes = self.room_shape_checks(&mut checked, &rules.rooms);
-                }
+                self.collab.routes = self.shape_checks(&mut checked, &rules);
                 self.collab.checked = checked;
                 let failed = self.collab.checked.first().and_then(|c| c.report.as_ref().ok()).and_then(|r| r.specifications.iter().position(|s| s.status == ValidationStatus::Failed));
                 self.collab.open_spec = failed.map(|s| (0, s));
@@ -3099,11 +3103,11 @@ impl App {
             list = list.push(w::checkbox(look, l.text("BIM basis ILS", "BIM basis ILS"), rules.ils, Some(|on| go(Event::Ils(on)))));
             list = list.push(w::checkbox(look, l.text("Ruimtes, deuren, vluchtwegen en brand", "Rooms, doors, escape routes and fire"), rules.rooms.on, Some(|on| go(Event::Rooms(on)))));
             if rules.rooms.on {
-                let names = [l.text("Vrije hoogte ruimte", "Free height of a room"), l.text("Breedte deur", "Width of a door"), l.text("Hoogte deur", "Height of a door"), l.text("Loopafstand tot uitgang", "Walk to a way out"), l.text("Drempel deur", "Threshold of a door"), l.text("Helling 1 op", "Ramp 1 in"), l.text("Draaicirkel", "Turning circle")];
+                let names = [l.text("Vrije hoogte ruimte", "Free height of a room"), l.text("Breedte deur", "Width of a door"), l.text("Hoogte deur", "Height of a door"), l.text("Loopafstand tot uitgang", "Walk to a way out"), l.text("Drempel deur", "Threshold of a door"), l.text("Helling 1 op", "Ramp 1 in"), l.text("Draaicirkel", "Turning circle"), l.text("Vrije ruimte bij deur", "Free space at a door"), l.text("Vloer per brandcompartiment", "Floor per fire compartment")];
                 for (k, name) in names.into_iter().enumerate() {
                     let typed = state.room_amounts.get(k).map(String::as_str).unwrap_or("");
                     list = list.push(
-                        container(row![w::secondary(look, name).width(Length::Fill), container(w::text_field(look, "m", typed, Some(move |t| go(Event::RoomAmount(k, t))), D::Compact, None)).width(64), w::secondary(look, "m")].spacing(4).align_y(Alignment::Center))
+                        container(row![w::secondary(look, name).width(Length::Fill), container(w::text_field(look, "m", typed, Some(move |t| go(Event::RoomAmount(k, t))), D::Compact, None)).width(64), w::secondary(look, if k == 8 { "m²" } else if k == 5 { "" } else { "m" })].spacing(4).align_y(Alignment::Center))
                             .padding(iced::Padding { left: 24.0, ..iced::Padding::ZERO }),
                     );
                 }

@@ -280,6 +280,28 @@ mod tests {
     }
 
     #[test]
+    fn a_click_in_a_dimensions_field_types_there_and_leaves_the_selection() {
+        let mut app = modelling();
+        app.modeller.model.add_grid(DVec2::new(-2.0, 0.0), DVec2::new(10.0, 0.0)).unwrap();
+        walls(&mut app, &[(0.0, 3.0), (6.0, 3.0)]);
+        app.select_modelled(ElementId(1));
+        // the viewport alone, at the size the app knows it has: the field at the middle of the line
+        let (x, y) = app.on_screen(DVec3::new(3.0, 1.5, 0.0), 1000.0, 800.0).unwrap();
+        let p = app.theme.palette();
+        let messages: Vec<Message> = {
+            let settings = iced::Settings::default();
+            let mut ui = iced_test::Simulator::with_size(settings, iced::Size::new(1000.0, 800.0), app.viewport_view(p, openaec_ui::Language::English));
+            ui.point_at(Point::new(x, y));
+            let _ = ui.simulate(iced_test::simulator::click());
+            let _ = ui.typewrite("7");
+            ui.into_messages().collect()
+        };
+        let typed: Vec<&Message> = messages.iter().filter(|m| matches!(m, Message::TempDim(_))).collect();
+        assert!(!typed.is_empty(), "the field takes what is typed: {messages:?}");
+        assert!(!messages.iter().any(|m| matches!(m, Message::Navigate(crate::viewport::Navigate::Pick { .. }))), "the click is the field's, not the viewport's: {messages:?}");
+    }
+
+    #[test]
     fn esc_drops_what_was_typed_and_a_text_that_is_no_number_moves_nothing() {
         let mut app = modelling();
         walls(&mut app, &[(0.0, 0.0), (6.0, 0.0)]);

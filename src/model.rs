@@ -614,6 +614,9 @@ pub struct CropSplit {
 pub enum DraftKind {
     Legend,
     Drafting,
+    /// A drawing of a project that is no view of a model: a sheet, a section, a floor or panel
+    /// drawing as its file keeps it.
+    Drawing,
 }
 
 /// A drawing without a model (Revit, beta: a legend or a drafting view): what is drawn in it, in

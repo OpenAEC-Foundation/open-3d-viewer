@@ -5,7 +5,7 @@
 //! files report that the reader is missing. The interface (`vertex_read`, one scene buffer) is
 //! described in the library's `docs/ABI.md`.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{Layer, ProjectData};
+use crate::model::{Draft, DraftKind, DraftLine, DraftText, Layer, ProjectData};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -176,6 +176,42 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
         let props = l["props"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_u64()?, p[1].as_str()?.to_string()))).collect();
         layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false, points: false });
     }
+    // the drawings of a project, after the layers: per drawing its lines (x and y of both ends,
+    // metres) and the widths of their pens; its texts are in the header
+    for (k, d) in header["drawings"].as_array().into_iter().flatten().enumerate() {
+        let count = d["lines"].as_u64().ok_or_else(bad)? as usize;
+        let ends = floats(take(count.checked_mul(16).ok_or_else(bad)?)?);
+        let _weights = take(count * 4)?;
+        let id = k as u64 + 1;
+        let kind = d["kind"].as_str().unwrap_or_default();
+        let name = d["name"].as_str().unwrap_or("Drawing");
+        let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
+        let lines = ends.chunks_exact(4).filter(|l| finite(l)).map(|l| DraftLine { element: id, a: [l[0], l[1]], b: [l[2], l[3]] }).collect();
+        let texts = d["texts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| {
+                let number = |i: usize| t.get(i).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).map(|v| v as f32);
+                let size = number(2)?.max(0.0);
+                Some(DraftText {
+                    element: id,
+                    at: [number(0)?, number(1)?],
+                    width: 0.0,
+                    height: size,
+                    size,
+                    align: t.get(4).and_then(|v| v.as_u64()).unwrap_or(0).min(2) as u8,
+                    angle: number(3)?.to_radians(),
+                    text: t.get(5)?.as_str()?.to_string(),
+                    face: Default::default(),
+                })
+            })
+            .collect();
+        // a sheet and a panel drawing are on paper already; the others are the model at full size
+        let scale = if matches!(kind, "Sheet" | "Panel") { 1.0 } else { 50.0 };
+        let name = if kind.is_empty() { name.to_string() } else { format!("{name} ({kind})") };
+        project.drafts.push(Draft { id, name, kind: DraftKind::Drawing, scale, lines, texts, dimensions: Vec::new(), line_colors: Vec::new(), fills: Vec::new() });
+    }
     Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
 }
 
@@ -206,6 +242,25 @@ mod tests {
         assert_eq!(layer.colors.as_ref().unwrap()[2], [200, 150, 100, 255]);
         assert_eq!(layer.elements, [(1, 0, 3)]);
         assert_eq!(loaded.project.info[0].1, "BTL V10.5");
+    }
+
+    /// A scene with one drawing: a line and a text.
+    #[test]
+    fn decodes_the_drawings_of_a_project() {
+        let header = r#"{"format":"Vertex BD","info":[],"layers":[],"drawings":[{"name":"SECT-A","kind":"View","lines":1,"texts":[[1.5,-0.5,0.1,90.0,1,"6900"]]}]}"#;
+        let mut buf = b"VXS1".to_vec();
+        buf.extend((header.len() as u32).to_le_bytes());
+        buf.extend(header.as_bytes());
+        for v in [0f32, 0., 3., 0., 0.18] { buf.extend(v.to_le_bytes()); }
+        let loaded = decode(&buf).unwrap();
+        let draft = &loaded.project.drafts[0];
+        assert_eq!((draft.name.as_str(), draft.kind, draft.scale), ("SECT-A (View)", DraftKind::Drawing, 50.0));
+        assert_eq!(draft.lines, [DraftLine { element: 1, a: [0.0, 0.0], b: [3.0, 0.0] }]);
+        let text = &draft.texts[0];
+        assert_eq!((text.text.as_str(), text.at, text.size, text.align), ("6900", [1.5, -0.5], 0.1, 1));
+        assert!((text.angle - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        // lines the header promises but the buffer lacks
+        assert!(decode(&buf[..buf.len() - 8]).is_err());
     }
 
     #[test]

@@ -47,6 +47,11 @@ pub const DEFINITION: &str = "OpenAEC_definition";
 /// under this key.
 pub const GRID: &str = "openaec::grid";
 
+/// The key the reader gives a file's library back under, among the project's definitions: the
+/// materials and types of its `openaec::material`, `openaec::buildup`, `openaec::lineartype` and
+/// `openaec::systemtype` nodes (see `bim_library::ifcx`).
+pub const LIBRARY: &str = "openaec::library";
+
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.
 pub fn element_path(file_name: &str, layer: usize, id: u64) -> String {
@@ -183,6 +188,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         project_children.insert(key, path.clone().into());
         data.push(json!({"path": path, "attributes": {"bsi::ifc::class": {"code": "IfcGridAxis"}, "bsi::ifc::prop::Name": grid.name, GRID: {"name": grid.name, "start": end(grid.a), "end": end(grid.b)}}}));
     }
+    // the library of a modelled project: its materials and types, as a library file holds them
+    data.extend(model.project.types.iter().cloned());
     data.push(json!({"path": project, "children": project_children, "attributes": {"bsi::ifc::class": {"code": "IfcProject"}, "bsi::ifc::prop::Name": stem}}));
     data.extend(document.ifcx_drawing_nodes_with(&|set| hidden_paths(model, file_name, set)));
 

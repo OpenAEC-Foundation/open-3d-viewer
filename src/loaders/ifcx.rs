@@ -610,7 +610,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         let node = composer.compose(root);
         scene.walk(&node, root, root, DMat4::IDENTITY, None, None, 0);
     }
-    let definitions = std::mem::take(&mut scene.definitions);
+    let mut definitions = std::mem::take(&mut scene.definitions);
     let mut layers: Vec<Layer> = scene.layers.into_values().filter(|l| !l.indices.is_empty()).collect();
     if layers.iter().all(|l| l.hidden) {
         // a file of only spaces or openings: show them
@@ -659,6 +659,17 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         match drawings.iter_mut().find(|(p, _)| *p == node.path) {
             Some((_, attributes)) => attributes.as_object_mut().into_iter().for_each(|a| a.extend(own.clone())),
             None => drawings.push((node.path.clone(), Value::Object(own))),
+        }
+    }
+    // the library a modelled project's file holds: its materials and types come back under their
+    // own key, before the elements made of them
+    if !definitions.is_empty() {
+        let mut nodes: Vec<Value> = flat.iter().map(|(path, node)| serde_json::json!({"path": path, "attributes": node.attributes.iter().map(|(k, v)| (k.clone(), (**v).clone())).collect::<serde_json::Map<String, Value>>()})).collect();
+        nodes.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+        if let Ok(library) = bim_library::ifcx::read(&serde_json::json!({ "data": nodes })) {
+            if library != bim_library::Library::default() {
+                definitions.insert(0, serde_json::json!({ crate::export::ifcx::LIBRARY: library }));
+            }
         }
     }
     let project = ProjectData { info, levels, level_paths, drawings, elements: definitions, ..ProjectData::default() };

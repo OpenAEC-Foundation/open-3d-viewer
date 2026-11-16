@@ -63,6 +63,10 @@ pub(super) struct Source {
     level: Option<String>,
     /// What the new wall is named after: its type, as the file names it, else "Wall".
     name: String,
+    /// Its type's layers, from the exterior in, and whether that exterior is on its left (see
+    /// `modeller::file_types`).
+    layers: Vec<crate::model::SourceLayer>,
+    exterior_left: bool,
 }
 
 impl App {
@@ -98,7 +102,7 @@ impl App {
         }
         let wall = PlanarDef { form: PlanarForm::Wall { start, end, base: w.base, height: w.height }, thickness: w.thickness, openings: w.openings.clone(), build_up: None };
         let name = scene.element_props(shown).into_iter().find(|(k, _)| k == "type").map(|(_, v)| v).filter(|v| !v.is_empty()).unwrap_or_else(|| "Wall".into());
-        Some(Source { entry, id, wall, level: w.level.clone(), name })
+        Some(Source { entry, id, wall, level: w.level.clone(), name, layers: w.layers.clone(), exterior_left: w.exterior_left })
     }
 
     /// Shows every opened file a wall was taken over from without the walls `taken` names (the
@@ -135,7 +139,15 @@ impl App {
     /// changes and the banner says why.
     pub(super) fn take_over(&mut self, source: Source) -> Option<ElementId> {
         let grid = self.modeller.model.grid;
-        let shape = Shape::Planar(source.wall);
+        // the file's layers as a wall type of the library; its exterior comes on the right
+        let mut wall = source.wall;
+        if let Some(build_up) = super::modeller::file_types::file_build_up(&mut self.library, &source.name, wall.total_thickness(), &source.layers) {
+            if source.exterior_left {
+                wall = super::modeller::file_types::turned_round(wall);
+            }
+            wall = wall.with_build_up(Some(build_up));
+        }
+        let shape = Shape::Planar(wall);
         // the kernel must make the wall before anything changes
         if let Err(refusal) = bim_core::Model::new(grid).add(Element::in_project(&grid, "", None, shape.clone())) {
             self.modeller.refusal = Some(refusal);
@@ -194,7 +206,7 @@ pub(crate) fn house() -> Arc<Model> {
     let mut model = Model::new(std::path::PathBuf::from("C:/work/house.rvt"), "Revit", vec![boxed(7, [0.0, 0.0, 0.0], [6.0, 0.3, 3.0]), boxed(8, [0.0, 0.3, 0.0], [0.3, 4.0, 3.0])]);
     model.project.levels = vec![("Level 0".into(), 0.0)];
     let door = bim_core::Opening { along: 1.0, sill: 0.0, width: 0.9, height: 2.1 };
-    let wall = crate::model::SourceWall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, thickness: 0.3, openings: vec![door], level: Some("Level 0".into()) };
+    let wall = crate::model::SourceWall { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 3.0, thickness: 0.3, openings: vec![door], level: Some("Level 0".into()), layers: Vec::new(), exterior_left: false };
     model.project.walls.insert(7, wall);
     Arc::new(model)
 }
@@ -287,6 +299,48 @@ mod tests {
         assert_eq!(read[0].shape_in_project(&back.modeller.model.grid), shape);
         let shown = back.model.as_ref().unwrap();
         assert_eq!(shown.layers.iter().map(|l| l.elements.len()).sum::<usize>(), 2, "the wall taken over and the file's other wall");
+    }
+
+    #[test]
+    fn a_layered_wall_of_the_file_keeps_its_layers_and_materials() {
+        // the house, its wall 7 a cavity wall with its exterior on the left of its line
+        let mut model = Arc::try_unwrap(house()).ok().expect("one owner");
+        let layer = |material: &str, thickness: f64, colour| crate::model::SourceLayer { material: material.into(), thickness, function: "Structure".into(), colour };
+        let wall = model.project.walls.get_mut(&7).unwrap();
+        wall.layers = vec![layer("Metselwerk", 0.1, None), layer("Luchtspouw", 0.04, None), layer("Steenwol plaat", 0.06, Some([230, 200, 90])), layer("Kalkzandsteen", 0.1, None)];
+        wall.exterior_left = true;
+        let mut app = opened();
+        app.set_model(Arc::new(model));
+        app.modeller.in_modeller = true;
+        select(&mut app, 7);
+        // the grip at the file's end of the wall, (6, 0.15), dragged out to 8 m
+        drag(&mut app, 1, 8.0, 0.15);
+        let taken = app.modeller.model.iter().next().expect("taken over").clone();
+        let shape = taken.shape_in_project(&app.modeller.model.grid);
+        let Shape::Planar(p) = &shape else { panic!() };
+        let build_up = p.build_up.as_ref().expect("a build-up");
+        assert_eq!(build_up.layers.iter().map(|l| l.material.as_str()).collect::<Vec<_>>(), ["brick", "luchtspouw", "steenwol-plaat", "sand-lime"]);
+        assert_eq!(build_up.layers.iter().map(|l| l.cavity).collect::<Vec<_>>(), [false, true, false, false]);
+        assert!((p.total_thickness() - 0.3).abs() < 1e-12);
+        // its exterior is on the right now: the wall runs the other way, and the end dragged is
+        // the one that was pressed; the door is where it was, counted from the other end
+        assert_eq!(edit_points(&shape).0, vec![DVec3::new(8.0, 0.15, 0.0), DVec3::new(0.0, 0.15, 0.0)]);
+        assert!((p.openings[0].along - 6.1).abs() < 1e-9 && (p.openings[0].width - 0.9).abs() < 1e-9, "{:?}", p.openings);
+        // the library has the file's materials and the type; the solids are in their colours
+        assert_eq!(app.library.material("steenwol-plaat").map(|m| m.colour), Some([230, 200, 90]));
+        assert!(app.library.buildup(&build_up.id).is_some());
+        let parts = app.modeller.model.evaluate(taken.id).unwrap();
+        assert_eq!(parts.len(), 3, "the cavity has no solid");
+        // saved and opened again, the wall has the same layers and the library the materials
+        let scene = app.model.clone().unwrap();
+        let bytes = crate::export::to_bytes(&scene, &app.document_now(), "house.ifcx").unwrap();
+        let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: Arc::new(bytes) };
+        let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        let mut back = App::default();
+        back.set_model(Arc::new(loaded));
+        let read = back.modeller.model.iter().next().expect("the wall").clone();
+        assert_eq!(read.shape_in_project(&back.modeller.model.grid), shape);
+        assert_eq!(back.library.material("steenwol-plaat").map(|m| m.colour), Some([230, 200, 90]));
     }
 
     /// A wall of a sample taken over, and how many of its walls the kernel makes. Set `RVT_SAMPLE`

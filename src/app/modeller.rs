@@ -20,6 +20,7 @@ use std::sync::Arc;
 mod grids;
 pub mod browser;
 pub mod explorer;
+pub(super) mod file_types;
 pub mod key_actions;
 pub mod keys;
 pub mod select;
@@ -237,7 +238,12 @@ impl App {
         }
         for definition in &model.project.elements {
             // a grid line comes under its own key, an element as it is
-            if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
+            if let Some(library) = definition.get(crate::export::ifcx::LIBRARY) {
+                // the file's library: what this one lacks of it is added
+                if let Ok(library) = serde_json::from_value::<bim_library::Library>(library.clone()) {
+                    self.library.merge(&library);
+                }
+            } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
                 if let Ok(grid) = serde_json::from_value::<bim_core::GridDef>(grid.clone()) {
                     let _ = self.modeller.model.insert_grid(grid);
                 }
@@ -545,6 +551,8 @@ impl App {
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
         let mut built = viewer_model(&self.modeller.model, &levels, &self.library);
         built.project.grids = self.modelled_grid_lines();
+        // the project's library goes into its file: materials and types, those taken from a file too
+        built.project.types = bim_library::ifcx::nodes(&self.library);
         let built = Arc::new(built);
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {

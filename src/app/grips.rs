@@ -82,12 +82,16 @@ impl App {
 
     /// A press on grip `index` of the selected element: an end, or (past them) the middle, which
     /// moves both.
-    pub(super) fn grip_press(&mut self, index: usize) {
+    pub(super) fn grip_press(&mut self, mut index: usize) {
         if self.gripped().is_none() {
             // a wall of an opened file: taken over first, then dragged as a modelled wall
             let Some(source) = self.source_gripped() else { return };
-            if self.take_over(source).is_none() {
-                return;
+            let (shown, _) = edit_points(&Shape::Planar(source.wall.clone()));
+            let Some(taken) = self.take_over(source) else { return };
+            // taken over with its ends changed round, the grip pressed is its other end
+            let ends = self.modeller.model.get(taken).map(|e| edit_points(&e.shape_in_project(&self.modeller.model.grid)).0);
+            if index < 2 && ends.is_some_and(|e| e[0].distance(shown[0]) > e[0].distance(shown[1])) {
+                index = 1 - index;
             }
         }
         let Some(element) = self.gripped() else { return };

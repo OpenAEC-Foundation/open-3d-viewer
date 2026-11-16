@@ -327,6 +327,21 @@ const WINDOWS: i32 = -2000014;
 fn source_walls(doc: &rvt_read::Document) -> HashMap<u64, SourceWall> {
     let levels: HashMap<i64, String> = doc.levels().into_iter().map(|l| (l.id as i64, l.name)).collect();
     let mut walls = HashMap::new();
+    // the layers of each wall type, from the exterior in, and each material once
+    let types: HashMap<i64, rvt_model::CompoundType> = doc.compound_types().into_iter().map(|t| (t.id as i64, t)).collect();
+    let mut materials: HashMap<i64, (String, Option<[u8; 3]>)> = HashMap::new();
+    let mut material = |id: Option<i64>| -> (String, Option<[u8; 3]>) {
+        let Some(id) = id.filter(|id| *id > 0) else { return (String::new(), None) };
+        materials
+            .entry(id)
+            .or_insert_with(|| {
+                let o = doc.object(id as u64);
+                let m = o.as_ref().and_then(|o| o.deref(o.get("m_pMaterial")?));
+                let name = m.and_then(|m| m.get("m_name")?.as_str()).unwrap_or_default().to_string();
+                (name, m.and_then(|m| m.get("m_color")?.as_i64()).map(super::rvt_materials::rgb))
+            })
+            .clone()
+    };
     for w in doc.walls() {
         if w.curve.is_some() || w.in_place || w.stacked || w.stacked_parent.is_some() || w.curtain_panel {
             continue;
@@ -341,7 +356,18 @@ fn source_walls(doc: &rvt_read::Document) -> HashMap<u64, SourceWall> {
         }
         // as the mesher stands it: on its base level and offset, else on its line's height
         let base = doc.level_elevation(w.base_level).map_or(w.p0[2], |z| z + w.base_offset) * FT;
-        let wall = SourceWall { start, end, base, height: height * FT, thickness: thickness * FT, openings: Vec::new(), level: levels.get(&w.base_level).cloned() };
+        let layers = types.get(&w.wall_type).map_or_else(Vec::new, |t| {
+            t.layers
+                .iter()
+                .map(|l| {
+                    let (name, colour) = material(l.material);
+                    crate::model::SourceLayer { material: name, thickness: l.width * FT, function: l.function.to_string(), colour }
+                })
+                .collect()
+        });
+        // a wall as drawn has its exterior on the left of its location line; flipped, on the right
+        let flipped = doc.object(w.id).and_then(|o| o.get("m_isFlipped")?.as_i64()).is_some_and(|f| f != 0);
+        let wall = SourceWall { start, end, base, height: height * FT, thickness: thickness * FT, openings: Vec::new(), level: levels.get(&w.base_level).cloned(), layers, exterior_left: !flipped };
         walls.insert(w.id, wall);
     }
     // a door's or window's category is its family's, which its instance record carries
@@ -1027,7 +1053,7 @@ mod tests {
     use super::*;
 
     fn wall(start: glam::DVec2, end: glam::DVec2) -> SourceWall {
-        SourceWall { start, end, base: 1.0, height: 3.0, thickness: 0.3, openings: Vec::new(), level: None }
+        SourceWall { start, end, base: 1.0, height: 3.0, thickness: 0.3, openings: Vec::new(), level: None, layers: Vec::new(), exterior_left: false }
     }
 
     /// A box in feet from metres.

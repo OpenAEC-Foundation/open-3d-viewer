@@ -115,7 +115,15 @@ pub fn with_points(shape: &Shape, points: &[DVec3]) -> Shape {
             l.start = points[0];
             l.end = points[1];
         }
-        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, base, .. }, .. }) => {
+        Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, base, .. }, openings, .. }) => {
+            // its doors and windows stay where they stand: counted from the start, they are as
+            // much nearer to it as the start came along the wall
+            if let Some(along) = (*end - *start).try_normalize() {
+                let came = (flat(&points[0]) - *start).dot(along);
+                for o in openings.iter_mut() {
+                    o.along -= came;
+                }
+            }
             *start = flat(&points[0]);
             *end = flat(&points[1]);
             *base = points[0].z;

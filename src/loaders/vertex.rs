@@ -245,8 +245,9 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
                 })
             })
             .collect();
-        // a sheet and a panel drawing are on paper already; the others are the model at full size
-        let scale = if matches!(kind, "Sheet" | "Panel") { 1.0 } else { 50.0 };
+        // a sheet, a panel and a piece drawing are on paper already; the others are the model at
+        // full size
+        let scale = if matches!(kind, "Sheet" | "Panel" | "Piece") { 1.0 } else { 50.0 };
         let name = if kind.is_empty() { name.to_string() } else { format!("{name} ({kind})") };
         project.drafts.push(Draft { id, name, kind: DraftKind::Drawing, scale, lines, texts, dimensions: Vec::new(), line_colors, fills: Vec::new() });
     }

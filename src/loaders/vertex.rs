@@ -227,8 +227,9 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
                 Some(DraftText {
                     element: t.get(9).and_then(|v| v.as_u64()).filter(|p| *p != 0).unwrap_or(id),
                     at: [number(0)?, number(1)?],
+                    // its box from the foot of its letters up to the top of a line of them
                     width: 0.0,
-                    height: capitals,
+                    height: size,
                     size,
                     align: t.get(4).and_then(|v| v.as_u64()).unwrap_or(0).min(2) as u8,
                     angle: number(3)?.to_radians(),
@@ -292,7 +293,7 @@ mod tests {
         assert_eq!(draft.texts[0].element, 1_000_007);
         let text = &draft.texts[0];
         assert_eq!((text.text.as_str(), text.at, text.align), ("6900", [1.5, -0.5], 1));
-        assert!((text.size - 0.1).abs() < 1e-6 && (text.height - 0.072).abs() < 1e-6);
+        assert!((text.size - 0.1).abs() < 1e-6 && (text.height - 0.1).abs() < 1e-6);
         assert_eq!((&*text.face.family, text.face.color, text.face.width), ("Courier New", Some([0, 36, 170]), 0.7));
         assert_eq!(draft.line_colors, [Some([182, 145, 0])]);
         assert!((text.angle - std::f32::consts::FRAC_PI_2).abs() < 1e-6);

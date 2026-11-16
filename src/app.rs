@@ -714,6 +714,8 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// The rows of an element's top in the Modeller's properties.
+    Top(modeller::tops::TopMessage),
     /// A row of the Modeller's model explorer.
     Explorer(modeller::explorer::ExplorerMessage),
     /// A row of the Modeller's project browser.
@@ -1733,6 +1735,7 @@ impl App {
             Message::LevelEdit(message) => self.level_edit_message(message),
             Message::Browser(message) => self.browser_message(message),
             Message::Explorer(message) => self.explorer_message(message),
+            Message::Top(message) => self.top_message(message),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),

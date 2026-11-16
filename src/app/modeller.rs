@@ -161,6 +161,8 @@ pub struct Modeller {
     pub tool: Option<(ModelTool, &'static str)>,
     /// The branches of the model explorer that are open, by their keys (see `explorer`).
     pub explorer_open: std::collections::HashSet<String>,
+    /// The offset of a top being typed in the properties: the element and the text (see `tops`).
+    pub top_offset: Option<(ElementId, String)>,
     /// The level being renamed or moved in the Levels tab (see `levels`).
     pub level_edit: Option<levels::LevelEdit>,
     /// The level worked on when no floor plan is shown (its path): PageUp and PageDown step it.
@@ -404,7 +406,10 @@ impl App {
             self.move_wall_end(last, start);
         }
         let name = self.placed_name(tool, name);
-        match self.add_element(name, level, shape) {
+        // with no height typed, what stands reaches the level above, when there is one
+        let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
+        let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
+        match self.add_element_reaching(name, level, top, shape) {
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];
                 self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
@@ -416,8 +421,14 @@ impl App {
 
     /// Adds an element defined in scene coordinates, named `name` and a number, and shows it.
     pub(super) fn add_element(&mut self, name: &str, level: Option<String>, shape: Shape) -> Result<ElementId, Refusal> {
+        self.add_element_reaching(name, level, None, shape)
+    }
+
+    /// As [`App::add_element`], the element reaching `top` with its top (see `tops`).
+    pub(super) fn add_element_reaching(&mut self, name: &str, level: Option<String>, top: Option<bim_core::Top>, shape: Shape) -> Result<ElementId, Refusal> {
         let grid = self.modeller.model.grid;
         let mut element = Element::in_project(&grid, name, level, shape);
+        element.top = top;
         // numbered per IFC class: Wall 1, Wall 2, Slab 1
         let number = self.modeller.model.iter().filter(|e| e.class() == element.class()).count() + 1;
         element.name = format!("{name} {number}");

@@ -232,7 +232,14 @@ impl App {
                 self.change_element(renamed);
             }
         } else if let Some(shape) = number(&typed).and_then(|v| with_value(&e.shape_in_project(&self.modeller.model.grid), field, v)) {
-            self.change_shape(&e, shape);
+            if field == ElementField::Height && e.top.is_some() {
+                // a height typed is the element's own: its top lets its level go
+                let mut freed = e.reshaped(&self.modeller.model.grid, shape);
+                freed.top = None;
+                self.change_element(freed);
+            } else {
+                self.change_shape(&e, shape);
+            }
         }
         self.modeller.typing = Some((e.id, field, typed));
     }
@@ -371,11 +378,15 @@ impl App {
             // what a type gives is shown, not typed
             let fixed = match f {
                 F::Thickness => layered.is_some() || system_type.is_some(),
+                // a top that reaches a level gives the height
+                F::Height => e.top.is_some(),
                 F::Width | F::Depth => system_type.is_some(),
                 _ => false,
             };
             rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
+        // between levels: the level it stands on and the one its top reaches
+        rows = rows.push(self.top_rows(e, p, l));
         // a join: its kind to choose, and an end plate's sizes
         if let Shape::Connection(c) = &shape {
             if c.kind != ConnectionKind::Cut {

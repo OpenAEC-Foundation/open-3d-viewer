@@ -25,6 +25,7 @@ pub mod keys;
 pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
+pub mod tops;
 
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -712,7 +713,7 @@ impl App {
         if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { end, .. }, .. }) = &mut shape {
             *end = to;
         }
-        let mut moved = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+        let mut moved = e.reshaped(&grid, shape);
         moved.id = id;
         let _ = self.modeller.model.replace(moved);
     }

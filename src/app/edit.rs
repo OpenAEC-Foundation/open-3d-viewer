@@ -393,10 +393,9 @@ impl App {
     /// Gives the edited element `shape` (scene coordinates), if the kernel can make it; else keeps
     /// it and shows why. Whether it changed.
     pub(super) fn change_edited(&mut self, shape: Shape) -> bool {
-        let Some((id, name, level)) = self.edited().map(|(e, _)| (e.id, e.name.clone(), e.level.clone())) else { return false };
-        let grid = self.modeller.model.grid;
-        let mut element = Element::in_project(&grid, name, level, shape);
-        element.id = id;
+        let Some(old) = self.edited().map(|(e, _)| e.clone()) else { return false };
+        let (id, grid) = (old.id, self.modeller.model.grid);
+        let element = old.reshaped(&grid, shape);
         match self.modeller.model.replace(element) {
             Ok(()) => {
                 self.joins_follow(&[id]);

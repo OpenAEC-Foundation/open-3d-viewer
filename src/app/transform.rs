@@ -7,7 +7,7 @@
 use super::App;
 use crate::selection::Pickable;
 use bim_core::element::{Opening, PlanarForm};
-use bim_core::{Element, ElementId, Shape};
+use bim_core::{ElementId, Shape};
 use glam::{DVec2, DVec3};
 use openaec_ui::Language;
 
@@ -269,7 +269,7 @@ impl App {
         for &id in elements {
             let Some(e) = self.modeller.model.get(id).cloned() else { continue };
             let Some(shape) = transformed(&e.shape_in_project(&grid), map) else { continue };
-            let mut changed = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+            let mut changed = e.reshaped(&grid, shape);
             let result = if copy {
                 // the next number of its name: Wall 3 copied is Wall 4 when there are three
                 let base = e.name.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()).map_or(e.name.as_str(), |(base, _)| base);
@@ -378,7 +378,7 @@ mod tests {
         let _ = app.update(Message::Transform(TransformKind::Copy));
         click(&mut app, 10.0, 5.0);
         click(&mut app, 10.0, 8.0);
-        let walls: Vec<&Element> = app.modeller.model.iter().filter(|e| e.class() == "IfcWall").collect();
+        let walls: Vec<&bim_core::Element> = app.modeller.model.iter().filter(|e| e.class() == "IfcWall").collect();
         assert_eq!(walls.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Wall 1", "Wall 2"]);
         let (a, b) = ends(&app, id);
         assert!(near(a, [0.0, 0.0]) && near(b, [4.0, 0.0]), "the first stays");
@@ -410,7 +410,7 @@ mod tests {
         if let Shape::Planar(p) = &mut shape {
             p.openings.push(Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1 });
         }
-        e = Element { id, ..Element::in_project(&grid, e.name.clone(), e.level.clone(), shape) };
+        e = e.reshaped(&grid, shape);
         app.modeller.model.replace(e).unwrap();
         app.show_modelled();
         app.select_modelled(id);

@@ -12,7 +12,7 @@
 use crate::app::edit::{edit_points, Axis, Edit, EditOverlay, Grab};
 use crate::app::App;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, PlanarDef, Shape};
 use glam::DVec3;
 use iced::Color;
 
@@ -94,13 +94,13 @@ impl App {
     /// it. False when no such drag was under way.
     pub(in crate::app) fn put_height_down(&mut self) -> bool {
         let Some(dz) = self.height_drag() else { return false };
-        let edited = self.edited().map(|(e, s)| (e.id, e.name.clone(), e.level.clone(), s));
+        let edited = self.edited().map(|(e, s)| (e.clone(), s));
         self.modeller.edit = None;
-        let Some((id, name, level, shape)) = edited.filter(|_| dz != 0.0) else { return true };
+        let Some((old, shape)) = edited.filter(|_| dz != 0.0) else { return true };
+        let id = old.id;
         let Some(height) = self.dragged_height(&shape, dz) else { return true };
         let grid = self.modeller.model.grid;
-        let mut element = Element::in_project(&grid, name, level, with_height(&shape, height));
-        element.id = id;
+        let element = old.reshaped(&grid, with_height(&shape, height));
         match self.modeller.model.replace(element) {
             Ok(()) => {
                 self.modeller.refusal = None;

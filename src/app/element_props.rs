@@ -289,7 +289,7 @@ impl App {
     /// Gives element `e` a new definition (scene coordinates), if the kernel can make it.
     fn change_shape(&mut self, e: &Element, shape: Shape) {
         let grid = self.modeller.model.grid;
-        let mut changed = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+        let mut changed = e.reshaped(&grid, shape);
         changed.id = e.id;
         self.change_element(changed);
     }

@@ -2001,7 +2001,10 @@ impl App {
             Message::AddLevel => self.add_level(),
             Message::CancelLevel => self.level_form = None,
             Message::RemoveLevel(path) => {
-                self.document.remove_level(&path);
+                if self.document.remove_level(&path) {
+                    // what reached it with its top keeps its height
+                    self.free_tops_of(&path);
+                }
             }
             Message::NewPlan(level) => self.new_plan(&level),
             Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),

@@ -10,7 +10,7 @@ use super::element_props::{DOOR, WINDOW};
 use super::modeller::ModelTool;
 use super::App;
 use bim_core::element::{Opening, PlanarForm};
-use bim_core::{Element, ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, PlanarDef, Shape};
 use glam::{DVec2, DVec3, Vec3};
 
 /// Openings are placed to this (metres).
@@ -102,7 +102,7 @@ impl App {
         if let Some(openings) = super::element_props::openings_mut(&mut shape) {
             openings.push(aim.opening);
         }
-        let mut changed = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+        let mut changed = e.reshaped(&grid, shape);
         changed.id = e.id;
         match self.modeller.model.replace(changed) {
             Ok(()) => {

@@ -14,7 +14,7 @@
 use super::edit::{edit_points, with_points, Edit, EditOverlay};
 use super::App;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, PlanarDef, Shape};
 use glam::{DVec2, DVec3};
 use iced::Color;
 
@@ -107,7 +107,7 @@ impl App {
         let grid = self.modeller.model.grid;
         for (e, shape) in changes {
             let Some(old) = self.modeller.model.get(e) else { continue };
-            let mut element = Element::in_project(&grid, old.name.clone(), old.level.clone(), shape);
+            let mut element = old.reshaped(&grid, shape);
             element.id = e;
             if let Err(refusal) = self.modeller.model.replace(element) {
                 self.modeller.model = kept;

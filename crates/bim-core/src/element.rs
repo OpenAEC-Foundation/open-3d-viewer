@@ -240,6 +240,16 @@ pub enum Shape {
     Connection(ConnectionDef),
 }
 
+/// Where the top of an element reaches: a level (its IfcX path) and how far above it (metres;
+/// below it when negative). A wall's or a standing system's height, or a column's top end, is
+/// worked out from it whenever the level moves; with none the element keeps its own height.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Top {
+    pub level: String,
+    #[serde(default)]
+    pub offset: f64,
+}
+
 /// An element: its id, name, tile, level and definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
@@ -250,6 +260,9 @@ pub struct Element {
     /// The level it is placed on (the level's IfcX path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
+    /// The level its top reaches, if it reaches one (see [`Top`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<Top>,
     pub shape: Shape,
 }
 
@@ -260,7 +273,12 @@ impl Element {
     pub fn in_project(grid: &TileGrid, name: impl Into<String>, level: Option<String>, mut shape: Shape) -> Self {
         let tile = shape.placement().map_or(TileKey::default(), |p| grid.tile_of(p));
         shape.translate(-grid.origin(tile));
-        Self { id: ElementId(0), name: name.into(), tile, level, shape }
+        Self { id: ElementId(0), name: name.into(), tile, level, top: None, shape }
+    }
+
+    /// The same element (its id, name, level and top) with `shape`, given in project coordinates.
+    pub fn reshaped(&self, grid: &TileGrid, shape: Shape) -> Self {
+        Self { id: self.id, top: self.top.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
     }
 
     /// Its definition in project coordinates.
@@ -901,5 +919,25 @@ mod tests {
         let e = Element::in_project(&grid, "Wall 1", Some("level-path".into()), shape);
         let json = serde_json::to_string(&e).unwrap();
         assert_eq!(serde_json::from_str::<Element>(&json).unwrap(), e, "{json}");
+    }
+
+    #[test]
+    fn an_element_keeps_its_top_when_reshaped_and_reads_without_one() {
+        let grid = TileGrid::default();
+        let wall = |x: f64| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(x, 0.0), end: DVec2::new(x + 4.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None });
+        let mut e = Element::in_project(&grid, "Wall 1", Some("ground".into()), wall(0.0));
+        assert_eq!(e.top, None);
+        // a file of before tops reads without one
+        let old = serde_json::to_string(&e).unwrap();
+        assert!(!old.contains("top\""), "{old}");
+        assert_eq!(serde_json::from_str::<Element>(&old).unwrap().top, None);
+        e.id = ElementId(7);
+        e.top = Some(Top { level: "first".into(), offset: -0.3 });
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(serde_json::from_str::<Element>(&json).unwrap(), e, "{json}");
+        // reshaped: the id, name, level and top stay, the shape is the new one
+        let moved = e.reshaped(&grid, wall(5.0));
+        assert_eq!((moved.id, moved.name.as_str(), moved.level.as_deref(), moved.top.clone()), (e.id, "Wall 1", Some("ground"), e.top.clone()));
+        assert_eq!(moved.shape_in_project(&grid), wall(5.0));
     }
 }

@@ -128,7 +128,7 @@ impl App {
 /// dialog is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
 fn pick_and_read(level: Arc<str>, folder: Option<std::path::PathBuf>) -> Task<Message> {
-    let mut dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD, PDF", &["dwg", "dxf", "ifcx", "pdf"]);
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD, PDF", &["dwg", "dxf", "ifccad", "ifcx", "pdf"]);
     if let Some(folder) = folder {
         dialog = dialog.set_directory(folder);
     }
@@ -153,7 +153,7 @@ fn pick_and_read(level: Arc<str>, folder: Option<std::path::PathBuf>) -> Task<Me
 /// In the browser: the browser's file picker, which hands over the bytes, read on the page.
 #[cfg(target_arch = "wasm32")]
 fn pick_and_read(level: Arc<str>, _folder: Option<std::path::PathBuf>) -> Task<Message> {
-    let dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD, PDF", &["dwg", "dxf", "ifcx", "pdf"]);
+    let dialog = rfd::AsyncFileDialog::new().set_title("Underlay").add_filter("DWG, DXF, IFCCAD, PDF", &["dwg", "dxf", "ifccad", "ifcx", "pdf"]);
     Task::perform(
         async move {
             let file = dialog.pick_file().await?;

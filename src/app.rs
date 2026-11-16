@@ -14,7 +14,11 @@ mod ifc;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod inform;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+mod clash_words;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod room_checks;
+#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+mod shape_checks;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod reports;
 mod layers;

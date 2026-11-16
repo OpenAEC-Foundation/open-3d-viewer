@@ -260,7 +260,7 @@ impl App {
                 })
                 .collect();
             blocks.push(Block::Table {
-                widths: vec![1.3, 1.4, 4.0, 1.0],
+                widths: vec![1.2, 1.9, 3.3, 1.5],
                 headings: vec![l.text("Uitkomst", "Outcome").into(), l.text("Code", "Code").into(), l.text("Regel", "Rule").into(), l.text("Voldoet", "Pass").into()],
                 rows,
             });
@@ -317,7 +317,7 @@ impl App {
             let open = g.iter().filter(|c| c.decision == Decision::Open).count();
             let accepted = g.iter().all(|c| c.decision == Decision::Accepted);
             let deepest = g.iter().map(|c| c.distance).fold(0.0f32, f32::max);
-            let title = if g.len() == 1 { format!("{} × {}", g[0].a_name, g[0].b_name) } else { group_title(g) };
+            let title = if g.len() == 1 { format!("{} × {}", g[0].a_name, g[0].b_name) } else { self.clash_words(g, l).0.map_or_else(|| group_title(g), |w| format!("{w} · {}", group_title(g))) };
             Row {
                 cells: vec![(g[0].group + 1).to_string(), g[0].rule.clone(), title, g.len().to_string(), format!("{:.0} mm", deepest * 1000.0), if accepted { decision(Decision::Accepted, l).to_string() } else { format!("{open} {}", decision(Decision::Open, l)) }],
                 mark: Some(if accepted { Mark::Pass } else if open == 0 { Mark::Warning } else { Mark::Fail }),
@@ -339,7 +339,7 @@ impl App {
         blocks.push(Block::PageBreak);
         blocks.push(Block::Heading(l.text("Clashgroepen in beeld", "Clash groups in view").to_string()));
         for g in pictured {
-            let title = if g.len() == 1 { format!("{} × {}", g[0].a_name, g[0].b_name) } else { group_title(g) };
+            let title = if g.len() == 1 { format!("{} × {}", g[0].a_name, g[0].b_name) } else { self.clash_words(g, l).0.map_or_else(|| group_title(g), |w| format!("{w} · {}", group_title(g))) };
             blocks.push(Block::Subheading(format!("{} {} · {title}", l.text("Groep", "Group"), g[0].group + 1)));
             blocks.push(Block::Note(format!("{} · {} {}", g[0].rule, g.len(), l.text("clashes", "clashes"))));
             if let Some(picture) = pictures.get(&g[0].group) {
@@ -440,7 +440,7 @@ impl App {
             .map(|g| {
                 let deepest = g.iter().map(|c| c.distance).fold(0.0f32, f32::max);
                 let count = |d: Decision| g.iter().filter(|c| c.decision == d).count().to_string();
-                vec![g[0].rule.clone(), (g[0].group + 1).to_string(), group_title(g), g.len().to_string(), format!("{:.0}", deepest * 1000.0), count(Decision::Open), count(Decision::Accepted), count(Decision::Rejected)]
+                vec![g[0].rule.clone(), (g[0].group + 1).to_string(), self.clash_words(g, l).0.map_or_else(|| group_title(g), |w| format!("{w} · {}", group_title(g))), g.len().to_string(), format!("{:.0}", deepest * 1000.0), count(Decision::Open), count(Decision::Accepted), count(Decision::Rejected)]
             })
             .collect();
         let issues: Vec<Vec<String>> = self

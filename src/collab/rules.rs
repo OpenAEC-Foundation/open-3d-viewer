@@ -244,6 +244,9 @@ pub struct ClashMemo {
     pub rule: String,
     pub a: String,
     pub b: String,
+    /// Where it is (metres): an element modelled anew has another key, but its clash is still
+    /// between elements of the same names in the same place.
+    pub at: [f32; 3],
 }
 
 /// A run of the clash tests: when, how many clashes it found, how many of them the run before
@@ -256,6 +259,8 @@ pub struct ClashRun {
     pub new: usize,
     pub resolved: usize,
     pub open: usize,
+    /// How many are open per test (a pair of disciplines of the matrix is a test).
+    pub per_test: Vec<(String, usize)>,
 }
 
 /// A rule of the project's own on what its elements say: the elements of a class have a
@@ -347,11 +352,17 @@ pub struct RoomRules {
     pub threshold: f32,
     pub ramp_run: f32,
     pub turning_circle: f32,
+    /// (Each of these: 0 for not asked.)
+    /// The circle that fits at each side of a door, to open it from a wheelchair (metres; 0: not
+    /// asked), and the most floor rooms may have together through doors that do not hold back
+    /// fire (square metres; 0: not asked).
+    pub door_space: f32,
+    pub compartment_area: f32,
 }
 
 impl Default for RoomRules {
     fn default() -> Self {
-        RoomRules { on: false, room_height: 2.6, door_width: 0.85, door_height: 2.3, escape_distance: 30.0, threshold: 0.02, ramp_run: 12.0, turning_circle: 1.5 }
+        RoomRules { on: false, room_height: 2.6, door_width: 0.85, door_height: 2.3, escape_distance: 30.0, threshold: 0.02, ramp_run: 12.0, turning_circle: 1.5, door_space: 1.5, compartment_area: 1000.0 }
     }
 }
 
@@ -500,6 +511,51 @@ impl RuleSet {
                     Discipline { name: t("Installaties", "Services"), take: Selector::classes(&SERVICES) },
                 ],
                 matrix: vec![[t("Bouwkundig", "Architecture"), t("Installaties", "Services")]],
+                ..RuleSet::default()
+            },
+            // the values are those commonly asked of new buildings in the Netherlands; a project
+            // checks them against the rules that hold for it and sets its own
+            RuleSet {
+                name: t("Toegankelijkheid", "Accessibility"),
+                description: t(
+                    "Deuren breed en hoog genoeg, lage drempels, hellingen niet te steil, een draaicirkel in elke ruimte en vrije ruimte bij elke deur. Richtwaarden: stel ze in op wat voor het project geldt.",
+                    "Doors wide and high enough, low thresholds, ramps not too steep, a turning circle in each room and free space at each door. Guide values: set them to what holds for the project.",
+                ),
+                model_checks: false,
+                rooms: RoomRules { on: true, room_height: 0.0, escape_distance: 0.0, compartment_area: 0.0, ..RoomRules::default() },
+                ..RuleSet::default()
+            },
+            RuleSet {
+                name: t("Vluchten en brand", "Escape and fire"),
+                description: t(
+                    "De loopafstand van elk punt van een ruimte naar een uitgang van de bouwlaag, de vloer per brandcompartiment, en deuren en openingen in brandscheidingen. Richtwaarden: stel ze in op wat voor het project geldt.",
+                    "The walk from each point of a room to a way out of its storey, the floor per fire compartment, and doors and openings in fire separations. Guide values: set them to what holds for the project.",
+                ),
+                model_checks: false,
+                rooms: RoomRules { on: true, room_height: 0.0, turning_circle: 0.0, door_space: 0.0, ..RoomRules::default() },
+                clashes: vec![ClashRule {
+                    kind: ClashKind::Sight,
+                    sight_names: "*vlucht*, *nooduitgang*, *exit*, *emergency*".into(),
+                    ..rule(t("Vluchtwegaanduiding zichtbaar", "Escape route signs in sight"), &[], &[], ClashKind::Sight)
+                }],
+                ..RuleSet::default()
+            },
+            RuleSet {
+                name: t("Woning: ruimtes", "Dwelling: rooms"),
+                description: t(
+                    "Vrije hoogte van ruimtes, deurmaten, drempels, loopafstand en draaicirkel, met de waarden die voor een nieuwe woning gebruikelijk zijn. Richtwaarden: stel ze in op wat voor het project geldt.",
+                    "Free height of rooms, door sizes, thresholds, walk to a way out and turning circle, with the values usual for a new dwelling. Guide values: set them to what holds for the project.",
+                ),
+                rooms: RoomRules { on: true, compartment_area: 500.0, ..RoomRules::default() },
+                ..RuleSet::default()
+            },
+            RuleSet {
+                name: t("Modelkwaliteit", "Model quality"),
+                description: t(
+                    "De modelcontroles, elementen die los hangen of ver van het model liggen, en dubbele of doorsnijdende elementen binnen elk model.",
+                    "The model checks, elements that hang loose or lie far from the model, and elements that are double or cross within each model.",
+                ),
+                clashes: vec![rule(t("Dubbel of doorsnijdend binnen een model", "Double or crossing within a model"), &[], &[], ClashKind::Hard)],
                 ..RuleSet::default()
             },
         ]

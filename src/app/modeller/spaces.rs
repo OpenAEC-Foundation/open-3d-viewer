@@ -456,6 +456,11 @@ mod tests {
         let props = scene.element_props(scene.layers[k].elements[0].0);
         let prop = |key: &str| props.iter().find(|(p, _)| p == key).map(|(_, v)| v.as_str());
         assert_eq!((prop("Name"), prop("class"), prop("Area"), prop("Volume")), (Some("Space 1"), Some("IfcSpace"), Some("25.84 m²"), Some("67.18 m³")));
+        // the Project tab lists it with its area; its row selects it
+        let _ = app.update(crate::app::Message::Browser(super::super::browser::BrowserMessage::Space(0)));
+        let picked = app.sel.primary();
+        assert!(matches!(picked, Some(crate::app::Pickable::Element(e)) if scene.element_props(e).iter().any(|(k, v)| k == "Name" && v == "Space 1")), "{picked:?}");
+        app.sel.set(None);
         // an IFC file says it as a space, an IFCX file too; read again, the project makes it anew
         let ifc = String::from_utf8(crate::export::to_bytes(&scene, &app.document, "house.ifc").unwrap()).unwrap();
         assert!(ifc.contains("IFCSPACE("), "the space is in the IFC file");

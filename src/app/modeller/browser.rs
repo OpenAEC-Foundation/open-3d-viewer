@@ -29,6 +29,8 @@ pub enum BrowserMessage {
     Grid(usize),
     /// A kind of building component (its IFC class): select every modelled element of it.
     Class(&'static str),
+    /// A space the walls close in (its place in the list): select it.
+    Space(usize),
 }
 
 /// The kinds of building components in the order they are listed, with their names.
@@ -88,6 +90,14 @@ impl App {
                 self.pick_grid(shown);
             }
             BrowserMessage::Class(class) => self.select_class(class),
+            BrowserMessage::Space(k) => {
+                let Some(scene) = self.model.clone() else { return };
+                let entry = if self.models.len() == 1 { 0 } else { self.models.iter().position(|e| Some(e.model.id) == self.modeller.shown).unwrap_or(0) as u32 };
+                let key = crate::model::ElementKey { model: entry, source: super::spaces::SPACE_IDS + k as u64 };
+                self.pick_grid(None);
+                self.sel.set(scene.element_with_key(key).map(Pickable::Element));
+                self.selection_changed();
+            }
         }
     }
 
@@ -194,6 +204,14 @@ impl App {
         }
         for (class, n) in counts {
             body = body.push(item(class_label(class, l).to_string(), n.to_string(), false, Message::Browser(BrowserMessage::Class(class))));
+        }
+        // the spaces the walls close in, each with its area
+        let spaces = self.spaces();
+        if !spaces.is_empty() {
+            body = body.push(header(l.text("Ruimten", "Spaces"), spaces.len()));
+            for (k, s) in spaces.iter().enumerate() {
+                body = body.push(item(s.name.clone(), format!("{:.2} m²", s.area), false, Message::Browser(BrowserMessage::Space(k))));
+            }
         }
         scrollable(column![body].padding(Padding { top: 0.0, right: 4.0, bottom: 8.0, left: 0.0 })).height(Fill).spacing(4).into()
     }

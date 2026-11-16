@@ -42,5 +42,5 @@ A material's properties beyond its name and colour (thermal, structural). Layers
 
 **Files:** Modify `src/export/ifc.rs` (a material layer set per build-up, its usage per wall and slab), `src/loaders/ifc.rs` (layer sets read as properties and, for taking over, as layers).
 
-- [ ] Test: a layered wall written as IFC4 and read back has the same layers, thicknesses and material names.
-- [ ] Implement; whole suite; commit; push.
+- [x] Test: a layered wall written as IFC4 and read back has the same layers, thicknesses and material names.
+- [x] Implement; whole suite; commit; push. A layer set an element has only through its type is not read yet.

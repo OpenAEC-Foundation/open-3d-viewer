@@ -16,6 +16,10 @@
 //! - The element's properties as one property set named after the source format, its materials
 //!   as IfcMaterial (one) or IfcMaterialConstituentSet (several), the model's layers as
 //!   IfcPresentationLayerAssignment.
+//! - A modelled element has the class of its definition (IfcWall, IfcSlab, IfcBeam, ...). A wall
+//!   or slab with a build-up has its layers as an IfcMaterialLayerSet (each layer its material,
+//!   its thickness, and `IsVentilated` for a cavity), named after its type, through an
+//!   IfcMaterialLayerSetUsage: a wall's along its axis, centred on it; a slab's from its top down.
 //! - GlobalIds are derived from the file name and the element, so saving again gives the same ids.
 //! - Units: metres. OBJ, STL and PLY carry no unit; such a model larger than 500 units is taken to
 //!   be in millimetres.
@@ -314,7 +318,16 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             "Zone" => ("IFCSPACE", "SPACE"),
             _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
         },
-        _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
+        // an element this viewer modelled says its class itself
+        _ => match get("class").unwrap_or("") {
+            "IfcWall" => ("IFCWALL", "NOTDEFINED"),
+            "IfcSlab" => ("IFCSLAB", "FLOOR"),
+            "IfcBeam" => ("IFCBEAM", "BEAM"),
+            "IfcColumn" => ("IFCCOLUMN", "COLUMN"),
+            "IfcMember" => ("IFCMEMBER", "NOTDEFINED"),
+            "IfcCurtainWall" => ("IFCCURTAINWALL", "NOTDEFINED"),
+            _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
+        },
     };
     let name = match (get("family"), get("type")) {
         (Some(f), Some(t)) => format!("{f}:{t}"),
@@ -340,6 +353,30 @@ fn materials(props: &[(String, String)]) -> Vec<String> {
     } else {
         get("Material").map(|m| vec![m.to_string()]).unwrap_or_default()
     }
+}
+
+/// The build-up of a modelled wall or slab, for its material layer set.
+#[derive(PartialEq)]
+struct Layered {
+    /// Its type's name.
+    name: String,
+    wall: bool,
+    /// Each layer: its material's name, its thickness in metres, and whether it is a cavity.
+    layers: Vec<(String, f64, bool)>,
+}
+
+/// The build-up of an element this viewer modelled, from its definition; the names of its type
+/// and of its materials from its properties, where those name them.
+fn layered(props: &[(String, String)]) -> Option<Layered> {
+    use bim_core::element::PlanarForm;
+    let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
+    let all: Vec<bim_core::Element> = serde_json::from_str(get(super::ifcx::DEFINITION)?).ok()?;
+    let bim_core::Shape::Planar(p) = &all.first()?.shape else { return None };
+    let b = p.build_up.as_ref()?;
+    // "brickwork 100, air cavity 40": each layer's material name before its thickness
+    let named: Vec<&str> = get("Layers").map(|l| l.split(", ").map(|part| part.rsplit_once(' ').map_or(part, |(name, _)| name)).collect()).unwrap_or_default();
+    let layers = b.layers.iter().enumerate().map(|(i, l)| (named.get(i).filter(|_| named.len() == b.layers.len()).map_or_else(|| l.material.clone(), |n| n.to_string()), l.thickness, l.cavity)).collect();
+    Some(Layered { name: get("Type").unwrap_or(&b.id).to_string(), wall: matches!(p.form, PlanarForm::Wall { .. }), layers })
 }
 
 /// Writes the model as an IFC 4 file named `file_name`, with the document's levels as storeys.
@@ -424,6 +461,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     let mut contained: Vec<Vec<u64>> = vec![Vec::new(); storeys.len()];
     let mut spaces: Vec<Vec<u64>> = vec![Vec::new(); storeys.len()];
     let mut by_material: Vec<(Vec<String>, Vec<u64>)> = Vec::new();
+    let mut by_build_up: Vec<(Layered, Vec<u64>)> = Vec::new();
     let mut by_layer: Vec<(String, Vec<u64>)> = Vec::new();
     let mut material_ids: HashMap<String, u64> = HashMap::new();
     for product in products(model) {
@@ -519,7 +557,15 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         } else {
             contained[storey].push(element);
         }
-        let mats = materials(&props);
+        // a build-up is a layer set; else the materials the properties name
+        let build_up = layered(&props);
+        let mats = if build_up.is_some() { Vec::new() } else { materials(&props) };
+        if let Some(build_up) = build_up {
+            match by_build_up.iter_mut().find(|(b, _)| *b == build_up) {
+                Some((_, list)) => list.push(element),
+                None => by_build_up.push((build_up, vec![element])),
+            }
+        }
         if !mats.is_empty() {
             match by_material.iter_mut().find(|(m, _)| *m == mats) {
                 Some((_, list)) => list.push(element),
@@ -569,6 +615,34 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         f.add(format!(
             "IFCRELASSOCIATESMATERIAL({},$,$,$,{},#{material})",
             text(&ids.get(&format!("material/{}", mats.join("|")))),
+            refs(elements)
+        ))?;
+    }
+    for (i, (build_up, elements)) in by_build_up.iter().enumerate() {
+        let in_units = |metres: f64| real(metres * if units.millimetres { 1000.0 } else { 1.0 });
+        let mut layers = Vec::new();
+        for (name, thickness, cavity) in &build_up.layers {
+            let material = match material_ids.get(name) {
+                Some(&id) => id,
+                None => {
+                    let id = f.add(format!("IFCMATERIAL({},$,$)", text(name)))?;
+                    material_ids.insert(name.clone(), id);
+                    id
+                }
+            };
+            let ventilated = if *cavity { ".T." } else { ".F." };
+            layers.push(f.add(format!("IFCMATERIALLAYER(#{material},{},{ventilated},{},$,$,$)", in_units(*thickness), text(name)))?);
+        }
+        let set = f.add(format!("IFCMATERIALLAYERSET({},{},$)", refs(&layers), text(&build_up.name)))?;
+        let total: f64 = build_up.layers.iter().map(|l| l.1).sum();
+        let usage = if build_up.wall {
+            f.add(format!("IFCMATERIALLAYERSETUSAGE(#{set},.AXIS2.,.POSITIVE.,{},$)", in_units(-total / 2.0)))?
+        } else {
+            f.add(format!("IFCMATERIALLAYERSETUSAGE(#{set},.AXIS3.,.NEGATIVE.,0.,$)"))?
+        };
+        f.add(format!(
+            "IFCRELASSOCIATESMATERIAL({},$,$,$,{},#{usage})",
+            text(&ids.get(&format!("layers/{i}/{}", build_up.name))),
             refs(elements)
         ))?;
     }

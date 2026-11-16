@@ -91,6 +91,8 @@ impl Loader for IfcLoader {
         let mut layers = BTreeMap::<(Option<Helper>, String), Layer>::new();
         let mut spatial_volume_ids = BTreeSet::new();
         let mut opening_ids = BTreeSet::new();
+        // the layers of the elements with a material layer set, to show among their properties
+        let layered = material_layers(header, result.metadata.length_unit_scale.unwrap_or(1.0));
         for mesh in result.meshes {
             if mesh.indices.is_empty() || mesh.positions.is_empty() {
                 continue;
@@ -144,6 +146,14 @@ impl Loader for IfcLoader {
             }
             if let Some(material) = mesh.material_name {
                 props.insert("Material".into(), material);
+            }
+            if let Some((name, layers)) = layered.get(&mesh.express_id) {
+                // as a modelled element says them: each material and its thickness in millimetres
+                let said: Vec<String> = layers.iter().map(|(material, thickness)| format!("{material} {}", bim_library::millimetres(*thickness, bim_library::Lang::En))).collect();
+                props.insert("Layers".into(), said.join(", "));
+                if let Some(name) = name {
+                    props.insert("Type".into(), name.clone());
+                }
             }
             layer.props.push((id, serde_json::to_string(&props).map_err(|e| format!("IFC properties: {e}"))?));
         }
@@ -376,6 +386,52 @@ fn curve_ends(decoder: &mut ifc_lite_core::EntityDecoder, curve: u32) -> Option<
         }
         _ => None,
     }
+}
+
+/// The layers of the elements that have a material layer set (`IfcRelAssociatesMaterial` to an
+/// `IfcMaterialLayerSetUsage` or an `IfcMaterialLayerSet`), by the element's id: the set's name,
+/// and each layer's material name and thickness in metres, in the set's order. A layer set an
+/// element has only through its type is not looked up.
+fn material_layers(content: &[u8], scale: f64) -> std::collections::HashMap<u32, (Option<String>, Vec<(String, f64)>)> {
+    use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner};
+    let mut scanner = EntityScanner::new(content);
+    let mut decoder = EntityDecoder::new(content);
+    let mut out = std::collections::HashMap::new();
+    while let Some((_, keyword, start, end)) = scanner.next_entity() {
+        if !keyword.eq_ignore_ascii_case("IFCRELASSOCIATESMATERIAL") {
+            continue;
+        }
+        let Ok(relation) = decoder.decode_at(start, end) else { continue };
+        let Some(material) = relation.get_ref(5) else { continue };
+        let Some(set) = layer_set(&mut decoder, material) else { continue };
+        let name = set.get_string(1).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty());
+        let mut layers = Vec::new();
+        for id in set.get_refs(0).unwrap_or_default() {
+            let Ok(layer) = decoder.decode_by_id(id) else { continue };
+            let Some(thickness) = layer.get_float(1) else { continue };
+            let material = layer.get_ref(0).and_then(|m| decoder.decode_by_id(m).ok()).and_then(|m| m.get_string(0).map(|s| decode_ifc_string(s).trim().to_string()));
+            layers.push((material.unwrap_or_default(), thickness * scale));
+        }
+        if layers.is_empty() {
+            continue;
+        }
+        for element in relation.get_refs(4).unwrap_or_default() {
+            out.insert(element, (name.clone(), layers.clone()));
+        }
+    }
+    out
+}
+
+/// The layer set `material` is or uses: an entity whose first attribute lists its layers, itself
+/// or the one its first attribute points to (a usage's `ForLayerSet`).
+fn layer_set(decoder: &mut ifc_lite_core::EntityDecoder, material: u32) -> Option<ifc_lite_core::DecodedEntity> {
+    let entity = decoder.decode_by_id(material).ok()?;
+    // a usage points to its set with one reference; a set lists its layers
+    let set = match entity.get_ref(0) {
+        Some(set) => decoder.decode_by_id(set).ok()?,
+        None => entity,
+    };
+    set.get_list(0).is_some().then_some(set)
 }
 
 /// The Z of a local placement's own offset (`IfcLocalPlacement` → `IfcAxis2Placement3D` →

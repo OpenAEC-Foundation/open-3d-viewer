@@ -856,6 +856,40 @@ mod tests {
     }
 
     #[test]
+    fn a_layered_wall_written_as_ifc4_reads_back_with_its_layers() {
+        use bim_core::{PlanarDef, Shape};
+        use glam::DVec2;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let wall = PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None };
+        let id = app.add_element("Wall", None, Shape::Planar(wall)).unwrap();
+        app.select_modelled(id);
+        assert_eq!(app.assign_build_up("wall.cavity-pir-360"), 1);
+        let scene = app.model.clone().unwrap();
+        let said = |model: &crate::model::Model, element: u64, key: &str| model.element_props(element).into_iter().find(|(k, _)| k == key).map(|(_, v)| v);
+        let layers = said(&scene, id.0, "Layers").expect("the modelled wall says its layers");
+        let bytes = crate::export::to_bytes(&scene, &app.document_now(), "wall.ifc").unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        // a wall, not a proxy, with one layer set of four layers, the cavity ventilated
+        assert_eq!((text.matches("=IFCWALL(").count(), text.matches("=IFCBUILDINGELEMENTPROXY(").count()), (1, 0), "{text}");
+        assert_eq!((text.matches("=IFCMATERIALLAYERSET(").count(), text.matches("=IFCMATERIALLAYER(").count()), (1, 4));
+        assert!(text.contains(",.T.,'air cavity'") && text.contains(",.F.,'brickwork'"), "the cavity alone is ventilated");
+        assert!(text.contains("IFCMATERIALLAYERSETUSAGE(") && text.contains(".AXIS2.,.POSITIVE.,-0.18"), "centred on the axis");
+        assert!(text.contains("'Brickwork-air cavity-PIR insulation-sand-lime brick 360'"));
+        // read back: the same layers, thicknesses and material names, and the type's name
+        let source = crate::loaders::Source::Bytes { name: "wall.ifc".into(), data: std::sync::Arc::new(bytes) };
+        let back = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        // one wall (its solids come by colour, each naming it)
+        let mut read: Vec<u64> = back.layers.iter().flat_map(|l| l.elements.iter().map(|e| e.0)).collect();
+        read.dedup();
+        assert_eq!(read.len(), 1);
+        assert_eq!(said(&back, read[0], "Layers"), Some(layers.clone()));
+        assert_eq!(layers, "brickwork 100, air cavity 40, PIR insulation 100, sand-lime brick 120");
+        assert_eq!(said(&back, read[0], "Type").as_deref(), Some("Brickwork-air cavity-PIR insulation-sand-lime brick 360"));
+        assert_eq!(said(&back, read[0], "IfcType").as_deref(), Some("IfcWall"));
+    }
+
+    #[test]
     fn a_selected_wall_takes_a_build_up_and_keeps_it_in_ifcx() {
         use bim_core::{PlanarDef, Shape};
         use glam::DVec2;

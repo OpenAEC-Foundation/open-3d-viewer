@@ -837,6 +837,7 @@
     "properties added as rules (off); tick the ones you ask.": "Eigenschaften als Regeln hinzugefügt (aus); haken Sie an, was Sie verlangen.",
     "Show ambient shadows": "Umgebungsschatten anzeigen",
     "By kind": "Nach Art",
-    "Order": "Ordnen"
+    "Order": "Ordnen",
+    "Room": "Raum"
   }
 }

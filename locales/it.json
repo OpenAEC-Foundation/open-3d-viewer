@@ -837,6 +837,7 @@
     "properties added as rules (off); tick the ones you ask.": "proprietà aggiunte come regole (disattivate); spunta quelle che richiedi.",
     "Show ambient shadows": "Mostra ombre ambientali",
     "By kind": "Per tipo",
-    "Order": "Ordina"
+    "Order": "Ordina",
+    "Room": "Locale"
   }
 }

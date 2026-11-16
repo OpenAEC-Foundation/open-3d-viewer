@@ -1293,6 +1293,11 @@ impl Studio {
             .icon(small("draw.dimension"), large("draw.dimension"))
             .enabled(plan_shown.is_some()),
         );
+        for (kind, icon) in [(crate::app::DrawKind::Line, "draw.line"), (crate::app::DrawKind::Rectangle, "draw.filled-area"), (crate::app::DrawKind::Circle, "draw.coordinate")] {
+            let on = app.draw_tool == Some(kind);
+            let drawable = app.shown_drawing().is_some();
+            list.push(Command::new(kind.command(), kind.label(l), go(Message::DrawTool(Some(kind)))).icon(small(icon), large(icon)).toggle(on && drawable).enabled(drawable));
+        }
         list.push(
             Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
                 .icon(small("draw.text"), large("draw.text"))
@@ -2152,6 +2157,8 @@ impl Studio {
             RibbonPage::Annotate => vec![
                 (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
                 (l.text("Tekst", "Text"), vec![large("annotate.text")]),
+                // lines that are no model, drawn on the view shown
+                (l.text("Tekenen", "Draw"), vec![large("draw.line"), large("draw.rectangle"), large("draw.circle")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![

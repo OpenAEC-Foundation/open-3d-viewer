@@ -1231,6 +1231,32 @@ impl Document {
         self.section(path).map_or(&[], |s| &s.lines[..])
     }
 
+    fn lines_mut(&mut self, path: &str) -> Option<&mut Vec<[[f64; 2]; 2]>> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some(&mut p.lines);
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| &mut s.lines)
+    }
+
+    /// Adds lines to a view's drawing (its own points, metres); one without length or with a
+    /// point that is not finite is left out. How many were added.
+    pub fn add_view_lines(&mut self, view: &str, lines: &[[[f64; 2]; 2]]) -> usize {
+        let Some(own) = self.lines_mut(view) else { return 0 };
+        let before = own.len();
+        own.extend(lines.iter().filter(|l| l.iter().flatten().all(|v| v.is_finite()) && l[0] != l[1]));
+        own.len() - before
+    }
+
+    /// Removes a line of a view's drawing.
+    pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
+        let Some(own) = self.lines_mut(view) else { return false };
+        if index >= own.len() {
+            return false;
+        }
+        own.remove(index);
+        true
+    }
+
     fn notes_mut(&mut self, path: &str) -> Option<&mut Vec<Note>> {
         if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
             return Some(&mut p.notes);

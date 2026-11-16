@@ -29,6 +29,10 @@ pub enum ModelKey {
     Dimension,
     /// A text on the drawing shown.
     Text,
+    /// Lines, a rectangle or a circle drawn on the view shown.
+    DrawLine,
+    DrawRectangle,
+    DrawCircle,
     /// Another element like the one selected: its tool, with its type and sizes.
     CreateSimilar,
     /// G: grabs the picked points in edit mode, else moves the selection.
@@ -64,6 +68,9 @@ pub const PAIRS: &[(&str, ModelKey)] = &[
     ("sl", ModelKey::Slab),
     ("se", ModelKey::Section),
     ("tx", ModelKey::Text),
+    ("li", ModelKey::DrawLine),
+    ("rc", ModelKey::DrawRectangle),
+    ("ci", ModelKey::DrawCircle),
     ("cs", ModelKey::CreateSimilar),
     ("de", ModelKey::Delete),
     ("mv", ModelKey::Move),

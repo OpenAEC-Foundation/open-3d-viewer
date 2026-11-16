@@ -43,7 +43,10 @@ impl GraphLayout {
         let mut row = 0.0f32;
         let mut deepest = 0usize;
         // the roots first, then whatever nothing holds along children (reached by inherits only)
-        let starts: Vec<u32> = s.roots.iter().copied().chain(0..n as u32).collect();
+        // the roots that hold something before those that stand alone: the project on top
+        let mut roots = s.roots.clone();
+        roots.sort_by_key(|r| children[*r as usize].is_empty());
+        let starts: Vec<u32> = roots.into_iter().chain(0..n as u32).collect();
         for start in starts {
             if placed[start as usize] {
                 continue;

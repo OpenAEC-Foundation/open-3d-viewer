@@ -404,6 +404,25 @@ impl App {
     /// The panel under the 3D view: a bar with the file and what it holds, then the view of it.
     pub(super) fn ifc_panel(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(s) = self.ifc.structure.as_deref() else { return Space::new().into() };
+        match self.ifc.view {
+            IfcView::Text => self.ifc_text(p, s),
+            IfcView::Nodes => self.ifc_tree(p, l, s),
+            IfcView::Table => self.ifc_table(p, l, s),
+            IfcView::Relations => self.ifc_relations(p, l, s),
+            IfcView::Graph => match self.ifc.graph.as_deref() {
+                Some(layout) => iced::widget::canvas(super::ifc_graph::IfcGraph { structure: s, layout, pick: self.ifc.pick, matches: &self.ifc.matches, searching: !self.ifc.query.is_empty(), palette: p })
+                    .width(Fill)
+                    .height(Fill)
+                    .into(),
+                None => Space::new().into(),
+            },
+        }
+    }
+
+    /// The IFCX section of the right pane while the file shows: what it is, the ways to look at
+    /// it, the search, and closing it. Nothing stands over the view itself.
+    pub(super) fn ifc_properties(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
+        let s = self.ifc.structure.as_deref().filter(|_| self.ifc.shown)?;
         let size = if s.bytes >= 1 << 20 { format!("{:.1} MB", s.bytes as f64 / (1 << 20) as f64) } else { format!("{} kB", s.bytes.div_ceil(1024)) };
         let info = format!(
             "{} {} · {} {} · {} {} · {size}",
@@ -414,8 +433,8 @@ impl App {
             s.lines.len(),
             l.text("regels", "lines")
         );
-        // the views first, then the file (cut off when the bar is narrow), then the search
-        let mut bar = row![text("IFC").size(12).font(FONT_BOLD).color(p.text)].spacing(10).align_y(Center).padding([4, 8]);
+        let mut rows = column![text(s.source.as_str()).size(12).font(FONT_BOLD).color(p.text), text(info).size(11).color(p.text_muted)].spacing(6);
+        let mut bar = row![].spacing(4);
         for view in IfcView::ALL {
             let active = self.ifc.view == view;
             bar = bar.push(
@@ -425,16 +444,15 @@ impl App {
                     .on_press(Message::IfcView(view)),
             );
         }
-        let file = row![text(s.source.as_str()).size(12).color(p.text).wrapping(Wrapping::None), text(info).size(11).color(p.text_muted).wrapping(Wrapping::None)].spacing(10).align_y(Center);
-        bar = bar.push(container(file).width(Fill).clip(true));
+        rows = rows.push(bar.wrap());
+        let mut bar = row![].spacing(6).align_y(Center);
         // the search: what it finds in the view shown; the text jumps from line to line
         let search = text_input(l.text("Zoeken in IFC…", "Search IFC…"), &self.ifc.query)
             .on_input(Message::IfcQuery)
             .on_submit(Message::IfcNext(true))
             .size(12)
-            .padding([3, 8])
-            .width(220);
-        bar = bar.push(search);
+            .padding([3, 8]);
+        rows = rows.push(search);
         if !self.ifc.query.is_empty() {
             let found = match self.ifc.view {
                 IfcView::Text if self.ifc.hits.is_empty() => l.text("niets gevonden", "nothing found").to_string(),
@@ -449,22 +467,12 @@ impl App {
                 bar = bar.push(step("▲", false)).push(step("▼", true));
             }
         }
-        let close = button(text("×").size(14).color(p.text_secondary)).padding([0, 6]).style(move |_, st| p.row_button(st)).on_press(Message::CloseIfc);
-        bar = bar.push(close);
-        let body = match self.ifc.view {
-            IfcView::Text => self.ifc_text(p, s),
-            IfcView::Nodes => self.ifc_tree(p, l, s),
-            IfcView::Table => self.ifc_table(p, l, s),
-            IfcView::Relations => self.ifc_relations(p, l, s),
-            IfcView::Graph => match self.ifc.graph.as_deref() {
-                Some(layout) => iced::widget::canvas(super::ifc_graph::IfcGraph { structure: s, layout, pick: self.ifc.pick, matches: &self.ifc.matches, searching: !self.ifc.query.is_empty(), palette: p })
-                    .width(Fill)
-                    .height(Fill)
-                    .into(),
-                None => Space::new().into(),
-            },
-        };
-        column![bar, rule::horizontal(1), body].into()
+        rows = rows.push(bar);
+        // under the 3D view it can be closed; the IFCX page is left by its tab
+        if !self.ifc.full {
+            rows = rows.push(button(text(l.text("Sluiten", "Close")).size(12)).padding([3, 8]).style(move |_, st| p.ribbon_button(false, st)).on_press(Message::CloseIfc));
+        }
+        Some(container(rows).padding([2, 8]).into())
     }
 
     /// The rows in sight of a view with `count` rows: first and last.

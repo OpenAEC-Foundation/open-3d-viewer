@@ -51,6 +51,7 @@ mod underlays;
 mod views_in_3d;
 
 pub use ifc::{IfcTab, IfcView};
+pub use marks::DrawKind;
 #[cfg(test)]
 pub use edit::{press as edit_press, release as edit_release};
 pub use layers::SideTab;
@@ -298,6 +299,8 @@ pub struct App {
     pub dragging_view: Option<Arc<str>>,
     /// The text tool is on: a click on a view (its tab, or placed on a sheet) puts a text there.
     pub note_tool: bool,
+    /// The drawing tool that is on: lines, rectangles or circles on the view shown.
+    pub draw_tool: Option<marks::DrawKind>,
     /// The wording of the next text placed, or of the picked text.
     pub note_text: String,
     /// What is picked on the view shown in its tab: a dimension or a text.
@@ -528,6 +531,10 @@ pub enum Message {
     AddNote(Arc<str>, [f64; 2], String),
     /// Move a view's text (its index) to a point of its drawing.
     MoveNote(Arc<str>, usize, [f64; 2]),
+    /// A drawing tool on (or off): lines, rectangles and circles drawn on the view shown.
+    DrawTool(Option<marks::DrawKind>),
+    /// Lines drawn on a view (its own points).
+    AddLines(Arc<str>, Vec<[[f64; 2]; 2]>),
     /// Pick a dimension or text on the view shown in its tab (`None`: nothing).
     PickMark(Option<marks::MarkPick>),
     /// Remove what is picked on the view shown in its tab.
@@ -914,6 +921,7 @@ impl Default for App {
             cut_edit: None,
             dragging_view: None,
             note_tool: false,
+            draw_tool: None,
             note_text: String::new(),
             mark_pick: None,
             open_layer_groups: HashSet::new(),
@@ -2110,6 +2118,19 @@ impl App {
                 self.mark_pick = None;
             }
             Message::NoteText(wording) => self.note_text_changed(wording),
+            Message::DrawTool(kind) => {
+                // the same tool again switches it off
+                self.draw_tool = kind.filter(|k| self.draw_tool != Some(*k));
+                if self.draw_tool.is_some() {
+                    self.dimension_tool = false;
+                    self.section_tool = false;
+                    self.note_tool = false;
+                    self.mark_pick = None;
+                }
+            }
+            Message::AddLines(view, lines) => {
+                self.document.add_view_lines(&view, &lines);
+            }
             Message::AddNote(view, at, wording) => {
                 self.document.add_note(&view, at, &wording);
             }
@@ -3482,6 +3503,10 @@ impl App {
             content = content.push(section(&title)).push(rows).push(rule::horizontal(1));
         }
 
+        // the IFCX file shown: what it is, its views and its search
+        if let Some(rows) = self.ifc_properties(p, l) {
+            content = content.push(section("IFCX")).push(rows).push(rule::horizontal(1));
+        }
         // a tool on: its type and sizes
         if let Some(rows) = self.placement_bar(p, l) {
             let name = self.modeller.tool.map_or("", |(t, _)| t.label(l));

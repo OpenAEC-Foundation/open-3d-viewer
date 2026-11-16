@@ -38,6 +38,62 @@ pub enum MarkPick {
     Dimension(usize),
     /// A text of the view (its index).
     Note(usize),
+    /// A line drawn on the view (its index).
+    Line(usize),
+}
+
+/// What a drawing tool draws on a view with two clicks: lines that are no model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DrawKind {
+    /// From the first click to the second, and on from there.
+    Line,
+    /// Between two opposite corners.
+    Rectangle,
+    /// About the first click, through the second.
+    Circle,
+}
+
+impl DrawKind {
+    pub const ALL: [DrawKind; 3] = [DrawKind::Line, DrawKind::Rectangle, DrawKind::Circle];
+
+    /// How many chords a circle is drawn in.
+    const CHORDS: usize = 48;
+
+    pub fn label(self, l: Language) -> &'static str {
+        match self {
+            DrawKind::Line => l.text("Lijn", "Line"),
+            DrawKind::Rectangle => l.text("Rechthoek", "Rectangle"),
+            DrawKind::Circle => l.text("Cirkel", "Circle"),
+        }
+    }
+
+    /// The id of its command.
+    pub fn command(self) -> &'static str {
+        match self {
+            DrawKind::Line => "draw.line",
+            DrawKind::Rectangle => "draw.rectangle",
+            DrawKind::Circle => "draw.circle",
+        }
+    }
+
+    /// The lines it draws from its first click `a` to its second `b`.
+    pub fn lines(self, a: [f64; 2], b: [f64; 2]) -> Vec<[[f64; 2]; 2]> {
+        match self {
+            DrawKind::Line => vec![[a, b]],
+            DrawKind::Rectangle => {
+                let corners = [a, [b[0], a[1]], b, [a[0], b[1]]];
+                (0..4).map(|k| [corners[k], corners[(k + 1) % 4]]).collect()
+            }
+            DrawKind::Circle => {
+                let r = (b[0] - a[0]).hypot(b[1] - a[1]);
+                let at = |k: usize| {
+                    let t = std::f64::consts::TAU * k as f64 / Self::CHORDS as f64;
+                    [a[0] + r * t.cos(), a[1] + r * t.sin()]
+                };
+                (0..Self::CHORDS).map(|k| [at(k), at(k + 1)]).collect()
+            }
+        }
+    }
 }
 
 /// A change to the look of the picked dimension, from the bar.
@@ -153,6 +209,8 @@ impl App {
             // on paper the view draws its grid lines and levels itself; over the model the
             // viewport does
             datums: if self.drawing_on_paper { self.view_datums(view) } else { Vec::new() },
+            drawing: self.draw_tool.filter(|_| self.annotates && !self.dimension_tool && !self.section_tool && !self.note_tool),
+            own_lines: self.document.view_lines(view).len(),
             selected: self.sel.items().iter().filter_map(|item| if let super::Pickable::Element(id) = item { Some(*id) } else { None }).collect(),
         })
     }
@@ -178,6 +236,8 @@ impl App {
                 "Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.",
                 "Click where the section starts and ends on a floor plan; it looks to the left.",
             )));
+        } else if self.annotates && self.draw_tool.is_some() {
+            rows = rows.push(hint(l.text("Klik twee punten; een lijn gaat door vanaf zijn eind. Esc stopt.", "Click two points; a line goes on from its end. Esc stops.")));
         } else if self.annotates && self.note_tool {
             rows = rows.push(text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
             rows = rows.push(hint(l.text("Klik waar de tekst komt.", "Click where the text goes.")));
@@ -215,6 +275,9 @@ impl App {
                 rows = rows.push(self.dimension_value_field(view, k));
                 rows = rows.push(choices(vec![tool(l.text("Andere kant", "Other side"), false, Message::FlipDimension), tool(l.text("Maat verwijderen", "Remove dimension"), false, Message::RemoveMark)]));
             }
+            Some(MarkPick::Line(_)) => {
+                rows = rows.push(tool(l.text("Lijn verwijderen", "Remove line"), false, Message::RemoveMark));
+            }
             None => {
                 rows = rows.push(choices(vec![
                     tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)),
@@ -250,6 +313,9 @@ impl App {
             }
             Some(MarkPick::Note(k)) => {
                 self.document.remove_note(&view, k);
+            }
+            Some(MarkPick::Line(k)) => {
+                self.document.remove_view_line(&view, k);
             }
             None => {}
         }
@@ -443,6 +509,10 @@ pub(super) struct ViewMarks {
     datums: Vec<crate::drawing2d::Datum2>,
     /// The elements selected: what the view cuts of them shows as a whole in the accent colour.
     selected: Vec<u64>,
+    /// The drawing tool that is on.
+    drawing: Option<DrawKind>,
+    /// How many of `lines` are the view's own (the first ones): those can be picked.
+    own_lines: usize,
 }
 
 /// The first point of a dimension being made, where the pointer snaps to now, a text being
@@ -540,15 +610,37 @@ impl ViewMarks {
                 .find(|&k| self.dimension_line(screen, k).is_some_and(|(a, b)| near(a, b, pointer) <= PICK))
                 .map(MarkPick::Dimension)
         })
+        .or_else(|| {
+            // a line drawn on the view: the nearest within reach
+            (0..self.own_lines.min(self.lines.len()))
+                .filter_map(|k| Some((k, near(self.px(screen, self.lines[k][0])?, self.px(screen, self.lines[k][1])?, pointer))))
+                .filter(|(_, d)| *d <= PICK)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(k, _)| MarkPick::Line(k))
+        })
     }
 
     fn busy(&self) -> bool {
-        self.measuring || self.cutting || self.noting.is_some()
+        self.measuring || self.cutting || self.noting.is_some() || self.drawing.is_some()
     }
 
-    /// The tools of two clicks (dimension, section), which snap to the view's lines.
+    /// The tools of two clicks (dimension, section, drawing), which snap to the view's lines.
     fn two_clicks(&self) -> bool {
-        self.measuring || self.cutting
+        self.measuring || self.cutting || self.drawing.is_some()
+    }
+
+    /// Where a drawing tool's click lands: on the end of a line drawn on the view when near
+    /// one, else as the other tools of two clicks snap.
+    fn draw_snap(&self, screen: &Screen, pointer: Point) -> Option<[f64; 2]> {
+        let end = self
+            .lines
+            .iter()
+            .take(self.own_lines)
+            .flatten()
+            .filter_map(|q| Some((*q, self.px(screen, *q)?.distance(pointer))))
+            .filter(|(_, d)| *d <= 2.0 * PICK)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        end.map(|(q, _)| q).or_else(|| self.snap(screen, pointer)).or_else(|| self.at(screen, pointer))
     }
 
     /// A section's mark on the floor plan, as a sheet draws it: its line dash-dotted, at each end
@@ -613,7 +705,7 @@ impl canvas::Program<Message> for ViewMarks {
                     return Some(canvas::Action::publish(Message::MoveNote(self.view.clone(), k, [q[0] + grip[0], q[1] + grip[1]])).and_capture());
                 }
                 if self.busy() {
-                    state.aim = pointer.and_then(|p| if self.two_clicks() { self.snap(&screen, p) } else { self.at(&screen, p) });
+                    state.aim = pointer.and_then(|p| if self.drawing.is_some() { self.draw_snap(&screen, p) } else if self.two_clicks() { self.snap(&screen, p) } else { self.at(&screen, p) });
                     return Some(canvas::Action::request_redraw());
                 }
                 let hover = pointer.and_then(|p| self.mark_at(&screen, p)).is_some();
@@ -624,6 +716,20 @@ impl canvas::Program<Message> for ViewMarks {
             }
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let p = pointer?;
+                if let Some(kind) = self.drawing {
+                    let q = self.draw_snap(&screen, p)?;
+                    return match state.first {
+                        None => {
+                            state.first = Some(q);
+                            Some(canvas::Action::request_redraw().and_capture())
+                        }
+                        Some(from) => {
+                            // a line goes on from its end; a rectangle and a circle start anew
+                            state.first = (kind == DrawKind::Line).then_some(q);
+                            Some(canvas::Action::publish(Message::AddLines(self.view.clone(), kind.lines(from, q))).and_capture())
+                        }
+                    };
+                }
                 if self.two_clicks() {
                     let q = self.snap(&screen, p)?;
                     return match state.first.take() {
@@ -655,6 +761,9 @@ impl canvas::Program<Message> for ViewMarks {
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
                 if state.first.take().is_some() {
                     return Some(canvas::Action::request_redraw().and_capture());
+                }
+                if self.drawing.is_some() {
+                    return Some(canvas::Action::publish(Message::DrawTool(None)).and_capture());
                 }
                 if self.measuring {
                     return Some(canvas::Action::publish(Message::DimensionTool(false)).and_capture());
@@ -782,6 +891,27 @@ impl canvas::Program<Message> for ViewMarks {
                 }
             });
             frame.stroke(&lines, Stroke::default().with_color(ink).with_width(1.0));
+        }
+        // the line picked, and what a drawing tool would draw to where the pointer is
+        if let Some(MarkPick::Line(k)) = self.pick {
+            if let Some((Some(a), Some(b))) = self.lines.get(k).map(|line| (self.px(&screen, line[0]), self.px(&screen, line[1]))) {
+                frame.stroke(&Path::line(a, b), Stroke::default().with_color(p.accent).with_width(2.5));
+            }
+        }
+        if let (Some(kind), Some(from), Some(aim)) = (self.drawing, state.first, state.aim) {
+            let preview = Path::new(|path| {
+                for line in kind.lines(from, aim) {
+                    let (Some(a), Some(b)) = (self.px(&screen, line[0]), self.px(&screen, line[1])) else { continue };
+                    path.move_to(a);
+                    path.line_to(b);
+                }
+            });
+            frame.stroke(&preview, Stroke::default().with_color(p.accent).with_width(1.5));
+        }
+        if let (Some(_), Some(aim)) = (self.drawing, state.aim) {
+            if let Some(c) = self.px(&screen, aim) {
+                frame.stroke(&Path::circle(c, 4.0), Stroke::default().with_color(p.accent).with_width(1.5));
+            }
         }
         for (k, note) in self.notes.iter().enumerate() {
             let Some(at) = self.px(&screen, note.at) else { continue };
@@ -1073,6 +1203,30 @@ mod tests {
         let made = lengths(&app, &section);
         assert!(made.contains(&3000.0), "{made:?}");
         assert!(made.contains(&3000.0) && made.iter().any(|&l| l >= 8000.0), "{made:?}");
+    }
+
+    #[test]
+    fn a_drawing_tool_draws_lines_on_the_view_shown_and_a_picked_line_is_removed() {
+        let (mut app, plan) = plan_shown();
+        assert_eq!(DrawKind::Line.lines([0.0, 0.0], [2.0, 1.0]), vec![[[0.0, 0.0], [2.0, 1.0]]]);
+        assert_eq!(DrawKind::Rectangle.lines([0.0, 0.0], [2.0, 1.0]).len(), 4);
+        let circle = DrawKind::Circle.lines([1.0, 1.0], [3.0, 1.0]);
+        assert!(circle.len() == 48 && circle.iter().all(|l| ((l[0][0] - 1.0).hypot(l[0][1] - 1.0) - 2.0).abs() < 1e-9));
+        // the tool goes on and off by its own command, and takes the place of the others
+        let _ = app.update(Message::DimensionTool(true));
+        let _ = app.update(Message::DrawTool(Some(DrawKind::Rectangle)));
+        assert!(app.draw_tool == Some(DrawKind::Rectangle) && !app.dimension_tool);
+        assert_eq!(layer(&app).drawing, Some(DrawKind::Rectangle));
+        let _ = app.update(Message::AddLines(plan.clone(), DrawKind::Rectangle.lines([0.0, 0.0], [2.0, 1.0])));
+        // a line without length is left out
+        let _ = app.update(Message::AddLines(plan.clone(), vec![[[1.0, 1.0], [1.0, 1.0]]]));
+        assert_eq!(app.document.view_lines(&plan).len(), 4);
+        let _ = app.update(Message::DrawTool(Some(DrawKind::Rectangle)));
+        assert!(app.draw_tool.is_none());
+        // a line picked goes with Remove
+        let _ = app.update(Message::PickMark(Some(MarkPick::Line(1))));
+        let _ = app.update(Message::RemoveMark);
+        assert_eq!(app.document.view_lines(&plan).len(), 3);
     }
 
     #[test]

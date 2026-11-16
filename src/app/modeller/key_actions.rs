@@ -23,6 +23,9 @@ impl ModelKey {
             ModelKey::Section => l.text("Doorsnede", "Section"),
             ModelKey::Dimension => l.text("Maatvoering", "Dimension"),
             ModelKey::Text => l.text("Tekst", "Text"),
+            ModelKey::DrawLine => l.text("Lijn", "Line"),
+            ModelKey::DrawRectangle => l.text("Rechthoek", "Rectangle"),
+            ModelKey::DrawCircle => l.text("Cirkel", "Circle"),
             ModelKey::CreateSimilar => l.text("Nog zo een maken", "Create similar"),
             ModelKey::Grab => l.text("Pakken: de selectie volgt de muis", "Grab: the selection follows the mouse"),
             ModelKey::Move => TransformKind::Move.label(l),
@@ -101,6 +104,15 @@ impl App {
                 let _ = self.update(Message::NoteTool(!self.note_tool));
             }
             ModelKey::CreateSimilar => self.create_similar(l),
+            ModelKey::DrawLine | ModelKey::DrawRectangle | ModelKey::DrawCircle => {
+                use crate::app::marks::DrawKind;
+                let kind = match key {
+                    ModelKey::DrawLine => DrawKind::Line,
+                    ModelKey::DrawRectangle => DrawKind::Rectangle,
+                    _ => DrawKind::Circle,
+                };
+                let _ = self.update(Message::DrawTool(Some(kind)));
+            }
             ModelKey::Section => {
                 let _ = self.update(Message::SectionTool(!self.section_tool));
             }

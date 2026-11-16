@@ -9,12 +9,17 @@ struct BlitParams {
     // x: pixels a metre is at depth 1 (perspective) or anywhere (parallel), y: the reach of a
     // shadow (metres), z: how dark, w: the darkest
     reach: vec4<f32>,
+    // the depth shading of point clouds: x on (1), y how strong, z the distance of the
+    // neighbours it compares with (pixels)
+    cloud: vec4<f32>,
 };
 
 @group(0) @binding(0) var frame: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> blit: BlitParams;
 // the depth of the model's opaque surfaces, drawn once more for the shadows
 @group(0) @binding(2) var depth: texture_depth_2d;
+// the same with the points of the clouds drawn over it
+@group(0) @binding(3) var cloud_depth: texture_depth_2d;
 
 @vertex
 fn vs_blit(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -61,10 +66,37 @@ fn shadow(p: vec2<i32>) -> f32 {
     return clamp((sum / 16.0 - 0.02) * blit.reach.z, 0.0, blit.reach.w);
 }
 
+// How much darker a point of a cloud is where it lies behind the points around it (eye-dome
+// lighting): the depth of a cloud shows in its edges, as its points are not lit.
+fn dome(p: vec2<i32>, d: f32) -> f32 {
+    let z = log2(distance_of(d));
+    let last = vec2<i32>(textureDimensions(cloud_depth)) - vec2<i32>(1, 1);
+    var sum = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        let angle = f32(k) * 0.7853982;
+        let q = clamp(p + vec2<i32>(round(vec2<f32>(cos(angle), sin(angle)) * blit.cloud.z)), vec2<i32>(0, 0), last);
+        let other = textureLoad(cloud_depth, q, 0);
+        // the background is no neighbour: an edge against it stays as it is
+        if (other < 1.0) {
+            sum = sum + max(0.0, z - log2(distance_of(other)));
+        }
+    }
+    return 1.0 - exp(-sum / 8.0 * blit.cloud.y);
+}
+
 @fragment
 fn fs_blit(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(pos.xy - blit.offset.xy));
     let color = textureLoad(frame, p, 0);
+    // a point of a cloud lies in front of the surfaces at its pixel
+    var point = false;
+    if (blit.cloud.x > 0.5) {
+        let d = textureLoad(cloud_depth, p, 0);
+        point = d < 1.0 && d < textureLoad(depth, p, 0);
+        if (point) {
+            return vec4<f32>(color.rgb * (1.0 - dome(p, d)), color.a);
+        }
+    }
     if (blit.ambient.x < 0.5) {
         return color;
     }

@@ -861,6 +861,7 @@
     "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.": "Koloruje punkty tak, jak zapisuje je plik: ich kolory albo klasę lub skan cieniowane intensywnością.",
     "Colours the points by their height, from blue low to red high.": "Koloruje punkty według wysokości, od niebieskiego nisko do czerwonego wysoko.",
     "Colours the points by what they reflected, from dark to light. A file without intensity turns white.": "Koloruje punkty według tego, ile odbiły, od ciemnego do jasnego. Plik bez intensywności staje się biały.",
-    "Gives every class of a classified cloud, or every scan, one colour.": "Nadaje jeden kolor każdej klasie sklasyfikowanej chmury lub każdemu skanowi."
+    "Gives every class of a classified cloud, or every scan, one colour.": "Nadaje jeden kolor każdej klasie sklasyfikowanej chmury lub każdemu skanowi.",
+    "Darkens points where they lie behind their neighbours, so the shape of a cloud shows.": "Przyciemnia punkty tam, gdzie leżą za sąsiadami, dzięki czemu widać kształt chmury."
   }
 }

@@ -1688,6 +1688,14 @@ impl Studio {
                 // (not in edit mode, whose own keys came before; its other letters stay the app's)
                 if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !sketching && !grabbing && !press.modifiers.control() && !press.modifiers.alt() {
                     use crate::app::modeller::keys::{ModelKey, Step};
+                    // while a tool draws, digits type the length of what it draws
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| !c.is_ascii_alphabetic() && self.app.tool_drawing()) {
+                            if !press.modifiers.shift() {
+                                return self.update(Msg::App(Message::ToolDigit(c)));
+                            }
+                        }
+                    }
                     // Shift+C takes the 3D cursor home, as in Blender
                     if press.modifiers.shift() && matches!(&press.key, Key::Character(c) if c.eq_ignore_ascii_case("c")) {
                         return self.update(Msg::App(Message::Cursor3dHome));

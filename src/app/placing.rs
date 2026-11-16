@@ -76,7 +76,7 @@ impl App {
             }
         }
         let points = self.modeller.points.iter().map(|p| p.as_vec3()).collect();
-        Some(PlacingOverlay { faces, points, cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, mark: self.snap_mark() })
+        Some(PlacingOverlay { faces, points, cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, mark: self.snap_mark(), readout: self.tool_readout() })
     }
 }
 
@@ -93,6 +93,8 @@ pub struct PlacingOverlay {
     pub ink: Color,
     /// The snap the cursor's point is on, and what it is called: its mark is drawn there.
     pub mark: Option<(crate::app::modeller::snaps::Snap, &'static str)>,
+    /// What shows beside the cursor: the length and angle of what is drawn, or the length typed.
+    pub readout: Option<String>,
 }
 
 /// Half the size of a snap's mark (pixels).
@@ -197,6 +199,13 @@ impl<M> canvas::Program<M> for PlacingOverlay {
                     frame.stroke(&Path::circle(p, 5.0), canvas::Stroke::default().with_color(self.ink).with_width(1.5));
                 }
             }
+        }
+        // the length and angle of what is drawn, or the length typed: below the cursor, to the right
+        if let (Some(words), Some((p, _))) = (&self.readout, self.project(size, self.cursor)) {
+            let width = words.chars().count() as f32 * 7.0 + 12.0;
+            let at = Point::new(p.x + 20.0, p.y + 20.0);
+            frame.fill(&Path::rectangle(at, Size::new(width, 20.0)), Color::from_rgba8(20, 20, 24, 0.88));
+            frame.fill_text(canvas::Text { content: words.clone(), position: Point::new(at.x + 6.0, at.y + 3.0), size: 12.0.into(), color: Color::from_rgb8(120, 230, 140), ..canvas::Text::default() });
         }
         vec![frame.into_geometry()]
     }

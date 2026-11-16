@@ -35,6 +35,7 @@ pub mod spaces;
 pub mod temp_dims;
 pub mod sketch;
 pub mod tops;
+pub mod typed_length;
 pub mod typed_move;
 
 /// A tool that places a base element with clicks on the work plane.
@@ -189,6 +190,8 @@ pub struct Modeller {
     pub join_word: &'static str,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
+    /// The length being typed for what a tool draws, in millimetres (see `typed_length`).
+    pub length_typed: String,
     /// The kind of snap that took the cursor's point where it is, for its mark; and what that
     /// kind is called, in the interface language.
     pub snap_mark: Option<snaps::Snap>,
@@ -552,6 +555,7 @@ impl App {
 
     /// The next point of `tool`, already snapped: with its last point the element is placed.
     fn model_point(&mut self, tool: ModelTool, name: &'static str, level: Option<String>, p: DVec3) {
+        self.modeller.length_typed.clear();
         self.modeller.points.push(p);
         self.modeller.refusal = None;
         if self.modeller.points.len() < tool.clicks() {

@@ -285,7 +285,7 @@ impl App {
         let points: Vec<glam::Vec3> = self.modeller.points.iter().map(|p| p.as_vec3()).collect();
         // the line as a face of two corners: its outline is the line
         let faces = points.first().map(|first| vec![vec![vec![*first, cursor.as_vec3()]]]).unwrap_or_default();
-        Some(PlacingOverlay { faces, points, cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, mark: self.snap_mark() })
+        Some(PlacingOverlay { faces, points, cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, mark: self.snap_mark(), readout: self.tool_readout() })
     }
 }
 

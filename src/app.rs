@@ -718,6 +718,8 @@ pub enum Message {
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
     ElementFieldDone,
+    /// A character of the length typed for what a tool draws.
+    ToolDigit(char),
     /// The series field of the picked grid line.
     GridSeries(modeller::grids::SeriesMessage),
     /// A snap switched on or off at the right of the status bar.
@@ -1767,6 +1769,9 @@ impl App {
             Message::TempDim(message) => self.temp_dim_message(message),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
+            Message::ToolDigit(c) => {
+                self.tool_digit(c);
+            }
             Message::GridSeries(message) => self.series_message(message),
             Message::SnapToggle(snap) => self.modeller.snaps.toggle(snap),
             Message::SpaceName(typed) => self.type_space_name(typed),
@@ -2151,7 +2156,9 @@ impl App {
                 };
             }
             Message::DeletePicked => {
-                if self.grab_backspace() {
+                if self.tool_backspace() {
+                    // a length typed for what a tool draws: its last character goes
+                } else if self.grab_backspace() {
                     // a distance typed in a grab: its last character goes
                 } else if self.edit_backspace() {
                     // a distance being typed: its last character goes
@@ -2390,6 +2397,7 @@ impl App {
                 }
             }
             // Enter while a distance is typed in a move puts the move down
+            Message::MeasureFinish if self.tool_enter() => {}
             Message::MeasureFinish if self.put_grab_down() => {}
             Message::MeasureFinish if self.edit_enter() => {}
             // Enter while Rotate waits for its centre: about the 3D cursor
@@ -2463,6 +2471,8 @@ impl App {
             Message::Escape if self.modeller.transform.is_some() => {
                 self.escape_transform();
             }
+            // Esc drops a length being typed first; the tool goes on drawing
+            Message::Escape if !self.modeller.length_typed.is_empty() => self.modeller.length_typed.clear(),
             Message::Escape if self.modeller.grid_tool => self.escape_grid_tool(),
             Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
                 if !self.escape_model_tool() {

@@ -54,6 +54,26 @@ impl App {
         Some(drawing)
     }
 
+    /// Writes the drawing of the sheet or view shown to `path`, in the format its extension names
+    /// (pdf, svg, dxf, dwg, png, ifccad). How many bytes were written. For the remote control.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn export_shown_to(&mut self, path: &std::path::Path) -> Result<usize, String> {
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let format = match extension.as_str() {
+            "pdf" => DrawingFormat::Pdf,
+            "svg" => DrawingFormat::Svg,
+            "dxf" => DrawingFormat::Dxf,
+            "dwg" => DrawingFormat::Dwg,
+            "png" => DrawingFormat::Png,
+            "ifccad" => DrawingFormat::Ifccad,
+            other => return Err(format!("a drawing is written as pdf, svg, dxf, dwg, png or ifccad, not '{other}'")),
+        };
+        let drawing = self.drawing_to_export().ok_or("no sheet or view is shown in this tab")?;
+        let bytes = crate::export::drawing::write(&drawing, format)?;
+        std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(bytes.len())
+    }
+
     /// Exports the drawing of the sheet or view shown in `format`.
     pub(super) fn export_drawing(&mut self, format: DrawingFormat) -> Task<Message> {
         match self.drawing_to_export() {

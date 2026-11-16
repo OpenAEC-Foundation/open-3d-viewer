@@ -383,7 +383,12 @@ impl Drawing2d {
             self.dimensions.push(Dim2d { from: to(d.from), to: to(d.to), value: d.length(), offset: DIMENSION_OFFSET * unit, text_height: TEXT * unit });
         }
         for n in notes {
-            self.text(to(n.at), TEXT * unit, n.text.clone(), Align::Left);
+            let align = match n.align {
+                crate::document::Align::Left => Align::Left,
+                crate::document::Align::Center => Align::Center,
+                crate::document::Align::Right => Align::Right,
+            };
+            self.text(to(n.at), TEXT * unit, n.text.clone(), align);
         }
     }
 }
@@ -462,6 +467,9 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
         };
         let drawn = c.as_ref().is_some_and(|c| crate::drawing::drawn(c).next().is_some());
         d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, &notes), &to, 1.0, v.scale);
+        // the lines drawn on the view that are no model, and those the model draws by itself
+        d.detail(doc.view_lines(&v.plan), &to);
+        d.detail(doc.view_symbols(&v.plan), &to);
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);
         }

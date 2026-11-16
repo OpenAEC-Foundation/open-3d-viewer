@@ -450,6 +450,12 @@ impl App {
                 Ok(json!({ "cursor": self.modeller.cursor3d.at.to_array() }))
             }
             "drag_handle" => self.remote_drag_handle(a),
+            #[cfg(not(target_arch = "wasm32"))]
+            "export_drawing" => {
+                let path = a.get("path").and_then(|v| v.as_str()).ok_or("path is required")?;
+                let bytes = self.export_shown_to(std::path::Path::new(path))?;
+                Ok(json!({ "saved": path, "bytes": bytes }))
+            }
             "hover" => {
                 let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
                 let (vx, vy) = self.to_viewport(x, y);

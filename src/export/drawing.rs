@@ -38,7 +38,7 @@ impl DrawingFormat {
         match self {
             DrawingFormat::Dwg => "dwg",
             DrawingFormat::Dxf => "dxf",
-            DrawingFormat::Ifccad => "ifcx",
+            DrawingFormat::Ifccad => "ifccad",
             DrawingFormat::Pdf => "pdf",
             DrawingFormat::Png => "png",
             DrawingFormat::Svg => "svg",
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn formats_have_their_name_extension_and_type() {
         assert_eq!(DrawingFormat::ALL.map(DrawingFormat::name), ["DWG", "DXF", "IFCCAD", "PDF", "PNG", "SVG"]);
-        assert_eq!(DrawingFormat::ALL.map(DrawingFormat::extension), ["dwg", "dxf", "ifcx", "pdf", "png", "svg"]);
+        assert_eq!(DrawingFormat::ALL.map(DrawingFormat::extension), ["dwg", "dxf", "ifccad", "pdf", "png", "svg"]);
         assert_eq!(DrawingFormat::Pdf.mime(), "application/pdf");
         assert_eq!(DrawingFormat::Svg.mime(), "image/svg+xml");
     }

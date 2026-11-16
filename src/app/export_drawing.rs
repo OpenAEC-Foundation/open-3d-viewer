@@ -104,6 +104,10 @@ impl App {
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn format_for(path: &std::path::Path, chosen: DrawingFormat) -> DrawingFormat {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // a drawing typed as `.ifcx`, as older exports were named, is an IFCCAD drawing too
+    if ext == "ifcx" {
+        return DrawingFormat::Ifccad;
+    }
     DrawingFormat::ALL.into_iter().find(|f| f.extension() == ext).unwrap_or(chosen)
 }
 
@@ -247,6 +251,7 @@ mod tests {
     fn the_typed_extension_picks_the_writer() {
         assert_eq!(format_for(std::path::Path::new("plan.pdf"), DrawingFormat::Dwg), DrawingFormat::Pdf);
         assert_eq!(format_for(std::path::Path::new("plan.IFCX"), DrawingFormat::Dwg), DrawingFormat::Ifccad);
+        assert_eq!(format_for(std::path::Path::new("plan.ifccad"), DrawingFormat::Dwg), DrawingFormat::Ifccad);
         assert_eq!(format_for(std::path::Path::new("plan"), DrawingFormat::Dxf), DrawingFormat::Dxf);
         assert_eq!(format_for(std::path::Path::new("plan.txt"), DrawingFormat::Svg), DrawingFormat::Svg);
     }

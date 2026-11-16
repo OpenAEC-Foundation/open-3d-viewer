@@ -46,16 +46,16 @@ pub fn is_pdf(name: &str) -> bool {
     std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
-/// The lines of the drawing `name` (its extension says DWG, DXF or IFCCAD `.ifcx`) in metres, and
+/// The lines of the drawing `name` (its extension says DWG, DXF or IFCCAD `.ifccad`, or `.ifcx` as older exports are named) in metres, and
 /// how many entities it left out (texts, hatches, solids and the like).
 pub fn read(name: &str, bytes: &[u8]) -> Result<(Vec<Segment2>, usize), String> {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let format: &dyn Format = match ext.as_str() {
         "dwg" => &Dwg,
         "dxf" => &Dxf,
-        "ifcx" => &Ifcx,
+        "ifcx" | "ifccad" => &Ifcx,
         "pdf" => return pdf(bytes).map_err(|e| format!("{name}: {e}")),
-        _ => return Err(format!("{name}: an underlay is a DWG, DXF, IFCCAD (.ifcx) or PDF drawing")),
+        _ => return Err(format!("{name}: an underlay is a DWG, DXF, IFCCAD (.ifccad) or PDF drawing")),
     };
     let (doc, _) = format.read(bytes).map_err(|e| format!("{name}: {e}"))?;
     Ok(segments(&doc))

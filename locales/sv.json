@@ -837,6 +837,7 @@
     "properties added as rules (off); tick the ones you ask.": "egenskaper tillagda som regler (av); bocka för dem du kräver.",
     "Show ambient shadows": "Visa omgivningsskuggor",
     "By kind": "Efter typ",
-    "Order": "Ordna"
+    "Order": "Ordna",
+    "Room": "Rum"
   }
 }

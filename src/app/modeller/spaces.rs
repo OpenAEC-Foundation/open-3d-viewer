@@ -46,6 +46,76 @@ pub struct Space {
     pub z: f64,
 }
 
+/// The layer the spaces stand on in the model shown: switched off until asked for.
+pub const SPACE_LAYER: &str = "IfcSpace";
+/// Where the ids of the spaces start in the model shown: far above those of modelled elements.
+pub const SPACE_IDS: u64 = 1 << 40;
+/// How high a space is taken to be.
+pub const SPACE_HEIGHT: f64 = 2.6;
+
+/// The spaces as elements of the model shown: each a body from its floor up, with its name, its
+/// level, its area and what follows from it. They are made from the walls again after every
+/// change and so are no elements of the modelled project; a file says them as IfcSpace.
+pub fn space_layer(spaces: &[Space], levels: &[(String, String)]) -> Option<crate::model::Layer> {
+    if spaces.is_empty() {
+        return None;
+    }
+    let mut layer = crate::model::Layer { name: SPACE_LAYER.into(), color: [0.62, 0.78, 0.90], hidden: true, ..Default::default() };
+    for (k, s) in spaces.iter().enumerate() {
+        let first = layer.indices.len() as u32;
+        let n = s.outline.len();
+        let flat: Vec<f64> = s.outline.iter().flat_map(|p| [p.x, p.y]).collect();
+        let corners = earcutr::earcut(&flat, &[], 2).unwrap_or_default();
+        let (low, high) = (s.z, s.z + SPACE_HEIGHT);
+        // its floor (seen from below) and its ceiling
+        for (z, up) in [(low, false), (high, true)] {
+            let base = (layer.positions.len() / 3) as u32;
+            for p in &s.outline {
+                layer.positions.extend([p.x as f32, p.y as f32, z as f32]);
+                layer.normals.extend([0.0, 0.0, if up { 1.0 } else { -1.0 }]);
+            }
+            for t in corners.chunks_exact(3) {
+                let (a, b, c) = (t[0] as u32 + base, t[1] as u32 + base, t[2] as u32 + base);
+                // the outline runs anticlockwise; whichever way the ears came, the face looks out
+                let turn = (s.outline[t[1]] - s.outline[t[0]]).perp_dot(s.outline[t[2]] - s.outline[t[0]]) > 0.0;
+                layer.indices.extend(if turn == up { [a, b, c] } else { [a, c, b] });
+            }
+        }
+        // its sides, each looking out
+        for i in 0..n {
+            let (a, b) = (s.outline[i], s.outline[(i + 1) % n]);
+            let out = (b - a).normalize_or_zero();
+            let normal = [out.y as f32, -out.x as f32, 0.0];
+            let base = (layer.positions.len() / 3) as u32;
+            for (p, z) in [(a, low), (b, low), (b, high), (a, high)] {
+                layer.positions.extend([p.x as f32, p.y as f32, z as f32]);
+                layer.normals.extend(normal);
+            }
+            layer.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+        let id = SPACE_IDS + k as u64;
+        layer.elements.push((id, first, layer.indices.len() as u32 - first));
+        let perimeter: f64 = (0..n).map(|i| (s.outline[(i + 1) % n] - s.outline[i]).length()).sum();
+        let mut props = serde_json::Map::new();
+        let mut put = |key: &str, value: String| {
+            props.insert(key.into(), serde_json::Value::String(value));
+        };
+        put("Name", s.name.clone());
+        put("class", SPACE_LAYER.into());
+        if let Some(name) = s.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name) {
+            put("level", name.clone());
+        }
+        put("Area", format!("{:.2} m²", s.area));
+        put("Perimeter", format!("{perimeter:.3} m"));
+        put("Height", format!("{SPACE_HEIGHT:.3} m"));
+        put("Volume", format!("{:.2} m³", s.area * SPACE_HEIGHT));
+        // made from the walls: a file says it, and the modelled project makes it again
+        put(crate::export::ifcx::DERIVED, "space".into());
+        layer.props.push((id, serde_json::Value::Object(props).to_string()));
+    }
+    Some(layer)
+}
+
 /// The area inside a ring, above zero when it runs anticlockwise.
 fn signed_area(ring: &[DVec2]) -> f64 {
     let n = ring.len();
@@ -378,6 +448,22 @@ mod tests {
         app.select_modelled(bim_core::ElementId(2));
         assert!(app.set_temp_dim(0, 7.0), "the east wall 7 m from the west wall");
         assert!((app.spaces()[0].area - 6.8 * 3.8).abs() < 1e-9, "{}", app.spaces()[0].area);
+        // the model shown holds the space as an element of its own, on a layer switched off
+        let scene = app.model.clone().unwrap();
+        let k = scene.layers.iter().position(|l| l.name == SPACE_LAYER).expect("a layer of spaces");
+        assert!(scene.layers[k].hidden && !app.visible[k]);
+        assert_eq!(scene.layers[k].elements.len(), 1);
+        let props = scene.element_props(scene.layers[k].elements[0].0);
+        let prop = |key: &str| props.iter().find(|(p, _)| p == key).map(|(_, v)| v.as_str());
+        assert_eq!((prop("Name"), prop("class"), prop("Area"), prop("Volume")), (Some("Space 1"), Some("IfcSpace"), Some("25.84 m²"), Some("67.18 m³")));
+        // an IFC file says it as a space, an IFCX file too; read again, the project makes it anew
+        let ifc = String::from_utf8(crate::export::to_bytes(&scene, &app.document, "house.ifc").unwrap()).unwrap();
+        assert!(ifc.contains("IFCSPACE("), "the space is in the IFC file");
+        let ifcx = crate::export::to_bytes(&scene, &app.document, "house.ifcx").unwrap();
+        assert!(String::from_utf8_lossy(&ifcx).contains("IfcSpace"));
+        let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: std::sync::Arc::new(ifcx) };
+        let read = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).unwrap();
+        assert!(read.layers.iter().all(|l| l.indices.is_empty()), "a space is no mesh of the file's own");
         // a floor plan says its spaces itself, and draws the swing of a door standing on it
         let level = app.document.levels()[0].path.clone();
         let plan = app.document.add_plan(&level).unwrap();

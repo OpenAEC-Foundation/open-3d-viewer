@@ -331,6 +331,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             "IfcCurtainWall" => ("IFCCURTAINWALL", "NOTDEFINED"),
             "IfcDoor" => ("IFCDOOR", "DOOR"),
             "IfcWindow" => ("IFCWINDOW", "WINDOW"),
+            "IfcSpace" => ("IFCSPACE", "SPACE"),
             _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
         },
     };

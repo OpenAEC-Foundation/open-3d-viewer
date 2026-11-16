@@ -626,7 +626,10 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let mut built = viewer_model(&self.modeller.model, &levels, &self.library);
+        let mut layers = viewer_layers(&self.modeller.model, &levels, &self.library);
+        // the spaces its walls close in stand beside its elements, on a layer of their own
+        layers.extend(spaces::space_layer(&self.spaces(), &levels));
+        let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
@@ -861,6 +864,11 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// `levels` names the levels by path.
 /// A part of a layered element has the colour of its layer's material in `library`.
 pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
+    Model::new(PathBuf::from("model.ifcx"), "IFCX", viewer_layers(model, levels, library))
+}
+
+/// The layers of the model shown: one per class, each element with its properties.
+fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Vec<Layer> {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
     for element in model.iter() {
@@ -898,7 +906,7 @@ pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], librar
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
         layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
-    Model::new(PathBuf::from("model.ifcx"), "IFCX", layers)
+    layers
 }
 
 /// An element's properties as a flat JSON object.

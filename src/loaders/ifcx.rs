@@ -426,6 +426,10 @@ impl Scene {
             }
             return;
         }
+        // what a modelled project makes from its elements by itself (a space): made again
+        if node.attribute("openaec::derived").is_some() {
+            return;
+        }
         // a grid line this viewer wrote: its definition comes back under its key
         if let Some(grid) = node.attribute(crate::export::ifcx::GRID) {
             self.definitions.push(serde_json::json!({ crate::export::ifcx::GRID: grid }));

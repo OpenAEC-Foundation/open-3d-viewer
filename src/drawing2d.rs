@@ -442,7 +442,7 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut) -> Option<Drawing2d> 
 /// The drawing of a sheet as its tab draws it: the paper's edge, its border and title, and each
 /// placed view's lines (`cut` gives a view's cut by its path), dimensions, texts, the marks of the
 /// sections on the floor plans, its name and scale.
-pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>) -> Option<Drawing2d> {
+pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, datums: &dyn Fn(&str) -> Vec<Datum2>) -> Option<Drawing2d> {
     let sheet = doc.sheet(path)?;
     let [w, h] = sheet.paper;
     let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
@@ -470,6 +470,9 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
         // the lines drawn on the view that are no model, and those the model draws by itself
         d.detail(doc.view_lines(&v.plan), &to);
         d.detail(doc.view_symbols(&v.plan), &to);
+        // its grid lines and levels, as its own tab shows them
+        let placed: Vec<Datum2> = datums(&v.plan).into_iter().map(|m| Datum2 { a: to(m.a), b: to(m.b), ..m }).collect();
+        d.datums(&placed);
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);
         }
@@ -659,7 +662,7 @@ mod tests {
         doc.place_plan(&sheet, &plan).unwrap();
         assert!(doc.move_placed(&sheet, 0, [0.2, 0.15]));
         let cut = Arc::new(room());
-        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone())).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone()), &|_| Vec::new()).unwrap();
         assert_eq!(d.space, Space::Paper);
         // the room's middle (4, 2.5) stands at (0.2, 0.15); the 8 m wall is 8 cm long
         let wall = d.lines.iter().find(|l| l.pen == Pen::Cut && (l.a[1] - l.b[1]).abs() < 1e-12 && l.a[1] < 0.13).unwrap();
@@ -675,7 +678,7 @@ mod tests {
     fn a_sheet_has_its_frame_and_title() {
         let mut doc = Document::default();
         let sheet = doc.add_sheet("Plattegronden");
-        let d = sheet_drawing(&doc, &sheet, &|_| None).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|_| None, &|_| Vec::new()).unwrap();
         assert_eq!(d.paper, Some(A3_LANDSCAPE));
         let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 1e-12 && (p[1] - q[1]).abs() < 1e-12;
         assert!(d.lines.iter().any(|l| l.pen == Pen::Frame && near(l.a, [0.02, 0.01]) && near(l.b, [0.41, 0.01])), "{:?}", d.lines);
@@ -706,12 +709,15 @@ mod tests {
         doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
         let sheet = doc.add_sheet("Plattegronden");
         doc.place_plan(&sheet, &plan).unwrap();
-        // the plan never cut: an empty frame
-        let d = sheet_drawing(&doc, &sheet, &|_| None).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|_| None, &|_| Vec::new()).unwrap();
+        // a level of the view goes with it: its line and its name at both ends, at the view's place
+        let with = sheet_drawing(&doc, &sheet, &|_| None, &|_| vec![Datum2 { name: "01".into(), a: [-1.0, 3.0], b: [1.0, 3.0], level: Some(3.0) }]).unwrap();
+        assert_eq!(with.lines.len(), d.lines.len() + 1);
+        assert_eq!(with.texts.iter().filter(|t| t.text == "01 +3.000").count(), 2);
         assert!(d.lines.iter().all(|l| l.pen == Pen::Frame), "{:?}", d.lines);
         // cut: only what lies beyond is thin
         let cut = Arc::new(room());
-        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone())).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone()), &|_| Vec::new()).unwrap();
         assert_eq!(count(&d, Pen::Beyond), 1, "{:?}", d.lines);
     }
 

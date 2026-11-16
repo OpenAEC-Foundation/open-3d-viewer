@@ -35,12 +35,16 @@ impl Writer for IfcxWriter {
 }
 
 /// Property keys that are written as their own attributes, not as properties.
-const OWN_KEYS: [&str; 8] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION];
+const OWN_KEYS: [&str; 9] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION, DERIVED];
 
 /// The property of a modelled element that holds its definitions (a JSON array: the element's
 /// and its connections'); written as the node's `openaec::element` attribute, from which the
 /// reader gives the elements back.
 pub const DEFINITION: &str = "OpenAEC_definition";
+/// The property of an element the modelled project makes by itself from its other elements (a
+/// space, from its walls): written as the node's `openaec::derived` attribute, by which the
+/// reader leaves its mesh out, the project making it again.
+pub const DERIVED: &str = "OpenAEC_derived";
 
 /// The attribute of a grid line's node that holds its definition: its name and its ends in plan
 /// (`start`, `end`: x, y in metres). The reader gives it back among the project's definitions,
@@ -140,6 +144,9 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             }
             if let Some(definition) = prop(DEFINITION).and_then(|d| serde_json::from_str::<Value>(d).ok()) {
                 attributes.insert("openaec::element".into(), definition);
+            }
+            if let Some(derived) = prop(DERIVED) {
+                attributes.insert("openaec::derived".into(), derived.into());
             }
             attributes.insert("bsi::ifc::presentation::diffuseColor".into(), json!([rgba[0], rgba[1], rgba[2]]));
             if rgba[3] < 0.999 {

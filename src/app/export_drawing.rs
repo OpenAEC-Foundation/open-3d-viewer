@@ -37,7 +37,7 @@ impl App {
             for view in &views {
                 self.cut_view(view);
             }
-            return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned());
+            return sheet_drawing(&self.document, &sheet, &|path| self.cuts.get(path).cloned(), &|path| self.view_datums(path));
         }
         // a sheet read from the file, with the views it places cut first
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i).cloned()) {

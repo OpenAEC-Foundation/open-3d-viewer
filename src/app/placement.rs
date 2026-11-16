@@ -80,12 +80,14 @@ pub struct Settings {
     /// A window's sill.
     pub sill: f64,
     pub location: LocationLine,
+    /// What the Slab tool makes: a floor, a roof or a ceiling.
+    pub role: bim_core::SlabRole,
 }
 
 impl Settings {
     /// What a tool places when nothing was typed.
     pub fn default_for(tool: ModelTool) -> Self {
-        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre };
+        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, role: bim_core::SlabRole::Floor };
         use super::element_props::{DOOR, WINDOW};
         use super::modeller::{BEAM, COLUMN, OBJECT, SLAB_THICKNESS, WALL_THICKNESS};
         match tool {
@@ -120,6 +122,8 @@ pub enum PlaceMessage {
     /// Enter: the fields show the values in use.
     Done,
     Location(LocationLine),
+    /// What the Slab tool makes; its type goes, as types are per role.
+    Role(bim_core::SlabRole),
     Chain(bool),
 }
 
@@ -168,6 +172,16 @@ impl std::fmt::Display for Choice {
 struct Located(LocationLine, &'static str);
 
 impl std::fmt::Display for Located {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+
+/// What a slab is, in the strip, named in the interface language.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Roled(bim_core::SlabRole, &'static str);
+
+impl std::fmt::Display for Roled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.1)
     }
@@ -239,6 +253,12 @@ impl App {
         match message {
             PlaceMessage::Kind(kind) => s.kind = kind,
             PlaceMessage::Location(location) => s.location = location,
+            PlaceMessage::Role(role) => {
+                if s.role != role {
+                    s.role = role;
+                    s.kind = None;
+                }
+            }
             PlaceMessage::Chain(on) => {
                 placement.chain = on;
                 if !on {
@@ -332,6 +352,12 @@ impl App {
             let input = if fixed { input } else { input.on_input(move |t| Message::Place(PlaceMessage::Field(field, t))).on_submit(Message::Place(PlaceMessage::Done)) };
             bar = bar.push(label(name)).push(input);
         }
+        if tool == ModelTool::Slab {
+            // a floor, a roof or a ceiling: made the same, classed and listed apart
+            let options: Vec<Roled> = [(bim_core::SlabRole::Floor, l.text("Vloer", "Floor")), (bim_core::SlabRole::Roof, l.text("Dak", "Roof")), (bim_core::SlabRole::Ceiling, l.text("Plafond", "Ceiling"))].into_iter().map(|(r, name)| Roled(r, name)).collect();
+            let picked = options.iter().find(|o| o.0 == s.role).copied();
+            bar = bar.push(pick_list(options, picked, |o: Roled| Message::Place(PlaceMessage::Role(o.0))).text_size(12).padding([2, 6]).width(100));
+        }
         if tool == ModelTool::Wall {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(l))).collect();
             let picked = options.iter().find(|o| o.0 == s.location).copied();
@@ -352,7 +378,12 @@ impl App {
         let mut choices = vec![generic];
         match tool {
             ModelTool::Wall | ModelTool::Slab => {
-                let role = if tool == ModelTool::Wall { bim_library::Role::Wall } else { bim_library::Role::Floor };
+                let role = match (tool, self.modeller.placement.of(tool).role) {
+                    (ModelTool::Wall, _) => bim_library::Role::Wall,
+                    (_, bim_core::SlabRole::Floor) => bim_library::Role::Floor,
+                    (_, bim_core::SlabRole::Roof) => bim_library::Role::Roof,
+                    (_, bim_core::SlabRole::Ceiling) => bim_library::Role::Ceiling,
+                };
                 choices.extend(self.library.names(role, lang).into_iter().map(|(id, name)| Choice { id: Some(id.to_string()), name }));
             }
             ModelTool::Column | ModelTool::Beam => {
@@ -479,6 +510,40 @@ mod tests {
         assert_eq!(c.profile.name(), "BK 300x300");
         let outline = c.profile.profile().unwrap();
         assert!((outline.area() - 0.09).abs() < 1e-9, "300 × 300");
+    }
+
+    #[test]
+    fn the_slab_tool_makes_a_roof_or_a_ceiling_classed_and_typed_as_such() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Slab, "Slab")));
+        // a roof: the types offered are the library's roof types
+        place(&mut app, PlaceMessage::Role(bim_core::SlabRole::Roof));
+        let kinds = app.kinds(ModelTool::Slab, Language::English).unwrap();
+        let roofs: Vec<String> = app.library.names(bim_library::Role::Roof, bim_library::Lang::En).into_iter().map(|(_, n)| n).collect();
+        assert_eq!(kinds.iter().skip(1).map(|k| k.name.clone()).collect::<Vec<_>>(), roofs);
+        place(&mut app, PlaceMessage::Field(PlaceField::Offset, "3".into()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 6.0, 4.0);
+        place(&mut app, PlaceMessage::Role(bim_core::SlabRole::Ceiling));
+        place(&mut app, PlaceMessage::Field(PlaceField::Offset, "2.6".into()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 6.0, 4.0);
+        let classes: Vec<&str> = app.modeller.model.iter().map(|e| e.class()).collect();
+        assert_eq!(classes, ["IfcRoof", "IfcCovering"]);
+        // each on a layer of its own, and a roof in IFC 4 is a slab of the roof
+        let scene = app.model.clone().unwrap();
+        let layers: Vec<&str> = scene.layers.iter().map(|l| l.name.as_str()).collect();
+        assert!(layers.contains(&"IfcRoof") && layers.contains(&"IfcCovering"), "{layers:?}");
+        let text = String::from_utf8(crate::export::to_bytes(&scene, &app.document_now(), "roof.ifc").unwrap()).unwrap();
+        assert!(text.contains("=IFCSLAB(") && text.contains(".ROOF.)") && text.contains("=IFCCOVERING(") && text.contains(".CEILING.)"), "{}", text.lines().filter(|l| l.contains("IFCSLAB(") || l.contains("IFCCOVERING(")).collect::<Vec<_>>().join("\n"));
+        // the definition keeps the role, and a floor writes none
+        let json = serde_json::to_string(&app.modeller.model.iter().next().unwrap().shape).unwrap();
+        assert!(json.contains("\"role\":\"roof\""), "{json}");
+        // a roof is shaped as a floor is: Tab opens the sketch of its outline
+        app.set_model_tool(None);
+        app.select_modelled(ElementId(1));
+        let _ = app.update(Message::EditMode);
+        assert!(app.modeller.sketch.is_some());
     }
 
     #[test]

@@ -276,7 +276,7 @@ mod tests {
 
     fn slab_shape(outline: &[(f64, f64)], top: f64, thickness: f64) -> Shape {
         let outline = outline.iter().map(|&(x, y)| DVec2::new(x, y)).collect();
-        Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top, bulges: Vec::new() }, thickness, openings: Vec::new(), build_up: None })
+        Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top, bulges: Vec::new(), role: Default::default() }, thickness, openings: Vec::new(), build_up: None })
     }
 
     fn parts(shape: &Shape) -> (Vec<DVec2>, f64, f64) {

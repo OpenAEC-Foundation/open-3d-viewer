@@ -322,6 +322,9 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
         _ => match get("class").unwrap_or("") {
             "IfcWall" => ("IFCWALL", "NOTDEFINED"),
             "IfcSlab" => ("IFCSLAB", "FLOOR"),
+            // a roof plane is a slab of the roof in IFC 4; a ceiling a covering
+            "IfcRoof" => ("IFCSLAB", "ROOF"),
+            "IfcCovering" => ("IFCCOVERING", "CEILING"),
             "IfcBeam" => ("IFCBEAM", "BEAM"),
             "IfcColumn" => ("IFCCOLUMN", "COLUMN"),
             "IfcMember" => ("IFCMEMBER", "NOTDEFINED"),

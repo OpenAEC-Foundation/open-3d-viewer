@@ -350,7 +350,7 @@ impl App {
     /// Opens the sketch of floor `element`: its outline and its openings as lines.
     pub(in crate::app) fn open_sketch(&mut self, element: ElementId) {
         let Some(shape) = self.modeller.model.get(element).map(|e| e.shape_in_project(&self.modeller.model.grid)) else { return };
-        let Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, bulges }, .. }) = shape else { return };
+        let Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, bulges, .. }, .. }) = shape else { return };
         let n = outline.len();
         let mut segments: Vec<Segment> = (0..n).map(|i| Segment { a: outline[i], b: outline[(i + 1) % n], bulge: bulges.get(i).copied().unwrap_or(0.0) }).collect();
         for hole in &holes {
@@ -671,7 +671,7 @@ mod tests {
     fn floor() -> (App, ElementId) {
         let mut app = modelling();
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let shape = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new() }, thickness: 0.25, openings: Vec::new(), build_up: None });
+        let shape = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default() }, thickness: 0.25, openings: Vec::new(), build_up: None });
         let id = app.add_element("Floor", None, shape).unwrap();
         app.keep_model_history();
         app.select_modelled(id);

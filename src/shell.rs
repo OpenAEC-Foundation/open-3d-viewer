@@ -1443,6 +1443,7 @@ impl Studio {
                 }
                 // joins made automatically are named in the interface language
                 self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
+                self.app.modeller.space_word = self.l().text("Ruimte", "Space");
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,

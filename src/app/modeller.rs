@@ -30,6 +30,7 @@ pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 pub mod slab_handles;
+pub mod spaces;
 pub mod temp_dims;
 pub mod sketch;
 pub mod tops;
@@ -185,6 +186,8 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// What joins made automatically are called, in the interface language.
     pub join_word: &'static str,
+    /// What a space is called, in the interface language ("Space 1").
+    pub space_word: &'static str,
     /// Edit mode (Tab) on an element, or a drag of a selected element's grip.
     pub edit: Option<super::edit::Edit>,
     /// The value being typed in a temporary dimension's field: which one, and the text (see

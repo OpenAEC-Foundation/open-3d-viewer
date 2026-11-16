@@ -3977,6 +3977,8 @@ impl App {
         // the temporary dimensions of the selected wall: their lines, and a field on each
         let temp_marks = self.temp_dim_marks(p.accent).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let temp_fields = self.temp_dim_fields(p).filter(|_| overlay.is_none());
+        // the spaces the walls close in: their names and areas
+        let space_labels = self.space_labels(p.text_secondary).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         let cursor3d = self.cursor3d_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
@@ -3989,6 +3991,7 @@ impl App {
             .push(marks)
             // what the Modeller works with lies over a view drawn as on a sheet too, so elements
             // are picked, gripped and moved there as in the 3D view
+            .push(space_labels)
             .push(cursor3d)
             .push(placing)
             .push(joins)

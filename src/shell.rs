@@ -1613,11 +1613,11 @@ impl Studio {
                     return self.update(Msg::App(Message::Escape));
                 }
                 // in edit mode G, X, Y, Z and A are its own keys
-                // and in the sketch of a floor L, R and T are its tools
+                // and in the sketch of a floor L, R, A and T are its tools
                 let sketching = self.app.modeller.sketch.is_some();
                 if self.dialog.is_none() && sketching && !press.modifiers.control() && !press.modifiers.alt() {
                     if let Key::Character(c) = &press.key {
-                        if let Some(c) = c.chars().next().filter(|c| "lrtLRT".contains(*c)) {
+                        if let Some(c) = c.chars().next().filter(|c| "lratLRAT".contains(*c)) {
                             return self.update(Msg::App(Message::EditKey(c)));
                         }
                     }

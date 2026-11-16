@@ -94,7 +94,45 @@ pub enum PlanarForm {
         #[serde(default)]
         holes: Vec<Vec<DVec2>>,
         top: f64,
+        /// How far each edge of the outline bows: entry `i` is the bulge of the edge from corner
+        /// `i` to the next (the tangent of a quarter of the arc's angle, above zero where the
+        /// edge bows to the right of its way). Empty, or 0 for an edge: straight.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        bulges: Vec<f64>,
     },
+}
+
+/// A bulge this small is a straight edge.
+const STRAIGHT: f64 = 1e-9;
+/// An arc is made of chords that each turn at most this far (radians).
+const CHORD_TURN: f64 = std::f64::consts::PI / 16.0;
+
+/// The middle and the radius of the arc from `a` to `b` with `bulge`, the angle it starts at and
+/// the angle it turns through (above zero: counter-clockwise). `None` where it is straight.
+pub fn arc_of(a: DVec2, b: DVec2, bulge: f64) -> Option<(DVec2, f64, f64, f64)> {
+    let chord = b - a;
+    let length = chord.length();
+    if bulge.abs() < STRAIGHT || !positive(length) {
+        return None;
+    }
+    let left = DVec2::new(-chord.y, chord.x) / length;
+    let centre = (a + b) / 2.0 + left * (length / 2.0 * (1.0 - bulge * bulge) / (2.0 * bulge));
+    let from = a - centre;
+    Some((centre, from.length(), from.y.atan2(from.x), 4.0 * bulge.atan()))
+}
+
+/// The points of the edge from `a` to `b` with `bulge`, `a` first and without `b`: `a` alone where
+/// it is straight, else the arc in chords.
+pub fn arc_points(a: DVec2, b: DVec2, bulge: f64) -> Vec<DVec2> {
+    let Some((centre, radius, start, turn)) = arc_of(a, b, bulge) else { return vec![a] };
+    let n = ((turn.abs() / CHORD_TURN).ceil() as usize).max(2);
+    std::iter::once(a).chain((1..n).map(|k| centre + radius * DVec2::from_angle(start + turn * k as f64 / n as f64))).collect()
+}
+
+/// `outline` with its bowed edges in chords: the ring a solid is made of.
+pub fn bowed(outline: &[DVec2], bulges: &[f64]) -> Vec<DVec2> {
+    let n = outline.len();
+    (0..n).flat_map(|i| arc_points(outline[i], outline[(i + 1) % n], bulges.get(i).copied().unwrap_or(0.0))).collect()
 }
 
 /// A planar element: a wall or a slab, `thickness` thick, with openings (walls only). With a
@@ -363,7 +401,7 @@ impl Shape {
                 *end += flat;
                 *base += delta.z;
             }
-            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top }, .. }) => {
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, .. }, .. }) => {
                 outline.iter_mut().chain(holes.iter_mut().flatten()).for_each(|p| *p += flat);
                 *top += delta.z;
             }
@@ -519,9 +557,9 @@ fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Vec<P
             let reach = Axes::new(axes.origin - axes.x * extend[0], axes.x, axes.z)?;
             Ok((wall_elevation(reach_length, *height, &shifted)?, reach))
         }
-        PlanarForm::Slab { outline, holes, top } => {
+        PlanarForm::Slab { outline, holes, top, bulges } => {
             let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
-            Ok((vec![Profile::new(outline.clone(), holes.clone())?], axes))
+            Ok((vec![Profile::new(bowed(outline, bulges), holes.clone())?], axes))
         }
     }
 }
@@ -688,6 +726,25 @@ mod tests {
     }
 
     #[test]
+    fn a_slab_edge_with_a_bulge_bows_and_is_read_back() {
+        // a 2 × 2 square whose east edge is a half circle outward (it runs north, bowing right)
+        let outline = vec![DVec2::ZERO, DVec2::new(2.0, 0.0), DVec2::new(2.0, 2.0), DVec2::new(0.0, 2.0)];
+        let ring = bowed(&outline, &[0.0, 1.0]);
+        assert_eq!(ring.len(), 3 + 16);
+        assert!(ring.iter().any(|p| (*p - DVec2::new(3.0, 1.0)).length() < 1e-9), "the arc reaches a metre out: {ring:?}");
+        let form = PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: vec![0.0, 1.0] };
+        let slab = PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None };
+        let solid = planar_solid(&slab).unwrap();
+        let area = 4.0 + std::f64::consts::PI / 2.0;
+        assert!((solid.volume() - 0.2 * area).abs() < 0.2 * 0.02, "{}", solid.volume());
+        // written and read, the bulges are kept; a slab without them writes none
+        let text = serde_json::to_string(&slab).unwrap();
+        assert_eq!(serde_json::from_str::<PlanarDef>(&text).unwrap(), slab);
+        let straight = PlanarDef { form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y], holes: Vec::new(), top: 0.0, bulges: Vec::new() }, ..slab.clone() };
+        assert!(!serde_json::to_string(&straight).unwrap().contains("bulges"));
+    }
+
+    #[test]
     fn a_wall_is_its_elevation_extruded_through_its_thickness() {
         let s = planar_solid(&wall(Vec::new())).unwrap();
         assert!((s.volume() - 5.0 * 3.0 * 0.2).abs() < 1e-12);
@@ -773,7 +830,7 @@ mod tests {
     #[test]
     fn a_slab_hangs_under_its_top() {
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
+        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new() }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
         let (lo, hi) = s.bounds();
         assert_eq!((lo.z, hi.z), (2.75, 3.0));
         assert!((s.volume() - 4.0 * 3.0 * 0.25).abs() < 1e-12);
@@ -817,7 +874,7 @@ mod tests {
     fn a_layered_slab_has_its_first_layer_on_top() {
         let layer = |material: &str, thickness| LayerDef { material: material.into(), thickness, cavity: false };
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.0, openings: Vec::new(), build_up: None }
+        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new() }, thickness: 0.0, openings: Vec::new(), build_up: None }
             .with_build_up(Some(BuildUpDef { id: "floor".into(), layers: vec![layer("screed", 0.05), layer("concrete", 0.2), layer("insulation", 0.1)] }));
         let parts = planar_parts(&slab).unwrap();
         let z = |i: usize| {

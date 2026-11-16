@@ -26,7 +26,7 @@
 
 ## Not in this plan
 
-Arcs (a segment with a bulge, kept by the kernel) and floor openings by two clicks: the next plan of this sub-project. Roofs: once a roof is an element.
+Roofs: once a roof is an element. Arcs in the outline of an opening are kept as chords, not as arcs. Buttons for the sketch tools in the ribbon.
 
 ---
 
@@ -56,3 +56,17 @@ Keys in the sketch: L line (chained clicks), R rectangle (two clicks), T trim (a
 
 - [ ] Tests in `sketch.rs`: `closed_loop` on a rectangle in any segment order and direction, with a gap, a branch, two loops; `trimmed` on two crossing lines and on a lone segment; an app test: Tab on a slab, R with two clicks beside it, T on the stretches inside, Tab → the slab is the union outline; Esc leaves it unchanged.
 - [x] Run to fail; implement; run to pass; translations; whole suite; commit; push.
+
+### Task 3: Arcs and openings in the sketch
+
+**Files:** Modify `crates/bim-core/src/element.rs` (`PlanarForm::Slab::bulges`, `arc_of`, `arc_points`, `bowed`), `src/app/modeller/sketch.rs`, `src/app/transform.rs` (a mirrored floor keeps its bows), `src/app/edit.rs`, `src/shell.rs` (the A key), `locales/*.json`.
+
+**Interfaces:** Produces `PlanarForm::Slab { bulges: Vec<f64> }` (entry `i` the bulge of the edge from corner `i`: the tangent of a quarter of the arc's angle, above zero where it bows to the right of its way; empty: all straight; not written when empty), `sketch::Segment { a, b, bulge }`, `Segment::through(a, b, p)`, `sketch::loops(segments) -> Result<Vec<Loop>, SketchError>`.
+
+- A in the sketch draws an arc with three clicks: start, end, a point on it. Trim cuts lines and arcs where they cross each other.
+- Tab: the largest loop is the outline (its arcs kept), every other loop an opening. Loops that cross, or an opening outside the outline, are refused by the kernel and told.
+- A floor's openings open again as lines of the sketch.
+
+- [x] Tests: kernel (a bulge bows the solid and is read back), sketch (an arc through three points, trimmed by a line; a loop inside is an opening; a side drawn as an arc is kept).
+- [x] Implement; translations; whole suite; commit; push.
+

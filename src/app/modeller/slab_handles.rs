@@ -189,12 +189,17 @@ impl App {
             None => self.modeller.model.get(self.slab_gripped()?)?.shape_in_project(&self.modeller.model.grid),
         };
         let (outline, top, _, _) = slab(&shape)?;
+        // the outline as the floor has it: its bowed edges as arcs
+        let ring = match &shape {
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { bulges, .. }, .. }) => bim_core::element::bowed(outline, bulges),
+            _ => outline.to_vec(),
+        };
         let shown = self.slab_handles_shown(&shape);
         Some(EditOverlay {
             picked: shown.iter().map(|(h, _, _)| Some(*h) == dragged).collect(),
             points: shown.iter().map(|(_, at, _)| at.as_vec3()).collect(),
             closed: false,
-            lines: Some((0..outline.len()).map(|i| [outline[i], outline[(i + 1) % outline.len()]].map(|p| p.extend(top).as_vec3())).collect()),
+            lines: Some((0..ring.len()).map(|i| [ring[i], ring[(i + 1) % ring.len()]].map(|p| p.extend(top).as_vec3())).collect()),
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,
@@ -271,7 +276,7 @@ mod tests {
 
     fn slab_shape(outline: &[(f64, f64)], top: f64, thickness: f64) -> Shape {
         let outline = outline.iter().map(|&(x, y)| DVec2::new(x, y)).collect();
-        Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top }, thickness, openings: Vec::new(), build_up: None })
+        Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top, bulges: Vec::new() }, thickness, openings: Vec::new(), build_up: None })
     }
 
     fn parts(shape: &Shape) -> (Vec<DVec2>, f64, f64) {

@@ -620,7 +620,7 @@ impl App {
         let level = self.work_plane().2;
         let p = DVec2::new;
         let add = |app: &mut App, name: &str, shape: Shape| app.add_element(name, level.clone(), shape).expect("the demo evaluates");
-        let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0 };
+        let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0, bulges: Vec::new() };
         add(self, "Slab", Shape::Planar(PlanarDef { form: slab, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None }));
         let wall = |a: DVec2, b: DVec2, openings: Vec<Opening>| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: a, end: b, base: 0.0, height: 3.0 }, thickness: WALL_THICKNESS, openings, build_up: None });
         let door = Opening { along: 1.0, sill: 0.0, width: 1.0, height: 2.3 };
@@ -685,7 +685,7 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
         ModelTool::Slab => {
             let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
             let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset }, thickness: s.width, openings: Vec::new(), build_up: None };
+            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset, bulges: Vec::new() }, thickness: s.width, openings: Vec::new(), build_up: None };
             Shape::Planar(slab.with_build_up(build_up(&s.kind)))
         }
         ModelTool::System => {

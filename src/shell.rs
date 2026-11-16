@@ -2225,7 +2225,7 @@ impl Studio {
                 Some(Side::Right) => {
                     let hide = l.text("Eigenschappen verbergen", "Hide properties");
                     let actions = vec![w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight))];
-                    w::panel(look, l.text("Eigenschappen", "Properties"), width, actions, Self::pane(app.properties_body(p, l)))
+                    w::panel(look, l.text("Eigenschappen", "Properties"), width, actions, self.right_body(look))
                 }
                 None => middle.into(),
             };
@@ -2246,7 +2246,7 @@ impl Studio {
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight)), hide, Some(self.command("view.right").shortcut_label().unwrap_or("")))];
             body = body
                 .push(ch::splitter(look, dragging(Side::Right), Msg::SplitterPress(Side::Right)))
-                .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, Self::pane(app.properties_body(p, l))));
+                .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, self.right_body(look)));
         }
         body.into()
     }
@@ -2271,6 +2271,23 @@ impl Studio {
     }
 
     /// The viewer's content of a side panel, clear of the panel's edges.
+    /// The right panel's body: the properties; in the Modeller the model explorer above them, as in
+    /// the reference modeller.
+    fn right_body(&self, look: Look) -> Element<'_, Msg> {
+        let (app, l) = (&self.app, self.l());
+        let p = palette(look);
+        if self.product() != Product::Modeller {
+            return Self::pane(app.properties_body(p, l));
+        }
+        column![
+            container(w::mono_label(look, l.text("Modelverkenner", "Model explorer"))).padding([4, 8]),
+            container(app.model_explorer(p, l).map(Msg::App)).padding([0, 4]).width(Length::Fill).height(Length::FillPortion(2)),
+            iced::widget::rule::horizontal(1),
+            container(Self::pane(app.properties_body(p, l))).height(Length::FillPortion(3)),
+        ]
+        .into()
+    }
+
     fn pane(content: Element<'_, Message>) -> Element<'_, Msg> {
         container(content.map(Msg::App)).padding([4, 8]).width(Length::Fill).height(Length::Fill).into()
     }
@@ -2936,6 +2953,19 @@ mod tests {
         let studio = Studio::new(App::default());
         let _ = studio.view();
         let _ = studio.backstage_view(studio.look());
+    }
+
+    #[test]
+    fn the_modellers_right_pane_shows_the_explorer_above_the_properties() {
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(Msg::App(Message::NewModel("Level 0")));
+        assert!(iced_test::simulator(studio.view()).find("MODEL EXPLORER").is_err(), "not in the Viewer");
+        studio.set_product(Product::Modeller);
+        let mut ui = iced_test::simulator(studio.view());
+        for label in ["MODEL EXPLORER", "Storeys", "Grid lines", "Properties"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
     }
 
     #[test]

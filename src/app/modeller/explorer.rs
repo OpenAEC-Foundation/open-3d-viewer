@@ -10,7 +10,8 @@
 //!   - **Types**: each type the elements use, with how many use it; a click selects them.
 //!   - **Views and sheets**; a click opens one.
 //!
-//! A branch shows what it holds while it is open, at most [`MOST`] rows, then how many more.
+//! A branch shows what it holds while it is open, at most [`MOST`] rows, then a row "More" with how
+//! many more there are, which selects them.
 //! The tree is worked out from the project each time it is drawn, so it is never behind; which
 //! branches are open is kept, and selecting an element opens the branches that hold it.
 
@@ -121,8 +122,7 @@ impl App {
             }
             if of_kind.len() > MOST {
                 let rest: Vec<ElementId> = of_kind.iter().skip(MOST).map(|e| e.id).collect();
-                let label = format!("{} {} {}", l.text("en", "and"), rest.len(), l.text("meer", "more"));
-                rows.push(ExplorerRow { depth: depth + 1, key: String::new(), label, beside: String::new(), count: None, open: None, picked: false, on_click: ExplorerMessage::Select(rest) });
+                rows.push(ExplorerRow { depth: depth + 1, key: String::new(), label: l.text("Meer", "More").to_string(), beside: String::new(), count: Some(rest.len()), open: None, picked: false, on_click: ExplorerMessage::Select(rest) });
             }
         }
     }
@@ -274,7 +274,7 @@ impl App {
 
     /// The explorer, drawn: a row per row of [`App::explorer_rows`], indented by its depth, a
     /// branch with its chevron to open or close it.
-    pub(in crate::app) fn model_explorer(&self, p: Palette, l: Language) -> Widget<'_, Message> {
+    pub(crate) fn model_explorer(&self, p: Palette, l: Language) -> Widget<'_, Message> {
         let mut list = Column::new().spacing(0);
         for r in self.explorer_rows(l) {
             let indent = Space::new().width(f32::from(r.depth) * 12.0);
@@ -384,7 +384,7 @@ mod tests {
         }
         let rows = app.explorer_rows(Language::English);
         assert_eq!(rows.iter().filter(|r| r.depth == 4).count(), 401, "400 and the row of the rest");
-        assert!(rows.iter().any(|r| r.label == "and 5 more"));
+        assert!(rows.iter().any(|r| r.label == "More" && r.count == Some(5)), "the row of the rest");
     }
 
     #[test]

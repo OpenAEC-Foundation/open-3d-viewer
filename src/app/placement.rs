@@ -181,15 +181,6 @@ impl std::fmt::Display for Located {
     }
 }
 
-/// What a slab is, in the strip, named in the interface language.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Roled(bim_core::SlabRole, &'static str);
-
-impl std::fmt::Display for Roled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.1)
-    }
-}
 
 /// The fields `tool` shows, with their labels.
 fn fields(tool: ModelTool, l: Language) -> Vec<(PlaceField, &'static str)> {
@@ -363,9 +354,10 @@ impl App {
         }
         if tool == ModelTool::Slab {
             // a floor, a roof or a ceiling: made the same, classed and listed apart
-            let options: Vec<Roled> = [(bim_core::SlabRole::Floor, l.text("Vloer", "Floor")), (bim_core::SlabRole::Roof, l.text("Dak", "Roof")), (bim_core::SlabRole::Ceiling, l.text("Plafond", "Ceiling"))].into_iter().map(|(r, name)| Roled(r, name)).collect();
-            let picked = options.iter().find(|o| o.0 == s.role).copied();
-            bar = bar.push(pick_list(options, picked, |o: Roled| Message::Place(PlaceMessage::Role(o.0))).text_size(12).padding([2, 6]).width(100));
+            for (role, name) in [(bim_core::SlabRole::Floor, l.text("Vloer", "Floor")), (bim_core::SlabRole::Roof, l.text("Dak", "Roof")), (bim_core::SlabRole::Ceiling, l.text("Plafond", "Ceiling"))] {
+                let on = s.role == role;
+                bar = bar.push(button(text(name).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Role(role))));
+            }
         }
         if tool == ModelTool::Wall {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(l))).collect();

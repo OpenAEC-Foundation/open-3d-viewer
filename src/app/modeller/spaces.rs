@@ -23,6 +23,8 @@ use iced::{alignment, mouse, Color, Point, Rectangle};
 const SAME: f64 = 1e-3;
 /// A wall's end this far past another's face still ends on it (metres).
 const REACH: f64 = 0.01;
+/// The labels show over the viewport when the view looks down at least this steeply (radians).
+const LOOKING_DOWN: f32 = 1.0;
 
 /// A wall as the spaces see it: its axis in plan and half its thickness.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -262,6 +264,11 @@ impl App {
     /// floor plan's tab, which says them itself, nor over a section or an elevation.
     pub(in crate::app) fn space_labels(&self, ink: Color) -> Option<SpaceLabels> {
         if !self.modeller.in_modeller || self.modeller.shown.is_none() || self.modeller.sketch.is_some() || self.shown_view().is_some() {
+            return None;
+        }
+        // only where the floors are looked down on: from the side the labels would lie over walls
+        // and roofs
+        if self.camera.pitch.abs() < LOOKING_DOWN {
             return None;
         }
         let labels: Vec<(Vec3, String)> = self

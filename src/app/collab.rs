@@ -148,16 +148,28 @@ pub fn compare_models(model: &Model, old: u32, new: u32) -> Comparison {
 /// Where the Collaborator keeps who you are: beside the preferences.
 /// Where the Collaborator keeps the folder the project is shared through.
 fn share_file() -> Option<PathBuf> {
+    // a test starts as a first run: it does not take over what the person set on this machine
+    if cfg!(test) {
+        return None;
+    }
     Some(crate::remote_link::settings_dir()?.join("collaborator-share.txt"))
 }
 
 /// Where the Collaborator keeps the house its reports are in the style of.
 fn house_file() -> Option<PathBuf> {
+    // a test starts as a first run: it does not take over what the person set on this machine
+    if cfg!(test) {
+        return None;
+    }
     Some(crate::remote_link::settings_dir()?.join("collaborator-house.json"))
 }
 
 /// Where the Collaborator keeps the BCF server of the project.
 fn server_file() -> Option<PathBuf> {
+    // a test starts as a first run: it does not take over what the person set on this machine
+    if cfg!(test) {
+        return None;
+    }
     Some(crate::remote_link::settings_dir()?.join("collaborator-server.json"))
 }
 
@@ -381,6 +393,8 @@ pub struct State {
     /// The house the reports are in the style of, and only the issues given to the person shown.
     pub house: crate::export::report::House,
     pub only_mine: bool,
+    /// Sharing and the house style are folded open.
+    pub setup_open: bool,
     /// The BCF server of the project, the projects it offers to choose from, and the issues
     /// removed here since it was last brought to the same.
     pub server: crate::collab::bcf_api::Server,
@@ -496,6 +510,7 @@ impl Default for State {
                 house
             },
             only_mine: false,
+            setup_open: false,
             server: server_file().and_then(|f| std::fs::read(f).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default(),
             server_projects: Vec::new(),
             server_removed: Vec::new(),
@@ -830,6 +845,7 @@ pub enum Event {
     HouseLogoOff,
     /// Only the issues given to the person.
     OnlyMine(bool),
+    Setup(bool),
     /// The BCF server: its address (0) or token (1) typed, asked for its projects, what it
     /// answered (the version it speaks and its projects), a project chosen, brought to the same,
     /// what that gave (the issues as they are now), and let go.
@@ -2748,6 +2764,7 @@ impl App {
                 return Task::perform(async { rfd::AsyncFileDialog::new().add_filter("Logo", &["svg", "png", "jpg", "jpeg"]).pick_file().await.map(|f| f.path().to_path_buf()) }, |file| Message::Collab(Event::HouseLogoIs(file)));
             }
             Event::OnlyMine(on) => self.collab.only_mine = on,
+            Event::Setup(open) => self.collab.setup_open = open,
             Event::Server(0, typed) => self.collab.server.base = typed,
             Event::Server(_, typed) => self.collab.server.token = typed,
             Event::ServerConnect => {
@@ -3119,6 +3136,13 @@ impl App {
         .spacing(6)
         .wrap()]
         .spacing(6);
+        list = list.push(
+            button(row![text(if state.setup_open { "▾" } else { "▸" }).size(12).color(p.text_secondary), w::secondary(look, l.text("Delen en huisstijl", "Sharing and house style"))].spacing(6).align_y(Alignment::Center))
+                .padding([2, 0])
+                .style(move |_, st| p.ribbon_button(false, st))
+                .on_press(go(Event::Setup(!state.setup_open))),
+        );
+        if state.setup_open || state.share_folder.is_some() || state.server.ready() {
         // the project shared through a folder
         list = list.push(match &state.share_folder {
             Some(folder) => row![
@@ -3184,6 +3208,7 @@ impl App {
             ]
             .spacing(4),
         );
+        }
         if state.issues.topics.is_empty() {
             return list
                 .push(w::secondary(
@@ -3585,6 +3610,12 @@ impl App {
                 w::icon_button(look, crate::b2::small("page.previous"), 16.0, false, l.text("Vorige clash", "Previous clash"), Some(go(Event::Step(-1)))),
                 w::icon_button(look, crate::b2::small("page.next"), 16.0, false, l.text("Volgende clash", "Next clash"), Some(go(Event::Step(1)))),
                 w::secondary(look, format!("{place}{} {}", state.clashes.len(), l.text("clashes", "clashes"))).width(Length::Fill),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        );
+        list = list.push(
+            row![
                 w::button(look, l.text("Issues maken", "Make issues"), K::Secondary, D::Compact, None, Some(go(Event::IssuesFromClashes))),
                 w::button(look, "PDF", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Pdf)))),
                 w::button(look, "Excel", K::Quiet, D::Compact, None, Some(go(Event::Export(Report::Xlsx)))),
@@ -3735,7 +3766,8 @@ impl App {
             let (what, tone) = if undecided == 0 && rows.iter().all(|c| c.decision == Decision::Accepted) { (l.text("akkoord", "accepted").to_string(), Tone::Success) } else { says(worst) };
             let count = format!(
                 "{}{} {}{} · {}",
-                if title == shared { String::new() } else { format!("{shared} · ") },
+                // the element they share, cut short: its full name is in the clashes under it
+                if title == shared { String::new() } else { format!("{} · ", if shared.chars().count() > 34 { shared.chars().take(33).collect::<String>() + "…" } else { shared.clone() }) },
                 rows.len(),
                 l.text("clashes", "clashes"),
                 if undecided < rows.len() { format!(" · {undecided} {}", l.text("open", "open")) } else { String::new() },
@@ -3743,7 +3775,7 @@ impl App {
             );
             let line = row![
                 text(if open { "▾" } else { "▸" }).size(12).color(p.text_secondary),
-                column![w::body(look, title.clone()), w::secondary(look, count)].spacing(1).width(Length::Fill),
+                column![w::body(look, if title.chars().count() > 44 { title.chars().take(43).collect::<String>() + "…" } else { title.clone() }), w::secondary(look, count)].spacing(1).width(Length::Fill),
                 site::chip(look, &what, Some(tone)),
             ]
             .spacing(6)

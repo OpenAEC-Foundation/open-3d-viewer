@@ -130,9 +130,15 @@ impl App {
                 None => pairs.push((pair, vec![r])),
             }
         }
-        let Some(((a, b), of)) = pairs.iter().max_by_key(|(_, of)| of.len()) else { return (None, Priority::Normal) };
-        let worst = of.iter().max_by(|x, y| x.reach.cmp(&y.reach).then(x.distance.total_cmp(&y.distance))).copied().unwrap_or(rows[0]);
-        let copy = of.iter().all(|r| r.copy);
+        if pairs.is_empty() {
+            return (None, Priority::Normal);
+        }
+        // the words of the pair of classes most clashes are between, of those that have words
+        pairs.sort_by_key(|(_, of)| std::cmp::Reverse(of.len()));
+        let said = pairs.iter().find_map(|((a, b), of)| {
+            let worst = of.iter().max_by(|x, y| x.reach.cmp(&y.reach).then(x.distance.total_cmp(&y.distance))).copied()?;
+            words(a, b, worst.kind, worst.reach, of.iter().all(|r| r.copy), l)
+        });
         // the group is as urgent as its most urgent pair of classes
         let priority = pairs
             .iter()
@@ -142,7 +148,7 @@ impl App {
             })
             .min()
             .unwrap_or(Priority::Normal);
-        (words(a, b, worst.kind, worst.reach, copy, l), priority)
+        (said, priority)
     }
 }
 

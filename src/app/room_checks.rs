@@ -192,12 +192,21 @@ impl App {
                     }
                 }
             }
+            // without a single door in the model nothing can be said of the ways out
+            if floors.doors.is_empty() && !floors.rooms.is_empty() {
+                for r in [&mut escape, &mut at_door, &mut compartment] {
+                    *r = result(r.identifier.as_deref().unwrap_or(""), &r.name);
+                    r.status = S::NotCheckable;
+                    r.reasons.push("The model has rooms but no doors: the ways out cannot be walked".into());
+                }
+                routes.clear();
+            }
             let report = Arc::make_mut(report);
             for mut r in [height, escape, turning, at_door, compartment] {
                 if floors.rooms.is_empty() {
                     r.status = S::NotCheckable;
                     r.reasons.push("The model has no rooms with a shape".into());
-                } else if r.failed_count > 0 {
+                } else if r.failed_count > 0 && r.status != S::NotCheckable {
                     r.status = S::Failed;
                 }
                 report.specifications.push(r);

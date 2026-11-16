@@ -891,6 +891,7 @@
     "Server": "Serveur",
     "Or share issues through a BCF server: its address and your token.": "Ou partagez les sujets via un serveur BCF : son adresse et votre jeton.",
     "Token": "Jeton",
-    "Connect": "Connecter"
+    "Connect": "Connecter",
+    "Sharing and house style": "Partage et charte graphique"
   }
 }

@@ -167,16 +167,31 @@ struct Depth {
     w: usize,
     h: usize,
     far: Vec<f32>,
+    /// How many cells the room covers.
+    floor: usize,
 }
 
 impl Depth {
-    fn of(grid: &Grid, label: u32, min: Vec2, max: Vec2) -> Depth {
+    /// Of a room by its own shape: rooms that lie over each other (a zone over its rooms, the
+    /// same room in two models) each keep their whole floor.
+    fn of(grid: &Grid, room: &Room) -> Depth {
+        let (min, max) = (room.min.truncate(), room.max.truncate());
         let lo = ((min - grid.origin) / grid.cell).floor() - Vec2::splat(2.0);
         let hi = ((max - grid.origin) / grid.cell).ceil() + Vec2::splat(2.0);
         let (x0, y0) = (lo.x.max(0.0) as usize, lo.y.max(0.0) as usize);
         let (x1, y1) = ((hi.x.max(0.0) as usize).min(grid.w), (hi.y.max(0.0) as usize).min(grid.h));
         let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-        let mut far: Vec<f32> = (0..w * h).map(|k| if grid.owner[(y0 + k / w) * grid.w + x0 + k % w] == label { f32::INFINITY } else { 0.0 }).collect();
+        let mut far = vec![0.0f32; w * h];
+        for t in &room.shape {
+            let (lo, hi) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2]));
+            for c in grid.cells(lo, hi) {
+                let (x, y) = (c % grid.w, c / grid.w);
+                if x >= x0 && y >= y0 && x < x1 && y < y1 && in_triangle(grid.centre(c), t) {
+                    far[(y - y0) * w + x - x0] = f32::INFINITY;
+                }
+            }
+        }
+        let floor = far.iter().filter(|d| d.is_infinite()).count();
         let (one, across) = (grid.cell, grid.cell * std::f32::consts::SQRT_2);
         // twice over the cells, there and back: each takes the least of its neighbours plus a step
         let mut pass = |order: &mut dyn Iterator<Item = usize>, back: bool| {
@@ -201,7 +216,7 @@ impl Depth {
                 *d = 0.0;
             }
         }
-        Depth { x0, y0, w, h, far }
+        Depth { x0, y0, w, h, far, floor }
     }
 
     fn at(&self, grid: &Grid, cell: usize) -> f32 {
@@ -256,11 +271,11 @@ pub fn walk(rooms: &[Room], doors: &[Way], stairs: &[Way], cell: f32) -> Walked 
                     }
                 }
             }
-            out.area[k] = grid.owner.iter().filter(|&&o| o == k as u32 + 1).count() as f32 * cell * cell;
         }
         // the largest circle in each room: how far its cells are from what is not the room
-        let depths: std::collections::HashMap<usize, Depth> = here.iter().map(|&k| (k, Depth::of(&grid, k as u32 + 1, rooms[k].min.truncate(), rooms[k].max.truncate()))).collect();
+        let depths: std::collections::HashMap<usize, Depth> = here.iter().map(|&k| (k, Depth::of(&grid, &rooms[k]))).collect();
         for &k in &here {
+            out.area[k] = depths[&k].floor as f32 * cell * cell;
             // a cell's centre lies half a cell from the edge of the cell beside the room
             out.widest[k] = (2.0 * depths[&k].far.iter().copied().fold(0.0f32, f32::max) - cell).max(0.0);
         }
@@ -296,7 +311,7 @@ pub fn walk(rooms: &[Room], doors: &[Way], stairs: &[Way], cell: f32) -> Walked 
             for &r in beside.iter().take(2) {
                 let Some(depth) = depths.get(&r) else { continue };
                 let near = Vec2::splat(1.5);
-                let widest = grid.cells(door.min.truncate() - near, door.max.truncate() + near).filter(|&c| grid.owner[c] == r as u32 + 1).map(|c| depth.at(&grid, c)).fold(0.0f32, f32::max);
+                let widest = grid.cells(door.min.truncate() - near, door.max.truncate() + near).map(|c| depth.at(&grid, c)).fold(0.0f32, f32::max);
                 out.at_door[d].push((r, (2.0 * widest - cell).max(0.0)));
             }
         }

@@ -383,7 +383,7 @@ impl App {
                 }
             })
             .collect();
-        let sections = self.document.sections().iter().map(|s| (s.name.clone(), s.from, s.to)).collect();
+        let sections = self.document.sections().iter().map(|s| (s.mark(), s.from, s.to)).collect();
         let carrying = self.dragging_view.as_ref().and_then(|v| {
             let name = self.document.view_name(v)?.to_string();
             Some((v.clone(), name, self.cuts.get(&**v).and_then(|c| c.extent)))

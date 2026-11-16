@@ -475,7 +475,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
         }
         if doc.plan(&v.plan).is_some() {
             for s in doc.sections() {
-                let letter = s.name.rsplit(' ').next().unwrap_or(&s.name).to_string();
+                let letter = s.mark();
                 section_mark(&mut d, to(s.from), to(s.to), letter);
             }
         }

@@ -137,6 +137,18 @@ pub struct PlanView {
     pub hidden: Arc<UnitKeySet>,
 }
 
+impl SectionView {
+    /// What its mark on a floor plan says: a section its letter (the last word of "Section A"),
+    /// an elevation the side it looks at (the first word of "North elevation").
+    pub fn mark(&self) -> String {
+        let word = match self.kind {
+            SectionKind::Section => self.name.rsplit(' ').next(),
+            SectionKind::Elevation => self.name.split(' ').next(),
+        };
+        word.unwrap_or(&self.name).to_string()
+    }
+}
+
 /// The kinds of view along a line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SectionKind {

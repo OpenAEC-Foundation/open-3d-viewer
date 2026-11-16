@@ -145,7 +145,7 @@ impl App {
             measuring: self.dimension_tool,
             noting: self.note_tool.then(|| self.note_to_place(l)),
             cutting: self.section_tool && is_plan,
-            sections: if is_plan { self.document.sections().iter().map(|s| (s.name.clone(), s.from, s.to)).collect() } else { Vec::new() },
+            sections: if is_plan { self.document.sections().iter().map(|s| (s.mark(), s.from, s.to)).collect() } else { Vec::new() },
             word: l.text("Doorsnede", "Section"),
             pick: self.mark_pick,
             palette: p,

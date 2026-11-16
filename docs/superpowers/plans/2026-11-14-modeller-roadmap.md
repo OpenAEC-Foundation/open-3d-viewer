@@ -161,11 +161,21 @@ is one closed loop; holes are separate openings.
 - A sketch that is not one closed loop, or crosses itself, cannot be finished and says where.
 - Floor openings: a rectangle between two clicks on a selected slab.
 
-**Decisions:** radius and centre arcs, tangent arcs, circles, ellipses and trim come later.
+- Trim: a click on a stretch of a line between two crossings takes that stretch out, so lines
+  drawn across each other are cut back to a closed outline.
+- **Shape handles on the finished floor**, outside the sketch: a grip at the middle of every
+  edge, in the floor plan and in a section. In the plan a drag moves that edge sideways, its
+  neighbours following; in a section the grip at a side of the floor moves that side (the edge
+  the section cuts), and the grips at its top and its underside move its level and its
+  thickness.
+- **Roofs** take the same sketch and the same handles once they are an element (a slab that
+  slopes); until then the sketch and the handles are the slab's.
+
+**Decisions:** radius and centre arcs, tangent arcs, circles and ellipses come later.
 Walls and systems keep their rectangle; their elevation contour is not in this sub-project.
 
 **Done when:** a slab with one arc edge is drawn, saved, opened and edited again with the arc
-still an arc.
+still an arc; and a side of a floor is moved by its grip in a section.
 
 ## 6. Types with layers and materials
 

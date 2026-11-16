@@ -217,6 +217,11 @@ fn fs_depth(in: VertexOut) {
     }
 }
 
+// The depth of the points of a cloud, for its depth shading (they are cut in `vs_point`).
+@fragment
+fn fs_point_depth(in: VertexOut) {
+}
+
 @fragment
 fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
     if (clipped(in.world)) {
@@ -260,28 +265,14 @@ fn vs_point(p: PointIn, @builtin(vertex_index) vi: u32) -> VertexOut {
         out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     }
     out.world = world.xyz;
-    // where in its square a pixel of the point lies, for `fs_cloud`
-    out.normal = vec3<f32>(corner, 0.0);
+    out.normal = vec3<f32>(0.0);
     out.color = p.color;
     out.flags = 0u;
     out.look = vec4<f32>(0.0);
     return out;
 }
 
-// A point of a cloud: a small lit sphere in the colour of the scan (or of its height or class), so
-// that a surface of points shows its relief; cut in `vs_point`.
-@fragment
-fn fs_cloud(in: VertexOut) -> @location(0) vec4<f32> {
-    let r2 = dot(in.normal.xy, in.normal.xy);
-    if (r2 > 1.0) {
-        discard;
-    }
-    let n = vec3<f32>(in.normal.x, in.normal.y, sqrt(1.0 - r2));
-    let shade = 0.74 + 0.26 * max(dot(n, normalize(vec3<f32>(-0.45, 0.65, 0.85))), 0.0);
-    return vec4<f32>(encode(to_linear(in.color.rgb) * shade), 1.0);
-}
-
-// Unlit: what is drawn flat, in its own colour.
+// Unlit: points carry the colour of the scan (or of their class); cut in `vs_point`.
 @fragment
 fn fs_point(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(encode(to_linear(in.color.rgb)), 1.0);

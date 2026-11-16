@@ -3754,6 +3754,7 @@ dependencies = [
  "skp-reader",
  "stl_io",
  "tekla-reader",
+ "tempfile",
  "tobj",
  "ttf-parser",
  "ureq",

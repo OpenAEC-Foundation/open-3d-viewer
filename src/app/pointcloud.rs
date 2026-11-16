@@ -110,6 +110,8 @@ pub struct Share(pub u8);
 const VERTICES: [Vertices; 6] = [Vertices(25_000), Vertices(50_000), Vertices(100_000), Vertices(250_000), Vertices(500_000), Vertices(1_000_000)];
 const VOXELS: [Voxel; 6] = [Voxel(None), Voxel(Some(10)), Voxel(Some(20)), Voxel(Some(30)), Voxel(Some(50)), Voxel(Some(100))];
 const HOLES: [Width; 6] = [Width(0), Width(10), Width(25), Width(50), Width(100), Width(200)];
+const NEIGHBORS: [Vertices; 6] = [Vertices(6), Vertices(8), Vertices(12), Vertices(16), Vertices(24), Vertices(32)];
+const EDGES: [Vertices; 5] = [Vertices(2), Vertices(3), Vertices(4), Vertices(6), Vertices(8)];
 const SHARES: [Share; 6] = [Share(100), Share(50), Share(25), Share(10), Share(5), Share(1)];
 
 impl std::fmt::Display for Vertices {
@@ -164,6 +166,12 @@ pub struct Settings {
     pub voxel: Option<u16>,
     /// A closed mesh closes gaps up to this wide (centimetres).
     pub hole: u16,
+    /// A surface mesh joins a vertex to this many neighbours.
+    pub neighbors: usize,
+    /// A surface mesh leaves out edges longer than this many times the usual one.
+    pub edge: usize,
+    /// The share of the points a closed mesh is fitted to (percent).
+    pub sample: u8,
     /// The share of the points an export keeps (percent).
     pub share: u8,
     /// The face of the section box a drawing is made at.
@@ -172,7 +180,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { vertices: 100_000, voxel: None, hole: 25, share: 100, view: View::Plan }
+        Self { vertices: 100_000, voxel: None, hole: 25, neighbors: 12, edge: 4, sample: 100, share: 100, view: View::Plan }
     }
 }
 
@@ -182,6 +190,9 @@ pub enum Setting {
     Vertices(usize),
     Voxel(Option<u16>),
     Hole(u16),
+    Neighbors(usize),
+    Edge(usize),
+    Sample(u8),
     Share(u8),
     View(View),
 }
@@ -209,6 +220,22 @@ pub struct Meshed {
     pub vertices: usize,
     pub triangles: usize,
     pub seconds: f32,
+    /// How the triangles hang together: edges of one triangle only, and loose parts.
+    pub open_edges: u64,
+    pub parts: u32,
+    /// How far the points lie from a closed mesh (metres): the mean, and what 95 % stay within.
+    pub deviation: Option<(f64, f64)>,
+}
+
+impl Meshed {
+    /// The figures of the mesh in a line.
+    pub fn figures(&self) -> String {
+        let mut text = format!("{} vertices, {} triangles, {} open edges, {} parts", grouped(self.vertices as u64), grouped(self.triangles as u64), grouped(self.open_edges), self.parts);
+        if let Some((mean, most)) = self.deviation {
+            text.push_str(&format!(", deviation {:.1} mm (95 %: {:.1} mm)", mean * 1000.0, most * 1000.0));
+        }
+        text
+    }
 }
 
 /// What can be written to a file of the user's choice.
@@ -243,8 +270,6 @@ pub enum Event {
     Mesh(Mesh),
     /// Draw the points a step larger (true) or smaller.
     PointSize(bool),
-    /// What the points take their colour from.
-    Colors(crate::viewport::render::PointColors),
     Set(Setting),
     /// Read what the file of the cloud holds, unless it is known.
     Inspect,
@@ -310,13 +335,15 @@ impl App {
                 let next = if larger { (at + 1).min(POINT_SIZES.len() - 1) } else { at.saturating_sub(1) };
                 self.point_size = POINT_SIZES[next];
             }
-            Event::Colors(colors) => self.point_colors = colors,
             Event::Set(setting) => {
                 let s = &mut self.cloud.settings;
                 match setting {
                     Setting::Vertices(n) => s.vertices = n,
                     Setting::Voxel(v) => s.voxel = v,
                     Setting::Hole(h) => s.hole = h,
+                    Setting::Neighbors(n) => s.neighbors = n,
+                    Setting::Edge(e) => s.edge = e,
+                    Setting::Sample(p) => s.sample = p,
                     Setting::Share(p) => s.share = p,
                     Setting::View(v) => s.view = v,
                 }
@@ -391,7 +418,7 @@ impl App {
                 self.meshing = false;
                 match done {
                     Ok(Done::Meshed(mesh)) => {
-                        self.status = Status::Loaded(format!("Meshed: {} vertices, {} triangles in {:.1} s", grouped(mesh.vertices as u64), grouped(mesh.triangles as u64), mesh.seconds));
+                        self.status = Status::Loaded(format!("Meshed: {} in {:.1} s", mesh.figures(), mesh.seconds));
                         let file = mesh.file.clone();
                         self.cloud.last = Some(mesh);
                         return self.open(loaders::Source::File(file), true);
@@ -451,10 +478,29 @@ impl App {
                 l.text("Gaten dichten tot (gesloten)", "Close gaps up to (closed)"),
                 w::select(look, &HOLES[..], Some(Width(s.hole)), move |h: Width| go(Event::Set(Setting::Hole(h.0))), D::Regular),
             ))
+            .push(w::property_row(
+                look,
+                l.text("Buren per hoekpunt (oppervlak)", "Neighbours per vertex (surface)"),
+                w::select(look, &NEIGHBORS[..], Some(Vertices(s.neighbors)), move |n: Vertices| go(Event::Set(Setting::Neighbors(n.0))), D::Regular),
+            ))
+            .push(w::property_row(
+                look,
+                l.text("Langste rand, maal de gewone (oppervlak)", "Longest edge, times the usual (surface)"),
+                w::select(look, &EDGES[..], Some(Vertices(s.edge)), move |e: Vertices| go(Event::Set(Setting::Edge(e.0))), D::Regular),
+            ))
+            .push(w::property_row(
+                look,
+                l.text("Aandeel van de punten (gesloten)", "Share of the points (closed)"),
+                w::select(look, &SHARES[..], Some(Share(s.sample)), move |p: Share| go(Event::Set(Setting::Sample(p.0))), D::Regular),
+            ))
+            .push(w::secondary(look, match &self.cloud.last {
+                Some(mesh) => format!("{}: {}", file_name(&mesh.file), mesh.figures()),
+                None => String::new(),
+            }))
             .push(w::mono_label(look, l.text("Exporteren", "Export")))
             .push(w::property_row(
                 look,
-                l.text("Aandeel van de punten", "Share of the points"),
+                l.text("Aandeel van de punten (export)", "Share of the points (export)"),
                 w::select(look, &SHARES[..], Some(Share(s.share)), move |p: Share| go(Event::Set(Setting::Share(p.0))), D::Regular),
             ))
             .push(w::property_row(look, l.text("Doorsnedetekening van", "Section drawing of"), views.into()))
@@ -536,6 +582,7 @@ pub fn mesh(cloud: &Source, kind: Mesh, settings: &Settings, section: Option<Ori
     let points = ops::open_source(&cloud.file, &keep_going).map_err(say)?;
     let inside = |p: &pointcloud_core::Point| section.is_none_or(|b| b.contains(p.xyz));
     let cell = settings.voxel.map_or(0.0, |mm| mm as f64 / 1000.0);
+    let mut deviation = None;
     let (vertices, triangles) = match kind {
         Mesh::Terrain => {
             let config = pointcloud_core::MeshConfig { max_vertices: settings.vertices, ..Default::default() };
@@ -543,7 +590,7 @@ pub fn mesh(cloud: &Source, kind: Mesh, settings: &Settings, section: Option<Ori
             (stats.vertices, stats.triangles)
         }
         Mesh::Surface => {
-            let config = pointcloud_core::SurfaceMeshConfig { max_vertices: settings.vertices, mesh_size: cell, ..Default::default() };
+            let config = pointcloud_core::SurfaceMeshConfig { max_vertices: settings.vertices, mesh_size: cell, neighbors: settings.neighbors, max_edge_factor: settings.edge as f64 };
             let stats = pointcloud_core::mesh_surface_obj_where_progress(&points, &source, config, |_, p| inside(p), |_| keep_going()).map_err(say)?;
             (stats.vertices, stats.triangles)
         }
@@ -551,15 +598,18 @@ pub fn mesh(cloud: &Source, kind: Mesh, settings: &Settings, section: Option<Ori
             // the closed mesher reads tile by tile, through an index of the cloud on disk
             let index = ops::build_index(&points, &ops::IndexOptions::default(), &mut |_| keep_going()).map_err(say)?;
             let layers = [pointcloud_core::surfels::SurfelSource::new(&points, Some(&index), Default::default())];
-            let config = pointcloud_core::ClosedMeshConfig { voxel: settings.voxel.map(|mm| mm as f64 / 1000.0), max_hole: settings.hole as f64 / 100.0, ..Default::default() };
+            let config = pointcloud_core::ClosedMeshConfig { voxel: settings.voxel.map(|mm| mm as f64 / 1000.0), max_hole: settings.hole as f64 / 100.0, sample_percent: settings.sample as f64, ..Default::default() };
             let accept = |_: usize, _: u64, p: &pointcloud_core::Point| inside(p);
-            let (mesh, _) = pointcloud_core::mesh_closed(&layers, section.map(|b| b.aabb()), &accept, &config, &mut |_| keep_going()).map_err(say)?;
+            let (mesh, report) = pointcloud_core::mesh_closed(&layers, section.map(|b| b.aabb()), &accept, &config, &mut |_| keep_going()).map_err(say)?;
             pointcloud_core::write_mesh(&mesh, &source, pointcloud_core::MeshFormat::Obj, &[]).map_err(say)?;
+            deviation = (report.deviation.samples > 0).then_some((report.deviation.mean, report.deviation.p95));
             (mesh.vertices.len(), mesh.triangles.len())
         }
     };
     to_view(&source, &shown, cloud.origin).map_err(io)?;
-    Ok(Meshed { file: shown, source, vertices, triangles, seconds: start.elapsed().as_secs_f32() })
+    // how the triangles hang together, corners at one position counted as one
+    let topology = pointcloud_core::mesh_topology_by_position(&pointcloud_core::read_obj_mesh(&source).map_err(say)?);
+    Ok(Meshed { file: shown, source, vertices, triangles, seconds: start.elapsed().as_secs_f32(), open_edges: topology.open_edges, parts: topology.components, deviation })
 }
 
 /// Writes the mesh of `source`, in the coordinates of the cloud's file and Z up as the library
@@ -667,7 +717,7 @@ mod tests {
     fn a_grid_of_points_meshes_into_a_terrain_file() {
         let (folder, cloud) = grid("terrain", false);
         let done = mesh(&cloud, Mesh::Terrain, &Settings::default(), None, &AtomicBool::new(false)).unwrap();
-        assert!(done.vertices >= 100 && done.triangles >= 100, "{done:?}");
+        assert!(done.vertices >= 100 && done.triangles >= 100 && done.parts == 1 && done.open_edges > 0, "{done:?}");
         assert!(done.file.is_file() && done.file.file_name().unwrap() == "terrain-terrain.obj");
         // the shown file is Y up: the heights of the grid (0 to 2) are its second number; the
         // file for export keeps Z up

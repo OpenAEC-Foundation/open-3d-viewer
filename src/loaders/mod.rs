@@ -60,7 +60,7 @@ mod max3ds;
 mod geojson;
 mod citygml;
 mod usd;
-pub(crate) mod pointcloud;
+mod pointcloud;
 mod las;
 mod e57;
 mod xyz;

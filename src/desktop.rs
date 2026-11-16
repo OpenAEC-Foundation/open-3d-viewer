@@ -4,9 +4,9 @@
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--product viewer|modeller|collaborator|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
-//!                  [--product ...] [--mesh terrain|surface|closed] [--points scan|height|layer]
+//!                  [--product ...] [--mesh terrain|surface|closed]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
@@ -48,8 +48,6 @@ struct Args {
     saved_view: Option<String>,
     /// For `--screenshot`: mesh the cloud opened (terrain or surface) and show the mesh over it.
     mesh: Option<String>,
-    /// For `--screenshot`: what the points of a cloud take their colour from.
-    points: crate::viewport::render::PointColors,
     /// For `--screenshot`: a legend or drafting view of the file (by name) to show in its tab.
     draft: Option<String>,
     /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
@@ -65,6 +63,10 @@ struct Args {
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
     mode: Option<RenderMode>,
+    /// For `--screenshot`: how the points of a cloud are coloured.
+    cloud_color: Option<crate::cloud_color::CloudColor>,
+    /// For `--screenshot`: the clouds without their depth shading.
+    flat_clouds: bool,
     view: Option<ViewPreset>,
     bench: Option<PathBuf>,
     ortho: bool,
@@ -104,14 +106,6 @@ fn parse_args() -> Result<Args, String> {
             "--drawing" => args.drawing = Some(value()?),
             "--saved-view" => args.saved_view = Some(value()?),
             "--mesh" => args.mesh = Some(value()?),
-            "--points" => {
-                args.points = match value()?.as_str() {
-                    "scan" => crate::viewport::render::PointColors::Scan,
-                    "height" => crate::viewport::render::PointColors::Height,
-                    "layer" => crate::viewport::render::PointColors::Layer,
-                    _ => return Err("--points scan|height|layer".into()),
-                }
-            }
             "--draft" => args.draft = Some(value()?),
             "--pick" => args.pick = Some(value()?.parse().map_err(|_| "--pick takes an element id")?),
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
@@ -124,6 +118,17 @@ fn parse_args() -> Result<Args, String> {
                 let v = value()?;
                 let (w, h) = v.split_once('x').ok_or("--size WxH")?;
                 args.size = Some((w.parse().map_err(|_| "--size WxH")?, h.parse().map_err(|_| "--size WxH")?));
+            }
+            "--flat-clouds" => args.flat_clouds = true,
+            "--cloud-color" => {
+                use crate::cloud_color::CloudColor as C;
+                args.cloud_color = Some(match value()?.as_str() {
+                    "stored" => C::Stored,
+                    "elevation" => C::Elevation,
+                    "intensity" => C::Intensity,
+                    "class" => C::Class,
+                    _ => return Err("--cloud-color stored|elevation|intensity|class".into()),
+                });
             }
             "--mode" => {
                 args.mode = Some(match value()?.as_str() {
@@ -248,6 +253,12 @@ fn initial_state(args: &Args) -> App {
     }
     if let Some(m) = args.mode {
         app.mode = m;
+    }
+    if let Some(c) = args.cloud_color {
+        app.cloud_color = c;
+    }
+    if args.flat_clouds {
+        app.cloud_depth = false;
     }
     app.camera.ortho = args.ortho;
     if args.view_tab {
@@ -402,7 +413,6 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             model.load_time.as_secs_f32()
         );
         app.initial_view = args.view;
-        app.point_colors = args.points;
         app.set_model(Arc::new(model));
         // the card of a cloud shows what its file holds: read here, as no message runs
         #[cfg(feature = "pointcloud")]
@@ -421,7 +431,7 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             };
             let cloud = app.cloud().ok_or("--mesh: the file is not a point cloud")?;
             let done = crate::app::pointcloud::mesh(&cloud, kind, &app.cloud.settings, None, &std::sync::atomic::AtomicBool::new(false))?;
-            eprintln!("meshed {}: {} vertices, {} triangles in {:.2} s", done.file.display(), done.vertices, done.triangles, done.seconds);
+            eprintln!("meshed {}: {} in {:.2} s", done.file.display(), done.figures(), done.seconds);
             app.add_model(Arc::new(loaders::load(&done.file)?));
             app.fit();
         }

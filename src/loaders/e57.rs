@@ -64,7 +64,7 @@ fn read<T: Read + Seek>(mut reader: ::e57::E57Reader<T>, max: usize) -> ::e57::R
                 (None, Some(i)) => [(i.clamp(0.0, 1.0) * 255.0).round() as u8; 3],
                 (None, None) => base,
             };
-            cloud.push(layer, [x, y, z], color);
+            cloud.push_lit(layer, [x, y, z], color, point.intensity.map_or(255, |i| (i.clamp(0.0, 1.0) * 255.0).round() as u8));
         }
     }
     let mut info = cloud.info("E57", total);
@@ -159,7 +159,7 @@ mod tests {
         assert!(spherical.positions[2] > 1.99 && spherical.positions[0].abs() < 1e-6);
         // intensity as grey, brighter along the scan
         let grey = spherical.colors.as_ref().unwrap();
-        assert_eq!(grey[0], [0, 0, 0, 255]);
+        assert_eq!(grey[0], [0, 0, 0, 0]); // the fourth byte is its intensity
         assert_eq!(grey[4], [255, 255, 255, 255]);
         assert!(model.project.info.iter().any(|(k, v)| k == "Scans" && v == "2"));
     }

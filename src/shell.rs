@@ -1296,22 +1296,6 @@ impl Studio {
             add("cloud.export-mesh", l.text("Mesh exporteren…", "Export mesh…"), "bcf.export", mesh, last && idle, l.text("Schrijft de laatst gemaakte mesh als OBJ, PLY, STL, DXF, DWG of IFC, op de coördinaten van de puntenwolk.", "Writes the mesh made last as OBJ, PLY, STL, DXF, DWG or IFC, at the coordinates of the point cloud."));
             add("cloud.drawing", l.text("Doorsnedetekening…", "Section drawing…"), "drawing.section", drawing, cloud && idle && boxed, l.text("Tekent de punten in een plak bij een vlak van de doorsnedebox als DXF of DWG: de plattegrond bij het bovenvlak, of een aanzicht.", "Draws the points in a slab at a face of the section box as DXF or DWG: the plan at the top face, or an elevation."));
             add("cloud.cancel", l.text("Stoppen", "Stop"), "edit.clear-all", cancel, running, l.text("Stopt de mesh, de export of de tekening die wordt gemaakt.", "Stops the mesh, the export or the drawing that is being made."));
-            // what the points take their colour from
-            {
-                use crate::viewport::render::PointColors;
-                let choices = [
-                    ("cloud.colour-scan", PointColors::Scan, l.text("Kleur van de scan", "Scan colour"), "draw.filled-area", l.text("Kleurt de punten zoals het bestand ze geeft: de kleur van de scan, of de intensiteit.", "Colours the points as the file gives them: the colour of the scan, or its intensity.")),
-                    ("cloud.colour-height", PointColors::Height, l.text("Kleur op hoogte", "Colour by height"), "resource.level", l.text("Kleurt de punten op hun hoogte, van blauw (laag) naar rood (hoog).", "Colours the points by their height, from blue (low) to red (high).")),
-                    ("cloud.colour-layer", PointColors::Layer, l.text("Kleur op klasse", "Colour by class"), "view.grid", l.text("Kleurt de punten op hun laag: de klasse van een geclassificeerde wolk, of de scan van een bestand met meer scans.", "Colours the points by their layer: the class of a classified cloud, or the scan of a file with several scans.")),
-                ];
-                for (id, colors, label, icon, detail) in choices {
-                    #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
-                    let message = Some(go(Message::Pointcloud(Cloud::Colors(colors))));
-                    #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
-                    let message: Option<Msg> = None;
-                    list.push(Command::new(id, label, message.clone().unwrap_or(Msg::Dialog(None))).icon(small(icon), large(icon)).mode(app.point_colors == colors).enabled(message.is_some() && loaded).detail(detail));
-                }
-            }
             list.push(
                 Command::new("cloud.details", l.text("Gegevens", "Details"), Msg::Dialog(Some(Dialog::Cloud)))
                     .icon(small("status.info"), large("status.info"))
@@ -1319,6 +1303,20 @@ impl Studio {
                     .detail(l.text("Wat het bestand van de puntenwolk bevat, en hoe de meshes, de export en de tekening worden gemaakt.", "What the file of the point cloud holds, and how the meshes, the export and the drawing are made."))
                     .dialog(),
             );
+        }
+        list.push(Command::new("cloud.depth", l.text("Diepte", "Depth"), go(Message::ToggleCloudDepth)).icon(small("view.isometric"), large("view.isometric")).toggle(app.cloud_depth).enabled(loaded).detail(l.text("Maakt punten donkerder waar ze achter hun buren liggen, zodat de vorm van een wolk te zien is.", "Darkens points where they lie behind their neighbours, so the shape of a cloud shows.")));
+        // how the points of a cloud are coloured
+        {
+            use crate::cloud_color::CloudColor as C;
+            let ways = [
+                ("cloud.color-stored", C::Stored, l.text("Eigen kleur", "Stored colour"), "object.show", l.text("Kleurt de punten zoals het bestand ze bewaart: hun kleuren, of hun klasse of scan met de intensiteit als tint.", "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.")),
+                ("cloud.color-elevation", C::Elevation, l.text("Hoogte", "Elevation"), "resource.level", l.text("Kleurt de punten naar hun hoogte, van blauw laag naar rood hoog.", "Colours the points by their height, from blue low to red high.")),
+                ("cloud.color-intensity", C::Intensity, l.text("Intensiteit", "Intensity"), "theme.light", l.text("Kleurt de punten naar wat ze terugkaatsten, van donker naar licht. Een bestand zonder intensiteit wordt wit.", "Colours the points by what they reflected, from dark to light. A file without intensity turns white.")),
+                ("cloud.color-class", C::Class, l.text("Klasse of scan", "Class or scan"), "construction.types", l.text("Geeft elke klasse van een geclassificeerde wolk, of elke scan, één kleur.", "Gives every class of a classified cloud, or every scan, one colour.")),
+            ];
+            for (id, way, label, icon, detail) in ways {
+                list.push(Command::new(id, label, go(Message::CloudColor(way))).icon(small(icon), large(icon)).mode(app.cloud_color == way).enabled(loaded).detail(detail));
+            }
         }
         for planned in PLANNED {
             #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
@@ -2033,7 +2031,8 @@ impl Studio {
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
-                (l.text("Punten", "Points"), vec![smalls(&["cloud.colour-scan", "cloud.colour-height", "cloud.colour-layer"]), smalls(&["cloud.points-smaller", "cloud.points-larger"])]),
+                (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
+                (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("cloud.drawing")]),
                 (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface"), large("cloud.mesh-closed"), smalls(&["cloud.cancel"])]),
                 (l.text("Exporteren", "Export"), vec![large("cloud.export-points"), large("cloud.export-mesh")]),

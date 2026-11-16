@@ -8,6 +8,8 @@ mod cloud;
 mod export_drawing;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
 pub mod pointcloud;
+#[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+pub mod scan_project;
 mod grids;
 mod hatch;
 mod ifc;
@@ -269,9 +271,11 @@ pub struct App {
     pub ambient: bool,
     /// The size a point of a cloud is drawn at (pixels).
     pub point_size: f32,
-    /// What the points of a cloud take their colour from.
-    pub point_colors: crate::viewport::render::PointColors,
-    /// A job of the Pointcloud product runs (a mesh, an export, a drawing).
+    /// Shade the points of a cloud by depth (eye-dome lighting).
+    pub cloud_depth: bool,
+    /// How the points of a cloud are coloured.
+    pub cloud_color: crate::cloud_color::CloudColor,
+    /// A cloud is being meshed.
     pub meshing: bool,
     /// What the Pointcloud product keeps: its settings, the mesh made last, the details read.
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -565,6 +569,10 @@ pub enum Message {
     ToggleViewsIn3d,
     /// Ambient shadows in the 3D view on or off.
     ToggleAmbient,
+    /// Colour the points of the clouds another way.
+    CloudColor(crate::cloud_color::CloudColor),
+    /// Shade the points of a cloud by depth, or not.
+    ToggleCloudDepth,
     ToggleGridHeadsHidden,
     ToggleGridDims,
     ToggleLevels3d,
@@ -884,7 +892,8 @@ impl Default for App {
             views_in_3d: false,
             ambient: false,
             point_size: 2.5,
-            point_colors: Default::default(),
+            cloud_depth: true,
+            cloud_color: Default::default(),
             meshing: false,
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             cloud: pointcloud::State::default(),
@@ -1016,6 +1025,9 @@ fn pick_model_task(add: bool) -> Task<Message> {
     exts.sort_unstable();
     Task::perform(
         async move {
+            // a scan project file opens as the scans it lists
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            exts.push(scan_project::PROJECT_EXTENSION);
             let dialog = rfd::AsyncFileDialog::new()
                 .set_title(if add { "Add 3D model" } else { "Open 3D model" })
                 .add_filter("3D models", &exts)
@@ -1382,7 +1394,8 @@ impl App {
         // how the 3D view draws is set for the app, not for a project
         (app.ambient, app.grid_heads_hidden, app.grid_dims, app.levels_3d) = (self.ambient, self.grid_heads_hidden, self.grid_dims, self.levels_3d);
         app.point_size = self.point_size;
-        app.point_colors = self.point_colors;
+        app.cloud_depth = self.cloud_depth;
+        app.cloud_color = self.cloud_color;
         #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
         {
             app.cloud.settings = self.cloud.settings;
@@ -1571,6 +1584,24 @@ impl App {
         self.pending_open = None;
         if matches!(self.status, Status::Loading { .. }) {
             return Task::none();
+        }
+        // a scan project file or a folder of scans: the scans it lists or holds, one after another
+        #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+        if let loaders::Source::File(path) = &source {
+            if path.is_dir() || path.extension().is_some_and(|e| e.eq_ignore_ascii_case(scan_project::PROJECT_EXTENSION)) {
+                let open: Vec<PathBuf> = if add { self.models.iter().map(|entry| entry.model.path.clone()).collect() } else { Vec::new() };
+                let found = scan_project::expand(std::slice::from_ref(path), &open);
+                let mut scans = found.files.iter().cloned().map(loaders::Source::File);
+                let Some(first) = scans.next() else {
+                    self.status = Status::Error(found.summary());
+                    return Task::none();
+                };
+                self.add_queue.extend(scans);
+                if found.has_notes() {
+                    eprintln!("{}", found.summary());
+                }
+                return self.open(first, add);
+            }
         }
         // an IFCX file added to an IFCX model layers over it: the files load again as one model
         let last = self.models.last().map(|entry| entry.model.id).or(self.model.as_ref().map(|m| m.id));
@@ -2107,6 +2138,8 @@ impl App {
                 }
             }
             Message::ToggleAmbient => self.ambient = !self.ambient,
+            Message::CloudColor(color) => self.cloud_color = color,
+            Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
             Message::ToggleLevels3d => self.levels_3d = !self.levels_3d,
@@ -3704,7 +3737,8 @@ impl App {
             grids: self.grids_shown() || (self.levels_3d && !clean),
             ambient: self.ambient,
             point_size: self.point_size,
-            point_colors: self.point_colors,
+            cloud_depth: self.cloud_depth,
+            cloud_color: self.cloud_color,
             bounds: self.world_bounds(),
         };
         // the grid lines and levels where the view shown draws them

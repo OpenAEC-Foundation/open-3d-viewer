@@ -704,6 +704,10 @@ pub enum Message {
     Edit(edit::EditEvent),
     /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
     EditKey(char),
+    /// A length typed for the picked dimension, and Enter there: the element its last end holds
+    /// on to moves (see `modeller::dim_refs`).
+    DimensionValue(String),
+    DimensionValueApply,
     /// A field of a temporary dimension in the Modeller.
     TempDim(modeller::temp_dims::TempDimMessage),
     /// Shift+C in the Modeller: the 3D cursor goes home.
@@ -2175,8 +2179,13 @@ impl App {
             }
             Message::ApplyCut => self.apply_cut(),
             Message::AddDimension(plan, from, to) => {
-                self.document.add_dimension(&plan, from, to);
+                if self.document.add_dimension(&plan, from, to) {
+                    // in the Modeller its ends hold on to the elements they were clicked on
+                    self.anchor_last_dimension(&plan);
+                }
             }
+            Message::DimensionValue(text) => self.modeller.dimension_value = Some(text),
+            Message::DimensionValueApply => self.apply_dimension_value(),
             Message::SelectTab(i) => return self.select_tab(i),
             Message::RemoveSection(path) => {
                 self.close_plan(&path);

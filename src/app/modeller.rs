@@ -20,6 +20,7 @@ use std::sync::Arc;
 mod grids;
 pub mod browser;
 pub mod cursor3d;
+pub mod dim_refs;
 pub mod explorer;
 pub mod grab;
 pub(super) mod file_types;
@@ -191,6 +192,8 @@ pub struct Modeller {
     pub temp_dim: Option<(usize, String)>,
     /// The selected elements grabbed with G, following the cursor (see `grab`).
     pub grab: Option<grab::ObjectGrab>,
+    /// The length being typed for the picked dimension (see `dim_refs`).
+    pub dimension_value: Option<String>,
     /// The 3D cursor (see `cursor3d`).
     pub cursor3d: cursor3d::Cursor3d,
     /// The file the modelled project was opened from, when that file holds the project and
@@ -640,6 +643,8 @@ impl App {
             Arc::new(combined)
         };
         self.replace_scene(scene);
+        // the dimensions that hold on to elements follow them
+        self.follow_dimensions();
     }
 
     /// Puts `model` in the place of the scene shown, keeping the camera, the views and the

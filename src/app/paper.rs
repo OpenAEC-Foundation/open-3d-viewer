@@ -1035,7 +1035,7 @@ impl canvas::Program<Message> for PaperDrawing {
                     if self.section_tool {
                         draw_section_mark(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), String::new(), p.accent);
                     } else {
-                        let length = Dimension { from, to: q, style: 0 }.length();
+                        let length = Dimension { from, to: q, style: 0, anchors: [None, None] }.length();
                         draw_dimension(&mut frame, &fit, self.to_paper(j, from), self.to_paper(i, q), length, p.accent);
                     }
                 }

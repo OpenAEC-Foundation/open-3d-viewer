@@ -223,6 +223,7 @@ impl App {
                         .push(text(format!("{:.1} mm", style.size * 1000.0)).size(12).color(p.text_secondary))
                         .push(named("A+".to_string(), LookEdit::Larger))
                         .push(tool(l.text("Andere kant", "Other side"), false, Message::FlipDimension))
+                        .push(self.dimension_value_field(view, k))
                         .push(remove(l.text("Maat verwijderen", "Remove dimension")))
                 }
                 None => bar.push(hint(l.text(
@@ -237,6 +238,7 @@ impl App {
     /// Picks a dimension or text of the view shown; a picked text's wording can then be edited.
     pub(super) fn pick_mark(&mut self, pick: Option<MarkPick>) {
         self.mark_pick = pick;
+        self.modeller.dimension_value = None;
         if let (Some(MarkPick::Note(k)), Some(view)) = (pick, self.shown_view()) {
             if let Some(note) = self.document.view_notes(view).and_then(|n| n.get(k)) {
                 self.note_text = note.text.clone();
@@ -314,16 +316,16 @@ impl App {
         let mut made = Vec::new();
         // below: right to left, so the line stands under what it measures
         for pair in below.windows(2) {
-            made.push(Dimension { from: [pair[1], lo[1]], to: [pair[0], lo[1]], style: 0 });
+            made.push(Dimension { from: [pair[1], lo[1]], to: [pair[0], lo[1]], style: 0, anchors: [None, None] });
         }
         let out = if below.is_empty() { 0.0 } else { 1.0 };
-        made.push(Dimension { from: [hi[0], lo[1] - out], to: [lo[0], lo[1] - out], style: 0 });
+        made.push(Dimension { from: [hi[0], lo[1] - out], to: [lo[0], lo[1] - out], style: 0, anchors: [None, None] });
         // on the left: upwards, so the line stands left of what it measures
         for pair in left.windows(2) {
-            made.push(Dimension { from: [lo[0], pair[0]], to: [lo[0], pair[1]], style: 0 });
+            made.push(Dimension { from: [lo[0], pair[0]], to: [lo[0], pair[1]], style: 0, anchors: [None, None] });
         }
         let out = if left.is_empty() { 0.0 } else { 1.0 };
-        made.push(Dimension { from: [lo[0] - out, lo[1]], to: [lo[0] - out, hi[1]], style: 0 });
+        made.push(Dimension { from: [lo[0] - out, lo[1]], to: [lo[0] - out, hi[1]], style: 0, anchors: [None, None] });
         let same = |a: &Dimension, b: &Dimension| {
             let close = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 0.001 && (p[1] - q[1]).abs() < 0.001;
             (close(a.from, b.from) && close(a.to, b.to)) || (close(a.from, b.to) && close(a.to, b.from))
@@ -726,7 +728,9 @@ impl canvas::Program<Message> for ViewMarks {
         }
         for (k, d) in self.dimensions.iter().enumerate() {
             let (Some(a), Some(b)) = (self.px(&screen, d.from), self.px(&screen, d.to)) else { continue };
-            let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else { ink };
+            // an end whose element is gone: the dimension measures nothing that is, and shows it
+            let lost = d.anchors.iter().flatten().any(|a| a.lost);
+            let color = if self.pick == Some(MarkPick::Dimension(k)) { p.accent } else if lost { Color::from_rgb8(200, 40, 40) } else { ink };
             draw_dimension_px(&mut frame, a, b, d.length(), color, self.look(&screen, d.from, d.style));
         }
         // the regions filled in one colour, under the lines: black is the ink of the drawing
@@ -780,7 +784,7 @@ impl canvas::Program<Message> for ViewMarks {
                 (None, Some(from)) if self.cutting => self.draw_section(&mut frame, &screen, from, aim, String::new(), p.accent),
                 (None, Some(from)) => {
                     if let Some(a) = self.px(&screen, from) {
-                        let length = Dimension { from, to: aim, style: 0 }.length();
+                        let length = Dimension { from, to: aim, style: 0, anchors: [None, None] }.length();
                         draw_dimension_px(&mut frame, a, c, length, p.accent, self.look(&screen, from, 0));
                     }
                 }

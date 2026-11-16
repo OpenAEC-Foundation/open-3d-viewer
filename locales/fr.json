@@ -849,6 +849,7 @@
     "properties added as rules (off); tick the ones you ask.": "propriétés ajoutées comme règles (désactivées) ; cochez celles que vous demandez.",
     "Show ambient shadows": "Afficher les ombres ambiantes",
     "By kind": "Par type",
-    "Order": "Trier"
+    "Order": "Trier",
+    "Room": "Pièce"
   }
 }

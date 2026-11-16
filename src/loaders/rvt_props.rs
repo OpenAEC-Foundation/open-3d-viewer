@@ -527,18 +527,18 @@ impl Reader<'_> {
                 let leaders = o.get("m_leaders").and_then(FieldValue::as_list).map_or(0, <[FieldValue]>::len);
                 rows.push((word("Aanhaallijnen", "Leaders"), leaders.to_string().into()));
             }
-            "IndependentTag" => {
-                // what it tags: the host of its first reference
-                let host = o.objects.iter().filter(|n| n.class == "TagReferenceWithLeader").find_map(|n| {
-                    let key = n.get("m_referenceIdKey").and_then(FieldValue::as_object)?;
-                    element_of(key.get("m_hostOrLinkElemId").and_then(FieldValue::as_object)?.get("m_linkInstOrHostId"))
-                });
+            "IndependentTag" | "RoomTag" => {
+                // what it tags: the host of its reference (named otherwise in older files), or a
+                // room tag's room
+                let room = || u64::try_from(o.path(&["m_taggedRoomElemId", "m_linkInstOrHostId"])?.element()?).ok();
+                let host = super::rvt_tags::tag_reference(&o).and_then(super::rvt_tags::tagged_element).or_else(room).and_then(|h| i64::try_from(h).ok());
                 if let Some(host) = host {
                     let of = self.object(host).map(|h| h.class).unwrap_or_default();
                     let what = match of.as_str() {
                         "FilledRegion" => word("Arcering", "Filled region"),
                         "FamilyInstance" => word("Component", "Component"),
                         "CurveElem" => word("Lijn", "Line"),
+                        "Room" => word("Ruimte", "Room"),
                         _ => Word::Own(of),
                     };
                     rows.push((word("Getagd element", "Tagged element"), what));

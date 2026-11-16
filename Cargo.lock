@@ -4636,7 +4636,7 @@ dependencies = [
 [[package]]
 name = "rvt-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=3b10b3763e48a75f369731b1ebb6eabd7fde6bdb#3b10b3763e48a75f369731b1ebb6eabd7fde6bdb"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
 dependencies = [
  "flate2",
 ]
@@ -4644,7 +4644,7 @@ dependencies = [
 [[package]]
 name = "rvt-export"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=3b10b3763e48a75f369731b1ebb6eabd7fde6bdb#3b10b3763e48a75f369731b1ebb6eabd7fde6bdb"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
 dependencies = [
  "delaunator",
  "earcutr",
@@ -4657,7 +4657,7 @@ dependencies = [
 [[package]]
 name = "rvt-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=3b10b3763e48a75f369731b1ebb6eabd7fde6bdb#3b10b3763e48a75f369731b1ebb6eabd7fde6bdb"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
 dependencies = [
  "serde",
 ]
@@ -4665,7 +4665,7 @@ dependencies = [
 [[package]]
 name = "rvt-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=3b10b3763e48a75f369731b1ebb6eabd7fde6bdb#3b10b3763e48a75f369731b1ebb6eabd7fde6bdb"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
 dependencies = [
  "flate2",
  "rvt-core",

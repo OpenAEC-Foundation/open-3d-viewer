@@ -453,12 +453,12 @@ pub(super) fn tags(doc: &rvt_read::Document, types: &mut Types) -> Vec<Tag> {
 
 /// What a tag says of what it tags, with its leader: a `TagReferenceWithLeader` in newer files,
 /// a `TaggedElem` in older ones (2024 and before); both hold the leader's offsets alike.
-fn tag_reference(tag: &rvt_model::ObjectView) -> Option<&NestedObject> {
+pub(super) fn tag_reference(tag: &rvt_model::ObjectView) -> Option<&NestedObject> {
     tag.objects.iter().find(|x| x.class == "TagReferenceWithLeader").or_else(|| tag.objects.iter().find(|x| x.class == "TaggedElem"))
 }
 
 /// The element a tag's reference names.
-fn tagged_element(reference: &NestedObject) -> Option<u64> {
+pub(super) fn tagged_element(reference: &NestedObject) -> Option<u64> {
     let newer = || reference.get("m_referenceIdKey")?.as_object()?.get("m_hostOrLinkElemId")?.as_object()?.get("m_linkInstOrHostId")?.element();
     let older = || reference.get("m_taggedId")?.as_object()?.get("m_linkInstOrHostId")?.element();
     newer().or_else(older).and_then(|e| u64::try_from(e).ok())

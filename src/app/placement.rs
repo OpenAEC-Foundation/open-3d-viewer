@@ -125,6 +125,8 @@ pub enum PlaceMessage {
     /// What the Slab tool makes; its type goes, as types are per role.
     Role(bim_core::SlabRole),
     Chain(bool),
+    /// The Wall tool draws a rectangle, or single walls.
+    Rectangle(bool),
 }
 
 /// The settings of every tool, the chain, and a value being typed.
@@ -132,6 +134,8 @@ pub enum PlaceMessage {
 pub struct Placement {
     settings: HashMap<ModelTool, Settings>,
     pub chain: bool,
+    /// The Wall tool draws a rectangle of four walls with two clicks.
+    pub rectangle: bool,
     typing: Option<(PlaceField, String)>,
     /// The wall placed last while chaining: the next one on a face meets it where their axes cross.
     pub last_wall: Option<ElementId>,
@@ -139,7 +143,7 @@ pub struct Placement {
 
 impl Default for Placement {
     fn default() -> Self {
-        Self { settings: HashMap::new(), chain: true, typing: None, last_wall: None }
+        Self { settings: HashMap::new(), chain: true, rectangle: false, typing: None, last_wall: None }
     }
 }
 
@@ -259,6 +263,11 @@ impl App {
                     s.kind = None;
                 }
             }
+            PlaceMessage::Rectangle(on) => {
+                placement.rectangle = on;
+                self.modeller.points.clear();
+                placement.last_wall = None;
+            }
             PlaceMessage::Chain(on) => {
                 placement.chain = on;
                 if !on {
@@ -362,6 +371,11 @@ impl App {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(l))).collect();
             let picked = options.iter().find(|o| o.0 == s.location).copied();
             bar = bar.push(label(l.text("Locatielijn", "Location line"))).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]).width(120));
+        }
+        if tool == ModelTool::Wall {
+            let on = self.modeller.placement.rectangle;
+            let rectangle = button(text(l.text("Rechthoek", "Rectangle")).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Rectangle(!on)));
+            bar = bar.push(rectangle);
         }
         if tool.chains() {
             let on = self.modeller.placement.chain;
@@ -544,6 +558,31 @@ mod tests {
         app.select_modelled(ElementId(1));
         let _ = app.update(Message::EditMode);
         assert!(app.modeller.sketch.is_some());
+    }
+
+    #[test]
+    fn the_wall_tool_draws_a_rectangle_of_four_walls_with_two_clicks() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        place(&mut app, PlaceMessage::Rectangle(true));
+        click(&mut app, 0.0, 0.0);
+        assert_eq!(app.modeller.model.len(), 0);
+        click(&mut app, 6.0, 4.0);
+        let walls: Vec<(DVec2, DVec2)> = (1..=4).map(|id| {
+            let w = wall(&app, id);
+            let bim_core::element::PlanarForm::Wall { start, end, .. } = w.form else { panic!() };
+            (start, end)
+        }).collect();
+        let c = |x: f64, y: f64| DVec2::new(x, y);
+        assert_eq!(walls, vec![(c(0.0, 0.0), c(6.0, 0.0)), (c(6.0, 0.0), c(6.0, 4.0)), (c(6.0, 4.0), c(0.0, 4.0)), (c(0.0, 4.0), c(0.0, 0.0))]);
+        assert!(app.modeller.points.is_empty(), "the next click starts a new rectangle");
+        // the corners are cut: each wall's solid is shorter than its axis by what the others take
+        let volume: f64 = (1..=4).map(|id| app.modeller.model.evaluate(ElementId(id)).unwrap().iter().map(|p| p.solid.volume()).sum::<f64>()).sum();
+        assert!((volume - (2.0 * (6.0 + 4.0)) * 0.2 * 3.0).abs() < 0.2 * 0.2 * 3.0 * 4.0 + 1e-9, "{volume}");
+        // two clicks on one line make nothing
+        click(&mut app, 10.0, 0.0);
+        click(&mut app, 12.0, 0.0);
+        assert_eq!(app.modeller.model.len(), 4);
     }
 
     #[test]

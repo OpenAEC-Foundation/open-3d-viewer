@@ -449,6 +449,33 @@ impl App {
         let (z, _, level) = self.work_plane();
         let Some(p) = self.plane_point(x, y, width, height, z) else { return };
         let p = self.snapped(p, x, y, width, height);
+        // walls as a rectangle: the second click is the opposite corner, and four walls go
+        // round, each from the end of the one before, as a chain does
+        if tool == ModelTool::Wall && self.modeller.placement.rectangle {
+            let Some(&a) = self.modeller.points.first() else {
+                self.modeller.points.push(p);
+                self.modeller.refusal = None;
+                return;
+            };
+            if (a.x - p.x).abs() < 1e-6 || (a.y - p.y).abs() < 1e-6 {
+                return;
+            }
+            let chained = std::mem::replace(&mut self.modeller.placement.chain, true);
+            self.modeller.points.clear();
+            self.modeller.placement.last_wall = None;
+            for corner in [a, DVec3::new(p.x, a.y, a.z), DVec3::new(p.x, p.y, a.z), DVec3::new(a.x, p.y, a.z), a] {
+                self.model_point(tool, name, level.clone(), corner);
+            }
+            self.modeller.points.clear();
+            self.modeller.placement.last_wall = None;
+            self.modeller.placement.chain = chained;
+            return;
+        }
+        self.model_point(tool, name, level, p);
+    }
+
+    /// The next point of `tool`, already snapped: with its last point the element is placed.
+    fn model_point(&mut self, tool: ModelTool, name: &'static str, level: Option<String>, p: DVec3) {
         self.modeller.points.push(p);
         self.modeller.refusal = None;
         if self.modeller.points.len() < tool.clicks() {

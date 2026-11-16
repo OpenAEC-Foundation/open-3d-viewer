@@ -1330,6 +1330,8 @@ struct Scene<'f> {
     /// What was drawn and what was left out, by kind.
     drawn: BTreeMap<&'static str, usize>,
     skipped: BTreeMap<&'static str, usize>,
+    /// The objects drawn with meshes the viewer made (by the address of their meshes).
+    meshed: HashSet<usize>,
 }
 
 /// The colour an object is drawn in: sRGB and alpha.
@@ -1408,6 +1410,7 @@ impl<'f> Scene<'f> {
             origin: None,
             drawn: BTreeMap::new(),
             skipped: BTreeMap::new(),
+            meshed: HashSet::new(),
         }
     }
 
@@ -1652,6 +1655,9 @@ impl<'f> Scene<'f> {
                 if let Some(p) = props.take() {
                     target.props.push((id, p));
                 }
+                if meshes.iter().any(|m| m.computed) {
+                    self.meshed.insert(meshes.as_ptr() as usize);
+                }
                 true
             }
             Geometry::Points { points, colors, .. } => {
@@ -1718,9 +1724,8 @@ impl<'f> Scene<'f> {
         if !self.drawn.is_empty() {
             info.push(("Rhino objects drawn".into(), list(&self.drawn)));
         }
-        let computed = file.objects.iter().filter(|o| matches!(&o.geometry, Geometry::Meshes(m, _) if m.iter().any(|m| m.computed))).count();
-        if computed > 0 {
-            info.push(("Rhino objects meshed by the viewer".into(), format!("{computed} (saved without a render mesh)")));
+        if !self.meshed.is_empty() {
+            info.push(("Rhino objects meshed by the viewer".into(), format!("{} (saved without a render mesh)", self.meshed.len())));
         }
         if self.stride > 1 {
             info.push(("Rhino points".into(), format!("{} in the file, every {}th drawn", self.total_points, self.stride)));
@@ -2468,7 +2473,8 @@ mod tests {
     #[test]
     fn polysurfaces_and_extrusions_without_meshes_are_meshed() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
-        for (name, objects) in [("primitives", 7), ("booleans", 3), ("extrusions", 5), ("freeform", 5), ("building", 12), ("tower", 10), ("mechanical", 3), ("stairs", 22)] {
+        // objects meshed: a block definition's members once, however often it is placed
+        for (name, objects) in [("primitives", 7), ("booleans", 3), ("extrusions", 5), ("freeform", 5), ("building", 12), ("tower", 10), ("mechanical", 3), ("stairs", 22), ("blocks", 8), ("dome", 2), ("roofs", 3)] {
             let data = std::fs::read(dir.join(format!("{name}.3dm"))).unwrap();
             let (model, info) = load(&format!("{name}.3dm"), data);
             assert!(info.iter().all(|(k, _)| k != "Rhino objects left out"), "{name}: {info:?}");
@@ -2557,10 +2563,17 @@ mod tests {
         ("stairs", "Step 19", 3.5360),
         ("stairs", "Step 20", 3.5360),
         ("stairs", "Handrail", 3.6224),
+        ("dome", "Dome", 408.1008),
+        ("dome", "Drum", 320.6938),
+        ("roofs", "Hypar", 125.2610),
+        ("roofs", "SubD blob", 106.3228),
+        ("roofs", "Ribbon", 30.7790),
+        // three table sets of four chairs (nested blocks) and a mirrored chair
+        ("blocks", "", 26.1531),
         ];
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
         let mut areas: HashMap<(String, String), f64> = HashMap::new();
-        for name in ["primitives", "booleans", "extrusions", "freeform", "building", "tower", "mechanical", "stairs"] {
+        for name in ["primitives", "booleans", "extrusions", "freeform", "building", "tower", "mechanical", "stairs", "dome", "roofs", "blocks"] {
             let (model, _) = load(&format!("{name}.3dm"), std::fs::read(dir.join(format!("{name}.3dm"))).unwrap());
             for layer in &model.layers {
                 let p = |i: u32| DVec3::from_slice(&layer.positions[3 * i as usize..3 * i as usize + 3].iter().map(|&v| v as f64).collect::<Vec<_>>());
@@ -2576,7 +2589,8 @@ mod tests {
         let mut wrong = Vec::new();
         for (file, object, rhino) in expected {
             // the models are in millimetres, the viewer in metres
-            let ours = 1e6 * areas.get(&(file.to_string(), object.to_string())).copied().unwrap_or(0.0);
+            // an empty name: the whole file
+            let ours = 1e6 * areas.iter().filter(|((f, o), _)| f == file && (object.is_empty() || o == object)).map(|(_, a)| a).sum::<f64>();
             if (ours - rhino).abs() > 0.015 * rhino {
                 wrong.push(format!("{file} {object}: {ours:.3} against {rhino} in Rhino"));
             }

@@ -13,7 +13,7 @@ use crate::theme::Palette;
 use glam::{Vec2, Vec3};
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::{button, container, text, text_input, Row};
-use iced::{alignment, keyboard, mouse, Center, Color, Element, Fill, Point, Rectangle, Size};
+use iced::{alignment, keyboard, mouse, Center, Color, Element, Point, Rectangle, Size};
 use openaec_ui::Language;
 use std::sync::Arc;
 
@@ -157,84 +157,77 @@ impl App {
         })
     }
 
-    /// The bar over a view's tab: its tools, then what goes with the tool on or what is picked.
-    pub(super) fn view_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
+    /// The Drawing section of the right pane while a view's tab is shown in the Modeller: how the
+    /// view shows (as on a sheet, laid in 3D), its standard dimensions and its export; and, for a
+    /// dimension or text picked on it, what can be done with that.
+    pub(super) fn view_mark_properties(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let view = self.shown_view()?;
-        let (measuring, noting) = (self.dimension_tool, self.note_tool);
-        let is_plan = self.document.plan(view).is_some();
-        let cutting = self.section_tool && is_plan;
-        let tool = |label: &'static str, on: bool, message: Message| {
-            button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(message)
-        };
-        let hint = |line: &'static str| text(line).size(12).color(p.text_secondary);
         let (on_paper, laid) = (self.drawing_on_paper, self.projected.contains(view));
-        if !self.annotates {
-            // the Viewer only looks: how the view shows, and its export
-            let bar = Row::new()
-                .spacing(6)
-                .align_y(Center)
-                .push(tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)))
-                .push(tool(l.text("In 3D", "In 3D"), laid, Message::ProjectView(Arc::from(view))))
-                .push(self.export_control(p, l));
-            return Some(container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()).into());
-        }
-        let mut bar = Row::new()
-            .spacing(6)
-            .align_y(Center)
-            .push(tool(l.text("Maatvoering", "Dimension"), measuring, Message::DimensionTool(!measuring)))
-            .push(tool(l.text("Tekst", "Text"), noting, Message::NoteTool(!noting)));
-        if is_plan {
-            bar = bar.push(tool(l.text("Doorsnede", "Section"), cutting, Message::SectionTool(!cutting)));
-        }
-        // as on a sheet, or over the model; and laid in the 3D view where it is taken
-        bar = bar
-            .push(tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)))
-            .push(tool(l.text("In 3D", "In 3D"), laid, Message::ProjectView(Arc::from(view))));
-        bar = bar
-            .push(tool(l.text("Standaard maatvoering", "Standard dimensions"), false, Message::StandardDimensions(Arc::from(view))))
-            .push(self.export_control(p, l))
-            .push(text("|").size(12).color(p.text_muted));
-        let wording = || text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
-        let remove = |label: &'static str| tool(label, false, Message::RemoveMark);
-        bar = if measuring {
-            bar.push(hint(l.text("Klik twee punten; ze springen naar de uiteinden van de lijnen. Esc breekt af.", "Click two points; they snap to the ends of the lines. Esc cancels.")))
-        } else if cutting {
-            bar.push(hint(l.text(
+        let hint = |line: &'static str| text(line).size(12).color(p.text_secondary);
+        let is_plan = self.document.plan(view).is_some();
+        let tool = |label: &'static str, on: bool, message: Message| -> Element<'static, Message> {
+            button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(on, s)).on_press(message).into()
+        };
+        let choices = |items: Vec<Element<'static, Message>>| -> Element<'static, Message> { Row::with_children(items).spacing(4).wrap().into() };
+        let mut rows = iced::widget::Column::new().spacing(6);
+        // a tool on: what it waits for, and the wording of a text to place
+        if self.annotates && self.dimension_tool {
+            rows = rows.push(hint(l.text("Klik twee punten; ze springen naar de uiteinden van de lijnen. Esc breekt af.", "Click two points; they snap to the ends of the lines. Esc cancels.")));
+        } else if self.annotates && self.section_tool && is_plan {
+            rows = rows.push(hint(l.text(
                 "Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.",
                 "Click where the section starts and ends on a floor plan; it looks to the left.",
-            )))
-        } else if noting {
-            bar.push(wording()).push(hint(l.text("Klik waar de tekst komt.", "Click where the text goes.")))
-        } else {
-            match self.mark_pick {
-                Some(MarkPick::Note(_)) => bar.push(wording()).push(remove(l.text("Tekst verwijderen", "Remove text"))),
-                Some(MarkPick::Dimension(k)) => {
-                    let style = self.document.view_marks(view).and_then(|(d, _)| d.get(k)).map_or(0, |d| d.style);
-                    let style = self.document.dimension_style(style);
-                    let named = |label: String, edit: LookEdit| button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::DimensionLook(edit));
-                    let tick = match style.tick {
-                        Tick::Slash => l.text("Streepje", "Slash"),
-                        Tick::Arrow => l.text("Pijl", "Arrow"),
-                        Tick::Dot => l.text("Stip", "Dot"),
-                        Tick::None => l.text("Geen eindteken", "No end mark"),
-                    };
-                    bar.push(named(format!("{}: {}", l.text("Stijl", "Style"), style.name), LookEdit::NextStyle))
-                        .push(named(tick.to_string(), LookEdit::NextTick))
-                        .push(named(style.unit.key().to_string(), LookEdit::NextUnit))
+            )));
+        } else if self.annotates && self.note_tool {
+            rows = rows.push(text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
+            rows = rows.push(hint(l.text("Klik waar de tekst komt.", "Click where the text goes.")));
+        }
+        match self.mark_pick.filter(|_| self.annotates) {
+            Some(MarkPick::Note(_)) => {
+                rows = rows.push(text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
+                rows = rows.push(tool(l.text("Tekst verwijderen", "Remove text"), false, Message::RemoveMark));
+            }
+            Some(MarkPick::Dimension(k)) => {
+                let style = self.document.view_marks(view).and_then(|(d, _)| d.get(k)).map_or(0, |d| d.style);
+                let style = self.document.dimension_style(style);
+                let named = |label: String, edit: LookEdit| -> Element<'static, Message> {
+                    button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::DimensionLook(edit)).into()
+                };
+                let tick = match style.tick {
+                    Tick::Slash => l.text("Streepje", "Slash"),
+                    Tick::Arrow => l.text("Pijl", "Arrow"),
+                    Tick::Dot => l.text("Stip", "Dot"),
+                    Tick::None => l.text("Geen eindteken", "No end mark"),
+                };
+                rows = rows.push(choices(vec![
+                    named(format!("{}: {}", l.text("Stijl", "Style"), style.name), LookEdit::NextStyle),
+                    named(tick.to_string(), LookEdit::NextTick),
+                    named(style.unit.key().to_string(), LookEdit::NextUnit),
+                ]));
+                rows = rows.push(
+                    Row::new()
+                        .spacing(6)
+                        .align_y(Center)
                         .push(named("A−".to_string(), LookEdit::Smaller))
                         .push(text(format!("{:.1} mm", style.size * 1000.0)).size(12).color(p.text_secondary))
-                        .push(named("A+".to_string(), LookEdit::Larger))
-                        .push(tool(l.text("Andere kant", "Other side"), false, Message::FlipDimension))
-                        .push(self.dimension_value_field(view, k))
-                        .push(remove(l.text("Maat verwijderen", "Remove dimension")))
-                }
-                None => bar.push(hint(l.text(
-                    "Maten en teksten horen bij deze weergave: ze staan ook op elk blad waar hij op staat.",
-                    "Dimensions and texts belong to this view: they show on every sheet it is placed on too.",
-                ))),
+                        .push(named("A+".to_string(), LookEdit::Larger)),
+                );
+                rows = rows.push(self.dimension_value_field(view, k));
+                rows = rows.push(choices(vec![tool(l.text("Andere kant", "Other side"), false, Message::FlipDimension), tool(l.text("Maat verwijderen", "Remove dimension"), false, Message::RemoveMark)]));
             }
-        };
-        Some(container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()).into())
+            None => {
+                rows = rows.push(choices(vec![
+                    tool(l.text("Als op blad", "As on sheet"), on_paper, Message::DrawingOnPaper(!on_paper)),
+                    tool(l.text("In 3D", "In 3D"), laid, Message::ProjectView(Arc::from(view))),
+                ]));
+                // the Viewer only looks: how the view shows, and its export
+                if self.annotates {
+                    rows = rows.push(tool(l.text("Standaard maatvoering", "Standard dimensions"), false, Message::StandardDimensions(Arc::from(view))));
+                }
+                rows = rows.push(self.export_control(p, l));
+            }
+        }
+        Some(container(rows).padding([2, 8]).into())
     }
 
     /// Picks a dimension or text of the view shown; a picked text's wording can then be edited.

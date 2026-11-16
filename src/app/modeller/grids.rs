@@ -139,7 +139,7 @@ impl App {
             )
             .padding(8)
             .width(CARD)
-            .style(move |_| p.overlay());
+            .style(move |_| p.panel());
             let mut place = at(CARD, 96.0);
             place.left = (x + PLUS).clamp(0.0, (width - CARD).max(0.0));
             layers = layers.push(container(card).padding(place));

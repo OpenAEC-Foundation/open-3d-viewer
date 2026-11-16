@@ -1254,6 +1254,14 @@ impl Studio {
         let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
             Command::new(id, label, go(Message::PickLevelFor((app.views_picker != Some(kind)).then_some(kind)))).icon(small("drawing.plan"), large("drawing.plan")).mode(app.views_picker == Some(kind)).enabled(loaded)
         };
+        for view in crate::app::IfcView::ALL {
+            list.push(
+                Command::new(view.command(), view.label(l), go(Message::IfcView(view)))
+                    .icon(small("panel.model-tree"), large("panel.model-tree"))
+                    .mode(app.ifc.shown && app.ifc.view == view)
+                    .enabled(loaded),
+            );
+        }
         list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
         // a grid line of the modelled project: two clicks on the work plane
         list.push(Command::new("project.grid", l.text("Stramien", "Grid"), go(Message::GridTool)).icon(small("view.grid"), large("view.grid")).mode(app.modeller.grid_tool).enabled(app.modeller.shown.is_some()));
@@ -1504,6 +1512,19 @@ impl Studio {
                 self.ribbon_folded = self.compact() && !self.backstage && same && !self.ribbon_folded;
                 self.ribbon_tab = tab;
                 self.backstage = false;
+                // the IFCX page shows the project's IFCX in place of the views; another page
+                // gives them back
+                if self.ribbon_page() == RibbonPage::Ifcx {
+                    // the first time it opens on the graph
+                    if !self.app.ifc.open {
+                        self.app.ifc.view = crate::app::IfcView::Graph;
+                    }
+                    self.app.ifc.full = true;
+                    return self.update(Msg::App(Message::OpenIfc));
+                } else if self.app.ifc.full {
+                    self.app.ifc.full = false;
+                    self.app.ifc.shown = false;
+                }
             }
             Msg::Backstage(open) => self.backstage = open,
             Msg::OpenRecent(path) => return self.update(Msg::App(Message::Open(path))),
@@ -2113,6 +2134,11 @@ impl Studio {
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
                 (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
+            ],
+            // the project as its IFCX file has it: the ways to look at it, and saving it
+            RibbonPage::Ifcx => vec![
+                ("IFCX", crate::app::IfcView::ALL.iter().map(|v| large(v.command())).collect()),
+                (l.text("Bestand", "File"), vec![large("file.save-as")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![

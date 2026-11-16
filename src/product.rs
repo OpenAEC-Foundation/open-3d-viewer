@@ -84,7 +84,7 @@ impl Product {
     pub fn pages(self) -> &'static [RibbonPage] {
         match self {
             Product::Viewer => &[RibbonPage::Home],
-            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View],
+            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View, RibbonPage::Ifcx],
             Product::Collaborator => &[RibbonPage::Collaborate, RibbonPage::View],
         }
     }
@@ -177,6 +177,9 @@ pub enum RibbonPage {
     View,
     /// The Collaborator's models, issues, checks and comments.
     Collaborate,
+    /// The Modeller's IFCX worksheet: the whole project as its IFCX file has it, in place of the
+    /// views.
+    Ifcx,
 }
 
 impl RibbonPage {
@@ -188,6 +191,7 @@ impl RibbonPage {
             RibbonPage::Annotate => l.text("Annoteren", "Annotate"),
             RibbonPage::View => l.text("Beeld", "View"),
             RibbonPage::Collaborate => l.text("Samenwerken", "Collaborate"),
+            RibbonPage::Ifcx => "IFCX",
         }
     }
 }

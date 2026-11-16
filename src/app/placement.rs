@@ -380,14 +380,18 @@ impl App {
     pub(super) fn placement_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let (tool, s) = self.tool_settings()?;
         let label = |t: &'static str| text(t).size(12).color(p.text_secondary).wrapping(iced::widget::text::Wrapping::None);
-        let mut bar = Row::new().spacing(8).align_y(Center).push(text(tool.label(l)).size(12).color(p.text));
+        // each value with its name, one under the other: the right pane is narrow
+        fn pair<'a>(name: impl Into<Element<'a, Message>>, value: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+            Row::new().spacing(8).align_y(Center).push(container(name).width(iced::Length::FillPortion(2))).push(container(value).width(iced::Length::FillPortion(3))).into()
+        }
+        let mut bar = iced::widget::Column::new().spacing(5);
         if let Some(choices) = self.kinds(tool, l) {
             let picked = choices.iter().find(|c| c.id == s.kind).cloned();
             let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Kind(c.id))).text_size(12).padding([2, 6]);
             // a system type's name ends with what tells it from the next (its centres, its
             // bond), so its list is as wide as its longest name
             let pick = if tool == ModelTool::System { pick } else { pick.width(150) };
-            bar = bar.push(label(l.text("Type", "Type"))).push(pick);
+            bar = bar.push(pair(label(l.text("Type", "Type")), pick));
         }
         let typing = self.modeller.placement.typing.clone();
         for (field, name) in fields(tool, l) {
@@ -401,7 +405,7 @@ impl App {
             let hint = if field == PlaceField::Height { l.text("tot niveau", "to level") } else { "" };
             let input = text_input(hint, &value).size(12).padding([2, 6]).width(68);
             let input = if fixed { input } else { input.on_input(move |t| Message::Place(PlaceMessage::Field(field, t))).on_submit(Message::Place(PlaceMessage::Done)) };
-            bar = bar.push(label(name)).push(input);
+            bar = bar.push(pair(label(name), input.width(Fill)));
         }
         if tool == ModelTool::Slab {
             // a floor, a roof or a ceiling: made the same, classed and listed apart
@@ -425,7 +429,7 @@ impl App {
             let chain = button(text(l.text("Ketting", "Chain")).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Chain(!on)));
             bar = bar.push(chain);
         }
-        Some(container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()).into())
+        Some(container(bar).padding([2, 8]).width(Fill).into())
     }
 
     /// The types `tool` can take, generic first; `None` for a tool without types.

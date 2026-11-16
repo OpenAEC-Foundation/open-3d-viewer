@@ -588,7 +588,7 @@ impl App {
             .push(tool(l.text("Trimmen (T)", "Trim (T)"), 't', is(SketchTool::Trim)))
             .push(button(text(l.text("Klaar (Tab)", "Finish (Tab)")).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::EditMode))
             .push(button(text(l.text("Annuleren", "Cancel")).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::SketchCancel));
-        Some(container(container(bar).padding(4).style(move |_| p.overlay())).padding(iced::Padding { top: 48.0, left: 8.0, ..iced::Padding::ZERO }).into())
+        Some(container(bar.wrap()).padding([2, 8]).into())
     }
 
     /// Cancel: the sketch leaves with the floor unchanged, whatever tool is on.

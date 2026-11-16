@@ -13,7 +13,7 @@ use iced::alignment;
 use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
-use iced::widget::{button, canvas as canvas_widget, column, container, row, text, Row};
+use iced::widget::{button, canvas as canvas_widget, container, row, text, Row};
 use iced::{Center, Color, Element, Fill, Point, Rectangle, Size};
 use openaec_ui::Language;
 use std::sync::Arc;
@@ -405,32 +405,13 @@ impl App {
         })
     }
 
-    /// The workspace of a sheet's tab: the sheet alone. While a tool waits for a click, a line
-    /// above it says what it waits for (and holds the wording of a text to place); everything
-    /// else of the sheet is in the right pane (see [`App::sheet_properties`]) and in the ribbon.
+    /// The workspace of a sheet's tab: the sheet alone. Everything of the sheet, and what a tool
+    /// on waits for, is in the right pane (see [`App::sheet_properties`]) and in the ribbon.
     pub(super) fn doc_sheet_workspace(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let path = self.active_doc_sheet.as_ref()?;
         self.document.sheet(path)?;
-        let hint = |words: &str| text(words.to_string()).size(12).color(p.text_secondary);
-        let line: Option<Row<'_, Message>> = if self.dimension_tool {
-            Some(Row::new().push(hint(l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels."))))
-        } else if self.note_tool {
-            let wording = iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
-            Some(Row::new().push(wording).push(hint(l.text("Klik op een weergave waar de tekst komt.", "Click on a view where the text goes."))))
-        } else if self.section_tool {
-            Some(Row::new().push(hint(l.text(
-                "Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.",
-                "Click where the section starts and ends on a floor plan; it looks to the left.",
-            ))))
-        } else {
-            None
-        };
         let drawing = self.paper_drawing(p, l)?;
-        let sheet = canvas_widget(drawing).width(Fill).height(Fill);
-        Some(match line {
-            Some(line) => column![container(line.spacing(8).align_y(Center)).padding([6, 10]).width(Fill).style(move |_| p.ribbon()), sheet].into(),
-            None => sheet.into(),
-        })
+        Some(canvas_widget(drawing).width(Fill).height(Fill).into())
     }
 
     /// The Sheet section of the right pane while a sheet is shown: its paper, its arranging, its
@@ -446,6 +427,19 @@ impl App {
         let label = |words: &str| -> Element<'static, Message> { text(words.to_string()).size(12).color(p.text_secondary).into() };
         let choices = |items: Vec<Element<'static, Message>>| -> Element<'static, Message> { Row::with_children(items).spacing(4).wrap().into() };
         let mut rows = iced::widget::Column::new().spacing(6);
+        // a tool on: what it waits for, and the wording of a text to place
+        let hint = |words: &'static str| text(words).size(12).color(p.text_secondary);
+        if self.dimension_tool {
+            rows = rows.push(hint(l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.")));
+        } else if self.note_tool {
+            rows = rows.push(iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
+            rows = rows.push(hint(l.text("Klik op een weergave waar de tekst komt.", "Click on a view where the text goes.")));
+        } else if self.section_tool {
+            rows = rows.push(hint(l.text(
+                "Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.",
+                "Click where the section starts and ends on a floor plan; it looks to the left.",
+            )));
+        }
         let picked_view = match self.sheet_pick {
             Some(SheetPick::View(i)) => sheet.views.get(i).map(|v| (i, v)),
             _ => None,

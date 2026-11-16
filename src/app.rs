@@ -9,6 +9,7 @@ mod export_drawing;
 mod grids;
 mod hatch;
 mod ifc;
+mod ifc_graph;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod inform;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
@@ -3481,6 +3482,24 @@ impl App {
             content = content.push(section(&title)).push(rows).push(rule::horizontal(1));
         }
 
+        // a tool on: its type and sizes
+        if let Some(rows) = self.placement_bar(p, l) {
+            let name = self.modeller.tool.map_or("", |(t, _)| t.label(l));
+            content = content.push(section(name)).push(rows).push(rule::horizontal(1));
+        }
+        // the sketch of a floor: its tools
+        if let Some(rows) = self.sketch_bar(p, l) {
+            content = content.push(section(l.text("Schets", "Sketch"))).push(rows).push(rule::horizontal(1));
+        }
+        // a sheet of the file: its export
+        if self.active_sheet.is_some() && self.active_doc_sheet.is_none() {
+            content = content.push(section(l.text("Tekening", "Drawing"))).push(container(self.export_control(p, l)).padding([2, 8])).push(rule::horizontal(1));
+        }
+        // the view shown: how it shows, what a tool on waits for, or what is picked on it
+        if let Some(rows) = self.view_mark_properties(p, l) {
+            content = content.push(section(l.text("Tekening", "Drawing"))).push(rows).push(rule::horizontal(1));
+        }
+
         // the sheet shown: its paper and views, or what is picked on it
         if let Some(rows) = self.sheet_properties(p, l) {
             content = content.push(section(l.text("Blad", "Sheet"))).push(rows).push(rule::horizontal(1));
@@ -4036,7 +4055,6 @@ impl App {
             .push(editing)
             .push(temp_fields)
             .push(self.grid_series_overlay(p, l).filter(|_| overlay.is_none()))
-            .push(self.sketch_bar(p, l).filter(|_| overlay.is_none()))
             .push(boxed)
             .push(picking)
             .push(cube)

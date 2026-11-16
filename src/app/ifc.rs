@@ -45,17 +45,31 @@ pub enum IfcView {
     Nodes,
     Table,
     Relations,
+    /// Every node as a dot, hung from the node that holds it (see `ifc_graph`).
+    Graph,
 }
 
 impl IfcView {
-    const ALL: [IfcView; 4] = [IfcView::Text, IfcView::Nodes, IfcView::Table, IfcView::Relations];
+    pub const ALL: [IfcView; 5] = [IfcView::Graph, IfcView::Nodes, IfcView::Table, IfcView::Relations, IfcView::Text];
 
-    fn label(self, l: Language) -> &'static str {
+    /// The id of the command that shows it.
+    pub fn command(self) -> &'static str {
+        match self {
+            IfcView::Text => "ifcx.text",
+            IfcView::Nodes => "ifcx.nodes",
+            IfcView::Table => "ifcx.table",
+            IfcView::Relations => "ifcx.relations",
+            IfcView::Graph => "ifcx.graph",
+        }
+    }
+
+    pub fn label(self, l: Language) -> &'static str {
         match self {
             IfcView::Text => l.text("Tekst", "Text"),
             IfcView::Nodes => l.text("Nodes", "Nodes"),
             IfcView::Table => l.text("Tabel", "Table"),
             IfcView::Relations => l.text("Relaties", "Relations"),
+            IfcView::Graph => l.text("Graaf", "Graph"),
         }
     }
 
@@ -66,6 +80,7 @@ impl IfcView {
             IfcView::Nodes => "ifc-nodes",
             IfcView::Table => "ifc-table",
             IfcView::Relations => "ifc-relations",
+            IfcView::Graph => "ifc-graph",
         }
     }
 }
@@ -76,11 +91,15 @@ pub struct IfcTab {
     /// Its tab is open, and shown (under the 3D view).
     pub open: bool,
     pub shown: bool,
+    /// It fills the whole workspace (the IFCX page of the ribbon), not the half under the view.
+    pub full: bool,
+    /// Where each node stands in the Graph view.
+    pub graph: Option<Arc<super::ifc_graph::GraphLayout>>,
     /// The file taken apart.
     pub structure: Option<Arc<Structure>>,
     pub view: IfcView,
     /// Per view: scrolled offset and height (logical pixels).
-    pub scroll: [(f32, f32); 4],
+    pub scroll: [(f32, f32); 5],
     /// The model's elements of the nodes, and the node of each element.
     pub elements: HashMap<u32, Pickable>,
     pub node_of: HashMap<u64, u32>,
@@ -121,7 +140,8 @@ impl App {
         };
         let (s, links) = s;
         let previous = std::mem::take(&mut self.ifc);
-        self.ifc = IfcTab { open: true, view: previous.view, relation: previous.relation, ..IfcTab::default() };
+        self.ifc = IfcTab { open: true, view: previous.view, relation: previous.relation, full: previous.full, ..IfcTab::default() };
+        self.ifc.graph = Some(Arc::new(super::ifc_graph::GraphLayout::of(&s)));
         // the model's elements by node: the file's own paths (`Id`), or those Save as gives them
         for (path, item) in links {
             if let Some(&k) = s.index.get(&path) {
@@ -358,6 +378,8 @@ impl App {
             }
             IfcView::Table => self.ifc.table.iter().position(|e| n.entries.contains(e)),
             IfcView::Relations => self.ifc.links.iter().position(|&k| s.links[k as usize].from == node || s.links[k as usize].to == Some(node)),
+            // the graph does not scroll: its picked node carries a ring and its name
+            IfcView::Graph => None,
         };
         let Some(at) = at else { return Task::none() };
         let (offset, height) = self.ifc.scroll(view);
@@ -417,7 +439,7 @@ impl App {
             let found = match self.ifc.view {
                 IfcView::Text if self.ifc.hits.is_empty() => l.text("niets gevonden", "nothing found").to_string(),
                 IfcView::Text => format!("{} / {}", self.ifc.hit + 1, self.ifc.hits.len()),
-                IfcView::Nodes => self.ifc.matches.len().to_string(),
+                IfcView::Nodes | IfcView::Graph => self.ifc.matches.len().to_string(),
                 IfcView::Table => self.ifc.table.len().to_string(),
                 IfcView::Relations => self.ifc.links.len().to_string(),
             };
@@ -434,6 +456,13 @@ impl App {
             IfcView::Nodes => self.ifc_tree(p, l, s),
             IfcView::Table => self.ifc_table(p, l, s),
             IfcView::Relations => self.ifc_relations(p, l, s),
+            IfcView::Graph => match self.ifc.graph.as_deref() {
+                Some(layout) => iced::widget::canvas(super::ifc_graph::IfcGraph { structure: s, layout, pick: self.ifc.pick, matches: &self.ifc.matches, searching: !self.ifc.query.is_empty(), palette: p })
+                    .width(Fill)
+                    .height(Fill)
+                    .into(),
+                None => Space::new().into(),
+            },
         };
         column![bar, rule::horizontal(1), body].into()
     }

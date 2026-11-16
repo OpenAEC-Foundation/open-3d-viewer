@@ -831,7 +831,8 @@ pub enum Event {
     AddInfoRule,
     /// The properties the data dictionary has for the class of a rule: asked for, and given.
     Bsdd(usize),
-    BsddGave(String, Result<Vec<crate::collab::bsdd::Property>, String>),
+    /// The class asked, the property set typed with it (empty for all), and what the bSDD gave.
+    BsddGave(String, String, Result<Vec<crate::collab::bsdd::Property>, String>),
     RemoveInfoRule(usize),
     InfoRuleOn(usize, bool),
     InfoRuleField(usize, u8, String),
@@ -956,11 +957,15 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
     struct Item {
         id: u64,
         model: usize,
+        /// The model within its file: a coordination file or a project package holds several,
+        /// each element naming its own. Apart from that, one for each file.
+        part: usize,
         layer: usize,
         class: String,
         solid: Solid,
     }
     let mut items: Vec<Item> = Vec::new();
+    let mut parts: Vec<(usize, String)> = Vec::new();
     for (l, layer) in model.layers.iter().enumerate().filter(|(_, layer)| !layer.points) {
         let which = models.iter().position(|(_, range)| range.contains(&l)).unwrap_or(0);
         let point = |i: u32| {
@@ -979,8 +984,14 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
                     item.solid.triangles.extend(solid.triangles);
                 }
                 None => {
-                    let class = model.props.get(&id).and_then(|p| field(p, "IfcType")).unwrap_or("").to_string();
-                    items.push(Item { id, model: which, layer: l, class, solid });
+                    let props = model.props.get(&id).map(String::as_str).unwrap_or("");
+                    let class = field(props, "IfcType").unwrap_or("").to_string();
+                    let named = (which, field(props, "Model").unwrap_or("").trim().to_string());
+                    let part = parts.iter().position(|p| *p == named).unwrap_or_else(|| {
+                        parts.push(named);
+                        parts.len() - 1
+                    });
+                    items.push(Item { id, model: which, part, layer: l, class, solid });
                 }
             }
         }
@@ -991,7 +1002,9 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
     for rule in rules.iter().filter(|r| r.on) {
         let side = |s: &Selector| -> Vec<usize> {
             let takes = |item: &Item| {
-                s.takes_element(item.id, &models[item.model.min(models.len().saturating_sub(1))].0, &model.layers[item.layer].name, &item.class)
+                // by the name of its file, or of its model within the file
+                (s.takes_element(item.id, &models[item.model.min(models.len().saturating_sub(1))].0, &model.layers[item.layer].name, &item.class)
+                    || !parts[item.part].1.is_empty() && s.takes_element(item.id, &parts[item.part].1, &model.layers[item.layer].name, &item.class))
                     && (s.names.is_empty() || s.takes_name(model.props.get(&item.id).and_then(|p| field(p, "Name")).unwrap_or("")))
             };
             (0..items.len()).filter(|&k| models.is_empty() || takes(&items[k])).collect()
@@ -1083,8 +1096,8 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         }
         let (sa, sb) = (solids(&a), if rule.within() { Vec::new() } else { solids(&b) });
         // a test between models leaves the pairs of one model out, when there is more than one
-        let apart = rule.between_models && models.len() > 1;
-        let skip = |i: usize, j: usize| apart && items[a[i]].model == items[b[j]].model;
+        let apart = rule.between_models && (models.len() > 1 || parts.len() > 1);
+        let skip = |i: usize, j: usize| apart && items[a[i]].part == items[b[j]].part;
         let found = clash::clashes_but(&sa, if rule.within() { &sa } else { &sb }, rule.within(), rule.test(), &skip, cancel);
         for c in found {
             let (ia, ib) = (&items[a[c.a]], &items[b[c.b]]);
@@ -2696,14 +2709,14 @@ impl App {
                 }
             }
             Event::Bsdd(k) => {
-                let Some(class) = self.collab.rules().and_then(|r| r.info_rules.get(k)).map(|r| r.class.clone()) else { return Task::none() };
+                let Some((class, set)) = self.collab.rules().and_then(|r| r.info_rules.get(k)).map(|r| (r.class.clone(), r.set.trim().to_string())) else { return Task::none() };
                 self.collab.running = true;
                 return job(move || {
                     let found = crate::collab::bsdd::class_properties(&class);
-                    Event::BsddGave(class, found)
+                    Event::BsddGave(class, set, found)
                 });
             }
-            Event::BsddGave(class, found) => {
+            Event::BsddGave(class, set, found) => {
                 self.collab.running = false;
                 match found {
                     Err(e) => self.collab_note(Tone::Error, format!("bSDD: {e}")),
@@ -2712,7 +2725,8 @@ impl App {
                         // the project ticks the ones it asks
                         let mut added = 0;
                         if let Some(rules) = self.collab.rules_mut() {
-                            for p in properties {
+                            // with a property set typed only its properties: a class has hundreds
+                            for p in properties.into_iter().filter(|p| set.is_empty() || p.set.eq_ignore_ascii_case(&set)) {
                                 let has = rules.info_rules.iter().any(|r| r.class.eq_ignore_ascii_case(&class) && r.property == p.code);
                                 if !has {
                                     rules.info_rules.push(crate::collab::rules::InfoRule { name: format!("{} · {}", class.trim(), p.name), class: class.trim().to_string(), set: p.set, property: p.code, value: String::new(), on: false });
@@ -3136,12 +3150,13 @@ impl App {
         .spacing(6)
         .wrap()]
         .spacing(6);
-        list = list.push(
+        list = list.push(named(
             button(row![text(if state.setup_open { "▾" } else { "▸" }).size(12).color(p.text_secondary), w::secondary(look, l.text("Delen en huisstijl", "Sharing and house style"))].spacing(6).align_y(Alignment::Center))
                 .padding([2, 0])
                 .style(move |_, st| p.ribbon_button(false, st))
                 .on_press(go(Event::Setup(!state.setup_open))),
-        );
+            Node::new(Role::Button, l.text("Delen en huisstijl", "Sharing and house style")).value(if state.setup_open { "open" } else { "closed" }),
+        ));
         if state.setup_open || state.share_folder.is_some() || state.server.ready() {
         // the project shared through a folder
         list = list.push(match &state.share_folder {
@@ -4755,6 +4770,20 @@ mod tests {
         let two = vec![("house.ifc".to_string(), 0..model.layers.len()), ("pipes.ifc".to_string(), model.layers.len()..model.layers.len() + 1)];
         assert!(run_clashes(&model, &two, &[between], &AtomicBool::new(false)).is_empty());
         assert_eq!(run_clashes(&model, &two, &[rule(&[], &[])], &AtomicBool::new(false)).len(), 1);
+        // one file of several models (a coordination file, a project package): each element
+        // names its model, and those are the models the test is between
+        let mut package = two_blocks();
+        for (id, of) in [(1u64, "Structure"), (2, "Services")] {
+            let props = package.props.get(&id).unwrap().replacen('{', &format!("{{\"Model\":\"{of}\","), 1);
+            package.props.insert(id, props);
+        }
+        let between = ClashRule { between_models: true, ..rule(&[], &[]) };
+        assert_eq!(run_clashes(&package, &models, std::slice::from_ref(&between), &AtomicBool::new(false)).len(), 1);
+        // with a second file beside it, the pair is left alone once both are of one model
+        assert_eq!(run_clashes(&package, &two, std::slice::from_ref(&between), &AtomicBool::new(false)).len(), 1);
+        let same = package.props.get(&2).unwrap().replace("Services", "Structure");
+        package.props.insert(2, same);
+        assert!(run_clashes(&package, &two, &[between], &AtomicBool::new(false)).is_empty());
     }
 
     #[test]

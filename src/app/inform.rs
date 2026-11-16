@@ -181,6 +181,11 @@ impl App {
         let props = model.props.get(&id).map(String::as_str).unwrap_or("");
         match key {
             MODEL => {
+                // a file of several models (a coordination file, a project package) names the
+                // model of each element
+                if let Some(named) = field(props, "Model").filter(|m| !m.trim().is_empty()) {
+                    return Some(named.to_string());
+                }
                 let k = model.element_key(id).model as usize;
                 self.models.get(k).or(self.models.first()).and_then(|e| e.model.path.file_name()).map(|n| n.to_string_lossy().into_owned())
             }
@@ -559,7 +564,12 @@ impl App {
             },
             _ => match text("action").unwrap_or_default().as_str() {
                 "make" | "" | "keep" => {
-                    let mut draft = Takeoff { name: text("name").unwrap_or_default(), ..Takeoff::default() };
+                    // keeping with a name alone keeps the takeoff made last, under that name
+                    let said = ["classes", "property", "group_by"].iter().any(|k| a.get(*k).is_some());
+                    let mut draft = if text("action").as_deref() == Some("keep") && !said { self.collab.inform.draft.clone() } else { Takeoff::default() };
+                    if let Some(name) = text("name") {
+                        draft.name = name;
+                    }
                     if let Some(classes) = a.get("classes").and_then(|v| v.as_array()) {
                         draft.take.classes = classes.iter().filter_map(|c| c.as_str().map(str::to_string)).collect();
                     }

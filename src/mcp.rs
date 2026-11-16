@@ -274,7 +274,7 @@ pub fn tools() -> Vec<Value> {
                 "replace": { "type": "boolean", "description": "Clear the field first (default true)" },
                 "dry_run": { "type": "boolean" }
             }), &["text"], false),
-        tool("ui_key", "Press a key in the window (Enter, Escape, Tab, Delete, Backspace or a letter), after clicking a control when one is named.",
+        tool("ui_key", "Press a key in the window (Enter, Escape, Tab, Delete, Backspace or a letter), after clicking a control when one is named; a key no control takes is the window's own shortcut (J and K step through the clashes, A accepts, R rejects, T makes an issue).",
             json!({ "key": { "type": "string" }, "name": { "type": "string" }, "index": { "type": "integer" }, "dry_run": { "type": "boolean" } }), &["key"], false),
         // the BIM Collaborator
         tool("collab_state", "The BIM Collaborator: who you are (the author of issues), the rule set in use and those to choose from, the number of issues and open issues, the BCF file, the issue shown, checked models, clashes, the team that issues can be assigned to and the open models.", json!({}), &[], true),
@@ -311,7 +311,7 @@ pub fn tools() -> Vec<Value> {
         tool("collab_share", "Share the project through a folder (a network drive or a synced folder): the issues, each as a BCF file of its own, and the decisions on clashes. set names the folder and syncs, sync brings both sides to the same (the last change of an issue stands, with the comments of both), off stops sharing.",
             json!({ "action": { "type": "string", "enum": ["set", "sync", "off"] }, "folder": { "type": "string" } }), &[], false),
         tool("collab_cloud", "A point cloud against the model (both open together): the distance of each point to the model's surfaces. Colours the points (green within the tolerance, red at twice it, grey with no surface within half a metre) and answers with the counts, the mean and worst distance and the places where the most points are off. action off gives the cloud its own colours back.",
-            json!({ "tolerance_mm": { "type": "number" }, "action": { "type": "string", "enum": ["compare", "align", "off"], "description": "align moves the scan onto the model (a move, no turn) and compares" } }), &[], false),
+            json!({ "tolerance_mm": { "type": "number" }, "action": { "type": "string", "enum": ["compare", "align", "off"], "description": "align moves the scan onto the model (a move and a turn about the vertical) and compares" } }), &[], false),
         tool("collab_colours", "Colour the model by a property: each value its own colour, elements without one grey. Gives the legend (value, colour, count). Property: model, layer, class, type or any property key of the elements; none switches the colours off.",
             json!({ "property": { "type": "string" } }), &[], false),
         tool("collab_sets", "Selection sets of the rule set: list them, save the selection as one (by the elements' GlobalIds), add one by property value (* for any), select, isolate or hide one, remove one.",
@@ -319,7 +319,7 @@ pub fn tools() -> Vec<Value> {
                 "action": { "type": "string", "enum": ["list", "save", "add", "select", "isolate", "hide", "remove"] },
                 "name": { "type": "string" }, "property": { "type": "string" }, "value": { "type": "string" }, "index": { "type": "integer" }
             }), &[], false),
-        tool("collab_takeoff", "Information takeoff: the elements (by class, e.g. [\"IfcWall*\"], and/or a property value) grouped by up to two properties (model, layer, class, type or a property key), with count, length, area and volume from the geometry. make shows it as a table under the 3D view (Excel from there) and returns its rows; keep stores it in the rule set; list gives those kept.",
+        tool("collab_takeoff", "Information takeoff: the elements (by class, e.g. [\"IfcWall*\"], and/or a property value) grouped by up to two properties (model, layer, class, type or a property key), with count, length, area and volume from the geometry. make shows it as a table under the 3D view (Excel from there) and returns its rows; keep stores it in the rule set (with a name alone: the one made last); list gives those kept.",
             json!({
                 "action": { "type": "string", "enum": ["make", "keep", "list"] },
                 "name": { "type": "string" }, "classes": { "type": "array", "items": { "type": "string" } },

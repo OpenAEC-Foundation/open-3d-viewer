@@ -949,6 +949,21 @@ impl Studio {
                             _ => None,
                         };
                         let mut messages = run(size, first);
+                        // a key no control took is the window's own, as when a person presses it:
+                        // a shortcut (J and K through the clashes, A and R to decide), Esc
+                        if messages.is_empty() && call.cmd == "ui_key" && target.is_none() {
+                            use iced::keyboard::{key::Named, Key};
+                            let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("Enter").to_lowercase();
+                            let key = match key.as_str() {
+                                "enter" | "return" => Key::Named(Named::Enter),
+                                "escape" | "esc" => Key::Named(Named::Escape),
+                                "tab" => Key::Named(Named::Tab),
+                                "delete" => Key::Named(Named::Delete),
+                                "backspace" => Key::Named(Named::Backspace),
+                                _ => Key::Character(key.into()),
+                            };
+                            messages.push(Msg::Key(KeyPress { key, modifiers: iced::keyboard::Modifiers::empty() }));
+                        }
                         // nothing answered: the control may lie past the end of the list it is in,
                         // out of view; the window is laid out tall enough to show it, and the same
                         // control (by its name and role, the same one of those) is clicked there

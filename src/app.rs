@@ -714,6 +714,8 @@ pub enum Message {
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// A row of the Modeller's model explorer.
+    Explorer(modeller::explorer::ExplorerMessage),
     /// A row of the Modeller's project browser.
     Browser(modeller::browser::BrowserMessage),
     /// The form of a level being edited in the Modeller.
@@ -1728,6 +1730,7 @@ impl App {
             Message::ModelKey(key, l) => self.model_key(key, l),
             Message::LevelEdit(message) => self.level_edit_message(message),
             Message::Browser(message) => self.browser_message(message),
+            Message::Explorer(message) => self.explorer_message(message),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),
@@ -2593,6 +2596,8 @@ impl App {
     pub(crate) fn selection_changed(&mut self) {
         // a grid is picked alone
         self.picked_grid = None;
+        // the Modeller's explorer shows what is selected
+        self.explorer_follow_selection();
         let model = self.model.clone();
         self.selected = model.as_deref().and_then(|m| match self.sel.primary()? {
             Pickable::Element(id) => Some((m.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == id))?, Some(id))),

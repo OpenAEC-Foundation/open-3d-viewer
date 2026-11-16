@@ -32,7 +32,7 @@ pub enum BrowserMessage {
 }
 
 /// The kinds of building components in the order they are listed, with their names.
-fn class_label(class: &str, l: Language) -> &'static str {
+pub(super) fn class_label(class: &str, l: Language) -> &'static str {
     match class {
         "IfcWall" => l.text("Wanden", "Walls"),
         "IfcSlab" => l.text("Vloeren", "Slabs"),
@@ -46,7 +46,7 @@ fn class_label(class: &str, l: Language) -> &'static str {
 }
 
 /// The order of the kinds in the list.
-const CLASSES: [&str; 9] = ["IfcWall", "IfcSlab", "IfcColumn", "IfcBeam", "IfcMember", "IfcCurtainWall", "IfcBuildingElementProxy", "IfcElementAssembly", "IfcRelConnectsElements"];
+pub(super) const CLASSES: [&str; 9] = ["IfcWall", "IfcSlab", "IfcColumn", "IfcBeam", "IfcMember", "IfcCurtainWall", "IfcBuildingElementProxy", "IfcElementAssembly", "IfcRelConnectsElements"];
 
 impl App {
     /// Whether the explorer has its Project tab: the Modeller is shown.

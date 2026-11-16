@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 mod grids;
 pub mod browser;
+pub mod explorer;
 pub mod key_actions;
 pub mod keys;
 pub mod select;
@@ -157,6 +158,8 @@ pub struct Modeller {
     pub model: bim_core::Model,
     /// The tool placing elements, and the name its elements get (in the interface language).
     pub tool: Option<(ModelTool, &'static str)>,
+    /// The branches of the model explorer that are open, by their keys (see `explorer`).
+    pub explorer_open: std::collections::HashSet<String>,
     /// The level being renamed or moved in the Levels tab (see `levels`).
     pub level_edit: Option<levels::LevelEdit>,
     /// The level worked on when no floor plan is shown (its path): PageUp and PageDown step it.

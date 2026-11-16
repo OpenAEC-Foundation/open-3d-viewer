@@ -5,7 +5,7 @@
 //! is uploaded once per model (keyed by `Model::id`); each frame only writes the uniforms, and
 //! the offsets of the exploded view when they change.
 //!
-//! Point clouds are drawn as squares of [`POINT_SIZE`] pixels, whatever their distance: each
+//! Point clouds are drawn as squares of the size the settings give (2.5 pixels unless set), whatever their distance: each
 //! point is an instance of a four-vertex triangle strip that the vertex shader spreads round the
 //! point on screen. Instanced quads rather than `PointList`, whose points are one pixel on every
 //! backend that matters (WebGL2 and WebGPU have no point size).
@@ -40,8 +40,6 @@ const SHADOW_DARKEST: f32 = 0.5;
 /// Cut fill: a dark neutral grey (as Open Pointcloud Studio), hatched every 9 pixels.
 const CAP_COLOR: [f32; 3] = [0.345, 0.345, 0.345];
 const CAP_HATCH: f32 = 9.0;
-/// The size of a point of a point cloud, in logical pixels.
-const POINT_SIZE: f32 = 2.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
@@ -84,6 +82,8 @@ pub struct RenderSettings {
     /// Ambient shadows: surfaces darker in corners, under overhangs and behind what stands in
     /// front of them (shaded styles only).
     pub ambient: bool,
+    /// The size a point of a cloud is drawn at (logical pixels).
+    pub point_size: f32,
     /// World bounds of the model as drawn (pulled apart by the exploded view), for the ground
     /// grid; `None`: the model's own.
     pub bounds: Option<Bounds>,
@@ -1018,7 +1018,7 @@ impl ScenePipeline {
         let clip = settings.section.map(|s| s.uniform()).unwrap_or([[0.0, 0.0, 0.0, 1.0], [0.0; 4], [0.0; 4]]);
         let plane = settings.plane.unwrap_or([[0.0; 4]; 2]);
         // half the point size in clip units (x, y), for `vs_point`
-        let point = POINT_SIZE * scale;
+        let point = settings.point_size.clamp(0.5, 32.0) * scale;
         // eye.w: 2 draws the faces white and unlit (hidden lines)
         let faces = if settings.mode == RenderMode::HiddenLine { 2.0 } else { 1.0 };
         let uniforms = |model: Mat4, line_scale: f32, clip: [[f32; 4]; 3], plane: [[f32; 4]; 2]| Uniforms {

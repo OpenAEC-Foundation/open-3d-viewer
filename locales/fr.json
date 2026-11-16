@@ -839,6 +839,20 @@
     "By kind": "Par type",
     "Order": "Trier",
     "Room": "Pièce",
-    "2D drawings": "Dessins 2D"
+    "2D drawings": "Dessins 2D",
+    "Draws the points of a cloud a step larger.": "Dessine les points d'un nuage un cran plus grands.",
+    "Draws the points of a cloud a step smaller.": "Dessine les points d'un nuage un cran plus petits.",
+    "Larger points": "Points plus grands",
+    "Smaller points": "Points plus petits",
+    "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out.": "Crée une surface sur les points vus du dessus : sol, terrain, pan de toiture. Les murs et les surplombs sont laissés de côté.",
+    "Makes a surface through the points in all directions: walls, ceilings, objects.": "Crée une surface à travers les points dans toutes les directions : murs, plafonds, objets.",
+    "Mesh": "Maillage",
+    "Terrain mesh": "Maillage de terrain",
+    "Surface mesh": "Maillage de surface",
+    "No point cloud open": "Aucun nuage de points ouvert",
+    "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Ouvrez un nuage de points (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) pour le regarder, le mesurer, le couper et en faire un maillage.",
+    "Open point clouds and make meshes of them": "Ouvrir des nuages de points et en faire des maillages",
+    "Point cloud": "Nuage de points",
+    "Point clouds": "Nuages de points"
   }
 }

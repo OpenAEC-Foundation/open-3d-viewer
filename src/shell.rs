@@ -113,7 +113,7 @@ enum RibbonPart {
 
 /// From what width of the window the title bar names the products to come, and says how far
 /// along a product is.
-const SOON_WIDTH: f32 = 1250.0;
+const SOON_WIDTH: f32 = 1360.0;
 const STAGE_WIDTH: f32 = 1000.0;
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
@@ -1255,6 +1255,24 @@ impl Studio {
             list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
         // the Collaborator's commands: issues, checks, clashes and the rule set
+        // Pointcloud: the size of the points and the meshes made of a cloud (on the desktop)
+        {
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            let (cloud, event) = (app.cloud_file().is_some() && !app.meshing, |e: crate::app::pointcloud::Event| Some(go(Message::Pointcloud(e))));
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            use crate::app::pointcloud::{Event as Cloud, Mesh};
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            let (terrain, surface, smaller, larger) = (event(Cloud::Mesh(Mesh::Terrain)), event(Cloud::Mesh(Mesh::Surface)), event(Cloud::PointSize(false)), event(Cloud::PointSize(true)));
+            #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
+            let (cloud, terrain, surface, smaller, larger): (bool, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>) = (false, None, None, None, None);
+            let mut add = |id: &'static str, label: &'static str, icon: &'static str, message: Option<Msg>, on: bool, detail: &'static str| {
+                list.push(Command::new(id, label, message.clone().unwrap_or(Msg::Dialog(None))).icon(small(icon), large(icon)).enabled(message.is_some() && on).detail(detail));
+            };
+            add("cloud.mesh-terrain", l.text("Terreinmesh", "Terrain mesh"), "mesh.surface", terrain, cloud, l.text("Maakt een oppervlak over de punten, van boven gezien: maaiveld, een terrein, een dakvlak. Wanden en overstekken komen er niet in.", "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out."));
+            add("cloud.mesh-surface", l.text("Oppervlakmesh", "Surface mesh"), "mesh.faces", surface, cloud, l.text("Maakt een oppervlak door de punten in alle richtingen: wanden, plafonds, objecten.", "Makes a surface through the points in all directions: walls, ceilings, objects."));
+            add("cloud.points-smaller", l.text("Punten kleiner", "Smaller points"), "view.zoom-out", smaller, loaded, l.text("Tekent de punten van een puntenwolk een stap kleiner.", "Draws the points of a cloud a step smaller."));
+            add("cloud.points-larger", l.text("Punten groter", "Larger points"), "view.zoom-in", larger, loaded, l.text("Tekent de punten van een puntenwolk een stap groter.", "Draws the points of a cloud a step larger."));
+        }
         for planned in PLANNED {
             #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
             let message = planned.event().map(|e| go(Message::Collab(e)));
@@ -1888,7 +1906,7 @@ impl Studio {
         let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
         // (where the window has room for them beside the title)
         let room = self.width >= SOON_WIDTH;
-        let segments = segments.chain(["FM", "Analyse", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
+        let segments = segments.chain(["Analysis", "FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
@@ -1955,6 +1973,12 @@ impl Studio {
             RibbonPage::Annotate => vec![
                 (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
                 (l.text("Tekst", "Text"), vec![large("annotate.text")]),
+            ],
+            // the clouds of the project, how their points show and the meshes made of them
+            RibbonPage::Cloud => vec![
+                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger"])]),
+                (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
@@ -2112,6 +2136,12 @@ impl Studio {
                     l.text("Begin een nieuw model, of open een IFCX-bestand om verder te modelleren.", "Start a new model, or open an IFCX file to model on."),
                     row![cm::button(look, &self.command("model.new"), K::Primary, D::Regular), open(K::Secondary)].spacing(8).into(),
                 ),
+                Product::Pointcloud => (
+                    "mesh.surface",
+                    l.text("Geen puntenwolk geopend", "No point cloud open"),
+                    l.text("Open een puntenwolk (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) om hem te bekijken, te meten, door te snijden en er een mesh van te maken.", "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it."),
+                    open(K::Primary),
+                ),
                 Product::Collaborator => (
                     "team.add",
                     l.text("Geen modellen geopend", "No models open"),
@@ -2208,7 +2238,7 @@ impl Studio {
                 };
                 (l.text("Samenwerken", "Collaboration"), body.into())
             }
-            Product::Viewer | Product::Modeller => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+            Product::Viewer | Product::Modeller | Product::Pointcloud => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
 

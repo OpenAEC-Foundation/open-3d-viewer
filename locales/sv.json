@@ -839,6 +839,20 @@
     "By kind": "Efter typ",
     "Order": "Ordna",
     "Room": "Rum",
-    "2D drawings": "2D-ritningar"
+    "2D drawings": "2D-ritningar",
+    "Draws the points of a cloud a step larger.": "Ritar punkterna i ett moln ett steg större.",
+    "Draws the points of a cloud a step smaller.": "Ritar punkterna i ett moln ett steg mindre.",
+    "Larger points": "Större punkter",
+    "Smaller points": "Mindre punkter",
+    "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out.": "Skapar en yta över punkterna sedda ovanifrån: mark, en tomt, ett takfall. Väggar och överhäng utelämnas.",
+    "Makes a surface through the points in all directions: walls, ceilings, objects.": "Skapar en yta genom punkterna i alla riktningar: väggar, tak, objekt.",
+    "Mesh": "Mesh",
+    "Terrain mesh": "Terrängmesh",
+    "Surface mesh": "Ytmesh",
+    "No point cloud open": "Inget punktmoln öppet",
+    "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Öppna ett punktmoln (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) för att titta på det, mäta det, snitta det och skapa en mesh av det.",
+    "Open point clouds and make meshes of them": "Öppna punktmoln och skapa meshar av dem",
+    "Point cloud": "Punktmoln",
+    "Point clouds": "Punktmoln"
   }
 }

@@ -839,6 +839,20 @@
     "By kind": "Por tipo",
     "Order": "Ordenar",
     "Room": "Compartimento",
-    "2D drawings": "Desenhos 2D"
+    "2D drawings": "Desenhos 2D",
+    "Draws the points of a cloud a step larger.": "Desenha os pontos de uma nuvem um passo maiores.",
+    "Draws the points of a cloud a step smaller.": "Desenha os pontos de uma nuvem um passo menores.",
+    "Larger points": "Pontos maiores",
+    "Smaller points": "Pontos menores",
+    "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out.": "Cria uma superfície sobre os pontos vistos de cima: solo, um terreno, uma água de cobertura. Paredes e saliências ficam de fora.",
+    "Makes a surface through the points in all directions: walls, ceilings, objects.": "Cria uma superfície através dos pontos em todas as direções: paredes, tetos, objetos.",
+    "Mesh": "Malha",
+    "Terrain mesh": "Malha de terreno",
+    "Surface mesh": "Malha de superfície",
+    "No point cloud open": "Nenhuma nuvem de pontos aberta",
+    "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Abra uma nuvem de pontos (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) para a ver, medir, cortar e criar uma malha a partir dela.",
+    "Open point clouds and make meshes of them": "Abrir nuvens de pontos e criar malhas a partir delas",
+    "Point cloud": "Nuvem de pontos",
+    "Point clouds": "Nuvens de pontos"
   }
 }

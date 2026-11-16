@@ -1,5 +1,5 @@
-//! The three products built from this code base: the Viewer, the Modeller and the BIM
-//! Collaborator (see `docs/architecture/products.md`).
+//! The four products built from this code base: the Viewer, the Modeller, the BIM Collaborator
+//! and Pointcloud (see `docs/architecture/products.md`).
 //!
 //! They share one `App` and one window. The switch at the top right of the window moves between
 //! them; each shows its own ribbon, panels and start screen over the same open project.
@@ -20,10 +20,12 @@ pub enum Product {
     Modeller,
     /// Check models together and agree on issues.
     Collaborator,
+    /// Open point clouds and make meshes of them.
+    Pointcloud,
 }
 
 impl Product {
-    pub const ALL: [Product; 3] = [Product::Viewer, Product::Collaborator, Product::Modeller];
+    pub const ALL: [Product; 4] = [Product::Viewer, Product::Collaborator, Product::Pointcloud, Product::Modeller];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
@@ -31,6 +33,7 @@ impl Product {
             Product::Viewer => "viewer",
             Product::Modeller => "modeller",
             Product::Collaborator => "collaborator",
+            Product::Pointcloud => "pointcloud",
         }
     }
 
@@ -40,6 +43,7 @@ impl Product {
             "viewer" => Some(Product::Viewer),
             "modeller" | "modeler" => Some(Product::Modeller),
             "collaborator" | "bim-collaborator" => Some(Product::Collaborator),
+            "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
             _ => None,
         }
     }
@@ -50,6 +54,7 @@ impl Product {
             Product::Viewer => "Viewer",
             Product::Modeller => "Modeller",
             Product::Collaborator => "BIM Collaborator",
+            Product::Pointcloud => "Pointcloud",
         }
     }
 
@@ -58,6 +63,7 @@ impl Product {
     pub fn stage(self) -> Option<&'static str> {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
+            Product::Pointcloud => Some("(alpha)"),
             Product::Viewer | Product::Collaborator => None,
         }
     }
@@ -68,6 +74,7 @@ impl Product {
             Product::Viewer => l.text("Modellen openen, bekijken, meten en doorsnijden", "Open, view, measure and cut models"),
             Product::Modeller => l.text("Een BIM-model maken uit wanden, vloeren, kolommen en balken", "Make a BIM model from walls, slabs, columns and beams"),
             Product::Collaborator => l.text("Modellen samen controleren en issues afspreken", "Check models together and agree on issues"),
+            Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
         }
     }
 
@@ -77,6 +84,7 @@ impl Product {
             Product::Viewer => "product.viewer",
             Product::Modeller => "product.modeller",
             Product::Collaborator => "product.collaborator",
+            Product::Pointcloud => "product.pointcloud",
         }
     }
 
@@ -86,6 +94,7 @@ impl Product {
             Product::Viewer => &[RibbonPage::Home],
             Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View],
             Product::Collaborator => &[RibbonPage::Collaborate, RibbonPage::View],
+            Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
         }
     }
 
@@ -95,6 +104,7 @@ impl Product {
             Product::Viewer => "Open BIM Suite",
             Product::Modeller => "Open BIM Modeller",
             Product::Collaborator => "Open BIM Collaborator",
+            Product::Pointcloud => "Open BIM Pointcloud",
         }
     }
 
@@ -104,6 +114,7 @@ impl Product {
             Product::Viewer => "open-3d-viewer",
             Product::Modeller => "open-bim-modeller",
             Product::Collaborator => "open-bim-collaborator",
+            Product::Pointcloud => "open-bim-pointcloud",
         }
     }
 
@@ -113,6 +124,7 @@ impl Product {
             Product::Viewer => cfg!(feature = "viewer"),
             Product::Modeller => cfg!(feature = "modeller"),
             Product::Collaborator => cfg!(feature = "collaborator"),
+            Product::Pointcloud => cfg!(feature = "pointcloud"),
         }
     }
 
@@ -122,8 +134,8 @@ impl Product {
     }
 }
 
-#[cfg(not(any(feature = "viewer", feature = "modeller", feature = "collaborator")))]
-compile_error!("a build needs at least one product: the feature viewer, modeller or collaborator");
+#[cfg(not(any(feature = "viewer", feature = "modeller", feature = "collaborator", feature = "pointcloud")))]
+compile_error!("a build needs at least one product: the feature viewer, modeller, collaborator or pointcloud");
 
 /// What a build is: the Studio, with every product it holds and the switch between them, or one
 /// product alone (`open-bim-modeller`, `open-bim-collaborator`).
@@ -177,6 +189,8 @@ pub enum RibbonPage {
     View,
     /// The Collaborator's models, issues, checks and comments.
     Collaborate,
+    /// Pointcloud's clouds, the size of their points and the meshes made of them.
+    Cloud,
 }
 
 impl RibbonPage {
@@ -188,6 +202,7 @@ impl RibbonPage {
             RibbonPage::Annotate => l.text("Annoteren", "Annotate"),
             RibbonPage::View => l.text("Beeld", "View"),
             RibbonPage::Collaborate => l.text("Samenwerken", "Collaborate"),
+            RibbonPage::Cloud => l.text("Puntenwolk", "Point cloud"),
         }
     }
 }
@@ -332,7 +347,7 @@ mod tests {
         names.dedup();
         ids.sort();
         ids.dedup();
-        assert_eq!((names.len(), ids.len()), (3, 3));
+        assert_eq!((names.len(), ids.len()), (4, 4));
         // the Studio is what was released as the viewer: same name, same installer id
         assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);
@@ -352,6 +367,7 @@ mod tests {
         assert!(!Product::Viewer.pages().contains(&RibbonPage::Model));
         assert_eq!(Product::Modeller.pages()[0], RibbonPage::Model);
         assert_eq!(Product::Collaborator.pages()[0], RibbonPage::Collaborate);
+        assert_eq!(Product::Pointcloud.pages()[0], RibbonPage::Cloud);
     }
 
     #[test]

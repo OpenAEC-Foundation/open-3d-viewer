@@ -45,6 +45,8 @@ pub struct Grab {
     /// Begun with G: it follows the cursor and a click puts it down (a drag ends when the button
     /// comes up).
     pub by_key: bool,
+    /// The distance typed for the move (see `modeller::typed_move`); empty: the cursor says.
+    pub typed: String,
 }
 
 /// Edit mode on a modelled element.
@@ -224,7 +226,7 @@ impl App {
         let Some((points, _)) = self.edited().map(|(_, s)| edit_points(&s)) else { return };
         let origin = points.get(anchor).copied().unwrap_or_else(|| points.iter().sum::<DVec3>() / points.len().max(1) as f64);
         if let Some(edit) = self.modeller.edit.as_mut() {
-            edit.grab = Some(Grab { from: points, origin, delta: DVec3::ZERO, axis: None, by_key });
+            edit.grab = Some(Grab { from: points, origin, delta: DVec3::ZERO, axis: None, by_key, typed: String::new() });
         }
         self.modeller.refusal = None;
     }
@@ -232,6 +234,10 @@ impl App {
     /// A key in edit mode: G grabs the picked points, X, Y and Z hold the move to an axis, A picks
     /// every point.
     pub(super) fn edit_key(&mut self, key: char) {
+        // a digit, a point, a comma or a minus: the distance of the move under way
+        if super::modeller::typed_move::DIGITS.contains(key) {
+            return self.edit_type(key);
+        }
         let Some(edit) = self.modeller.edit.as_mut() else { return };
         match key.to_ascii_lowercase() {
             'g' if edit.grab.is_none() && !edit.picked.is_empty() => {
@@ -246,6 +252,10 @@ impl App {
                         _ => Axis::Z,
                     };
                     g.axis = if g.axis == Some(axis) { None } else { Some(axis) };
+                }
+                // a distance typed runs along the axis now held
+                if self.typed_distance().is_some() {
+                    self.edit_type_again();
                 }
             }
             'a' => {
@@ -321,6 +331,10 @@ impl App {
     fn grab_to(&mut self, x: f32, y: f32, width: f32, height: f32) {
         let Some(edit) = self.modeller.edit.as_ref() else { return };
         let Some(g) = edit.grab.clone() else { return };
+        // a distance typed says how far: the cursor does not
+        if !g.typed.is_empty() {
+            return;
+        }
         let anchor = g.origin;
         let mm = self.model_matrix();
         let inv = (self.camera.view_proj(width / height) * mm).inverse();
@@ -370,7 +384,7 @@ impl App {
     }
 
     /// Puts a move down: the element takes the moved points, if the kernel can make it.
-    fn put_down(&mut self) {
+    pub(super) fn put_down(&mut self) {
         // a drag of a wall's top grip changes its height
         if self.put_height_down() {
             return;

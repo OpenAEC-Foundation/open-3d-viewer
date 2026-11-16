@@ -26,6 +26,7 @@ pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 pub mod tops;
+pub mod typed_move;
 
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -192,6 +192,30 @@ mod tests {
     }
 
     #[test]
+    fn digits_are_a_distance_only_while_a_point_is_grabbed() {
+        let mut studio = modelling_studio();
+        let form = bim_core::element::PlanarForm::Wall { start: glam::DVec2::ZERO, end: glam::DVec2::new(4.0, 0.0), base: 0.0, height: 3.0 };
+        let wall = studio.app.add_element("Wall", None, bim_core::Shape::Planar(bim_core::PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None })).unwrap();
+        // no grab: 1 is the camera's view from the top
+        let yaw = studio.app.camera.yaw;
+        studio.app.camera.pitch = 0.3;
+        press(&mut studio, "1");
+        assert!(studio.app.typed_distance().is_none());
+        assert!(studio.app.anim.is_some() || studio.app.camera.pitch != 0.3 || studio.app.camera.yaw != yaw, "the view turns");
+        // a point grabbed in edit mode: digits type its distance
+        studio.app.select_modelled(wall);
+        let _ = studio.update(Msg::App(crate::app::Message::EditMode));
+        let _ = studio.update(Msg::App(crate::app::Message::Edit(crate::app::edit::EditEvent::Press { index: 1, add: false })));
+        let _ = studio.update(Msg::App(crate::app::Message::Edit(crate::app::edit::EditEvent::Release)));
+        press(&mut studio, "g");
+        press(&mut studio, "x");
+        press(&mut studio, "1");
+        press(&mut studio, ",");
+        press(&mut studio, "5");
+        assert_eq!(studio.app.typed_distance(), Some("1,5"));
+    }
+
+    #[test]
     fn esc_drops_a_pending_letter_only() {
         let mut studio = modelling_studio();
         press(&mut studio, "w");

@@ -2117,7 +2117,9 @@ impl App {
                 };
             }
             Message::DeletePicked => {
-                if self.edit_delete() {
+                if self.edit_backspace() {
+                    // a distance being typed: its last character goes
+                } else if self.edit_delete() {
                     // in edit mode: the picked corners go
                 } else if self.delete_modelled() {
                     // modelled elements selected: they go
@@ -2344,6 +2346,8 @@ impl App {
                     }
                 }
             }
+            // Enter while a distance is typed in a move puts the move down
+            Message::MeasureFinish if self.edit_enter() => {}
             Message::MeasureFinish => self.measure.finish(),
             Message::StructuralGrid(built) => return self.structural_grid_built(built),
             Message::MeasureEdges(edges) => {
@@ -3803,7 +3807,11 @@ impl App {
             });
             Some(match self.modeller.refusal {
                 Some(refusal) => format!("{}: {} · {}", element.name, l.translate(refusal.reason()), hint),
-                None => format!("{} {}: {}{}", l.text("Bewerken", "Editing"), element.name, hint, axis.unwrap_or("")),
+                None => {
+                    // the distance typed for the move, where one is
+                    let typed = self.typed_distance().map_or_else(String::new, |t| format!(" · {t} m"));
+                    format!("{} {}: {}{}{}", l.text("Bewerken", "Editing"), element.name, hint, axis.unwrap_or(""), typed)
+                }
             })
         } else if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())

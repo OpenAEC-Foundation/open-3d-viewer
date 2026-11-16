@@ -71,7 +71,7 @@ impl App {
         let Some(top) = top_middle(&shape) else { return };
         let (from, _) = edit_points(&shape);
         // no point picked: the element's points stay, only how far the top went is kept
-        self.modeller.edit = Some(Edit { element, picked: Vec::new(), grab: Some(Grab { from, origin: top, delta: DVec3::ZERO, axis: Some(Axis::Z), by_key: false }), grips: true });
+        self.modeller.edit = Some(Edit { element, picked: Vec::new(), grab: Some(Grab { from, origin: top, delta: DVec3::ZERO, axis: Some(Axis::Z), by_key: false, typed: String::new() }), grips: true });
         self.modeller.refusal = None;
     }
 

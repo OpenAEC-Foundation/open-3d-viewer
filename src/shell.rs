@@ -1615,7 +1615,9 @@ impl Studio {
                 // in edit mode G, X, Y, Z and A are its own keys
                 if self.dialog.is_none() && self.app.modeller.edit.is_some() && !press.modifiers.control() && !press.modifiers.alt() {
                     if let Key::Character(c) = &press.key {
-                        if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c)) {
+                        // and while a point is grabbed, the digits of a typed distance
+                        let grabbed = self.app.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some());
+                        if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c) || (grabbed && crate::app::modeller::typed_move::DIGITS.contains(*c))) {
                             return self.update(Msg::App(Message::EditKey(c)));
                         }
                     }

@@ -658,7 +658,7 @@ impl App {
             self.modeller.model.replace(joint).expect("the demo's end plate");
             self.show_modelled();
         }
-        add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT }));
+        add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT, opening: None }));
         // a beam through the side wall, cutting its way
         let through = add(self, "Beam", beam(p(8.5, 3.0), p(13.0, 3.0)));
         add(self, "Cut-out", Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: through, secondary: side }));
@@ -685,7 +685,7 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
     match tool {
         // an opening tool places none of its own (see `openings`): an object stands for it
         ModelTool::Point | ModelTool::Door | ModelTool::Window => {
-            Shape::Point(PointDef { at: a + DVec3::Z * s.offset, rotation: 0.0, size: DVec3::new(s.width, s.depth.max(0.01), s.height.unwrap_or(OBJECT.z)) })
+            Shape::Point(PointDef { at: a + DVec3::Z * s.offset, rotation: 0.0, size: DVec3::new(s.width, s.depth.max(0.01), s.height.unwrap_or(OBJECT.z)), opening: None })
         }
         ModelTool::Column => {
             let base = z + s.offset;

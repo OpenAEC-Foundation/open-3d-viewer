@@ -6,7 +6,8 @@
 //! bolts) are its body. A connection that cannot be made is refused by its own evaluation and
 //! leaves its members as they are.
 
-use crate::element::{planar_parts, point_solid, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Shape};
+use crate::element::{planar_parts, point_solid, ConnectionDef, ConnectionKind, Element, ElementId, LinearDef, Opening, PlanarDef, PlanarForm, PointDef, Shape};
+use glam::DVec2;
 use crate::join::{self, JoinKind, JoinResult, Member, MemberEnd};
 use crate::solid::{Plane, Solid};
 use crate::tile::{TileGrid, TileKey};
@@ -14,6 +15,11 @@ use crate::boolean::{boolean, BooleanOp};
 use crate::Refusal;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// A door or window stands in a wall when its foot lies within the wall and this far beside it (metres).
+const STANDS_IN: f64 = 0.01;
+/// And faces along it: the sine of the angle between them is at most this.
+const FACES_ALONG: f64 = 0.02;
 
 /// How far apart (metres) the ends of members may be and still be joined.
 pub const JOIN_TOLERANCE: f64 = 1e-3;
@@ -258,9 +264,73 @@ impl Model {
         Ok(parts)
     }
 
+    /// The openings the doors and windows standing in `target` (a wall or a standing system) cut
+    /// in it, in its own terms: along its axis from its start, above its base. A door or window
+    /// stands in it when its foot lies within the wall's thickness of the axis (and a centimetre),
+    /// it faces along the wall, its width lies between the wall's ends, and its foot is not below
+    /// the wall's base or above its top. One that reaches above the wall is cut off at its top.
+    pub fn standing_openings(&self, target: &Element) -> Vec<Opening> {
+        let (start, end, base, height, half) = match &target.shape {
+            Shape::Planar(p @ PlanarDef { form: PlanarForm::Wall { start, end, base, height }, .. }) => (*start, *end, *base, *height, p.total_thickness() / 2.0),
+            // a framed system (a timber frame wall) frames them; a curtain wall takes none
+            Shape::System(s) if !s.lies() && s.system_type.as_ref().is_some_and(|t| t.framing.is_some()) => (s.start, s.end, s.base, s.height, s.member.max_element() / 2.0),
+            _ => return Vec::new(),
+        };
+        let length = start.distance(end);
+        let Some(along) = (end - start).try_normalize() else { return Vec::new() };
+        let mut out = Vec::new();
+        for e in self.elements.values() {
+            let Shape::Point(p @ PointDef { opening: Some(_), .. }) = &e.shape else { continue };
+            let at = p.at + self.grid.offset(e.tile, target.tile);
+            let from_start = at.truncate() - start;
+            let facing = DVec2::from_angle(p.rotation);
+            if from_start.perp_dot(along).abs() > half + STANDS_IN || facing.perp_dot(along).abs() > FACES_ALONG {
+                continue;
+            }
+            let (left, sill) = (from_start.dot(along) - p.size.x / 2.0, at.z - base);
+            let sill = if sill.abs() < crate::LINEAR_TOLERANCE { 0.0 } else { sill };
+            if left < 0.0 || left + p.size.x > length || sill < 0.0 || sill >= height {
+                continue;
+            }
+            out.push(Opening { along: left, sill, width: p.size.x, height: p.size.z.min(height - sill) });
+        }
+        out
+    }
+
+    /// The openings of wall or system `id`: its own and those of the doors and windows standing
+    /// in it.
+    pub fn openings_of(&self, id: ElementId) -> Vec<Opening> {
+        let Some(e) = self.elements.get(&id) else { return Vec::new() };
+        let own = match &e.shape {
+            Shape::Planar(p) => p.openings.clone(),
+            Shape::System(s) => s.openings.clone(),
+            _ => Vec::new(),
+        };
+        own.into_iter().chain(self.standing_openings(e)).collect()
+    }
+
     /// An element's solids before any cut is made in it (with the ends its joints give it). A
-    /// cutter cuts with this body, so cuts never depend on each other.
+    /// cutter cuts with this body, so cuts never depend on each other. A wall or a system is made
+    /// with the openings of the doors and windows standing in it; when it cannot be made with
+    /// them (one too near its end, or overlapping another), it is made without.
     fn body(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
+        let standing = self.standing_openings(element);
+        if !standing.is_empty() {
+            let mut with = element.clone();
+            match &mut with.shape {
+                Shape::Planar(p) => p.openings.extend(standing),
+                Shape::System(s) => s.openings.extend(standing),
+                _ => {}
+            }
+            if let Ok(parts) = self.body_as_defined(&with) {
+                return Ok(parts);
+            }
+        }
+        self.body_as_defined(element)
+    }
+
+    /// An element's solids as its own definition gives them.
+    fn body_as_defined(&self, element: &Element) -> Result<Vec<Part>, Refusal> {
         let class = element.class();
         let part = |solid: Solid| Part { class, tile: element.tile, solid, material: None };
         match &element.shape {
@@ -602,7 +672,7 @@ mod tests {
     #[test]
     fn every_base_element_evaluates() {
         let mut m = Model::new(TileGrid::default());
-        let point = add(&mut m, Shape::Point(PointDef { at: DVec3::new(1.0, 1.0, 0.0), rotation: 0.5, size: DVec3::new(0.6, 0.6, 0.9) }));
+        let point = add(&mut m, Shape::Point(PointDef { at: DVec3::new(1.0, 1.0, 0.0), rotation: 0.5, size: DVec3::new(0.6, 0.6, 0.9), opening: None }));
         let system = add(
             &mut m,
             Shape::System(SystemDef { start: DVec2::new(0.0, 5.0), end: DVec2::new(6.0, 5.0), base: 0.0, height: 3.0, spacing: DVec2::new(1.2, 1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() }),
@@ -641,7 +711,7 @@ mod tests {
         let mut m = Model::new(TileGrid::default());
         let wall = add(&mut m, wall_along_x());
         let far = add(&mut m, beam(DVec3::new(3.0, 5.0, 2.5), DVec3::new(3.0, 9.0, 2.5)));
-        let block = add(&mut m, Shape::Point(PointDef { at: DVec3::new(3.0, 0.0, -1.0), rotation: 0.0, size: DVec3::new(8.0, 2.0, 6.0) }));
+        let block = add(&mut m, Shape::Point(PointDef { at: DVec3::new(3.0, 0.0, -1.0), rotation: 0.0, size: DVec3::new(8.0, 2.0, 6.0), opening: None }));
         let grid = m.grid;
         let try_cut = |m: &mut Model, primary, secondary| m.add(Element::in_project(&grid, "c", None, Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary, secondary })));
         assert_eq!(try_cut(&mut m, far, wall), Err(Refusal::NotTouching));
@@ -776,6 +846,40 @@ mod tests {
         let (added, removed) = m.update_joins("Joint", None);
         assert_eq!((added.len(), removed.len()), (0, 1));
         assert!(joints(&m).is_empty());
+    }
+
+    #[test]
+    fn a_door_cuts_the_wall_it_stands_in_and_moved_to_another_the_first_closes() {
+        use crate::element::OpeningKind;
+        let wall = |y: f64| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(0.0, y), end: DVec2::new(6.0, y), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None });
+        let door = |x: f64, y: f64, rotation: f64| Shape::Point(PointDef { at: DVec3::new(x, y, 0.0), rotation, size: DVec3::new(0.9, 0.04, 2.1), opening: Some(OpeningKind::Door) });
+        let mut m = Model::new(TileGrid::default());
+        let (south, north) = (add(&mut m, wall(0.0)), add(&mut m, wall(4.0)));
+        let whole = 6.0 * 0.2 * 3.0;
+        let hole = 0.9 * 0.2 * 2.1;
+        let volume = |m: &Model, id| m.evaluate(id).unwrap().iter().map(|p| p.solid.volume()).sum::<f64>();
+        let id = add(&mut m, door(2.0, 0.05, 0.0));
+        assert_eq!(m.get(id).unwrap().class(), "IfcDoor");
+        assert!((volume(&m, south) - (whole - hole)).abs() < 1e-9 && (volume(&m, north) - whole).abs() < 1e-9);
+        assert_eq!(m.openings_of(south), vec![Opening { along: 1.55, sill: 0.0, width: 0.9, height: 2.1 }]);
+        // moved into the north wall: the south wall closes, the north one opens
+        let mut moved = m.get(id).unwrap().clone();
+        moved.shape = door(3.0, 4.0, std::f64::consts::PI);
+        m.replace(moved).unwrap();
+        assert!((volume(&m, south) - whole).abs() < 1e-9 && (volume(&m, north) - (whole - hole)).abs() < 1e-9);
+        // square to the wall, beside it, or out past its end it cuts nothing; the wall stays whole
+        for (x, y, rotation) in [(3.0, 4.0, 1.5), (3.0, 4.5, 0.0), (5.8, 4.0, 0.0)] {
+            let mut e = m.get(id).unwrap().clone();
+            e.shape = door(x, y, rotation);
+            m.replace(e).unwrap();
+            assert!((volume(&m, north) - whole).abs() < 1e-9, "{x} {y} {rotation}");
+        }
+        // the wall removed, the door still stands
+        let mut back = m.get(id).unwrap().clone();
+        back.shape = door(3.0, 4.0, 0.0);
+        m.replace(back).unwrap();
+        m.remove(north);
+        assert!(m.get(id).is_some() && m.evaluate(id).is_ok());
     }
 
     #[test]

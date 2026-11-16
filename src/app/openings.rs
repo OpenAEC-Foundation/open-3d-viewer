@@ -1,5 +1,10 @@
-//! The Door and Window tools: a click on a wall or a timber frame wall puts an opening there, as Revit's and Archicad's
-//! door and window tools do. The opening is centred on the point clicked along the wall, kept
+//! The Door and Window tools: a click places a door or a window, an element of its own (a point
+//! element that cuts an opening, see `bim_core::Model::standing_openings`). It is not tied to a
+//! wall: it cuts every wall or timber frame wall it stands in, moved out of one it stays and the
+//! wall closes, and a wall that goes leaves it standing. A click on a wall puts it in that wall;
+//! a click away from any wall places it free.
+//!
+//! On a wall the opening is centred on the point clicked along the wall, kept
 //! [`JAMB`] inside the wall's ends and rounded to 10 mm; a door stands on the wall's base, a window on its sill.
 //! While the cursor is over a wall, the opening shows there as a box through the wall.
 //!
@@ -10,9 +15,11 @@ use super::element_props::{DOOR, WINDOW};
 use super::modeller::ModelTool;
 use super::App;
 use bim_core::element::{Opening, PlanarForm};
-use bim_core::{ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, OpeningKind, PlanarDef, PointDef, Shape};
 use glam::{DVec2, DVec3, Vec3};
 
+/// How thick the leaf of a door or the pane of a window is drawn (metres).
+const LEAF: f64 = 0.04;
 /// Openings are placed to this (metres).
 const ROUND: f64 = 0.01;
 /// The wall an opening keeps beside it at the wall's ends (metres): the kernel makes an opening
@@ -92,23 +99,29 @@ impl App {
         best.map(|(_, aim)| aim)
     }
 
-    /// A click of the Door or Window tool: the wall under the cursor gets the opening, if the
-    /// kernel can make the wall with it; else the banner says why. The tool stays on.
+    /// A click of the Door or Window tool: a door or window is placed, an element of its own. On
+    /// a wall it stands in the wall, where the opening showed, and cuts its opening there; away
+    /// from any wall it stands free, on the level worked on, facing along x. The tool stays on.
     pub(super) fn place_opening(&mut self, tool: ModelTool, x: f32, y: f32, width: f32, height: f32) {
-        let Some(aim) = self.opening_at(tool, x, y, width, height) else { return };
-        let Some(e) = self.modeller.model.get(aim.wall).cloned() else { return };
-        let grid = self.modeller.model.grid;
-        let mut shape = e.shape_in_project(&grid);
-        if let Some(openings) = super::element_props::openings_mut(&mut shape) {
-            openings.push(aim.opening);
-        }
-        let mut changed = e.reshaped(&grid, shape);
-        changed.id = e.id;
-        match self.modeller.model.replace(changed) {
-            Ok(()) => {
-                self.modeller.refusal = None;
-                self.show_modelled();
+        let kind = if tool == ModelTool::Door { OpeningKind::Door } else { OpeningKind::Window };
+        let (z, _, level) = self.work_plane();
+        let def = match self.opening_at(tool, x, y, width, height) {
+            Some(aim) => {
+                let o = aim.opening;
+                let foot = (aim.start + aim.along * (o.along + o.width / 2.0)).extend(aim.base + o.sill);
+                PointDef { at: foot, rotation: aim.along.y.atan2(aim.along.x), size: DVec3::new(o.width, LEAF, o.height), opening: Some(kind) }
             }
+            None => {
+                let s = self.modeller.placement.of(tool);
+                let (h, sill) = (s.height.unwrap_or(if tool == ModelTool::Door { DOOR.1 } else { WINDOW.1 }), if tool == ModelTool::Door { 0.0 } else { s.sill });
+                let Some(p) = self.plane_point(x, y, width, height, z) else { return };
+                let p = self.snapped(p, x, y, width, height);
+                PointDef { at: DVec3::new(p.x, p.y, z + sill), rotation: 0.0, size: DVec3::new(s.width, LEAF, h), opening: Some(kind) }
+            }
+        };
+        let name = self.modeller.tool.map_or("Door", |(_, name)| name);
+        match self.add_element(name, level, Shape::Point(def)) {
+            Ok(_) => self.modeller.refusal = None,
             Err(refusal) => self.modeller.refusal = Some(refusal),
         }
     }
@@ -165,9 +178,42 @@ mod tests {
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
     }
 
+    /// The openings of the wall: those the doors and windows standing in it cut.
     fn openings(app: &App) -> Vec<Opening> {
-        let Shape::Planar(p) = &app.modeller.model.get(ElementId(1)).unwrap().shape else { panic!() };
-        p.openings.clone()
+        app.modeller.model.openings_of(ElementId(1))
+    }
+
+    #[test]
+    fn a_door_is_an_element_of_its_own_moved_from_wall_to_wall_and_left_when_its_wall_goes() {
+        let mut app = a_wall();
+        // a second wall, 4 m north of the first
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        click(&mut app, 0.0, 4.0);
+        click(&mut app, 6.0, 4.0);
+        app.set_model_tool(Some((ModelTool::Door, "Door")));
+        click(&mut app, 2.0, 0.0);
+        let door = app.modeller.model.iter().find(|e| e.class() == "IfcDoor").map(|e| e.id).expect("a door of its own");
+        assert_eq!(app.modeller.model.get(door).unwrap().name, "Door 1");
+        let cut = |app: &App, wall: u64| app.modeller.model.openings_of(ElementId(wall)).len();
+        assert_eq!((cut(&app, 1), cut(&app, 2)), (1, 0));
+        // a click away from any wall: a door that stands free
+        click(&mut app, 2.0, 2.0);
+        assert_eq!(app.modeller.model.iter().filter(|e| e.class() == "IfcDoor").count(), 2);
+        assert_eq!((cut(&app, 1), cut(&app, 2)), (1, 0));
+        // the first door moved 4 m north, into the second wall: the first closes, the second opens
+        app.set_model_tool(None);
+        app.select_modelled(door);
+        app.begin_transform(crate::app::transform::TransformKind::Move);
+        click(&mut app, 8.0, 1.0);
+        click(&mut app, 8.0, 5.0);
+        assert_eq!((cut(&app, 1), cut(&app, 2)), (0, 1));
+        let whole = 6.0 * 3.0;
+        let face = |app: &App, wall: u64| app.modeller.model.evaluate(ElementId(wall)).unwrap().iter().map(|p| p.solid.volume()).sum::<f64>() / app.modeller.model.get(ElementId(wall)).map(|e| match &e.shape { Shape::Planar(p) => p.total_thickness(), _ => 1.0 }).unwrap();
+        assert!((face(&app, 1) - whole).abs() < 1e-6 && face(&app, 2) < whole - 1.0, "{} {}", face(&app, 1), face(&app, 2));
+        // the wall deleted, its door still stands
+        app.select_modelled(ElementId(2));
+        let _ = app.update(Message::DeletePicked);
+        assert!(app.modeller.model.get(ElementId(2)).is_none() && app.modeller.model.get(door).is_some());
     }
 
     #[test]
@@ -201,14 +247,13 @@ mod tests {
         app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
         let s = SystemDef { start: DVec2::ZERO, end: DVec2::new(6.0, 0.0), base: 0.0, height: 2.7, spacing: DVec2::splat(1.5), member: DVec2::new(0.05, 0.15), panel: 0.02, system_type: None, openings: Vec::new() };
         let id = app.add_element("Curtain wall", None, Shape::System(s)).unwrap();
-        let framed = |app: &App| match app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) {
-            Shape::System(s) => s.openings,
-            _ => panic!(),
-        };
-        // a curtain wall is no wall to put a door in
+        let framed = |app: &App| app.modeller.model.openings_of(id);
+        // a curtain wall is no wall to put a door in: the door placed there stands free
         app.set_model_tool(Some((ModelTool::Door, "Door")));
         click(&mut app, 2.0, 0.0);
         assert!(framed(&app).is_empty());
+        let free = app.modeller.model.iter().find(|e| e.class() == "IfcDoor").map(|e| e.id).expect("a door of its own");
+        app.modeller.model.remove(free);
         // as a timber frame it takes the door and the window where they are clicked
         app.select_modelled(id);
         assert_eq!(app.assign_system_type("system.timber-frame-140"), 1);
@@ -253,8 +298,7 @@ mod tests {
         }
         app.set_model_tool(Some((ModelTool::Door, "Door")));
         click(&mut app, 3.0, 0.0);
-        let Shape::System(with_door) = app.modeller.model.get(id).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
-        assert_eq!((app.modeller.refusal.clone(), with_door.openings.len()), (None, 1));
+        assert_eq!((app.modeller.refusal.clone(), app.modeller.model.openings_of(id).len()), (None, 1));
     }
 
     #[test]

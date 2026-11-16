@@ -534,7 +534,7 @@ mod tests {
         place(&mut app, PlaceMessage::Field(PlaceField::Width, "1.5".into()));
         let (sx, sy) = app.on_screen(DVec3::new(7.0, 0.0, 3.0), 1000.0, 800.0).unwrap();
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
-        let o = wall(&app, 2).openings;
+        let o = app.modeller.model.openings_of(ElementId(2));
         assert_eq!(o.len(), 1);
         assert_eq!((o[0].sill, o[0].width), (0.6, 1.5));
     }

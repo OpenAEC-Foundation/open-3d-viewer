@@ -49,13 +49,25 @@ impl BaseKind {
 }
 
 /// A point element: a box of `size` (width along its x, depth, height) standing on `at`, turned
-/// `rotation` radians about the vertical.
+/// `rotation` radians about the vertical. With `opening` it is a door or a window: `at` is the
+/// middle of its width at its foot, and it cuts an opening of its width and height in every wall
+/// or framed system it stands in (see `Model::standing_openings`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PointDef {
     pub at: DVec3,
     #[serde(default)]
     pub rotation: f64,
     pub size: DVec3,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening: Option<OpeningKind>,
+}
+
+/// What a point element that cuts an opening is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpeningKind {
+    Door,
+    Window,
 }
 
 /// A linear element: `profile` from `start` to `end`, turned `roll` radians about its axis. A
@@ -334,6 +346,8 @@ impl Element {
     /// Its IFC class (IFC4.3 names, ADR-0010).
     pub fn class(&self) -> &'static str {
         match &self.shape {
+            Shape::Point(PointDef { opening: Some(OpeningKind::Door), .. }) => "IfcDoor",
+            Shape::Point(PointDef { opening: Some(OpeningKind::Window), .. }) => "IfcWindow",
             Shape::Point(_) => "IfcBuildingElementProxy",
             Shape::Linear(l) => linear_class(l.end - l.start),
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, .. }) => "IfcWall",
@@ -954,7 +968,7 @@ mod tests {
     #[test]
     fn an_element_lives_in_the_tile_of_its_placement() {
         let grid = TileGrid::default();
-        let shape = Shape::Point(PointDef { at: DVec3::new(1500.25, -20.5, 1.0), rotation: 0.0, size: DVec3::ONE });
+        let shape = Shape::Point(PointDef { at: DVec3::new(1500.25, -20.5, 1.0), rotation: 0.0, size: DVec3::ONE, opening: None });
         let mut e = Element::in_project(&grid, "Box", None, shape.clone());
         assert_eq!(e.tile, TileKey { x: 1, y: -1 });
         assert_eq!(e.shape_in_project(&grid), shape);

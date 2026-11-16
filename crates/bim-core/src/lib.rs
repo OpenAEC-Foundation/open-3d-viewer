@@ -30,7 +30,7 @@ pub mod tile;
 
 pub use boolean::{boolean, BooleanOp};
 pub use datum::GridDef;
-pub use element::{BaseKind, Top, BuildUpDef, ConnectionDef, ConnectionKind, Element, ElementId, LayerDef, LinearDef, Opening, PlanarDef, PointDef, Shape, SystemDef};
+pub use element::{BaseKind, OpeningKind, Top, BuildUpDef, ConnectionDef, ConnectionKind, Element, ElementId, LayerDef, LinearDef, Opening, PlanarDef, PointDef, Shape, SystemDef};
 pub use mesh::Mesh;
 pub use model::{Model, Part};
 pub use profile::{Profile, ProfileDef};

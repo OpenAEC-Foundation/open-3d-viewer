@@ -361,7 +361,7 @@ mod tests {
         let mut app = modelling();
         app.modeller.in_modeller = true;
         assert!(!labels(&app.explorer_rows(Language::English)).contains(&"No level".to_string()));
-        let object = Shape::Point(PointDef { at: DVec3::ZERO, rotation: 0.0, size: DVec3::splat(0.5) });
+        let object = Shape::Point(PointDef { at: DVec3::ZERO, rotation: 0.0, size: DVec3::splat(0.5), opening: None });
         app.add_element("Object", None, object).unwrap();
         open(&mut app, "nolevel");
         open(&mut app, "nolevel/IfcBuildingElementProxy");
@@ -376,7 +376,7 @@ mod tests {
         app.modeller.in_modeller = true;
         let ground = app.document.levels()[0].path.clone();
         for i in 0..405 {
-            let object = Shape::Point(PointDef { at: DVec3::new(i as f64, 0.0, 0.0), rotation: 0.0, size: DVec3::splat(0.5) });
+            let object = Shape::Point(PointDef { at: DVec3::new(i as f64, 0.0, 0.0), rotation: 0.0, size: DVec3::splat(0.5), opening: None });
             app.add_element("Object", Some(ground.clone()), object).unwrap();
         }
         for key in ["storeys".to_string(), format!("level:{ground}"), format!("level:{ground}/IfcBuildingElementProxy")] {

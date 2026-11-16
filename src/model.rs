@@ -219,6 +219,10 @@ pub struct ProjectData {
     pub joins: std::collections::HashSet<(u64, u64)>,
     /// The properties of what the legends and drafting views draw, by its element in the file.
     pub drawn: crate::app::drawn_props::Drawn,
+    /// What a reader knows of the parts of its drawings, by the element their lines and texts
+    /// carry: a JSON array of `[name, value]` pairs as the reader wrote it, read when the part
+    /// is picked.
+    pub drawn_pairs: std::collections::HashMap<u64, String>,
     /// Project information: (key, value). Built-in keys: `number`, `name`, `client`, `status`;
     /// other keys are the captions of the project's own parameters.
     pub info: Vec<(String, String)>,

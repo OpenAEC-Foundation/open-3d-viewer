@@ -125,12 +125,15 @@ impl App {
         if dz.is_finite() && dz != 0.0 {
             let on_level: Vec<Element> = model.iter().filter(|e| e.level.as_deref() == Some(path) && !matches!(e.shape, Shape::Connection(_))).cloned().collect();
             for e in on_level {
-                let mut lifted = Element::in_project(&grid, e.name.clone(), e.level.clone(), lifted(e.shape_in_project(&grid), dz));
+                let mut lifted = e.reshaped(&grid, lifted(e.shape_in_project(&grid), dz));
                 lifted.id = e.id;
                 model.replace(lifted).map_err(LevelEditError::Element)?;
                 moved.push(e.id);
             }
         }
+        // what reaches a level with its top follows: this level moved, or its own base did
+        let now = |p: &str| if p == path { Some(elevation) } else { self.document.level(p).map(|l| l.elevation) };
+        moved.extend(super::tops::fit_tops(&mut model, &now).map_err(LevelEditError::Element)?);
         self.document.set_level(path, name, elevation).map_err(LevelEditError::Level)?;
         self.modeller.model = model;
         self.joins_follow(&moved);

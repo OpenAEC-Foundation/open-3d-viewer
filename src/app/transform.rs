@@ -7,7 +7,7 @@
 use super::App;
 use crate::selection::Pickable;
 use bim_core::element::{Opening, PlanarForm};
-use bim_core::{Element, ElementId, Shape};
+use bim_core::{ElementId, Shape};
 use glam::{DVec2, DVec3};
 use openaec_ui::Language;
 
@@ -180,7 +180,14 @@ pub fn transformed(shape: &Shape, map: &Map) -> Option<Shape> {
                 (*start, *end) = run(map, *start, *end, &mut p.openings);
                 *base += map.lift();
             }
-            PlanarForm::Slab { outline, holes, top } => {
+            PlanarForm::Slab { outline, holes, top, bulges, .. } => {
+                // mirrored, the outline runs the other way round: each edge keeps its bow, which
+                // is then the bulge of the edge that takes its place
+                if map.flips() && !bulges.is_empty() {
+                    let n = outline.len();
+                    bulges.resize(n, 0.0);
+                    *bulges = (0..n).map(|i| bulges[(2 * n - 2 - i) % n]).collect();
+                }
                 for ring in std::iter::once(&mut *outline).chain(holes.iter_mut()) {
                     for q in ring.iter_mut() {
                         *q = map.plan(*q);
@@ -225,6 +232,8 @@ impl App {
         self.modeller.edit = None;
         self.modeller.refusal = None;
         self.modeller.transform = Some(Transform { kind, elements, points: Vec::new() });
+        // a fresh 3D cursor is the base point of a move or a copy
+        self.transform_from_cursor3d();
     }
 
     /// Esc: the points clicked go, else the transform itself. False when none was under way.
@@ -269,7 +278,7 @@ impl App {
         for &id in elements {
             let Some(e) = self.modeller.model.get(id).cloned() else { continue };
             let Some(shape) = transformed(&e.shape_in_project(&grid), map) else { continue };
-            let mut changed = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+            let mut changed = e.reshaped(&grid, shape);
             let result = if copy {
                 // the next number of its name: Wall 3 copied is Wall 4 when there are three
                 let base = e.name.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()).map_or(e.name.as_str(), |(base, _)| base);
@@ -378,7 +387,7 @@ mod tests {
         let _ = app.update(Message::Transform(TransformKind::Copy));
         click(&mut app, 10.0, 5.0);
         click(&mut app, 10.0, 8.0);
-        let walls: Vec<&Element> = app.modeller.model.iter().filter(|e| e.class() == "IfcWall").collect();
+        let walls: Vec<&bim_core::Element> = app.modeller.model.iter().filter(|e| e.class() == "IfcWall").collect();
         assert_eq!(walls.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Wall 1", "Wall 2"]);
         let (a, b) = ends(&app, id);
         assert!(near(a, [0.0, 0.0]) && near(b, [4.0, 0.0]), "the first stays");
@@ -410,7 +419,7 @@ mod tests {
         if let Shape::Planar(p) = &mut shape {
             p.openings.push(Opening { along: 0.5, sill: 0.0, width: 0.9, height: 2.1 });
         }
-        e = Element { id, ..Element::in_project(&grid, e.name.clone(), e.level.clone(), shape) };
+        e = e.reshaped(&grid, shape);
         app.modeller.model.replace(e).unwrap();
         app.show_modelled();
         app.select_modelled(id);
@@ -447,7 +456,7 @@ mod tests {
     #[test]
     fn a_slab_mirrored_keeps_its_way_round() {
         let outline = vec![DVec2::new(0.0, 0.0), DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let slab = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0 }, thickness: 0.2, openings: Vec::new(), build_up: None });
+        let slab = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.2, openings: Vec::new(), build_up: None });
         let map = Map::Flip { on: DVec2::new(5.0, 0.0), along: DVec2::Y };
         let Some(Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, .. }, .. })) = transformed(&slab, &map) else { panic!() };
         let area: f64 = (0..outline.len()).map(|k| outline[k].perp_dot(outline[(k + 1) % outline.len()])).sum::<f64>() / 2.0;

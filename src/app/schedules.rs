@@ -184,21 +184,15 @@ impl App {
             return self.draft_view_element(p, l, draft);
         }
         if let Some(sheet) = self.active_sheet.and_then(|i| self.sheets().get(i)) {
-            // over the sheet: its export (DWG, DXF, PDF and the others)
-            let bar = iced::widget::container(self.export_control(p, l)).padding([6, 10]).width(iced::Fill).style(move |_| p.ribbon());
-            return iced::widget::column![bar, self.sheet_view_element(p, l, sheet)].into();
+            // the sheet alone: its export is in the right pane
+            return self.sheet_view_element(p, l, sheet);
         }
         let viewport = self.viewport_view(p, l);
-        // a view's tab: its tools over it
-        let viewport = match self.view_bar(p, l) {
-            Some(bar) => column![bar, viewport].into(),
-            None => viewport,
-        };
-        // a tool on: its type and sizes over it
-        let viewport = match self.placement_bar(p, l) {
-            Some(strip) => column![strip, viewport].into(),
-            None => viewport,
-        };
+        // nothing stands over the viewport: what a view or a tool offers is in the right pane
+        // the IFCX page: the file fills the workspace
+        if self.ifc.shown && self.ifc.full && self.ifc.structure.is_some() {
+            return container(self.ifc_panel(p, l)).width(iced::Fill).height(iced::Fill).style(move |_| p.panel()).into();
+        }
         if self.ifc.shown && self.ifc.structure.is_some() {
             return column![container(viewport).height(FillPortion(1)), rule::horizontal(1), container(self.ifc_panel(p, l)).height(FillPortion(1)).style(move |_| p.panel())].into();
         }

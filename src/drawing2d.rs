@@ -383,7 +383,12 @@ impl Drawing2d {
             self.dimensions.push(Dim2d { from: to(d.from), to: to(d.to), value: d.length(), offset: DIMENSION_OFFSET * unit, text_height: TEXT * unit });
         }
         for n in notes {
-            self.text(to(n.at), TEXT * unit, n.text.clone(), Align::Left);
+            let align = match n.align {
+                crate::document::Align::Left => Align::Left,
+                crate::document::Align::Center => Align::Center,
+                crate::document::Align::Right => Align::Right,
+            };
+            self.text(to(n.at), TEXT * unit, n.text.clone(), align);
         }
     }
 }
@@ -415,9 +420,10 @@ pub fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f6
 }
 
 /// The dimensions and texts of a view.
-fn marks<'a>(doc: &'a Document, path: &str) -> (&'a [Dimension], &'a [Note], Option<([f64; 2], [f64; 2])>) {
+fn marks<'a>(doc: &'a Document, path: &str) -> (&'a [Dimension], Vec<Note>, Option<([f64; 2], [f64; 2])>) {
     let (dimensions, crop) = doc.view_marks(path).unwrap_or((&[], None));
-    (dimensions, doc.view_notes(path).unwrap_or(&[]), crop)
+    // its own texts, then what the model says on it by itself (the names of its spaces)
+    (dimensions, doc.view_notes(path).unwrap_or(&[]).iter().chain(doc.view_tags(path)).cloned().collect(), crop)
 }
 
 /// The drawing of a floor plan, section or elevation (`path`) from its `cut`, with its dimensions
@@ -427,15 +433,16 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut) -> Option<Drawing2d> 
     let scale = doc.sheets().iter().flat_map(|s| &s.views).find(|v| v.plan == path).map_or(SHEET_SCALE, |v| v.scale);
     let (dimensions, notes, crop) = marks(doc, path);
     let mut d = Drawing2d { name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
-    d.view(Some(cut), crop, (dimensions, notes), &|q| q, scale, scale);
+    d.view(Some(cut), crop, (dimensions, &notes), &|q| q, scale, scale);
     d.detail(doc.view_lines(path), &|q| q);
+    d.detail(doc.view_symbols(path), &|q| q);
     Some(d)
 }
 
 /// The drawing of a sheet as its tab draws it: the paper's edge, its border and title, and each
 /// placed view's lines (`cut` gives a view's cut by its path), dimensions, texts, the marks of the
 /// sections on the floor plans, its name and scale.
-pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>) -> Option<Drawing2d> {
+pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Arc<Cut>>, datums: &dyn Fn(&str) -> Vec<Datum2>) -> Option<Drawing2d> {
     let sheet = doc.sheet(path)?;
     let [w, h] = sheet.paper;
     let mut d = Drawing2d { name: sheet.title.clone(), space: Space::Paper, paper: Some(sheet.paper), lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
@@ -459,13 +466,19 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
             (None, None) => ([v.at[0] - 0.02, v.at[1] - 0.015], [v.at[0] + 0.02, v.at[1] + 0.015]),
         };
         let drawn = c.as_ref().is_some_and(|c| crate::drawing::drawn(c).next().is_some());
-        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, notes), &to, 1.0, v.scale);
+        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, &notes), &to, 1.0, v.scale);
+        // the lines drawn on the view that are no model, and those the model draws by itself
+        d.detail(doc.view_lines(&v.plan), &to);
+        d.detail(doc.view_symbols(&v.plan), &to);
+        // its grid lines and levels, as its own tab shows them
+        let placed: Vec<Datum2> = datums(&v.plan).into_iter().map(|m| Datum2 { a: to(m.a), b: to(m.b), ..m }).collect();
+        d.datums(&placed);
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);
         }
         if doc.plan(&v.plan).is_some() {
             for s in doc.sections() {
-                let letter = s.name.rsplit(' ').next().unwrap_or(&s.name).to_string();
+                let letter = s.mark();
                 section_mark(&mut d, to(s.from), to(s.to), letter);
             }
         }
@@ -524,8 +537,9 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
             [at[0] + (dx * cx + dy * cy) * ratio, at[1] + (dy * cx - dx * cy) * ratio]
         };
         let per_metre = if ratio > 0.0 { 1.0 / ratio } else { SHEET_SCALE };
-        d.view(c.as_deref(), crop, (dimensions, notes), &to, 1.0, per_metre);
+        d.view(c.as_deref(), crop, (dimensions, &notes), &to, 1.0, per_metre);
         d.detail(doc.view_lines(path), &to);
+        d.detail(doc.view_symbols(path), &to);
         // its title, where the sheet has it
         if let Some(label) = v.label {
             let title = v.written.clone().unwrap_or_else(|| format!("{}  {}", v.title, v.scale));
@@ -648,7 +662,7 @@ mod tests {
         doc.place_plan(&sheet, &plan).unwrap();
         assert!(doc.move_placed(&sheet, 0, [0.2, 0.15]));
         let cut = Arc::new(room());
-        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone())).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone()), &|_| Vec::new()).unwrap();
         assert_eq!(d.space, Space::Paper);
         // the room's middle (4, 2.5) stands at (0.2, 0.15); the 8 m wall is 8 cm long
         let wall = d.lines.iter().find(|l| l.pen == Pen::Cut && (l.a[1] - l.b[1]).abs() < 1e-12 && l.a[1] < 0.13).unwrap();
@@ -664,7 +678,7 @@ mod tests {
     fn a_sheet_has_its_frame_and_title() {
         let mut doc = Document::default();
         let sheet = doc.add_sheet("Plattegronden");
-        let d = sheet_drawing(&doc, &sheet, &|_| None).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|_| None, &|_| Vec::new()).unwrap();
         assert_eq!(d.paper, Some(A3_LANDSCAPE));
         let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 1e-12 && (p[1] - q[1]).abs() < 1e-12;
         assert!(d.lines.iter().any(|l| l.pen == Pen::Frame && near(l.a, [0.02, 0.01]) && near(l.b, [0.41, 0.01])), "{:?}", d.lines);
@@ -695,12 +709,15 @@ mod tests {
         doc.add_section("Section A", [0.0, 2.0], [8.0, 2.0], 10.0).unwrap();
         let sheet = doc.add_sheet("Plattegronden");
         doc.place_plan(&sheet, &plan).unwrap();
-        // the plan never cut: an empty frame
-        let d = sheet_drawing(&doc, &sheet, &|_| None).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|_| None, &|_| Vec::new()).unwrap();
+        // a level of the view goes with it: its line and its name at both ends, at the view's place
+        let with = sheet_drawing(&doc, &sheet, &|_| None, &|_| vec![Datum2 { name: "01".into(), a: [-1.0, 3.0], b: [1.0, 3.0], level: Some(3.0) }]).unwrap();
+        assert_eq!(with.lines.len(), d.lines.len() + 1);
+        assert_eq!(with.texts.iter().filter(|t| t.text == "01 +3.000").count(), 2);
         assert!(d.lines.iter().all(|l| l.pen == Pen::Frame), "{:?}", d.lines);
         // cut: only what lies beyond is thin
         let cut = Arc::new(room());
-        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone())).unwrap();
+        let d = sheet_drawing(&doc, &sheet, &|p| (p == plan).then(|| cut.clone()), &|_| Vec::new()).unwrap();
         assert_eq!(count(&d, Pen::Beyond), 1, "{:?}", d.lines);
     }
 

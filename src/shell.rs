@@ -495,6 +495,8 @@ pub enum Side {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// While a letter waits for its pair: the time to look at.
+    KeyWindow,
     /// The window's size changed (layout units).
     Sized(iced::Size),
     /// The window's size, asked for before a remote command on the window runs.
@@ -554,6 +556,8 @@ pub enum Msg {
 pub struct Studio {
     /// The project shown.
     pub app: App,
+    /// The Modeller's letters typed so far (one waiting for its pair).
+    pub(crate) keys: crate::app::modeller::keys::KeySequence,
     /// Its id, the other open projects with theirs, and the order of the project tabs.
     project: u64,
     parked: Vec<(u64, App)>,
@@ -625,8 +629,32 @@ impl DevSession {
 }
 
 impl Studio {
+    /// The time is `now`: a letter that waited too long for its pair does what it does alone.
+    pub(crate) fn expire_keys(&mut self, now: Instant) {
+        if let Some(step) = self.keys.expire_step(now) {
+            let _ = self.key_step(step);
+        }
+    }
+
+    /// What a letter typed in the Modeller came to: its command, or, when the Modeller has no use
+    /// for the letter, the app's own shortcut on it (F fits, H hides).
+    fn key_step(&mut self, step: crate::app::modeller::keys::Step) -> Task<Msg> {
+        use crate::app::modeller::keys::Step;
+        match step {
+            Step::Key(key) => {
+                let l = self.l();
+                self.update(Msg::App(Message::ModelKey(key, l)))
+            }
+            Step::Letter(c) => match cm::find(&self.commands(), &iced::keyboard::Key::Character(c.to_string().into()), iced::keyboard::Modifiers::empty()) {
+                Some(message) => self.update(message),
+                None => Task::none(),
+            },
+        }
+    }
+
     pub fn new(app: App) -> Self {
         Self {
+            keys: Default::default(),
             app,
             project: 0,
             parked: Vec::new(),
@@ -909,7 +937,10 @@ impl Studio {
             }
             "ui_press" | "ui_type" | "ui_key" => {
                 let dry = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-                let target = if call.cmd == "ui_key" && args.get("name").is_none() && args.get("index").is_none() { None } else { Some(ui::find(&found, &args)) };
+                // a point of the window in place of a control: what lies there is clicked, named or not
+                let point = args.get("at").and_then(|v| v.as_array()).filter(|a| a.len() == 2).and_then(|a| Some(iced::Point::new(a[0].as_f64()? as f32, a[1].as_f64()? as f32)));
+                let unnamed = args.get("name").is_none() && args.get("index").is_none();
+                let target = if unnamed && (call.cmd == "ui_key" || point.is_some()) { None } else { Some(ui::find(&found, &args)) };
                 match target {
                     Some(Err(e)) => Err(e),
                     Some(Ok((_, f))) if f.node.state.disabled => Err(format!("'{}' is disabled", f.node.name)),
@@ -925,7 +956,7 @@ impl Studio {
                         let run = |size: iced::Size, bounds: Option<iced::Rectangle>| -> Vec<Msg> {
                             let settings = iced::Settings { fonts: [crate::INTER_REGULAR, crate::INTER_SEMIBOLD].into_iter().chain(fonts::FILES.iter().copied()).map(std::borrow::Cow::Borrowed).collect(), default_font: fonts::BODY, ..Default::default() };
                             let mut sim = iced_test::Simulator::with_size(settings, size, self.view());
-                            if let Some(at) = bounds.and_then(|b| ui::aim(b, size)) {
+                            if let Some(at) = bounds.and_then(|b| ui::aim(b, size)).or(point) {
                                 sim.point_at(at);
                                 let _ = sim.simulate(iced_test::simulator::click());
                             }
@@ -966,6 +997,36 @@ impl Studio {
                             _ => None,
                         };
                         let mut messages = run(size, first);
+                        // a key no control took, with none named: the window's own key, as the
+                        // keyboard sends it (a shortcut, a key of the Modeller, Tab)
+                        if messages.is_empty() && call.cmd == "ui_key" && target.is_none() && point.is_none() {
+                            use iced::keyboard::key::Named;
+                            use iced::keyboard::{Key, Modifiers};
+                            let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("Enter");
+                            let held = |name: &str| args.get(name).and_then(|v| v.as_bool()).unwrap_or(false);
+                            let mut modifiers = Modifiers::empty();
+                            modifiers.set(Modifiers::SHIFT, held("shift"));
+                            modifiers.set(Modifiers::CTRL, held("ctrl"));
+                            let named = match key.to_ascii_lowercase().as_str() {
+                                "enter" | "return" => Some(Named::Enter),
+                                "escape" | "esc" => Some(Named::Escape),
+                                "tab" => Some(Named::Tab),
+                                "delete" => Some(Named::Delete),
+                                "backspace" => Some(Named::Backspace),
+                                "pageup" => Some(Named::PageUp),
+                                "pagedown" => Some(Named::PageDown),
+                                _ => None,
+                            };
+                            messages = match named {
+                                Some(Named::Tab) => vec![Msg::Navigate(openaec_ui::keyboard::Navigation::Next)],
+                                // Enter and Delete are also the app's own keys (its subscription), beside the
+                                // shell's shortcuts
+                                Some(Named::Enter) => vec![Msg::App(Message::MeasureFinish)],
+                                Some(Named::Delete | Named::Backspace) => vec![Msg::App(Message::DeletePicked)],
+                                Some(named) => vec![Msg::Key(openaec_ui::keyboard::KeyPress { key: Key::Named(named), modifiers })],
+                                None => vec![Msg::Key(openaec_ui::keyboard::KeyPress { key: Key::Character(key.to_lowercase().into()), modifiers })],
+                            };
+                        }
                         // nothing answered: the control may lie past the end of the list it is in,
                         // out of view; the window is laid out tall enough to show it, and the same
                         // control (by its name and role, the same one of those) is clicked there
@@ -1154,6 +1215,11 @@ impl Studio {
                 .enabled(!app.measure.results.is_empty()),
             Command::new("app.settings", l.text("Instellingen…", "Settings…"), Msg::Dialog(Some(Dialog::Settings))).icon(small("ui.settings"), large("ui.settings")).shortcut(Shortcut::ctrl(',')).dialog(),
             Command::new("model.new", l.text("Nieuw model", "New model"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("object.add"), large("object.add")),
+            // the Select tool of the Modeller: on when no other tool is
+            Command::new("model.select", l.text("Selecteren", "Select"), go(Message::SelectTool))
+                .icon(small("view.fit-selection"), large("view.fit-selection"))
+                .mode(app.selecting())
+                .enabled(app.modeller.shown.is_some()),
             Command::new("model.butt", l.text("Stomp", "Butt"), go(Message::Connect(bim_core::ConnectionKind::Butt, l.text("Verbinding", "Connection"))))
                 .icon(small("grid.end-couple"), large("grid.end-couple"))
                 .enabled(app.selected_joinable()),
@@ -1171,7 +1237,7 @@ impl Studio {
                 .enabled(app.selected_linear() == 2),
             Command::new("model.edit", l.text("Bewerken", "Edit"), go(Message::EditMode))
                 .icon(small("object.edit"), large("object.edit"))
-                .toggle(app.modeller.edit.is_some())
+                .toggle(app.modeller.edit.is_some() || app.modeller.sketch.is_some())
                 .enabled(app.wants_tab()),
             Command::new("model.delete", l.text("Verwijderen", "Delete"), go(Message::DeletePicked))
                 .icon(small("edit.delete"), large("edit.delete"))
@@ -1205,6 +1271,14 @@ impl Studio {
         let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
             Command::new(id, label, go(Message::PickLevelFor((app.views_picker != Some(kind)).then_some(kind)))).icon(small("drawing.plan"), large("drawing.plan")).mode(app.views_picker == Some(kind)).enabled(loaded)
         };
+        for view in crate::app::IfcView::ALL {
+            list.push(
+                Command::new(view.command(), view.label(l), go(Message::IfcView(view)))
+                    .icon(small("panel.model-tree"), large("panel.model-tree"))
+                    .mode(app.ifc.shown && app.ifc.view == view)
+                    .enabled(loaded),
+            );
+        }
         list.push(Command::new("project.level", l.text("Niveau", "Level"), go(Message::NewLevel(l.text("Niveau", "Level")))).icon(small("resource.level"), large("resource.level")).enabled(loaded));
         // a grid line of the modelled project: two clicks on the work plane
         list.push(Command::new("project.grid", l.text("Stramien", "Grid"), go(Message::GridTool)).icon(small("view.grid"), large("view.grid")).mode(app.modeller.grid_tool).enabled(app.modeller.shown.is_some()));
@@ -1236,6 +1310,11 @@ impl Studio {
             .icon(small("draw.dimension"), large("draw.dimension"))
             .enabled(plan_shown.is_some()),
         );
+        for (kind, icon) in [(crate::app::DrawKind::Line, "draw.line"), (crate::app::DrawKind::Rectangle, "draw.filled-area"), (crate::app::DrawKind::Circle, "draw.coordinate")] {
+            let on = app.draw_tool == Some(kind);
+            let drawable = app.shown_drawing().is_some();
+            list.push(Command::new(kind.command(), kind.label(l), go(Message::DrawTool(Some(kind)))).icon(small(icon), large(icon)).toggle(on && drawable).enabled(drawable));
+        }
         list.push(
             Command::new("annotate.text", l.text("Tekst", "Text"), go(Message::NoteTool(!app.note_tool)))
                 .icon(small("draw.text"), large("draw.text"))
@@ -1446,6 +1525,8 @@ impl Studio {
                 }
                 // joins made automatically are named in the interface language
                 self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
+                self.app.modeller.space_word = self.l().text("Ruimte", "Space");
+                self.app.modeller.snap_words = crate::app::modeller::snaps::Snap::ALL.map(|s| s.label(self.l()));
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
@@ -1505,6 +1586,19 @@ impl Studio {
                 self.ribbon_folded = self.compact() && !self.backstage && same && !self.ribbon_folded;
                 self.ribbon_tab = tab;
                 self.backstage = false;
+                // the IFCX page shows the project's IFCX in place of the views; another page
+                // gives them back
+                if self.ribbon_page() == RibbonPage::Ifcx {
+                    // the first time it opens on the graph
+                    if !self.app.ifc.open {
+                        self.app.ifc.view = crate::app::IfcView::Graph;
+                    }
+                    self.app.ifc.full = true;
+                    return self.update(Msg::App(Message::OpenIfc));
+                } else if self.app.ifc.full {
+                    self.app.ifc.full = false;
+                    self.app.ifc.shown = false;
+                }
             }
             Msg::Backstage(open) => self.backstage = open,
             Msg::OpenRecent(path) => return self.update(Msg::App(Message::Open(path))),
@@ -1639,9 +1733,15 @@ impl Studio {
             // the 3D view (tab 0) stays open
             Msg::CloseTab(i) => return self.update(Msg::App(Message::CloseTab(i))),
             Msg::Key(press) if self.shortcuts.recording() => return self.update(Msg::Shortcuts(sc::Message::Key(press))),
+            Msg::KeyWindow => self.expire_keys(Instant::now()),
             Msg::Key(press) => {
                 use iced::keyboard::{key::Named, Key};
                 if press.key == Key::Named(Named::Escape) {
+                    // a letter waiting for its pair goes, and nothing else
+                    if self.keys.pending().is_some() {
+                        self.keys.clear();
+                        return Task::none();
+                    }
                     if self.dialog.is_some() {
                         return self.update(Msg::Dialog(None));
                     }
@@ -1652,11 +1752,67 @@ impl Studio {
                     return self.update(Msg::App(Message::Escape));
                 }
                 // in edit mode G, X, Y, Z and A are its own keys
-                if self.dialog.is_none() && self.app.modeller.edit.is_some() && !press.modifiers.control() && !press.modifiers.alt() {
+                // while elements are grabbed (G), X, Y and Z hold the move and digits type its distance
+                let grabbing = self.app.modeller.grab.is_some();
+                if self.dialog.is_none() && grabbing && !press.modifiers.control() && !press.modifiers.alt() {
+                    // R right after the G that grabbed: GR, the grid tool
+                    if self.keys.pending() == Some('g') && matches!(&press.key, Key::Character(c) if c.eq_ignore_ascii_case("r")) {
+                        let steps = self.keys.steps('r', Instant::now());
+                        if steps.contains(&crate::app::modeller::keys::Step::Key(crate::app::modeller::keys::ModelKey::Grid)) {
+                            let l = self.l();
+                            return self.update(Msg::App(Message::ModelKey(crate::app::modeller::keys::ModelKey::Grid, l)));
+                        }
+                    }
                     if let Key::Character(c) = &press.key {
-                        if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c)) {
+                        if let Some(c) = c.chars().next().filter(|c| "xyzXYZ".contains(*c) || crate::app::modeller::typed_move::DIGITS.contains(*c)) {
                             return self.update(Msg::App(Message::EditKey(c)));
                         }
+                    }
+                }
+                // and in the sketch of a floor L, R, A and T are its tools
+                let sketching = self.app.modeller.sketch.is_some();
+                if self.dialog.is_none() && sketching && !press.modifiers.control() && !press.modifiers.alt() {
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| "lratLRAT".contains(*c)) {
+                            return self.update(Msg::App(Message::EditKey(c)));
+                        }
+                    }
+                }
+                if self.dialog.is_none() && self.app.modeller.edit.is_some() && !press.modifiers.control() && !press.modifiers.alt() {
+                    if let Key::Character(c) = &press.key {
+                        // and while a point is grabbed, the digits of a typed distance
+                        let grabbed = self.app.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some());
+                        if let Some(c) = c.chars().next().filter(|c| "gxyzaGXYZA".contains(*c) || (grabbed && crate::app::modeller::typed_move::DIGITS.contains(*c))) {
+                            return self.update(Msg::App(Message::EditKey(c)));
+                        }
+                    }
+                }
+                // in the Modeller a plain letter is a key of its own (see `app::modeller::keys`),
+                // and PageUp / PageDown step through the levels
+                // (not in edit mode, whose own keys came before; its other letters stay the app's)
+                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !sketching && !grabbing && !press.modifiers.control() && !press.modifiers.alt() {
+                    use crate::app::modeller::keys::{ModelKey, Step};
+                    // while a tool draws, digits type the length of what it draws
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| !c.is_ascii_alphabetic() && self.app.tool_drawing()) {
+                            if !press.modifiers.shift() {
+                                return self.update(Msg::App(Message::ToolDigit(c)));
+                            }
+                        }
+                    }
+                    // Shift+C takes the 3D cursor home, as in Blender
+                    if press.modifiers.shift() && matches!(&press.key, Key::Character(c) if c.eq_ignore_ascii_case("c")) {
+                        return self.update(Msg::App(Message::Cursor3dHome));
+                    }
+                    let steps: Option<Vec<Step>> = match &press.key {
+                        Key::Character(c) => c.chars().next().filter(|c| c.is_ascii_alphabetic()).map(|c| self.keys.steps(c, Instant::now())),
+                        Key::Named(Named::PageUp) => Some(vec![Step::Key(ModelKey::LevelUp)]),
+                        Key::Named(Named::PageDown) => Some(vec![Step::Key(ModelKey::LevelDown)]),
+                        _ => None,
+                    };
+                    if let Some(steps) = steps {
+                        let tasks: Vec<Task<Msg>> = steps.into_iter().map(|step| self.key_step(step)).collect();
+                        return Task::batch(tasks);
                     }
                 }
                 if self.dialog.is_none() {
@@ -1794,6 +1950,8 @@ impl Studio {
             open.map(Msg::App),
             drag,
             openaec_ui::keyboard::presses().map(Msg::Key),
+            // while a letter waits for its pair, the time is looked at every frame
+            if self.keys.pending().is_some() { iced::window::frames().map(|_| Msg::KeyWindow) } else { Subscription::none() },
             openaec_ui::keyboard::navigation().map(Msg::Navigate),
             iced::window::close_requests().map(|_| Msg::CloseWindow),
         ])
@@ -1845,7 +2003,7 @@ impl Studio {
         let folded = compact && self.ribbon_folded;
         let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
         // a phone has no room for the version, and the web app has no remote control
-        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{} {VERSION}", self.edition.name())]), self.mcp_lamp(look)].into() };
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{} {VERSION}", self.edition.name())]), self.snap_switches(look), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
             w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { self.ribbon_tab.min(tabs.len() - 1) }, Msg::RibbonTab),
@@ -1860,6 +2018,42 @@ impl Studio {
         }
         // the window has no system frame (the shell draws the title bar), so its edges resize it here
         crate::resize_frame::resize_frame(iced::widget::Stack::with_children(layers), !self.maximized && cfg!(not(target_arch = "wasm32")), Msg::ResizeEdge)
+    }
+
+    /// The snaps of the Modeller at the right of the status bar, each a switch: on in the accent
+    /// colour. Nothing in the other products.
+    fn snap_switches(&self, look: Look) -> Element<'_, Msg> {
+        use crate::app::modeller::snaps::Snap;
+        if self.product() != Product::Modeller {
+            return Space::new().into();
+        }
+        let l = self.l();
+        let c = look.color;
+        let mut line = iced::widget::Row::new().spacing(2).align_y(iced::Alignment::Center);
+        line = line.push(iced::widget::text("SNAP").size(10).font(fonts::MONO).color(c.statusbar_text));
+        for snap in Snap::ALL {
+            let on = self.app.modeller.snaps.is(snap);
+            let label = iced::widget::text(snap.label(l)).size(11).color(if on { c.accent } else { c.statusbar_text });
+            let switch = iced::widget::button(label)
+                .padding([1, 6])
+                .style(move |_, status| iced::widget::button::Style {
+                    background: matches!(status, iced::widget::button::Status::Hovered).then(|| c.frame.into()),
+                    border: iced::Border { radius: 3.0.into(), width: if on { 1.0 } else { 0.0 }, color: c.accent },
+                    ..Default::default()
+                })
+                .on_press(Msg::App(Message::SnapToggle(snap)));
+            line = line.push(w::with_tooltip(look, switch.into(), snap.tip(l), None));
+        }
+        let cell = column![
+            w::divider(look),
+            container(line.spacing(6))
+                .height(openaec_ui::design::tokens::shell::STATUSBAR - 1.0)
+                .padding([0, 10])
+                .align_y(iced::alignment::Vertical::Center)
+                .style(move |_| container::Style { background: Some(c.statusbar.into()), ..Default::default() }),
+        ]
+        .width(Length::Shrink);
+        cell.into()
     }
 
     /// The lamp at the right of the status bar: grey when remote control is off, amber when the
@@ -2026,6 +2220,9 @@ impl Studio {
             // two selected elements, and changes. New, open and save are on the File page and in
             // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
+                (l.text("Selecteren", "Select"), vec![large("model.select")]),
+                // what the building is set out on: its grid lines and its levels
+                (l.text("Stramien", "Grid"), vec![large("project.grid"), large("project.level")]),
                 (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 (l.text("Systeem", "System"), vec![large("model.system")]),
@@ -2033,6 +2230,11 @@ impl Studio {
                 (l.text("Openingen", "Openings"), vec![large("model.door"), large("model.window")]),
                 (l.text("Verbinding", "Connection"), vec![smalls(&["model.butt", "model.mitre", "model.cut"]), smalls(&["model.end-plate", "model.apart"])]),
                 (l.text("Wijzigen", "Modify"), vec![large("model.edit"), smalls(&["model.move", "model.copy"]), smalls(&["model.rotate", "model.mirror"]), large("model.delete")]),
+            ],
+            // the project as its IFCX file has it: the ways to look at it, and saving it
+            RibbonPage::Ifcx => vec![
+                ("IFCX", crate::app::IfcView::ALL.iter().map(|v| large(v.command())).collect()),
+                (l.text("Bestand", "File"), vec![large("file.save-as")]),
             ],
             // what the model is drawn on and in: its levels, its views and sheets, its types
             RibbonPage::Project => vec![
@@ -2046,6 +2248,8 @@ impl Studio {
             RibbonPage::Annotate => vec![
                 (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
                 (l.text("Tekst", "Text"), vec![large("annotate.text")]),
+                // lines that are no model, drawn on the view shown
+                (l.text("Tekenen", "Draw"), vec![large("draw.line"), large("draw.rectangle"), large("draw.circle")]),
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Cloud => vec![
@@ -2273,7 +2477,7 @@ impl Studio {
                 Some(Side::Right) => {
                     let hide = l.text("Eigenschappen verbergen", "Hide properties");
                     let actions = vec![w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight))];
-                    w::panel(look, l.text("Eigenschappen", "Properties"), width, actions, Self::pane(app.properties_body(p, l)))
+                    w::panel(look, l.text("Eigenschappen", "Properties"), width, actions, self.right_body(look))
                 }
                 None => middle.into(),
             };
@@ -2294,7 +2498,7 @@ impl Studio {
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight)), hide, Some(self.command("view.right").shortcut_label().unwrap_or("")))];
             body = body
                 .push(ch::splitter(look, dragging(Side::Right), Msg::SplitterPress(Side::Right)))
-                .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, Self::pane(app.properties_body(p, l))));
+                .push(w::panel(look, l.text("Eigenschappen", "Properties"), self.prefs.right_width, actions, self.right_body(look)));
         }
         body.into()
     }
@@ -2319,6 +2523,23 @@ impl Studio {
     }
 
     /// The viewer's content of a side panel, clear of the panel's edges.
+    /// The right panel's body: the properties; in the Modeller the model explorer above them, as in
+    /// the reference modeller.
+    fn right_body(&self, look: Look) -> Element<'_, Msg> {
+        let (app, l) = (&self.app, self.l());
+        let p = palette(look);
+        if self.product() != Product::Modeller {
+            return Self::pane(app.properties_body(p, l));
+        }
+        column![
+            container(w::mono_label(look, l.text("Modelverkenner", "Model explorer"))).padding([4, 8]),
+            container(app.model_explorer(p, l).map(Msg::App)).padding([0, 4]).width(Length::Fill).height(Length::FillPortion(2)),
+            iced::widget::rule::horizontal(1),
+            container(Self::pane(app.properties_body(p, l))).height(Length::FillPortion(3)),
+        ]
+        .into()
+    }
+
     fn pane(content: Element<'_, Message>) -> Element<'_, Msg> {
         container(content.map(Msg::App)).padding([4, 8]).width(Length::Fill).height(Length::Fill).into()
     }
@@ -2373,7 +2594,11 @@ impl Studio {
                         }
                         list.push(w::button(look, l.text("Alle groepen tonen", "Show all groups"), K::Secondary, D::Compact, None, (!hidden.is_empty()).then_some(Msg::RibbonReset))).into()
                     }
-                    SettingsPage::Shortcuts => sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts),
+                    // in the Modeller its own keys follow the commands' shortcuts
+                    SettingsPage::Shortcuts => column![sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts)]
+                        .push((self.product() == Product::Modeller).then(|| crate::app::modeller::key_actions::key_list(look, l)))
+                        .spacing(14)
+                        .into(),
                 };
                 w::dialog(
                     look,
@@ -2996,6 +3221,38 @@ mod tests {
         let studio = Studio::new(App::default());
         let _ = studio.view();
         let _ = studio.backstage_view(studio.look());
+    }
+
+    #[test]
+    fn the_modellers_right_pane_shows_the_explorer_above_the_properties() {
+        let mut studio = Studio::new(App::default());
+        studio.prefs.language = Language::English;
+        let _ = studio.update(Msg::App(Message::NewModel("Level 0")));
+        assert!(iced_test::simulator(studio.view()).find("MODEL EXPLORER").is_err(), "not in the Viewer");
+        studio.set_product(Product::Modeller);
+        let mut ui = iced_test::simulator(studio.view());
+        for label in ["MODEL EXPLORER", "Storeys", "Grid lines", "Properties"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+    }
+
+    #[test]
+    fn the_shortcuts_page_of_the_modeller_lists_its_keys() {
+        let mut studio = Studio::new(App::default());
+        studio.dialog = Some(Dialog::Settings);
+        studio.settings_page = SettingsPage::Shortcuts;
+        studio.prefs.language = Language::English;
+        assert!(iced_test::simulator(studio.view()).find("MV").is_err(), "not in the Viewer");
+        studio.set_product(Product::Modeller);
+        // the dialog scrolls: its first rows show, the list itself has them all
+        let mut ui = iced_test::simulator(studio.view());
+        for label in ["MODELLER", "MV", "Move", "Select"] {
+            assert!(ui.find(label).is_ok(), "{label}");
+        }
+        let mut list = iced_test::simulator(crate::app::modeller::key_actions::key_list::<Msg>(studio.look(), Language::English));
+        for label in ["S", "W", "CL", "FL", "PgUp", "PgDn", "Level up"] {
+            assert!(list.find(label).is_ok(), "{label}");
+        }
     }
 
     #[test]

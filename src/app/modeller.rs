@@ -17,10 +17,26 @@ use openaec_ui::Language;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod grids;
+pub mod grids;
 pub mod browser;
+pub mod cursor3d;
+pub mod dim_refs;
+pub mod explorer;
+pub mod grab;
+pub(super) mod file_types;
+pub mod key_actions;
+pub mod keys;
+pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
+pub mod slab_handles;
+pub mod snaps;
+pub mod spaces;
+pub mod temp_dims;
+pub mod sketch;
+pub mod tops;
+pub mod typed_length;
+pub mod typed_move;
 
 /// A tool that places a base element with clicks on the work plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,8 +170,14 @@ pub struct Modeller {
     pub model: bim_core::Model,
     /// The tool placing elements, and the name its elements get (in the interface language).
     pub tool: Option<(ModelTool, &'static str)>,
+    /// The branches of the model explorer that are open, by their keys (see `explorer`).
+    pub explorer_open: std::collections::HashSet<String>,
+    /// The offset of a top being typed in the properties: the element and the text (see `tops`).
+    pub top_offset: Option<(ElementId, String)>,
     /// The level being renamed or moved in the Levels tab (see `levels`).
     pub level_edit: Option<levels::LevelEdit>,
+    /// The level worked on when no floor plan is shown (its path): PageUp and PageDown step it.
+    pub level: Option<String>,
     /// The Grid tool is on: two clicks draw a grid line (see `grids`).
     pub grid_tool: bool,
     /// The points clicked so far for the tool (scene coordinates).
@@ -166,8 +188,40 @@ pub struct Modeller {
     pub refusal: Option<Refusal>,
     /// What joins made automatically are called, in the interface language.
     pub join_word: &'static str,
+    /// What a space is called, in the interface language ("Space 1").
+    pub space_word: &'static str,
+    /// The length being typed for what a tool draws, in millimetres (see `typed_length`).
+    pub length_typed: String,
+    /// The kind of snap that took the cursor's point where it is, for its mark; and what that
+    /// kind is called, in the interface language.
+    pub snap_mark: Option<snaps::Snap>,
+    pub snap_words: [&'static str; 6],
+    /// The series of grid lines being typed beside the picked one (see `grids`); `None`: closed.
+    pub grid_series: Option<String>,
+    /// Which snaps are on (see `snaps`).
+    pub snaps: snaps::Snaps,
+    /// The names given to spaces, each at a point of its space (see `spaces`).
+    pub rooms: Vec<spaces::Room>,
+    /// The name being typed for a space: which one, and the text.
+    pub space_typing: Option<(usize, String)>,
     /// Edit mode (Tab) on an element, or a drag of a selected element's grip.
     pub edit: Option<super::edit::Edit>,
+    /// The value being typed in a temporary dimension's field: which one, and the text (see
+    /// `temp_dims`).
+    pub temp_dim: Option<(usize, String)>,
+    /// The selected elements grabbed with G, following the cursor (see `grab`).
+    pub grab: Option<grab::ObjectGrab>,
+    /// The length being typed for the picked dimension (see `dim_refs`).
+    pub dimension_value: Option<String>,
+    /// The 3D cursor (see `cursor3d`).
+    pub cursor3d: cursor3d::Cursor3d,
+    /// The file the modelled project was opened from, when that file holds the project and
+    /// nothing else: the model shown is that file, under its name.
+    pub file: Option<PathBuf>,
+    /// A grip of a selected floor being dragged (see `slab_handles`).
+    pub slab_drag: Option<slab_handles::SlabDrag>,
+    /// The sketch of a floor outline, open (see `sketch`).
+    pub sketch: Option<sketch::Sketch>,
     /// Where the next click of the tool would place a point (snapped, scene coordinates), while
     /// the cursor is over the viewport: the preview runs to it.
     pub cursor: Option<DVec3>,
@@ -206,6 +260,8 @@ pub struct Step {
     pub model: Arc<bim_core::Model>,
     pub taken: Arc<Vec<(u64, u64)>>,
     pub project_file: Option<PathBuf>,
+    /// The levels of the document: a level moves with what stands on it and reaches up to it.
+    pub levels: Arc<Vec<crate::document::Level>>,
 }
 
 impl App {
@@ -217,13 +273,26 @@ impl App {
         }
         for definition in &model.project.elements {
             // a grid line comes under its own key, an element as it is
-            if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
+            if let Some(library) = definition.get(crate::export::ifcx::LIBRARY) {
+                // the file's library: what this one lacks of it is added
+                if let Ok(library) = serde_json::from_value::<bim_library::Library>(library.clone()) {
+                    self.library.merge(&library);
+                }
+            } else if let Some(rooms) = definition.get(crate::export::ifcx::ROOMS) {
+                self.modeller.rooms = serde_json::from_value(rooms.clone()).unwrap_or_default();
+            } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
                 if let Ok(grid) = serde_json::from_value::<bim_core::GridDef>(grid.clone()) {
                     let _ = self.modeller.model.insert_grid(grid);
                 }
             } else if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
                 self.modeller.model.insert(element);
             }
+        }
+        // a file of the project alone (no meshes of its own) is the modelled project: the model
+        // shown takes its place and its name, not a second model beside it
+        if model.layers.iter().all(|l| l.indices.is_empty()) {
+            self.modeller.shown = Some(model.id);
+            self.modeller.file = Some(model.path.clone());
         }
         self.show_modelled();
         // what a file gives is where its history starts
@@ -238,6 +307,8 @@ impl App {
         self.set_model(empty.clone());
         self.modeller = Modeller { shown: Some(empty.id), in_modeller: self.modeller.in_modeller, ..Modeller::default() };
         let _ = self.document.add_level(level, 0.0);
+        // the empty project with its first level is where its history starts
+        self.settle_modelled();
         self.grid = true;
         // nothing to fit yet: look at the work plane from above and aside, 20 m around
         self.camera.target = Vec3::ZERO;
@@ -259,6 +330,8 @@ impl App {
             self.measure.tool = None;
             self.plane_picking = false;
         }
+        // a fresh 3D cursor is where a wall, a beam or a system starts
+        self.tool_from_cursor3d();
     }
 
     /// Esc while placing: drop the points clicked, else switch the tool off. False when no tool
@@ -284,7 +357,9 @@ impl App {
     pub(super) fn work_plane(&self) -> (f64, f64, Option<String>) {
         let levels = self.document.levels();
         let shown = self.active_plan.as_deref().and_then(|p| self.document.plan(p)).and_then(|plan| self.document.level(&plan.level));
-        let level = shown.or_else(|| levels.iter().min_by(|a, b| a.elevation.abs().total_cmp(&b.elevation.abs())));
+        // the floor plan shown, else the level stepped to, else the one nearest zero
+        let stepped = self.modeller.level.as_deref().and_then(|p| self.document.level(p));
+        let level = shown.or(stepped).or_else(|| levels.iter().min_by(|a, b| a.elevation.abs().total_cmp(&b.elevation.abs())));
         let Some(level) = level else { return (0.0, STOREY, None) };
         let above = levels.iter().map(|l| l.elevation).filter(|&z| z > level.elevation + 0.1).fold(f64::INFINITY, f64::min);
         let height = if above.is_finite() { above - level.elevation } else { STOREY };
@@ -305,6 +380,28 @@ impl App {
         (t >= 0.0).then(|| a + d * t)
     }
 
+    /// Where the cursor's ray meets the plane a drag runs in, through `through`: the level plane
+    /// when the view looks down on it, else (an elevation, a section) the upright plane that
+    /// faces the view. So what is dragged in a floor plan moves over the floor, and what is
+    /// dragged in a section moves along the section and up and down.
+    pub(super) fn drag_plane_point(&self, x: f32, y: f32, width: f32, height: f32, through: DVec3) -> Option<DVec3> {
+        /// A view looks from the side when its rays rise or fall less than this (the sine of
+        /// their slope).
+        const FROM_THE_SIDE: f64 = 0.2;
+        let inv = (self.camera.view_proj(width / height) * self.model_matrix()).inverse();
+        let (nx, ny) = (2.0 * x / width - 1.0, 1.0 - 2.0 * y / height);
+        let a = inv.project_point3(Vec3::new(nx, ny, 0.0)).as_dvec3();
+        let d = inv.project_point3(Vec3::new(nx, ny, 1.0)).as_dvec3() - a;
+        let along = d.try_normalize()?;
+        let normal = if along.z.abs() >= FROM_THE_SIDE { DVec3::Z } else { DVec3::new(along.x, along.y, 0.0).try_normalize()? };
+        let denom = d.dot(normal);
+        if denom.abs() < 1e-12 {
+            return None;
+        }
+        let t = (through - a).dot(normal) / denom;
+        (t >= 0.0).then(|| a + d * t)
+    }
+
     /// Where a scene point shows in the viewport (logical pixels), if in front of the camera.
     pub(crate) fn on_screen(&self, p: DVec3, width: f32, height: f32) -> Option<(f32, f32)> {
         let c = (self.camera.view_proj(width / height) * self.model_matrix()).project_point3(p.as_vec3());
@@ -319,37 +416,95 @@ impl App {
 
     /// The points a click snaps to, of every modelled element but `except` (ids start at 1).
     pub(super) fn snap_points_except(&self, except: ElementId) -> Vec<DVec3> {
+        self.snap_marks_except(except).into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The points of [`App::snap_points_except`], each with the kind of snap it is.
+    pub(super) fn snap_marks_except(&self, except: ElementId) -> Vec<(DVec3, snaps::Snap)> {
+        use snaps::Snap;
         let grid = self.modeller.model.grid;
-        let mut points = Vec::new();
+        // the 3D cursor, once placed, is a point to land on
+        let mut points: Vec<(DVec3, Snap)> = self.cursor3d_snap().into_iter().map(|p| (p, Snap::End)).collect();
+        let snaps = self.modeller.snaps;
+        // the ends of a line when ends are on, its middle when middles are
+        let mut line = |a: DVec3, b: DVec3| {
+            if snaps.end {
+                points.extend([(a, Snap::End), (b, Snap::End)]);
+            }
+            if snaps.middle {
+                points.push(((a + b) / 2.0, Snap::Middle));
+            }
+        };
+        let (mut corners, mut middles) = (Vec::new(), Vec::new());
         for e in self.modeller.model.iter().filter(|e| e.id != except) {
             match e.shape_in_project(&grid) {
-                Shape::Point(p) => points.push(p.at),
-                Shape::Linear(l) => points.extend([l.start, l.end]),
-                Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, base, .. }, .. }) => points.extend([start.extend(base), end.extend(base)]),
-                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) => points.extend(outline.iter().map(|p| p.extend(top))),
-                Shape::System(s) => points.extend([s.start.extend(s.base), s.end.extend(s.base)]),
+                Shape::Point(p) => corners.push(p.at),
+                Shape::Linear(l) => line(l.start, l.end),
+                Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, base, .. }, .. }) => line(start.extend(base), end.extend(base)),
+                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) => {
+                    let n = outline.len();
+                    for k in 0..n {
+                        // each corner once: as the start of its edge
+                        corners.push(outline[k].extend(top));
+                        middles.push(((outline[k] + outline[(k + 1) % n]) / 2.0).extend(top));
+                    }
+                }
+                Shape::System(s) => line(s.start.extend(s.base), s.end.extend(s.base)),
                 Shape::Connection(_) => {}
             }
         }
-        points.extend(self.grid_snap_points());
+        if snaps.end {
+            points.extend(corners.into_iter().map(|p| (p, Snap::End)));
+        }
+        if snaps.middle {
+            points.extend(middles.into_iter().map(|p| (p, Snap::Middle)));
+        }
+        if snaps.grid {
+            points.extend(self.grid_snap_points().into_iter().map(|p| (p, Snap::Grid)));
+        }
         points
     }
 
     /// A click on the work plane at `p`: onto a point of an element near the cursor, else in line
     /// with the last point when nearly so, else rounded.
     pub(super) fn snapped(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> DVec3 {
+        self.snapped_as(p, x, y, width, height).0
+    }
+
+    /// The point of [`App::snapped`], and the kind of snap that took it there (none for a click
+    /// that is where it is, rounded).
+    pub(super) fn snapped_as(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> (DVec3, Option<snaps::Snap>) {
         let near = self
-            .snap_points()
+            .snap_marks_except(ElementId(0))
             .into_iter()
-            .filter_map(|q| self.on_screen(q, width, height).map(|s| (q, (s.0 - x).hypot(s.1 - y))))
-            .filter(|(_, d)| *d <= SNAP_PIXELS)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((q, _)) = near {
-            return DVec3::new(q.x, q.y, p.z);
+            .filter_map(|(q, kind)| self.on_screen(q, width, height).map(|s| (q, kind, (s.0 - x).hypot(s.1 - y))))
+            .filter(|(_, _, d)| *d <= SNAP_PIXELS)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((q, kind, _)) = near {
+            return (DVec3::new(q.x, q.y, p.z), Some(kind));
         }
-        let round = |v: f64| (v / ROUND).round() * ROUND;
+        let snaps = self.modeller.snaps;
+        // the nearest point of a line under the cursor
+        if snaps.line {
+            let on_line = self
+                .snap_lines()
+                .into_iter()
+                .filter_map(|(a, b)| {
+                    let d = b - a;
+                    let c = a + d * ((p.truncate() - a).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                    let s = self.on_screen(c.extend(p.z), width, height)?;
+                    Some((c, (s.0 - x).hypot(s.1 - y)))
+                })
+                .filter(|(_, d)| *d <= SNAP_PIXELS)
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((c, _)) = on_line {
+                return (c.extend(p.z), Some(snaps::Snap::Line));
+            }
+        }
+        let mut straight = None;
+        let round = |v: f64| if snaps.round { (v / ROUND).round() * ROUND } else { v };
         let mut p = DVec3::new(round(p.x), round(p.y), p.z);
-        if let Some(first) = self.modeller.points.last() {
+        if let Some(first) = self.modeller.points.last().filter(|_| snaps.ortho) {
             let d = p - *first;
             let angle = d.y.atan2(d.x).to_degrees().rem_euclid(90.0);
             if angle < ORTHO_DEGREES || angle > 90.0 - ORTHO_DEGREES {
@@ -358,9 +513,10 @@ impl App {
                 } else {
                     p.x = first.x;
                 }
+                straight = Some(snaps::Snap::Ortho);
             }
         }
-        p
+        (p, straight)
     }
 
     /// A click in the viewport while a tool is on.
@@ -372,6 +528,34 @@ impl App {
         let (z, _, level) = self.work_plane();
         let Some(p) = self.plane_point(x, y, width, height, z) else { return };
         let p = self.snapped(p, x, y, width, height);
+        // walls as a rectangle: the second click is the opposite corner, and four walls go
+        // round, each from the end of the one before, as a chain does
+        if tool == ModelTool::Wall && self.modeller.placement.rectangle {
+            let Some(&a) = self.modeller.points.first() else {
+                self.modeller.points.push(p);
+                self.modeller.refusal = None;
+                return;
+            };
+            if (a.x - p.x).abs() < 1e-6 || (a.y - p.y).abs() < 1e-6 {
+                return;
+            }
+            let chained = std::mem::replace(&mut self.modeller.placement.chain, true);
+            self.modeller.points.clear();
+            self.modeller.placement.last_wall = None;
+            for corner in [a, DVec3::new(p.x, a.y, a.z), DVec3::new(p.x, p.y, a.z), DVec3::new(a.x, p.y, a.z), a] {
+                self.model_point(tool, name, level.clone(), corner);
+            }
+            self.modeller.points.clear();
+            self.modeller.placement.last_wall = None;
+            self.modeller.placement.chain = chained;
+            return;
+        }
+        self.model_point(tool, name, level, p);
+    }
+
+    /// The next point of `tool`, already snapped: with its last point the element is placed.
+    fn model_point(&mut self, tool: ModelTool, name: &'static str, level: Option<String>, p: DVec3) {
+        self.modeller.length_typed.clear();
         self.modeller.points.push(p);
         self.modeller.refusal = None;
         if self.modeller.points.len() < tool.clicks() {
@@ -389,7 +573,10 @@ impl App {
             self.move_wall_end(last, start);
         }
         let name = self.placed_name(tool, name);
-        match self.add_element(name, level, shape) {
+        // with no height typed, what stands reaches the level above, when there is one
+        let storey = matches!(tool, ModelTool::Wall | ModelTool::Column | ModelTool::System) && self.modeller.placement.of(tool).height.is_none() && tops::has_top(&shape);
+        let top = if storey { self.level_above(level.as_deref()).map(|level| bim_core::Top { level, offset: 0.0 }) } else { None };
+        match self.add_element_reaching(name, level, top, shape) {
             Ok(id) if tool.chains() && self.modeller.placement.chain => {
                 self.modeller.points = vec![b];
                 self.modeller.placement.last_wall = (tool == ModelTool::Wall).then_some(id);
@@ -401,8 +588,14 @@ impl App {
 
     /// Adds an element defined in scene coordinates, named `name` and a number, and shows it.
     pub(super) fn add_element(&mut self, name: &str, level: Option<String>, shape: Shape) -> Result<ElementId, Refusal> {
+        self.add_element_reaching(name, level, None, shape)
+    }
+
+    /// As [`App::add_element`], the element reaching `top` with its top (see `tops`).
+    pub(super) fn add_element_reaching(&mut self, name: &str, level: Option<String>, top: Option<bim_core::Top>, shape: Shape) -> Result<ElementId, Refusal> {
         let grid = self.modeller.model.grid;
         let mut element = Element::in_project(&grid, name, level, shape);
+        element.top = top;
         // numbered per IFC class: Wall 1, Wall 2, Slab 1
         let number = self.modeller.model.iter().filter(|e| e.class() == element.class()).count() + 1;
         element.name = format!("{name} {number}");
@@ -431,7 +624,8 @@ impl App {
             .filter_map(|item| match item {
                 Pickable::Element(id) => {
                     let key = model.element_key(*id);
-                    (key.model == entry).then_some(ElementId(key.source))
+                    // a space is made from the walls: no element of the modelled project
+                    (key.model == entry && key.source < spaces::SPACE_IDS).then_some(ElementId(key.source))
                 }
                 Pickable::Layer(_) => None,
             })
@@ -510,8 +704,20 @@ impl App {
     pub(super) fn show_modelled(&mut self) {
         self.modeller.touched = true;
         let levels: Vec<(String, String)> = self.document.levels().iter().map(|l| (l.path.clone(), l.name.clone())).collect();
-        let mut built = viewer_model(&self.modeller.model, &levels, &self.library);
+        let mut layers = viewer_layers(&self.modeller.model, &levels, &self.library);
+        // the spaces its walls close in stand beside its elements, on a layer of their own
+        layers.extend(spaces::space_layer(&self.spaces(), &levels));
+        let mut built = Model::new(PathBuf::from("model.ifcx"), "IFCX", layers);
         built.project.grids = self.modelled_grid_lines();
+        // the project's library goes into its file: materials and types, those taken from a file too
+        built.project.types = bim_library::ifcx::nodes(&self.library);
+        // and the names given to its spaces
+        if !self.modeller.rooms.is_empty() {
+            built.project.types.push(serde_json::json!({ "path": "openaec-rooms", "attributes": { crate::export::ifcx::ROOMS: self.modeller.rooms } }));
+        }
+        if let Some(file) = &self.modeller.file {
+            built.path = file.clone();
+        }
         let built = Arc::new(built);
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {
@@ -552,6 +758,10 @@ impl App {
             Arc::new(combined)
         };
         self.replace_scene(scene);
+        // the dimensions that hold on to elements follow them
+        self.follow_dimensions();
+        // and the floor plans say their spaces and draw their doors' swings again
+        self.tag_plans();
     }
 
     /// Puts `model` in the place of the scene shown, keeping the camera, the views and the
@@ -587,7 +797,7 @@ impl App {
         let level = self.work_plane().2;
         let p = DVec2::new;
         let add = |app: &mut App, name: &str, shape: Shape| app.add_element(name, level.clone(), shape).expect("the demo evaluates");
-        let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0 };
+        let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None };
         add(self, "Slab", Shape::Planar(PlanarDef { form: slab, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None }));
         let wall = |a: DVec2, b: DVec2, openings: Vec<Opening>| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: a, end: b, base: 0.0, height: 3.0 }, thickness: WALL_THICKNESS, openings, build_up: None });
         let door = Opening { along: 1.0, sill: 0.0, width: 1.0, height: 2.3 };
@@ -611,7 +821,7 @@ impl App {
             self.modeller.model.replace(joint).expect("the demo's end plate");
             self.show_modelled();
         }
-        add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT }));
+        add(self, "Object", Shape::Point(PointDef { at: DVec3::new(7.0, 3.0, 0.0), rotation: 0.4, size: OBJECT, opening: None }));
         // a beam through the side wall, cutting its way
         let through = add(self, "Beam", beam(p(8.5, 3.0), p(13.0, 3.0)));
         add(self, "Cut-out", Shape::Connection(ConnectionDef { kind: ConnectionKind::Cut, primary: through, secondary: side }));
@@ -626,12 +836,19 @@ impl App {
 pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f64, s: &Settings, library: &bim_library::Library) -> Shape {
     // up to the next level, unless a height was typed
     let up_to = |base: f64| s.height.unwrap_or(z + storey - base);
-    let profile = || s.kind.as_deref().and_then(ProfileDef::steel).unwrap_or(ProfileDef::Rectangle { width: s.width, height: s.depth });
+    // a steel profile by its designation, else a linear type of the library, named as the library
+    // names it and whole without it
+    let typed = |id: &str| {
+        let t = library.linear_type(id)?;
+        let designation = library.linear_name(id, bim_library::Lang::En).unwrap_or_else(|| id.to_string());
+        Some(ProfileDef::Catalogue { designation, shape: t.profile.clone() })
+    };
+    let profile = || s.kind.as_deref().and_then(|id| ProfileDef::steel(id).or_else(|| typed(id))).unwrap_or(ProfileDef::Rectangle { width: s.width, height: s.depth });
     let build_up = |id: &Option<String>| id.as_deref().and_then(|id| bim_core::BuildUpDef::from_library(library, id));
     match tool {
         // an opening tool places none of its own (see `openings`): an object stands for it
         ModelTool::Point | ModelTool::Door | ModelTool::Window => {
-            Shape::Point(PointDef { at: a + DVec3::Z * s.offset, rotation: 0.0, size: DVec3::new(s.width, s.depth.max(0.01), s.height.unwrap_or(OBJECT.z)) })
+            Shape::Point(PointDef { at: a + DVec3::Z * s.offset, rotation: 0.0, size: DVec3::new(s.width, s.depth.max(0.01), s.height.unwrap_or(OBJECT.z)), opening: None })
         }
         ModelTool::Column => {
             let base = z + s.offset;
@@ -652,7 +869,7 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
         ModelTool::Slab => {
             let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
             let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset }, thickness: s.width, openings: Vec::new(), build_up: None };
+            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset, bulges: Vec::new(), role: s.role, slope: None }, thickness: s.width, openings: Vec::new(), build_up: None };
             Shape::Planar(slab.with_build_up(build_up(&s.kind)))
         }
         ModelTool::System => {
@@ -702,7 +919,7 @@ impl App {
         if let Shape::Planar(PlanarDef { form: PlanarForm::Wall { end, .. }, .. }) = &mut shape {
             *end = to;
         }
-        let mut moved = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+        let mut moved = e.reshaped(&grid, shape);
         moved.id = id;
         let _ = self.modeller.model.replace(moved);
     }
@@ -713,10 +930,14 @@ fn class_colour(class: &str) -> [f32; 3] {
     match class {
         "IfcWall" => [0.86, 0.84, 0.80],
         "IfcSlab" => [0.70, 0.70, 0.72],
+        "IfcRoof" => [0.66, 0.42, 0.36],
+        "IfcCovering" => [0.93, 0.93, 0.90],
         "IfcColumn" | "IfcBeam" => [0.55, 0.62, 0.72],
         "IfcMember" => [0.45, 0.47, 0.52],
         "IfcPlate" => [0.62, 0.80, 0.92],
         "IfcCurtainWall" => [0.62, 0.80, 0.92],
+        "IfcDoor" => [0.72, 0.55, 0.38],
+        "IfcWindow" => [0.95, 0.95, 0.93],
         _ => [0.90, 0.60, 0.30],
     }
 }
@@ -727,6 +948,11 @@ fn class_colour(class: &str) -> [f32; 3] {
 /// `levels` names the levels by path.
 /// A part of a layered element has the colour of its layer's material in `library`.
 pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Model {
+    Model::new(PathBuf::from("model.ifcx"), "IFCX", viewer_layers(model, levels, library))
+}
+
+/// The layers of the model shown: one per class, each element with its properties.
+fn viewer_layers(model: &bim_core::Model, levels: &[(String, String)], library: &bim_library::Library) -> Vec<Layer> {
     let grid = model.grid;
     let mut layers: Vec<Layer> = Vec::new();
     for element in model.iter() {
@@ -764,7 +990,7 @@ pub fn viewer_model(model: &bim_core::Model, levels: &[(String, String)], librar
         let level = element.level.as_deref().and_then(|path| levels.iter().find(|(p, _)| p == path)).map(|(_, name)| name.as_str());
         layer.props.push((element.id.0, properties(model, element, &parts, level, library)));
     }
-    Model::new(PathBuf::from("model.ifcx"), "IFCX", layers)
+    layers
 }
 
 /// An element's properties as a flat JSON object.
@@ -1092,6 +1318,34 @@ mod tests {
         // a frame and a beam are not joined
         app.sel.clear();
         assert!(!app.selected_joinable());
+    }
+
+    #[test]
+    fn a_saved_project_opens_again_as_one_model_under_its_name() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        app.set_model_tool(None);
+        let scene = app.model.clone().unwrap();
+        let bytes = crate::export::to_bytes(&scene, &app.document_now(), "house.ifcx").unwrap();
+        let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: Arc::new(bytes) };
+        let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        let mut back = App::default();
+        back.set_model(Arc::new(loaded));
+        // the project, not an empty file with a model beside it
+        assert_eq!(back.models.len(), 1);
+        assert_eq!(back.modeller.model.len(), 1);
+        let shown = back.model.clone().unwrap();
+        assert_eq!(shown.path.file_name().and_then(|n| n.to_str()), Some("house.ifcx"));
+        assert!(back.title().starts_with("house.ifcx"), "{}", back.title());
+        // and it stays so after a change
+        back.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        back.viewport_size = (1000.0, 800.0);
+        let again = back.modeller.model.iter().next().unwrap().shape.clone();
+        let _ = back.add_element("Wall", None, again);
+        assert_eq!(back.models.len(), 1);
+        assert_eq!(back.model.as_ref().unwrap().path.file_name().and_then(|n| n.to_str()), Some("house.ifcx"));
     }
 
     #[test]

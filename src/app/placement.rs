@@ -80,12 +80,14 @@ pub struct Settings {
     /// A window's sill.
     pub sill: f64,
     pub location: LocationLine,
+    /// What the Slab tool makes: a floor, a roof or a ceiling.
+    pub role: bim_core::SlabRole,
 }
 
 impl Settings {
     /// What a tool places when nothing was typed.
     pub fn default_for(tool: ModelTool) -> Self {
-        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre };
+        let plain = |width: f64, depth: f64, height: Option<f64>| Settings { kind: None, width, depth, height, offset: 0.0, sill: 0.0, location: LocationLine::Centre, role: bim_core::SlabRole::Floor };
         use super::element_props::{DOOR, WINDOW};
         use super::modeller::{BEAM, COLUMN, OBJECT, SLAB_THICKNESS, WALL_THICKNESS};
         match tool {
@@ -120,7 +122,11 @@ pub enum PlaceMessage {
     /// Enter: the fields show the values in use.
     Done,
     Location(LocationLine),
+    /// What the Slab tool makes; its type goes, as types are per role.
+    Role(bim_core::SlabRole),
     Chain(bool),
+    /// The Wall tool draws a rectangle, or single walls.
+    Rectangle(bool),
 }
 
 /// The settings of every tool, the chain, and a value being typed.
@@ -128,6 +134,8 @@ pub enum PlaceMessage {
 pub struct Placement {
     settings: HashMap<ModelTool, Settings>,
     pub chain: bool,
+    /// The Wall tool draws a rectangle of four walls with two clicks.
+    pub rectangle: bool,
     typing: Option<(PlaceField, String)>,
     /// The wall placed last while chaining: the next one on a face meets it where their axes cross.
     pub last_wall: Option<ElementId>,
@@ -135,7 +143,7 @@ pub struct Placement {
 
 impl Default for Placement {
     fn default() -> Self {
-        Self { settings: HashMap::new(), chain: true, typing: None, last_wall: None }
+        Self { settings: HashMap::new(), chain: true, rectangle: false, typing: None, last_wall: None }
     }
 }
 
@@ -147,6 +155,57 @@ impl Placement {
 
     fn set(&mut self, tool: ModelTool, settings: Settings) {
         self.settings.insert(tool, settings);
+    }
+}
+
+impl App {
+    /// Create similar: the tool that makes the one element selected, with its type and sizes, so
+    /// the next one drawn is like it.
+    pub(in crate::app) fn create_similar(&mut self, l: Language) {
+        let Some(e) = self.defined().cloned() else { return };
+        let of = |tool: ModelTool| self.modeller.placement.of(tool);
+        let (tool, settings) = match e.shape_in_project(&self.modeller.model.grid) {
+            Shape::Planar(p) => {
+                let kind = p.build_up.as_ref().map(|b| b.id.clone());
+                match p.form {
+                    // a wall up to its level stays so; one with a height of its own keeps it
+                    PlanarForm::Wall { height, .. } => (ModelTool::Wall, Settings { kind, width: p.total_thickness(), height: e.top.is_none().then_some(height), ..of(ModelTool::Wall) }),
+                    PlanarForm::Slab { role, .. } => (ModelTool::Slab, Settings { kind, width: p.total_thickness(), role, ..of(ModelTool::Slab) }),
+                }
+            }
+            Shape::Linear(d) => {
+                let tool = if e.class() == "IfcColumn" { ModelTool::Column } else { ModelTool::Beam };
+                let mut s = of(tool);
+                match &d.profile {
+                    bim_core::ProfileDef::Rectangle { width, height } => (s.kind, s.width, s.depth) = (None, *width, *height),
+                    // a steel profile by its designation, a type of the library by its name
+                    bim_core::ProfileDef::Catalogue { designation, .. } => {
+                        let typed = self.library.linear_types.iter().find(|t| self.library.linear_name(&t.id, bim_library::Lang::En).as_deref() == Some(designation.as_str())).map(|t| t.id.clone());
+                        s.kind = typed.or_else(|| bim_core::ProfileDef::steel(designation).map(|_| designation.clone())).or(s.kind);
+                    }
+                    _ => {}
+                }
+                (tool, s)
+            }
+            Shape::System(d) => (ModelTool::System, Settings { kind: d.system_type.as_ref().map(|t| t.id.clone()), height: e.top.is_none().then_some(d.height), ..of(ModelTool::System) }),
+            Shape::Point(d) => {
+                let tool = match d.opening {
+                    Some(bim_core::OpeningKind::Door) => ModelTool::Door,
+                    Some(bim_core::OpeningKind::Window) => ModelTool::Window,
+                    None => ModelTool::Point,
+                };
+                let mut s = Settings { width: d.size.x, height: Some(d.size.z), ..of(tool) };
+                if tool == ModelTool::Point {
+                    s.depth = d.size.y;
+                }
+                (tool, s)
+            }
+            Shape::Connection(_) => return,
+        };
+        self.modeller.placement.set(tool, settings);
+        if self.modeller.tool.map(|t| t.0) != Some(tool) {
+            self.set_model_tool(Some((tool, tool.label(l))));
+        }
     }
 }
 
@@ -172,6 +231,7 @@ impl std::fmt::Display for Located {
         f.write_str(self.1)
     }
 }
+
 
 /// The fields `tool` shows, with their labels.
 fn fields(tool: ModelTool, l: Language) -> Vec<(PlaceField, &'static str)> {
@@ -239,6 +299,17 @@ impl App {
         match message {
             PlaceMessage::Kind(kind) => s.kind = kind,
             PlaceMessage::Location(location) => s.location = location,
+            PlaceMessage::Role(role) => {
+                if s.role != role {
+                    s.role = role;
+                    s.kind = None;
+                }
+            }
+            PlaceMessage::Rectangle(on) => {
+                placement.rectangle = on;
+                self.modeller.points.clear();
+                placement.last_wall = None;
+            }
             PlaceMessage::Chain(on) => {
                 placement.chain = on;
                 if !on {
@@ -308,15 +379,19 @@ impl App {
     /// what goes with the tool (location line, chain).
     pub(super) fn placement_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let (tool, s) = self.tool_settings()?;
-        let label = |t: &'static str| text(t).size(12).color(p.text_secondary);
-        let mut bar = Row::new().spacing(8).align_y(Center).push(text(tool.label(l)).size(12).color(p.text));
+        let label = |t: &'static str| text(t).size(12).color(p.text_secondary).wrapping(iced::widget::text::Wrapping::None);
+        // each value with its name, one under the other: the right pane is narrow
+        fn pair<'a>(name: impl Into<Element<'a, Message>>, value: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+            Row::new().spacing(8).align_y(Center).push(container(name).width(iced::Length::FillPortion(2))).push(container(value).width(iced::Length::FillPortion(3))).into()
+        }
+        let mut bar = iced::widget::Column::new().spacing(5);
         if let Some(choices) = self.kinds(tool, l) {
             let picked = choices.iter().find(|c| c.id == s.kind).cloned();
             let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Kind(c.id))).text_size(12).padding([2, 6]);
             // a system type's name ends with what tells it from the next (its centres, its
             // bond), so its list is as wide as its longest name
-            let pick = if tool == ModelTool::System { pick } else { pick.width(180) };
-            bar = bar.push(label(l.text("Type", "Type"))).push(pick);
+            let pick = if tool == ModelTool::System { pick } else { pick.width(150) };
+            bar = bar.push(pair(label(l.text("Type", "Type")), pick));
         }
         let typing = self.modeller.placement.typing.clone();
         for (field, name) in fields(tool, l) {
@@ -330,19 +405,31 @@ impl App {
             let hint = if field == PlaceField::Height { l.text("tot niveau", "to level") } else { "" };
             let input = text_input(hint, &value).size(12).padding([2, 6]).width(68);
             let input = if fixed { input } else { input.on_input(move |t| Message::Place(PlaceMessage::Field(field, t))).on_submit(Message::Place(PlaceMessage::Done)) };
-            bar = bar.push(label(name)).push(input);
+            bar = bar.push(pair(label(name), input.width(Fill)));
+        }
+        if tool == ModelTool::Slab {
+            // a floor, a roof or a ceiling: made the same, classed and listed apart
+            for (role, name) in [(bim_core::SlabRole::Floor, l.text("Vloer", "Floor")), (bim_core::SlabRole::Roof, l.text("Dak", "Roof")), (bim_core::SlabRole::Ceiling, l.text("Plafond", "Ceiling"))] {
+                let on = s.role == role;
+                bar = bar.push(button(text(name).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Role(role))));
+            }
         }
         if tool == ModelTool::Wall {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(l))).collect();
             let picked = options.iter().find(|o| o.0 == s.location).copied();
-            bar = bar.push(label(l.text("Locatielijn", "Location line"))).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]));
+            bar = bar.push(label(l.text("Locatielijn", "Location line"))).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]).width(120));
+        }
+        if tool == ModelTool::Wall {
+            let on = self.modeller.placement.rectangle;
+            let rectangle = button(text(l.text("Rechthoek", "Rectangle")).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Rectangle(!on)));
+            bar = bar.push(rectangle);
         }
         if tool.chains() {
             let on = self.modeller.placement.chain;
             let chain = button(text(l.text("Ketting", "Chain")).size(12)).padding([3, 10]).style(move |_, st| p.ribbon_button(on, st)).on_press(Message::Place(PlaceMessage::Chain(!on)));
             bar = bar.push(chain);
         }
-        Some(container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()).into())
+        Some(container(bar).padding([2, 8]).width(Fill).into())
     }
 
     /// The types `tool` can take, generic first; `None` for a tool without types.
@@ -352,10 +439,19 @@ impl App {
         let mut choices = vec![generic];
         match tool {
             ModelTool::Wall | ModelTool::Slab => {
-                let role = if tool == ModelTool::Wall { bim_library::Role::Wall } else { bim_library::Role::Floor };
+                let role = match (tool, self.modeller.placement.of(tool).role) {
+                    (ModelTool::Wall, _) => bim_library::Role::Wall,
+                    (_, bim_core::SlabRole::Floor) => bim_library::Role::Floor,
+                    (_, bim_core::SlabRole::Roof) => bim_library::Role::Roof,
+                    (_, bim_core::SlabRole::Ceiling) => bim_library::Role::Ceiling,
+                };
                 choices.extend(self.library.names(role, lang).into_iter().map(|(id, name)| Choice { id: Some(id.to_string()), name }));
             }
             ModelTool::Column | ModelTool::Beam => {
+                // the library's own columns or beams (a catalogue's among them), then the steel table
+                let role = if tool == ModelTool::Column { bim_library::LinearRole::Column } else { bim_library::LinearRole::Beam };
+                let steel = |id: &str| self.library.linear_type(id).is_some_and(|t| t.designation.is_some());
+                choices.extend(self.library.linear_names(role, lang).into_iter().filter(|(id, _)| !steel(id)).map(|(id, name)| Choice { id: Some(id.to_string()), name }));
                 choices.extend(bim_library::profile::steel_profiles().iter().map(|p| Choice { id: Some(p.designation.clone()), name: p.designation.clone() }));
             }
             ModelTool::System => {
@@ -446,6 +542,97 @@ mod tests {
     }
 
     #[test]
+    fn a_wall_and_a_column_of_an_inb_type_are_placed_and_say_what_they_are_made_of() {
+        let mut app = modelling();
+        let _ = app.update(Message::Library(crate::app::library::LibraryMessage::AddInb));
+        // the wall tool lists the catalogue's types under the names the template gives them
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        let kinds = app.kinds(ModelTool::Wall, Language::Dutch).unwrap();
+        let kzst = kinds.iter().find(|k| k.id.as_deref() == Some("inb.wall.kzst_100")).expect("the INB sand-lime wall");
+        assert_eq!(kzst.name, "kzst_100");
+        place(&mut app, PlaceMessage::Kind(kzst.id.clone()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        let w = wall(&app, 1);
+        assert!((w.total_thickness() - 0.1).abs() < 1e-12);
+        let props = app.model.as_ref().unwrap().element_props(1);
+        let said = |key: &str| props.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!((said("Type"), said("Layers")), (Some("kzst_100"), Some("sand-lime brick 100")));
+        // and a concrete column of the catalogue
+        app.set_model_tool(None);
+        app.set_model_tool(Some((ModelTool::Column, "Column")));
+        let kinds = app.kinds(ModelTool::Column, Language::Dutch).unwrap();
+        let bk = kinds.iter().find(|k| k.id.as_deref() == Some("inb.column.bk-300x300")).expect("the INB concrete column");
+        assert_eq!(bk.name, "BK 300x300");
+        place(&mut app, PlaceMessage::Kind(bk.id.clone()));
+        click(&mut app, 8.0, 3.0);
+        let column = app.modeller.model.iter().find(|e| e.class() == "IfcColumn").expect("a column");
+        let Shape::Linear(c) = &column.shape else { panic!() };
+        assert_eq!(c.profile.name(), "BK 300x300");
+        let outline = c.profile.profile().unwrap();
+        assert!((outline.area() - 0.09).abs() < 1e-9, "300 × 300");
+    }
+
+    #[test]
+    fn the_slab_tool_makes_a_roof_or_a_ceiling_classed_and_typed_as_such() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Slab, "Slab")));
+        // a roof: the types offered are the library's roof types
+        place(&mut app, PlaceMessage::Role(bim_core::SlabRole::Roof));
+        let kinds = app.kinds(ModelTool::Slab, Language::English).unwrap();
+        let roofs: Vec<String> = app.library.names(bim_library::Role::Roof, bim_library::Lang::En).into_iter().map(|(_, n)| n).collect();
+        assert_eq!(kinds.iter().skip(1).map(|k| k.name.clone()).collect::<Vec<_>>(), roofs);
+        place(&mut app, PlaceMessage::Field(PlaceField::Offset, "3".into()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 6.0, 4.0);
+        place(&mut app, PlaceMessage::Role(bim_core::SlabRole::Ceiling));
+        place(&mut app, PlaceMessage::Field(PlaceField::Offset, "2.6".into()));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 6.0, 4.0);
+        let classes: Vec<&str> = app.modeller.model.iter().map(|e| e.class()).collect();
+        assert_eq!(classes, ["IfcRoof", "IfcCovering"]);
+        // each on a layer of its own, and a roof in IFC 4 is a slab of the roof
+        let scene = app.model.clone().unwrap();
+        let layers: Vec<&str> = scene.layers.iter().map(|l| l.name.as_str()).collect();
+        assert!(layers.contains(&"IfcRoof") && layers.contains(&"IfcCovering"), "{layers:?}");
+        let text = String::from_utf8(crate::export::to_bytes(&scene, &app.document_now(), "roof.ifc").unwrap()).unwrap();
+        assert!(text.contains("=IFCSLAB(") && text.contains(".ROOF.)") && text.contains("=IFCCOVERING(") && text.contains(".CEILING.)"), "{}", text.lines().filter(|l| l.contains("IFCSLAB(") || l.contains("IFCCOVERING(")).collect::<Vec<_>>().join("\n"));
+        // the definition keeps the role, and a floor writes none
+        let json = serde_json::to_string(&app.modeller.model.iter().next().unwrap().shape).unwrap();
+        assert!(json.contains("\"role\":\"roof\""), "{json}");
+        // a roof is shaped as a floor is: Tab opens the sketch of its outline
+        app.set_model_tool(None);
+        app.select_modelled(ElementId(1));
+        let _ = app.update(Message::EditMode);
+        assert!(app.modeller.sketch.is_some());
+    }
+
+    #[test]
+    fn the_wall_tool_draws_a_rectangle_of_four_walls_with_two_clicks() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        place(&mut app, PlaceMessage::Rectangle(true));
+        click(&mut app, 0.0, 0.0);
+        assert_eq!(app.modeller.model.len(), 0);
+        click(&mut app, 6.0, 4.0);
+        let walls: Vec<(DVec2, DVec2)> = (1..=4).map(|id| {
+            let w = wall(&app, id);
+            let bim_core::element::PlanarForm::Wall { start, end, .. } = w.form else { panic!() };
+            (start, end)
+        }).collect();
+        let c = |x: f64, y: f64| DVec2::new(x, y);
+        assert_eq!(walls, vec![(c(0.0, 0.0), c(6.0, 0.0)), (c(6.0, 0.0), c(6.0, 4.0)), (c(6.0, 4.0), c(0.0, 4.0)), (c(0.0, 4.0), c(0.0, 0.0))]);
+        assert!(app.modeller.points.is_empty(), "the next click starts a new rectangle");
+        // the corners are cut: each wall's solid is shorter than its axis by what the others take
+        let volume: f64 = (1..=4).map(|id| app.modeller.model.evaluate(ElementId(id)).unwrap().iter().map(|p| p.solid.volume()).sum::<f64>()).sum();
+        assert!((volume - (2.0 * (6.0 + 4.0)) * 0.2 * 3.0).abs() < 0.2 * 0.2 * 3.0 * 4.0 + 1e-9, "{volume}");
+        // two clicks on one line make nothing
+        click(&mut app, 10.0, 0.0);
+        click(&mut app, 12.0, 0.0);
+        assert_eq!(app.modeller.model.len(), 4);
+    }
+
+    #[test]
     fn walls_drawn_on_their_exterior_face_meet_at_their_corners() {
         let mut app = modelling();
         app.set_model_tool(Some((ModelTool::Wall, "Wall")));
@@ -498,7 +685,7 @@ mod tests {
         place(&mut app, PlaceMessage::Field(PlaceField::Width, "1.5".into()));
         let (sx, sy) = app.on_screen(DVec3::new(7.0, 0.0, 3.0), 1000.0, 800.0).unwrap();
         let _ = app.update(Message::Navigate(Navigate::Pick { x: sx, y: sy, width: 1000.0, height: 800.0, add: false }));
-        let o = wall(&app, 2).openings;
+        let o = app.modeller.model.openings_of(ElementId(2));
         assert_eq!(o.len(), 1);
         assert_eq!((o[0].sill, o[0].width), (0.6, 1.5));
     }

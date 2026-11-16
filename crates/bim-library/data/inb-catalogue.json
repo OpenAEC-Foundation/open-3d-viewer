@@ -1,0 +1,1272 @@
+{
+  "schema_version": 1,
+  "catalogue_id": "org.openaec.nl.types.inb-template",
+  "units": "m",
+  "language": "nl-NL",
+  "status": "runtime-imported",
+  "source": {
+    "repository": "https://github.com/OpenAEC-Foundation/inb-template",
+    "commit": "edbbf7855e661c0d0d3af980dbe9c6e6fe1f0c00",
+    "file": "INB-Template 0.6.ifc",
+    "length_unit_m": 0.001
+  },
+  "materials": {
+    "bekledingsplaatmultiplex": "timber plywood",
+    "generiek": "generic",
+    "gewapendbetonprefab": "precast concrete",
+    "gewapendbetontpg": "concrete",
+    "gips": "gypsum board",
+    "isolatie": "insulation",
+    "isolatieEPS": "insulation EPS",
+    "isolatieglaswol": "insulation glass wool",
+    "isolatiePIR": "insulation PIR",
+    "isolatiePUR": "insulation PUR",
+    "kalkzandsteen": "sand-lime",
+    "metselwerkbaksteenporiso": "brick porous",
+    "metselwerkbaksteenrood": "brick",
+    "naaldhoutvuren": "timber",
+    "naaldhoutvurenCLT": "timber CLT",
+    "ongewapendbeton": "unreinforced concrete"
+  },
+  "types": [
+    {
+      "name": "beton_250",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "STANDARD",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gewapendbetontpg",
+          "material": "concrete",
+          "thickness_m": 0.25
+        }
+      ]
+    },
+    {
+      "name": "clt_60",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.06
+        }
+      ]
+    },
+    {
+      "name": "clt_70",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.07
+        }
+      ]
+    },
+    {
+      "name": "clt_90",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.09
+        }
+      ]
+    },
+    {
+      "name": "clt_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "clt_120",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.12
+        }
+      ]
+    },
+    {
+      "name": "clt_140",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.14
+        }
+      ]
+    },
+    {
+      "name": "clt_160",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.16
+        }
+      ]
+    },
+    {
+      "name": "clt_180",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.18
+        }
+      ]
+    },
+    {
+      "name": "clt_200",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "STANDARD",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "clt_220",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "STANDARD",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.22
+        }
+      ]
+    },
+    {
+      "name": "fermacell_12.5",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "STANDARD",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gips",
+          "material": "gypsum board",
+          "thickness_m": 0.0125
+        }
+      ]
+    },
+    {
+      "name": "gen_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "generiek",
+          "material": "generic",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "gen_200",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "generiek",
+          "material": "generic",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "gen_300",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "generiek",
+          "material": "generic",
+          "thickness_m": 0.3
+        }
+      ]
+    },
+    {
+      "name": "gips_9",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gips",
+          "material": "gypsum board",
+          "thickness_m": 0.009
+        }
+      ]
+    },
+    {
+      "name": "gips_12",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gips",
+          "material": "gypsum board",
+          "thickness_m": 0.012
+        }
+      ]
+    },
+    {
+      "name": "isolatie_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "isolatie",
+          "material": "insulation",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "isolatie_glaswol_184",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "isolatieglaswol",
+          "material": "insulation glass wool",
+          "thickness_m": 0.184
+        }
+      ]
+    },
+    {
+      "name": "isolatie_glaswol_235",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "isolatieglaswol",
+          "material": "insulation glass wool",
+          "thickness_m": 0.235
+        }
+      ]
+    },
+    {
+      "name": "isolatie_pir_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "isolatiePIR",
+          "material": "insulation PIR",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "isolatie_pir_110",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "isolatiePIR",
+          "material": "insulation PIR",
+          "thickness_m": 0.11
+        }
+      ]
+    },
+    {
+      "name": "isolatie_pur_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "isolatiePUR",
+          "material": "insulation PUR",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "kzst_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "kalkzandsteen",
+          "material": "sand-lime",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "kzst_120",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "kalkzandsteen",
+          "material": "sand-lime",
+          "thickness_m": 0.12
+        }
+      ]
+    },
+    {
+      "name": "kzst_140",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "kalkzandsteen",
+          "material": "sand-lime",
+          "thickness_m": 0.14
+        }
+      ]
+    },
+    {
+      "name": "kzst_150",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "kalkzandsteen",
+          "material": "sand-lime",
+          "thickness_m": 0.15
+        }
+      ]
+    },
+    {
+      "name": "kzst_214",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "kalkzandsteen",
+          "material": "sand-lime",
+          "thickness_m": 0.214
+        }
+      ]
+    },
+    {
+      "name": "mplex_10",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "bekledingsplaatmultiplex",
+          "material": "timber plywood",
+          "thickness_m": 0.01
+        }
+      ]
+    },
+    {
+      "name": "mplex_12",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "bekledingsplaatmultiplex",
+          "material": "timber plywood",
+          "thickness_m": 0.012
+        }
+      ]
+    },
+    {
+      "name": "mplex_15",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "bekledingsplaatmultiplex",
+          "material": "timber plywood",
+          "thickness_m": 0.015
+        }
+      ]
+    },
+    {
+      "name": "mplex_18",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "bekledingsplaatmultiplex",
+          "material": "timber plywood",
+          "thickness_m": 0.018
+        }
+      ]
+    },
+    {
+      "name": "mw_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "ELEMENTEDWALL",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "metselwerkbaksteenrood",
+          "material": "brick",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "mw_210",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "metselwerkbaksteenrood",
+          "material": "brick",
+          "thickness_m": 0.21
+        }
+      ]
+    },
+    {
+      "name": "mw_poriso_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "metselwerkbaksteenporiso",
+          "material": "brick porous",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "prefab_beton_100",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "prefab_beton_180",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.18
+        }
+      ]
+    },
+    {
+      "name": "prefab_beton_250",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.25
+        }
+      ]
+    },
+    {
+      "name": "promatect_12",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "NOTDEFINED",
+      "role": "wall",
+      "layers": [
+        {
+          "template_material": "gips",
+          "material": "gypsum board",
+          "thickness_m": 0.0125
+        }
+      ]
+    },
+    {
+      "name": "und",
+      "ifc_class": "IfcWallType",
+      "predefined_type": "MOVABLE",
+      "role": "wall",
+      "layers": [],
+      "not_imported": "the template gives this type no material layer set"
+    },
+    {
+      "name": "anhydriet_50",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "ongewapendbeton",
+          "material": "unreinforced concrete",
+          "thickness_m": 0.05
+        }
+      ]
+    },
+    {
+      "name": "beton_100",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetontpg",
+          "material": "concrete",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "beton_150",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetontpg",
+          "material": "concrete",
+          "thickness_m": 0.15
+        }
+      ]
+    },
+    {
+      "name": "beton_200",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetontpg",
+          "material": "concrete",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "beton_250",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetontpg",
+          "material": "concrete",
+          "thickness_m": 0.25
+        }
+      ]
+    },
+    {
+      "name": "clt_60",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.06
+        }
+      ]
+    },
+    {
+      "name": "clt_70",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.07
+        }
+      ]
+    },
+    {
+      "name": "clt_90",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.09
+        }
+      ]
+    },
+    {
+      "name": "clt_100",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "clt_120",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.12
+        }
+      ]
+    },
+    {
+      "name": "clt_140",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.14
+        }
+      ]
+    },
+    {
+      "name": "clt_160",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.16
+        }
+      ]
+    },
+    {
+      "name": "clt_180",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.18
+        }
+      ]
+    },
+    {
+      "name": "clt_200",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "clt_220",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "NOTDEFINED",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "naaldhoutvurenCLT",
+          "material": "timber CLT",
+          "thickness_m": 0.22
+        }
+      ]
+    },
+    {
+      "name": "dekvloer_50",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "ongewapendbeton",
+          "material": "unreinforced concrete",
+          "thickness_m": 0.05
+        }
+      ]
+    },
+    {
+      "name": "dekvloer_70",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "ongewapendbeton",
+          "material": "unreinforced concrete",
+          "thickness_m": 0.07
+        }
+      ]
+    },
+    {
+      "name": "gen_100",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "BASESLAB",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "generiek",
+          "material": "generic",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "gen_200",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "BASESLAB",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "generiek",
+          "material": "generic",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "gen_300",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "BASESLAB",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "generiek",
+          "material": "generic",
+          "thickness_m": 0.3
+        }
+      ]
+    },
+    {
+      "name": "isolatie_100",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "BASESLAB",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "isolatie",
+          "material": "insulation",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "isolatie_pir_100",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "isolatiePIR",
+          "material": "insulation PIR",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "kpv_150",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "BASESLAB",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.15
+        }
+      ]
+    },
+    {
+      "name": "kpv_200",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "kpv_260",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.26
+        }
+      ]
+    },
+    {
+      "name": "kpv_320",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.32
+        }
+      ]
+    },
+    {
+      "name": "kpv_400",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.4
+        }
+      ]
+    },
+    {
+      "name": "prefab_beton_200",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.2
+        }
+      ]
+    },
+    {
+      "name": "prefab_beton_250",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "gewapendbetonprefab",
+          "material": "precast concrete",
+          "thickness_m": 0.25
+        }
+      ]
+    },
+    {
+      "name": "zandcement_50",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "ongewapendbeton",
+          "material": "unreinforced concrete",
+          "thickness_m": 0.07
+        }
+      ],
+      "note": "the name says 50 mm, the template's layers are 70 mm; kept as the template has it"
+    },
+    {
+      "name": "zandcement_70",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "FLOOR",
+      "role": "floor",
+      "layers": [
+        {
+          "template_material": "ongewapendbeton",
+          "material": "unreinforced concrete",
+          "thickness_m": 0.07
+        }
+      ]
+    },
+    {
+      "name": "isolatie_eps_100",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "ROOF",
+      "role": "roof",
+      "layers": [
+        {
+          "template_material": "isolatieEPS",
+          "material": "insulation EPS",
+          "thickness_m": 0.1
+        }
+      ]
+    },
+    {
+      "name": "isolatie_pir_110",
+      "ifc_class": "IfcSlabType",
+      "predefined_type": "ROOF",
+      "role": "roof",
+      "layers": [
+        {
+          "template_material": "isolatiePIR",
+          "material": "insulation PIR",
+          "thickness_m": 0.11
+        }
+      ]
+    },
+    {
+      "name": "BK 200x200",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.2,
+        "depth_m": 0.2,
+        "template_material": "gewapendbetontpg",
+        "material": "concrete"
+      }
+    },
+    {
+      "name": "BK 300x300",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.3,
+        "depth_m": 0.3,
+        "template_material": "gewapendbetontpg",
+        "material": "concrete"
+      }
+    },
+    {
+      "name": "GL 120x550",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.12,
+        "depth_m": 0.55,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "NE44x70",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.044,
+        "depth_m": 0.07,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "SLS38x89",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.038,
+        "depth_m": 0.089,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "SLS38x184",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.038,
+        "depth_m": 0.184,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "SLS38x235",
+      "ifc_class": "IfcColumnType",
+      "predefined_type": "COLUMN",
+      "role": "column",
+      "profile": {
+        "round": false,
+        "width_m": 0.038,
+        "depth_m": 0.235,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "BB 200x200",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.2,
+        "depth_m": 0.2,
+        "template_material": "gewapendbetontpg",
+        "material": "concrete"
+      }
+    },
+    {
+      "name": "BB 300x300",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.3,
+        "depth_m": 0.3,
+        "template_material": "gewapendbetontpg",
+        "material": "concrete"
+      }
+    },
+    {
+      "name": "BB 400x500",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.4,
+        "depth_m": 0.5,
+        "template_material": "gewapendbetontpg",
+        "material": "concrete"
+      }
+    },
+    {
+      "name": "NE44x70",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.044,
+        "depth_m": 0.07,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "SLS38x89",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.038,
+        "depth_m": 0.089,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "SLS38x184",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.038,
+        "depth_m": 0.184,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    },
+    {
+      "name": "SLS38x235",
+      "ifc_class": "IfcBeamType",
+      "predefined_type": "BEAM",
+      "role": "beam",
+      "profile": {
+        "round": false,
+        "width_m": 0.038,
+        "depth_m": 0.235,
+        "template_material": "naaldhoutvuren",
+        "material": "timber"
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "name": "HEA160",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEA200",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEB200",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEB300",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "IPE200",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "IPE300",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "IPE400",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "K90/4",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "K120/5",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "UNP160",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "UNP200",
+      "ifc_class": "IfcBeamType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEA160",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEA200",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEB200",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "HEB300",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "IPE200",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "IPE300",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "IPE400",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "K90/4",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "K120/5",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "UNP160",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    },
+    {
+      "name": "UNP200",
+      "ifc_class": "IfcColumnType",
+      "reason": "steel profile series; follows the profile catalogue (#95)"
+    }
+  ]
+}

@@ -14,7 +14,7 @@
 use super::edit::{edit_points, with_points, Edit, EditOverlay};
 use super::App;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, PlanarDef, Shape};
 use glam::{DVec2, DVec3};
 use iced::Color;
 
@@ -44,8 +44,8 @@ pub(super) fn crossing(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<DVec2> 
 
 impl App {
     /// The selected element with grips: one alone, outside edit mode and with no tool on.
-    fn gripped(&self) -> Option<ElementId> {
-        if self.modeller.edit.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
+    pub(super) fn gripped(&self) -> Option<ElementId> {
+        if self.modeller.edit.is_some() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.measure.tool.is_some() || self.plane_picking {
             return None;
         }
         let [id] = self.selected_modelled()[..] else { return None };
@@ -55,6 +55,10 @@ impl App {
     /// The grips of the selected element over the viewport: its ends, then its middle. A wall of
     /// an opened file that the Modeller can take over has them too (see `take_over`).
     pub(super) fn grip_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
+        // a floor has grips of its own: its edges, its top and its underside
+        if let Some(overlay) = self.slab_overlay(ink, fill) {
+            return Some(overlay);
+        }
         let shape = match self.gripped() {
             Some(id) => self.modeller.model.get(id)?.shape_in_project(&self.modeller.model.grid),
             None => Shape::Planar(self.source_gripped()?.wall),
@@ -69,6 +73,7 @@ impl App {
             picked: vec![false; points.len()],
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,
+            lines: None,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,
@@ -77,12 +82,16 @@ impl App {
 
     /// A press on grip `index` of the selected element: an end, or (past them) the middle, which
     /// moves both.
-    pub(super) fn grip_press(&mut self, index: usize) {
+    pub(super) fn grip_press(&mut self, mut index: usize) {
         if self.gripped().is_none() {
             // a wall of an opened file: taken over first, then dragged as a modelled wall
             let Some(source) = self.source_gripped() else { return };
-            if self.take_over(source).is_none() {
-                return;
+            let (shown, _) = edit_points(&Shape::Planar(source.wall.clone()));
+            let Some(taken) = self.take_over(source) else { return };
+            // taken over with its ends changed round, the grip pressed is its other end
+            let ends = self.modeller.model.get(taken).map(|e| edit_points(&e.shape_in_project(&self.modeller.model.grid)).0);
+            if index < 2 && ends.is_some_and(|e| e[0].distance(shown[0]) > e[0].distance(shown[1])) {
+                index = 1 - index;
             }
         }
         let Some(element) = self.gripped() else { return };
@@ -107,7 +116,7 @@ impl App {
         let grid = self.modeller.model.grid;
         for (e, shape) in changes {
             let Some(old) = self.modeller.model.get(e) else { continue };
-            let mut element = Element::in_project(&grid, old.name.clone(), old.level.clone(), shape);
+            let mut element = old.reshaped(&grid, shape);
             element.id = e;
             if let Err(refusal) = self.modeller.model.replace(element) {
                 self.modeller.model = kept;

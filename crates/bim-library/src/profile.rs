@@ -327,17 +327,20 @@ pub struct LinearType {
     pub profile: ProfileShape,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub designation: Option<String>,
+    /// A name of its own, shown in place of the rule's (a type of a catalogue).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl LinearType {
     pub fn new(id: &str, role: LinearRole, material: &str, profile: ProfileShape) -> Self {
-        Self { id: id.into(), role, material: material.into(), profile, designation: None }
+        Self { id: id.into(), role, material: material.into(), profile, designation: None, name: None }
     }
 
     /// A type of `role` of the steel profile `designation`, of steel.
     pub fn steel(id: &str, role: LinearRole, designation: &str) -> Option<Self> {
         let p = steel(designation)?;
-        Some(Self { id: id.into(), role, material: "steel".into(), profile: p.shape.clone(), designation: Some(p.designation.clone()) })
+        Some(Self { id: id.into(), role, material: "steel".into(), profile: p.shape.clone(), designation: Some(p.designation.clone()), name: None })
     }
 
     /// Checks it against `materials`: an id, a known material, a profile that checks.
@@ -355,6 +358,9 @@ impl LinearType {
     /// and size: "Beton 300x300", "Beton rond 300". The role is the group it is listed in, so it is
     /// not part of the name.
     pub fn rule_name(&self, materials: &[Material], lang: Lang) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
         if let Some(designation) = &self.designation {
             return designation.clone();
         }

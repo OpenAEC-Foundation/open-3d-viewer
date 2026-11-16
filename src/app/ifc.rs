@@ -45,17 +45,31 @@ pub enum IfcView {
     Nodes,
     Table,
     Relations,
+    /// Every node as a dot, hung from the node that holds it (see `ifc_graph`).
+    Graph,
 }
 
 impl IfcView {
-    const ALL: [IfcView; 4] = [IfcView::Text, IfcView::Nodes, IfcView::Table, IfcView::Relations];
+    pub const ALL: [IfcView; 5] = [IfcView::Graph, IfcView::Nodes, IfcView::Table, IfcView::Relations, IfcView::Text];
 
-    fn label(self, l: Language) -> &'static str {
+    /// The id of the command that shows it.
+    pub fn command(self) -> &'static str {
+        match self {
+            IfcView::Text => "ifcx.text",
+            IfcView::Nodes => "ifcx.nodes",
+            IfcView::Table => "ifcx.table",
+            IfcView::Relations => "ifcx.relations",
+            IfcView::Graph => "ifcx.graph",
+        }
+    }
+
+    pub fn label(self, l: Language) -> &'static str {
         match self {
             IfcView::Text => l.text("Tekst", "Text"),
             IfcView::Nodes => l.text("Nodes", "Nodes"),
             IfcView::Table => l.text("Tabel", "Table"),
             IfcView::Relations => l.text("Relaties", "Relations"),
+            IfcView::Graph => l.text("Graaf", "Graph"),
         }
     }
 
@@ -66,6 +80,7 @@ impl IfcView {
             IfcView::Nodes => "ifc-nodes",
             IfcView::Table => "ifc-table",
             IfcView::Relations => "ifc-relations",
+            IfcView::Graph => "ifc-graph",
         }
     }
 }
@@ -76,11 +91,15 @@ pub struct IfcTab {
     /// Its tab is open, and shown (under the 3D view).
     pub open: bool,
     pub shown: bool,
+    /// It fills the whole workspace (the IFCX page of the ribbon), not the half under the view.
+    pub full: bool,
+    /// Where each node stands in the Graph view.
+    pub graph: Option<Arc<super::ifc_graph::GraphLayout>>,
     /// The file taken apart.
     pub structure: Option<Arc<Structure>>,
     pub view: IfcView,
     /// Per view: scrolled offset and height (logical pixels).
-    pub scroll: [(f32, f32); 4],
+    pub scroll: [(f32, f32); 5],
     /// The model's elements of the nodes, and the node of each element.
     pub elements: HashMap<u32, Pickable>,
     pub node_of: HashMap<u64, u32>,
@@ -121,7 +140,8 @@ impl App {
         };
         let (s, links) = s;
         let previous = std::mem::take(&mut self.ifc);
-        self.ifc = IfcTab { open: true, view: previous.view, relation: previous.relation, ..IfcTab::default() };
+        self.ifc = IfcTab { open: true, view: previous.view, relation: previous.relation, full: previous.full, ..IfcTab::default() };
+        self.ifc.graph = Some(Arc::new(super::ifc_graph::GraphLayout::of(&s)));
         // the model's elements by node: the file's own paths (`Id`), or those Save as gives them
         for (path, item) in links {
             if let Some(&k) = s.index.get(&path) {
@@ -358,6 +378,8 @@ impl App {
             }
             IfcView::Table => self.ifc.table.iter().position(|e| n.entries.contains(e)),
             IfcView::Relations => self.ifc.links.iter().position(|&k| s.links[k as usize].from == node || s.links[k as usize].to == Some(node)),
+            // the graph does not scroll: its picked node carries a ring and its name
+            IfcView::Graph => None,
         };
         let Some(at) = at else { return Task::none() };
         let (offset, height) = self.ifc.scroll(view);
@@ -382,6 +404,25 @@ impl App {
     /// The panel under the 3D view: a bar with the file and what it holds, then the view of it.
     pub(super) fn ifc_panel(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let Some(s) = self.ifc.structure.as_deref() else { return Space::new().into() };
+        match self.ifc.view {
+            IfcView::Text => self.ifc_text(p, s),
+            IfcView::Nodes => self.ifc_tree(p, l, s),
+            IfcView::Table => self.ifc_table(p, l, s),
+            IfcView::Relations => self.ifc_relations(p, l, s),
+            IfcView::Graph => match self.ifc.graph.as_deref() {
+                Some(layout) => iced::widget::canvas(super::ifc_graph::IfcGraph { structure: s, layout, pick: self.ifc.pick, matches: &self.ifc.matches, searching: !self.ifc.query.is_empty(), palette: p })
+                    .width(Fill)
+                    .height(Fill)
+                    .into(),
+                None => Space::new().into(),
+            },
+        }
+    }
+
+    /// The IFCX section of the right pane while the file shows: what it is, the ways to look at
+    /// it, the search, and closing it. Nothing stands over the view itself.
+    pub(super) fn ifc_properties(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
+        let s = self.ifc.structure.as_deref().filter(|_| self.ifc.shown)?;
         let size = if s.bytes >= 1 << 20 { format!("{:.1} MB", s.bytes as f64 / (1 << 20) as f64) } else { format!("{} kB", s.bytes.div_ceil(1024)) };
         let info = format!(
             "{} {} · {} {} · {} {} · {size}",
@@ -392,8 +433,8 @@ impl App {
             s.lines.len(),
             l.text("regels", "lines")
         );
-        // the views first, then the file (cut off when the bar is narrow), then the search
-        let mut bar = row![text("IFC").size(12).font(FONT_BOLD).color(p.text)].spacing(10).align_y(Center).padding([4, 8]);
+        let mut rows = column![text(s.source.as_str()).size(12).font(FONT_BOLD).color(p.text), text(info).size(11).color(p.text_muted)].spacing(6);
+        let mut bar = row![].spacing(4);
         for view in IfcView::ALL {
             let active = self.ifc.view == view;
             bar = bar.push(
@@ -403,21 +444,20 @@ impl App {
                     .on_press(Message::IfcView(view)),
             );
         }
-        let file = row![text(s.source.as_str()).size(12).color(p.text).wrapping(Wrapping::None), text(info).size(11).color(p.text_muted).wrapping(Wrapping::None)].spacing(10).align_y(Center);
-        bar = bar.push(container(file).width(Fill).clip(true));
+        rows = rows.push(bar.wrap());
+        let mut bar = row![].spacing(6).align_y(Center);
         // the search: what it finds in the view shown; the text jumps from line to line
         let search = text_input(l.text("Zoeken in IFC…", "Search IFC…"), &self.ifc.query)
             .on_input(Message::IfcQuery)
             .on_submit(Message::IfcNext(true))
             .size(12)
-            .padding([3, 8])
-            .width(220);
-        bar = bar.push(search);
+            .padding([3, 8]);
+        rows = rows.push(search);
         if !self.ifc.query.is_empty() {
             let found = match self.ifc.view {
                 IfcView::Text if self.ifc.hits.is_empty() => l.text("niets gevonden", "nothing found").to_string(),
                 IfcView::Text => format!("{} / {}", self.ifc.hit + 1, self.ifc.hits.len()),
-                IfcView::Nodes => self.ifc.matches.len().to_string(),
+                IfcView::Nodes | IfcView::Graph => self.ifc.matches.len().to_string(),
                 IfcView::Table => self.ifc.table.len().to_string(),
                 IfcView::Relations => self.ifc.links.len().to_string(),
             };
@@ -427,15 +467,12 @@ impl App {
                 bar = bar.push(step("▲", false)).push(step("▼", true));
             }
         }
-        let close = button(text("×").size(14).color(p.text_secondary)).padding([0, 6]).style(move |_, st| p.row_button(st)).on_press(Message::CloseIfc);
-        bar = bar.push(close);
-        let body = match self.ifc.view {
-            IfcView::Text => self.ifc_text(p, s),
-            IfcView::Nodes => self.ifc_tree(p, l, s),
-            IfcView::Table => self.ifc_table(p, l, s),
-            IfcView::Relations => self.ifc_relations(p, l, s),
-        };
-        column![bar, rule::horizontal(1), body].into()
+        rows = rows.push(bar);
+        // under the 3D view it can be closed; the IFCX page is left by its tab
+        if !self.ifc.full {
+            rows = rows.push(button(text(l.text("Sluiten", "Close")).size(12)).padding([3, 8]).style(move |_, st| p.ribbon_button(false, st)).on_press(Message::CloseIfc));
+        }
+        Some(container(rows).padding([2, 8]).into())
     }
 
     /// The rows in sight of a view with `count` rows: first and last.

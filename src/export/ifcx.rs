@@ -35,17 +35,28 @@ impl Writer for IfcxWriter {
 }
 
 /// Property keys that are written as their own attributes, not as properties.
-const OWN_KEYS: [&str; 8] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION];
+const OWN_KEYS: [&str; 9] = ["Name", "name", "IfcType", "Class", "class", "Path", "Id", DEFINITION, DERIVED];
 
 /// The property of a modelled element that holds its definitions (a JSON array: the element's
 /// and its connections'); written as the node's `openaec::element` attribute, from which the
 /// reader gives the elements back.
 pub const DEFINITION: &str = "OpenAEC_definition";
+/// The property of an element the modelled project makes by itself from its other elements (a
+/// space, from its walls): written as the node's `openaec::derived` attribute, by which the
+/// reader leaves its mesh out, the project making it again.
+pub const DERIVED: &str = "OpenAEC_derived";
+/// The attribute of the node that holds the names given to a modelled project's spaces.
+pub const ROOMS: &str = "openaec::rooms";
 
 /// The attribute of a grid line's node that holds its definition: its name and its ends in plan
 /// (`start`, `end`: x, y in metres). The reader gives it back among the project's definitions,
 /// under this key.
 pub const GRID: &str = "openaec::grid";
+
+/// The key the reader gives a file's library back under, among the project's definitions: the
+/// materials and types of its `openaec::material`, `openaec::buildup`, `openaec::lineartype` and
+/// `openaec::systemtype` nodes (see `bim_library::ifcx`).
+pub const LIBRARY: &str = "openaec::library";
 
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.
@@ -136,6 +147,9 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             if let Some(definition) = prop(DEFINITION).and_then(|d| serde_json::from_str::<Value>(d).ok()) {
                 attributes.insert("openaec::element".into(), definition);
             }
+            if let Some(derived) = prop(DERIVED) {
+                attributes.insert("openaec::derived".into(), derived.into());
+            }
             attributes.insert("bsi::ifc::presentation::diffuseColor".into(), json!([rgba[0], rgba[1], rgba[2]]));
             if rgba[3] < 0.999 {
                 attributes.insert("bsi::ifc::presentation::opacity".into(), json!(rgba[3]));
@@ -183,6 +197,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         project_children.insert(key, path.clone().into());
         data.push(json!({"path": path, "attributes": {"bsi::ifc::class": {"code": "IfcGridAxis"}, "bsi::ifc::prop::Name": grid.name, GRID: {"name": grid.name, "start": end(grid.a), "end": end(grid.b)}}}));
     }
+    // the library of a modelled project: its materials and types, as a library file holds them
+    data.extend(model.project.types.iter().cloned());
     data.push(json!({"path": project, "children": project_children, "attributes": {"bsi::ifc::class": {"code": "IfcProject"}, "bsi::ifc::prop::Name": stem}}));
     data.extend(document.ifcx_drawing_nodes_with(&|set| hidden_paths(model, file_name, set)));
 

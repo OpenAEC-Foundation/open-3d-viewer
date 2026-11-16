@@ -241,6 +241,9 @@ pub struct ProjectData {
     /// The definitions of elements this viewer modelled, as an IFCX file it wrote holds them
     /// (`openaec::element`); the modeller takes them over.
     pub elements: Vec<serde_json::Value>,
+    /// The library of the modelled project as IFCX nodes (its materials and types): an IFCX file
+    /// written from the model holds them, and the reader gives the library back.
+    pub types: Vec<serde_json::Value>,
     /// The walls of the file the Modeller can take over as editable walls (Revit), by element id.
     pub walls: HashMap<u64, SourceWall>,
     /// Schedules: computed after the model shows, as they take seconds on a large project.
@@ -300,6 +303,20 @@ pub struct SourceWall {
     pub thickness: f64,
     pub openings: Vec<bim_core::Opening>,
     pub level: Option<String>,
+    /// Its type's layers, from its exterior face in; empty when the file gives none.
+    pub layers: Vec<SourceLayer>,
+    /// Its exterior face is on the left, walking from `start` to `end`.
+    pub exterior_left: bool,
+}
+
+/// A layer of a wall of an opened file: its material as the file names it (empty: none), its
+/// thickness in metres, what the file says it is for, and its material's colour.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceLayer {
+    pub material: String,
+    pub thickness: f64,
+    pub function: String,
+    pub colour: Option<[u8; 3]>,
 }
 
 /// Work a loader leaves for after the model shows; whoever takes it runs it (once).
@@ -896,6 +913,7 @@ impl Model {
                 g
             }));
             project.rooms.extend(model.project.rooms.iter().cloned());
+            project.types.extend(model.project.types.iter().cloned());
             project.drawings.extend(model.project.drawings.iter().cloned());
             project.drafts.extend(model.project.drafts.iter().cloned());
         }

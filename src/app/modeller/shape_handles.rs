@@ -3,7 +3,8 @@
 //!
 //! - **Dragging it** up or down changes the element's height; its base stays. The drag runs along
 //!   the vertical through the grip and is rounded as other moves are. A top that comes within
-//!   [`LEVEL_SNAP`] of a level goes to that level.
+//!   [`LEVEL_SNAP`] of a level goes to that level and reaches it from then on (it follows the
+//!   level); dropped elsewhere the height is the element's own.
 //! - **Where it shows.** Only where it can be told from the middle grip: seen from straight
 //!   above the two lie on one point of the screen, and the top grip is left out.
 //! - **When it is put down** the kernel makes the element at its new height, with its corners and
@@ -12,7 +13,7 @@
 use crate::app::edit::{edit_points, Axis, Edit, EditOverlay, Grab};
 use crate::app::App;
 use bim_core::element::PlanarForm;
-use bim_core::{Element, ElementId, PlanarDef, Shape};
+use bim_core::{ElementId, PlanarDef, Shape};
 use glam::DVec3;
 use iced::Color;
 
@@ -70,7 +71,7 @@ impl App {
         let Some(top) = top_middle(&shape) else { return };
         let (from, _) = edit_points(&shape);
         // no point picked: the element's points stay, only how far the top went is kept
-        self.modeller.edit = Some(Edit { element, picked: Vec::new(), grab: Some(Grab { from, origin: top, delta: DVec3::ZERO, axis: Some(Axis::Z), by_key: false }), grips: true });
+        self.modeller.edit = Some(Edit { element, picked: Vec::new(), grab: Some(Grab { from, origin: top, delta: DVec3::ZERO, axis: Some(Axis::Z), by_key: false, typed: String::new() }), grips: true });
         self.modeller.refusal = None;
     }
 
@@ -84,23 +85,33 @@ impl App {
     /// The height the dragged element gets: its own and how far the top went, its top on a level
     /// when it comes near one.
     fn dragged_height(&self, shape: &Shape, dz: f64) -> Option<f64> {
+        self.dragged_top(shape, dz).map(|(height, _)| height)
+    }
+
+    /// As [`App::dragged_height`], with the level the top came to (its path), if it came to one.
+    fn dragged_top(&self, shape: &Shape, dz: f64) -> Option<(f64, Option<String>)> {
         let (base, height) = stands(shape)?;
         let top = base + height + dz;
-        let level = self.document.levels().iter().map(|l| l.elevation).filter(|z| (z - top).abs() <= LEVEL_SNAP && *z > base).min_by(|a, b| (a - top).abs().total_cmp(&(b - top).abs()));
-        Some(level.unwrap_or(top) - base)
+        let level = self.document.levels().iter().filter(|l| (l.elevation - top).abs() <= LEVEL_SNAP && l.elevation > base).min_by(|a, b| (a.elevation - top).abs().total_cmp(&(b.elevation - top).abs()));
+        Some(match level {
+            Some(level) => (level.elevation - base, Some(level.path.clone())),
+            None => (top - base, None),
+        })
     }
 
     /// Puts a drag of the top grip down: the element takes its new height, if the kernel can make
     /// it. False when no such drag was under way.
     pub(in crate::app) fn put_height_down(&mut self) -> bool {
         let Some(dz) = self.height_drag() else { return false };
-        let edited = self.edited().map(|(e, s)| (e.id, e.name.clone(), e.level.clone(), s));
+        let edited = self.edited().map(|(e, s)| (e.clone(), s));
         self.modeller.edit = None;
-        let Some((id, name, level, shape)) = edited.filter(|_| dz != 0.0) else { return true };
-        let Some(height) = self.dragged_height(&shape, dz) else { return true };
+        let Some((old, shape)) = edited.filter(|_| dz != 0.0) else { return true };
+        let id = old.id;
+        let Some((height, level)) = self.dragged_top(&shape, dz) else { return true };
         let grid = self.modeller.model.grid;
-        let mut element = Element::in_project(&grid, name, level, with_height(&shape, height));
-        element.id = id;
+        let mut element = old.reshaped(&grid, with_height(&shape, height));
+        // dropped on a level its top reaches that level from now on; elsewhere its height is its own
+        element.top = level.map(|level| bim_core::Top { level, offset: 0.0 });
         match self.modeller.model.replace(element) {
             Ok(()) => {
                 self.modeller.refusal = None;
@@ -127,6 +138,7 @@ impl App {
             picked: (0..points.len()).map(|i| i == TOP_GRIP).collect(),
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,
+            lines: None,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,
@@ -200,5 +212,26 @@ mod tests {
         assert!((height_of(&app, id) - 2.8).abs() < 1e-9);
         assert!(app.modeller.refusal.is_some());
         assert!(app.modeller.edit.is_none());
+    }
+
+    #[test]
+    fn the_top_grip_takes_the_level_it_is_dropped_on_and_frees_the_top_elsewhere() {
+        let (mut app, id) = wall_selected();
+        let _ = app.document.add_level("Level 1", 2.8);
+        let first = app.document.levels()[1].path.clone();
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Front);
+        // dropped near Level 1: the top reaches that level, and follows it
+        drag_top(&mut app, 2.76);
+        assert_eq!(app.modeller.model.get(id).unwrap().top, Some(bim_core::Top { level: first.clone(), offset: 0.0 }));
+        app.set_level(&first, "Level 1", 3.1).unwrap();
+        assert!((height_of(&app, id) - 3.1).abs() < 1e-9);
+        // dropped away from any level: a height of its own
+        app.select_modelled(id);
+        drag_top(&mut app, 3.5);
+        assert_eq!(app.modeller.model.get(id).unwrap().top, None);
+        assert!((height_of(&app, id) - 3.5).abs() < 1e-9);
+        // which a level's move then leaves alone
+        app.set_level(&first, "Level 1", 3.2).unwrap();
+        assert!((height_of(&app, id) - 3.5).abs() < 1e-9);
     }
 }

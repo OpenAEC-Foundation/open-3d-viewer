@@ -51,6 +51,10 @@ pub enum ElementField {
     Bolt,
     Hole,
     BoltRows,
+    /// How a slab rises from its eave (degrees), and which edge of its outline the eave is
+    /// (counted from 1).
+    Slope,
+    Eave,
 }
 
 /// A door's and a window's size and sill when added (metres).
@@ -88,6 +92,8 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { height, .. }, .. }), F::Height) => Some(*height),
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { base, .. }, .. }), F::Base) => Some(*base),
         (Shape::Planar(PlanarDef { form: PlanarForm::Slab { top, .. }, .. }), F::Base) => Some(*top),
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope, .. }, .. }), F::Slope) => Some(slope.map_or(0.0, |s| s.angle.to_degrees())),
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope: Some(s), outline, .. }, .. }), F::Eave) => Some((s.edge % outline.len().max(1) + 1) as f64),
         (Shape::Planar(p), F::Thickness) => Some(p.total_thickness()),
         (Shape::Planar(p), F::Along(i)) => opening(&p.openings, i).map(|o| o.along),
         (Shape::Planar(p), F::Sill(i)) => opening(&p.openings, i).map(|o| o.sill),
@@ -162,6 +168,12 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { height, .. }, .. }), F::Height) => set(height),
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { base, .. }, .. }), F::Base) => set(base),
         (Shape::Planar(PlanarDef { form: PlanarForm::Slab { top, .. }, .. }), F::Base) => set(top),
+        // no slope: it lies level again; its eave stays the edge it was
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope, .. }, .. }), F::Slope) => {
+            let edge = slope.map_or(0, |s| s.edge);
+            *slope = (v.abs() > 1e-9).then(|| bim_core::Slope { edge, angle: v.to_radians() });
+        }
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope: Some(s), outline, .. }, .. }), F::Eave) if v >= 1.0 && v.fract() == 0.0 && v <= outline.len() as f64 => s.edge = v as usize - 1,
         // a layered element is as thick as its type's layers
         (Shape::Planar(p), F::Thickness) if p.build_up.is_none() => set(&mut p.thickness),
         (Shape::Planar(p), F::Along(i)) => set(&mut p.openings.get_mut(i)?.along),
@@ -212,8 +224,8 @@ impl App {
             return e.name.clone();
         }
         let digits = match field {
-            ElementField::Turn => 1,
-            ElementField::BoltRows => 0,
+            ElementField::Turn | ElementField::Slope => 1,
+            ElementField::BoltRows | ElementField::Eave => 0,
             _ => 3,
         };
         value(&e.shape_in_project(&self.modeller.model.grid), field).map_or(String::new(), |v| format!("{v:.digits$}"))
@@ -232,7 +244,14 @@ impl App {
                 self.change_element(renamed);
             }
         } else if let Some(shape) = number(&typed).and_then(|v| with_value(&e.shape_in_project(&self.modeller.model.grid), field, v)) {
-            self.change_shape(&e, shape);
+            if field == ElementField::Height && e.top.is_some() {
+                // a height typed is the element's own: its top lets its level go
+                let mut freed = e.reshaped(&self.modeller.model.grid, shape);
+                freed.top = None;
+                self.change_element(freed);
+            } else {
+                self.change_shape(&e, shape);
+            }
         }
         self.modeller.typing = Some((e.id, field, typed));
     }
@@ -289,7 +308,7 @@ impl App {
     /// Gives element `e` a new definition (scene coordinates), if the kernel can make it.
     fn change_shape(&mut self, e: &Element, shape: Shape) {
         let grid = self.modeller.model.grid;
-        let mut changed = Element::in_project(&grid, e.name.clone(), e.level.clone(), shape);
+        let mut changed = e.reshaped(&grid, shape);
         changed.id = e.id;
         self.change_element(changed);
     }
@@ -308,6 +327,19 @@ impl App {
         }
     }
 
+    /// What the properties show of a member besides what is typed: where it starts and ends (x; y;
+    /// z in metres, scene coordinates) and how long it is. Nothing for another element. Its ends
+    /// are moved in edit mode (Tab).
+    pub(super) fn member_rows(&self, e: &Element, l: Language) -> Vec<(String, String)> {
+        let Shape::Linear(m) = e.shape_in_project(&self.modeller.model.grid) else { return Vec::new() };
+        let point = |q: glam::DVec3| format!("{:.3}; {:.3}; {:.3}", q.x, q.y, q.z);
+        vec![
+            (l.text("Begin", "Start").to_string(), point(m.start)),
+            (l.text("Eind", "End").to_string(), point(m.end)),
+            (l.text("Lengte", "Length").to_string(), format!("{:.3} m", (m.end - m.start).length())),
+        ]
+    }
+
     /// The Definition section: the selected modelled element's values to type in, and the openings
     /// of a wall or a timber frame.
     pub(super) fn element_properties(&self, p: Palette, l: Language) -> Option<Widget<'_, Message>> {
@@ -317,7 +349,7 @@ impl App {
         use ElementField as F;
         let mut rows = column![field(l.text("Naam", "Name"), F::Name)].spacing(5);
         let has = |f: F| value(&shape, f).is_some();
-        let fields: [(F, &str); 9] = [
+        let fields: [(F, &str); 11] = [
             (F::Height, l.text("Hoogte (m)", "Height (m)")),
             (F::Thickness, l.text("Dikte (m)", "Thickness (m)")),
             (F::Base, l.text("Basis (m)", "Base (m)")),
@@ -325,6 +357,8 @@ impl App {
             (F::Depth, l.text("Diepte (m)", "Depth (m)")),
             (F::Diameter, l.text("Diameter (m)", "Diameter (m)")),
             (F::Turn, l.text("Draaiing (°)", "Turn (°)")),
+            (F::Slope, l.text("Helling (°)", "Slope (°)")),
+            (F::Eave, l.text("Dakvoet (rand nr.)", "Eave (edge no.)")),
             (F::SpacingAlong, l.text("Raster langs (m)", "Spacing along (m)")),
             (F::SpacingUp, l.text("Raster omhoog (m)", "Spacing up (m)")),
         ];
@@ -371,11 +405,19 @@ impl App {
             // what a type gives is shown, not typed
             let fixed = match f {
                 F::Thickness => layered.is_some() || system_type.is_some(),
+                // a top that reaches a level gives the height
+                F::Height => e.top.is_some(),
                 F::Width | F::Depth => system_type.is_some(),
                 _ => false,
             };
             rows = if fixed { rows.push(prop_row(p, label.to_string(), self.element_field_text(e, f))) } else { rows.push(field(label, f)) };
         }
+        // a member: its ends and its length
+        for (label, value) in self.member_rows(e, l) {
+            rows = rows.push(prop_row(p, label, value));
+        }
+        // between levels: the level it stands on and the one its top reaches
+        rows = rows.push(self.top_rows(e, p, l));
         // a join: its kind to choose, and an end plate's sizes
         if let Shape::Connection(c) = &shape {
             if c.kind != ConnectionKind::Cut {
@@ -485,6 +527,20 @@ mod tests {
     fn wall(app: &App) -> PlanarDef {
         let Shape::Planar(p) = app.modeller.model.get(ElementId(1)).unwrap().shape_in_project(&app.modeller.model.grid) else { panic!() };
         p
+    }
+
+    #[test]
+    fn a_member_shows_its_ends_and_its_length() {
+        let mut app = App::default();
+        app.new_model("Level 0");
+        let beam = Shape::Linear(LinearDef { start: DVec3::new(0.0, 1.0, 2.8), end: DVec3::new(3.0, 5.0, 2.8), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 });
+        let id = app.add_element("Beam", None, beam).unwrap();
+        app.select_modelled(id);
+        let rows = app.member_rows(app.defined().unwrap(), openaec_ui::Language::English);
+        assert_eq!(rows, [("Start".to_string(), "0.000; 1.000; 2.800".to_string()), ("End".to_string(), "3.000; 5.000; 2.800".to_string()), ("Length".to_string(), "5.000 m".to_string())]);
+        // a wall has none
+        let wall = wall_selected();
+        assert!(wall.member_rows(wall.defined().unwrap(), openaec_ui::Language::English).is_empty());
     }
 
     #[test]
@@ -717,7 +773,7 @@ mod tests {
     fn every_value_a_shape_shows_can_be_set_back() {
         use ElementField as F;
         let shapes = [
-            Shape::Point(PointDef { at: DVec3::new(1.0, 2.0, 0.5), rotation: 0.3, size: DVec3::ONE }),
+            Shape::Point(PointDef { at: DVec3::new(1.0, 2.0, 0.5), rotation: 0.3, size: DVec3::ONE, opening: None }),
             Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 0.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.1 }),
             Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 0.0), profile: ProfileDef::Circle { diameter: 0.3 }, roll: 0.0 }),
             wall_selected().modeller.model.get(ElementId(1)).unwrap().shape.clone(),

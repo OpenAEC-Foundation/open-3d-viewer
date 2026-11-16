@@ -121,6 +121,11 @@ pub struct PlanView {
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (x, y, metres).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// What the modelled project says on it by itself, made again after every change of the
+    /// model and not kept in the file: the names and areas of its spaces.
+    pub tags: Vec<Note>,
+    /// And the lines it draws by itself: the swings of its doors.
+    pub symbols: Vec<[[f64; 2]; 2]>,
     /// The regions drawn on it in one colour that are no model, under its lines.
     pub fills: Vec<Fill>,
     /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
@@ -130,6 +135,18 @@ pub struct PlanView {
     pub layers: LayerSwitches,
     /// The elements hidden in it with Hide or Isolate.
     pub hidden: Arc<UnitKeySet>,
+}
+
+impl SectionView {
+    /// What its mark on a floor plan says: a section its letter (the last word of "Section A"),
+    /// an elevation the side it looks at (the first word of "North elevation").
+    pub fn mark(&self) -> String {
+        let word = match self.kind {
+            SectionKind::Section => self.name.rsplit(' ').next(),
+            SectionKind::Elevation => self.name.split(' ').next(),
+        };
+        word.unwrap_or(&self.name).to_string()
+    }
 }
 
 /// The kinds of view along a line.
@@ -420,6 +437,32 @@ pub struct Dimension {
     pub to: [f64; 2],
     /// Which of the document's dimension styles it has (0: the standard one).
     pub style: usize,
+    /// What its ends hold on to, `from` then `to`: an end with an anchor follows its element.
+    pub anchors: [Option<Anchor>; 2],
+}
+
+/// What an end of a dimension holds on to: a point of a modelled element (a wall's start or end,
+/// a slab's corner, an object's place: the element's points as edit mode has them), and how far
+/// from that point the end lies. For an element with a direction (a wall, a beam) the offset is
+/// along it and to its left, so the end turns with the element; else along x and y.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Anchor {
+    /// The id of the modelled element.
+    pub element: u64,
+    pub point: usize,
+    pub offset: [f64; 2],
+    /// The element is gone: the end stays where it was, and the dimension is marked.
+    pub lost: bool,
+}
+
+impl Anchor {
+    fn to_ifcx(self) -> Value {
+        json!([self.element, self.point, self.offset[0], self.offset[1]])
+    }
+
+    fn from_ifcx(v: &Value) -> Option<Self> {
+        Some(Self { element: v.get(0)?.as_u64()?, point: v.get(1)?.as_u64()? as usize, offset: [v.get(2)?.as_f64()?, v.get(3)?.as_f64()?], lost: false })
+    }
 }
 
 impl Dimension {
@@ -570,7 +613,18 @@ impl Document {
             view
         };
         let rect = |c: Option<([f64; 2], [f64; 2])>| c.map_or(Value::Null, |(lo, hi)| json!([lo, hi]));
-        let dims = |d: &[Dimension]| d.iter().map(|d| if d.style == 0 { json!([d.from, d.to]) } else { json!([d.from, d.to, self.dimension_style(d.style).name]) }).collect::<Vec<_>>();
+        // from, to, then its style's name (when not the standard one), then what its ends hold on to
+        let dims = |d: &[Dimension]| {
+            let one = |d: &Dimension| {
+                let style = if d.style == 0 { Value::Null } else { json!(self.dimension_style(d.style).name) };
+                match (d.style, d.anchors) {
+                    (0, [None, None]) => json!([d.from, d.to]),
+                    (_, [None, None]) => json!([d.from, d.to, style]),
+                    (_, [a, b]) => json!([d.from, d.to, style, a.map(Anchor::to_ifcx), b.map(Anchor::to_ifcx)]),
+                }
+            };
+            d.iter().map(one).collect::<Vec<_>>()
+        };
         let notes = |n: &[Note]| {
             let note = |n: &Note| {
                 let mut note = json!({"at": n.at, "text": n.text, "size": n.size});
@@ -648,7 +702,7 @@ impl Document {
             Some((pair(v.get(0)?)?, pair(v.get(1)?)?))
         };
         let dims = |v: Option<&Value>| -> Vec<Dimension> {
-            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)?, style: style(d.get(2)) })).collect()
+            v.and_then(Value::as_array).into_iter().flatten().filter_map(|d| Some(Dimension { from: pair(d.get(0)?)?, to: pair(d.get(1)?)?, style: style(d.get(2)), anchors: [d.get(3).and_then(Anchor::from_ifcx), d.get(4).and_then(Anchor::from_ifcx)] })).collect()
         };
         let notes = |v: Option<&Value>| -> Vec<Note> {
             let all = v.and_then(Value::as_array).into_iter().flatten();
@@ -687,6 +741,8 @@ impl Document {
                     cut: number(p, "cut", cut),
                     depth: number(p, "depth", depth),
                     scale: scale(p),
+                    tags: Vec::new(),
+                    symbols: Vec::new(),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     lines: lines(p.get("lines")),
@@ -769,6 +825,13 @@ impl Document {
         Ok(self.levels.iter().position(|l| l.path == path).unwrap_or_default())
     }
 
+    /// Puts the levels back as they were at a step of the history, low to high.
+    pub fn set_levels(&mut self, levels: Vec<Level>) {
+        self.levels = levels;
+        self.sort();
+        self.drop_orphan_plans();
+    }
+
     /// Renames the level at `path` and puts it at `elevation`; a path that is no level changes
     /// nothing.
     pub fn set_level(&mut self, path: &str, name: &str, elevation: f64) -> Result<(), LevelError> {
@@ -833,7 +896,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1017,7 +1080,7 @@ impl Document {
     /// Adds a dimension between two points to a view's drawing; two points less than a
     /// millimetre apart, or not finite, measure nothing.
     pub fn add_dimension(&mut self, view: &str, from: [f64; 2], to: [f64; 2]) -> bool {
-        let dimension = Dimension { from, to, style: 0 };
+        let dimension = Dimension { from, to, style: 0, anchors: [None, None] };
         if !(from.iter().chain(&to).all(|v| v.is_finite()) && dimension.length() >= 0.001) {
             return false;
         }
@@ -1074,7 +1137,18 @@ impl Document {
     pub fn flip_dimension(&mut self, view: &str, index: usize) -> bool {
         let Some(d) = self.marks_mut(view).and_then(|(d, _)| d.get_mut(index)) else { return false };
         std::mem::swap(&mut d.from, &mut d.to);
+        d.anchors.swap(0, 1);
         true
+    }
+
+    /// Dimension `index` of a view, to change.
+    pub fn dimension_mut(&mut self, view: &str, index: usize) -> Option<&mut Dimension> {
+        self.marks_mut(view)?.0.get_mut(index)
+    }
+
+    /// Every dimension of the floor plans, to change: their points are the model's x and y.
+    pub fn plan_dimensions_mut(&mut self) -> impl Iterator<Item = &mut Dimension> {
+        self.plans.iter_mut().flat_map(|p| p.dimensions.iter_mut())
     }
 
     /// Removes a dimension of a view.
@@ -1125,6 +1199,22 @@ impl Document {
         self.section(path).map(|s| &s.notes[..])
     }
 
+    /// What a floor plan says and draws by itself (see [`PlanView::tags`]); nothing for a section.
+    pub fn view_tags(&self, path: &str) -> &[Note] {
+        self.plan(path).map_or(&[], |p| &p.tags[..])
+    }
+
+    pub fn view_symbols(&self, path: &str) -> &[[[f64; 2]; 2]] {
+        self.plan(path).map_or(&[], |p| &p.symbols[..])
+    }
+
+    /// Gives every floor plan what it says and draws by itself: `of` makes them for a plan.
+    pub fn set_plan_tags(&mut self, of: impl Fn(&PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>)) {
+        for p in &mut self.plans {
+            (p.tags, p.symbols) = of(p);
+        }
+    }
+
     /// The regions of a view filled in one colour that are no model, drawn under its lines.
     pub fn view_fills(&self, path: &str) -> &[Fill] {
         if let Some(p) = self.plan(path) {
@@ -1139,6 +1229,32 @@ impl Document {
             return &p.lines;
         }
         self.section(path).map_or(&[], |s| &s.lines[..])
+    }
+
+    fn lines_mut(&mut self, path: &str) -> Option<&mut Vec<[[f64; 2]; 2]>> {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            return Some(&mut p.lines);
+        }
+        self.sections.iter_mut().find(|s| s.path == path).map(|s| &mut s.lines)
+    }
+
+    /// Adds lines to a view's drawing (its own points, metres); one without length or with a
+    /// point that is not finite is left out. How many were added.
+    pub fn add_view_lines(&mut self, view: &str, lines: &[[[f64; 2]; 2]]) -> usize {
+        let Some(own) = self.lines_mut(view) else { return 0 };
+        let before = own.len();
+        own.extend(lines.iter().filter(|l| l.iter().flatten().all(|v| v.is_finite()) && l[0] != l[1]));
+        own.len() - before
+    }
+
+    /// Removes a line of a view's drawing.
+    pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
+        let Some(own) = self.lines_mut(view) else { return false };
+        if index >= own.len() {
+            return false;
+        }
+        own.remove(index);
+        true
     }
 
     fn notes_mut(&mut self, path: &str) -> Option<&mut Vec<Note>> {
@@ -1776,7 +1892,7 @@ mod tests {
         let lengths: Vec<f64> = document.plan(&plan).unwrap().dimensions.iter().map(Dimension::length).collect();
         assert_eq!(lengths, [3.6, 5.0]);
         assert!(document.flip_dimension(&plan, 1));
-        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0], style: 0 });
+        assert_eq!(document.plan(&plan).unwrap().dimensions[1], Dimension { from: [3.0, 4.0], to: [0.0, 0.0], style: 0, anchors: [None, None] });
         assert!(!document.flip_dimension(&plan, 9));
         assert!(document.remove_dimension(&plan, 0));
         assert!(!document.remove_dimension(&plan, 5));

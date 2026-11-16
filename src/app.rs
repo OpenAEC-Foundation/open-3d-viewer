@@ -13,6 +13,7 @@ pub mod scan_project;
 mod grids;
 mod hatch;
 mod ifc;
+mod ifc_graph;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod inform;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
@@ -58,6 +59,7 @@ mod underlays;
 mod views_in_3d;
 
 pub use ifc::{IfcTab, IfcView};
+pub use marks::DrawKind;
 #[cfg(test)]
 pub use edit::{press as edit_press, release as edit_release};
 pub use layers::SideTab;
@@ -316,6 +318,8 @@ pub struct App {
     pub dragging_view: Option<Arc<str>>,
     /// The text tool is on: a click on a view (its tab, or placed on a sheet) puts a text there.
     pub note_tool: bool,
+    /// The drawing tool that is on: lines, rectangles or circles on the view shown.
+    pub draw_tool: Option<marks::DrawKind>,
     /// The wording of the next text placed, or of the picked text.
     pub note_text: String,
     /// What is picked on the view shown in its tab: a dimension or a text.
@@ -548,6 +552,10 @@ pub enum Message {
     AddNote(Arc<str>, [f64; 2], String),
     /// Move a view's text (its index) to a point of its drawing.
     MoveNote(Arc<str>, usize, [f64; 2]),
+    /// A drawing tool on (or off): lines, rectangles and circles drawn on the view shown.
+    DrawTool(Option<marks::DrawKind>),
+    /// Lines drawn on a view (its own points).
+    AddLines(Arc<str>, Vec<[[f64; 2]; 2]>),
     /// Pick a dimension or text on the view shown in its tab (`None`: nothing).
     PickMark(Option<marks::MarkPick>),
     /// Remove what is picked on the view shown in its tab.
@@ -729,22 +737,49 @@ pub enum Message {
     Edit(edit::EditEvent),
     /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
     EditKey(char),
+    /// A length typed for the picked dimension, and Enter there: the element its last end holds
+    /// on to moves (see `modeller::dim_refs`).
+    DimensionValue(String),
+    DimensionValueApply,
+    /// A field of a temporary dimension in the Modeller.
+    TempDim(modeller::temp_dims::TempDimMessage),
+    /// Cancel in a floor's sketch: it leaves with the floor unchanged.
+    SketchCancel,
+    /// Shift+C in the Modeller: the 3D cursor goes home.
+    Cursor3dHome,
     /// Typed in a field of the selected modelled element's Definition section.
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
     ElementFieldDone,
+    /// A character of the length typed for what a tool draws.
+    ToolDigit(char),
+    /// The series field of the picked grid line.
+    GridSeries(modeller::grids::SeriesMessage),
+    /// A snap switched on or off at the right of the status bar.
+    SnapToggle(modeller::snaps::Snap),
+    /// The name typed for the space selected, and Enter in its field.
+    SpaceName(String),
+    SpaceNameDone,
     /// Something the placement strip over the view sends.
     Place(placement::PlaceMessage),
     /// Add a door (`true`) or a window to the selected wall.
     AddOpening(bool),
     /// Remove an opening (its index) of the selected wall.
     RemoveOpening(usize),
+    /// The rows of an element's top in the Modeller's properties.
+    Top(modeller::tops::TopMessage),
+    /// A row of the Modeller's model explorer.
+    Explorer(modeller::explorer::ExplorerMessage),
     /// A row of the Modeller's project browser.
     Browser(modeller::browser::BrowserMessage),
     /// The form of a level being edited in the Modeller.
     LevelEdit(modeller::levels::LevelEditMessage),
     /// Switch the Modeller's Grid tool on or off.
     GridTool,
+    /// The Modeller's Select tool: every other tool off.
+    SelectTool,
+    /// A key of the Modeller (see modeller::keys), with the interface language its tools are named in.
+    ModelKey(modeller::keys::ModelKey, openaec_ui::Language),
     /// Give the selected join another kind.
     JoinKind(bim_core::ConnectionKind),
     /// Turn the selected join round: its other member runs through.
@@ -917,6 +952,7 @@ impl Default for App {
             cut_edit: None,
             dragging_view: None,
             note_tool: false,
+            draw_tool: None,
             note_text: String::new(),
             mark_pick: None,
             open_layer_groups: HashSet::new(),
@@ -1449,6 +1485,8 @@ impl App {
         // the product shown stays the one it was
         self.modeller = modeller::Modeller { in_modeller: self.modeller.in_modeller, ..modeller::Modeller::default() };
         self.set_scene(model.clone());
+        // the file with its levels is where the modelled project's history starts
+        self.settle_modelled();
         self.adopt_elements(&model);
     }
 
@@ -1654,6 +1692,10 @@ impl App {
         if let Some(view) = self.shown_view().filter(|v| !self.cuts.contains_key(*v)).map(str::to_string) {
             self.cut_view(&view);
         }
+        // and the views of the sheet shown, cut again after the model changed
+        if let Some(sheet) = self.active_doc_sheet.as_ref().map(|s| s.to_string()) {
+            self.cut_placed_plans(&sheet);
+        }
         self.refresh_hover();
         // the structural hover goes when the camera moves (it no longer lies under the cursor) and
         // while measuring or placing a section plane
@@ -1779,15 +1821,29 @@ impl App {
             Message::NewModel(level) => self.new_model(level),
             Message::ModelTool(tool) => self.set_model_tool(tool),
             Message::GridTool => self.toggle_grid_tool(),
+            Message::SelectTool => self.select_tool(),
+            Message::ModelKey(key, l) => self.model_key(key, l),
             Message::LevelEdit(message) => self.level_edit_message(message),
             Message::Browser(message) => self.browser_message(message),
+            Message::Explorer(message) => self.explorer_message(message),
+            Message::Top(message) => self.top_message(message),
             Message::Connect(kind, name) => self.connect_selected(kind, name),
             Message::Transform(kind) => self.begin_transform(kind),
             Message::EditMode => self.toggle_edit(),
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
+            Message::Cursor3dHome => self.cursor3d_home(),
+            Message::SketchCancel => self.cancel_sketch(),
+            Message::TempDim(message) => self.temp_dim_message(message),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
+            Message::ToolDigit(c) => {
+                self.tool_digit(c);
+            }
+            Message::GridSeries(message) => self.series_message(message),
+            Message::SnapToggle(snap) => self.modeller.snaps.toggle(snap),
+            Message::SpaceName(typed) => self.type_space_name(typed),
+            Message::SpaceNameDone => self.modeller.space_typing = None,
             Message::Place(message) => self.place_message(message),
             Message::AddOpening(door) => self.add_opening(door),
             Message::RemoveOpening(index) => self.remove_opening(index),
@@ -1967,13 +2023,16 @@ impl App {
                 }
                 Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
                 Navigate::Context { x, y, width, height } => self.context_click(x, y, width, height),
-                Navigate::Box { x0, y0, x1, y1, width, height, done } => {
+                Navigate::Cursor3d { x, y, width, height } => self.place_cursor3d(x, y, width, height),
+                Navigate::Box { x0, y0, x1, y1, width, height, done, add } => {
                     let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
                     self.box_select = (!done).then_some(rect);
                     if done {
-                        self.select_box(rect, width, height);
+                        self.select_box(rect, width, height, add);
                     }
                 }
+                Navigate::Hover { x, y, width, height } if self.grab_hover(x, y, width, height) => {}
+                Navigate::Hover { x, y, width, height } if self.sketch_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) || self.grid_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } => {
@@ -2053,9 +2112,15 @@ impl App {
             Message::AddLevel => self.add_level(),
             Message::CancelLevel => self.level_form = None,
             Message::RemoveLevel(path) => {
-                self.document.remove_level(&path);
+                if self.document.remove_level(&path) {
+                    // what reached it with its top keeps its height
+                    self.free_tops_of(&path);
+                }
             }
-            Message::NewPlan(level) => self.new_plan(&level),
+            Message::NewPlan(level) => {
+                self.new_plan(&level);
+                self.tag_plans();
+            }
             Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
             Message::PickLevelFor(kind) => {
                 // the levels to pick from are listed in the Views tab
@@ -2114,6 +2179,19 @@ impl App {
                 self.mark_pick = None;
             }
             Message::NoteText(wording) => self.note_text_changed(wording),
+            Message::DrawTool(kind) => {
+                // the same tool again switches it off
+                self.draw_tool = kind.filter(|k| self.draw_tool != Some(*k));
+                if self.draw_tool.is_some() {
+                    self.dimension_tool = false;
+                    self.section_tool = false;
+                    self.note_tool = false;
+                    self.mark_pick = None;
+                }
+            }
+            Message::AddLines(view, lines) => {
+                self.document.add_view_lines(&view, &lines);
+            }
             Message::AddNote(view, at, wording) => {
                 self.document.add_note(&view, at, &wording);
             }
@@ -2163,8 +2241,16 @@ impl App {
                 };
             }
             Message::DeletePicked => {
-                if self.edit_delete() {
-                    // in edit mode: the picked corners go
+                if self.tool_backspace() {
+                    // a length typed for what a tool draws: its last character goes
+                } else if self.grab_backspace() {
+                    // a distance typed in a grab: its last character goes
+                } else if self.edit_backspace() {
+                    // a distance being typed: its last character goes
+                } else if self.sketch_delete() {
+                    // in the sketch of a floor: the picked line goes
+                } else if self.modeller.edit.is_some() {
+                    // in edit mode Delete takes nothing: the element stays
                 } else if self.delete_modelled() {
                     // modelled elements selected: they go
                 } else if self.delete_picked_grid() {
@@ -2206,8 +2292,13 @@ impl App {
             }
             Message::ApplyCut => self.apply_cut(),
             Message::AddDimension(plan, from, to) => {
-                self.document.add_dimension(&plan, from, to);
+                if self.document.add_dimension(&plan, from, to) {
+                    // in the Modeller its ends hold on to the elements they were clicked on
+                    self.anchor_last_dimension(&plan);
+                }
             }
+            Message::DimensionValue(text) => self.modeller.dimension_value = Some(text),
+            Message::DimensionValueApply => self.apply_dimension_value(),
             Message::SelectTab(i) => return self.select_tab(i),
             Message::RemoveSection(path) => {
                 self.close_plan(&path);
@@ -2390,6 +2481,12 @@ impl App {
                     }
                 }
             }
+            // Enter while a distance is typed in a move puts the move down
+            Message::MeasureFinish if self.tool_enter() => {}
+            Message::MeasureFinish if self.put_grab_down() => {}
+            Message::MeasureFinish if self.edit_enter() => {}
+            // Enter while Rotate waits for its centre: about the 3D cursor
+            Message::MeasureFinish if self.rotate_about_cursor3d() => {}
             Message::MeasureFinish => self.measure.finish(),
             Message::StructuralGrid(built) => return self.structural_grid_built(built),
             Message::MeasureEdges(edges) => {
@@ -2441,18 +2538,34 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.grab.is_some() => {
+                self.drop_grab();
+            }
+            Message::Escape if self.modeller.temp_dim.is_some() => {
+                self.temp_dim_escape();
+            }
+            Message::Escape if self.modeller.sketch.is_some() => {
+                self.sketch_escape();
+            }
+            Message::Escape if self.modeller.slab_drag.is_some() => {
+                self.slab_escape();
+            }
             Message::Escape if self.modeller.edit.is_some() => {
                 self.edit_escape();
             }
             Message::Escape if self.modeller.transform.is_some() => {
                 self.escape_transform();
             }
+            // Esc drops a length being typed first; the tool goes on drawing
+            Message::Escape if !self.modeller.length_typed.is_empty() => self.modeller.length_typed.clear(),
             Message::Escape if self.modeller.grid_tool => self.escape_grid_tool(),
             Message::Escape if self.modeller.tool.is_some() || self.modeller.refusal.is_some() => {
                 if !self.escape_model_tool() {
                     self.modeller.refusal = None;
                 }
             }
+            // in the Modeller a tool still on goes, back to Select, before the selection does
+            Message::Escape if self.modeller.in_modeller && self.context_menu.is_none() && self.modeller_escape() => {}
             Message::Escape => {
                 if self.context_menu.take().is_some() {
                     return Task::none();
@@ -2566,6 +2679,13 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        // a click puts grabbed elements down
+        if self.put_grab_down() {
+            return;
+        }
+        if self.sketch_click(x, y, width, height) {
+            return;
+        }
         if self.modeller.transform.is_some() {
             return self.transform_click(x, y, width, height);
         }
@@ -2648,6 +2768,8 @@ impl App {
     pub(crate) fn selection_changed(&mut self) {
         // a grid is picked alone
         self.picked_grid = None;
+        // the Modeller's explorer shows what is selected
+        self.explorer_follow_selection();
         let model = self.model.clone();
         self.selected = model.as_deref().and_then(|m| match self.sel.primary()? {
             Pickable::Element(id) => Some((m.layers.iter().position(|l| l.elements.iter().any(|e| e.0 == id))?, Some(id))),
@@ -2784,9 +2906,10 @@ impl App {
         self.selection_changed();
     }
 
-    /// Adds what the box `rect` (viewport pixels of a viewport of width × height) holds to the
-    /// selection: elements, and layers without elements; nothing hidden or switched off.
-    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32) {
+    /// Selects what the box `rect` (viewport pixels of a viewport of width × height) holds:
+    /// elements, and layers without elements; nothing hidden or switched off. With `add` beside
+    /// the selection, else in its place.
+    fn select_box(&mut self, rect: (Vec2, Vec2), width: f32, height: f32, add: bool) {
         let (Some(model), Some(index)) = (self.model.clone(), self.explode_index.clone()) else { return };
         // the elements on layers that are switched on; with every layer on, all of them
         let all_on = self.visible.iter().all(|&v| v);
@@ -2834,6 +2957,10 @@ impl App {
                 UnitOwner::LayerRest(l) => Some(Pickable::Layer(l)),
             })
             .collect();
+        if !add {
+            self.sel.clear();
+            self.set_structural_selection(Vec::new());
+        }
         self.sel.extend(items);
         self.selection_changed();
     }
@@ -3439,9 +3566,40 @@ impl App {
             content = content.push(section(&title)).push(rows).push(rule::horizontal(1));
         }
 
+        // the IFCX file shown: what it is, its views and its search
+        if let Some(rows) = self.ifc_properties(p, l) {
+            content = content.push(section("IFCX")).push(rows).push(rule::horizontal(1));
+        }
+        // a tool on: its type and sizes
+        if let Some(rows) = self.placement_bar(p, l) {
+            let name = self.modeller.tool.map_or("", |(t, _)| t.label(l));
+            content = content.push(section(name)).push(rows).push(rule::horizontal(1));
+        }
+        // the sketch of a floor: its tools
+        if let Some(rows) = self.sketch_bar(p, l) {
+            content = content.push(section(l.text("Schets", "Sketch"))).push(rows).push(rule::horizontal(1));
+        }
+        // a sheet of the file: its export
+        if self.active_sheet.is_some() && self.active_doc_sheet.is_none() {
+            content = content.push(section(l.text("Tekening", "Drawing"))).push(container(self.export_control(p, l)).padding([2, 8])).push(rule::horizontal(1));
+        }
+        // the view shown: how it shows, what a tool on waits for, or what is picked on it
+        if let Some(rows) = self.view_mark_properties(p, l) {
+            content = content.push(section(l.text("Tekening", "Drawing"))).push(rows).push(rule::horizontal(1));
+        }
+
+        // the sheet shown: its paper and views, or what is picked on it
+        if let Some(rows) = self.sheet_properties(p, l) {
+            content = content.push(section(l.text("Blad", "Sheet"))).push(rows).push(rule::horizontal(1));
+        }
+
         // a modelled element's definition, typed in
         if let Some(rows) = self.element_properties(p, l) {
             content = content.push(section(l.text("Definitie", "Definition"))).push(rows).push(rule::horizontal(1));
+        }
+
+        if let Some(rows) = self.space_properties(p, l) {
+            content = content.push(section(l.text("Definitie", "Definition"))).push(container(rows).padding([2, 8])).push(rule::horizontal(1));
         }
 
         // the selection
@@ -3453,7 +3611,7 @@ impl App {
             }
             let mut props = element.map(|id| model.element_props(id)).unwrap_or_default();
             // a modelled element's definition is kept for the file, not shown
-            props.retain(|(k, _)| k != crate::export::ifcx::DEFINITION);
+            props.retain(|(k, _)| k != crate::export::ifcx::DEFINITION && k != crate::export::ifcx::DERIVED);
             if props.is_empty() {
                 props.push(("category".into(), model.layers[li].name.clone()));
                 if let Some(id) = element {
@@ -3756,7 +3914,9 @@ impl App {
             explode: self.explode_index.as_ref(),
             offsets: &self.units,
             looks: &self.unit_looks,
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
+            drag_selects: self.drag_selects(),
+            cursor3d: self.has_cursor3d(),
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3781,6 +3941,8 @@ impl App {
                 "Tik: selecteren · Eén vinger: draaien · Twee vingers: zoomen en pannen · Lang drukken: menu, en slepen: pannen",
                 "Tap: select · One finger: orbit · Two fingers: zoom and pan · Long press: menu, then drag: pan",
             )
+        } else if let Some(gestures) = self.modeller_gestures(l) {
+            gestures
         } else {
             l.text(
                 "Klik: selecteren · Rechtsklik: menu · Esc: wissen · Middelste knop: pannen · Shift + middelste of links slepen: orbit · Wiel: zoomen · F: passend · W A S D: lopen",
@@ -3824,7 +3986,11 @@ impl App {
             canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let editing = self.modeller.edit.as_ref().and_then(|e| Some((e, self.modeller.model.get(e.element)?)));
-        let banner = if let Some((edit, element)) = editing {
+        let banner = if let Some(hint) = self.grab_hint(l) {
+            Some(hint)
+        } else if let Some(hint) = self.sketch_hint(l) {
+            Some(hint)
+        } else if let Some((edit, element)) = editing {
             let hint = match &edit.grab {
                 Some(g) if g.by_key => l.text("Klik: neerzetten · X, Y, Z: as · Esc: annuleren", "Click: put down · X, Y, Z: axis · Esc: cancel"),
                 Some(_) => l.text("Sleep naar de nieuwe plek · X, Y, Z: as", "Drag to the new place · X, Y, Z: axis"),
@@ -3840,7 +4006,11 @@ impl App {
             });
             Some(match self.modeller.refusal {
                 Some(refusal) => format!("{}: {} · {}", element.name, l.translate(refusal.reason()), hint),
-                None => format!("{} {}: {}{}", l.text("Bewerken", "Editing"), element.name, hint, axis.unwrap_or("")),
+                None => {
+                    // the distance typed for the move, where one is
+                    let typed = self.typed_distance().map_or_else(String::new, |t| format!(" · {t} m"));
+                    format!("{} {}: {}{}{}", l.text("Bewerken", "Editing"), element.name, hint, axis.unwrap_or(""), typed)
+                }
             })
         } else if self.plane_picking {
             Some(l.text("Klik op een vlak om door te snijden · Esc: annuleren", "Click a face to cut there · Esc: cancel").to_string())
@@ -3863,7 +4033,7 @@ impl App {
         } else {
             self.measure.tool.map(|tool| {
                 format!("{}: {} · Esc: {}", tool.label(l), tool.hint(l, self.measure.picks.len()), l.text("stoppen", "stop"))
-            })
+            }).or_else(|| self.select_hint(l))
         };
         // what a click would take, found in this view (not one the camera left)
         let view_proj = self.camera.view_proj(self.aspect());
@@ -3951,18 +4121,31 @@ impl App {
         let editing = self.edit_overlay(p.accent, p.surface).or_else(|| self.grip_overlay(p.accent, p.surface)).map(|o| canvas(o).width(Fill).height(Fill));
         let placing = self.placing_overlay(p.accent).filter(|_| overlay.is_none()).map(|o| canvas(o).width(Fill).height(Fill));
         let joins = self.join_marks(p.accent, p.surface).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        // the temporary dimensions of the selected wall: their lines, and a field on each
+        let temp_marks = self.temp_dim_marks(p.accent).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let temp_fields = self.temp_dim_fields(p).filter(|_| overlay.is_none());
+        // the spaces the walls close in: their names and areas
+        let space_labels = self.space_labels(p.text_secondary).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let cursor3d = self.cursor3d_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
             .push(grids)
             .push(view_labels)
             .push(zero_points)
-            .push(placing)
-            .push(joins)
-            .push(editing)
             .push(section)
             .push(plane)
             .push(measures)
             .push(measurements)
             .push(marks)
+            // what the Modeller works with lies over a view drawn as on a sheet too, so elements
+            // are picked, gripped and moved there as in the 3D view
+            .push(space_labels)
+            .push(cursor3d)
+            .push(placing)
+            .push(joins)
+            .push(temp_marks)
+            .push(editing)
+            .push(temp_fields)
+            .push(self.grid_series_overlay(p, l).filter(|_| overlay.is_none()))
             .push(boxed)
             .push(picking)
             .push(cube)
@@ -5082,7 +5265,7 @@ mod tests {
         let (w, h) = app.viewport_size;
         let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true, add: true }));
         assert_eq!(app.sel.items(), &[Pickable::Element(10)]);
     }
 
@@ -5103,7 +5286,7 @@ mod tests {
         let (ax, ay) = screen_point(&app, Vec3::new(-0.5, 0.0, 5.0));
         let (bx, by) = screen_point(&app, Vec3::new(0.5, 0.0, -1.0));
         let (x0, x1) = (ax.min(bx), ax.max(bx));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0: ay, x1, y1: by, width: w, height: h, done: true, add: true }));
         let mut got: Vec<u64> = app.sel.items().iter().filter_map(|i| match i { Pickable::Element(id) => Some(*id), _ => None }).collect();
         got.sort_unstable();
         assert_eq!(got, want);
@@ -5168,9 +5351,9 @@ mod tests {
         let (w, h) = app.viewport_size;
         let (x0, y0) = screen_point(&app, Vec3::new(-0.5, 1.5, 0.0));
         let (x1, y1) = screen_point(&app, Vec3::new(3.5, -0.5, 0.0));
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: false, add: true }));
         assert!(app.box_select.is_some(), "drawn while dragging");
-        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true }));
+        let _ = app.update(Message::Navigate(Navigate::Box { x0, y0, x1, y1, width: w, height: h, done: true, add: true }));
         assert!(app.box_select.is_none());
         assert_eq!(app.sel.len(), 2);
     }

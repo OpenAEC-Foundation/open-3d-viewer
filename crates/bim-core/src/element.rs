@@ -49,13 +49,25 @@ impl BaseKind {
 }
 
 /// A point element: a box of `size` (width along its x, depth, height) standing on `at`, turned
-/// `rotation` radians about the vertical.
+/// `rotation` radians about the vertical. With `opening` it is a door or a window: `at` is the
+/// middle of its width at its foot, and it cuts an opening of its width and height in every wall
+/// or framed system it stands in (see `Model::standing_openings`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PointDef {
     pub at: DVec3,
     #[serde(default)]
     pub rotation: f64,
     pub size: DVec3,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening: Option<OpeningKind>,
+}
+
+/// What a point element that cuts an opening is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpeningKind {
+    Door,
+    Window,
 }
 
 /// A linear element: `profile` from `start` to `end`, turned `roll` radians about its axis. A
@@ -81,6 +93,17 @@ pub struct Opening {
     pub height: f64,
 }
 
+/// How a slab rises: from edge `edge` of its outline (the eave, where its top is at the slab's
+/// `top`) inwards, at `angle` radians to the level. Its thickness is measured square to it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Slope {
+    pub edge: usize,
+    pub angle: f64,
+}
+
+/// The steepest a slab rises (radians): 85°.
+pub const STEEPEST: f64 = 1.4835298641951802;
+
 /// The form of a planar element.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,7 +117,67 @@ pub enum PlanarForm {
         #[serde(default)]
         holes: Vec<Vec<DVec2>>,
         top: f64,
+        /// How far each edge of the outline bows: entry `i` is the bulge of the edge from corner
+        /// `i` to the next (the tangent of a quarter of the arc's angle, above zero where the
+        /// edge bows to the right of its way). Empty, or 0 for an edge: straight.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        bulges: Vec<f64>,
+        /// What the slab is: a floor, a roof or a ceiling. A floor is not written.
+        #[serde(default, skip_serializing_if = "SlabRole::is_floor")]
+        role: SlabRole,
+        /// How it rises from one of its edges (a roof's plane). None: it lies level.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slope: Option<Slope>,
     },
+}
+
+/// What a slab is in the building: it is made the same, and classed and listed by this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlabRole {
+    #[default]
+    Floor,
+    Roof,
+    Ceiling,
+}
+
+impl SlabRole {
+    pub fn is_floor(&self) -> bool {
+        *self == SlabRole::Floor
+    }
+}
+
+/// A bulge this small is a straight edge.
+const STRAIGHT: f64 = 1e-9;
+/// An arc is made of chords that each turn at most this far (radians).
+const CHORD_TURN: f64 = std::f64::consts::PI / 16.0;
+
+/// The middle and the radius of the arc from `a` to `b` with `bulge`, the angle it starts at and
+/// the angle it turns through (above zero: counter-clockwise). `None` where it is straight.
+pub fn arc_of(a: DVec2, b: DVec2, bulge: f64) -> Option<(DVec2, f64, f64, f64)> {
+    let chord = b - a;
+    let length = chord.length();
+    if bulge.abs() < STRAIGHT || !positive(length) {
+        return None;
+    }
+    let left = DVec2::new(-chord.y, chord.x) / length;
+    let centre = (a + b) / 2.0 + left * (length / 2.0 * (1.0 - bulge * bulge) / (2.0 * bulge));
+    let from = a - centre;
+    Some((centre, from.length(), from.y.atan2(from.x), 4.0 * bulge.atan()))
+}
+
+/// The points of the edge from `a` to `b` with `bulge`, `a` first and without `b`: `a` alone where
+/// it is straight, else the arc in chords.
+pub fn arc_points(a: DVec2, b: DVec2, bulge: f64) -> Vec<DVec2> {
+    let Some((centre, radius, start, turn)) = arc_of(a, b, bulge) else { return vec![a] };
+    let n = ((turn.abs() / CHORD_TURN).ceil() as usize).max(2);
+    std::iter::once(a).chain((1..n).map(|k| centre + radius * DVec2::from_angle(start + turn * k as f64 / n as f64))).collect()
+}
+
+/// `outline` with its bowed edges in chords: the ring a solid is made of.
+pub fn bowed(outline: &[DVec2], bulges: &[f64]) -> Vec<DVec2> {
+    let n = outline.len();
+    (0..n).flat_map(|i| arc_points(outline[i], outline[(i + 1) % n], bulges.get(i).copied().unwrap_or(0.0))).collect()
 }
 
 /// A planar element: a wall or a slab, `thickness` thick, with openings (walls only). With a
@@ -240,6 +323,16 @@ pub enum Shape {
     Connection(ConnectionDef),
 }
 
+/// Where the top of an element reaches: a level (its IfcX path) and how far above it (metres;
+/// below it when negative). A wall's or a standing system's height, or a column's top end, is
+/// worked out from it whenever the level moves; with none the element keeps its own height.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Top {
+    pub level: String,
+    #[serde(default)]
+    pub offset: f64,
+}
+
 /// An element: its id, name, tile, level and definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {
@@ -250,6 +343,9 @@ pub struct Element {
     /// The level it is placed on (the level's IfcX path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
+    /// The level its top reaches, if it reaches one (see [`Top`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<Top>,
     pub shape: Shape,
 }
 
@@ -260,7 +356,12 @@ impl Element {
     pub fn in_project(grid: &TileGrid, name: impl Into<String>, level: Option<String>, mut shape: Shape) -> Self {
         let tile = shape.placement().map_or(TileKey::default(), |p| grid.tile_of(p));
         shape.translate(-grid.origin(tile));
-        Self { id: ElementId(0), name: name.into(), tile, level, shape }
+        Self { id: ElementId(0), name: name.into(), tile, level, top: None, shape }
+    }
+
+    /// The same element (its id, name, level and top) with `shape`, given in project coordinates.
+    pub fn reshaped(&self, grid: &TileGrid, shape: Shape) -> Self {
+        Self { id: self.id, top: self.top.clone(), ..Self::in_project(grid, self.name.clone(), self.level.clone(), shape) }
     }
 
     /// Its definition in project coordinates.
@@ -278,9 +379,13 @@ impl Element {
     /// Its IFC class (IFC4.3 names, ADR-0010).
     pub fn class(&self) -> &'static str {
         match &self.shape {
+            Shape::Point(PointDef { opening: Some(OpeningKind::Door), .. }) => "IfcDoor",
+            Shape::Point(PointDef { opening: Some(OpeningKind::Window), .. }) => "IfcWindow",
             Shape::Point(_) => "IfcBuildingElementProxy",
             Shape::Linear(l) => linear_class(l.end - l.start),
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { .. }, .. }) => "IfcWall",
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { role: SlabRole::Roof, .. }, .. }) => "IfcRoof",
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { role: SlabRole::Ceiling, .. }, .. }) => "IfcCovering",
             Shape::Planar(PlanarDef { form: PlanarForm::Slab { .. }, .. }) => "IfcSlab",
             Shape::System(_) => "IfcCurtainWall",
             // a join with parts of its own is an assembly of them; one without is a relation only
@@ -345,7 +450,7 @@ impl Shape {
                 *end += flat;
                 *base += delta.z;
             }
-            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top }, .. }) => {
+            Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes, top, .. }, .. }) => {
                 outline.iter_mut().chain(holes.iter_mut().flatten()).for_each(|p| *p += flat);
                 *top += delta.z;
             }
@@ -418,6 +523,43 @@ pub fn point_solid(p: &PointDef) -> Result<Solid, Refusal> {
     let (sin, cos) = p.rotation.sin_cos();
     let axes = Axes::new(p.at, DVec3::new(cos, sin, 0.0), DVec3::Z)?;
     Solid::extrude(&Profile::rectangle(p.size.x, p.size.y)?, &axes, p.size.z)
+}
+
+/// How wide the members of a door or window frame are, how deep at least, and how thick a pane.
+pub const FRAME_WIDTH: f64 = 0.06;
+pub const FRAME_DEPTH: f64 = 0.09;
+pub const PANE: f64 = 0.02;
+
+/// The solids of a door or a window: its frame (a door has none under its leaf) and what fills
+/// it, a leaf or a pane of glass (marked true). One too small for a frame is a single block.
+pub fn opening_solids(p: &PointDef) -> Result<Vec<(Solid, bool)>, Refusal> {
+    let (w, h, f) = (p.size.x, p.size.z, FRAME_WIDTH);
+    let Some(kind) = p.opening.filter(|_| w > 3.0 * f && h > 3.0 * f) else { return Ok(vec![(point_solid(p)?, false)]) };
+    let depth = p.size.y.max(FRAME_DEPTH);
+    let (sin, cos) = p.rotation.sin_cos();
+    let along = DVec3::new(cos, sin, 0.0);
+    // a block: its middle along the width, its foot above the sill, and its sizes
+    let block = |x: f64, z: f64, size: DVec3| point_solid(&PointDef { at: p.at + along * x + DVec3::Z * z, rotation: p.rotation, size, opening: None });
+    let side = w / 2.0 - f / 2.0;
+    let mut solids = Vec::new();
+    match kind {
+        OpeningKind::Window => {
+            solids.push((block(0.0, 0.0, DVec3::new(w, depth, f))?, false));
+            solids.push((block(0.0, h - f, DVec3::new(w, depth, f))?, false));
+            for x in [-side, side] {
+                solids.push((block(x, f, DVec3::new(f, depth, h - 2.0 * f))?, false));
+            }
+            solids.push((block(0.0, f, DVec3::new(w - 2.0 * f, PANE, h - 2.0 * f))?, true));
+        }
+        OpeningKind::Door => {
+            solids.push((block(0.0, h - f, DVec3::new(w, depth, f))?, false));
+            for x in [-side, side] {
+                solids.push((block(x, 0.0, DVec3::new(f, depth, h - f))?, false));
+            }
+            solids.push((block(0.0, 0.0, DVec3::new(w - 2.0 * f, p.size.y.min(depth), h - f))?, false));
+        }
+    }
+    Ok(solids)
 }
 
 /// The solids of a planar element, each through all its layers: one, or one per piece of a wall
@@ -501,9 +643,33 @@ fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Vec<P
             let reach = Axes::new(axes.origin - axes.x * extend[0], axes.x, axes.z)?;
             Ok((wall_elevation(reach_length, *height, &shifted)?, reach))
         }
-        PlanarForm::Slab { outline, holes, top } => {
-            let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
-            Ok((vec![Profile::new(outline.clone(), holes.clone())?], axes))
+        PlanarForm::Slab { outline, holes, top, bulges, slope, .. } => {
+            let ring = bowed(outline, bulges);
+            let Some(s) = slope.filter(|s| s.angle.abs() > 1e-9 && outline.len() >= 3) else {
+                let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
+                return Ok((vec![Profile::new(ring, holes.clone())?], axes));
+            };
+            if !(s.angle.abs() <= STEEPEST) {
+                return Err(Refusal::NotPositive);
+            }
+            // the eave, and the way in from it: to the left of an outline that runs anticlockwise
+            let n = outline.len();
+            let (a, b) = (outline[s.edge % n], outline[(s.edge + 1) % n]);
+            let along = (b - a).normalize_or_zero();
+            if along == DVec2::ZERO {
+                return Err(Refusal::ZeroLength);
+            }
+            let area: f64 = (0..n).map(|k| outline[k].perp_dot(outline[(k + 1) % n])).sum();
+            let d = if area >= 0.0 { along.perp() } else { -along.perp() };
+            // the plane it lies in: x up the slope, y level along the eave, z square to it
+            let (sin, cos) = s.angle.sin_cos();
+            let x = (d * cos).extend(sin);
+            let normal = (-d * sin).extend(cos);
+            let level = d.perp();
+            let on = |q: &DVec2| DVec2::new((*q - a).dot(d) / cos, (*q - a).dot(level));
+            let axes = Axes::new(a.extend(*top) - normal * thickness, x, normal)?;
+            let profile = Profile::new(ring.iter().map(on).collect(), holes.iter().map(|h| h.iter().map(on).collect()).collect())?;
+            Ok((vec![profile], axes))
         }
     }
 }
@@ -670,6 +836,25 @@ mod tests {
     }
 
     #[test]
+    fn a_slab_edge_with_a_bulge_bows_and_is_read_back() {
+        // a 2 × 2 square whose east edge is a half circle outward (it runs north, bowing right)
+        let outline = vec![DVec2::ZERO, DVec2::new(2.0, 0.0), DVec2::new(2.0, 2.0), DVec2::new(0.0, 2.0)];
+        let ring = bowed(&outline, &[0.0, 1.0]);
+        assert_eq!(ring.len(), 3 + 16);
+        assert!(ring.iter().any(|p| (*p - DVec2::new(3.0, 1.0)).length() < 1e-9), "the arc reaches a metre out: {ring:?}");
+        let form = PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: vec![0.0, 1.0], role: Default::default(), slope: None };
+        let slab = PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None };
+        let solid = planar_solid(&slab).unwrap();
+        let area = 4.0 + std::f64::consts::PI / 2.0;
+        assert!((solid.volume() - 0.2 * area).abs() < 0.2 * 0.02, "{}", solid.volume());
+        // written and read, the bulges are kept; a slab without them writes none
+        let text = serde_json::to_string(&slab).unwrap();
+        assert_eq!(serde_json::from_str::<PlanarDef>(&text).unwrap(), slab);
+        let straight = PlanarDef { form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y], holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None }, ..slab.clone() };
+        assert!(!serde_json::to_string(&straight).unwrap().contains("bulges"));
+    }
+
+    #[test]
     fn a_wall_is_its_elevation_extruded_through_its_thickness() {
         let s = planar_solid(&wall(Vec::new())).unwrap();
         assert!((s.volume() - 5.0 * 3.0 * 0.2).abs() < 1e-12);
@@ -755,7 +940,16 @@ mod tests {
     #[test]
     fn a_slab_hangs_under_its_top() {
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
+        // rising at 45° from its first edge, its top goes up as far as it goes in, and it is as
+        // much longer as the slope is
+        let pitched = PlanarDef { form: PlanarForm::Slab { outline: outline.clone(), holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: SlabRole::Roof, slope: Some(Slope { edge: 0, angle: std::f64::consts::FRAC_PI_4 }) }, thickness: 0.25, openings: Vec::new(), build_up: None };
+        let roof = planar_solid(&pitched).unwrap();
+        let level = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline: outline.clone(), holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
+        assert!((roof.volume() - level.volume() * std::f64::consts::SQRT_2).abs() < 1e-9, "{} {}", roof.volume(), level.volume());
+        let depth = outline.iter().map(|p| (*p - outline[0]).dot((outline[1] - outline[0]).normalize().perp()).abs()).fold(0.0, f64::max);
+        let highest = roof.bounds().1.z;
+        assert!((highest - (3.0 + depth)).abs() < 1e-9, "{highest} {depth}");
+        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
         let (lo, hi) = s.bounds();
         assert_eq!((lo.z, hi.z), (2.75, 3.0));
         assert!((s.volume() - 4.0 * 3.0 * 0.25).abs() < 1e-12);
@@ -799,7 +993,7 @@ mod tests {
     fn a_layered_slab_has_its_first_layer_on_top() {
         let layer = |material: &str, thickness| LayerDef { material: material.into(), thickness, cavity: false };
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0 }, thickness: 0.0, openings: Vec::new(), build_up: None }
+        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.0, openings: Vec::new(), build_up: None }
             .with_build_up(Some(BuildUpDef { id: "floor".into(), layers: vec![layer("screed", 0.05), layer("concrete", 0.2), layer("insulation", 0.1)] }));
         let parts = planar_parts(&slab).unwrap();
         let z = |i: usize| {
@@ -879,7 +1073,7 @@ mod tests {
     #[test]
     fn an_element_lives_in_the_tile_of_its_placement() {
         let grid = TileGrid::default();
-        let shape = Shape::Point(PointDef { at: DVec3::new(1500.25, -20.5, 1.0), rotation: 0.0, size: DVec3::ONE });
+        let shape = Shape::Point(PointDef { at: DVec3::new(1500.25, -20.5, 1.0), rotation: 0.0, size: DVec3::ONE, opening: None });
         let mut e = Element::in_project(&grid, "Box", None, shape.clone());
         assert_eq!(e.tile, TileKey { x: 1, y: -1 });
         assert_eq!(e.shape_in_project(&grid), shape);
@@ -901,5 +1095,25 @@ mod tests {
         let e = Element::in_project(&grid, "Wall 1", Some("level-path".into()), shape);
         let json = serde_json::to_string(&e).unwrap();
         assert_eq!(serde_json::from_str::<Element>(&json).unwrap(), e, "{json}");
+    }
+
+    #[test]
+    fn an_element_keeps_its_top_when_reshaped_and_reads_without_one() {
+        let grid = TileGrid::default();
+        let wall = |x: f64| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::new(x, 0.0), end: DVec2::new(x + 4.0, 0.0), base: 0.0, height: 3.0 }, thickness: 0.2, openings: Vec::new(), build_up: None });
+        let mut e = Element::in_project(&grid, "Wall 1", Some("ground".into()), wall(0.0));
+        assert_eq!(e.top, None);
+        // a file of before tops reads without one
+        let old = serde_json::to_string(&e).unwrap();
+        assert!(!old.contains("top\""), "{old}");
+        assert_eq!(serde_json::from_str::<Element>(&old).unwrap().top, None);
+        e.id = ElementId(7);
+        e.top = Some(Top { level: "first".into(), offset: -0.3 });
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(serde_json::from_str::<Element>(&json).unwrap(), e, "{json}");
+        // reshaped: the id, name, level and top stay, the shape is the new one
+        let moved = e.reshaped(&grid, wall(5.0));
+        assert_eq!((moved.id, moved.name.as_str(), moved.level.as_deref(), moved.top.clone()), (e.id, "Wall 1", Some("ground"), e.top.clone()));
+        assert_eq!(moved.shape_in_project(&grid), wall(5.0));
     }
 }

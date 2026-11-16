@@ -439,6 +439,46 @@ impl App {
                 Ok(self.visibility_json())
             }
             "pick" => self.remote_pick(a),
+            "place_cursor" => {
+                let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
+                if !self.has_cursor3d() {
+                    return Err("the 3D cursor is the Modeller's, on a modelled project".into());
+                }
+                let (vx, vy) = self.to_viewport(x, y);
+                let (w, h) = self.viewport_size;
+                let _ = self.update(Message::Navigate(crate::viewport::Navigate::Cursor3d { x: vx, y: vy, width: w, height: h }));
+                Ok(json!({ "cursor": self.modeller.cursor3d.at.to_array() }))
+            }
+            "drag_handle" => self.remote_drag_handle(a),
+            "open_drawing" => {
+                // the project's own drawings: its floor plans, sections and elevations, and sheets
+                let plans = self.document.plans().iter().map(|p| ("plan", p.name.clone(), p.path.clone()));
+                let sections = self.document.sections().iter().map(|s| ("section", s.name.clone(), s.path.clone()));
+                let sheets = self.document.sheets().iter().map(|s| ("sheet", s.title.clone(), s.path.clone()));
+                let all: Vec<(&str, String, String)> = plans.chain(sections).chain(sheets).collect();
+                let Some(name) = a.get("name").and_then(|v| v.as_str()) else {
+                    return Ok(json!({ "drawings": all.iter().map(|(kind, name, _)| json!({ "kind": kind, "name": name })).collect::<Vec<_>>() }));
+                };
+                let wanted = name.to_lowercase();
+                let found = all.iter().find(|d| d.1.to_lowercase() == wanted).or_else(|| all.iter().find(|d| d.1.to_lowercase().contains(&wanted)));
+                let (kind, name, path) = found.ok_or_else(|| format!("no drawing named '{name}'; call open_drawing without a name to list them"))?.clone();
+                let message = if kind == "sheet" { Message::OpenDocSheet(path.as_str().into()) } else { Message::OpenPlan(path.as_str().into()) };
+                let _ = self.update(message);
+                Ok(json!({ "opened": name, "kind": kind }))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "export_drawing" => {
+                let path = a.get("path").and_then(|v| v.as_str()).ok_or("path is required")?;
+                let bytes = self.export_shown_to(std::path::Path::new(path))?;
+                Ok(json!({ "saved": path, "bytes": bytes }))
+            }
+            "hover" => {
+                let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
+                let (vx, vy) = self.to_viewport(x, y);
+                let (w, h) = self.viewport_size;
+                let _ = self.update(Message::Navigate(crate::viewport::Navigate::Hover { x: vx, y: vy, width: w, height: h }));
+                Ok(json!({ "hovering": [x, y] }))
+            }
             "set_view" => self.remote_set_view(a),
             "set_camera" => self.set_camera(a),
             "navigate" => self.navigate(a),
@@ -1255,6 +1295,24 @@ impl App {
             "properties": hit.element.and_then(|id| Some(props_json(model?.element_props(id)))),
             "distance_from_camera": round(hit.point.distance(self.camera.eye())),
         })
+    }
+
+    /// The handles the viewport shows (edit mode's points, a sketch's, the grips of the selected
+    /// element), and one of them dragged: pressed at `from`, moved to `to` and let go, as the
+    /// mouse does. Without `from` the handles are only listed, in pixels of the last screenshot.
+    fn remote_drag_handle(&mut self, a: &Value) -> Answer {
+        let shown = self.handles_shown().ok_or("no handles: select one modelled element, or open edit mode or a sketch with Tab")?;
+        let (w, h) = self.viewport_size;
+        // viewport pixels back to those of the last screenshot
+        let (sx, sy) = match self.remote.shot_image {
+            Some((iw, ih)) => (iw as f32 / w, ih as f32 / h),
+            None => (1.0, 1.0),
+        };
+        let handles: Vec<Value> = shown.iter().map(|p| p.map_or(Value::Null, |(x, y)| json!([(x * sx).round(), (y * sy).round()]))).collect();
+        let Some(from) = a.get("from").and_then(Self::screen_xy) else { return Ok(json!({ "handles": handles })) };
+        let to = a.get("to").and_then(Self::screen_xy).ok_or("to: [x, y] is required with from")?;
+        let index = self.drag_handle(self.to_viewport(from.0, from.1), self.to_viewport(to.0, to.1)).ok_or("no handle within reach of from; call drag_handle without arguments to list them")?;
+        Ok(json!({ "dragged": index, "handles": handles.len(), "message": self.modeller.refusal.map(|r| r.reason()) }))
     }
 
     fn remote_pick(&mut self, a: &Value) -> Answer {

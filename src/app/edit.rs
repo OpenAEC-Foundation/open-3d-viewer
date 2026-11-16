@@ -577,7 +577,7 @@ impl<M: From<EditEvent>> canvas::Program<M> for EditOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bim_core::{LinearDef, PointDef, ProfileDef, SystemDef};
+    use bim_core::{LinearDef, PointDef, ProfileDef, Refusal, SystemDef};
     use glam::DVec2;
 
     use crate::app::modeller::ModelTool;

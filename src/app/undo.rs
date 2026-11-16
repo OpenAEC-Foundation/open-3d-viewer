@@ -16,12 +16,20 @@ impl App {
     /// After any message: when the modelled elements changed, the model as it was goes into the
     /// history, as one step to take back.
     pub(super) fn keep_model_history(&mut self) {
-        if !self.modeller.touched || self.moving() {
+        if self.moving() {
+            return;
+        }
+        if !self.modeller.touched {
+            // the levels changed without the model (a level of the form, a file added): no step,
+            // and what later steps are measured against has them
+            if self.document.levels() != self.modeller.base.levels.as_slice() {
+                self.modeller.base.levels = Arc::new(self.document.levels().to_vec());
+            }
             return;
         }
         self.modeller.touched = false;
         let base = &self.modeller.base;
-        if self.modeller.model == *base.model && self.modeller.taken == base.taken && self.modeller.project_file == base.project_file {
+        if self.modeller.model == *base.model && self.modeller.taken == base.taken && self.modeller.project_file == base.project_file && self.document.levels() == base.levels.as_slice() {
             return;
         }
         let now = self.modelled_step();
@@ -33,7 +41,7 @@ impl App {
     /// The modelled project as it is now: its elements, the walls taken over from opened files
     /// and the document it became.
     fn modelled_step(&self) -> Step {
-        Step { model: Arc::new(self.modeller.model.clone()), taken: self.modeller.taken.clone(), project_file: self.modeller.project_file.clone() }
+        Step { model: Arc::new(self.modeller.model.clone()), taken: self.modeller.taken.clone(), project_file: self.modeller.project_file.clone(), levels: Arc::new(self.document.levels().to_vec()) }
     }
 
     /// A step went into a history (`modelled`: the model's, else the view's): it is the next to
@@ -85,6 +93,10 @@ impl App {
     fn restore_modelled(&mut self, step: Step) {
         self.modeller.model = (*step.model).clone();
         self.modeller.project_file = step.project_file.clone();
+        // the levels as they stood: a level's move is taken back with what it moved
+        if self.document.levels() != step.levels.as_slice() {
+            self.document.set_levels(step.levels.to_vec());
+        }
         self.show_files_without(step.taken.clone());
         self.modeller.base = step;
         self.modeller.edit = None;

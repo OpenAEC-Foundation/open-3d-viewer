@@ -364,6 +364,7 @@ mod tests {
         assert!(app.modeller.model.is_empty());
         assert!(files(&app, 7) && files(&app, 8), "the wall is the file's again");
         assert!(app.modeller.project_file.is_none() && app.modeller.taken.is_empty());
+        assert_eq!(app.document.levels().len(), 1, "the file's level stays");
         let shown = app.model.as_ref().unwrap().element_with_key(ElementKey { model: 0, source: 7 }).unwrap();
         select(&mut app, shown);
         assert!(app.source_gripped().is_some(), "and can be taken over again");

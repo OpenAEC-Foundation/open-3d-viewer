@@ -215,6 +215,8 @@ pub struct Step {
     pub model: Arc<bim_core::Model>,
     pub taken: Arc<Vec<(u64, u64)>>,
     pub project_file: Option<PathBuf>,
+    /// The levels of the document: a level moves with what stands on it and reaches up to it.
+    pub levels: Arc<Vec<crate::document::Level>>,
 }
 
 impl App {
@@ -247,6 +249,8 @@ impl App {
         self.set_model(empty.clone());
         self.modeller = Modeller { shown: Some(empty.id), in_modeller: self.modeller.in_modeller, ..Modeller::default() };
         let _ = self.document.add_level(level, 0.0);
+        // the empty project with its first level is where its history starts
+        self.settle_modelled();
         self.grid = true;
         // nothing to fit yet: look at the work plane from above and aside, 20 m around
         self.camera.target = Vec3::ZERO;

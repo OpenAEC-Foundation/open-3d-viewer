@@ -194,6 +194,57 @@ mod tests {
     }
 
     #[test]
+    fn undo_puts_the_level_and_its_walls_back() {
+        use crate::app::modeller::levels::LevelEditMessage as Edit;
+        use crate::app::Message;
+        let (mut app, ground, first) = two_levels();
+        let w = wall(&mut app, &ground, 2.0);
+        app.set_top(w, Some(Top { level: first.clone(), offset: 0.0 })).unwrap();
+        app.keep_model_history();
+        for m in [Edit::Open(std::sync::Arc::from(first.as_str())), Edit::Elevation("3.4".into()), Edit::Apply] {
+            let _ = app.update(Message::LevelEdit(m));
+        }
+        assert_eq!(app.document.level(&first).unwrap().elevation, 3.4);
+        assert!(close(stands(&app, w), (0.0, 3.4)));
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document.level(&first).unwrap().elevation, 3.0, "the level is back");
+        assert!(close(stands(&app, w), (0.0, 3.0)), "and the wall with it");
+        let _ = app.update(Message::Redo);
+        assert_eq!(app.document.level(&first).unwrap().elevation, 3.4);
+        assert!(close(stands(&app, w), (0.0, 3.4)));
+    }
+
+    #[test]
+    fn undoing_the_first_element_of_a_new_model_keeps_its_level() {
+        use crate::app::modeller::ModelTool;
+        use crate::app::Message;
+        let mut app = modelling();
+        let _ = app.update(Message::ModelTool(Some((ModelTool::Wall, "Wall"))));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        assert_eq!(app.modeller.model.len(), 1);
+        let _ = app.update(Message::Undo);
+        assert!(app.modeller.model.is_empty());
+        assert_eq!(app.document.levels().len(), 1, "the first level stays");
+    }
+
+    #[test]
+    fn a_level_added_by_its_form_stays_when_a_later_step_is_taken_back() {
+        use crate::app::modeller::ModelTool;
+        use crate::app::Message;
+        let mut app = modelling();
+        let _ = app.update(Message::NewLevel("Level"));
+        let _ = app.update(Message::AddLevel);
+        assert_eq!(app.document.levels().len(), 2);
+        let _ = app.update(Message::ModelTool(Some((ModelTool::Wall, "Wall"))));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        let _ = app.update(Message::Undo);
+        assert!(app.modeller.model.is_empty());
+        assert_eq!(app.document.levels().len(), 2, "the level added before the wall stays");
+    }
+
+    #[test]
     fn removing_a_level_frees_the_tops_that_reach_it() {
         let (mut app, ground, first) = two_levels();
         let w = wall(&mut app, &ground, 2.0);

@@ -769,6 +769,13 @@ impl Document {
         Ok(self.levels.iter().position(|l| l.path == path).unwrap_or_default())
     }
 
+    /// Puts the levels back as they were at a step of the history, low to high.
+    pub fn set_levels(&mut self, levels: Vec<Level>) {
+        self.levels = levels;
+        self.sort();
+        self.drop_orphan_plans();
+    }
+
     /// Renames the level at `path` and puts it at `elevation`; a path that is no level changes
     /// nothing.
     pub fn set_level(&mut self, path: &str, name: &str, elevation: f64) -> Result<(), LevelError> {

@@ -853,6 +853,14 @@
     "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Aprire una nuvola di punti (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) per guardarla, misurarla, sezionarla e ricavarne una mesh.",
     "Open point clouds and make meshes of them": "Aprire nuvole di punti e ricavarne mesh",
     "Point cloud": "Nuvola di punti",
-    "Point clouds": "Nuvole di punti"
+    "Point clouds": "Nuvole di punti",
+    "Stored colour": "Colore proprio",
+    "Intensity": "Intensità",
+    "Class or scan": "Classe o scansione",
+    "Colour": "Colore",
+    "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.": "Colora i punti come li memorizza il file: i loro colori, oppure la classe o la scansione sfumata dall'intensità.",
+    "Colours the points by their height, from blue low to red high.": "Colora i punti in base alla quota, dal blu in basso al rosso in alto.",
+    "Colours the points by what they reflected, from dark to light. A file without intensity turns white.": "Colora i punti in base a quanto hanno riflesso, dallo scuro al chiaro. Un file senza intensità diventa bianco.",
+    "Gives every class of a classified cloud, or every scan, one colour.": "Assegna un colore a ogni classe di una nuvola classificata, o a ogni scansione."
   }
 }

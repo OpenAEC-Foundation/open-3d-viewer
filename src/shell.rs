@@ -1273,6 +1273,19 @@ impl Studio {
             add("cloud.points-smaller", l.text("Punten kleiner", "Smaller points"), "view.zoom-out", smaller, loaded, l.text("Tekent de punten van een puntenwolk een stap kleiner.", "Draws the points of a cloud a step smaller."));
             add("cloud.points-larger", l.text("Punten groter", "Larger points"), "view.zoom-in", larger, loaded, l.text("Tekent de punten van een puntenwolk een stap groter.", "Draws the points of a cloud a step larger."));
         }
+        // how the points of a cloud are coloured
+        {
+            use crate::cloud_color::CloudColor as C;
+            let ways = [
+                ("cloud.color-stored", C::Stored, l.text("Eigen kleur", "Stored colour"), "object.show", l.text("Kleurt de punten zoals het bestand ze bewaart: hun kleuren, of hun klasse of scan met de intensiteit als tint.", "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.")),
+                ("cloud.color-elevation", C::Elevation, l.text("Hoogte", "Elevation"), "resource.level", l.text("Kleurt de punten naar hun hoogte, van blauw laag naar rood hoog.", "Colours the points by their height, from blue low to red high.")),
+                ("cloud.color-intensity", C::Intensity, l.text("Intensiteit", "Intensity"), "theme.light", l.text("Kleurt de punten naar wat ze terugkaatsten, van donker naar licht. Een bestand zonder intensiteit wordt wit.", "Colours the points by what they reflected, from dark to light. A file without intensity turns white.")),
+                ("cloud.color-class", C::Class, l.text("Klasse of scan", "Class or scan"), "construction.types", l.text("Geeft elke klasse van een geclassificeerde wolk, of elke scan, één kleur.", "Gives every class of a classified cloud, or every scan, one colour.")),
+            ];
+            for (id, way, label, icon, detail) in ways {
+                list.push(Command::new(id, label, go(Message::CloudColor(way))).icon(small(icon), large(icon)).mode(app.cloud_color == way).enabled(loaded).detail(detail));
+            }
+        }
         for planned in PLANNED {
             #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
             let message = planned.event().map(|e| go(Message::Collab(e)));
@@ -1978,6 +1991,7 @@ impl Studio {
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger"])]),
+                (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come

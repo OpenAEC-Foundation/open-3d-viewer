@@ -853,6 +853,14 @@
     "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Bakmak, ölçmek, kesmek ve ondan bir ağ oluşturmak için bir nokta bulutu (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) açın.",
     "Open point clouds and make meshes of them": "Nokta bulutlarını açın ve onlardan ağlar oluşturun",
     "Point cloud": "Nokta bulutu",
-    "Point clouds": "Nokta bulutları"
+    "Point clouds": "Nokta bulutları",
+    "Stored colour": "Kendi rengi",
+    "Intensity": "Yoğunluk",
+    "Class or scan": "Sınıf veya tarama",
+    "Colour": "Renk",
+    "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.": "Noktaları dosyanın sakladığı gibi renklendirir: kendi renkleri veya yoğunluğa göre tonlanmış sınıfı ya da taraması.",
+    "Colours the points by their height, from blue low to red high.": "Noktaları yüksekliğine göre renklendirir: alçakta mavi, yüksekte kırmızı.",
+    "Colours the points by what they reflected, from dark to light. A file without intensity turns white.": "Noktaları yansıttıklarına göre koyudan açığa renklendirir. Yoğunluğu olmayan dosya beyaz olur.",
+    "Gives every class of a classified cloud, or every scan, one colour.": "Sınıflandırılmış bir bulutun her sınıfına veya her taramaya tek renk verir."
   }
 }

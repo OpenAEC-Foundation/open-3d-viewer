@@ -439,7 +439,8 @@ fn read(data: &[u8], stem: &str, pts: bool, max: usize) -> Result<(Vec<Layer>, V
                 ..Layer::default()
             }),
         };
-        cloud.push(layer, [x, y, z], color);
+        let lit = layout.intensity.map_or(255, |(k, range)| grey(get(k).unwrap_or(range.0), range)[0]);
+        cloud.push_lit(layer, [x, y, z], color, lit);
     }
     if total == 0 {
         return Err("no points".into());
@@ -523,7 +524,7 @@ mod tests {
         let c = model.layers[0].colors.as_ref().unwrap();
         assert!(c[0][2] > c[0][0] && c[2][0] > c[2][2], "blue low, red high: {c:?}");
         let model = load("t.xyz", "0 0 0 0.0\n1 0 0 1.0\n").unwrap();
-        assert_eq!(model.layers[0].colors.as_ref().unwrap(), &[[0, 0, 0, 255], [255, 255, 255, 255]]);
+        assert_eq!(model.layers[0].colors.as_ref().unwrap(), &[[0, 0, 0, 0], [255, 255, 255, 255]]); // the fourth byte is the intensity
     }
 
     #[test]
@@ -543,12 +544,12 @@ mod tests {
         assert_eq!(model.format, "PTS");
         let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["Scan 1", "Scan 2"]);
-        assert_eq!(model.layers[1].colors.as_ref().unwrap()[0], [0, 0, 255, 255]);
+        assert_eq!(model.layers[1].colors.as_ref().unwrap()[0], [0, 0, 255, 128]); // the fourth byte is its intensity
         assert!(model.project.info.iter().any(|(k, v)| k == "Scans" && v == "2"));
         // intensity only
         let model = load("i.pts", "2\n0 0 0 -2048\n1 1 1 2047\n").unwrap();
         assert_eq!(model.layers[0].name, "i");
-        assert_eq!(model.layers[0].colors.as_ref().unwrap(), &[[0, 0, 0, 255], [255, 255, 255, 255]]);
+        assert_eq!(model.layers[0].colors.as_ref().unwrap(), &[[0, 0, 0, 0], [255, 255, 255, 255]]); // the fourth byte is the intensity
     }
 
     #[test]

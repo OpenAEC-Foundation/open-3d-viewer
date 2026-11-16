@@ -28,6 +28,7 @@ pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 pub mod slab_handles;
+pub mod temp_dims;
 pub mod sketch;
 pub mod tops;
 pub mod typed_move;
@@ -184,6 +185,9 @@ pub struct Modeller {
     pub join_word: &'static str,
     /// Edit mode (Tab) on an element, or a drag of a selected element's grip.
     pub edit: Option<super::edit::Edit>,
+    /// The value being typed in a temporary dimension's field: which one, and the text (see
+    /// `temp_dims`).
+    pub temp_dim: Option<(usize, String)>,
     /// The 3D cursor (see `cursor3d`).
     pub cursor3d: cursor3d::Cursor3d,
     /// The file the modelled project was opened from, when that file holds the project and

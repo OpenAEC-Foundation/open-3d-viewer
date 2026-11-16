@@ -704,6 +704,8 @@ pub enum Message {
     Edit(edit::EditEvent),
     /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
     EditKey(char),
+    /// A field of a temporary dimension in the Modeller.
+    TempDim(modeller::temp_dims::TempDimMessage),
     /// Shift+C in the Modeller: the 3D cursor goes home.
     Cursor3dHome,
     /// Typed in a field of the selected modelled element's Definition section.
@@ -1744,6 +1746,7 @@ impl App {
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
             Message::Cursor3dHome => self.cursor3d_home(),
+            Message::TempDim(message) => self.temp_dim_message(message),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
             Message::Place(message) => self.place_message(message),
@@ -2408,6 +2411,9 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.temp_dim.is_some() => {
+                self.temp_dim_escape();
+            }
             Message::Escape if self.modeller.sketch.is_some() => {
                 self.sketch_escape();
             }
@@ -3943,6 +3949,9 @@ impl App {
         let editing = self.edit_overlay(p.accent, p.surface).or_else(|| self.grip_overlay(p.accent, p.surface)).map(|o| canvas(o).width(Fill).height(Fill));
         let placing = self.placing_overlay(p.accent).filter(|_| overlay.is_none()).map(|o| canvas(o).width(Fill).height(Fill));
         let joins = self.join_marks(p.accent, p.surface).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        // the temporary dimensions of the selected wall: their lines, and a field on each
+        let temp_marks = self.temp_dim_marks(p.accent).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let temp_fields = self.temp_dim_fields(p).filter(|_| overlay.is_none());
         let cursor3d = self.cursor3d_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
             .push(cursor3d)
@@ -3951,7 +3960,9 @@ impl App {
             .push(zero_points)
             .push(placing)
             .push(joins)
+            .push(temp_marks)
             .push(editing)
+            .push(temp_fields)
             .push(section)
             .push(plane)
             .push(measures)

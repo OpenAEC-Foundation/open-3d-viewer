@@ -835,6 +835,8 @@
     "Save as IDS": "Guardar como IDS",
     "Find again when a model changes": "Buscar de nuevo cuando cambie un modelo",
     "properties added as rules (off); tick the ones you ask.": "propiedades añadidas como reglas (desactivadas); marque las que pida.",
-    "Show ambient shadows": "Mostrar sombras ambientales"
+    "Show ambient shadows": "Mostrar sombras ambientales",
+    "By kind": "Por tipo",
+    "Order": "Ordenar"
   }
 }

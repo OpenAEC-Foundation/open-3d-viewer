@@ -159,6 +159,7 @@ impl App {
     }
 
     /// The grips of selected floor `id` that show, and where (scene coordinates).
+    #[cfg(test)]
     pub(crate) fn slab_grips(&self, id: ElementId) -> Vec<(SlabHandle, DVec3)> {
         let Some(e) = self.modeller.model.get(id) else { return Vec::new() };
         self.slab_handles_shown(&e.shape_in_project(&self.modeller.model.grid)).into_iter().map(|(h, at, _)| (h, at)).collect()

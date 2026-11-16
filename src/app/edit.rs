@@ -20,7 +20,7 @@
 use super::{App, Message};
 use crate::selection::Pickable;
 use bim_core::element::PlanarForm;
-use bim_core::{BaseKind, Element, ElementId, PlanarDef, Refusal, Shape};
+use bim_core::{BaseKind, Element, ElementId, PlanarDef, Shape};
 use glam::{DVec3, Mat4, Vec3};
 use iced::widget::canvas::{self, Frame, Path};
 use iced::{keyboard, mouse, Color, Point, Rectangle, Size};

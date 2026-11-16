@@ -710,6 +710,8 @@ pub enum Message {
     DimensionValueApply,
     /// A field of a temporary dimension in the Modeller.
     TempDim(modeller::temp_dims::TempDimMessage),
+    /// Cancel in a floor's sketch: it leaves with the floor unchanged.
+    SketchCancel,
     /// Shift+C in the Modeller: the 3D cursor goes home.
     Cursor3dHome,
     /// Typed in a field of the selected modelled element's Definition section.
@@ -1750,6 +1752,7 @@ impl App {
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
             Message::Cursor3dHome => self.cursor3d_home(),
+            Message::SketchCancel => self.cancel_sketch(),
             Message::TempDim(message) => self.temp_dim_message(message),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
@@ -3992,6 +3995,7 @@ impl App {
             .push(temp_marks)
             .push(editing)
             .push(temp_fields)
+            .push(self.sketch_bar(p, l).filter(|_| overlay.is_none()))
             .push(boxed)
             .push(picking)
             .push(cube)

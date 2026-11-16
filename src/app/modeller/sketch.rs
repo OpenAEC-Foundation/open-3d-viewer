@@ -572,6 +572,31 @@ impl App {
         })
     }
 
+    /// The sketch's tools as buttons, over the view's top left: the tool that is on shows so, and
+    /// Finish and Cancel end the sketch as Tab and Esc do.
+    pub(in crate::app) fn sketch_bar(&self, p: crate::theme::Palette, l: Language) -> Option<iced::Element<'_, crate::app::Message>> {
+        use crate::app::Message;
+        use iced::widget::{button, container, text, Row};
+        let sketch = self.modeller.sketch.as_ref()?;
+        let tool = |label: &'static str, key: char, on: bool| button(text(label).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(Message::EditKey(key));
+        let is = |t: SketchTool| sketch.tool == t;
+        let bar = Row::new()
+            .spacing(4)
+            .push(tool(l.text("Lijn (L)", "Line (L)"), 'l', is(SketchTool::Line)))
+            .push(tool(l.text("Rechthoek (R)", "Rectangle (R)"), 'r', is(SketchTool::Rectangle)))
+            .push(tool(l.text("Boog (A)", "Arc (A)"), 'a', is(SketchTool::Arc)))
+            .push(tool(l.text("Trimmen (T)", "Trim (T)"), 't', is(SketchTool::Trim)))
+            .push(button(text(l.text("Klaar (Tab)", "Finish (Tab)")).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::EditMode))
+            .push(button(text(l.text("Annuleren", "Cancel")).size(12)).padding([3, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(Message::SketchCancel));
+        Some(container(container(bar).padding(4).style(move |_| p.overlay())).padding(iced::Padding { top: 48.0, left: 8.0, ..iced::Padding::ZERO }).into())
+    }
+
+    /// Cancel: the sketch leaves with the floor unchanged, whatever tool is on.
+    pub(in crate::app) fn cancel_sketch(&mut self) {
+        self.modeller.sketch = None;
+        self.modeller.refusal = None;
+    }
+
     /// The banner while the sketch is open: why it could not finish, and what the keys do.
     pub(in crate::app) fn sketch_hint(&self, l: Language) -> Option<String> {
         let sketch = self.modeller.sketch.as_ref()?;
@@ -808,6 +833,39 @@ mod tests {
         let _ = app.update(Message::Escape);
         assert!(app.modeller.sketch.is_none());
         assert_eq!(slab_of(&app, id).0.len(), 4, "the floor as it was");
+    }
+
+    #[test]
+    fn the_sketchs_buttons_take_a_tool_finish_and_cancel() {
+        let (mut app, id) = floor();
+        let _ = app.update(Message::EditMode);
+        let p = app.theme.palette();
+        let said = |app: &App, label: &str| -> Vec<Message> {
+            let mut ui = iced_test::Simulator::with_size(iced::Settings::default(), iced::Size::new(900.0, 200.0), app.sketch_bar(p, Language::English).expect("the bar"));
+            ui.click(label).unwrap_or_else(|_| panic!("no {label}"));
+            ui.into_messages().collect()
+        };
+        for m in said(&app, "Rectangle (R)") {
+            let _ = app.update(m);
+        }
+        assert_eq!(app.modeller.sketch.as_ref().map(|s| s.tool), Some(SketchTool::Rectangle));
+        click(&mut app, 1.0, 1.0);
+        click(&mut app, 2.0, 2.0);
+        for m in said(&app, "Finish (Tab)") {
+            let _ = app.update(m);
+        }
+        assert!(app.modeller.sketch.is_none());
+        assert_eq!(slab_of(&app, id).1.len(), 1, "the rectangle became an opening");
+        // Cancel leaves at once, with a tool on and a point clicked
+        app.select_modelled(id);
+        let _ = app.update(Message::EditMode);
+        let _ = app.update(Message::EditKey('l'));
+        click(&mut app, 3.0, 1.0);
+        for m in said(&app, "Cancel") {
+            let _ = app.update(m);
+        }
+        assert!(app.modeller.sketch.is_none());
+        assert_eq!(slab_of(&app, id).1.len(), 1, "unchanged");
     }
 
     #[test]

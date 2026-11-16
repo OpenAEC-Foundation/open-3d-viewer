@@ -920,7 +920,10 @@ impl Studio {
             }
             "ui_press" | "ui_type" | "ui_key" => {
                 let dry = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-                let target = if call.cmd == "ui_key" && args.get("name").is_none() && args.get("index").is_none() { None } else { Some(ui::find(&found, &args)) };
+                // a point of the window in place of a control: what lies there is clicked, named or not
+                let point = args.get("at").and_then(|v| v.as_array()).filter(|a| a.len() == 2).and_then(|a| Some(iced::Point::new(a[0].as_f64()? as f32, a[1].as_f64()? as f32)));
+                let unnamed = args.get("name").is_none() && args.get("index").is_none();
+                let target = if unnamed && (call.cmd == "ui_key" || point.is_some()) { None } else { Some(ui::find(&found, &args)) };
                 match target {
                     Some(Err(e)) => Err(e),
                     Some(Ok((_, f))) if f.node.state.disabled => Err(format!("'{}' is disabled", f.node.name)),
@@ -936,7 +939,7 @@ impl Studio {
                         let run = |size: iced::Size, bounds: Option<iced::Rectangle>| -> Vec<Msg> {
                             let settings = iced::Settings { fonts: [crate::INTER_REGULAR, crate::INTER_SEMIBOLD].into_iter().chain(fonts::FILES.iter().copied()).map(std::borrow::Cow::Borrowed).collect(), default_font: fonts::BODY, ..Default::default() };
                             let mut sim = iced_test::Simulator::with_size(settings, size, self.view());
-                            if let Some(at) = bounds.and_then(|b| ui::aim(b, size)) {
+                            if let Some(at) = bounds.and_then(|b| ui::aim(b, size)).or(point) {
                                 sim.point_at(at);
                                 let _ = sim.simulate(iced_test::simulator::click());
                             }
@@ -979,7 +982,7 @@ impl Studio {
                         let mut messages = run(size, first);
                         // a key no control took, with none named: the window's own key, as the
                         // keyboard sends it (a shortcut, a key of the Modeller, Tab)
-                        if messages.is_empty() && call.cmd == "ui_key" && target.is_none() {
+                        if messages.is_empty() && call.cmd == "ui_key" && target.is_none() && point.is_none() {
                             use iced::keyboard::key::Named;
                             use iced::keyboard::{Key, Modifiers};
                             let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("Enter");

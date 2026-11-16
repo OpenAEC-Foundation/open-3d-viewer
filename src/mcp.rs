@@ -270,6 +270,7 @@ pub fn tools() -> Vec<Value> {
         tool("ui_press", "Click a control of the window, as a mouse click does: the click goes through the widget, which sends what it sends (or nothing when it does not answer). Returns the messages it sent; 'answered': false means the control did nothing. A button that opens a file dialog opens it in the window.",
             json!({
                 "name": { "type": "string", "description": "The control's accessible name, as ui_controls lists it (exact, else contains; any case)" },
+                "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "In place of a control: a point of the window to click, [x, y] in the pixels ui_controls gives bounds in (its size). For what a panel shows that ui_controls does not list. ui_type and ui_key take it too." },
                 "role": { "type": "string", "description": "Only controls of this role (Button, Tab, CheckBox, TextField, ComboBox, Switch, ...)" },
                 "nth": { "type": "integer", "description": "Which of the controls that match (from 0)" },
                 "index": { "type": "integer", "description": "The control's index from ui_controls, instead of a name" },

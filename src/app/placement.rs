@@ -308,14 +308,14 @@ impl App {
     /// what goes with the tool (location line, chain).
     pub(super) fn placement_bar(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let (tool, s) = self.tool_settings()?;
-        let label = |t: &'static str| text(t).size(12).color(p.text_secondary);
+        let label = |t: &'static str| text(t).size(12).color(p.text_secondary).wrapping(iced::widget::text::Wrapping::None);
         let mut bar = Row::new().spacing(8).align_y(Center).push(text(tool.label(l)).size(12).color(p.text));
         if let Some(choices) = self.kinds(tool, l) {
             let picked = choices.iter().find(|c| c.id == s.kind).cloned();
             let pick = pick_list(choices, picked, |c: Choice| Message::Place(PlaceMessage::Kind(c.id))).text_size(12).padding([2, 6]);
             // a system type's name ends with what tells it from the next (its centres, its
             // bond), so its list is as wide as its longest name
-            let pick = if tool == ModelTool::System { pick } else { pick.width(180) };
+            let pick = if tool == ModelTool::System { pick } else { pick.width(150) };
             bar = bar.push(label(l.text("Type", "Type"))).push(pick);
         }
         let typing = self.modeller.placement.typing.clone();
@@ -335,7 +335,7 @@ impl App {
         if tool == ModelTool::Wall {
             let options: Vec<Located> = LocationLine::ALL.iter().map(|&k| Located(k, k.label(l))).collect();
             let picked = options.iter().find(|o| o.0 == s.location).copied();
-            bar = bar.push(label(l.text("Locatielijn", "Location line"))).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]));
+            bar = bar.push(label(l.text("Locatielijn", "Location line"))).push(pick_list(options, picked, |o: Located| Message::Place(PlaceMessage::Location(o.0))).text_size(12).padding([2, 6]).width(120));
         }
         if tool.chains() {
             let on = self.modeller.placement.chain;

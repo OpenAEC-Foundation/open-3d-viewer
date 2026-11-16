@@ -282,7 +282,7 @@ impl App {
         let actions = row![
             button(text(l.text("Importeren…", "Import…")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::Import)),
             button(text(l.text("Exporteren…", "Export…")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::Export)),
-            button(text(l.text("INB-types toevoegen", "Add INB types")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::AddInb)),
+            button(text(l.text("+ INB-types", "+ INB types")).size(12)).padding([4, 10]).style(move |_, s| p.ribbon_button(false, s)).on_press(send(LibraryMessage::AddInb)),
         ]
         .spacing(6);
         let mut body = Column::new().spacing(1).push(container(actions).padding([2, 4]));

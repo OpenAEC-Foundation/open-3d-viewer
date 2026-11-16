@@ -93,6 +93,17 @@ pub struct Opening {
     pub height: f64,
 }
 
+/// How a slab rises: from edge `edge` of its outline (the eave, where its top is at the slab's
+/// `top`) inwards, at `angle` radians to the level. Its thickness is measured square to it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Slope {
+    pub edge: usize,
+    pub angle: f64,
+}
+
+/// The steepest a slab rises (radians): 85°.
+pub const STEEPEST: f64 = 1.4835298641951802;
+
 /// The form of a planar element.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,6 +125,9 @@ pub enum PlanarForm {
         /// What the slab is: a floor, a roof or a ceiling. A floor is not written.
         #[serde(default, skip_serializing_if = "SlabRole::is_floor")]
         role: SlabRole,
+        /// How it rises from one of its edges (a roof's plane). None: it lies level.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slope: Option<Slope>,
     },
 }
 
@@ -629,9 +643,33 @@ fn planar_base(p: &PlanarDef, thickness: f64, extend: [f64; 2]) -> Result<(Vec<P
             let reach = Axes::new(axes.origin - axes.x * extend[0], axes.x, axes.z)?;
             Ok((wall_elevation(reach_length, *height, &shifted)?, reach))
         }
-        PlanarForm::Slab { outline, holes, top, bulges, .. } => {
-            let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
-            Ok((vec![Profile::new(bowed(outline, bulges), holes.clone())?], axes))
+        PlanarForm::Slab { outline, holes, top, bulges, slope, .. } => {
+            let ring = bowed(outline, bulges);
+            let Some(s) = slope.filter(|s| s.angle.abs() > 1e-9 && outline.len() >= 3) else {
+                let axes = Axes::new(DVec3::new(0.0, 0.0, top - thickness), DVec3::X, DVec3::Z)?;
+                return Ok((vec![Profile::new(ring, holes.clone())?], axes));
+            };
+            if !(s.angle.abs() <= STEEPEST) {
+                return Err(Refusal::NotPositive);
+            }
+            // the eave, and the way in from it: to the left of an outline that runs anticlockwise
+            let n = outline.len();
+            let (a, b) = (outline[s.edge % n], outline[(s.edge + 1) % n]);
+            let along = (b - a).normalize_or_zero();
+            if along == DVec2::ZERO {
+                return Err(Refusal::ZeroLength);
+            }
+            let area: f64 = (0..n).map(|k| outline[k].perp_dot(outline[(k + 1) % n])).sum();
+            let d = if area >= 0.0 { along.perp() } else { -along.perp() };
+            // the plane it lies in: x up the slope, y level along the eave, z square to it
+            let (sin, cos) = s.angle.sin_cos();
+            let x = (d * cos).extend(sin);
+            let normal = (-d * sin).extend(cos);
+            let level = d.perp();
+            let on = |q: &DVec2| DVec2::new((*q - a).dot(d) / cos, (*q - a).dot(level));
+            let axes = Axes::new(a.extend(*top) - normal * thickness, x, normal)?;
+            let profile = Profile::new(ring.iter().map(on).collect(), holes.iter().map(|h| h.iter().map(on).collect()).collect())?;
+            Ok((vec![profile], axes))
         }
     }
 }
@@ -804,7 +842,7 @@ mod tests {
         let ring = bowed(&outline, &[0.0, 1.0]);
         assert_eq!(ring.len(), 3 + 16);
         assert!(ring.iter().any(|p| (*p - DVec2::new(3.0, 1.0)).length() < 1e-9), "the arc reaches a metre out: {ring:?}");
-        let form = PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: vec![0.0, 1.0], role: Default::default() };
+        let form = PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: vec![0.0, 1.0], role: Default::default(), slope: None };
         let slab = PlanarDef { form, thickness: 0.2, openings: Vec::new(), build_up: None };
         let solid = planar_solid(&slab).unwrap();
         let area = 4.0 + std::f64::consts::PI / 2.0;
@@ -812,7 +850,7 @@ mod tests {
         // written and read, the bulges are kept; a slab without them writes none
         let text = serde_json::to_string(&slab).unwrap();
         assert_eq!(serde_json::from_str::<PlanarDef>(&text).unwrap(), slab);
-        let straight = PlanarDef { form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y], holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default() }, ..slab.clone() };
+        let straight = PlanarDef { form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::X, DVec2::Y], holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None }, ..slab.clone() };
         assert!(!serde_json::to_string(&straight).unwrap().contains("bulges"));
     }
 
@@ -902,7 +940,16 @@ mod tests {
     #[test]
     fn a_slab_hangs_under_its_top() {
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default() }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
+        // rising at 45° from its first edge, its top goes up as far as it goes in, and it is as
+        // much longer as the slope is
+        let pitched = PlanarDef { form: PlanarForm::Slab { outline: outline.clone(), holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: SlabRole::Roof, slope: Some(Slope { edge: 0, angle: std::f64::consts::FRAC_PI_4 }) }, thickness: 0.25, openings: Vec::new(), build_up: None };
+        let roof = planar_solid(&pitched).unwrap();
+        let level = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline: outline.clone(), holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
+        assert!((roof.volume() - level.volume() * std::f64::consts::SQRT_2).abs() < 1e-9, "{} {}", roof.volume(), level.volume());
+        let depth = outline.iter().map(|p| (*p - outline[0]).dot((outline[1] - outline[0]).normalize().perp()).abs()).fold(0.0, f64::max);
+        let highest = roof.bounds().1.z;
+        assert!((highest - (3.0 + depth)).abs() < 1e-9, "{highest} {depth}");
+        let s = planar_solid(&PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.25, openings: Vec::new(), build_up: None }).unwrap();
         let (lo, hi) = s.bounds();
         assert_eq!((lo.z, hi.z), (2.75, 3.0));
         assert!((s.volume() - 4.0 * 3.0 * 0.25).abs() < 1e-12);
@@ -946,7 +993,7 @@ mod tests {
     fn a_layered_slab_has_its_first_layer_on_top() {
         let layer = |material: &str, thickness| LayerDef { material: material.into(), thickness, cavity: false };
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default() }, thickness: 0.0, openings: Vec::new(), build_up: None }
+        let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.0, openings: Vec::new(), build_up: None }
             .with_build_up(Some(BuildUpDef { id: "floor".into(), layers: vec![layer("screed", 0.05), layer("concrete", 0.2), layer("insulation", 0.1)] }));
         let parts = planar_parts(&slab).unwrap();
         let z = |i: usize| {

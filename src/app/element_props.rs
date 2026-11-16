@@ -51,6 +51,10 @@ pub enum ElementField {
     Bolt,
     Hole,
     BoltRows,
+    /// How a slab rises from its eave (degrees), and which edge of its outline the eave is
+    /// (counted from 1).
+    Slope,
+    Eave,
 }
 
 /// A door's and a window's size and sill when added (metres).
@@ -88,6 +92,8 @@ fn value(shape: &Shape, field: ElementField) -> Option<f64> {
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { height, .. }, .. }), F::Height) => Some(*height),
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { base, .. }, .. }), F::Base) => Some(*base),
         (Shape::Planar(PlanarDef { form: PlanarForm::Slab { top, .. }, .. }), F::Base) => Some(*top),
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope, .. }, .. }), F::Slope) => Some(slope.map_or(0.0, |s| s.angle.to_degrees())),
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope: Some(s), outline, .. }, .. }), F::Eave) => Some((s.edge % outline.len().max(1) + 1) as f64),
         (Shape::Planar(p), F::Thickness) => Some(p.total_thickness()),
         (Shape::Planar(p), F::Along(i)) => opening(&p.openings, i).map(|o| o.along),
         (Shape::Planar(p), F::Sill(i)) => opening(&p.openings, i).map(|o| o.sill),
@@ -162,6 +168,12 @@ fn with_value(shape: &Shape, field: ElementField, v: f64) -> Option<Shape> {
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { height, .. }, .. }), F::Height) => set(height),
         (Shape::Planar(PlanarDef { form: PlanarForm::Wall { base, .. }, .. }), F::Base) => set(base),
         (Shape::Planar(PlanarDef { form: PlanarForm::Slab { top, .. }, .. }), F::Base) => set(top),
+        // no slope: it lies level again; its eave stays the edge it was
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope, .. }, .. }), F::Slope) => {
+            let edge = slope.map_or(0, |s| s.edge);
+            *slope = (v.abs() > 1e-9).then(|| bim_core::Slope { edge, angle: v.to_radians() });
+        }
+        (Shape::Planar(PlanarDef { form: PlanarForm::Slab { slope: Some(s), outline, .. }, .. }), F::Eave) if v >= 1.0 && v.fract() == 0.0 && v <= outline.len() as f64 => s.edge = v as usize - 1,
         // a layered element is as thick as its type's layers
         (Shape::Planar(p), F::Thickness) if p.build_up.is_none() => set(&mut p.thickness),
         (Shape::Planar(p), F::Along(i)) => set(&mut p.openings.get_mut(i)?.along),
@@ -212,8 +224,8 @@ impl App {
             return e.name.clone();
         }
         let digits = match field {
-            ElementField::Turn => 1,
-            ElementField::BoltRows => 0,
+            ElementField::Turn | ElementField::Slope => 1,
+            ElementField::BoltRows | ElementField::Eave => 0,
             _ => 3,
         };
         value(&e.shape_in_project(&self.modeller.model.grid), field).map_or(String::new(), |v| format!("{v:.digits$}"))
@@ -337,7 +349,7 @@ impl App {
         use ElementField as F;
         let mut rows = column![field(l.text("Naam", "Name"), F::Name)].spacing(5);
         let has = |f: F| value(&shape, f).is_some();
-        let fields: [(F, &str); 9] = [
+        let fields: [(F, &str); 11] = [
             (F::Height, l.text("Hoogte (m)", "Height (m)")),
             (F::Thickness, l.text("Dikte (m)", "Thickness (m)")),
             (F::Base, l.text("Basis (m)", "Base (m)")),
@@ -345,6 +357,8 @@ impl App {
             (F::Depth, l.text("Diepte (m)", "Depth (m)")),
             (F::Diameter, l.text("Diameter (m)", "Diameter (m)")),
             (F::Turn, l.text("Draaiing (°)", "Turn (°)")),
+            (F::Slope, l.text("Helling (°)", "Slope (°)")),
+            (F::Eave, l.text("Dakvoet (rand nr.)", "Eave (edge no.)")),
             (F::SpacingAlong, l.text("Raster langs (m)", "Spacing along (m)")),
             (F::SpacingUp, l.text("Raster omhoog (m)", "Spacing up (m)")),
         ];

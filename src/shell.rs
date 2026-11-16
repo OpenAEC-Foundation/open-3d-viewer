@@ -1650,6 +1650,14 @@ impl Studio {
                 // while elements are grabbed (G), X, Y and Z hold the move and digits type its distance
                 let grabbing = self.app.modeller.grab.is_some();
                 if self.dialog.is_none() && grabbing && !press.modifiers.control() && !press.modifiers.alt() {
+                    // R right after the G that grabbed: GR, the grid tool
+                    if self.keys.pending() == Some('g') && matches!(&press.key, Key::Character(c) if c.eq_ignore_ascii_case("r")) {
+                        let steps = self.keys.steps('r', Instant::now());
+                        if steps.contains(&crate::app::modeller::keys::Step::Key(crate::app::modeller::keys::ModelKey::Grid)) {
+                            let l = self.l();
+                            return self.update(Msg::App(Message::ModelKey(crate::app::modeller::keys::ModelKey::Grid, l)));
+                        }
+                    }
                     if let Key::Character(c) = &press.key {
                         if let Some(c) = c.chars().next().filter(|c| "xyzXYZ".contains(*c) || crate::app::modeller::typed_move::DIGITS.contains(*c)) {
                             return self.update(Msg::App(Message::EditKey(c)));
@@ -1870,7 +1878,7 @@ impl Studio {
         let folded = compact && self.ribbon_folded;
         let ribbon: Element<'_, Msg> = if folded { Space::new().into() } else { self.ribbon(look) };
         // a phone has no room for the version, and the web app has no remote control
-        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{} {VERSION}", self.edition.name())]), self.mcp_lamp(look)].into() };
+        let status: Element<'_, Msg> = if compact { w::status_bar(look, vec![one_line(&left.join(" · "), self.width)], Vec::new()) } else { row![w::status_bar(look, left, vec![format!("{} {VERSION}", self.edition.name())]), self.snap_switches(look), self.mcp_lamp(look)].into() };
         let screen = column![
             self.title_bar(look),
             w::ribbon_tabs(look, l.text("Bestand", "File"), Some(Msg::Backstage(!self.backstage)), &tabs, if folded { usize::MAX } else { self.ribbon_tab.min(tabs.len() - 1) }, Msg::RibbonTab),
@@ -1884,6 +1892,42 @@ impl Studio {
             layers.push(mouse_area(w::overlay(look, self.dialog_card(look, dialog))).into());
         }
         iced::widget::Stack::with_children(layers).into()
+    }
+
+    /// The snaps of the Modeller at the right of the status bar, each a switch: on in the accent
+    /// colour. Nothing in the other products.
+    fn snap_switches(&self, look: Look) -> Element<'_, Msg> {
+        use crate::app::modeller::snaps::Snap;
+        if self.product() != Product::Modeller {
+            return Space::new().into();
+        }
+        let l = self.l();
+        let c = look.color;
+        let mut line = iced::widget::Row::new().spacing(2).align_y(iced::Alignment::Center);
+        line = line.push(iced::widget::text("SNAP").size(10).font(fonts::MONO).color(c.statusbar_text));
+        for snap in Snap::ALL {
+            let on = self.app.modeller.snaps.is(snap);
+            let label = iced::widget::text(snap.label(l)).size(11).color(if on { c.accent } else { c.statusbar_text });
+            let switch = iced::widget::button(label)
+                .padding([1, 6])
+                .style(move |_, status| iced::widget::button::Style {
+                    background: matches!(status, iced::widget::button::Status::Hovered).then(|| c.frame.into()),
+                    border: iced::Border { radius: 3.0.into(), width: if on { 1.0 } else { 0.0 }, color: c.accent },
+                    ..Default::default()
+                })
+                .on_press(Msg::App(Message::SnapToggle(snap)));
+            line = line.push(w::with_tooltip(look, switch.into(), snap.tip(l), None));
+        }
+        let cell = column![
+            w::divider(look),
+            container(line.spacing(6))
+                .height(openaec_ui::design::tokens::shell::STATUSBAR - 1.0)
+                .padding([0, 10])
+                .align_y(iced::alignment::Vertical::Center)
+                .style(move |_| container::Style { background: Some(c.statusbar.into()), ..Default::default() }),
+        ]
+        .width(Length::Shrink);
+        cell.into()
     }
 
     /// The lamp at the right of the status bar: grey when remote control is off, amber when the
@@ -2051,6 +2095,8 @@ impl Studio {
             // the title bar, as in other BIM modellers.
             RibbonPage::Model => vec![
                 (l.text("Selecteren", "Select"), vec![large("model.select")]),
+                // what the building is set out on: its grid lines and its levels
+                (l.text("Stramien", "Grid"), vec![large("project.grid"), large("project.level")]),
                 (l.text("Vlak", "Planar"), vec![large("model.wall"), large("model.slab")]),
                 (l.text("Lijnvormig", "Linear"), vec![large("model.column"), large("model.beam")]),
                 (l.text("Systeem", "System"), vec![large("model.system")]),

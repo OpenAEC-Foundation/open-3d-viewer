@@ -1,7 +1,8 @@
-//! The Modeller's keys, as the reference modeller has them: a letter starts a tool at once, and
-//! two letters typed within [`WINDOW`] are one command (MV moves, CL places a column). A letter
-//! that starts such a pair waits for the second one; when none comes in time it does what it
-//! does alone (C makes a section, D a door).
+//! The Modeller's keys, as the reference modeller has them: two letters typed within [`WINDOW`]
+//! are one command (WA draws a wall, DR places a door, MV moves, CS makes another like the one
+//! selected), and some letters are a command alone. A letter that starts a pair waits for the
+//! second one; when none comes in time it does what it does alone (W a wall, D a door). G and S
+//! do not wait: G grabs and S selects at once, and still start their pairs (GR, SB, SE).
 //!
 //! Only plain letters count: with Ctrl or Alt a key is a shortcut of the app, and a key a text
 //! field takes never gets here. PageUp and PageDown step through the levels (the shell maps them).
@@ -26,6 +27,10 @@ pub enum ModelKey {
     Grid,
     Section,
     Dimension,
+    /// A text on the drawing shown.
+    Text,
+    /// Another element like the one selected: its tool, with its type and sizes.
+    CreateSimilar,
     /// G: grabs the picked points in edit mode, else moves the selection.
     Grab,
     Move,
@@ -50,6 +55,15 @@ pub const SINGLE: &[(char, ModelKey)] = &[
 
 /// The two letters that are a command together (lower case).
 pub const PAIRS: &[(&str, ModelKey)] = &[
+    ("wa", ModelKey::Wall),
+    ("dr", ModelKey::Door),
+    ("wn", ModelKey::Window),
+    ("sb", ModelKey::Slab),
+    ("gr", ModelKey::Grid),
+    ("se", ModelKey::Section),
+    ("tx", ModelKey::Text),
+    ("cs", ModelKey::CreateSimilar),
+    ("de", ModelKey::Delete),
     ("mv", ModelKey::Move),
     ("co", ModelKey::Copy),
     ("ro", ModelKey::Rotate),
@@ -61,6 +75,10 @@ pub const PAIRS: &[(&str, ModelKey)] = &[
     ("cw", ModelKey::System),
     ("ob", ModelKey::Object),
 ];
+
+/// The letters that start a pair and still run at once: their command alone does no harm before
+/// the pair's (G grabs, and GR lets go again for the grid tool).
+pub const EAGER: &[char] = &['g', 's'];
 
 /// The letter of a command alone.
 fn single(c: char) -> Option<ModelKey> {
@@ -88,7 +106,8 @@ fn alone(c: char) -> Step {
 /// The letters typed so far: the one waiting for its pair, and when it was typed.
 #[derive(Debug, Clone, Default)]
 pub struct KeySequence {
-    pending: Option<(char, Instant)>,
+    /// The letter, when it was typed, and whether it ran already (see [`EAGER`]).
+    pending: Option<(char, Instant, bool)>,
 }
 
 impl KeySequence {
@@ -97,7 +116,7 @@ impl KeySequence {
     pub fn steps(&mut self, c: char, now: Instant) -> Vec<Step> {
         let c = c.to_ascii_lowercase();
         let mut out = Vec::new();
-        if let Some((first, at)) = self.pending.take() {
+        if let Some((first, at, ran)) = self.pending.take() {
             if now.duration_since(at) <= WINDOW {
                 let pair: String = [first, c].iter().collect();
                 if let Some((_, m)) = PAIRS.iter().find(|(p, _)| *p == pair) {
@@ -105,10 +124,16 @@ impl KeySequence {
                 }
             }
             // no such pair, or too late: the first is what it is alone
-            out.push(alone(first));
+            if !ran {
+                out.push(alone(first));
+            }
         }
         if starts_pair(c) {
-            self.pending = Some((c, now));
+            let eager = EAGER.contains(&c);
+            if eager {
+                out.push(alone(c));
+            }
+            self.pending = Some((c, now, eager));
         } else {
             out.push(alone(c));
         }
@@ -125,12 +150,12 @@ impl KeySequence {
 
     /// The time is `now`: a letter that waited longer than [`WINDOW`] is what it is alone.
     pub fn expire_step(&mut self, now: Instant) -> Option<Step> {
-        let (c, at) = self.pending?;
+        let (c, at, ran) = self.pending?;
         if now.duration_since(at) <= WINDOW {
             return None;
         }
         self.pending = None;
-        Some(alone(c))
+        (!ran).then(|| alone(c))
     }
 
     /// The command of [`KeySequence::expire_step`], if it is one.
@@ -143,7 +168,7 @@ impl KeySequence {
 
     /// The letter waiting for its pair.
     pub fn pending(&self) -> Option<char> {
-        self.pending.map(|(c, _)| c)
+        self.pending.map(|(c, ..)| c)
     }
 
     /// Forgets the letter waiting.
@@ -158,16 +183,15 @@ mod tests {
     use web_time::Duration;
 
     #[test]
-    fn single_letters_run_at_once_unless_they_start_a_pair() {
+    fn a_letter_that_starts_no_pair_runs_at_once_and_one_that_does_waits() {
         let t = Instant::now();
         let mut k = KeySequence::default();
-        assert_eq!(k.press('w', t), vec![ModelKey::Wall]);
         assert_eq!(k.press('i', t), vec![ModelKey::Grid]);
-        // c starts co and cl: it waits
-        assert!(k.press('c', t).is_empty());
-        assert_eq!(k.pending(), Some('c'));
+        // w starts wa and wn: it waits, and alone it is the wall
+        assert!(k.press('w', t).is_empty());
+        assert_eq!(k.pending(), Some('w'));
         assert_eq!(k.expire(t + Duration::from_millis(500)), None);
-        assert_eq!(k.expire(t + Duration::from_millis(760)), Some(ModelKey::Section));
+        assert_eq!(k.expire(t + Duration::from_millis(760)), Some(ModelKey::Wall));
         assert_eq!(k.pending(), None);
     }
 
@@ -175,22 +199,57 @@ mod tests {
     fn two_letters_within_the_window_are_one_command() {
         let t = Instant::now();
         let mut k = KeySequence::default();
-        assert!(k.press('m', t).is_empty());
-        assert_eq!(k.press('v', t + Duration::from_millis(300)), vec![ModelKey::Move]);
-        assert!(k.press('c', t).is_empty());
-        assert_eq!(k.press('l', t + Duration::from_millis(100)), vec![ModelKey::Column]);
-        // too late: the first runs alone, the second as itself
+        let mut pair = |a: char, b: char| {
+            assert!(k.press(a, t).is_empty(), "{a}");
+            k.press(b, t + Duration::from_millis(300))
+        };
+        for (a, b, key) in [
+            ('w', 'a', ModelKey::Wall),
+            ('d', 'r', ModelKey::Door),
+            ('w', 'n', ModelKey::Window),
+            ('c', 'l', ModelKey::Column),
+            ('b', 'm', ModelKey::Beam),
+            ('d', 'i', ModelKey::Dimension),
+            ('d', 'e', ModelKey::Delete),
+            ('m', 'v', ModelKey::Move),
+            ('c', 'o', ModelKey::Copy),
+            ('r', 'o', ModelKey::Rotate),
+            ('m', 'm', ModelKey::Mirror),
+            ('c', 's', ModelKey::CreateSimilar),
+            ('t', 'x', ModelKey::Text),
+        ] {
+            assert_eq!(pair(a, b), vec![key], "{a}{b}");
+        }
+        // too late: the first runs alone, the second waits for its own pair
         assert!(k.press('d', t).is_empty());
-        assert_eq!(k.press('w', t + Duration::from_millis(800)), vec![ModelKey::Door, ModelKey::Wall]);
+        assert_eq!(k.press('w', t + Duration::from_millis(800)), vec![ModelKey::Door]);
+        k.clear();
         // a pending letter with no command of its own and no pair: nothing
         assert!(k.press('m', t).is_empty());
         assert_eq!(k.press('x', t + Duration::from_millis(100)), vec![]);
         assert_eq!(k.pending(), None);
-        // c, then a letter that makes no pair with it: the section, then the grid
-        assert!(k.press('c', t).is_empty());
-        assert_eq!(k.press('i', t + Duration::from_millis(100)), vec![ModelKey::Section, ModelKey::Grid]);
         // upper case is the same key
-        assert_eq!(k.press('W', t), vec![ModelKey::Wall]);
+        assert_eq!(k.press('I', t), vec![ModelKey::Grid]);
+    }
+
+    #[test]
+    fn g_and_s_run_at_once_and_still_start_their_pairs() {
+        let t = Instant::now();
+        let mut k = KeySequence::default();
+        // G grabs at once; R right after it makes it the grid tool instead
+        assert_eq!(k.press('g', t), vec![ModelKey::Grab]);
+        assert_eq!(k.press('r', t + Duration::from_millis(200)), vec![ModelKey::Grid]);
+        // alone it ran already: nothing more when its time is up, nor before another letter
+        assert_eq!(k.press('g', t), vec![ModelKey::Grab]);
+        assert_eq!(k.expire(t + Duration::from_millis(800)), None);
+        assert_eq!(k.pending(), None);
+        assert_eq!(k.press('g', t), vec![ModelKey::Grab]);
+        assert_eq!(k.press('i', t + Duration::from_millis(100)), vec![ModelKey::Grid]);
+        // S selects at once, and SB is the slab, SE the section
+        assert_eq!(k.press('s', t), vec![ModelKey::Select]);
+        assert_eq!(k.press('b', t + Duration::from_millis(100)), vec![ModelKey::Slab]);
+        assert_eq!(k.press('s', t), vec![ModelKey::Select]);
+        assert_eq!(k.press('e', t + Duration::from_millis(100)), vec![ModelKey::Section]);
     }
 
     #[test]
@@ -206,7 +265,7 @@ mod tests {
         assert!(k.steps('m', t).is_empty());
         assert_eq!(k.steps('x', t + Duration::from_millis(100)), vec![Step::Letter('m'), Step::Letter('x')]);
         // a command stays a command
-        assert_eq!(k.steps('w', t), vec![Step::Key(ModelKey::Wall)]);
+        assert_eq!(k.steps('i', t), vec![Step::Key(ModelKey::Grid)]);
     }
 
     #[test]
@@ -217,6 +276,10 @@ mod tests {
         }
         for (p, _) in PAIRS {
             assert!(seen.insert(p.to_string()) && p.len() == 2, "{p}");
+        }
+        // a letter that runs at once has a command alone and starts a pair
+        for c in EAGER {
+            assert!(single(*c).is_some() && starts_pair(*c), "{c}");
         }
     }
 }

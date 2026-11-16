@@ -158,6 +158,57 @@ impl Placement {
     }
 }
 
+impl App {
+    /// Create similar: the tool that makes the one element selected, with its type and sizes, so
+    /// the next one drawn is like it.
+    pub(in crate::app) fn create_similar(&mut self, l: Language) {
+        let Some(e) = self.defined().cloned() else { return };
+        let of = |tool: ModelTool| self.modeller.placement.of(tool);
+        let (tool, settings) = match e.shape_in_project(&self.modeller.model.grid) {
+            Shape::Planar(p) => {
+                let kind = p.build_up.as_ref().map(|b| b.id.clone());
+                match p.form {
+                    // a wall up to its level stays so; one with a height of its own keeps it
+                    PlanarForm::Wall { height, .. } => (ModelTool::Wall, Settings { kind, width: p.total_thickness(), height: e.top.is_none().then_some(height), ..of(ModelTool::Wall) }),
+                    PlanarForm::Slab { role, .. } => (ModelTool::Slab, Settings { kind, width: p.total_thickness(), role, ..of(ModelTool::Slab) }),
+                }
+            }
+            Shape::Linear(d) => {
+                let tool = if e.class() == "IfcColumn" { ModelTool::Column } else { ModelTool::Beam };
+                let mut s = of(tool);
+                match &d.profile {
+                    bim_core::ProfileDef::Rectangle { width, height } => (s.kind, s.width, s.depth) = (None, *width, *height),
+                    // a steel profile by its designation, a type of the library by its name
+                    bim_core::ProfileDef::Catalogue { designation, .. } => {
+                        let typed = self.library.linear_types.iter().find(|t| self.library.linear_name(&t.id, bim_library::Lang::En).as_deref() == Some(designation.as_str())).map(|t| t.id.clone());
+                        s.kind = typed.or_else(|| bim_core::ProfileDef::steel(designation).map(|_| designation.clone())).or(s.kind);
+                    }
+                    _ => {}
+                }
+                (tool, s)
+            }
+            Shape::System(d) => (ModelTool::System, Settings { kind: d.system_type.as_ref().map(|t| t.id.clone()), height: e.top.is_none().then_some(d.height), ..of(ModelTool::System) }),
+            Shape::Point(d) => {
+                let tool = match d.opening {
+                    Some(bim_core::OpeningKind::Door) => ModelTool::Door,
+                    Some(bim_core::OpeningKind::Window) => ModelTool::Window,
+                    None => ModelTool::Point,
+                };
+                let mut s = Settings { width: d.size.x, height: Some(d.size.z), ..of(tool) };
+                if tool == ModelTool::Point {
+                    s.depth = d.size.y;
+                }
+                (tool, s)
+            }
+            Shape::Connection(_) => return,
+        };
+        self.modeller.placement.set(tool, settings);
+        if self.modeller.tool.map(|t| t.0) != Some(tool) {
+            self.set_model_tool(Some((tool, tool.label(l))));
+        }
+    }
+}
+
 /// A choice of type in the strip: its id (`None`: generic) and its name.
 #[derive(Debug, Clone, PartialEq)]
 struct Choice {

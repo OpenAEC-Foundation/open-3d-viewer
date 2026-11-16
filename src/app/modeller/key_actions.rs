@@ -22,6 +22,8 @@ impl ModelKey {
             ModelKey::Grid => l.text("Stramien", "Grid"),
             ModelKey::Section => l.text("Doorsnede", "Section"),
             ModelKey::Dimension => l.text("Maatvoering", "Dimension"),
+            ModelKey::Text => l.text("Tekst", "Text"),
+            ModelKey::CreateSimilar => l.text("Nog zo een maken", "Create similar"),
             ModelKey::Grab => l.text("Pakken: de selectie volgt de muis", "Grab: the selection follows the mouse"),
             ModelKey::Move => TransformKind::Move.label(l),
             ModelKey::Copy => TransformKind::Copy.label(l),
@@ -90,7 +92,15 @@ impl App {
             ModelKey::Object => self.set_model_tool(tool(ModelTool::Point)),
             ModelKey::Door => self.set_model_tool(tool(ModelTool::Door)),
             ModelKey::Window => self.set_model_tool(tool(ModelTool::Window)),
-            ModelKey::Grid => self.toggle_grid_tool(),
+            // GR: the G before it grabbed the selection, which goes back where it was
+            ModelKey::Grid => {
+                self.drop_grab();
+                self.toggle_grid_tool();
+            }
+            ModelKey::Text => {
+                let _ = self.update(Message::NoteTool(!self.note_tool));
+            }
+            ModelKey::CreateSimilar => self.create_similar(l),
             ModelKey::Section => {
                 let _ = self.update(Message::SectionTool(!self.section_tool));
             }
@@ -148,6 +158,7 @@ mod tests {
     fn letters_start_the_modellers_tools() {
         let mut studio = modelling_studio();
         press(&mut studio, "w");
+        press(&mut studio, "a");
         assert_eq!(studio.app.modeller.tool.map(|t| t.0), Some(ModelTool::Wall));
         press(&mut studio, "c");
         press(&mut studio, "l");
@@ -162,15 +173,42 @@ mod tests {
     }
 
     #[test]
+    fn cs_starts_the_tool_of_the_element_selected_with_its_sizes_and_gr_the_grid_tool() {
+        let mut studio = modelling_studio();
+        let form = bim_core::element::PlanarForm::Wall { start: glam::DVec2::ZERO, end: glam::DVec2::new(4.0, 0.0), base: 0.0, height: 2.4 };
+        let wall = studio.app.add_element("Wall", None, bim_core::Shape::Planar(bim_core::PlanarDef { form, thickness: 0.35, openings: Vec::new(), build_up: None })).unwrap();
+        // nothing selected: CS does nothing
+        press(&mut studio, "c");
+        press(&mut studio, "s");
+        assert!(studio.app.modeller.tool.is_none());
+        studio.app.select_modelled(wall);
+        press(&mut studio, "c");
+        press(&mut studio, "s");
+        assert_eq!(studio.app.modeller.tool.map(|t| t.0), Some(ModelTool::Wall));
+        let s = studio.app.modeller.placement.of(ModelTool::Wall);
+        assert_eq!((s.width, s.height), (0.35, Some(2.4)), "the next wall is as thick and as high");
+        // GR with the wall selected: G grabs it, R lets it go where it was and starts the grid
+        escape(&mut studio);
+        studio.app.select_modelled(wall);
+        let before = studio.app.modeller.model.get(wall).cloned();
+        press(&mut studio, "g");
+        assert!(studio.app.modeller.grab.is_some());
+        press(&mut studio, "r");
+        assert!(studio.app.modeller.grab.is_none() && studio.app.modeller.grid_tool);
+        assert_eq!(studio.app.modeller.model.get(wall).cloned(), before);
+    }
+
+    #[test]
     fn the_viewer_keeps_its_keys_and_ctrl_its_shortcuts() {
         let mut studio = modelling_studio();
         studio.set_product(Product::Viewer);
-        press(&mut studio, "w");
-        assert!(studio.app.modeller.tool.is_none(), "w walks in the Viewer");
+        press(&mut studio, "i");
+        assert!(!studio.app.modeller.grid_tool, "i is no key of the Viewer");
         studio.set_product(Product::Modeller);
         // Ctrl or Alt with a letter is not a Modeller key
-        press_with(&mut studio, "w", Modifiers::CTRL);
-        press_with(&mut studio, "w", Modifiers::ALT);
+        press_with(&mut studio, "i", Modifiers::CTRL);
+        press_with(&mut studio, "i", Modifiers::ALT);
+        assert!(!studio.app.modeller.grid_tool);
         assert!(studio.app.modeller.tool.is_none());
     }
 
@@ -199,6 +237,7 @@ mod tests {
         let _ = studio.update(Msg::App(crate::app::Message::EditMode));
         assert!(studio.app.modeller.edit.is_some());
         press(&mut studio, "w");
+        press(&mut studio, "a");
         assert!(studio.app.modeller.tool.is_none(), "no Wall tool while editing");
         let _ = studio.update(Msg::App(crate::app::Message::SelectTool));
         assert!(studio.app.modeller.edit.is_none() && studio.app.selecting(), "Select leaves edit mode");

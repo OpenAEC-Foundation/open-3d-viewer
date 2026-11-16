@@ -767,7 +767,7 @@ mod tests {
             Shape::Linear(LinearDef { start: DVec3::ZERO, end: DVec3::new(4.0, 0.0, 3.0), profile: ProfileDef::Rectangle { width: 0.2, height: 0.4 }, roll: 0.0 }),
             Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: DVec2::ZERO, end: DVec2::new(5.0, 1.0), base: 3.0, height: 2.7 }, thickness: 0.2, openings: Vec::new(), build_up: None }),
             Shape::Planar(PlanarDef {
-                form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0)], holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default() },
+                form: PlanarForm::Slab { outline: vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0)], holes: Vec::new(), top: 3.0, bulges: Vec::new(), role: Default::default(), slope: None },
                 thickness: 0.25,
                 openings: Vec::new(),
                 build_up: None,

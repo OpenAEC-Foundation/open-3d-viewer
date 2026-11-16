@@ -153,6 +153,7 @@ impl App {
             // on paper the view draws its grid lines and levels itself; over the model the
             // viewport does
             datums: if self.drawing_on_paper { self.view_datums(view) } else { Vec::new() },
+            selected: self.sel.items().iter().filter_map(|item| if let super::Pickable::Element(id) = item { Some(*id) } else { None }).collect(),
         })
     }
 
@@ -447,6 +448,8 @@ pub(super) struct ViewMarks {
     /// The grid lines and levels the view draws itself, on its drawing: those of a view shown on
     /// paper.
     datums: Vec<crate::drawing2d::Datum2>,
+    /// The elements selected: what the view cuts of them shows as a whole in the accent colour.
+    selected: Vec<u64>,
 }
 
 /// The first point of a dimension being made, where the pointer snaps to now, a text being
@@ -756,6 +759,26 @@ impl canvas::Program<Message> for ViewMarks {
             });
             let color = if fill.color == [0, 0, 0] { ink } else { Color::from_rgb8(fill.color[0], fill.color[1], fill.color[2]) };
             frame.fill(&outline, canvas::Fill { style: canvas::Style::Solid(color), rule: canvas::fill::Rule::EvenOdd });
+        }
+        // what is selected: the whole of each cut face of it, filled and outlined
+        if let Some(cut) = self.cut.as_ref().filter(|_| !self.selected.is_empty()) {
+            let picked = Path::new(|path| {
+                for fill in cut.fills.iter().filter(|f| f.element.is_some_and(|e| self.selected.contains(&e))) {
+                    for points in &fill.loops {
+                        let on: Vec<Point> = points.iter().filter_map(|q| self.px(&screen, q.map(f64::from))).collect();
+                        if on.len() < 3 || on.len() != points.len() {
+                            continue;
+                        }
+                        path.move_to(on[0]);
+                        for q in &on[1..] {
+                            path.line_to(*q);
+                        }
+                        path.close();
+                    }
+                }
+            });
+            frame.fill(&picked, canvas::Fill { style: canvas::Style::Solid(Color { a: 0.35, ..p.accent }), rule: canvas::fill::Rule::EvenOdd });
+            frame.stroke(&picked, Stroke::default().with_color(p.accent).with_width(2.0));
         }
         if !self.lines.is_empty() {
             let lines = Path::new(|path| {

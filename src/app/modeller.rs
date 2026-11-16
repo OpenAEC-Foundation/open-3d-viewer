@@ -30,6 +30,7 @@ pub mod select;
 pub mod levels;
 pub(super) mod shape_handles;
 pub mod slab_handles;
+pub mod snaps;
 pub mod spaces;
 pub mod temp_dims;
 pub mod sketch;
@@ -188,6 +189,8 @@ pub struct Modeller {
     pub join_word: &'static str,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
+    /// Which snaps are on (see `snaps`).
+    pub snaps: snaps::Snaps,
     /// The names given to spaces, each at a point of its space (see `spaces`).
     pub rooms: Vec<spaces::Room>,
     /// The name being typed for a space: which one, and the text.
@@ -407,17 +410,43 @@ impl App {
         let grid = self.modeller.model.grid;
         // the 3D cursor, once placed, is a point to land on
         let mut points: Vec<DVec3> = self.cursor3d_snap().into_iter().collect();
+        let snaps = self.modeller.snaps;
+        // the ends of a line when ends are on, its middle when middles are
+        let mut line = |a: DVec3, b: DVec3| {
+            if snaps.end {
+                points.extend([a, b]);
+            }
+            if snaps.middle {
+                points.push((a + b) / 2.0);
+            }
+        };
+        let (mut corners, mut middles) = (Vec::new(), Vec::new());
         for e in self.modeller.model.iter().filter(|e| e.id != except) {
             match e.shape_in_project(&grid) {
-                Shape::Point(p) => points.push(p.at),
-                Shape::Linear(l) => points.extend([l.start, l.end]),
-                Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, base, .. }, .. }) => points.extend([start.extend(base), end.extend(base)]),
-                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) => points.extend(outline.iter().map(|p| p.extend(top))),
-                Shape::System(s) => points.extend([s.start.extend(s.base), s.end.extend(s.base)]),
+                Shape::Point(p) => corners.push(p.at),
+                Shape::Linear(l) => line(l.start, l.end),
+                Shape::Planar(PlanarDef { form: PlanarForm::Wall { start, end, base, .. }, .. }) => line(start.extend(base), end.extend(base)),
+                Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, top, .. }, .. }) => {
+                    let n = outline.len();
+                    for k in 0..n {
+                        // each corner once: as the start of its edge
+                        corners.push(outline[k].extend(top));
+                        middles.push(((outline[k] + outline[(k + 1) % n]) / 2.0).extend(top));
+                    }
+                }
+                Shape::System(s) => line(s.start.extend(s.base), s.end.extend(s.base)),
                 Shape::Connection(_) => {}
             }
         }
-        points.extend(self.grid_snap_points());
+        if snaps.end {
+            points.extend(corners);
+        }
+        if snaps.middle {
+            points.extend(middles);
+        }
+        if snaps.grid {
+            points.extend(self.grid_snap_points());
+        }
         points
     }
 
@@ -433,9 +462,27 @@ impl App {
         if let Some((q, _)) = near {
             return DVec3::new(q.x, q.y, p.z);
         }
-        let round = |v: f64| (v / ROUND).round() * ROUND;
+        let snaps = self.modeller.snaps;
+        // the nearest point of a line under the cursor
+        if snaps.line {
+            let on_line = self
+                .snap_lines()
+                .into_iter()
+                .filter_map(|(a, b)| {
+                    let d = b - a;
+                    let c = a + d * ((p.truncate() - a).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                    let s = self.on_screen(c.extend(p.z), width, height)?;
+                    Some((c, (s.0 - x).hypot(s.1 - y)))
+                })
+                .filter(|(_, d)| *d <= SNAP_PIXELS)
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((c, _)) = on_line {
+                return c.extend(p.z);
+            }
+        }
+        let round = |v: f64| if snaps.round { (v / ROUND).round() * ROUND } else { v };
         let mut p = DVec3::new(round(p.x), round(p.y), p.z);
-        if let Some(first) = self.modeller.points.last() {
+        if let Some(first) = self.modeller.points.last().filter(|_| snaps.ortho) {
             let d = p - *first;
             let angle = d.y.atan2(d.x).to_degrees().rem_euclid(90.0);
             if angle < ORTHO_DEGREES || angle > 90.0 - ORTHO_DEGREES {
@@ -726,7 +773,7 @@ impl App {
         let level = self.work_plane().2;
         let p = DVec2::new;
         let add = |app: &mut App, name: &str, shape: Shape| app.add_element(name, level.clone(), shape).expect("the demo evaluates");
-        let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default() };
+        let slab = PlanarForm::Slab { outline: vec![p(-0.1, -0.1), p(10.1, -0.1), p(10.1, 6.1), p(-0.1, 6.1)], holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None };
         add(self, "Slab", Shape::Planar(PlanarDef { form: slab, thickness: SLAB_THICKNESS, openings: Vec::new(), build_up: None }));
         let wall = |a: DVec2, b: DVec2, openings: Vec<Opening>| Shape::Planar(PlanarDef { form: PlanarForm::Wall { start: a, end: b, base: 0.0, height: 3.0 }, thickness: WALL_THICKNESS, openings, build_up: None });
         let door = Opening { along: 1.0, sill: 0.0, width: 1.0, height: 2.3 };
@@ -798,7 +845,7 @@ pub(super) fn tool_shape(tool: ModelTool, a: DVec3, b: DVec3, z: f64, storey: f6
         ModelTool::Slab => {
             let (lo, hi) = (a.truncate().min(b.truncate()), a.truncate().max(b.truncate()));
             let outline = vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset, bulges: Vec::new(), role: s.role }, thickness: s.width, openings: Vec::new(), build_up: None };
+            let slab = PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: z + s.offset, bulges: Vec::new(), role: s.role, slope: None }, thickness: s.width, openings: Vec::new(), build_up: None };
             Shape::Planar(slab.with_build_up(build_up(&s.kind)))
         }
         ModelTool::System => {

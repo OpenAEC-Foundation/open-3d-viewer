@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn a_slab_mirrored_keeps_its_way_round() {
         let outline = vec![DVec2::new(0.0, 0.0), DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let slab = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default() }, thickness: 0.2, openings: Vec::new(), build_up: None });
+        let slab = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.2, openings: Vec::new(), build_up: None });
         let map = Map::Flip { on: DVec2::new(5.0, 0.0), along: DVec2::Y };
         let Some(Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, .. }, .. })) = transformed(&slab, &map) else { panic!() };
         let area: f64 = (0..outline.len()).map(|k| outline[k].perp_dot(outline[(k + 1) % outline.len()])).sum::<f64>() / 2.0;

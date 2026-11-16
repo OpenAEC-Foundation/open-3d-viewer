@@ -696,7 +696,7 @@ mod tests {
     fn floor() -> (App, ElementId) {
         let mut app = modelling();
         let outline = vec![DVec2::ZERO, DVec2::new(4.0, 0.0), DVec2::new(4.0, 3.0), DVec2::new(0.0, 3.0)];
-        let shape = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default() }, thickness: 0.25, openings: Vec::new(), build_up: None });
+        let shape = Shape::Planar(PlanarDef { form: PlanarForm::Slab { outline, holes: Vec::new(), top: 0.0, bulges: Vec::new(), role: Default::default(), slope: None }, thickness: 0.25, openings: Vec::new(), build_up: None });
         let id = app.add_element("Floor", None, shape).unwrap();
         app.keep_model_history();
         app.select_modelled(id);

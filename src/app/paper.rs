@@ -164,7 +164,7 @@ impl App {
 
     /// Cuts the views on a sheet that are not cut yet: a floor plan at its cut height, through
     /// its own layers.
-    fn cut_placed_plans(&mut self, sheet: &str) {
+    pub(super) fn cut_placed_plans(&mut self, sheet: &str) {
         let Some(sheet) = self.document.sheet(sheet) else { return };
         let plans: Vec<String> = sheet.views.iter().map(|v| v.plan.clone()).collect();
         for plan in plans {
@@ -405,107 +405,105 @@ impl App {
         })
     }
 
-    /// The workspace of a sheet's tab: the bar to place floor plans and to dimension, then the
-    /// sheet.
+    /// The workspace of a sheet's tab: the sheet alone. While a tool waits for a click, a line
+    /// above it says what it waits for (and holds the wording of a text to place); everything
+    /// else of the sheet is in the right pane (see [`App::sheet_properties`]) and in the ribbon.
     pub(super) fn doc_sheet_workspace(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
+        let path = self.active_doc_sheet.as_ref()?;
+        self.document.sheet(path)?;
+        let hint = |words: &str| text(words.to_string()).size(12).color(p.text_secondary);
+        let line: Option<Row<'_, Message>> = if self.dimension_tool {
+            Some(Row::new().push(hint(l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels."))))
+        } else if self.note_tool {
+            let wording = iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
+            Some(Row::new().push(wording).push(hint(l.text("Klik op een weergave waar de tekst komt.", "Click on a view where the text goes."))))
+        } else if self.section_tool {
+            Some(Row::new().push(hint(l.text(
+                "Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.",
+                "Click where the section starts and ends on a floor plan; it looks to the left.",
+            ))))
+        } else {
+            None
+        };
+        let drawing = self.paper_drawing(p, l)?;
+        let sheet = canvas_widget(drawing).width(Fill).height(Fill);
+        Some(match line {
+            Some(line) => column![container(line.spacing(8).align_y(Center)).padding([6, 10]).width(Fill).style(move |_| p.ribbon()), sheet].into(),
+            None => sheet.into(),
+        })
+    }
+
+    /// The Sheet section of the right pane while a sheet is shown: its paper, its arranging, its
+    /// export and the views to place on it; or, for what is picked on it, what can be done with
+    /// that (a view's scale and crop, a text's wording, a dimension's side).
+    pub(super) fn sheet_properties(&self, p: Palette, l: Language) -> Option<Element<'_, Message>> {
         let path = self.active_doc_sheet.as_ref()?;
         let sheet = self.document.sheet(path)?;
         let key: Arc<str> = Arc::from(path.as_str());
-        let tool = self.dimension_tool;
-        let measure = button(text(l.text("Maatvoering", "Dimension")).size(12))
-            .padding([3, 10])
-            .style(move |_, s| p.ribbon_button(tool, s))
-            .on_press(Message::DimensionTool(!tool));
-        let cutting = self.section_tool;
-        let section = button(text(l.text("Doorsnede", "Section")).size(12))
-            .padding([3, 10])
-            .style(move |_, s| p.ribbon_button(cutting, s))
-            .on_press(Message::SectionTool(!cutting));
-        let noting = self.note_tool;
-        let note = button(text(l.text("Tekst", "Text")).size(12))
-            .padding([3, 10])
-            .style(move |_, s| p.ribbon_button(noting, s))
-            .on_press(Message::NoteTool(!noting));
-        let mut bar = Row::new()
-            .spacing(6)
-            .align_y(Center)
-            .push(measure)
-            .push(note)
-            .push(section)
-            .push(self.export_control(p, l))
-            .push(text("|").size(12).color(p.text_muted));
-        let wording = || iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]).width(220);
-        let small = |label: String, active: bool, message: Message| {
-            button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(message)
+        let small = |label: String, active: bool, message: Message| -> Element<'static, Message> {
+            button(text(label).size(12)).padding([3, 8]).style(move |_, s| p.ribbon_button(active, s)).on_press(message).into()
         };
+        let label = |words: &str| -> Element<'static, Message> { text(words.to_string()).size(12).color(p.text_secondary).into() };
+        let choices = |items: Vec<Element<'static, Message>>| -> Element<'static, Message> { Row::with_children(items).spacing(4).wrap().into() };
+        let mut rows = iced::widget::Column::new().spacing(6);
         let picked_view = match self.sheet_pick {
             Some(SheetPick::View(i)) => sheet.views.get(i).map(|v| (i, v)),
             _ => None,
         };
-        if tool {
-            let hint = l.text("Klik twee punten op een plattegrond; Esc breekt af.", "Click two points on a floor plan; Esc cancels.");
-            bar = bar.push(text(hint).size(12).color(p.text_secondary));
-        } else if noting {
-            bar = bar.push(wording()).push(text(l.text("Klik op een weergave waar de tekst komt.", "Click on a view where the text goes.")).size(12).color(p.text_secondary));
-        } else if cutting {
-            let hint = l.text("Klik het begin en eind van de doorsnede op een plattegrond; hij kijkt naar links.", "Click where the section starts and ends on a floor plan; it looks to the left.");
-            bar = bar.push(text(hint).size(12).color(p.text_secondary));
-        } else if let Some((i, view)) = picked_view {
-            bar = bar.push(text(l.text("Schaal", "Scale")).size(12).color(p.text_secondary));
-            for scale in SCALES {
-                bar = bar.push(small(format!("1:{scale}"), view.scale == scale, Message::SetScale(key.clone(), i, scale)));
-            }
+        if let Some((i, view)) = picked_view {
+            rows = rows.push(label(l.text("Schaal", "Scale")));
+            rows = rows.push(choices(SCALES.iter().map(|&scale| small(format!("1:{scale}"), view.scale == scale, Message::SetScale(key.clone(), i, scale))).collect()));
             if let Some((_, typed)) = &self.cut_edit {
-                bar = bar.push(text(l.text("Snijhoogte (m)", "Cut height (m)")).size(12).color(p.text_secondary)).push(
-                    iced::widget::text_input("1.200", typed).on_input(Message::CutText).on_submit(Message::ApplyCut).size(12).padding([3, 6]).width(64),
+                rows = rows.push(
+                    row![
+                        label(l.text("Snijhoogte (m)", "Cut height (m)")),
+                        iced::widget::text_input("1.200", typed).on_input(Message::CutText).on_submit(Message::ApplyCut).size(12).padding([3, 6]).width(64),
+                    ]
+                    .spacing(8)
+                    .align_y(Center),
                 );
             }
             let cropped = self.document.plan(&view.plan).filter(|p| p.crop.is_some());
             if cropped.is_some() {
-                bar = bar.push(small(l.text("Bijsnijden opheffen", "Show all").to_string(), false, Message::CropPlan(Arc::from(view.plan.as_str()), None)));
+                rows = rows.push(small(l.text("Bijsnijden opheffen", "Show all").to_string(), false, Message::CropPlan(Arc::from(view.plan.as_str()), None)));
             } else {
-                bar = bar.push(text(l.text("sleep een rand om bij te snijden", "drag a side to crop")).size(12).color(p.text_muted));
+                rows = rows.push(text(l.text("sleep een rand om bij te snijden", "drag a side to crop")).size(12).color(p.text_muted));
             }
-            bar = bar.push(small(l.text("Standaard maatvoering", "Standard dimensions").to_string(), false, Message::StandardDimensions(Arc::from(view.plan.as_str()))));
-            bar = bar.push(small(l.text("Van blad halen", "Take off sheet").to_string(), false, Message::RemovePicked));
+            rows = rows.push(choices(vec![
+                small(l.text("Standaard maatvoering", "Standard dimensions").to_string(), false, Message::StandardDimensions(Arc::from(view.plan.as_str()))),
+                small(l.text("Van blad halen", "Take off sheet").to_string(), false, Message::RemovePicked),
+            ]));
         } else if let Some(SheetPick::Note(..)) = self.sheet_pick {
-            bar = bar.push(wording()).push(small(l.text("Tekst verwijderen", "Remove text").to_string(), false, Message::RemovePicked));
+            rows = rows.push(iced::widget::text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
+            rows = rows.push(small(l.text("Tekst verwijderen", "Remove text").to_string(), false, Message::RemovePicked));
         } else if let Some(SheetPick::Dimension(..)) = self.sheet_pick {
-            bar = bar
-                .push(small(l.text("Andere kant", "Other side").to_string(), false, Message::FlipDimension))
-                .push(small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked));
+            rows = rows.push(choices(vec![
+                small(l.text("Andere kant", "Other side").to_string(), false, Message::FlipDimension),
+                small(l.text("Maat verwijderen", "Remove dimension").to_string(), false, Message::RemovePicked),
+            ]));
         } else {
-            bar = bar.push(text(l.text("Papier", "Paper")).size(12).color(p.text_secondary));
-            for (name, size) in PAPERS {
-                bar = bar.push(small(name.to_string(), sheet.paper == size, Message::SetPaper(key.clone(), size)));
-            }
+            rows = rows.push(label(l.text("Papier", "Paper")));
+            rows = rows.push(choices(PAPERS.iter().map(|&(name, size)| small(name.to_string(), sheet.paper == size, Message::SetPaper(key.clone(), size))).collect()));
             if !sheet.views.is_empty() {
-                bar = bar.push(text("|").size(12).color(p.text_muted));
-                bar = bar.push(small(l.text("Indelen", "Arrange").to_string(), false, Message::ArrangeSheet(key.clone())));
+                rows = rows.push(small(l.text("Indelen", "Arrange").to_string(), false, Message::ArrangeSheet(key.clone())));
             }
-            bar = bar.push(text("|").size(12).color(p.text_muted));
-            bar = bar.push(text(l.text("Plaats op dit blad:", "Place on this sheet:")).size(12).color(p.text_secondary));
+            rows = rows.push(self.export_control(p, l));
+            rows = rows.push(label(l.text("Plaats op dit blad:", "Place on this sheet:")));
             if self.document.plans().is_empty() {
-                bar = bar.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
+                rows = rows.push(text(l.text("maak eerst een plattegrond in Weergaven", "make a floor plan in Views first")).size(12).color(p.text_muted));
             }
             let views = self.document.plans().iter().map(|v| (&v.name, &v.path)).chain(self.document.sections().iter().map(|s| (&s.name, &s.path)));
             for (name, path) in views {
-                bar = bar.push(
+                rows = rows.push(
                     button(text(name.clone()).size(12))
-                        .padding([3, 10])
-                        .style(move |_, s| p.ribbon_button(false, s))
+                        .padding([3, 8])
+                        .width(Fill)
+                        .style(move |_, s| p.row_button(s))
                         .on_press(Message::PlaceOnSheet(key.clone(), Arc::from(path.as_str()))),
                 );
             }
         }
-        let drawing = self.paper_drawing(p, l)?;
-        Some(
-            column![
-                container(bar).padding([6, 10]).width(Fill).style(move |_| p.ribbon()),
-                canvas_widget(drawing).width(Fill).height(Fill),
-            ]
-            .into(),
-        )
+        Some(container(rows).padding([2, 8]).into())
     }
 }
 

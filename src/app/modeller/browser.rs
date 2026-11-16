@@ -40,6 +40,8 @@ pub(super) fn class_label(class: &str, l: Language) -> &'static str {
         "IfcSlab" => l.text("Vloeren", "Slabs"),
         "IfcRoof" => l.text("Daken", "Roofs"),
         "IfcCovering" => l.text("Plafonds", "Ceilings"),
+        "IfcDoor" => l.text("Deuren", "Doors"),
+        "IfcWindow" => l.text("Ramen", "Windows"),
         "IfcColumn" => l.text("Kolommen", "Columns"),
         "IfcBeam" => l.text("Balken", "Beams"),
         "IfcMember" => l.text("Staven", "Members"),
@@ -50,7 +52,7 @@ pub(super) fn class_label(class: &str, l: Language) -> &'static str {
 }
 
 /// The order of the kinds in the list.
-pub(super) const CLASSES: [&str; 11] = ["IfcWall", "IfcSlab", "IfcRoof", "IfcCovering", "IfcColumn", "IfcBeam", "IfcMember", "IfcCurtainWall", "IfcBuildingElementProxy", "IfcElementAssembly", "IfcRelConnectsElements"];
+pub(super) const CLASSES: [&str; 13] = ["IfcWall", "IfcSlab", "IfcRoof", "IfcCovering", "IfcDoor", "IfcWindow", "IfcColumn", "IfcBeam", "IfcMember", "IfcCurtainWall", "IfcBuildingElementProxy", "IfcElementAssembly", "IfcRelConnectsElements"];
 
 impl App {
     /// Whether the explorer has its Project tab: the Modeller is shown.

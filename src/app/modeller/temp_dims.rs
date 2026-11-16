@@ -257,6 +257,9 @@ mod tests {
     #[test]
     fn a_wall_between_two_others_has_a_dimension_to_each_and_the_joined_walls_follow() {
         let mut app = modelling();
+        // seen from this far a click is near every line: the walls go where they are clicked
+        app.modeller.snaps.line = false;
+        app.modeller.snaps.middle = false;
         // a U open to the east: south wall 1, west wall 2, north wall 3; and a loose wall 4 in between
         walls(&mut app, &[(6.0, 0.0), (0.0, 0.0), (0.0, 4.0), (6.0, 4.0)]);
         walls(&mut app, &[(1.0, 1.5), (5.0, 1.5)]);

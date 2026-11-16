@@ -151,6 +151,11 @@ fn share_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-share.txt"))
 }
 
+/// Where the Collaborator keeps the house its reports are in the style of.
+fn house_file() -> Option<PathBuf> {
+    Some(crate::remote_link::settings_dir()?.join("collaborator-house.json"))
+}
+
 fn user_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-user.txt"))
 }
@@ -368,6 +373,9 @@ pub struct State {
     share_removed: Vec<String>,
     share_known: HashMap<String, String>,
     share_seen: u64,
+    /// The house the reports are in the style of, and only the issues given to the person shown.
+    pub house: crate::export::report::House,
+    pub only_mine: bool,
     /// The walk of each room to its way out (by the room's element), and the room whose walk
     /// the 3D view draws.
     pub routes: HashMap<u64, Vec<[f32; 3]>>,
@@ -471,6 +479,12 @@ impl Default for State {
             share_removed: Vec::new(),
             share_known: HashMap::new(),
             share_seen: 0,
+            house: {
+                let house: crate::export::report::House = house_file().and_then(|f| std::fs::read(f).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+                crate::export::report::set_house(house.clone());
+                house
+            },
+            only_mine: false,
             routes: HashMap::new(),
             route_shown: None,
             bcf3: false,
@@ -794,6 +808,13 @@ pub enum Event {
     /// Whether the clash tests run again when a model changes.
     AutoRerun(bool),
     /// The folder the project is shared through: asked for, chosen (none: not shared), synced.
+    /// The house of the reports: its name (0) or colour (1) typed, a logo asked for, chosen, taken off.
+    House(u8, String),
+    HouseLogo,
+    HouseLogoIs(Option<PathBuf>),
+    HouseLogoOff,
+    /// Only the issues given to the person.
+    OnlyMine(bool),
     ShareFolder,
     ShareFolderIs(Option<PathBuf>),
     Unshare,
@@ -1507,7 +1528,7 @@ impl App {
             .collab
             .clashes
             .iter()
-            .map(|c| crate::collab::rules::ClashMemo { key: if c.key.is_empty() { self.collab_clash_key(c) } else { c.key.clone() }, decision: c.decision.key().into(), rule: c.rule.clone(), a: c.a_name.clone(), b: c.b_name.clone() })
+            .map(|c| crate::collab::rules::ClashMemo { key: if c.key.is_empty() { self.collab_clash_key(c) } else { c.key.clone() }, decision: c.decision.key().into(), rule: c.rule.clone(), a: c.a_name.clone(), b: c.b_name.clone(), at: c.at })
             .collect();
         if let Some(rules) = self.collab.rules_mut() {
             rules.clash_memory = memory;
@@ -1525,11 +1546,27 @@ impl App {
         let mut found = std::collections::HashSet::new();
         for c in rows.iter_mut() {
             c.key = self.collab_clash_key(c);
-            match known.get(c.key.as_str()) {
+            found.insert(c.key.clone());
+        }
+        // an element modelled anew has another key: its clash is the one of the run before in
+        // the same test, between elements of the same names, within half a metre
+        let mut again: HashMap<String, &crate::collab::rules::ClashMemo> = HashMap::new();
+        let mut taken = std::collections::HashSet::new();
+        for c in rows.iter().filter(|c| !known.contains_key(c.key.as_str())) {
+            let same = |m: &&crate::collab::rules::ClashMemo| {
+                m.rule == c.rule && ((m.a == c.a_name && m.b == c.b_name) || (m.a == c.b_name && m.b == c.a_name)) && !found.contains(&m.key) && !taken.contains(&m.key) && Vec3::from_array(m.at).distance(Vec3::from_array(c.at)) < 0.5
+            };
+            if let Some(memo) = memory.iter().filter(same).min_by(|x, y| Vec3::from_array(x.at).distance(Vec3::from_array(c.at)).total_cmp(&Vec3::from_array(y.at).distance(Vec3::from_array(c.at)))) {
+                taken.insert(memo.key.clone());
+                again.insert(c.key.clone(), memo);
+            }
+        }
+        found.extend(taken);
+        for c in rows.iter_mut() {
+            match known.get(c.key.as_str()).or_else(|| again.get(c.key.as_str())) {
                 Some(memo) => c.decision = Decision::parse(&memo.decision).unwrap_or_default(),
                 None => c.fresh = compared,
             }
-            found.insert(c.key.clone());
         }
         if self.collab.partial_run {
             return;
@@ -1543,6 +1580,16 @@ impl App {
             new: rows.iter().filter(|c| c.fresh).count(),
             resolved: self.collab.resolved.len(),
             open: rows.iter().filter(|c| c.decision != Decision::Accepted).count(),
+            per_test: {
+                let mut per: Vec<(String, usize)> = Vec::new();
+                for c in rows.iter().filter(|c| c.decision != Decision::Accepted) {
+                    match per.iter_mut().find(|(name, _)| *name == c.rule) {
+                        Some(found) => found.1 += 1,
+                        None => per.push((c.rule.clone(), 1)),
+                    }
+                }
+                per
+            },
         };
         if let Some(rules) = self.collab.rules_mut() {
             rules.clash_runs.push(run);
@@ -1621,10 +1668,12 @@ impl App {
     /// The topic of a group of clashes: what they share, each clash in the description, and a
     /// viewpoint on all of them.
     fn collab_group_topic(&self, rows: &[&ClashRow], l: Language) -> Topic {
-        let title = group_title(rows);
+        let shared = group_title(rows);
+        let (words, priority) = self.clash_words(rows, l);
+        let title = words.map_or(shared.clone(), |w| format!("{w} · {shared}"));
         let mut topic = Topic::new(&format!("{}: {title} ({} {})", rows[0].rule, rows.len(), l.text("clashes", "clashes")), &self.collab.author);
         topic.kind = "Clash".into();
-        topic.priority = "Normal".into();
+        topic.priority = priority.bcf().into();
         topic.description = rows
             .iter()
             .take(30)
@@ -2651,6 +2700,26 @@ impl App {
                     rules.auto_rerun = on;
                 }
             }
+            Event::House(..) | Event::HouseLogoIs(_) | Event::HouseLogoOff => {
+                self.collab.dialog_open = false;
+                match event {
+                    Event::House(0, typed) => self.collab.house.company = typed,
+                    Event::House(_, typed) => self.collab.house.accent = typed,
+                    Event::HouseLogoIs(Some(path)) => self.collab.house.logo = Some(path),
+                    Event::HouseLogoOff => self.collab.house.logo = None,
+                    _ => {}
+                }
+                crate::export::report::set_house(self.collab.house.clone());
+                if let (Some(file), Ok(bytes)) = (house_file(), serde_json::to_vec_pretty(&self.collab.house)) {
+                    let _ = file.parent().map(std::fs::create_dir_all);
+                    let _ = std::fs::write(file, bytes);
+                }
+            }
+            Event::HouseLogo => {
+                self.collab.dialog_open = true;
+                return Task::perform(async { rfd::AsyncFileDialog::new().add_filter("Logo", &["svg", "png", "jpg", "jpeg"]).pick_file().await.map(|f| f.path().to_path_buf()) }, |file| Message::Collab(Event::HouseLogoIs(file)));
+            }
+            Event::OnlyMine(on) => self.collab.only_mine = on,
             Event::ShareFolder => {
                 self.collab.dialog_open = true;
                 return Task::perform(async { rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().to_path_buf()) }, |folder| Message::Collab(Event::ShareFolderIs(folder)));
@@ -2959,6 +3028,26 @@ impl App {
             .spacing(6)
             .align_y(Alignment::Center),
         });
+        // the house the reports are in the style of
+        let logo = state.house.logo.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+        list = list.push(
+            column![
+                w::secondary(look, l.text("Huisstijl van de rapporten", "House style of the reports")),
+                row![
+                    container(w::text_field(look, l.text("Naam van het bureau", "Name of the firm"), &state.house.company, Some(|t| go(Event::House(0, t))), D::Compact, None)).width(Length::FillPortion(3)),
+                    container(w::text_field(look, l.text("Kleur #RRGGBB", "Colour #RRGGBB"), &state.house.accent, Some(|t| go(Event::House(1, t))), D::Compact, (!state.house.accent_reads()).then_some(l.text("Schrijf de kleur als #RRGGBB", "Write the colour as #RRGGBB")))).width(Length::FillPortion(2)),
+                ]
+                .spacing(6),
+                row![
+                    w::secondary(look, logo.unwrap_or_else(|| l.text("Logo van Open BIM Suite", "Logo of Open BIM Suite").to_string())).width(Length::Fill),
+                    w::button(look, l.text("Logo kiezen", "Choose logo"), K::Secondary, D::Compact, None, Some(go(Event::HouseLogo))),
+                    w::button(look, l.text("Standaard", "Default"), K::Quiet, D::Compact, None, state.house.logo.is_some().then(|| go(Event::HouseLogoOff))),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(4),
+        );
         if state.issues.topics.is_empty() {
             return list
                 .push(w::secondary(
@@ -2973,7 +3062,9 @@ impl App {
         let needle = state.search.trim().to_lowercase();
         let fits = |t: &Topic| {
             let said = [&t.title, &t.description, &t.assigned_to, &t.kind].iter().any(|s| s.to_lowercase().contains(&needle)) || t.labels.iter().any(|s| s.to_lowercase().contains(&needle));
-            (needle.is_empty() || said) && (state.show_closed || !closed(&t.status))
+            let me = state.author.trim().to_lowercase();
+            let mine = !state.only_mine || (!me.is_empty() && t.assigned_to.to_lowercase().contains(&me));
+            (needle.is_empty() || said) && (state.show_closed || !closed(&t.status)) && mine
         };
         let shown: Vec<&Topic> = state.issues.topics.iter().filter(|t| fits(t)).collect();
         list = list.push(w::text_field(look, l.text("Zoeken in issues", "Search issues"), &state.search, Some(|t| go(Event::Search(t))), D::Compact, None));
@@ -2984,7 +3075,13 @@ impl App {
             facts.push(l.text("gewijzigd", "changed").to_string());
         }
         list = list.push(
-            row![w::secondary(look, facts.join(" · ")).width(Length::Fill), w::checkbox(look, l.text("Gesloten", "Closed"), state.show_closed, Some(|on| go(Event::ShowClosed(on))))].spacing(6).align_y(Alignment::Center),
+            row![
+                w::secondary(look, facts.join(" · ")).width(Length::Fill),
+                w::checkbox(look, l.text("Van mij", "Mine"), state.only_mine, Some(|on| go(Event::OnlyMine(on)))),
+                w::checkbox(look, l.text("Gesloten", "Closed"), state.show_closed, Some(|on| go(Event::ShowClosed(on)))),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
         );
         for topic in shown.into_iter().take(SHOWN) {
             let picked = state.topic.as_deref() == Some(topic.guid.as_str());
@@ -3389,6 +3486,24 @@ impl App {
             }
             let (first, latest) = (last[0], last[last.len() - 1]);
             list = list.push(row![bars, w::secondary(look, format!("{} {} · {} → {} {}", last.len(), l.text("runs", "runs"), first.open, latest.open, l.text("open", "open")))].spacing(8).align_y(Alignment::End));
+            // per test: how many were open at the first of these runs that knew it, and now
+            for (name, now) in &latest.per_test {
+                let Some(then) = last.iter().find_map(|r| r.per_test.iter().find(|(n, _)| n == name).map(|(_, open)| *open)) else { continue };
+                let tone = match now.cmp(&then) {
+                    std::cmp::Ordering::Less => Some(Tone::Success),
+                    std::cmp::Ordering::Greater => Some(Tone::Error),
+                    std::cmp::Ordering::Equal => None,
+                };
+                list = list.push(row![w::secondary(look, name.clone()).width(Length::Fill), site::chip(look, &format!("{then} → {now}"), tone)].spacing(6).align_y(Alignment::Center));
+            }
+            for (name, then) in last.iter().flat_map(|r| r.per_test.iter()).filter(|(n, _)| !latest.per_test.iter().any(|(m, _)| m == n)).fold(Vec::<(&String, usize)>::new(), |mut seen, (n, open)| {
+                if !seen.iter().any(|(m, _)| *m == n) {
+                    seen.push((n, *open));
+                }
+                seen
+            }) {
+                list = list.push(row![w::secondary(look, name.clone()).width(Length::Fill), site::chip(look, &format!("{then} → 0"), Some(Tone::Success))].spacing(6).align_y(Alignment::Center));
+            }
         }
         if let Some(rules) = state.rules() {
             list = list.push(w::checkbox(look, l.text("Opnieuw zoeken als een model verandert", "Find again when a model changes"), rules.auto_rerun, Some(|on| go(Event::AutoRerun(on)))));
@@ -3476,11 +3591,20 @@ impl App {
             let g = first.group;
             let open = state.open_group == Some(g);
             let rows: Vec<&ClashRow> = group.iter().map(|&k| &state.clashes[k]).collect();
-            let title = group_title(&rows);
+            let shared = group_title(&rows);
+            let (words, priority) = self.clash_words(&rows, l);
+            let title = words.unwrap_or_else(|| shared.clone());
             let undecided = rows.iter().filter(|c| c.decision == Decision::Open).count();
             let worst = rows.iter().filter(|c| c.decision != Decision::Accepted).max_by(|x, y| x.reach.cmp(&y.reach).then(x.distance.total_cmp(&y.distance))).copied().unwrap_or(first);
             let (what, tone) = if undecided == 0 && rows.iter().all(|c| c.decision == Decision::Accepted) { (l.text("akkoord", "accepted").to_string(), Tone::Success) } else { says(worst) };
-            let count = format!("{} {}{}", rows.len(), l.text("clashes", "clashes"), if undecided < rows.len() { format!(" · {undecided} {}", l.text("open", "open")) } else { String::new() });
+            let count = format!(
+                "{}{} {}{} · {}",
+                if title == shared { String::new() } else { format!("{shared} · ") },
+                rows.len(),
+                l.text("clashes", "clashes"),
+                if undecided < rows.len() { format!(" · {undecided} {}", l.text("open", "open")) } else { String::new() },
+                priority.word(l)
+            );
             let line = row![
                 text(if open { "▾" } else { "▸" }).size(12).color(p.text_secondary),
                 column![w::body(look, title.clone()), w::secondary(look, count)].spacing(1).width(Length::Fill),
@@ -3728,6 +3852,25 @@ impl App {
         self.collab.refresh();
         self.collab_refresh_sides();
         self.inform_refresh();
+        if cmd == "collab_house" {
+            if let Some(v) = a.get("company").and_then(|v| v.as_str()) {
+                let _ = self.collab_handle(Event::House(0, v.to_string()));
+            }
+            if let Some(v) = a.get("accent").and_then(|v| v.as_str()) {
+                let _ = self.collab_handle(Event::House(1, v.to_string()));
+            }
+            match a.get("logo") {
+                Some(serde_json::Value::Null) => {
+                    let _ = self.collab_handle(Event::HouseLogoOff);
+                }
+                Some(v) => {
+                    let path = v.as_str().map(PathBuf::from).filter(|p| p.is_file()).ok_or("give an existing logo file")?;
+                    let _ = self.collab_handle(Event::HouseLogoIs(Some(path)));
+                }
+                None => {}
+            }
+            return Ok(serde_json::json!({ "company": self.collab.house.company, "accent": self.collab.house.accent, "logo": self.collab.house.logo.as_ref().map(|p| p.display().to_string()) }));
+        }
         if cmd == "collab_share" {
             match a.get("action").and_then(|v| v.as_str()).unwrap_or("sync") {
                 "set" => {

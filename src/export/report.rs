@@ -58,6 +58,53 @@ pub struct Cover {
     pub picture: Option<Jpeg>,
 }
 
+/// The house a report is in the style of: whose name stands on it, its colour and its logo. The
+/// suite's own when nothing is set.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct House {
+    /// The name beside the logo; empty for the suite's.
+    pub company: String,
+    /// The colour of the bars and lines, as `#RRGGBB`; empty for the suite's amber.
+    pub accent: String,
+    /// A logo file (SVG, PNG or JPEG); none for the suite's.
+    pub logo: Option<std::path::PathBuf>,
+}
+
+impl House {
+    /// The colour as a PDF writes it, when it reads as one.
+    fn colour(&self) -> Option<String> {
+        let hex = self.accent.trim().trim_start_matches('#');
+        if hex.len() != 6 || !hex.is_ascii() {
+            return None;
+        }
+        let part = |k: usize| u8::from_str_radix(&hex[2 * k..2 * k + 2], 16).ok().map(|v| num_to(f64::from(v) / 255.0, 3));
+        Some(format!("{} {} {}", part(0)?, part(1)?, part(2)?))
+    }
+
+    /// Whether the colour typed reads as one (or is left empty).
+    pub fn accent_reads(&self) -> bool {
+        self.accent.trim().is_empty() || self.colour().is_some()
+    }
+}
+
+static HOUSE: std::sync::RwLock<Option<House>> = std::sync::RwLock::new(None);
+
+/// Sets the house the reports made from now on are in the style of.
+pub fn set_house(house: House) {
+    if let Ok(mut kept) = HOUSE.write() {
+        *kept = Some(house);
+    }
+}
+
+fn house() -> House {
+    HOUSE.read().ok().and_then(|h| h.clone()).unwrap_or_default()
+}
+
+fn accent() -> String {
+    house().colour().unwrap_or_else(|| ACCENT.to_string())
+}
+
 /// What a report holds, from the top down.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
@@ -299,7 +346,7 @@ fn table(p: &mut Pages, widths: &[f64], headings: &[String], rows: &[Row]) {
 
 /// The cover: the millimetre grid over the page, the logo and the name of the suite, the title
 /// over an amber bar, the picture of the model, and what the report covers.
-fn cover(p: &mut Pages, c: &Cover, logo: bool) -> String {
+fn cover(p: &mut Pages, c: &Cover, logo: Option<f64>) -> String {
     use std::fmt::Write;
     let mut s = String::new();
     // the millimetre grid: every millimetre faint, every centimetre a little stronger
@@ -320,17 +367,20 @@ fn cover(p: &mut Pages, c: &Cover, logo: bool) -> String {
     }
     p.page = s;
     // the logo and the suite
-    if logo {
-        let _ = writeln!(p.page, "q 34 0 0 34 {} {} cm /Logo Do Q", num_to(LEFT, 2), num_to(h - 48.0 - 34.0, 2));
+    // a logo wider than high keeps its shape, up to four times as wide
+    let wide = logo.map_or(0.0, |ratio| 34.0 * ratio.clamp(0.25, 4.0));
+    if logo.is_some() {
+        let _ = writeln!(p.page, "q {} 0 0 34 {} {} cm /Logo Do Q", num_to(wide, 2), num_to(LEFT, 2), num_to(h - 48.0 - 34.0, 2));
     }
-    p.text_at(LEFT + (if logo { 44.0 } else { 0.0 }), h - 48.0 - 22.0, 13.0, true, INK, "Open BIM Suite");
+    let company = house().company;
+    p.text_at(LEFT + (if logo.is_some() { wide + 10.0 } else { 0.0 }), h - 48.0 - 22.0, 13.0, true, INK, if company.trim().is_empty() { "Open BIM Suite" } else { company.trim() });
     // the title over an amber bar, white behind it so the grid does not run through
     p.y = 150.0;
     let title = wrap(&c.title, 30.0, true, WIDTH - 20.0);
     let sub = wrap(&c.subtitle, 12.0, false, WIDTH - 20.0);
     let block = title.len() as f64 * 38.0 + sub.len() as f64 * 17.0 + 26.0;
     p.fill(LEFT - 10.0, block, WIDTH + 20.0, "1 1 1");
-    p.fill(LEFT - 10.0, block, 5.0, ACCENT);
+    p.fill(LEFT - 10.0, block, 5.0, &accent());
     p.y += 8.0;
     for line in &title {
         p.text(LEFT + 6.0, 30.0, true, INK, line);
@@ -373,8 +423,45 @@ fn deflate(bytes: &[u8]) -> Vec<u8> {
     z.finish().unwrap_or_default()
 }
 
-/// The logo: its SVG drawn 256 pixels wide, as RGB and its transparency.
+/// The logo of the house when it has one that reads, else the suite's.
 fn logo() -> Option<(u32, u32, Vec<u8>, Vec<u8>)> {
+    house().logo.as_deref().and_then(logo_of).or_else(own_logo)
+}
+
+/// A logo file as RGB and its transparency, at most 512 pixels wide or high.
+#[cfg(not(target_arch = "wasm32"))]
+fn logo_of(path: &std::path::Path) -> Option<(u32, u32, Vec<u8>, Vec<u8>)> {
+    use resvg::{tiny_skia, usvg};
+    let bytes = std::fs::read(path).ok()?;
+    let rgba = if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("svg")) {
+        let tree = usvg::Tree::from_data(&bytes, &usvg::Options::default()).ok()?;
+        let size = tree.size();
+        let scale = 512.0 / size.width().max(size.height()).max(1.0);
+        let (w, h) = ((size.width() * scale).round().max(1.0) as u32, (size.height() * scale).round().max(1.0) as u32);
+        let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+        resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+        let pixels: Vec<u8> = pixmap.pixels().iter().flat_map(|px| { let c = px.demultiply(); [c.red(), c.green(), c.blue(), c.alpha()] }).collect();
+        image::RgbaImage::from_raw(w, h, pixels)?
+    } else {
+        let read = image::load_from_memory(&bytes).ok()?;
+        if read.width().max(read.height()) > 512 { read.thumbnail(512, 512).to_rgba8() } else { read.to_rgba8() }
+    };
+    let (w, h) = rgba.dimensions();
+    let (mut rgb, mut alpha) = (Vec::with_capacity((w * h * 3) as usize), Vec::with_capacity((w * h) as usize));
+    for px in rgba.pixels() {
+        rgb.extend_from_slice(&px.0[..3]);
+        alpha.push(px.0[3]);
+    }
+    Some((w, h, rgb, alpha))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn logo_of(_: &std::path::Path) -> Option<(u32, u32, Vec<u8>, Vec<u8>)> {
+    None
+}
+
+/// The suite's logo: its SVG drawn 256 pixels wide, as RGB and its transparency.
+fn own_logo() -> Option<(u32, u32, Vec<u8>, Vec<u8>)> {
     use resvg::{tiny_skia, usvg};
     const SVG: &str = include_str!("../../assets/logo.svg");
     const SIZE: u32 = 256;
@@ -397,7 +484,9 @@ pub fn report_pdf(cover_page: &Cover, title: &str, date: &str, blocks: &[Block])
     use std::fmt::Write;
     let logo = logo();
     let mut p = Pages { done: Vec::new(), page: String::new(), y: TOP, pictures: Vec::new() };
-    let first = cover(&mut p, cover_page, logo.is_some());
+    let ratio = logo.as_ref().map(|l| f64::from(l.0) / f64::from(l.1.max(1)));
+    let accent = accent();
+    let first = cover(&mut p, cover_page, ratio);
     p.done.push(first);
     p.y = TOP;
     for block in blocks {
@@ -406,7 +495,7 @@ pub fn report_pdf(cover_page: &Cover, title: &str, date: &str, blocks: &[Block])
                 p.y += 8.0;
                 p.room(16.0 * 1.4 + 50.0);
                 let top = p.y;
-                p.fill(LEFT, 13.0, 4.0, ACCENT);
+                p.fill(LEFT, 13.0, 4.0, &accent);
                 p.y = top - 1.0;
                 for line in wrap(text, 15.0, true, WIDTH - 12.0) {
                     p.text(LEFT + 11.0, 15.0, true, INK, &line);
@@ -479,13 +568,14 @@ pub fn report_pdf(cover_page: &Cover, title: &str, date: &str, blocks: &[Block])
             let mut s = String::new();
             if k > 0 {
                 let top = PAGE.1 - 40.0;
+                let wide = ratio.map_or(0.0, |r| 16.0 * r.clamp(0.25, 4.0));
                 if logo.is_some() {
-                    let _ = writeln!(s, "q 16 0 0 16 {} {} cm /Logo Do Q", num_to(LEFT, 2), num_to(top - 3.0, 2));
+                    let _ = writeln!(s, "q {} 0 0 16 {} {} cm /Logo Do Q", num_to(wide, 2), num_to(LEFT, 2), num_to(top - 3.0, 2));
                 }
-                let x = LEFT + if logo.is_some() { 22.0 } else { 0.0 };
+                let x = LEFT + if logo.is_some() { wide + 6.0 } else { 0.0 };
                 let _ = writeln!(s, "BT {INK} rg /F2 9 Tf {} {} Td {} Tj ET", num_to(x, 2), num_to(top + 2.0, 2), literal(title));
                 let _ = writeln!(s, "BT {MUTED} rg /F1 8 Tf {} {} Td {} Tj ET", num_to(PAGE.0 - LEFT - measure(date, 8.0, false), 2), num_to(top + 2.0, 2), literal(date));
-                let _ = writeln!(s, "{ACCENT} rg {} {} {} 1.5 re f", num_to(LEFT, 2), num_to(top - 9.0, 2), num_to(WIDTH, 2));
+                let _ = writeln!(s, "{accent} rg {} {} {} 1.5 re f", num_to(LEFT, 2), num_to(top - 9.0, 2), num_to(WIDTH, 2));
             }
             s.push_str(body);
             let foot = format!("{} / {count}", k + 1);
@@ -650,5 +740,8 @@ mod tests {
         assert_eq!(code('€'), 0x80);
         assert_eq!(code('é'), 0xE9);
         assert!(logo().is_some(), "the logo reads out of its SVG");
+        // a house of its own: its colour when it reads as one
+        assert_eq!(House { accent: "#0055AA".into(), ..House::default() }.colour().as_deref(), Some("0 0.333 0.667"));
+        assert!(House { accent: "blauw".into(), ..House::default() }.colour().is_none() && !House { accent: "blauw".into(), ..House::default() }.accent_reads());
     }
 }

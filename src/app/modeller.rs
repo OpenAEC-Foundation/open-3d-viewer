@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 mod grids;
 pub mod browser;
+pub mod cursor3d;
 pub mod explorer;
 pub(super) mod file_types;
 pub mod key_actions;
@@ -183,6 +184,8 @@ pub struct Modeller {
     pub join_word: &'static str,
     /// Edit mode (Tab) on an element, or a drag of a selected element's grip.
     pub edit: Option<super::edit::Edit>,
+    /// The 3D cursor (see `cursor3d`).
+    pub cursor3d: cursor3d::Cursor3d,
     /// A grip of a selected floor being dragged (see `slab_handles`).
     pub slab_drag: Option<slab_handles::SlabDrag>,
     /// The sketch of a floor outline, open (see `sketch`).
@@ -287,6 +290,8 @@ impl App {
             self.measure.tool = None;
             self.plane_picking = false;
         }
+        // a fresh 3D cursor is where a wall, a beam or a system starts
+        self.tool_from_cursor3d();
     }
 
     /// Esc while placing: drop the points clicked, else switch the tool off. False when no tool
@@ -350,7 +355,8 @@ impl App {
     /// The points a click snaps to, of every modelled element but `except` (ids start at 1).
     pub(super) fn snap_points_except(&self, except: ElementId) -> Vec<DVec3> {
         let grid = self.modeller.model.grid;
-        let mut points = Vec::new();
+        // the 3D cursor, once placed, is a point to land on
+        let mut points: Vec<DVec3> = self.cursor3d_snap().into_iter().collect();
         for e in self.modeller.model.iter().filter(|e| e.id != except) {
             match e.shape_in_project(&grid) {
                 Shape::Point(p) => points.push(p.at),

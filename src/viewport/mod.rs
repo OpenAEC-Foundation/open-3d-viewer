@@ -57,6 +57,9 @@ pub enum Navigate {
     /// Right click (or a long press) at (x, y) in a viewport of width × height: the menu of the
     /// selection.
     Context { x: f32, y: f32, width: f32, height: f32 },
+    /// Shift and the right button at (x, y), pressed or dragged (only while `cursor3d` is on): the
+    /// Modeller's 3D cursor goes there.
+    Cursor3d { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor rests at (x, y) in the viewport (only while `hover` is on).
     Hover { x: f32, y: f32, width: f32, height: f32 },
     /// The cursor left the viewport.
@@ -83,6 +86,8 @@ pub struct Viewport3D<'a> {
     /// A left drag draws a selection box instead of orbiting (the Modeller's Select tool); then
     /// Shift + middle drag orbits.
     pub drag_selects: bool,
+    /// Shift and the right button place the 3D cursor ([`Navigate::Cursor3d`]): in the Modeller.
+    pub cursor3d: bool,
     /// Show the crosshair cursor (measuring) instead of the hand.
     pub crosshair: bool,
     /// Structural instances drawn again on top: the selection and the hover.
@@ -140,6 +145,8 @@ enum Drag {
     Pan,
     /// Ctrl + left: a selection box from the point the button went down.
     Box,
+    /// Shift + right in the Modeller: the 3D cursor follows the pointer.
+    Cursor3d,
 }
 
 impl<Message> shader::Program<Message> for Viewport3D<'_>
@@ -202,14 +209,18 @@ where
                     mouse::Button::Left if state.shift => Drag::Pan,
                     mouse::Button::Left => Drag::Orbit,
                     mouse::Button::Middle if state.shift => Drag::Orbit,
+                    mouse::Button::Right if state.shift && self.cursor3d => Drag::Cursor3d,
                     mouse::Button::Right | mouse::Button::Middle => Drag::Pan,
                     _ => return None,
                 };
                 state.drag = Some((drag, position));
                 state.press = (*button == mouse::Button::Left && matches!(drag, Drag::Orbit | Drag::Box)).then_some(position);
-                state.right_press = (*button == mouse::Button::Right).then_some(position);
+                state.right_press = (*button == mouse::Button::Right && drag != Drag::Cursor3d).then_some(position);
                 // a click keeps the highlight it takes; a drag does not
                 state.hover = None;
+                if drag == Drag::Cursor3d {
+                    return publish(Navigate::Cursor3d { x: position.x, y: position.y, width: bounds.width, height: bounds.height });
+                }
                 Some(shader::Action::capture())
             }
             Event::Mouse(mouse::Event::ButtonReleased(_)) => {
@@ -276,6 +287,7 @@ where
                 match drag {
                     Drag::Orbit => publish(Navigate::Orbit { dx, dy }),
                     Drag::Pan | Drag::Box => publish(Navigate::Pan { dx, dy, height: bounds.height }),
+                    Drag::Cursor3d => publish(Navigate::Cursor3d { x: position.x, y: position.y, width: bounds.width, height: bounds.height }),
                 }
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -324,7 +336,7 @@ where
         match state.drag {
             Some((Drag::Orbit, _)) => mouse::Interaction::Grabbing,
             Some((Drag::Pan, _)) => mouse::Interaction::Move,
-            Some((Drag::Box, _)) => mouse::Interaction::Crosshair,
+            Some((Drag::Box | Drag::Cursor3d, _)) => mouse::Interaction::Crosshair,
             None if cursor.is_over(bounds) && self.crosshair => mouse::Interaction::Crosshair,
             None => mouse::Interaction::default(),
         }
@@ -479,6 +491,7 @@ mod tests {
             looks: &offsets,
             hover: false,
             drag_selects,
+            cursor3d: true,
             crosshair: false,
             structural_selected: &marks,
             structural_hovered: &marks,

@@ -1636,6 +1636,10 @@ impl Studio {
                 // (not in edit mode, whose own keys came before; its other letters stay the app's)
                 if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !sketching && !press.modifiers.control() && !press.modifiers.alt() {
                     use crate::app::modeller::keys::{ModelKey, Step};
+                    // Shift+C takes the 3D cursor home, as in Blender
+                    if press.modifiers.shift() && matches!(&press.key, Key::Character(c) if c.eq_ignore_ascii_case("c")) {
+                        return self.update(Msg::App(Message::Cursor3dHome));
+                    }
                     let steps: Option<Vec<Step>> = match &press.key {
                         Key::Character(c) => c.chars().next().filter(|c| c.is_ascii_alphabetic()).map(|c| self.keys.steps(c, Instant::now())),
                         Key::Named(Named::PageUp) => Some(vec![Step::Key(ModelKey::LevelUp)]),

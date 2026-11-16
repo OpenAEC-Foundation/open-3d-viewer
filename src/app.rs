@@ -704,6 +704,8 @@ pub enum Message {
     Edit(edit::EditEvent),
     /// A key in edit mode: G grabs, X, Y and Z hold to an axis, A picks every point.
     EditKey(char),
+    /// Shift+C in the Modeller: the 3D cursor goes home.
+    Cursor3dHome,
     /// Typed in a field of the selected modelled element's Definition section.
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
@@ -1741,6 +1743,7 @@ impl App {
             Message::EditMode => self.toggle_edit(),
             Message::Edit(event) => self.edit_event(event),
             Message::EditKey(key) => self.edit_key(key),
+            Message::Cursor3dHome => self.cursor3d_home(),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
             Message::Place(message) => self.place_message(message),
@@ -1922,6 +1925,7 @@ impl App {
                 }
                 Navigate::Pick { x, y, width, height, add } => self.pick(x, y, width, height, add),
                 Navigate::Context { x, y, width, height } => self.context_click(x, y, width, height),
+                Navigate::Cursor3d { x, y, width, height } => self.place_cursor3d(x, y, width, height),
                 Navigate::Box { x0, y0, x1, y1, width, height, done, add } => {
                     let rect = (Vec2::new(x0, y0), Vec2::new(x1, y1));
                     self.box_select = (!done).then_some(rect);
@@ -2351,6 +2355,8 @@ impl App {
             }
             // Enter while a distance is typed in a move puts the move down
             Message::MeasureFinish if self.edit_enter() => {}
+            // Enter while Rotate waits for its centre: about the 3D cursor
+            Message::MeasureFinish if self.rotate_about_cursor3d() => {}
             Message::MeasureFinish => self.measure.finish(),
             Message::StructuralGrid(built) => return self.structural_grid_built(built),
             Message::MeasureEdges(edges) => {
@@ -3733,6 +3739,7 @@ impl App {
             offsets: &self.units,
             looks: &self.unit_looks,
             drag_selects: self.drag_selects(),
+            cursor3d: self.has_cursor3d(),
             hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
@@ -3936,7 +3943,9 @@ impl App {
         let editing = self.edit_overlay(p.accent, p.surface).or_else(|| self.grip_overlay(p.accent, p.surface)).map(|o| canvas(o).width(Fill).height(Fill));
         let placing = self.placing_overlay(p.accent).filter(|_| overlay.is_none()).map(|o| canvas(o).width(Fill).height(Fill));
         let joins = self.join_marks(p.accent, p.surface).filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
+        let cursor3d = self.cursor3d_overlay().filter(|_| overlay.is_none()).map(|m| canvas(m).width(Fill).height(Fill));
         stack![scene, hint]
+            .push(cursor3d)
             .push(grids)
             .push(view_labels)
             .push(zero_points)

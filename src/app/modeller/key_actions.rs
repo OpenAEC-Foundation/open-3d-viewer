@@ -44,6 +44,15 @@ pub fn key_list<'a, M: 'a>(look: openaec_ui::design::Look, l: Language) -> iced:
     for (key, command) in keys.chain(pairs).chain(pages) {
         rows = rows.push(w::property_row(look, command.label(l), w::secondary(look, key).into()));
     }
+    // the 3D cursor has its own gestures (see `cursor3d`)
+    let cursor = [
+        (l.text("3D-cursor plaatsen", "Place the 3D cursor"), l.text("Shift + rechtermuisknop", "Shift + right button")),
+        (l.text("3D-cursor naar de oorsprong", "3D cursor home"), "Shift+C"),
+        (l.text("Roteren om de 3D-cursor", "Rotate about the 3D cursor"), "RO, Enter"),
+    ];
+    for (what, key) in cursor {
+        rows = rows.push(w::property_row(look, what, w::secondary(look, key).into()));
+    }
     rows.into()
 }
 

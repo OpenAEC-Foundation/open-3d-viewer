@@ -232,6 +232,8 @@ impl App {
         self.modeller.edit = None;
         self.modeller.refusal = None;
         self.modeller.transform = Some(Transform { kind, elements, points: Vec::new() });
+        // a fresh 3D cursor is the base point of a move or a copy
+        self.transform_from_cursor3d();
     }
 
     /// Esc: the points clicked go, else the transform itself. False when none was under way.

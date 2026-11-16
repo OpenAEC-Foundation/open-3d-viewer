@@ -853,6 +853,14 @@
     "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Öppna ett punktmoln (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) för att titta på det, mäta det, snitta det och skapa en mesh av det.",
     "Open point clouds and make meshes of them": "Öppna punktmoln och skapa meshar av dem",
     "Point cloud": "Punktmoln",
-    "Point clouds": "Punktmoln"
+    "Point clouds": "Punktmoln",
+    "Stored colour": "Egen färg",
+    "Intensity": "Intensitet",
+    "Class or scan": "Klass eller skanning",
+    "Colour": "Färg",
+    "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.": "Färgar punkterna som filen lagrar dem: deras färger, eller deras klass eller skanning skuggad efter intensitet.",
+    "Colours the points by their height, from blue low to red high.": "Färgar punkterna efter höjd, från blått lågt till rött högt.",
+    "Colours the points by what they reflected, from dark to light. A file without intensity turns white.": "Färgar punkterna efter vad de reflekterade, från mörkt till ljust. En fil utan intensitet blir vit.",
+    "Gives every class of a classified cloud, or every scan, one colour.": "Ger varje klass i ett klassificerat moln, eller varje skanning, en färg."
   }
 }

@@ -56,6 +56,12 @@ impl Cloud {
 
     /// Adds a point (file coordinates) with its colour to layer `layer`.
     pub fn push(&mut self, layer: usize, p: [f64; 3], color: [u8; 3]) {
+        self.push_lit(layer, p, color, 255);
+    }
+
+    /// As [`Cloud::push`], with what the point reflected, from 0 to 255: kept in the fourth byte
+    /// of its colour (see [`crate::cloud_color`]), so that the cloud can be coloured by it.
+    pub fn push_lit(&mut self, layer: usize, p: [f64; 3], color: [u8; 3], intensity: u8) {
         if !p.iter().all(|v| v.is_finite()) {
             return;
         }
@@ -63,7 +69,7 @@ impl Cloud {
         let layer = &mut self.layers[layer];
         layer.positions.extend((0..3).map(|k| (p[k] - origin[k]) as f32));
         if let Some(colors) = layer.colors.as_mut() {
-            colors.push([color[0], color[1], color[2], 255]);
+            colors.push([color[0], color[1], color[2], intensity]);
         }
     }
 

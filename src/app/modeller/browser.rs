@@ -1,19 +1,17 @@
 //! The project browser: the Project tab of the explorer, in the Modeller only. One list of what
 //! the modelled project holds, in the order a project is read:
 //!
-//! - **Views**: the floor plans (highest level first), the other plans per kind, the sections and
-//!   elevations, the 3D views and the sheets. A click opens the view in its tab; the one shown is
-//!   marked.
-//! - **Levels**, high to low, each with its elevation. A click opens the level's floor plan, and
-//!   makes one when it has none.
-//! - **Grid lines**, by name. A click picks the grid line.
+//! - **Views**: the floor plans (highest level first), the other plans per kind, the 3D views,
+//!   the elevations, the sections and the sheets. A click opens the view in its tab; the one
+//!   shown is marked.
 //! - **Building components**: the modelled elements per kind with how many there are. A click
 //!   selects them all.
 //!
-//! The other tabs of the explorer stay as they are: this one gathers, it does not replace.
+//! The levels and the grid lines are in the model explorer (`super::explorer`), as in the reference
+//! modeller. The other tabs of the explorer stay as they are: this one gathers, it does not replace.
 
 use crate::app::{App, Message, FONT_BOLD};
-use crate::document::PlanKind;
+use crate::document::{PlanKind, SectionKind};
 use crate::selection::Pickable;
 use crate::theme::Palette;
 use iced::widget::text::Wrapping;
@@ -161,16 +159,21 @@ impl App {
                 body = body.push(item(plan.name.clone(), String::new(), shown == Some(plan.path.as_str()), open(&plan.path)));
             }
         }
-        if !document.sections().is_empty() {
-            body = body.push(subheader(l.text("Doorsneden en aanzichten", "Sections and elevations")));
-            for section in document.sections() {
-                body = body.push(item(section.name.clone(), String::new(), shown == Some(section.path.as_str()), open(&section.path)));
-            }
-        }
         if !document.views_3d().is_empty() {
             body = body.push(subheader(l.text("3D-weergaven", "3D views")));
             for view in document.views_3d() {
                 body = body.push(item(view.name.clone(), String::new(), shown == Some(view.path.as_str()), open(&view.path)));
+            }
+        }
+        // the elevations, then the sections, each in the order they were made
+        for (kind, label) in [(SectionKind::Elevation, l.text("Aanzichten", "Elevations")), (SectionKind::Section, l.text("Doorsneden", "Sections"))] {
+            let of_kind: Vec<_> = document.sections().iter().filter(|s| s.kind == kind).collect();
+            if of_kind.is_empty() {
+                continue;
+            }
+            body = body.push(subheader(label));
+            for section in of_kind {
+                body = body.push(item(section.name.clone(), String::new(), shown == Some(section.path.as_str()), open(&section.path)));
             }
         }
         if !document.sheets().is_empty() {
@@ -179,24 +182,6 @@ impl App {
                 let active = self.active_doc_sheet.as_deref() == Some(sheet.path.as_str());
                 body = body.push(item(sheet.name.clone(), String::new(), active, Message::OpenDocSheet(Arc::from(sheet.path.as_str()))));
             }
-        }
-
-        // the levels, high to low
-        body = body.push(header(l.text("Niveaus", "Levels"), document.levels().len()));
-        for level in document.levels().iter().rev() {
-            let active = shown.and_then(|path| document.plan(path)).is_some_and(|plan| plan.level == level.path);
-            body = body.push(item(level.name.clone(), format!("{:+.3} m", level.elevation), active, Message::Browser(BrowserMessage::Level(Arc::from(level.path.as_str())))));
-        }
-
-        // the grid lines of the modelled project
-        let grids = self.modeller.model.grids();
-        body = body.push(header(l.text("Stramienen", "Grid lines"), grids.len()));
-        if grids.is_empty() {
-            body = body.push(none(l.text("Nog geen stramien", "No grid line yet")));
-        }
-        let picked = self.picked_modelled_grid();
-        for (i, grid) in grids.iter().enumerate() {
-            body = body.push(item(grid.name.clone(), format!("{:.3} m", (grid.end - grid.start).length()), picked == Some(i), Message::Browser(BrowserMessage::Grid(i))));
         }
 
         // the building components per kind
@@ -233,9 +218,16 @@ mod tests {
         app.modeller.in_modeller = true;
         let _ = app.update(Message::ExplorerTab(ExplorerTab::Project));
         app.add_grid_line(DVec2::new(0.0, -1.0), DVec2::new(0.0, 7.0)).unwrap();
+        let _ = app.document.add_section_of(crate::document::SectionKind::Elevation, "North", [0.0, 8.0], [10.0, 8.0], 20.0);
+        let _ = app.document.add_section("Section A", [5.0, -1.0], [5.0, 7.0], 20.0);
         let ui = |app: &App, label: &str| simulator(app).find(label).is_ok();
-        for label in ["Views", "FLOOR PLANS", "Levels", "Level 0", "Grid lines", "Building components", "Walls", "Slabs", "Building systems", "Connections"] {
+        // the views and the building components, as the reference modeller's browser has them
+        for label in ["Views", "FLOOR PLANS", "ELEVATIONS", "North", "SECTIONS", "Section A", "Building components", "Walls", "Slabs", "Building systems", "Connections"] {
             assert!(ui(&app, label), "{label}");
+        }
+        // the levels and the grid lines are the model explorer's
+        for label in ["Level 0", "Grid lines"] {
+            assert!(!ui(&app, label), "{label}");
         }
         // the counts: three walls, the joins of either class as one kind
         let counts = app.component_counts();

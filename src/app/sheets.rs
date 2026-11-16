@@ -156,8 +156,8 @@ impl App {
                     cut: self.cuts.get(path).cloned(),
                     crop,
                     dimensions: dimensions.to_vec(),
-                    notes: self.document.view_notes(path).map_or(Vec::new(), <[_]>::to_vec),
-                    lines: self.document.view_lines(path).to_vec(),
+                    notes: self.document.view_notes(path).unwrap_or(&[]).iter().chain(self.document.view_tags(path)).cloned().collect(),
+                    lines: self.document.view_lines(path).iter().chain(self.document.view_symbols(path)).copied().collect(),
                     fills: self.document.view_fills(path).to_vec(),
                 },
                 // a 3D view: its hidden lines, once they are made, within its crop where it has

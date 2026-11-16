@@ -136,8 +136,9 @@ impl App {
             scale: self.document.view_scale(view).unwrap_or(crate::document::SHEET_SCALE),
             styles: self.document.dimension_styles().to_vec(),
             dimensions: dimensions.to_vec(),
-            notes: self.document.view_notes(view)?.to_vec(),
-            lines: self.document.view_lines(view).to_vec(),
+            // its own texts and lines, then what the model says and draws on it by itself
+            notes: self.document.view_notes(view)?.iter().chain(self.document.view_tags(view)).cloned().collect(),
+            lines: self.document.view_lines(view).iter().chain(self.document.view_symbols(view)).copied().collect(),
             fills: self.document.view_fills(view).to_vec(),
             cut: self.cuts.get(view).cloned(),
             crop,

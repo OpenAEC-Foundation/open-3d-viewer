@@ -675,6 +675,8 @@ impl App {
         self.replace_scene(scene);
         // the dimensions that hold on to elements follow them
         self.follow_dimensions();
+        // and the floor plans say their spaces and draw their doors' swings again
+        self.tag_plans();
     }
 
     /// Puts `model` in the place of the scene shown, keeping the camera, the views and the

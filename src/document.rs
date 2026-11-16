@@ -121,6 +121,11 @@ pub struct PlanView {
     pub notes: Vec<Note>,
     /// The lines drawn on it that are no model: the shapes and leaders of its tags (x, y, metres).
     pub lines: Vec<[[f64; 2]; 2]>,
+    /// What the modelled project says on it by itself, made again after every change of the
+    /// model and not kept in the file: the names and areas of its spaces.
+    pub tags: Vec<Note>,
+    /// And the lines it draws by itself: the swings of its doors.
+    pub symbols: Vec<[[f64; 2]; 2]>,
     /// The regions drawn on it in one colour that are no model, under its lines.
     pub fills: Vec<Fill>,
     /// What it shows of the model in plan: lower left and upper right (x, y, metres); `None`:
@@ -724,6 +729,8 @@ impl Document {
                     cut: number(p, "cut", cut),
                     depth: number(p, "depth", depth),
                     scale: scale(p),
+                    tags: Vec::new(),
+                    symbols: Vec::new(),
                     dimensions: dims(p.get("dimensions")),
                     notes: notes(p.get("notes")),
                     lines: lines(p.get("lines")),
@@ -877,7 +884,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1178,6 +1185,22 @@ impl Document {
             return Some(&p.notes);
         }
         self.section(path).map(|s| &s.notes[..])
+    }
+
+    /// What a floor plan says and draws by itself (see [`PlanView::tags`]); nothing for a section.
+    pub fn view_tags(&self, path: &str) -> &[Note] {
+        self.plan(path).map_or(&[], |p| &p.tags[..])
+    }
+
+    pub fn view_symbols(&self, path: &str) -> &[[[f64; 2]; 2]] {
+        self.plan(path).map_or(&[], |p| &p.symbols[..])
+    }
+
+    /// Gives every floor plan what it says and draws by itself: `of` makes them for a plan.
+    pub fn set_plan_tags(&mut self, of: impl Fn(&PlanView) -> (Vec<Note>, Vec<[[f64; 2]; 2]>)) {
+        for p in &mut self.plans {
+            (p.tags, p.symbols) = of(p);
+        }
     }
 
     /// The regions of a view filled in one colour that are no model, drawn under its lines.

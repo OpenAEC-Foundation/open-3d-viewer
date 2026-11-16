@@ -415,9 +415,10 @@ pub fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f6
 }
 
 /// The dimensions and texts of a view.
-fn marks<'a>(doc: &'a Document, path: &str) -> (&'a [Dimension], &'a [Note], Option<([f64; 2], [f64; 2])>) {
+fn marks<'a>(doc: &'a Document, path: &str) -> (&'a [Dimension], Vec<Note>, Option<([f64; 2], [f64; 2])>) {
     let (dimensions, crop) = doc.view_marks(path).unwrap_or((&[], None));
-    (dimensions, doc.view_notes(path).unwrap_or(&[]), crop)
+    // its own texts, then what the model says on it by itself (the names of its spaces)
+    (dimensions, doc.view_notes(path).unwrap_or(&[]).iter().chain(doc.view_tags(path)).cloned().collect(), crop)
 }
 
 /// The drawing of a floor plan, section or elevation (`path`) from its `cut`, with its dimensions
@@ -427,8 +428,9 @@ pub fn view_drawing(doc: &Document, path: &str, cut: &Cut) -> Option<Drawing2d> 
     let scale = doc.sheets().iter().flat_map(|s| &s.views).find(|v| v.plan == path).map_or(SHEET_SCALE, |v| v.scale);
     let (dimensions, notes, crop) = marks(doc, path);
     let mut d = Drawing2d { name, space: Space::Model { scale }, paper: None, lines: Vec::new(), texts: Vec::new(), dimensions: Vec::new() };
-    d.view(Some(cut), crop, (dimensions, notes), &|q| q, scale, scale);
+    d.view(Some(cut), crop, (dimensions, &notes), &|q| q, scale, scale);
     d.detail(doc.view_lines(path), &|q| q);
+    d.detail(doc.view_symbols(path), &|q| q);
     Some(d)
 }
 
@@ -459,7 +461,7 @@ pub fn sheet_drawing(doc: &Document, path: &str, cut: &dyn Fn(&str) -> Option<Ar
             (None, None) => ([v.at[0] - 0.02, v.at[1] - 0.015], [v.at[0] + 0.02, v.at[1] + 0.015]),
         };
         let drawn = c.as_ref().is_some_and(|c| crate::drawing::drawn(c).next().is_some());
-        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, notes), &to, 1.0, v.scale);
+        d.view(c.as_deref().filter(|_| drawn), crop, (dimensions, &notes), &to, 1.0, v.scale);
         if !drawn || crop.is_some() {
             d.rectangle(Pen::Frame, lo, hi);
         }
@@ -524,8 +526,9 @@ pub fn model_sheet_drawing(doc: &Document, sheet: &crate::model::Sheet, cut: &dy
             [at[0] + (dx * cx + dy * cy) * ratio, at[1] + (dy * cx - dx * cy) * ratio]
         };
         let per_metre = if ratio > 0.0 { 1.0 / ratio } else { SHEET_SCALE };
-        d.view(c.as_deref(), crop, (dimensions, notes), &to, 1.0, per_metre);
+        d.view(c.as_deref(), crop, (dimensions, &notes), &to, 1.0, per_metre);
         d.detail(doc.view_lines(path), &to);
+        d.detail(doc.view_symbols(path), &to);
         // its title, where the sheet has it
         if let Some(label) = v.label {
             let title = v.written.clone().unwrap_or_else(|| format!("{}  {}", v.title, v.scale));

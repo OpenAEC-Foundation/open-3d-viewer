@@ -2027,7 +2027,10 @@ impl App {
                     self.free_tops_of(&path);
                 }
             }
-            Message::NewPlan(level) => self.new_plan(&level),
+            Message::NewPlan(level) => {
+                self.new_plan(&level);
+                self.tag_plans();
+            }
             Message::NewPlanOf(level, kind, word) => self.new_plan_of(&level, kind, word),
             Message::PickLevelFor(kind) => {
                 // the levels to pick from are listed in the Views tab

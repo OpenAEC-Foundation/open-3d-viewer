@@ -376,8 +376,8 @@ impl App {
                     plan: Arc::from(v.plan.as_str()),
                     cut: self.cuts.get(&v.plan).cloned(),
                     dimensions: marks.map_or(Vec::new(), |(d, _)| d.to_vec()),
-                    notes: self.document.view_notes(&v.plan).map_or(Vec::new(), <[_]>::to_vec),
-                    lines: self.document.view_lines(&v.plan).to_vec(),
+                    notes: self.document.view_notes(&v.plan).unwrap_or(&[]).iter().chain(self.document.view_tags(&v.plan)).cloned().collect(),
+                    lines: self.document.view_lines(&v.plan).iter().chain(self.document.view_symbols(&v.plan)).copied().collect(),
                     crop: marks.and_then(|(_, c)| c),
                     is_plan: self.document.plan(&v.plan).is_some(),
                 }

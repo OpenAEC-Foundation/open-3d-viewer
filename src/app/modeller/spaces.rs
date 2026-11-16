@@ -214,9 +214,54 @@ impl App {
         out
     }
 
-    /// The labels of the spaces over the viewport: each in the middle of its space.
+    /// What every floor plan says and draws by itself, made again from the model: the name and
+    /// the area of each space of its level, and the swing of each door standing on it. Called
+    /// after every change of the model and when a plan is made.
+    pub(in crate::app) fn tag_plans(&mut self) {
+        use crate::document::{Align, Note, NOTE_HEIGHT};
+        let spaces = self.spaces();
+        let grid = self.modeller.model.grid;
+        // each door: its level, the middle of its foot, the way its width runs, its width
+        let doors: Vec<(Option<String>, DVec2, DVec2, f64)> = self
+            .modeller
+            .model
+            .iter()
+            .filter_map(|e| match e.shape_in_project(&grid) {
+                Shape::Point(p) if p.opening == Some(bim_core::OpeningKind::Door) => Some((e.level.clone(), p.at.truncate(), DVec2::from_angle(p.rotation), p.size.x)),
+                _ => None,
+            })
+            .collect();
+        self.document.set_plan_tags(|plan| {
+            let on = |level: &Option<String>| level.as_deref().is_none_or(|l| l == plan.level);
+            let line = plan.scale * NOTE_HEIGHT * 1.6;
+            let mut notes = Vec::new();
+            for s in spaces.iter().filter(|s| on(&s.level)) {
+                let middle = s.outline.iter().sum::<DVec2>() / s.outline.len() as f64;
+                let note = |text: String, down: f64| Note { at: [middle.x, middle.y - down], text, size: NOTE_HEIGHT, align: Align::Center, angle: 0.0, face: crate::typeface::Face::default() };
+                notes.push(note(s.name.clone(), 0.0));
+                notes.push(note(format!("{:.2} m²", s.area), line));
+            }
+            let mut lines = Vec::new();
+            for (_, at, along, width) in doors.iter().filter(|d| on(&d.0)) {
+                // hinged at the start of its width, its leaf open square to the wall, and the
+                // quarter circle the leaf's end runs to the other jamb
+                let hinge = *at - *along * (*width / 2.0);
+                let leaf = |turn: f64| hinge + DVec2::from_angle(turn).rotate(*along) * *width;
+                lines.push([hinge.to_array(), leaf(std::f64::consts::FRAC_PI_2).to_array()]);
+                const STEPS: usize = 8;
+                for k in 0..STEPS {
+                    let turn = |k: usize| std::f64::consts::FRAC_PI_2 * k as f64 / STEPS as f64;
+                    lines.push([leaf(turn(k)).to_array(), leaf(turn(k + 1)).to_array()]);
+                }
+            }
+            (notes, lines)
+        });
+    }
+
+    /// The labels of the spaces over the viewport: each in the middle of its space. Not over a
+    /// floor plan's tab, which says them itself, nor over a section or an elevation.
     pub(in crate::app) fn space_labels(&self, ink: Color) -> Option<SpaceLabels> {
-        if !self.modeller.in_modeller || self.modeller.shown.is_none() || self.modeller.sketch.is_some() {
+        if !self.modeller.in_modeller || self.modeller.shown.is_none() || self.modeller.sketch.is_some() || self.shown_view().is_some() {
             return None;
         }
         let labels: Vec<(Vec3, String)> = self
@@ -326,8 +371,26 @@ mod tests {
         app.select_modelled(bim_core::ElementId(2));
         assert!(app.set_temp_dim(0, 7.0), "the east wall 7 m from the west wall");
         assert!((app.spaces()[0].area - 6.8 * 3.8).abs() < 1e-9, "{}", app.spaces()[0].area);
-        // a wall gone, no space
+        // a floor plan says its spaces itself, and draws the swing of a door standing on it
+        let level = app.document.levels()[0].path.clone();
+        let plan = app.document.add_plan(&level).unwrap();
+        app.set_model_tool(Some((ModelTool::Door, "Door")));
+        click(&mut app, 3.0, 0.0);
+        app.set_model_tool(None);
+        let tags: Vec<String> = app.document.view_tags(&plan).iter().map(|n| n.text.clone()).collect();
+        assert_eq!(tags, ["Space 1", "25.84 m²"]);
+        let swing = app.document.view_symbols(&plan);
+        assert_eq!(swing.len(), 9, "the leaf and the quarter circle in eight chords");
+        // the leaf stands square to the wall at the hinge, as long as the door is wide
+        let (a, b) = (DVec2::from_array(swing[0][0]), DVec2::from_array(swing[0][1]));
+        assert!((a - DVec2::new(2.55, 0.0)).length() < 1e-9 && (b - DVec2::new(2.55, 0.9)).length() < 1e-9, "{a} {b}");
+        // drawn as on a sheet, the plan's drawing holds both
+        let drawing = crate::drawing2d::view_drawing(&app.document, &plan, &crate::drawing::Cut::default()).unwrap();
+        assert!(drawing.texts.iter().any(|t| t.text == "Space 1") && drawing.lines.len() >= 9);
+        // a wall gone, no space, and the plan says none
+        app.select_modelled(bim_core::ElementId(2));
         let _ = app.update(crate::app::Message::DeletePicked);
         assert!(app.spaces().is_empty() && app.space_labels(Color::BLACK).is_none());
+        assert!(app.document.view_tags(&plan).is_empty());
     }
 }

@@ -190,13 +190,20 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
             Some(true) => take(count * 3)?.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
             _ => Vec::new(),
         };
+        // what each line belongs to: lines and texts of one number are picked together
+        let parts: Vec<u64> = match d["ids"].as_bool() {
+            Some(true) => take(count * 4)?.chunks_exact(4).map(|c| u64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]]))).collect(),
+            _ => Vec::new(),
+        };
         let id = k as u64 + 1;
+        // (a reader that numbers nothing gives the drawing as one thing)
+        let part = |i: usize| parts.get(i).copied().filter(|p| *p != 0).unwrap_or(id);
         let kind = d["kind"].as_str().unwrap_or_default();
         let name = d["name"].as_str().unwrap_or("Drawing");
         let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
         // a line that is no number is left out, with its colour
         let kept: Vec<usize> = (0..count).filter(|&i| finite(&ends[i * 4..i * 4 + 4])).collect();
-        let lines: Vec<DraftLine> = kept.iter().map(|&i| DraftLine { element: id, a: [ends[i * 4], ends[i * 4 + 1]], b: [ends[i * 4 + 2], ends[i * 4 + 3]] }).collect();
+        let lines: Vec<DraftLine> = kept.iter().map(|&i| DraftLine { element: part(i), a: [ends[i * 4], ends[i * 4 + 1]], b: [ends[i * 4 + 2], ends[i * 4 + 3]] }).collect();
         // black is the ink of the drawing
         let line_colors: Vec<Option<[u8; 3]>> = if colours.iter().any(|c| *c != [0, 0, 0]) { kept.iter().map(|&i| colours.get(i).copied().filter(|c| *c != [0, 0, 0])).collect() } else { Vec::new() };
         let texts = d["texts"]
@@ -218,7 +225,7 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
                     face.width = width;
                 }
                 Some(DraftText {
-                    element: id,
+                    element: t.get(9).and_then(|v| v.as_u64()).filter(|p| *p != 0).unwrap_or(id),
                     at: [number(0)?, number(1)?],
                     width: 0.0,
                     height: capitals,
@@ -270,16 +277,19 @@ mod tests {
     /// A scene with one drawing: a line and a text.
     #[test]
     fn decodes_the_drawings_of_a_project() {
-        let header = r#"{"format":"Vertex BD","info":[],"layers":[],"drawings":[{"name":"SECT-A","kind":"View","lines":1,"colors":true,"texts":[[1.5,-0.5,0.072,90.0,1,"6900","Courier New",[0,36,170],0.7]]}]}"#;
+        let header = r#"{"format":"Vertex BD","info":[],"layers":[],"drawings":[{"name":"SECT-A","kind":"View","lines":1,"colors":true,"ids":true,"texts":[[1.5,-0.5,0.072,90.0,1,"6900","Courier New",[0,36,170],0.7,1000007]]}]}"#;
         let mut buf = b"VXS1".to_vec();
         buf.extend((header.len() as u32).to_le_bytes());
         buf.extend(header.as_bytes());
         for v in [0f32, 0., 3., 0., 0.18] { buf.extend(v.to_le_bytes()); }
         buf.extend([182u8, 145, 0]);
+        buf.extend(1_000_007u32.to_le_bytes());
         let loaded = decode(&buf).unwrap();
         let draft = &loaded.project.drafts[0];
         assert_eq!((draft.name.as_str(), draft.kind, draft.scale), ("SECT-A (View)", DraftKind::Drawing, 50.0));
-        assert_eq!(draft.lines, [DraftLine { element: 1, a: [0.0, 0.0], b: [3.0, 0.0] }]);
+        // the line and the text of one dimension are one thing to pick
+        assert_eq!(draft.lines, [DraftLine { element: 1_000_007, a: [0.0, 0.0], b: [3.0, 0.0] }]);
+        assert_eq!(draft.texts[0].element, 1_000_007);
         let text = &draft.texts[0];
         assert_eq!((text.text.as_str(), text.at, text.align), ("6900", [1.5, -0.5], 1));
         assert!((text.size - 0.1).abs() < 1e-6 && (text.height - 0.072).abs() < 1e-6);

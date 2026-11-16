@@ -186,6 +186,9 @@ pub struct Modeller {
     pub edit: Option<super::edit::Edit>,
     /// The 3D cursor (see `cursor3d`).
     pub cursor3d: cursor3d::Cursor3d,
+    /// The file the modelled project was opened from, when that file holds the project and
+    /// nothing else: the model shown is that file, under its name.
+    pub file: Option<PathBuf>,
     /// A grip of a selected floor being dragged (see `slab_handles`).
     pub slab_drag: Option<slab_handles::SlabDrag>,
     /// The sketch of a floor outline, open (see `sketch`).
@@ -253,6 +256,12 @@ impl App {
             } else if let Ok(element) = serde_json::from_value::<Element>(definition.clone()) {
                 self.modeller.model.insert(element);
             }
+        }
+        // a file of the project alone (no meshes of its own) is the modelled project: the model
+        // shown takes its place and its name, not a second model beside it
+        if model.layers.iter().all(|l| l.indices.is_empty()) {
+            self.modeller.shown = Some(model.id);
+            self.modeller.file = Some(model.path.clone());
         }
         self.show_modelled();
         // what a file gives is where its history starts
@@ -559,6 +568,9 @@ impl App {
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
+        if let Some(file) = &self.modeller.file {
+            built.path = file.clone();
+        }
         let built = Arc::new(built);
         let before = self.modeller.shown.replace(built.id);
         if self.models.is_empty() {
@@ -1146,6 +1158,34 @@ mod tests {
         // a frame and a beam are not joined
         app.sel.clear();
         assert!(!app.selected_joinable());
+    }
+
+    #[test]
+    fn a_saved_project_opens_again_as_one_model_under_its_name() {
+        let mut app = modelling();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        click(&mut app, 0.0, 0.0);
+        click(&mut app, 4.0, 0.0);
+        app.set_model_tool(None);
+        let scene = app.model.clone().unwrap();
+        let bytes = crate::export::to_bytes(&scene, &app.document_now(), "house.ifcx").unwrap();
+        let source = crate::loaders::Source::Bytes { name: "house.ifcx".into(), data: Arc::new(bytes) };
+        let loaded = crate::loaders::load_with(&source, &crate::loaders::Progress::default()).expect("read back");
+        let mut back = App::default();
+        back.set_model(Arc::new(loaded));
+        // the project, not an empty file with a model beside it
+        assert_eq!(back.models.len(), 1);
+        assert_eq!(back.modeller.model.len(), 1);
+        let shown = back.model.clone().unwrap();
+        assert_eq!(shown.path.file_name().and_then(|n| n.to_str()), Some("house.ifcx"));
+        assert!(back.title().starts_with("house.ifcx"), "{}", back.title());
+        // and it stays so after a change
+        back.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        back.viewport_size = (1000.0, 800.0);
+        let again = back.modeller.model.iter().next().unwrap().shape.clone();
+        let _ = back.add_element("Wall", None, again);
+        assert_eq!(back.models.len(), 1);
+        assert_eq!(back.model.as_ref().unwrap().path.file_name().and_then(|n| n.to_str()), Some("house.ifcx"));
     }
 
     #[test]

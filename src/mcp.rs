@@ -253,6 +253,14 @@ pub fn tools() -> Vec<Value> {
             json!({ "a": { "type": ["integer", "string"] }, "b": { "type": ["integer", "string"] }, "show": { "type": "boolean" } }), &["a", "b"], false),
         tool("clear_measurements", "Remove the measurements drawn in the viewport.", json!({}), &[], false),
         tool("cancel", "Press Esc: stop placing a section plane, else clear the selection.", json!({}), &[], false),
+        // the Modeller's viewport gestures
+        tool("place_cursor", "The Modeller: put the 3D cursor under a pixel of the last viewport screenshot, as Shift + the right button does. It lands on a point of an element near it, else on the level worked on.",
+            json!({ "x": { "type": "number" }, "y": { "type": "number" } }), &["x", "y"], false),
+        tool("drag_handle", "The Modeller: drag a handle of the viewport from one pixel of the last viewport screenshot to another, as the mouse does: a grip of the selected element (a wall's ends, middle and top; a floor's edges, top and underside), or a point in edit mode or in a floor's sketch. Without from it lists where the handles are.",
+            json!({
+                "from": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                "to": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+            }), &[], false),
         // the window itself, as a person drives it
         tool("ui_controls", "The controls the window shows now (buttons, tabs, fields, checkboxes, lists), each with its index, role, accessible name, value, state (disabled, checked, selected) and bounds in window pixels. Use the names or indices with ui_press and ui_type to drive the window as a person would.",
             json!({
@@ -274,8 +282,8 @@ pub fn tools() -> Vec<Value> {
                 "replace": { "type": "boolean", "description": "Clear the field first (default true)" },
                 "dry_run": { "type": "boolean" }
             }), &["text"], false),
-        tool("ui_key", "Press a key in the window (Enter, Escape, Tab, Delete, Backspace or a letter), after clicking a control when one is named.",
-            json!({ "key": { "type": "string" }, "name": { "type": "string" }, "index": { "type": "integer" }, "dry_run": { "type": "boolean" } }), &["key"], false),
+        tool("ui_key", "Press a key in the window (Enter, Escape, Tab, Delete, Backspace, PageUp, PageDown, a letter or a digit), after clicking a control when one is named. With no control named, a key no field takes is the window's own: a shortcut, or a key of the Modeller (W wall, Tab edit mode or sketch, L R A T in a sketch, G X Y Z in edit mode). shift, ctrl: held with it.",
+            json!({ "key": { "type": "string" }, "name": { "type": "string" }, "index": { "type": "integer" }, "shift": { "type": "boolean" }, "ctrl": { "type": "boolean" }, "dry_run": { "type": "boolean" } }), &["key"], false),
         // the BIM Collaborator
         tool("collab_state", "The BIM Collaborator: who you are (the author of issues), the rule set in use and those to choose from, the number of issues and open issues, the BCF file, the issue shown, checked models, clashes, the team that issues can be assigned to and the open models.", json!({}), &[], true),
         tool("collab_issue", "Issues (BCF topics): list, get one with its comments, make a new one of the view as it is (camera, selection, hidden elements, section plane), update its fields, comment, show it (go to its viewpoint) or remove it.",

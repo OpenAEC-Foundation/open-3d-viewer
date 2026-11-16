@@ -977,6 +977,36 @@ impl Studio {
                             _ => None,
                         };
                         let mut messages = run(size, first);
+                        // a key no control took, with none named: the window's own key, as the
+                        // keyboard sends it (a shortcut, a key of the Modeller, Tab)
+                        if messages.is_empty() && call.cmd == "ui_key" && target.is_none() {
+                            use iced::keyboard::key::Named;
+                            use iced::keyboard::{Key, Modifiers};
+                            let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("Enter");
+                            let held = |name: &str| args.get(name).and_then(|v| v.as_bool()).unwrap_or(false);
+                            let mut modifiers = Modifiers::empty();
+                            modifiers.set(Modifiers::SHIFT, held("shift"));
+                            modifiers.set(Modifiers::CTRL, held("ctrl"));
+                            let named = match key.to_ascii_lowercase().as_str() {
+                                "enter" | "return" => Some(Named::Enter),
+                                "escape" | "esc" => Some(Named::Escape),
+                                "tab" => Some(Named::Tab),
+                                "delete" => Some(Named::Delete),
+                                "backspace" => Some(Named::Backspace),
+                                "pageup" => Some(Named::PageUp),
+                                "pagedown" => Some(Named::PageDown),
+                                _ => None,
+                            };
+                            messages = match named {
+                                Some(Named::Tab) => vec![Msg::Navigate(openaec_ui::keyboard::Navigation::Next)],
+                                // Enter and Delete are also the app's own keys (its subscription), beside the
+                                // shell's shortcuts
+                                Some(Named::Enter) => vec![Msg::App(Message::MeasureFinish)],
+                                Some(Named::Delete | Named::Backspace) => vec![Msg::App(Message::DeletePicked)],
+                                Some(named) => vec![Msg::Key(openaec_ui::keyboard::KeyPress { key: Key::Named(named), modifiers })],
+                                None => vec![Msg::Key(openaec_ui::keyboard::KeyPress { key: Key::Character(key.to_lowercase().into()), modifiers })],
+                            };
+                        }
                         // nothing answered: the control may lie past the end of the list it is in,
                         // out of view; the window is laid out tall enough to show it, and the same
                         // control (by its name and role, the same one of those) is clicked there

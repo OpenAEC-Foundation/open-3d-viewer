@@ -439,6 +439,17 @@ impl App {
                 Ok(self.visibility_json())
             }
             "pick" => self.remote_pick(a),
+            "place_cursor" => {
+                let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
+                if !self.has_cursor3d() {
+                    return Err("the 3D cursor is the Modeller's, on a modelled project".into());
+                }
+                let (vx, vy) = self.to_viewport(x, y);
+                let (w, h) = self.viewport_size;
+                let _ = self.update(Message::Navigate(crate::viewport::Navigate::Cursor3d { x: vx, y: vy, width: w, height: h }));
+                Ok(json!({ "cursor": self.modeller.cursor3d.at.to_array() }))
+            }
+            "drag_handle" => self.remote_drag_handle(a),
             "set_view" => self.remote_set_view(a),
             "set_camera" => self.set_camera(a),
             "navigate" => self.navigate(a),
@@ -1255,6 +1266,24 @@ impl App {
             "properties": hit.element.and_then(|id| Some(props_json(model?.element_props(id)))),
             "distance_from_camera": round(hit.point.distance(self.camera.eye())),
         })
+    }
+
+    /// The handles the viewport shows (edit mode's points, a sketch's, the grips of the selected
+    /// element), and one of them dragged: pressed at `from`, moved to `to` and let go, as the
+    /// mouse does. Without `from` the handles are only listed, in pixels of the last screenshot.
+    fn remote_drag_handle(&mut self, a: &Value) -> Answer {
+        let shown = self.handles_shown().ok_or("no handles: select one modelled element, or open edit mode or a sketch with Tab")?;
+        let (w, h) = self.viewport_size;
+        // viewport pixels back to those of the last screenshot
+        let (sx, sy) = match self.remote.shot_image {
+            Some((iw, ih)) => (iw as f32 / w, ih as f32 / h),
+            None => (1.0, 1.0),
+        };
+        let handles: Vec<Value> = shown.iter().map(|p| p.map_or(Value::Null, |(x, y)| json!([(x * sx).round(), (y * sy).round()]))).collect();
+        let Some(from) = a.get("from").and_then(Self::screen_xy) else { return Ok(json!({ "handles": handles })) };
+        let to = a.get("to").and_then(Self::screen_xy).ok_or("to: [x, y] is required with from")?;
+        let index = self.drag_handle(self.to_viewport(from.0, from.1), self.to_viewport(to.0, to.1)).ok_or("no handle within reach of from; call drag_handle without arguments to list them")?;
+        Ok(json!({ "dragged": index, "handles": handles.len(), "message": self.modeller.refusal.map(|r| r.reason()) }))
     }
 
     fn remote_pick(&mut self, a: &Value) -> Answer {

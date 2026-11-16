@@ -455,6 +455,29 @@ impl App {
         })
     }
 
+    /// Where the handles the viewport shows are (viewport pixels; `None` for one behind the
+    /// camera): edit mode's points, a sketch's, or the grips of the selected element. `None` when
+    /// it shows none. For the remote control.
+    pub(crate) fn handles_shown(&self) -> Option<Vec<Option<(f32, f32)>>> {
+        let overlay = self.edit_overlay(Color::BLACK, Color::BLACK).or_else(|| self.grip_overlay(Color::BLACK, Color::BLACK))?;
+        let size = Size::new(self.viewport_size.0, self.viewport_size.1);
+        Some(overlay.points.iter().map(|p| project(&overlay.view_proj, size, *p).map(|s| (s.x, s.y))).collect())
+    }
+
+    /// The handle at viewport point `from` pressed, dragged to `to` and let go, as the mouse
+    /// does; which handle it was, or `None` when none lies within reach of `from`.
+    pub(crate) fn drag_handle(&mut self, from: (f32, f32), to: (f32, f32)) -> Option<usize> {
+        let overlay = self.edit_overlay(Color::BLACK, Color::BLACK).or_else(|| self.grip_overlay(Color::BLACK, Color::BLACK))?;
+        let (width, height) = self.viewport_size;
+        let index = overlay.handle_at(Size::new(width, height), Point::new(from.0, from.1))?;
+        self.edit_event(EditEvent::Press { index, add: false });
+        self.edit_event(EditEvent::Drag { x: to.0, y: to.1, width, height });
+        self.edit_event(EditEvent::Release);
+        // as after every message: the step is kept to take back
+        self.keep_model_history();
+        Some(index)
+    }
+
     /// Selects modelled element `id` alone.
     pub(crate) fn select_modelled(&mut self, id: ElementId) {
         let Some(scene) = self.model.clone() else { return };
@@ -489,14 +512,14 @@ pub struct EditState {
 }
 
 /// Where a model point shows in a viewport of `size`, if in front of the camera.
-fn project(view_proj: &Mat4, size: Size, p: Vec3) -> Option<Point> {
+pub(crate) fn project(view_proj: &Mat4, size: Size, p: Vec3) -> Option<Point> {
     let c = view_proj.project_point3(p);
     ((0.0..=1.0).contains(&c.z)).then(|| Point::new((c.x + 1.0) / 2.0 * size.width, (1.0 - c.y) / 2.0 * size.height))
 }
 
 impl EditOverlay {
     /// The point under `at` (viewport pixels), the nearest within reach.
-    fn handle_at(&self, size: Size, at: Point) -> Option<usize> {
+    pub(crate) fn handle_at(&self, size: Size, at: Point) -> Option<usize> {
         self.points
             .iter()
             .enumerate()

@@ -152,5 +152,19 @@ mod tests {
         app.modeller.snaps.toggle(Snap::End);
         assert_eq!(at(&app, DVec3::new(20.02, 0.03, 0.0)), DVec3::new(20.02, 0.03, 0.0));
         assert!(Snap::ALL.iter().filter(|s| app.modeller.snaps.is(**s)).count() == 2);
+        // the cursor's point carries the mark of its snap: the grid, with all snaps on again
+        app.modeller.snaps = Snaps::default();
+        app.add_grid_line(glam::DVec2::new(5.0, -3.0), glam::DVec2::new(5.0, 9.0)).unwrap();
+        app.set_model_tool(Some((ModelTool::Wall, "Wall")));
+        let hover = |app: &mut App, p: DVec3| {
+            let (x, y) = app.on_screen(p, w, h).unwrap();
+            app.model_hover(x, y, w, h);
+            (app.modeller.cursor.unwrap(), app.modeller.snap_mark)
+        };
+        assert_eq!(hover(&mut app, DVec3::new(5.02, 9.03, 0.0)), (DVec3::new(5.0, 9.0, 0.0), Some(Snap::Grid)));
+        assert_eq!(hover(&mut app, DVec3::new(-20.02, 0.03, 0.0)), (DVec3::new(-20.0, 0.0, 0.0), Some(Snap::End)));
+        assert_eq!(hover(&mut app, DVec3::new(0.02, 0.03, 0.0)), (DVec3::new(0.0, 0.0, 0.0), Some(Snap::Middle)));
+        assert_eq!(hover(&mut app, DVec3::new(-10.513, 0.04, 0.0)).1, Some(Snap::Line));
+        assert_eq!(hover(&mut app, DVec3::new(-10.513, 7.0, 0.0)).1, None);
     }
 }

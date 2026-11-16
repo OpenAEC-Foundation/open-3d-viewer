@@ -20,13 +20,24 @@ impl App {
         let (width, height) = (width.max(1.0), height.max(1.0));
         if tool.opens() {
             // a door or window aims at the wall under the cursor
+            self.modeller.snap_mark = None;
             self.modeller.aim = self.opening_at(tool, x, y, width, height);
             self.modeller.cursor = self.modeller.aim.as_ref().map(|a| a.hit);
             return true;
         }
         let (z, _, _) = self.work_plane();
-        self.modeller.cursor = self.plane_point(x, y, width, height, z).map(|p| self.snapped(p, x, y, width, height));
+        let at = self.plane_point(x, y, width, height, z).map(|p| self.snapped_as(p, x, y, width, height));
+        self.modeller.cursor = at.map(|(p, _)| p);
+        self.modeller.snap_mark = at.and_then(|(_, kind)| kind);
         true
+    }
+
+    /// The mark of the snap the cursor's point is on, with what it is called.
+    pub(super) fn snap_mark(&self) -> Option<(crate::app::modeller::snaps::Snap, &'static str)> {
+        use crate::app::modeller::snaps::Snap;
+        let kind = self.modeller.snap_mark?;
+        let k = Snap::ALL.iter().position(|s| *s == kind)?;
+        Some((kind, self.modeller.snap_words[k]))
     }
 
     /// The element the tool would place with a click where the cursor is (scene coordinates).
@@ -65,7 +76,7 @@ impl App {
             }
         }
         let points = self.modeller.points.iter().map(|p| p.as_vec3()).collect();
-        Some(PlacingOverlay { faces, points, cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink })
+        Some(PlacingOverlay { faces, points, cursor: cursor.as_vec3(), view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(), ink, mark: self.snap_mark() })
     }
 }
 
@@ -80,9 +91,60 @@ pub struct PlacingOverlay {
     /// Model to clip space.
     pub view_proj: Mat4,
     pub ink: Color,
+    /// The snap the cursor's point is on, and what it is called: its mark is drawn there.
+    pub mark: Option<(crate::app::modeller::snaps::Snap, &'static str)>,
 }
 
+/// Half the size of a snap's mark (pixels).
+const MARK: f32 = 6.0;
+
 impl PlacingOverlay {
+    /// The mark of a snap at `p`: a square for an end, a triangle for a middle, a cross for the
+    /// grid, a diamond for a point on a line; each in its own colour over a dark edge, with its
+    /// name beside it.
+    fn draw_mark(frame: &mut Frame, p: Point, kind: crate::app::modeller::snaps::Snap, name: &str) {
+        use crate::app::modeller::snaps::Snap;
+        let (color, shape) = match kind {
+            Snap::End => (Color::from_rgb8(0, 200, 80), Path::rectangle(Point::new(p.x - MARK, p.y - MARK), Size::new(2.0 * MARK, 2.0 * MARK))),
+            Snap::Middle => (
+                Color::from_rgb8(0, 190, 220),
+                Path::new(|b| {
+                    b.move_to(Point::new(p.x, p.y - MARK));
+                    b.line_to(Point::new(p.x + MARK, p.y + MARK));
+                    b.line_to(Point::new(p.x - MARK, p.y + MARK));
+                    b.close();
+                }),
+            ),
+            Snap::Grid => (
+                Color::from_rgb8(230, 180, 0),
+                Path::new(|b| {
+                    b.move_to(Point::new(p.x - MARK, p.y - MARK));
+                    b.line_to(Point::new(p.x + MARK, p.y + MARK));
+                    b.move_to(Point::new(p.x - MARK, p.y + MARK));
+                    b.line_to(Point::new(p.x + MARK, p.y - MARK));
+                }),
+            ),
+            Snap::Line => (
+                Color::from_rgb8(235, 90, 160),
+                Path::new(|b| {
+                    b.move_to(Point::new(p.x, p.y - MARK));
+                    b.line_to(Point::new(p.x + MARK, p.y));
+                    b.line_to(Point::new(p.x, p.y + MARK));
+                    b.line_to(Point::new(p.x - MARK, p.y));
+                    b.close();
+                }),
+            ),
+            Snap::Ortho | Snap::Round => (Color::from_rgb8(240, 140, 0), Path::circle(p, MARK - 1.0)),
+        };
+        frame.stroke(&shape, canvas::Stroke::default().with_color(Color::from_rgba8(0, 0, 0, 0.75)).with_width(4.0));
+        frame.stroke(&shape, canvas::Stroke::default().with_color(color).with_width(2.0));
+        // its name on a dark box, up and to the right
+        let width = name.chars().count() as f32 * 6.4 + 10.0;
+        let at = Point::new(p.x + 12.0, p.y - 26.0);
+        frame.fill(&Path::rectangle(at, Size::new(width, 16.0)), Color::from_rgba8(20, 20, 24, 0.85));
+        frame.fill_text(canvas::Text { content: name.to_string(), position: Point::new(at.x + 5.0, at.y + 2.0), size: 11.0.into(), color: Color::WHITE, ..canvas::Text::default() });
+    }
+
     /// Where a model point shows in a viewport of `size`, and its depth, if in front of the camera.
     fn project(&self, size: Size, p: Vec3) -> Option<(Point, f32)> {
         let c = self.view_proj.project_point3(p);
@@ -129,7 +191,12 @@ impl<M> canvas::Program<M> for PlacingOverlay {
             frame.fill(&Path::rectangle(Point::new(p.x - 3.5, p.y - 3.5), Size::new(7.0, 7.0)), self.ink);
         }
         if let Some((p, _)) = self.project(size, self.cursor) {
-            frame.stroke(&Path::circle(p, 5.0), canvas::Stroke::default().with_color(self.ink).with_width(1.5));
+            match self.mark {
+                Some((kind, name)) => Self::draw_mark(&mut frame, p, kind, name),
+                None => {
+                    frame.stroke(&Path::circle(p, 5.0), canvas::Stroke::default().with_color(self.ink).with_width(1.5));
+                }
+            }
         }
         vec![frame.into_geometry()]
     }

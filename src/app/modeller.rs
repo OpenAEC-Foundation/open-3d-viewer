@@ -17,7 +17,7 @@ use openaec_ui::Language;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod grids;
+pub mod grids;
 pub mod browser;
 pub mod cursor3d;
 pub mod dim_refs;
@@ -189,6 +189,12 @@ pub struct Modeller {
     pub join_word: &'static str,
     /// What a space is called, in the interface language ("Space 1").
     pub space_word: &'static str,
+    /// The kind of snap that took the cursor's point where it is, for its mark; and what that
+    /// kind is called, in the interface language.
+    pub snap_mark: Option<snaps::Snap>,
+    pub snap_words: [&'static str; 6],
+    /// The series of grid lines being typed beside the picked one (see `grids`); `None`: closed.
+    pub grid_series: Option<String>,
     /// Which snaps are on (see `snaps`).
     pub snaps: snaps::Snaps,
     /// The names given to spaces, each at a point of its space (see `spaces`).
@@ -407,17 +413,23 @@ impl App {
 
     /// The points a click snaps to, of every modelled element but `except` (ids start at 1).
     pub(super) fn snap_points_except(&self, except: ElementId) -> Vec<DVec3> {
+        self.snap_marks_except(except).into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The points of [`App::snap_points_except`], each with the kind of snap it is.
+    pub(super) fn snap_marks_except(&self, except: ElementId) -> Vec<(DVec3, snaps::Snap)> {
+        use snaps::Snap;
         let grid = self.modeller.model.grid;
         // the 3D cursor, once placed, is a point to land on
-        let mut points: Vec<DVec3> = self.cursor3d_snap().into_iter().collect();
+        let mut points: Vec<(DVec3, Snap)> = self.cursor3d_snap().into_iter().map(|p| (p, Snap::End)).collect();
         let snaps = self.modeller.snaps;
         // the ends of a line when ends are on, its middle when middles are
         let mut line = |a: DVec3, b: DVec3| {
             if snaps.end {
-                points.extend([a, b]);
+                points.extend([(a, Snap::End), (b, Snap::End)]);
             }
             if snaps.middle {
-                points.push((a + b) / 2.0);
+                points.push(((a + b) / 2.0, Snap::Middle));
             }
         };
         let (mut corners, mut middles) = (Vec::new(), Vec::new());
@@ -439,13 +451,13 @@ impl App {
             }
         }
         if snaps.end {
-            points.extend(corners);
+            points.extend(corners.into_iter().map(|p| (p, Snap::End)));
         }
         if snaps.middle {
-            points.extend(middles);
+            points.extend(middles.into_iter().map(|p| (p, Snap::Middle)));
         }
         if snaps.grid {
-            points.extend(self.grid_snap_points());
+            points.extend(self.grid_snap_points().into_iter().map(|p| (p, Snap::Grid)));
         }
         points
     }
@@ -453,14 +465,20 @@ impl App {
     /// A click on the work plane at `p`: onto a point of an element near the cursor, else in line
     /// with the last point when nearly so, else rounded.
     pub(super) fn snapped(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> DVec3 {
+        self.snapped_as(p, x, y, width, height).0
+    }
+
+    /// The point of [`App::snapped`], and the kind of snap that took it there (none for a click
+    /// that is where it is, rounded).
+    pub(super) fn snapped_as(&self, p: DVec3, x: f32, y: f32, width: f32, height: f32) -> (DVec3, Option<snaps::Snap>) {
         let near = self
-            .snap_points()
+            .snap_marks_except(ElementId(0))
             .into_iter()
-            .filter_map(|q| self.on_screen(q, width, height).map(|s| (q, (s.0 - x).hypot(s.1 - y))))
-            .filter(|(_, d)| *d <= SNAP_PIXELS)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((q, _)) = near {
-            return DVec3::new(q.x, q.y, p.z);
+            .filter_map(|(q, kind)| self.on_screen(q, width, height).map(|s| (q, kind, (s.0 - x).hypot(s.1 - y))))
+            .filter(|(_, _, d)| *d <= SNAP_PIXELS)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((q, kind, _)) = near {
+            return (DVec3::new(q.x, q.y, p.z), Some(kind));
         }
         let snaps = self.modeller.snaps;
         // the nearest point of a line under the cursor
@@ -477,9 +495,10 @@ impl App {
                 .filter(|(_, d)| *d <= SNAP_PIXELS)
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             if let Some((c, _)) = on_line {
-                return c.extend(p.z);
+                return (c.extend(p.z), Some(snaps::Snap::Line));
             }
         }
+        let mut straight = None;
         let round = |v: f64| if snaps.round { (v / ROUND).round() * ROUND } else { v };
         let mut p = DVec3::new(round(p.x), round(p.y), p.z);
         if let Some(first) = self.modeller.points.last().filter(|_| snaps.ortho) {
@@ -491,9 +510,10 @@ impl App {
                 } else {
                     p.x = first.x;
                 }
+                straight = Some(snaps::Snap::Ortho);
             }
         }
-        p
+        (p, straight)
     }
 
     /// A click in the viewport while a tool is on.

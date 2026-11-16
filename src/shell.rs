@@ -1444,6 +1444,7 @@ impl Studio {
                 // joins made automatically are named in the interface language
                 self.app.modeller.join_word = self.l().text("Verbinding", "Connection");
                 self.app.modeller.space_word = self.l().text("Ruimte", "Space");
+                self.app.modeller.snap_words = crate::app::modeller::snaps::Snap::ALL.map(|s| s.label(self.l()));
                 let opened = match &message {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,

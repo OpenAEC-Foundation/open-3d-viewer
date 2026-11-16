@@ -60,6 +60,8 @@ pub const PAIRS: &[(&str, ModelKey)] = &[
     ("wn", ModelKey::Window),
     ("sb", ModelKey::Slab),
     ("gr", ModelKey::Grid),
+    ("gl", ModelKey::Grid),
+    ("sl", ModelKey::Slab),
     ("se", ModelKey::Section),
     ("tx", ModelKey::Text),
     ("cs", ModelKey::CreateSimilar),

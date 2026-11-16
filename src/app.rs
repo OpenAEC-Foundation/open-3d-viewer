@@ -718,6 +718,8 @@ pub enum Message {
     ElementField(element_props::ElementField, String),
     /// Enter in such a field: it shows the value in use again.
     ElementFieldDone,
+    /// The series field of the picked grid line.
+    GridSeries(modeller::grids::SeriesMessage),
     /// A snap switched on or off at the right of the status bar.
     SnapToggle(modeller::snaps::Snap),
     /// The name typed for the space selected, and Enter in its field.
@@ -1765,6 +1767,7 @@ impl App {
             Message::TempDim(message) => self.temp_dim_message(message),
             Message::ElementField(field, typed) => self.type_element_field(field, typed),
             Message::ElementFieldDone => self.modeller.typing = None,
+            Message::GridSeries(message) => self.series_message(message),
             Message::SnapToggle(snap) => self.modeller.snaps.toggle(snap),
             Message::SpaceName(typed) => self.type_space_name(typed),
             Message::SpaceNameDone => self.modeller.space_typing = None,
@@ -4022,6 +4025,7 @@ impl App {
             .push(temp_marks)
             .push(editing)
             .push(temp_fields)
+            .push(self.grid_series_overlay(p, l).filter(|_| overlay.is_none()))
             .push(self.sketch_bar(p, l).filter(|_| overlay.is_none()))
             .push(boxed)
             .push(picking)

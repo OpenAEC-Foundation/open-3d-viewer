@@ -1936,6 +1936,7 @@ impl App {
                         self.select_box(rect, width, height, add);
                     }
                 }
+                Navigate::Hover { x, y, width, height } if self.grab_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.sketch_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.edit_hover(x, y, width, height) => {}
                 Navigate::Hover { x, y, width, height } if self.model_hover(x, y, width, height) || self.grid_hover(x, y, width, height) => {}
@@ -2125,7 +2126,9 @@ impl App {
                 };
             }
             Message::DeletePicked => {
-                if self.edit_backspace() {
+                if self.grab_backspace() {
+                    // a distance typed in a grab: its last character goes
+                } else if self.edit_backspace() {
                     // a distance being typed: its last character goes
                 } else if self.sketch_delete() {
                     // in the sketch of a floor: the picked line goes
@@ -2357,6 +2360,7 @@ impl App {
                 }
             }
             // Enter while a distance is typed in a move puts the move down
+            Message::MeasureFinish if self.put_grab_down() => {}
             Message::MeasureFinish if self.edit_enter() => {}
             // Enter while Rotate waits for its centre: about the 3D cursor
             Message::MeasureFinish if self.rotate_about_cursor3d() => {}
@@ -2411,6 +2415,9 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.grab.is_some() => {
+                self.drop_grab();
+            }
             Message::Escape if self.modeller.temp_dim.is_some() => {
                 self.temp_dim_escape();
             }
@@ -2547,6 +2554,10 @@ impl App {
     pub(crate) fn pick(&mut self, x: f32, y: f32, width: f32, height: f32, add: bool) {
         let Some(model) = self.model.clone() else { return };
         let (width, height) = (width.max(1.0), height.max(1.0));
+        // a click puts grabbed elements down
+        if self.put_grab_down() {
+            return;
+        }
         if self.sketch_click(x, y, width, height) {
             return;
         }
@@ -3746,7 +3757,7 @@ impl App {
             looks: &self.unit_looks,
             drag_selects: self.drag_selects(),
             cursor3d: self.has_cursor3d(),
-            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
+            hover: (self.measure.tool.is_some() || self.structural_hover_on() || self.edit_follows_cursor() || self.modeller.sketch.is_some() || self.modeller.grab.is_some() || self.modeller.tool.is_some() || self.modeller.grid_tool) && !self.plane_picking,
             crosshair: (self.measure.tool.is_some() && !self.plane_picking) || (self.shown_view().is_some() && (self.dimension_tool || self.note_tool)),
             structural_selected: &self.structural.selected_marks,
             structural_hovered: &self.structural.hovered_marks,
@@ -3816,7 +3827,9 @@ impl App {
             canvas(PlaneOverlay { plane, world, view_proj: self.camera.view_proj(self.aspect()) }).width(Fill).height(Fill)
         });
         let editing = self.modeller.edit.as_ref().and_then(|e| Some((e, self.modeller.model.get(e.element)?)));
-        let banner = if let Some(hint) = self.sketch_hint(l) {
+        let banner = if let Some(hint) = self.grab_hint(l) {
+            Some(hint)
+        } else if let Some(hint) = self.sketch_hint(l) {
             Some(hint)
         } else if let Some((edit, element)) = editing {
             let hint = match &edit.grab {

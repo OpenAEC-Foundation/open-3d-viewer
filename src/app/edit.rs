@@ -258,6 +258,10 @@ impl App {
     /// A key in edit mode: G grabs the picked points, X, Y and Z hold the move to an axis, A picks
     /// every point.
     pub(super) fn edit_key(&mut self, key: char) {
+        // elements grabbed with G take the axis keys and the digits
+        if self.grab_key(key) {
+            return;
+        }
         if self.modeller.sketch.is_some() {
             return self.sketch_key(key);
         }

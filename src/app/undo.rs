@@ -10,7 +10,7 @@ impl App {
     /// A move being made in edit mode or with a grip: the model changes at every move of the
     /// cursor, and is one step once it is put down.
     fn moving(&self) -> bool {
-        self.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some())
+        self.modeller.edit.as_ref().is_some_and(|e| e.grab.is_some()) || self.modeller.grab.is_some()
     }
 
     /// After any message: when the modelled elements changed, the model as it was goes into the

@@ -1646,6 +1646,15 @@ impl Studio {
                     return self.update(Msg::App(Message::Escape));
                 }
                 // in edit mode G, X, Y, Z and A are its own keys
+                // while elements are grabbed (G), X, Y and Z hold the move and digits type its distance
+                let grabbing = self.app.modeller.grab.is_some();
+                if self.dialog.is_none() && grabbing && !press.modifiers.control() && !press.modifiers.alt() {
+                    if let Key::Character(c) = &press.key {
+                        if let Some(c) = c.chars().next().filter(|c| "xyzXYZ".contains(*c) || crate::app::modeller::typed_move::DIGITS.contains(*c)) {
+                            return self.update(Msg::App(Message::EditKey(c)));
+                        }
+                    }
+                }
                 // and in the sketch of a floor L, R, A and T are its tools
                 let sketching = self.app.modeller.sketch.is_some();
                 if self.dialog.is_none() && sketching && !press.modifiers.control() && !press.modifiers.alt() {
@@ -1667,7 +1676,7 @@ impl Studio {
                 // in the Modeller a plain letter is a key of its own (see `app::modeller::keys`),
                 // and PageUp / PageDown step through the levels
                 // (not in edit mode, whose own keys came before; its other letters stay the app's)
-                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !sketching && !press.modifiers.control() && !press.modifiers.alt() {
+                if self.dialog.is_none() && !self.backstage && self.product() == Product::Modeller && self.app.modeller.edit.is_none() && !sketching && !grabbing && !press.modifiers.control() && !press.modifiers.alt() {
                     use crate::app::modeller::keys::{ModelKey, Step};
                     // Shift+C takes the 3D cursor home, as in Blender
                     if press.modifiers.shift() && matches!(&press.key, Key::Character(c) if c.eq_ignore_ascii_case("c")) {

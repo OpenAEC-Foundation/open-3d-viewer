@@ -256,6 +256,8 @@ pub fn tools() -> Vec<Value> {
         // the Modeller's viewport gestures
         tool("place_cursor", "The Modeller: put the 3D cursor under a pixel of the last viewport screenshot, as Shift + the right button does. It lands on a point of an element near it, else on the level worked on.",
             json!({ "x": { "type": "number" }, "y": { "type": "number" } }), &["x", "y"], false),
+        tool("hover", "Rest the pointer on a pixel of the last viewport screenshot, as moving the mouse there does: a tool's preview runs to it, and elements grabbed with G follow it.",
+            json!({ "x": { "type": "number" }, "y": { "type": "number" } }), &["x", "y"], false),
         tool("drag_handle", "The Modeller: drag a handle of the viewport from one pixel of the last viewport screenshot to another, as the mouse does: a grip of the selected element (a wall's ends, middle and top; a floor's edges, top and underside), or a point in edit mode or in a floor's sketch. Without from it lists where the handles are.",
             json!({
                 "from": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },

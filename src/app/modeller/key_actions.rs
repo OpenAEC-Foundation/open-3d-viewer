@@ -22,7 +22,7 @@ impl ModelKey {
             ModelKey::Grid => l.text("Stramien", "Grid"),
             ModelKey::Section => l.text("Doorsnede", "Section"),
             ModelKey::Dimension => l.text("Maatvoering", "Dimension"),
-            ModelKey::Grab => l.text("Pakken (bewerken) of verplaatsen", "Grab (editing) or move"),
+            ModelKey::Grab => l.text("Pakken: de selectie volgt de muis", "Grab: the selection follows the mouse"),
             ModelKey::Move => TransformKind::Move.label(l),
             ModelKey::Copy => TransformKind::Copy.label(l),
             ModelKey::Rotate => TransformKind::Rotate.label(l),
@@ -98,7 +98,11 @@ impl App {
                 let _ = self.update(Message::DimensionTool(!self.dimension_tool));
             }
             ModelKey::Grab if self.modeller.edit.is_some() => self.edit_key('g'),
-            ModelKey::Grab | ModelKey::Move => self.begin_transform(TransformKind::Move),
+            // outside edit mode G grabs the selection, which follows the cursor at once
+            ModelKey::Grab => {
+                self.begin_grab_objects();
+            }
+            ModelKey::Move => self.begin_transform(TransformKind::Move),
             ModelKey::Copy => self.begin_transform(TransformKind::Copy),
             ModelKey::Rotate => self.begin_transform(TransformKind::Rotate),
             ModelKey::Mirror => self.begin_transform(TransformKind::Mirror),

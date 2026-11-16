@@ -450,6 +450,13 @@ impl App {
                 Ok(json!({ "cursor": self.modeller.cursor3d.at.to_array() }))
             }
             "drag_handle" => self.remote_drag_handle(a),
+            "hover" => {
+                let (x, y) = (num(a, "x").ok_or("x is required")?, num(a, "y").ok_or("y is required")?);
+                let (vx, vy) = self.to_viewport(x, y);
+                let (w, h) = self.viewport_size;
+                let _ = self.update(Message::Navigate(crate::viewport::Navigate::Hover { x: vx, y: vy, width: w, height: h }));
+                Ok(json!({ "hovering": [x, y] }))
+            }
             "set_view" => self.remote_set_view(a),
             "set_camera" => self.set_camera(a),
             "navigate" => self.navigate(a),

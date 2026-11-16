@@ -217,6 +217,11 @@ fn fs_depth(in: VertexOut) {
     }
 }
 
+// The depth of the points of a cloud, for its depth shading (they are cut in `vs_point`).
+@fragment
+fn fs_point_depth(in: VertexOut) {
+}
+
 @fragment
 fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
     if (clipped(in.world)) {

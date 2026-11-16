@@ -861,6 +861,7 @@
     "Colours the points as the file stores them: their colours, or their class or scan shaded by intensity.": "Noktaları dosyanın sakladığı gibi renklendirir: kendi renkleri veya yoğunluğa göre tonlanmış sınıfı ya da taraması.",
     "Colours the points by their height, from blue low to red high.": "Noktaları yüksekliğine göre renklendirir: alçakta mavi, yüksekte kırmızı.",
     "Colours the points by what they reflected, from dark to light. A file without intensity turns white.": "Noktaları yansıttıklarına göre koyudan açığa renklendirir. Yoğunluğu olmayan dosya beyaz olur.",
-    "Gives every class of a classified cloud, or every scan, one colour.": "Sınıflandırılmış bir bulutun her sınıfına veya her taramaya tek renk verir."
+    "Gives every class of a classified cloud, or every scan, one colour.": "Sınıflandırılmış bir bulutun her sınıfına veya her taramaya tek renk verir.",
+    "Darkens points where they lie behind their neighbours, so the shape of a cloud shows.": "Komşularının arkasında kalan noktaları koyulaştırır; böylece bulutun biçimi görünür."
   }
 }

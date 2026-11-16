@@ -1273,6 +1273,7 @@ impl Studio {
             add("cloud.points-smaller", l.text("Punten kleiner", "Smaller points"), "view.zoom-out", smaller, loaded, l.text("Tekent de punten van een puntenwolk een stap kleiner.", "Draws the points of a cloud a step smaller."));
             add("cloud.points-larger", l.text("Punten groter", "Larger points"), "view.zoom-in", larger, loaded, l.text("Tekent de punten van een puntenwolk een stap groter.", "Draws the points of a cloud a step larger."));
         }
+        list.push(Command::new("cloud.depth", l.text("Diepte", "Depth"), go(Message::ToggleCloudDepth)).icon(small("view.isometric"), large("view.isometric")).toggle(app.cloud_depth).enabled(loaded).detail(l.text("Maakt punten donkerder waar ze achter hun buren liggen, zodat de vorm van een wolk te zien is.", "Darkens points where they lie behind their neighbours, so the shape of a cloud shows.")));
         // how the points of a cloud are coloured
         {
             use crate::cloud_color::CloudColor as C;
@@ -1990,7 +1991,7 @@ impl Studio {
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
-                (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger"])]),
+                (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
                 (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface")]),
             ],

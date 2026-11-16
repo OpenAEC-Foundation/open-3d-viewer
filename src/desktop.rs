@@ -4,7 +4,7 @@
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--product viewer|modeller|collaborator|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
@@ -65,6 +65,8 @@ struct Args {
     mode: Option<RenderMode>,
     /// For `--screenshot`: how the points of a cloud are coloured.
     cloud_color: Option<crate::cloud_color::CloudColor>,
+    /// For `--screenshot`: the clouds without their depth shading.
+    flat_clouds: bool,
     view: Option<ViewPreset>,
     bench: Option<PathBuf>,
     ortho: bool,
@@ -117,6 +119,7 @@ fn parse_args() -> Result<Args, String> {
                 let (w, h) = v.split_once('x').ok_or("--size WxH")?;
                 args.size = Some((w.parse().map_err(|_| "--size WxH")?, h.parse().map_err(|_| "--size WxH")?));
             }
+            "--flat-clouds" => args.flat_clouds = true,
             "--cloud-color" => {
                 use crate::cloud_color::CloudColor as C;
                 args.cloud_color = Some(match value()?.as_str() {
@@ -253,6 +256,9 @@ fn initial_state(args: &Args) -> App {
     }
     if let Some(c) = args.cloud_color {
         app.cloud_color = c;
+    }
+    if args.flat_clouds {
+        app.cloud_depth = false;
     }
     app.camera.ortho = args.ortho;
     if args.view_tab {

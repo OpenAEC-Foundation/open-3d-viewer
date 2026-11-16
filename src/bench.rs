@@ -234,6 +234,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             grids: true,
             ambient: false,
             point_size: 2.5,
+            cloud_depth: false,
             cloud_color: Default::default(),
             bounds: None,
         };
@@ -392,6 +393,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
             grids: true,
             ambient: false,
             point_size: 2.5,
+            cloud_depth: false,
             cloud_color: Default::default(),
             bounds: None,
         };
@@ -682,6 +684,7 @@ mod tests {
                 grids: false,
                 ambient: false,
             point_size: 2.5,
+            cloud_depth: false,
             cloud_color: Default::default(),
                 bounds: None,
             },
@@ -834,6 +837,7 @@ mod tests {
             grids: false,
             ambient: false,
             point_size: 2.5,
+            cloud_depth: false,
             cloud_color: Default::default(),
             bounds: None,
         };

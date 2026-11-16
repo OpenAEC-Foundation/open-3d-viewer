@@ -450,6 +450,22 @@ impl App {
                 Ok(json!({ "cursor": self.modeller.cursor3d.at.to_array() }))
             }
             "drag_handle" => self.remote_drag_handle(a),
+            "open_drawing" => {
+                // the project's own drawings: its floor plans, sections and elevations, and sheets
+                let plans = self.document.plans().iter().map(|p| ("plan", p.name.clone(), p.path.clone()));
+                let sections = self.document.sections().iter().map(|s| ("section", s.name.clone(), s.path.clone()));
+                let sheets = self.document.sheets().iter().map(|s| ("sheet", s.title.clone(), s.path.clone()));
+                let all: Vec<(&str, String, String)> = plans.chain(sections).chain(sheets).collect();
+                let Some(name) = a.get("name").and_then(|v| v.as_str()) else {
+                    return Ok(json!({ "drawings": all.iter().map(|(kind, name, _)| json!({ "kind": kind, "name": name })).collect::<Vec<_>>() }));
+                };
+                let wanted = name.to_lowercase();
+                let found = all.iter().find(|d| d.1.to_lowercase() == wanted).or_else(|| all.iter().find(|d| d.1.to_lowercase().contains(&wanted)));
+                let (kind, name, path) = found.ok_or_else(|| format!("no drawing named '{name}'; call open_drawing without a name to list them"))?.clone();
+                let message = if kind == "sheet" { Message::OpenDocSheet(path.as_str().into()) } else { Message::OpenPlan(path.as_str().into()) };
+                let _ = self.update(message);
+                Ok(json!({ "opened": name, "kind": kind }))
+            }
             #[cfg(not(target_arch = "wasm32"))]
             "export_drawing" => {
                 let path = a.get("path").and_then(|v| v.as_str()).ok_or("path is required")?;

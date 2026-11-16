@@ -258,6 +258,8 @@ pub fn tools() -> Vec<Value> {
             json!({ "x": { "type": "number" }, "y": { "type": "number" } }), &["x", "y"], false),
         tool("export_drawing", "Write the drawing of the sheet or view shown in the active tab to a file, as its Export button does: the format is the path's extension (pdf, svg, dxf, dwg, png or ifccad).",
             json!({ "path": { "type": "string", "description": "Where to write it (absolute)" } }), &["path"], false),
+        tool("open_drawing", "The project's own drawings: without a name, lists its floor plans, sections and elevations, and sheets; with one, opens that drawing in its tab (exact name, else the first that contains it).",
+            json!({ "name": { "type": "string" } }), &[], false),
         tool("hover", "Rest the pointer on a pixel of the last viewport screenshot, as moving the mouse there does: a tool's preview runs to it, and elements grabbed with G follow it.",
             json!({ "x": { "type": "number" }, "y": { "type": "number" } }), &["x", "y"], false),
         tool("drag_handle", "The Modeller: drag a handle of the viewport from one pixel of the last viewport screenshot to another, as the mouse does: a grip of the selected element (a wall's ends, middle and top; a floor's edges, top and underside), or a point in edit mode or in a floor's sketch. Without from it lists where the handles are.",

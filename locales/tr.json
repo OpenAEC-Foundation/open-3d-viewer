@@ -839,6 +839,20 @@
     "By kind": "Türe göre",
     "Order": "Sırala",
     "Room": "Oda",
-    "2D drawings": "2B çizimler"
+    "2D drawings": "2B çizimler",
+    "Draws the points of a cloud a step larger.": "Bir bulutun noktalarını bir kademe büyük çizer.",
+    "Draws the points of a cloud a step smaller.": "Bir bulutun noktalarını bir kademe küçük çizer.",
+    "Larger points": "Daha büyük noktalar",
+    "Smaller points": "Daha küçük noktalar",
+    "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out.": "Noktaların üzerinde yukarıdan görüldüğü gibi bir yüzey oluşturur: zemin, bir arazi, bir çatı yüzeyi. Duvarlar ve çıkmalar dışarıda bırakılır.",
+    "Makes a surface through the points in all directions: walls, ceilings, objects.": "Noktalardan her yönde geçen bir yüzey oluşturur: duvarlar, tavanlar, nesneler.",
+    "Mesh": "Ağ",
+    "Terrain mesh": "Arazi ağı",
+    "Surface mesh": "Yüzey ağı",
+    "No point cloud open": "Açık nokta bulutu yok",
+    "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Bakmak, ölçmek, kesmek ve ondan bir ağ oluşturmak için bir nokta bulutu (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) açın.",
+    "Open point clouds and make meshes of them": "Nokta bulutlarını açın ve onlardan ağlar oluşturun",
+    "Point cloud": "Nokta bulutu",
+    "Point clouds": "Nokta bulutları"
   }
 }

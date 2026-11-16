@@ -839,6 +839,20 @@
     "By kind": "Nach Art",
     "Order": "Ordnen",
     "Room": "Raum",
-    "2D drawings": "2D-Zeichnungen"
+    "2D drawings": "2D-Zeichnungen",
+    "Draws the points of a cloud a step larger.": "Zeichnet die Punkte einer Punktwolke eine Stufe größer.",
+    "Draws the points of a cloud a step smaller.": "Zeichnet die Punkte einer Punktwolke eine Stufe kleiner.",
+    "Larger points": "Punkte größer",
+    "Smaller points": "Punkte kleiner",
+    "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out.": "Erzeugt eine Fläche über den Punkten, von oben gesehen: Gelände, ein Grundstück, eine Dachfläche. Wände und Überhänge bleiben weg.",
+    "Makes a surface through the points in all directions: walls, ceilings, objects.": "Erzeugt eine Fläche durch die Punkte in alle Richtungen: Wände, Decken, Objekte.",
+    "Mesh": "Netz",
+    "Terrain mesh": "Geländenetz",
+    "Surface mesh": "Flächennetz",
+    "No point cloud open": "Keine Punktwolke geöffnet",
+    "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Öffnen Sie eine Punktwolke (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ), um sie anzusehen, zu messen, zu schneiden und ein Netz daraus zu erzeugen.",
+    "Open point clouds and make meshes of them": "Punktwolken öffnen und Netze daraus erzeugen",
+    "Point cloud": "Punktwolke",
+    "Point clouds": "Punktwolken"
   }
 }

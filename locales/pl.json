@@ -839,6 +839,20 @@
     "By kind": "Według rodzaju",
     "Order": "Porządkuj",
     "Room": "Pomieszczenie",
-    "2D drawings": "Rysunki 2D"
+    "2D drawings": "Rysunki 2D",
+    "Draws the points of a cloud a step larger.": "Rysuje punkty chmury o stopień większe.",
+    "Draws the points of a cloud a step smaller.": "Rysuje punkty chmury o stopień mniejsze.",
+    "Larger points": "Większe punkty",
+    "Smaller points": "Mniejsze punkty",
+    "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out.": "Tworzy powierzchnię nad punktami widzianymi z góry: teren, działka, połać dachu. Ściany i nawisy są pomijane.",
+    "Makes a surface through the points in all directions: walls, ceilings, objects.": "Tworzy powierzchnię przez punkty we wszystkich kierunkach: ściany, sufity, obiekty.",
+    "Mesh": "Siatka",
+    "Terrain mesh": "Siatka terenu",
+    "Surface mesh": "Siatka powierzchni",
+    "No point cloud open": "Brak otwartej chmury punktów",
+    "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it.": "Otwórz chmurę punktów (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ), aby ją obejrzeć, zmierzyć, przeciąć i utworzyć z niej siatkę.",
+    "Open point clouds and make meshes of them": "Otwieraj chmury punktów i twórz z nich siatki",
+    "Point cloud": "Chmura punktów",
+    "Point clouds": "Chmury punktów"
   }
 }

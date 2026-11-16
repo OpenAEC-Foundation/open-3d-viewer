@@ -2399,6 +2399,9 @@ impl App {
             Message::IsolateSelection => self.isolate_selection(),
             Message::ShowAllElements => self.show_all_elements(),
             Message::Escape if self.plane_picking => self.plane_picking = false,
+            Message::Escape if self.modeller.slab_drag.is_some() => {
+                self.slab_escape();
+            }
             Message::Escape if self.modeller.edit.is_some() => {
                 self.edit_escape();
             }

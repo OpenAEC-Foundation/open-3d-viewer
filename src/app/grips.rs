@@ -55,6 +55,10 @@ impl App {
     /// The grips of the selected element over the viewport: its ends, then its middle. A wall of
     /// an opened file that the Modeller can take over has them too (see `take_over`).
     pub(super) fn grip_overlay(&self, ink: Color, fill: Color) -> Option<EditOverlay> {
+        // a floor has grips of its own: its edges, its top and its underside
+        if let Some(overlay) = self.slab_overlay(ink, fill) {
+            return Some(overlay);
+        }
         let shape = match self.gripped() {
             Some(id) => self.modeller.model.get(id)?.shape_in_project(&self.modeller.model.grid),
             None => Shape::Planar(self.source_gripped()?.wall),
@@ -69,6 +73,7 @@ impl App {
             picked: vec![false; points.len()],
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed: false,
+            outline: None,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
             fill,

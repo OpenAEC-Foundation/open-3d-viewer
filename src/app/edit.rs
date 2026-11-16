@@ -191,6 +191,10 @@ impl App {
 
     /// Something the edit overlay reports.
     pub(super) fn edit_event(&mut self, event: EditEvent) {
+        // a floor with grips, or one of them dragged
+        if self.modeller.edit.is_none() && self.slab_event(event) {
+            return;
+        }
         if self.modeller.edit.is_none() {
             // a press on a grip of the selected element begins a drag of it
             if let EditEvent::Press { index, .. } = event {
@@ -439,6 +443,7 @@ impl App {
         Some(EditOverlay {
             points: points.iter().map(|p| p.as_vec3()).collect(),
             closed,
+            outline: None,
             picked,
             view_proj: self.camera.view_proj(self.aspect()) * self.model_matrix(),
             ink,
@@ -461,6 +466,8 @@ pub struct EditOverlay {
     /// The points (a grip's middle last).
     pub points: Vec<Vec3>,
     pub closed: bool,
+    /// A loop drawn in place of the lines between the points (a floor with grips: its outline).
+    pub outline: Option<Vec<Vec3>>,
     pub picked: Vec<bool>,
     /// Model to clip space.
     pub view_proj: Mat4,
@@ -532,11 +539,17 @@ impl<M: From<EditEvent>> canvas::Program<M> for EditOverlay {
     fn draw(&self, state: &EditState, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let shown: Vec<Option<Point>> = self.points.iter().map(|p| project(&self.view_proj, bounds.size(), *p)).collect();
-        let n = shown.len();
+        // the lines: between the points, or the loop given in their place
+        let given: Option<Vec<Option<Point>>> = self.outline.as_ref().map(|o| o.iter().map(|p| project(&self.view_proj, bounds.size(), *p)).collect());
+        let (linked, closed) = match &given {
+            Some(o) => (o, true),
+            None => (&shown, self.closed),
+        };
+        let n = linked.len();
         let lines = Path::new(|path| {
-            let pairs = if self.closed { n } else { n.saturating_sub(1) };
+            let pairs = if closed { n } else { n.saturating_sub(1) };
             for i in 0..pairs {
-                if let (Some(a), Some(b)) = (shown[i], shown[(i + 1) % n]) {
+                if let (Some(a), Some(b)) = (linked[i], linked[(i + 1) % n]) {
                     path.move_to(a);
                     path.line_to(b);
                 }

@@ -18,8 +18,8 @@
 
 ## Review Focus
 
-1. An edge pushed past its neighbours' far ends (the outline would cross itself): refused by the kernel, nothing changes. Task 1.
-2. A slab seen exactly edge-on in a section: the grips of the edges the view looks along lie on one point; the nearest to the camera is taken. Task 1.
+1. An edge pushed through the far side (the outline would cross itself or turn inside out): refused, nothing changes. Task 1.
+2. A slab seen in a section: the grips of the edges the view looks along are left out (their way does not show on the screen); the sides the view cuts, the top and the underside have theirs. Task 1.
 3. The underside dragged above the top: refused. Task 1.
 4. A sketch with a gap, a branch or two loops cannot be finished and says so; Esc leaves the floor unchanged. Task 2.
 5. A trim click on a stretch that no other line crosses takes the whole segment. Task 2.
@@ -44,7 +44,7 @@ Arcs (a segment with a bulge, kept by the kernel) and floor openings by two clic
   - `a_selected_slab_has_a_grip_on_every_edge_and_dragging_one_moves_the_edge` (from above).
   - `in_a_section_the_side_of_a_floor_is_dragged` (camera from the front: the grip of the edge at x = 4 dragged to x = 5).
   - `the_underside_dragged_above_the_top_is_refused`.
-- [ ] Run to fail; implement; run to pass; whole suite; commit.
+- [x] Run to fail; implement; run to pass; whole suite; commit.
 
 ### Task 2: The sketch of a floor's outline
 

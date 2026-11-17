@@ -60,8 +60,20 @@ impl Product {
         }
     }
 
-    /// Its name on the switch: a product name, the same in every language.
+    /// Its name on the switch: short, so the row of products fits beside the title; the same in
+    /// every language.
     pub fn label(self) -> &'static str {
+        match self {
+            Product::Viewer => "View",
+            Product::Modeller => "Modeller",
+            Product::Validator => "Collab",
+            Product::Pointcloud => "PointCloud",
+            Product::Analysis => "Struct",
+        }
+    }
+
+    /// Its name in full, in the list of commands: a product name, the same in every language.
+    pub fn full_name(self) -> &'static str {
         match self {
             Product::Viewer => "Viewer",
             Product::Modeller => "Modeller",
@@ -72,8 +84,8 @@ impl Product {
         }
     }
 
-    /// How far along it is, said beside its name on the switch where it is not ready to work
-    /// with (the same in every language, as its name is).
+    /// How far along it is, where it is not ready to work with: its name is grey on the switch
+    /// and its tooltip says this (the same in every language, as its name is).
     pub fn stage(self) -> Option<&'static str> {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
@@ -375,6 +387,9 @@ mod tests {
         }
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
+        // the switch: short names, and the three in alpha are the grey ones
+        assert_eq!(Product::ALL.map(Product::label), ["View", "Collab", "PointCloud", "Struct", "Modeller"]);
+        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true]);
     }
 
     #[test]

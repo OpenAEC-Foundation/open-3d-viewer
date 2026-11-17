@@ -3,9 +3,10 @@
 //! type, layer, class, symbol, the values of their records and the IFC entity Vectorworks
 //! keeps for them); lines, arcs and the outlines of shapes without a fill as line work; what is
 //! on an invisible layer or in an invisible class starts switched off; the saved views of the
-//! document; its sheet layers as sheets, with the lines and texts drawn on them.
+//! document; its sheet layers as sheets, with the lines and texts drawn on them and their
+//! viewports, each with the view of the model it shows.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{DraftText, Layer, ProjectData, SavedView, Sheet, SheetRect, ViewCamera, ViewKind};
+use crate::model::{DraftText, Layer, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 
 /// Metres in a point, the measure of letters on paper.
 const POINT: f32 = 0.0254 / 72.0;
@@ -30,8 +31,9 @@ impl Loader for VwxLoader {
         let data = source.read()?;
         progress.set(Phase::Convert);
         let scene = vwx_read::read(&data).map_err(|e| format!("Cannot read Vectorworks file: {e}"))?;
-        let views = scene.views.iter().map(view).collect();
-        let project = ProjectData { sheets: scene.sheets.iter().map(sheet).collect(), ..ProjectData::default() };
+        // the saved views, then the views the viewports of the sheets show
+        let mut views: Vec<SavedView> = scene.views.iter().map(view).collect();
+        let project = ProjectData { sheets: scene.sheets.iter().map(|s| sheet(s, &mut views)).collect(), ..ProjectData::default() };
         let layers = scene.meshes.into_iter().map(layer).collect();
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
     }
@@ -53,10 +55,10 @@ fn view(view: &vwx_read::model::View) -> SavedView {
     }
 }
 
-/// A sheet layer of the document as a sheet: its number and title, and what is drawn on the
-/// paper itself (the lines and texts of its title block and notes). Its paper is taken to be
-/// what those cover. The views of the model it shows (its viewports) are not read yet.
-fn sheet(sheet: &vwx_read::model::Sheet) -> Sheet {
+/// A sheet layer of the document as a sheet: its number and title, what is drawn on the paper
+/// itself (the lines and texts of its title block and notes), and its viewports, each with the
+/// view of the model it shows added to `views`. Its paper is taken to be what those cover.
+fn sheet(sheet: &vwx_read::model::Sheet, views: &mut Vec<SavedView>) -> Sheet {
     let texts: Vec<DraftText> = sheet
         .texts
         .iter()
@@ -73,10 +75,45 @@ fn sheet(sheet: &vwx_read::model::Sheet) -> Sheet {
             face: crate::typeface::Face::default(),
         })
         .collect();
-    let corners = sheet.lines.iter().flatten().copied().chain(texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]]));
+    let viewports: Vec<SheetViewport> = sheet
+        .viewports
+        .iter()
+        .map(|v| {
+            // the model as the viewport looks at it: a parallel view of its own
+            views.push(SavedView {
+                name: v.name.clone(),
+                kind: ViewKind::ThreeD,
+                camera: Some(ViewCamera { eye: [0.0; 3], forward: v.forward, perspective: false, fov_y: None }),
+                clip: None,
+                plan: None,
+                level: None,
+                folder: vec![sheet.number.clone()],
+                style: None,
+                drawing: None,
+            });
+            SheetViewport {
+                title: v.name.clone(),
+                view: Some(views.len() - 1),
+                rect: SheetRect { min: v.min, max: v.max },
+                estimated: false,
+                scale: format!("1:{}", v.scale),
+                detail: None,
+                label: None,
+                origin: v.origin,
+                ratio: 1.0 / v.scale.max(f32::MIN_POSITIVE),
+                drawing: None,
+                anchor: None,
+                turn: [1.0, 0.0],
+                draft: None,
+                written: None,
+                face: crate::typeface::Face::default(),
+                split: None,
+            }
+        })
+        .collect();
+    let corners = sheet.lines.iter().flatten().copied().chain(texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]])).chain(viewports.iter().flat_map(|v| [v.rect.min, v.rect.max]));
     let paper = corners.map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union);
-    let title = [sheet.number.as_str(), sheet.title.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-    Sheet { number: sheet.number.clone(), name: sheet.title.clone(), title, paper, lines: sheet.lines.clone(), texts, ..Sheet::default() }
+    Sheet { lines: sheet.lines.clone(), texts, ..Sheet::new(sheet.number.clone(), sheet.title.clone(), paper, viewports) }
 }
 
 /// The viewer layer of a reader mesh (both metres, Z up).
@@ -168,9 +205,14 @@ mod tests {
             title: "Plans".into(),
             lines: vec![[[0.0, 0.0], [0.841, 0.0]], [[0.841, 0.0], [0.841, 0.594]]],
             texts: vec![vwx_read::model::Text { id: 12, text: "Sheet No.".into(), at: [0.7, 0.05, 0.0], width: 0.04, height: 0.005, size: 12.0, lines: 1, ..Default::default() }],
-            viewports: 2,
+            viewports: vec![vwx_read::model::Viewport { id: 14, name: "Front Elevation".into(), min: [0.1, 0.2], max: [0.6, 0.45], scale: 50.0, origin: [0.2, 0.25], forward: [0.0, 1.0, 0.0], up: [0.0, 0.0, 1.0] }],
         };
-        let sheet = super::sheet(&from);
+        let mut views = vec![super::view(&vwx_read::model::View { name: "Aanzicht A".into(), forward: [0.0, 0.6, -0.8], up: [0.0, 0.8, 0.6] })];
+        let sheet = super::sheet(&from, &mut views);
+        // its viewport shows a view of its own, after the saved views
+        let viewport = &sheet.viewports[0];
+        assert_eq!((viewport.title.as_str(), viewport.view, viewport.scale.as_str(), viewport.ratio), ("Front Elevation", Some(1), "1:50", 0.02));
+        assert_eq!((views[1].name.as_str(), views[1].camera.unwrap().forward), ("Front Elevation", [0.0, 1.0, 0.0]));
         assert_eq!((sheet.number.as_str(), sheet.name.as_str(), sheet.title.as_str()), ("210", "Plans", "210 Plans"));
         assert_eq!(sheet.lines.len(), 2);
         // the text box from its lower left corner; letters of 12 points

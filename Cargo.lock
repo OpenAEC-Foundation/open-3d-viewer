@@ -3702,7 +3702,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "open-3d-viewer"
-version = "2026.46.5"
+version = "2026.47.1"
 dependencies = [
  "bim-bcf",
  "bim-core",
@@ -4717,7 +4717,7 @@ dependencies = [
 [[package]]
 name = "rvt-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "flate2",
 ]
@@ -4725,7 +4725,7 @@ dependencies = [
 [[package]]
 name = "rvt-export"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "delaunator",
  "earcutr",
@@ -4738,7 +4738,7 @@ dependencies = [
 [[package]]
 name = "rvt-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "serde",
 ]
@@ -4746,7 +4746,7 @@ dependencies = [
 [[package]]
 name = "rvt-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=55c94d865ce2642b07334b02f4ddf22e70769f87#55c94d865ce2642b07334b02f4ddf22e70769f87"
+source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "flate2",
  "rvt-core",

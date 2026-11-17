@@ -1361,6 +1361,8 @@ impl Studio {
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             use crate::app::pointcloud::{Event as Cloud, Export, Mesh};
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
+            let faces = event(Cloud::Mesh(Mesh::Faces));
+            #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             let (terrain, surface, closed, smaller, larger) = (event(Cloud::Mesh(Mesh::Terrain)), event(Cloud::Mesh(Mesh::Surface)), event(Cloud::Mesh(Mesh::Closed)), event(Cloud::PointSize(false)), event(Cloud::PointSize(true)));
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             let (points, mesh, drawing, cancel) = (event(Cloud::Export(Export::Points)), event(Cloud::Export(Export::Mesh)), event(Cloud::Export(Export::Drawing)), event(Cloud::Cancel));
@@ -1368,6 +1370,8 @@ impl Studio {
             let (cloud, idle, last, running) = (false, false, false, false);
             #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
             let (terrain, surface, closed, smaller, larger, points, mesh, drawing, cancel): (Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>, Option<Msg>) = (None, None, None, None, None, None, None, None, None);
+            #[cfg(not(all(feature = "pointcloud", not(target_arch = "wasm32"))))]
+            let faces: Option<Msg> = None;
             let boxed = app.active_section().is_some();
             let mut add = |id: &'static str, label: &'static str, icon: &'static str, message: Option<Msg>, on: bool, detail: &'static str| {
                 list.push(Command::new(id, label, message.clone().unwrap_or(Msg::Dialog(None))).icon(small(icon), large(icon)).enabled(message.is_some() && on).detail(detail));
@@ -1375,6 +1379,7 @@ impl Studio {
             add("cloud.mesh-terrain", l.text("Terreinmesh", "Terrain mesh"), "mesh.surface", terrain, cloud && idle, l.text("Maakt een oppervlak over de punten, van boven gezien: maaiveld, een terrein, een dakvlak. Wanden en overstekken komen er niet in.", "Makes a surface over the points as seen from above: ground, a site, a roof plane. Walls and overhangs are left out."));
             add("cloud.mesh-surface", l.text("Oppervlakmesh", "Surface mesh"), "mesh.faces", surface, cloud && idle, l.text("Maakt een oppervlak door de punten in alle richtingen: wanden, plafonds, objecten.", "Makes a surface through the points in all directions: walls, ceilings, objects."));
             add("cloud.mesh-closed", l.text("Gesloten mesh", "Closed mesh"), "mesh.closed", closed, cloud && idle, l.text("Past een oppervlak op de punten, dicht kleine gaten en vereenvoudigt vlakke delen. Het langzaamst en het best voor gebouwen; zet de doorsnedebox om het deel dat je nodig hebt.", "Fits a surface to the points, closes small gaps and simplifies flat parts. The slowest and the best for buildings; put the section box around the part you need."));
+            add("cloud.faces", l.text("Vlakken", "Faces"), "mesh.faces", faces, cloud && idle, l.text("Zoekt de vlakke wanden, vloeren, plafonds en daken en de ronde kolommen en leidingen in de punten, elk als een eigen vlak in de kleur van zijn soort. Zet de doorsnedebox om de ruimte die je nodig hebt.", "Finds the flat walls, floors, ceilings and roofs and the round columns and pipes in the points, each as a face of its own in the colour of its kind. Put the section box around the room you need."));
             add("cloud.points-smaller", l.text("Punten kleiner", "Smaller points"), "view.zoom-out", smaller, loaded, l.text("Tekent de punten van een puntenwolk een stap kleiner.", "Draws the points of a cloud a step smaller."));
             add("cloud.points-larger", l.text("Punten groter", "Larger points"), "view.zoom-in", larger, loaded, l.text("Tekent de punten van een puntenwolk een stap groter.", "Draws the points of a cloud a step larger."));
             add("cloud.export-points", l.text("Punten exporteren…", "Export points…"), "file.save-as", points, cloud && idle, l.text("Schrijft de punten van de wolk als LAS, LAZ, E57, PLY, XYZ, PTS of CSV: alle punten, een aandeel ervan, of wat in de doorsnedebox ligt.", "Writes the points of the cloud as LAS, LAZ, E57, PLY, XYZ, PTS or CSV: all of them, a share of them, or what lies in the section box."));
@@ -2294,7 +2299,7 @@ impl Studio {
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
                 (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("cloud.drawing")]),
-                (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface"), large("cloud.mesh-closed"), smalls(&["cloud.cancel"])]),
+                (l.text("Mesh", "Mesh"), vec![large("cloud.mesh-terrain"), large("cloud.mesh-surface"), large("cloud.mesh-closed"), large("cloud.faces"), smalls(&["cloud.cancel"])]),
                 (l.text("Exporteren", "Export"), vec![large("cloud.export-points"), large("cloud.export-mesh")]),
             ],
             // the project's models together; issues, checks, comments and sharing to come

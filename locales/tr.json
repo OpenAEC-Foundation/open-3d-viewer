@@ -1008,6 +1008,8 @@
     "Longest edge, times the usual (surface)": "En uzun kenar, olağanın katı (yüzey)",
     "Share of the points (closed)": "Noktaların payı (kapalı)",
     "Share of the points (export)": "Noktaların payı (dışa aktarma)",
+    "Faces": "Yüzler",
+    "Finds the flat walls, floors, ceilings and roofs and the round columns and pipes in the points, each as a face of its own in the colour of its kind. Put the section box around the room you need.": "Noktalardaki düz duvarları, döşemeleri, tavanları ve çatıları, yuvarlak kolonları ve boruları bulur; her biri kendi türünün renginde ayrı bir yüz olur. Kesit kutusunu ihtiyacınız olan odanın çevresine yerleştirin.",
     "Axial force N": "Eksenel kuvvet N",
     "Shear force Vy": "Kesme kuvveti Vy",
     "Shear force Vz": "Kesme kuvveti Vz",

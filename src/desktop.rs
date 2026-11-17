@@ -6,7 +6,7 @@
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,loads,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
-//!                  [--product ...] [--mesh terrain|surface|closed]
+//!                  [--product ...] [--mesh terrain|surface|closed|faces]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
 //!                  [--recent PATH]...
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
@@ -430,7 +430,8 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
                 "terrain" => Mesh::Terrain,
                 "surface" => Mesh::Surface,
                 "closed" => Mesh::Closed,
-                _ => return Err("--mesh terrain|surface|closed".into()),
+                "faces" => Mesh::Faces,
+                _ => return Err("--mesh terrain|surface|closed|faces".into()),
             };
             let cloud = app.cloud().ok_or("--mesh: the file is not a point cloud")?;
             let done = crate::app::pointcloud::mesh(&cloud, kind, &app.cloud.settings, None, &std::sync::atomic::AtomicBool::new(false))?;

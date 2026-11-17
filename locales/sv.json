@@ -1008,6 +1008,8 @@
     "Longest edge, times the usual (surface)": "Längsta kant, gånger den vanliga (yta)",
     "Share of the points (closed)": "Andel av punkterna (sluten)",
     "Share of the points (export)": "Andel av punkterna (export)",
+    "Faces": "Ytor",
+    "Finds the flat walls, floors, ceilings and roofs and the round columns and pipes in the points, each as a face of its own in the colour of its kind. Put the section box around the room you need.": "Hittar plana väggar, golv, tak och yttertak samt runda pelare och rör i punkterna, var och en som en egen yta i sin sorts färg. Lägg snittboxen runt det rum du behöver.",
     "Axial force N": "Normalkraft N",
     "Shear force Vy": "Tvärkraft Vy",
     "Shear force Vz": "Tvärkraft Vz",

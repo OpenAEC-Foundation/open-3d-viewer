@@ -1008,6 +1008,8 @@
     "Longest edge, times the usual (surface)": "Spigolo più lungo, volte quello usuale (superficie)",
     "Share of the points (closed)": "Quota dei punti (chiusa)",
     "Share of the points (export)": "Quota dei punti (esportazione)",
+    "Faces": "Facce",
+    "Finds the flat walls, floors, ceilings and roofs and the round columns and pipes in the points, each as a face of its own in the colour of its kind. Put the section box around the room you need.": "Trova muri, pavimenti, soffitti e tetti piani e le colonne rotonde e i tubi nei punti, ciascuno come faccia a sé nel colore del suo tipo. Mettere il box di sezione attorno al locale che serve.",
     "Axial force N": "Sforzo normale N",
     "Shear force Vy": "Taglio Vy",
     "Shear force Vz": "Taglio Vz",

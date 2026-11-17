@@ -574,6 +574,7 @@ fn plural(kind: &str) -> &'static str {
         "Dimension" => "dimensions",
         "Leader" => "leaders",
         "Center mark" => "center marks",
+        "Text dot" => "text dots",
         _ => "objects",
     }
 }

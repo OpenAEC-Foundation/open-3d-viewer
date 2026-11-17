@@ -5518,7 +5518,7 @@ dependencies = [
 [[package]]
 name = "threedm-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=d98bab95d2d51ef52ea1a83f9e8bdc9f4a6df246#d98bab95d2d51ef52ea1a83f9e8bdc9f4a6df246"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5527,7 +5527,7 @@ dependencies = [
 [[package]]
 name = "threedm-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=d98bab95d2d51ef52ea1a83f9e8bdc9f4a6df246#d98bab95d2d51ef52ea1a83f9e8bdc9f4a6df246"
 dependencies = [
  "glam 0.30.10",
  "threedm-core",
@@ -5536,7 +5536,7 @@ dependencies = [
 [[package]]
 name = "threedm-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=d98bab95d2d51ef52ea1a83f9e8bdc9f4a6df246#d98bab95d2d51ef52ea1a83f9e8bdc9f4a6df246"
 dependencies = [
  "earcutr",
  "glam 0.30.10",

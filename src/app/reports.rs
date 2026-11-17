@@ -1,4 +1,4 @@
-//! The Collaborator's report of a project: how its models came out of the checks of the rule
+//! The Validator's report of a project: how its models came out of the checks of the rule
 //! set, which clashes its tests found (each group with a picture of it) and the issues (BCF)
 //! with their pictures, as a PDF in the house style to read and hand over, and as an Excel
 //! workbook to sort and filter.

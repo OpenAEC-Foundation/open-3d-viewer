@@ -291,8 +291,8 @@ pub fn tools() -> Vec<Value> {
             }), &["text"], false),
         tool("ui_key", "Press a key in the window (Enter, Escape, Tab, Delete, Backspace, PageUp, PageDown, a letter or a digit), after clicking a control when one is named. With no control named, a key no field takes is the window's own: a shortcut, or a key of the Modeller (W wall, Tab edit mode or sketch, L R A T in a sketch, G X Y Z in edit mode). shift, ctrl: held with it.",
             json!({ "key": { "type": "string" }, "name": { "type": "string" }, "index": { "type": "integer" }, "shift": { "type": "boolean" }, "ctrl": { "type": "boolean" }, "dry_run": { "type": "boolean" } }), &["key"], false),
-        // the BIM Collaborator
-        tool("collab_state", "The BIM Collaborator: who you are (the author of issues), the rule set in use and those to choose from, the number of issues and open issues, the BCF file, the issue shown, checked models, clashes, the team that issues can be assigned to and the open models.", json!({}), &[], true),
+        // the BIM Validator
+        tool("collab_state", "The BIM Validator: who you are (the author of issues), the rule set in use and those to choose from, the number of issues and open issues, the BCF file, the issue shown, checked models, clashes, the team that issues can be assigned to and the open models.", json!({}), &[], true),
         tool("collab_issue", "Issues (BCF topics): list, get one with its comments, make a new one of the view as it is (camera, selection, hidden elements, section plane), update its fields, comment, show it (go to its viewpoint) or remove it.",
             json!({
                 "action": { "type": "string", "enum": ["list", "get", "new", "update", "comment", "show", "remove"] },

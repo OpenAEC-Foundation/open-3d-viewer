@@ -37,9 +37,9 @@ path = "src/bin/open-bim-modeller.rs"
 required-features = ["modeller"]
 
 [[bin]]
-name = "open-bim-collaborator"
-path = "src/bin/open-bim-collaborator.rs"
-required-features = ["collaborator"]
+name = "open-bim-validator"
+path = "src/bin/open-bim-validator.rs"
+required-features = ["validator"]
 
 [[bin]]
 name = "open-bim-pointcloud"
@@ -49,10 +49,10 @@ required-features = ["pointcloud"]
 # The products a build holds: all four by default, with the switch at the top right of the window.
 # Code that serves one product moves behind its feature module by module.
 [features]
-default = ["viewer", "modeller", "collaborator", "pointcloud"]
+default = ["viewer", "modeller", "validator", "pointcloud"]
 viewer = []
 modeller = []
-collaborator = []
+validator = []
 # Its meshing comes from the library of Open Pointcloud Studio, on the desktop.
 pointcloud = ["dep:pointcloud-core"]
 
@@ -147,7 +147,7 @@ rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d
 rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
 rvt-core = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
-# The BIM Collaborator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
+# The BIM Validator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
 bim-bcf = { path = "crates/bim-bcf" }
 bim-validator-core = { path = "crates/bim-validator-core" }
 iced = { version = "0.14", default-features = false, features = ["thread-pool"] }

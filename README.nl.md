@@ -106,15 +106,15 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 - **Doorsnedekader en doorsnedevlak** snijden het model open, met gevulde snedes. Het kader kan zich aanpassen aan de selectie.
 - **Uit elkaar** trekt het model per verdieping of per element uit elkaar, met een percentage per as.
 
-## Viewer, Modeller en BIM Collaborator
+## Viewer, Modeller en BIM Validator
 
 Eén codebase, één app, drie producten. De schakelaar rechtsboven in het venster wisselt ertussen; elk heeft een eigen lint, eigen panelen en een eigen startscherm over hetzelfde open project:
 
 - **Viewer**: openen, bekijken, meten en doorsnijden, zoals hierboven.
 - **Modeller**: het tabblad **Modelleren** met de basiselementen (hieronder), en een tabblad **Beeld** met de weergave, camera, doorsnede en meten van de Viewer.
-- **BIM Collaborator** (een opzet): de modellen van het project samen, met issues (BCF), controleren tegen een IDS, opmerkingen en delen die nog komen. Het lint toont die opdrachten al, nog niet werkend, en het paneel zegt wat elk gaat bevatten.
+- **BIM Validator** (een opzet): de modellen van het project samen, met issues (BCF), controleren tegen een IDS, opmerkingen en delen die nog komen. Het lint toont die opdrachten al, nog niet werkend, en het paneel zegt wat elk gaat bevatten.
 
-Het venster opent in het product dat het laatst gebruikt is; `--product viewer|modeller|collaborator` op de opdrachtregel en `?product=modeller` in de browser kiezen er een. Welke modules elk product gebruikt, en hoe elk gebouwd wordt: [`docs/architecture/products.md`](docs/architecture/products.md).
+Het venster opent in het product dat het laatst gebruikt is; `--product viewer|modeller|validator` op de opdrachtregel en `?product=modeller` in de browser kiezen er een. Welke modules elk product gebruikt, en hoe elk gebouwd wordt: [`docs/architecture/products.md`](docs/architecture/products.md).
 
 ## Modelleren (bèta)
 
@@ -189,7 +189,7 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions, op 
 | [`.github/workflows/`](.github/workflows/) | `build.yml` test elke wijziging, `release.yml` bouwt en ondertekent een release, `live.yml` publiceert de browserversie, `android.yml` bouwt de Android-APK |
 | [`scripts/`](scripts/) | De README-beelden, de kopie van de B2-iconen en de productvideo, allemaal met een script gemaakt |
 | [`test-models/`](test-models/) | De modellen die de tests openen |
-| [`docs/architecture/`](docs/architecture/) | Hoe één codebase drie producten is: de Viewer, de Modeller en de BIM Collaborator |
+| [`docs/architecture/`](docs/architecture/) | Hoe één codebase drie producten is: de Viewer, de Modeller en de BIM Validator |
 
 De lezers voor SketchUp, Tekla en PLY, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). Deze repository legt elk vast op een vaste commit.
 
@@ -316,13 +316,13 @@ Vereist Rust 1.96 of later (met de MSVC-toolchain op Windows) en leestoegang tot
 
 Voor werk aan de interface houdt `powershell -File scripts/dev.ps1 [-Model BESTAND]` (Windows) een debug-build open die na elke wijziging in de broncode opnieuw bouwt en herstart, meestal binnen 10–20 s. Hij opent de bestanden die open waren opnieuw, elk in zijn tabblad, en de titel noemt de branch. Een mislukte build laat de laatste viewer open, met de fouten in `target/dev/build.log`; `scripts/dev.ps1 -Stop` stopt hem.
 
-Eén codebase bouwt drie producten ([`docs/architecture/products.md`](docs/architecture/products.md)). `cargo build --release` bouwt de Studio, `open-3d-viewer`, met alle drie en de schakelaar ertussen, en `open-bim-modeller` en `open-bim-collaborator`, elk één product alleen. Een build met maar één product is een build op zich: `cargo build --release --no-default-features --features modeller --bin open-bim-modeller` (net zo `viewer` met `--bin open-3d-viewer`, `collaborator` met `--bin open-bim-collaborator`). Releases leveren de Studio en de MCP-server; de productprogramma's worden nog niet verpakt.
+Eén codebase bouwt drie producten ([`docs/architecture/products.md`](docs/architecture/products.md)). `cargo build --release` bouwt de Studio, `open-3d-viewer`, met alle drie en de schakelaar ertussen, en `open-bim-modeller` en `open-bim-validator`, elk één product alleen. Een build met maar één product is een build op zich: `cargo build --release --no-default-features --features modeller --bin open-bim-modeller` (net zo `viewer` met `--bin open-3d-viewer`, `validator` met `--bin open-bim-validator`). Releases leveren de Studio en de MCP-server; de productprogramma's worden nog niet verpakt.
 
 De opdrachtregel:
 
 ```
 open-3d-viewer [BESTAND] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light] [--language en|nl|de|fr]
-               [--product viewer|modeller|collaborator]
+               [--product viewer|modeller|validator]
 open-3d-viewer [BESTAND] --screenshot UIT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAAM] [--explode X,Y,Z]
 open-3d-viewer BESTAND --save-as UIT.ifc

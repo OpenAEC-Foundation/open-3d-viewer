@@ -1,4 +1,4 @@
-//! The four products built from this code base: the Viewer, the Modeller, the BIM Collaborator
+//! The four products built from this code base: the Viewer, the Modeller, the BIM Validator
 //! and Pointcloud (see `docs/architecture/products.md`).
 //!
 //! They share one `App` and one window. The switch at the top right of the window moves between
@@ -18,8 +18,10 @@ pub enum Product {
     Viewer,
     /// Make a BIM model from the base elements of `bim-core`.
     Modeller,
-    /// Check models together and agree on issues.
-    Collaborator,
+    /// Check models together and agree on issues. Its name was the Collaborator: preferences
+    /// saved then still read.
+    #[serde(alias = "collaborator")]
+    Validator,
     /// Open point clouds and make meshes of them.
     Pointcloud,
     /// Look at structural analysis models: their loads and their results.
@@ -27,14 +29,14 @@ pub enum Product {
 }
 
 impl Product {
-    pub const ALL: [Product; 5] = [Product::Viewer, Product::Collaborator, Product::Pointcloud, Product::Analysis, Product::Modeller];
+    pub const ALL: [Product; 5] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
         match self {
             Product::Viewer => "viewer",
             Product::Modeller => "modeller",
-            Product::Collaborator => "collaborator",
+            Product::Validator => "validator",
             Product::Pointcloud => "pointcloud",
             Product::Analysis => "analysis",
         }
@@ -45,7 +47,8 @@ impl Product {
         match s.trim().to_ascii_lowercase().as_str() {
             "viewer" => Some(Product::Viewer),
             "modeller" | "modeler" => Some(Product::Modeller),
-            "collaborator" | "bim-collaborator" => Some(Product::Collaborator),
+            // its name before it was the Validator, as preferences and links may still say
+            "validator" | "bim-validator" | "collaborator" | "bim-collaborator" => Some(Product::Validator),
             "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
             "analysis" | "structural-analysis" => Some(Product::Analysis),
             _ => None,
@@ -57,7 +60,7 @@ impl Product {
         match self {
             Product::Viewer => "Viewer",
             Product::Modeller => "Modeller",
-            Product::Collaborator => "BIM Collaborator",
+            Product::Validator => "BIM Validator",
             Product::Pointcloud => "Pointcloud",
             Product::Analysis => "Structural Analysis",
         }
@@ -69,7 +72,7 @@ impl Product {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
             Product::Pointcloud | Product::Analysis => Some("(alpha)"),
-            Product::Viewer | Product::Collaborator => None,
+            Product::Viewer | Product::Validator => None,
         }
     }
 
@@ -78,7 +81,7 @@ impl Product {
         match self {
             Product::Viewer => l.text("Modellen openen, bekijken, meten en doorsnijden", "Open, view, measure and cut models"),
             Product::Modeller => l.text("Een BIM-model maken uit wanden, vloeren, kolommen en balken", "Make a BIM model from walls, slabs, columns and beams"),
-            Product::Collaborator => l.text("Modellen samen controleren en issues afspreken", "Check models together and agree on issues"),
+            Product::Validator => l.text("Modellen samen controleren en issues afspreken", "Check models together and agree on issues"),
             Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
             Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
         }
@@ -89,7 +92,7 @@ impl Product {
         match self {
             Product::Viewer => "product.viewer",
             Product::Modeller => "product.modeller",
-            Product::Collaborator => "product.collaborator",
+            Product::Validator => "product.validator",
             Product::Pointcloud => "product.pointcloud",
             Product::Analysis => "product.analysis",
         }
@@ -100,7 +103,7 @@ impl Product {
         match self {
             Product::Viewer => &[RibbonPage::Home],
             Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View, RibbonPage::Ifcx],
-            Product::Collaborator => &[RibbonPage::Collaborate, RibbonPage::View],
+            Product::Validator => &[RibbonPage::Collaborate, RibbonPage::View],
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
         }
@@ -111,7 +114,7 @@ impl Product {
         match self {
             Product::Viewer => "Open BIM Suite",
             Product::Modeller => "Open BIM Modeller",
-            Product::Collaborator => "Open BIM Collaborator",
+            Product::Validator => "Open BIM Validator",
             Product::Pointcloud => "Open BIM Pointcloud",
             Product::Analysis => "Open BIM Structural Analysis",
         }
@@ -122,7 +125,7 @@ impl Product {
         match self {
             Product::Viewer => "open-3d-viewer",
             Product::Modeller => "open-bim-modeller",
-            Product::Collaborator => "open-bim-collaborator",
+            Product::Validator => "open-bim-validator",
             Product::Pointcloud => "open-bim-pointcloud",
             Product::Analysis => "open-bim-analysis",
         }
@@ -133,7 +136,7 @@ impl Product {
         match self {
             Product::Viewer => cfg!(feature = "viewer"),
             Product::Modeller => cfg!(feature = "modeller"),
-            Product::Collaborator => cfg!(feature = "collaborator"),
+            Product::Validator => cfg!(feature = "validator"),
             Product::Pointcloud => cfg!(feature = "pointcloud"),
             // part of the viewer: it only looks
             Product::Analysis => cfg!(feature = "viewer"),
@@ -146,11 +149,11 @@ impl Product {
     }
 }
 
-#[cfg(not(any(feature = "viewer", feature = "modeller", feature = "collaborator", feature = "pointcloud")))]
-compile_error!("a build needs at least one product: the feature viewer, modeller, collaborator or pointcloud");
+#[cfg(not(any(feature = "viewer", feature = "modeller", feature = "validator", feature = "pointcloud")))]
+compile_error!("a build needs at least one product: the feature viewer, modeller, validator or pointcloud");
 
 /// What a build is: the Studio, with every product it holds and the switch between them, or one
-/// product alone (`open-bim-modeller`, `open-bim-collaborator`).
+/// product alone (`open-bim-modeller`, `open-bim-validator`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Edition {
     #[default]
@@ -197,9 +200,9 @@ pub enum RibbonPage {
     /// The Modeller's dimensions, texts and sections, in a floor plan or on a sheet.
     Annotate,
     /// Display, camera, section and measure, without the file group: the Viewer's tools in the
-    /// Modeller and the Collaborator.
+    /// Modeller and the Validator.
     View,
-    /// The Collaborator's models, issues, checks and comments.
+    /// The Validator's models, issues, checks and comments.
     Collaborate,
     /// The Modeller's IFCX worksheet: the whole project as its IFCX file has it, in place of the
     /// views.
@@ -226,14 +229,14 @@ impl RibbonPage {
     }
 }
 
-/// A command of the Collaborator's ribbon.
+/// A command of the Validator's ribbon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Planned {
     pub id: &'static str,
     pub icon: &'static str,
 }
 
-/// The Collaborator's commands, by ribbon group: issues (BCF), checks (IDS and the built-in
+/// The Validator's commands, by ribbon group: issues (BCF), checks (IDS and the built-in
 /// ones), clashes and the rule set that holds them.
 pub const PLANNED: [Planned; 9] = [
     Planned { id: "collaborate.issue", icon: "git.issue" },
@@ -278,7 +281,7 @@ impl Planned {
     }
 
     /// What it sets off in the project.
-    #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     pub fn event(self) -> Option<crate::app::collab::Event> {
         use crate::app::collab::{Event, File, Report};
         Some(match self.id {
@@ -296,7 +299,7 @@ impl Planned {
     }
 }
 
-/// The Collaborator's left panel: the project's models, its issues and its checks. Issues and
+/// The Validator's left panel: the project's models, its issues and its checks. Issues and
 /// checks are still to come; until then the panel says what they will hold.
 pub fn collaboration_panel<'a, M: 'a>(look: Look, l: Language, models: Vec<&'a str>) -> Element<'a, M> {
     use iced::widget::{column, row, scrollable, Space};
@@ -385,7 +388,7 @@ mod tests {
     fn the_viewer_has_no_modelling_and_the_modeller_starts_with_it() {
         assert!(!Product::Viewer.pages().contains(&RibbonPage::Model));
         assert_eq!(Product::Modeller.pages()[0], RibbonPage::Model);
-        assert_eq!(Product::Collaborator.pages()[0], RibbonPage::Collaborate);
+        assert_eq!(Product::Validator.pages()[0], RibbonPage::Collaborate);
         assert_eq!(Product::Pointcloud.pages()[0], RibbonPage::Cloud);
     }
 
@@ -396,6 +399,9 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", p.key()));
             assert_eq!(serde_json::from_str::<Product>(&json).unwrap(), p);
         }
+        // the Validator under its earlier name, in preferences and on the command line
+        assert_eq!(serde_json::from_str::<Product>("\"collaborator\"").unwrap(), Product::Validator);
+        assert_eq!(Product::parse("collaborator"), Some(Product::Validator));
     }
 
     #[test]

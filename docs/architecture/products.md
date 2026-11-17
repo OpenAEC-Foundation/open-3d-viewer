@@ -11,7 +11,7 @@ that is several products, each with its own build and its own interface:
 - **Viewer**: open any BIM or CAD file, look at it, measure it, cut it, read its properties.
 - **Modeller**: make a BIM model from the five base elements of `bim-core` (wall, slab, column,
   beam, curtain wall, object, connection), with levels, views and sheets.
-- **BIM Collaborator**: where a team checks models together and agrees on what to change.
+- **BIM Validator**: where a team checks models together and agrees on what to change.
 - **Pointcloud** (added 2026-11-16): open point clouds, look at them, measure and cut them, make
   meshes of them (terrain, surface, closed), export their points (LAS, LAZ, E57, PLY, XYZ, PTS,
   CSV; all, a share, or what lies in the section box) and their meshes (OBJ, PLY, STL, DXF, DWG,
@@ -36,7 +36,7 @@ other products should not offer). Until then the product decides only what its i
 
 ## Modules
 
-| Module | Viewer | Modeller | Collaborator | Proposal |
+| Module | Viewer | Modeller | Validator | Proposal |
 | --- | :-: | :-: | :-: | --- |
 | `vendor/openaec-ui`: window, tokens, widgets, icons, languages | ✓ | ✓ | ✓ | shared |
 | `src/shell.rs`: title bar, product switch, project tabs, Bestand, settings | ✓ | ✓ | ✓ | shared; the ribbon and panels per product |
@@ -49,7 +49,7 @@ other products should not offer). Until then the product decides only what its i
 | `src/app/schedules.rs`, `grids.rs`, `marks.rs`, `annotations` | ✓ | ✓ | ✓ | shared |
 | `crates/bim-structural`, `src/structural/`, `src/app/structural.rs` | show | show, later edit | show | shared |
 | `crates/bim-core`, `src/app/modeller.rs`: the kernel and the modelling tools | – | ✓ | – | **Modeller**; first module behind `modeller` |
-| validator and BCF crates of the draft validator branch | – | – | ✓ | **Collaborator**, behind `collaborator` |
+| validator and BCF crates of the draft validator branch | – | – | ✓ | **Validator**, behind `validator` |
 | `src/explode.rs`: exploded view | ✓ | – | ✓ | shared |
 | `src/remote.rs`, `src/mcp.rs`, `open-3d-viewer-mcp` | ✓ | ✓ | ✓ | shared; tools per product later |
 | `src/desktop.rs`, `src/web.rs`, `gpu`, `managed`, `bench` | ✓ | ✓ | ✓ | shared platform code |
@@ -63,11 +63,11 @@ Cargo features say which products a build holds; binaries say which product a bu
 | Studio (the app as released) | `cargo build --release` | all three, with the switch; starts in the product used last |
 | Viewer only | `cargo build --release --no-default-features --features viewer` | the Viewer, no switch |
 | Modeller | `cargo build --release --bin open-bim-modeller` | the Modeller only |
-| BIM Collaborator | `cargo build --release --bin open-bim-collaborator` | the Collaborator only |
+| BIM Validator | `cargo build --release --bin open-bim-validator` | the Validator only |
 | Pointcloud | `cargo build --release --bin open-bim-pointcloud` | Pointcloud only |
 | Web | `trunk build` | all three; `?product=modeller` starts in that product |
 
-- Features `viewer`, `modeller` and `collaborator` are all on by default. A product binary needs
+- Features `viewer`, `modeller` and `validator` are all on by default. A product binary needs
   its feature (`required-features`), so a build without it leaves the binary out.
 - Cargo unifies features within one invocation, so a slim product build is a build of its own:
   `cargo build --release --no-default-features --features modeller --bin open-bim-modeller`. The
@@ -84,7 +84,7 @@ Cargo features say which products a build holds; binaries say which product a bu
 
 ## What each product shows
 
-| | Viewer | Modeller | BIM Collaborator |
+| | Viewer | Modeller | BIM Validator |
 | --- | --- | --- | --- |
 | Ribbon | **Start**: file, display, show, IFC, camera, selection, section, measure, more | **Model**: planar, linear, system, point, openings (door, window), connection, modify. **Project**: levels, views, sheets, library. **Annotate**: dimensions and texts in the plan or sheet shown. **View**: the Viewer's display, camera, section and measure groups (see `docs/superpowers/specs/2026-11-10-modeller-ribbon-design.md`) | **Collaborate**: file (open, add), issues, check, comments, share. **View** |
 | Left panel | Explorer: Model, Levels, Views | Explorer: Model, Levels, Views | Collaboration: the open models, issues, checks |
@@ -95,7 +95,7 @@ What is the same in all three: the title bar with the switch, project tabs, docu
 plans, sections, sheets, schedules, IFC), the status bar, Bestand and the settings. Switching
 keeps the project; it ends a modelling tool that was on.
 
-## The BIM Collaborator: a proposal
+## The BIM Validator: a proposal
 
 Not defined yet. What it would hold, in a proposed order:
 
@@ -112,19 +112,19 @@ Not defined yet. What it would hold, in a proposed order:
    SuperCloud), issues kept in step.
 6. Later: model versions compared, clashes between models.
 
-The first step of the Collaborator is a skeleton: its ribbon with the planned commands shown
+The first step of the Validator is a skeleton: its ribbon with the planned commands shown
 but not yet working, and a panel that says what comes.
 
 ## Questions for the owner
 
-1. **Collaborator**: are these the right parts, and which comes first? Proposal: IDS checking and
+1. **Validator**: are these the right parts, and which comes first? Proposal: IDS checking and
    BCF issues, from the draft validator branch.
 2. **Names**: working names are *Open BIM Suite* (the Studio and the Viewer), *Open BIM
-   Modeller* and *Open BIM Collaborator*. Other names?
+   Modeller* and *Open BIM Validator*. Other names?
 3. **Drawings**: sheets, dimensions and drawing export: Viewer, Modeller, or both?
-4. **Installers**: publish the Modeller and the Collaborator as installers of their own now, or
+4. **Installers**: publish the Modeller and the Validator as installers of their own now, or
    only the Studio with its switch until they are further?
-5. **The draft validator branch**: move its validator and BCF crates into the Collaborator on
+5. **The draft validator branch**: move its validator and BCF crates into the Validator on
    this structure?
 
 ## Calls made in writing this

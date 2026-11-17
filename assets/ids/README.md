@@ -1,6 +1,6 @@
 # IDS files of the built-in rule sets
 
-The information delivery specifications the BIM Collaborator offers as rule sets of its own.
+The information delivery specifications the BIM Validator offers as rule sets of its own.
 They come from the OpenAEC BIM Validator (MIT licence, OpenAEC Foundation and 3BM Bouwkunde),
 `ids-bestanden/`, as they are but for one change: each specification also names `IFC4X3_ADD2`
 in its `ifcVersion`, so models in IFC 4.3 are checked too. The entities and properties they

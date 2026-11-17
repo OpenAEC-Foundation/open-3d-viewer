@@ -98,6 +98,14 @@ impl App {
         #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
         lines.extend(self.collab_marks());
         self.views_3d_labels = views.labels;
+        // the loads and results of a structural analysis model
+        if let Some(model) = self.model.as_ref().filter(|m| !m.structural.is_empty() && self.analysis.anything()) {
+            if self.model_tab_shown() {
+                let (drawn, figures) = crate::structural::diagrams::draw(&model.structural, &model.origins, &self.analysis);
+                lines.extend(drawn);
+                self.views_3d_labels.extend(figures);
+            }
+        }
         self.overlay_lines = Arc::new(lines);
     }
 }

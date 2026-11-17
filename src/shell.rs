@@ -1395,6 +1395,36 @@ impl Studio {
             );
         }
         list.push(Command::new("cloud.depth", l.text("Diepte", "Depth"), go(Message::ToggleCloudDepth)).icon(small("view.isometric"), large("view.isometric")).toggle(app.cloud_depth).enabled(loaded).detail(l.text("Maakt punten donkerder waar ze achter hun buren liggen, zodat de vorm van een wolk te zien is.", "Darkens points where they lie behind their neighbours, so the shape of a cloud shows.")));
+        // Structural Analysis: the internal forces, the deformed shape, reactions and loads
+        {
+            use crate::structural::diagrams::{Change, Force};
+            let doc = app.model.as_ref().and_then(|m| m.structural.first()).map(|p| p.doc.clone());
+            let results = doc.as_ref().and_then(|d| d.results.get(app.analysis.set)).and_then(|r| r.inline.as_ref());
+            let (forces, moved, held) = (results.is_some_and(|r| r.member_forces.is_some()), results.is_some_and(|r| r.node_displacements.is_some()), results.is_some_and(|r| r.reactions.is_some()));
+            let (cases, sets) = doc.as_ref().map_or((0, 0), |d| (d.load_cases.len(), d.results.len()));
+            let named = [
+                (Force::N, "analysis.n", l.text("Normaalkracht N", "Axial force N")),
+                (Force::Vy, "analysis.vy", l.text("Dwarskracht Vy", "Shear force Vy")),
+                (Force::Vz, "analysis.vz", l.text("Dwarskracht Vz", "Shear force Vz")),
+                (Force::Mx, "analysis.mx", l.text("Wringing Mx", "Torsion Mx")),
+                (Force::My, "analysis.my", l.text("Moment My", "Moment My")),
+                (Force::Mz, "analysis.mz", l.text("Moment Mz", "Moment Mz")),
+            ];
+            for (force, id, label) in named {
+                list.push(Command::new(id, label, go(Message::Analysis(Change::Force(force)))).icon(small("measure.perimeter"), large("measure.perimeter")).mode(app.analysis.force == Some(force)).enabled(forces).detail(l.text("Tekent deze snedekracht langs elke staaf, met de grootste waarde erbij.", "Draws this internal force along every member, with its largest value.")));
+            }
+            let mut add = |id: &'static str, label: &'static str, icon: &'static str, change: Change, on: bool, enabled: bool, detail: &'static str| {
+                list.push(Command::new(id, label, go(Message::Analysis(change))).icon(small(icon), large(icon)).mode(on).enabled(enabled).detail(detail));
+            };
+            add("analysis.deformed", l.text("Vervorming", "Deformed shape"), "transform.flip-vertical", Change::Deformed, app.analysis.deformed, moved, l.text("Tekent de staven tussen hun verplaatste knopen, vergroot.", "Draws the members between their displaced nodes, enlarged."));
+            add("analysis.reactions", l.text("Reacties", "Reactions"), "section.plane-z", Change::Reactions, app.analysis.reactions, held, l.text("Tekent bij elke oplegging de kracht op de constructie.", "Draws at every support the force on the structure."));
+            add("analysis.loads", l.text("Belastingen", "Loads"), "file.import", Change::Loads, app.analysis.loads.is_some(), cases > 0, l.text("Tekent de belastingen van een belastinggeval als pijlen.", "Draws the loads of a load case as arrows."));
+            add("analysis.case-next", l.text("Volgend geval", "Next case"), "page.next", Change::Case(true), false, cases > 1, l.text("Toont de belastingen van het volgende belastinggeval.", "Shows the loads of the next load case."));
+            add("analysis.case-previous", l.text("Vorig geval", "Previous case"), "page.previous", Change::Case(false), false, cases > 1, l.text("Toont de belastingen van het vorige belastinggeval.", "Shows the loads of the previous load case."));
+            add("analysis.set-next", l.text("Volgend resultaat", "Next result set"), "page.next", Change::Set(true), false, sets > 1, l.text("Toont de resultaten van het volgende belastinggeval of de volgende combinatie.", "Shows the results of the next load case or combination."));
+            add("analysis.larger", l.text("Groter", "Larger"), "view.zoom-in", Change::Scale(true), false, loaded, l.text("Tekent de lijnen en pijlen groter.", "Draws the diagrams and arrows larger."));
+            add("analysis.smaller", l.text("Kleiner", "Smaller"), "view.zoom-out", Change::Scale(false), false, loaded, l.text("Tekent de lijnen en pijlen kleiner.", "Draws the diagrams and arrows smaller."));
+        }
         // how the points of a cloud are coloured
         {
             use crate::cloud_color::CloudColor as C;
@@ -2178,7 +2208,7 @@ impl Studio {
         let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
         // (where the window has room for them beside the title)
         let room = self.width >= SOON_WIDTH;
-        let segments = segments.chain(["Analysis", "FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
+        let segments = segments.chain(["FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
@@ -2257,6 +2287,13 @@ impl Studio {
                 (l.text("Tekenen", "Draw"), vec![large("draw.line"), large("draw.rectangle"), large("draw.circle")]),
             ],
             // the clouds of the project, how their points show and the meshes made of them
+            RibbonPage::Analysis => vec![
+                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Snedekrachten", "Internal forces"), vec![smalls(&["analysis.n", "analysis.vy", "analysis.vz"]), smalls(&["analysis.mx", "analysis.my", "analysis.mz"])]),
+                (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), smalls(&["analysis.set-next"])]),
+                (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
+                (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
+            ],
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
@@ -2421,6 +2458,12 @@ impl Studio {
                     l.text("Begin een nieuw model, of open een IFCX-bestand om verder te modelleren.", "Start a new model, or open an IFCX file to model on."),
                     row![cm::button(look, &self.command("model.new"), K::Primary, D::Regular), open(K::Secondary)].spacing(8).into(),
                 ),
+                Product::Analysis => (
+                    "measure.perimeter",
+                    l.text("Geen rekenmodel geopend", "No analysis model open"),
+                    l.text("Open een constructief rekenmodel om het te bekijken met zijn belastingen en rekenresultaten.", "Open a structural analysis model to look at it with its loads and results."),
+                    open(K::Primary),
+                ),
                 Product::Pointcloud => (
                     "mesh.surface",
                     l.text("Geen puntenwolk geopend", "No point cloud open"),
@@ -2523,7 +2566,7 @@ impl Studio {
                 };
                 (l.text("Samenwerken", "Collaboration"), body.into())
             }
-            Product::Viewer | Product::Modeller | Product::Pointcloud => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
 

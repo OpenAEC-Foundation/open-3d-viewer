@@ -22,10 +22,12 @@ pub enum Product {
     Collaborator,
     /// Open point clouds and make meshes of them.
     Pointcloud,
+    /// Look at structural analysis models: their loads and their results.
+    Analysis,
 }
 
 impl Product {
-    pub const ALL: [Product; 4] = [Product::Viewer, Product::Collaborator, Product::Pointcloud, Product::Modeller];
+    pub const ALL: [Product; 5] = [Product::Viewer, Product::Collaborator, Product::Pointcloud, Product::Analysis, Product::Modeller];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
@@ -34,6 +36,7 @@ impl Product {
             Product::Modeller => "modeller",
             Product::Collaborator => "collaborator",
             Product::Pointcloud => "pointcloud",
+            Product::Analysis => "analysis",
         }
     }
 
@@ -44,6 +47,7 @@ impl Product {
             "modeller" | "modeler" => Some(Product::Modeller),
             "collaborator" | "bim-collaborator" => Some(Product::Collaborator),
             "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
+            "analysis" | "structural-analysis" => Some(Product::Analysis),
             _ => None,
         }
     }
@@ -55,6 +59,7 @@ impl Product {
             Product::Modeller => "Modeller",
             Product::Collaborator => "BIM Collaborator",
             Product::Pointcloud => "Pointcloud",
+            Product::Analysis => "Structural Analysis",
         }
     }
 
@@ -63,7 +68,7 @@ impl Product {
     pub fn stage(self) -> Option<&'static str> {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
-            Product::Pointcloud => Some("(alpha)"),
+            Product::Pointcloud | Product::Analysis => Some("(alpha)"),
             Product::Viewer | Product::Collaborator => None,
         }
     }
@@ -75,6 +80,7 @@ impl Product {
             Product::Modeller => l.text("Een BIM-model maken uit wanden, vloeren, kolommen en balken", "Make a BIM model from walls, slabs, columns and beams"),
             Product::Collaborator => l.text("Modellen samen controleren en issues afspreken", "Check models together and agree on issues"),
             Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
+            Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
         }
     }
 
@@ -85,6 +91,7 @@ impl Product {
             Product::Modeller => "product.modeller",
             Product::Collaborator => "product.collaborator",
             Product::Pointcloud => "product.pointcloud",
+            Product::Analysis => "product.analysis",
         }
     }
 
@@ -95,6 +102,7 @@ impl Product {
             Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View, RibbonPage::Ifcx],
             Product::Collaborator => &[RibbonPage::Collaborate, RibbonPage::View],
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
+            Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
         }
     }
 
@@ -105,6 +113,7 @@ impl Product {
             Product::Modeller => "Open BIM Modeller",
             Product::Collaborator => "Open BIM Collaborator",
             Product::Pointcloud => "Open BIM Pointcloud",
+            Product::Analysis => "Open BIM Structural Analysis",
         }
     }
 
@@ -115,6 +124,7 @@ impl Product {
             Product::Modeller => "open-bim-modeller",
             Product::Collaborator => "open-bim-collaborator",
             Product::Pointcloud => "open-bim-pointcloud",
+            Product::Analysis => "open-bim-analysis",
         }
     }
 
@@ -125,6 +135,8 @@ impl Product {
             Product::Modeller => cfg!(feature = "modeller"),
             Product::Collaborator => cfg!(feature = "collaborator"),
             Product::Pointcloud => cfg!(feature = "pointcloud"),
+            // part of the viewer: it only looks
+            Product::Analysis => cfg!(feature = "viewer"),
         }
     }
 
@@ -194,6 +206,8 @@ pub enum RibbonPage {
     Ifcx,
     /// Pointcloud's clouds, the size of their points and the meshes made of them.
     Cloud,
+    /// Structural Analysis: the internal forces, the deformed shape, reactions and loads.
+    Analysis,
 }
 
 impl RibbonPage {
@@ -207,6 +221,7 @@ impl RibbonPage {
             RibbonPage::Collaborate => l.text("Samenwerken", "Collaborate"),
             RibbonPage::Ifcx => "IFCX",
             RibbonPage::Cloud => l.text("Puntenwolk", "Point cloud"),
+            RibbonPage::Analysis => l.text("Rekenmodel", "Analysis"),
         }
     }
 }
@@ -351,7 +366,7 @@ mod tests {
         names.dedup();
         ids.sort();
         ids.dedup();
-        assert_eq!((names.len(), ids.len()), (4, 4));
+        assert_eq!((names.len(), ids.len()), (5, 5));
         // the Studio is what was released as the viewer: same name, same installer id
         assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);

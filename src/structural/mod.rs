@@ -6,6 +6,7 @@
 //! is written into `Model::props` per object at load. See
 //! `docs/superpowers/specs/2026-11-06-structural-model-design.md`.
 
+pub mod diagrams;
 pub mod display;
 pub mod pick;
 pub mod remote;

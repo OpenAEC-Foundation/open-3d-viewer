@@ -336,7 +336,7 @@ pub fn featured_formats() -> (Vec<&'static str>, usize) {
 }
 
 /// Where the desktop app is downloaded.
-pub const DESKTOP_DOWNLOAD: &str = "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest";
+pub const DESKTOP_DOWNLOAD: &str = "https://github.com/OpenAEC-Foundation/open-bim-suite/releases/latest";
 
 /// Formats the desktop app opens but the browser build cannot (their readers open the file in
 /// parts from disk or load a native library): the format name and its extensions.

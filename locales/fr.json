@@ -1007,6 +1007,8 @@
     "Neighbours per vertex (surface)": "Voisins par sommet (surface)",
     "Longest edge, times the usual (surface)": "Arête la plus longue, fois l'arête courante (surface)",
     "Share of the points (closed)": "Part des points (fermé)",
-    "Share of the points (export)": "Part des points (export)"
+    "Share of the points (export)": "Part des points (export)",
+    "Faces": "Faces",
+    "Finds the flat walls, floors, ceilings and roofs and the round columns and pipes in the points, each as a face of its own in the colour of its kind. Put the section box around the room you need.": "Trouve les murs, sols, plafonds et toits plans ainsi que les poteaux ronds et les tuyaux dans les points, chacun comme une face propre dans la couleur de son type. Placez la boîte de coupe autour de la pièce voulue."
   }
 }

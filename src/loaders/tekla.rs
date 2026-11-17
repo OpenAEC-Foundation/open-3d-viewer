@@ -138,7 +138,16 @@ fn saved_view(v: &ModelView, levels: &[(String, f32)]) -> Option<SavedView> {
         out.kind = ViewKind::Plan;
         out.plan = Some(PlanRange { low, high, from_below: false });
         out.clip = clip;
-        out.level = levels.iter().filter(|(_, h)| (h - plane).abs() < 0.005).map(|(n, _)| n.clone()).next();
+        // its level: the one of its plane when the plane lies in what it shows; else (a view
+        // made through the Open API keeps its height in its work area alone, its plane at 0)
+        // the level in what it shows nearest the middle of it
+        let within = |h: f32| h >= low - 0.005 && h <= high + 0.005;
+        let mid = (low + high) / 2.0;
+        out.level = levels
+            .iter()
+            .find(|(_, h)| (h - plane).abs() < 0.005 && within(*h))
+            .or_else(|| levels.iter().filter(|(_, h)| within(*h)).min_by(|a, b| (a.1 - mid).abs().total_cmp(&(b.1 - mid).abs())))
+            .map(|(n, _)| n.clone());
     } else if toward.z.abs() < 0.001 {
         // a section along a grid line: from in front of its depth, looking into it
         let depth = (z1 - z0).max(0.0);
@@ -375,6 +384,21 @@ mod tests {
         assert!((r.low - 3.3).abs() < 1e-5 && (r.high - 4.7).abs() < 1e-5, "{r:?}");
         let clip = s.clip.unwrap();
         assert!((clip.min.x + 2.0).abs() < 1e-5 && (clip.max.y - 10.0).abs() < 1e-5);
+    }
+
+    /// A plan made through the Open API keeps its plane at 0 and its height in its work area: its
+    /// level is the one in what it shows, not the one at 0.
+    #[test]
+    fn a_plan_whose_height_is_its_work_area_gets_the_level_in_it() {
+        let levels = [("+0".to_string(), 0.0), ("+4200".to_string(), 4.2), ("+8400".to_string(), 8.4)];
+        let v = view("PLAN +8400", [AXES[0], AXES[1], AXES[2], [0.0; 3]], AXES, [500.0, 500.0], [[-3000.0, -3000.0, 7900.0], [30000.0, 18000.0, 8900.0]]);
+        let s = saved_view(&v, &levels).unwrap();
+        assert_eq!((s.kind, s.level.as_deref()), (ViewKind::Plan, Some("+8400")));
+        let r = s.plan.unwrap();
+        assert!((r.low - 7.9).abs() < 1e-5 && (r.high - 8.9).abs() < 1e-5, "{r:?}");
+        // the plan at +0 keeps the level of its plane
+        let v = view("PLAN +0", [AXES[0], AXES[1], AXES[2], [0.0; 3]], AXES, [1000.0, 1000.0], [[-3000.0, -3000.0, -1000.0], [30000.0, 18000.0, 1000.0]]);
+        assert_eq!(saved_view(&v, &levels).unwrap().level.as_deref(), Some("+0"));
     }
 
     #[test]

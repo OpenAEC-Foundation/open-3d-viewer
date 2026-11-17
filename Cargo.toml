@@ -9,7 +9,7 @@ edition = "2021"
 # openusd (USD import) needs Rust 1.96
 rust-version = "1.96"
 
-repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
 default-run = "open-3d-viewer"
 
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
@@ -105,12 +105,11 @@ roxmltree = "0.20"
 # reader of src/loaders/cad.rs), IFCCAD (the open 2D drawing profile on IFCX) through ifccad (MPL-2.0).
 opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762969f3897e67e1801a2199445b6cf83b5d", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
-skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-# db1-dll, under its former name: the CI deploy key (FORMAT_CRATES_SSH_KEYS) is mapped to that URL
-tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e" }
-ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
+skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
+tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e" }
+ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
-threedm-read = { git = "https://github.com/OpenAEC-Foundation/3dm-dll", rev = "225f8d4823876270d498afb2ff132228f7e7f8d4", default-features = false }
+threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "225f8d4823876270d498afb2ff132228f7e7f8d4", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -145,11 +144,11 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
-rvt-core = { git = "https://github.com/OpenAEC-Foundation/rvt-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
+rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
 # The BIM Validator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
 bim-bcf = { path = "crates/bim-bcf" }
 bim-validator-core = { path = "crates/bim-validator-core" }
@@ -208,4 +207,4 @@ opt-level = 2
 
 [dev-dependencies]
 # The 3dm writer of the Rhino tests
-threedm-core = { git = "https://github.com/OpenAEC-Foundation/3dm-dll", rev = "225f8d4823876270d498afb2ff132228f7e7f8d4" }
+threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "225f8d4823876270d498afb2ff132228f7e7f8d4" }

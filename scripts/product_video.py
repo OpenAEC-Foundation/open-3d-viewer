@@ -48,7 +48,7 @@ NAVY = (15, 27, 45)
 KAVEL = ROOT / "test-models" / "test-kavel.skp"
 BATHROOM = ROOT / "test-models" / "bathroom-3d.skp"
 WEB = "https://open-3d-viewer.open-aec.com"
-REPO = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+REPO = "https://github.com/OpenAEC-Foundation/open-bim-suite"
 
 
 def font(size, bold=False):

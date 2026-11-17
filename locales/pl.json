@@ -1038,6 +1038,22 @@
     "Look at structural analysis models: loads and results": "Przeglądaj modele obliczeniowe: obciążenia i wyniki",
     "Analysis": "Obliczenia",
     "Moment My": "Moment My",
-    "Moment Mz": "Moment Mz"
+    "Moment Mz": "Moment Mz",
+    "Supports": "Podpory",
+    "Draws a symbol at every support and a circle at every released member end.": "Rysuje symbol przy każdej podporze i okrąg przy każdym przegubowym końcu pręta.",
+    "Previous result set": "Poprzedni wynik",
+    "Shows the results of the previous load case or combination.": "Pokazuje wyniki poprzedniego przypadku obciążenia lub kombinacji.",
+    "Case": "Przypadek",
+    "Combination": "Kombinacja",
+    "Envelope": "Obwiednia",
+    "Force lines": "Linie sił",
+    "Largest of the model": "Największa w modelu",
+    "Largest per member": "Największa na pręt",
+    "Line only": "Tylko linia",
+    "Line with strokes": "Linia z kreskami",
+    "Loads of": "Obciążenia z",
+    "None": "Brak",
+    "Results of": "Wyniki z",
+    "Values": "Wartości"
   }
 }

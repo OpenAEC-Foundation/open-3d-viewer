@@ -1038,6 +1038,22 @@
     "Look at structural analysis models: loads and results": "Consulter des modèles de calcul : charges et résultats",
     "Analysis": "Calcul",
     "Moment My": "Moment My",
-    "Moment Mz": "Moment Mz"
+    "Moment Mz": "Moment Mz",
+    "Supports": "Appuis",
+    "Draws a symbol at every support and a circle at every released member end.": "Dessine un symbole à chaque appui et un cercle à chaque extrémité de barre articulée.",
+    "Previous result set": "Résultat précédent",
+    "Shows the results of the previous load case or combination.": "Affiche les résultats du cas de charge ou de la combinaison précédents.",
+    "Case": "Cas",
+    "Combination": "Combinaison",
+    "Envelope": "Enveloppe",
+    "Force lines": "Lignes d'efforts",
+    "Largest of the model": "Le plus grand du modèle",
+    "Largest per member": "Le plus grand par barre",
+    "Line only": "La ligne seule",
+    "Line with strokes": "Ligne avec traits",
+    "Loads of": "Charges de",
+    "None": "Aucune",
+    "Results of": "Résultats de",
+    "Values": "Valeurs"
   }
 }

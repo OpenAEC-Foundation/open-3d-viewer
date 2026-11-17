@@ -12,7 +12,8 @@
 //!   (`IfcStructuralPointReaction`) and the internal forces along the members
 //!   (`IfcStructuralCurveReaction` with a load configuration of stations in metres from the start).
 //!
-//! The file is in SI units (metres, newtons), as the model is. The
+//! The file is in SI units (metres, newtons), as the model is. The internal forces are in the
+//! member's axes (local z along its `Axis`); their signs are turned to the model's. The
 //! checks are not read. The program's own project in the property sets gives the profiles, the
 //! grid and the levels (see `ifcfem_project`). A member's end forces
 //! are left out where the file also gives its force lines, which hold them.
@@ -256,6 +257,15 @@ fn six(file: &File, entity: u64) -> Option<[f64; 6]> {
     Some(out)
 }
 
+/// The six internal forces at a station as the model has them: on the cut face that looks along
+/// +x, forces and moment vectors along +x, +y, +z. The file gives the normal force so (tension
+/// positive) and the other five with the opposite sign: its +My stretches the −z fibre and its
+/// shear force is the derivative of that moment. Found from the equilibrium of every node of a
+/// steel hall, with the reactions and loads of the same file: it closes with these signs only.
+fn canonical(f: [f64; 6]) -> [f64; 6] {
+    [f[0], -f[1], -f[2], -f[3], -f[4], -f[5]]
+}
+
 /// Reads the file into an analysis model.
 fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
     if !text.trim_start().starts_with("ISO-10303-21") {
@@ -267,7 +277,9 @@ fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
     });
     let file = File::parse(text);
     let title = file.of("IFCPROJECT").next().and_then(|(_, a)| string(a.get(2)?)).filter(|t| !t.is_empty());
-    let source = SourceInfo { format: "IFC4".into(), file: file_name.to_string(), application, ..SourceInfo::default() };
+    // the signs of the internal forces are turned to the model's (see `canonical`)
+    let conventions = Conventions { mz_sign_was: MzSign::TensionPlusY, result_signs: SignStatus::Verified, ..Conventions::default() };
+    let source = SourceInfo { format: "IFC4".into(), file: file_name.to_string(), application, conventions, ..SourceInfo::default() };
     let mut model = AnalysisModel::new(1, title.unwrap_or_else(|| file_name.to_string()), source);
 
     // nodes, by the number of their connection and of their vertex
@@ -420,7 +432,7 @@ fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
                 }
             } else if let Some(a) = file.args(*r, "IFCSTRUCTURALCURVEREACTION") {
                 let (Some(member), Some(config)) = (member_of.get(item), a.get(7).and_then(|l| reference(l)).and_then(|c| file.args(c, "IFCSTRUCTURALLOADCONFIGURATION"))) else { continue };
-                let values: Vec<[f64; 6]> = references(config.get(1).copied().unwrap_or_default()).into_iter().filter_map(|f| six(&file, f)).collect();
+                let values: Vec<[f64; 6]> = references(config.get(1).copied().unwrap_or_default()).into_iter().filter_map(|f| six(&file, f)).map(canonical).collect();
                 let x = numbers(config.get(2).copied().unwrap_or_default());
                 if values.is_empty() || values.len() != x.len() {
                     continue;
@@ -541,7 +553,7 @@ DATA;
 #2101=IFCSTRUCTURALLOADSINGLEDISPLACEMENT('u 2',0.,0.,-0.012,0.,0.,0.);
 #2102=IFCSTRUCTURALPOINTREACTION('j',$,'Verplaatsing knoop 2',$,'verplaatsing:2',$,$,#2101,.GLOBAL_COORDS.);
 #2103=IFCRELCONNECTSSTRUCTURALACTIVITY('k',$,$,$,#109,#2102);
-#2299=IFCSTRUCTURALLOADSINGLEFORCE('R 1',IFCFORCEMEASURE(0.),IFCFORCEMEASURE(0.),IFCFORCEMEASURE(6000.),IFCTORQUEMEASURE(0.),IFCTORQUEMEASURE(-18000.),IFCTORQUEMEASURE(0.));
+#2299=IFCSTRUCTURALLOADSINGLEFORCE('R 1',IFCFORCEMEASURE(0.),IFCFORCEMEASURE(0.),IFCFORCEMEASURE(6000.),IFCTORQUEMEASURE(18000.),IFCTORQUEMEASURE(0.),IFCTORQUEMEASURE(0.));
 #2300=IFCSTRUCTURALPOINTREACTION('l',$,'Reactie knoop 1',$,'reactie:1',$,$,#2299,.GLOBAL_COORDS.);
 #2301=IFCRELCONNECTSSTRUCTURALACTIVITY('m',$,$,$,#98,#2300);
 #2335=IFCSTRUCTURALLOADSINGLEFORCE('Start',0.,0.,6000.,0.,-18000.,0.);
@@ -592,11 +604,24 @@ END-ISO-10303-21;
         // the three stations of the force lines, not the two end forces
         let forces = payload.member_forces.as_ref().expect("member forces");
         assert_eq!((forces.member.as_slice(), forces.offsets.as_slice(), forces.x.as_slice()), ([model.members[0].id].as_slice(), [0, 3].as_slice(), [0.0, 3.0, 6.0].as_slice()));
-        assert_eq!((forces.comps[2].as_slice(), forces.comps[4].as_slice()), ([6000.0, 3000.0, 0.0].as_slice(), [-18000.0, -4500.0, 0.0].as_slice()));
+        // a cantilever under 1 kN/m: in the model's signs the shear force on the face that looks
+        // along the member points down, and the moment stretches the top fibre (+z)
+        assert_eq!((forces.comps[2].as_slice(), forces.comps[4].as_slice()), ([-6000.0, -3000.0, 0.0].as_slice(), [18000.0, 4500.0, 0.0].as_slice()));
+        assert_eq!((model.source.conventions.result_signs, model.source.conventions.mz_sign_was), (SignStatus::Verified, MzSign::TensionPlusY));
         let displacements = payload.node_displacements.as_ref().expect("displacements");
         assert_eq!((displacements.node.as_slice(), displacements.comps[2].as_slice()), ([model.nodes[1].id].as_slice(), [-0.012].as_slice()));
         let reactions = payload.reactions.as_ref().expect("reactions");
-        assert_eq!((reactions.node.as_slice(), reactions.comps[2].as_slice(), reactions.comps[4].as_slice()), ([model.nodes[0].id].as_slice(), [6000.0].as_slice(), [-18000.0].as_slice()));
+        assert_eq!((reactions.node.as_slice(), reactions.comps[2].as_slice(), reactions.comps[3].as_slice()), ([model.nodes[0].id].as_slice(), [6000.0].as_slice(), [18000.0].as_slice()));
+        // the fixed node is in equilibrium: what the member does to it at its start (the forces
+        // on its first face, in the member's axes) and the reaction add up to nothing
+        let member = &model.members[0];
+        let (a, b) = model.member_ends(member).expect("its ends");
+        let f = frame::member_frame(a, b, member.z_ref).expect("its frame");
+        let at_start = |k: usize| forces.comps[k][0];
+        let force = f.x * at_start(0) + f.y * at_start(1) + f.z * at_start(2);
+        let moment = f.x * at_start(3) + f.y * at_start(4) + f.z * at_start(5);
+        let reaction = |k: usize| DVec3::new(reactions.comps[k][0], reactions.comps[k + 1][0], reactions.comps[k + 2][0]);
+        assert!((force + reaction(0)).length() < 1e-9 && (moment + reaction(3)).length() < 1e-9, "{force:?} {moment:?}");
 
         // a force on node 2 and a line load along the member, both in the load case: the file names
         // it twice, and holds them under the second, but it is one case

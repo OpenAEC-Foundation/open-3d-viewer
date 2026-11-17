@@ -5970,7 +5970,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vwx-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2f33489fc8e05889d753b81c85024d57b8289b8d#2f33489fc8e05889d753b81c85024d57b8289b8d"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=d94a951862c210d19768543053b7e0090d7c9bdb#d94a951862c210d19768543053b7e0090d7c9bdb"
 dependencies = [
  "flate2",
  "serde",
@@ -5979,7 +5979,7 @@ dependencies = [
 [[package]]
 name = "vwx-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2f33489fc8e05889d753b81c85024d57b8289b8d#2f33489fc8e05889d753b81c85024d57b8289b8d"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=d94a951862c210d19768543053b7e0090d7c9bdb#d94a951862c210d19768543053b7e0090d7c9bdb"
 dependencies = [
  "serde",
 ]
@@ -5987,7 +5987,7 @@ dependencies = [
 [[package]]
 name = "vwx-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2f33489fc8e05889d753b81c85024d57b8289b8d#2f33489fc8e05889d753b81c85024d57b8289b8d"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=d94a951862c210d19768543053b7e0090d7c9bdb#d94a951862c210d19768543053b7e0090d7c9bdb"
 dependencies = [
  "serde_json",
  "vwx-core",
@@ -5998,7 +5998,7 @@ dependencies = [
 [[package]]
 name = "vwx-xt"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2f33489fc8e05889d753b81c85024d57b8289b8d#2f33489fc8e05889d753b81c85024d57b8289b8d"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=d94a951862c210d19768543053b7e0090d7c9bdb#d94a951862c210d19768543053b7e0090d7c9bdb"
 dependencies = [
  "earcutr",
  "spade",

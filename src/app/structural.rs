@@ -358,10 +358,10 @@ impl App {
     /// Works out which structural objects are shown from the models list (a hidden model hides
     /// its structural objects) and "Hide all"; drops the hidden ones from the selection and the
     /// hover. Cheap when nothing changed.
-    pub(crate) fn refresh_structural_visibility(&mut self) {
-        let Some(model) = self.model.clone() else { return };
-        let Some(display) = model.structural_display.as_ref().filter(|d| !d.is_empty()) else { return };
-        // per source model (an index into the origins)
+    /// Per source model of `model` (an index into its origins) whether its structural objects
+    /// show: not while its model is switched off in the models list, nor after "Hide all". The
+    /// loads and results of an analysis model follow this too.
+    pub(crate) fn structural_models_on(&self, model: &crate::model::Model) -> Vec<bool> {
         let mut on = vec![!self.structural.all_hidden; model.origins.len().max(1)];
         let mut first = 0;
         for entry in &self.models {
@@ -371,9 +371,19 @@ impl App {
             }
             first += n;
         }
+        on
+    }
+
+    pub(crate) fn refresh_structural_visibility(&mut self) {
+        let Some(model) = self.model.clone() else { return };
+        let Some(display) = model.structural_display.as_ref().filter(|d| !d.is_empty()) else { return };
+        let on = self.structural_models_on(&model);
         // `None` while every item is shown (a hidden model may have no structural objects)
-        let items: Option<Vec<bool>> = (!on.iter().all(|&v| v))
-            .then(|| display.items.iter().map(|i| on.get(i.model as usize).copied().unwrap_or(true)).collect::<Vec<bool>>())
+        // the Analysis section leaves out the nodes or the members' lines
+        let (no_nodes, no_members) = (self.analysis.hide_nodes, self.analysis.hide_members);
+        let kind_shown = |kind: bim_structural::ItemKind| !((no_nodes && kind == bim_structural::ItemKind::Node) || (no_members && kind == bim_structural::ItemKind::Member));
+        let items: Option<Vec<bool>> = (!on.iter().all(|&v| v) || no_nodes || no_members)
+            .then(|| display.items.iter().map(|i| on.get(i.model as usize).copied().unwrap_or(true) && kind_shown(i.kind)).collect::<Vec<bool>>())
             .filter(|items| !items.iter().all(|&v| v));
         if items.as_ref() == self.structural.shown_items.as_deref() {
             return;
@@ -383,6 +393,8 @@ impl App {
             Arc::new(display.marks(shown))
         });
         self.structural.shown_items = items.map(Arc::new);
+        // the loads and results are drawn for the models that show
+        self.refresh_overlay();
         // what is hidden is neither selected nor hovered
         let shown = self.structural.shown_items.clone();
         let hidden = |id: u64| {

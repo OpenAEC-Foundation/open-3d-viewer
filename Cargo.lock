@@ -346,6 +346,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bim-gis"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "bim-library"
 version = "0.1.0"
 dependencies = [
@@ -3742,6 +3749,7 @@ version = "2026.47.1"
 dependencies = [
  "bim-bcf",
  "bim-core",
+ "bim-gis",
  "bim-library",
  "bim-structural",
  "bim-validator-core",

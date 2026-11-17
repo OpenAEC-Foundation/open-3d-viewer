@@ -8,7 +8,7 @@
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
-//!                  [--recent PATH]...
+//!                  [--recent PATH]... [--gis PLACE (an address or coordinates: its parcels and buildings are fetched)]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
@@ -59,6 +59,8 @@ struct Args {
     collab: Option<String>,
     /// For `--screenshot`: recent files, besides FILE.
     recent: Vec<PathBuf>,
+    /// For `--screenshot`: a place whose surroundings the GIS tab fetches.
+    gis: Option<String>,
     screenshot: Option<PathBuf>,
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
@@ -115,6 +117,7 @@ fn parse_args() -> Result<Args, String> {
             "--collab" => args.collab = Some(value()?),
             "--recent" => args.recent.push(PathBuf::from(value()?)),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
+            "--gis" => args.gis = Some(value()?),
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
@@ -508,6 +511,10 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let _ = app.update(Message::OpenPlan(Arc::from(path.as_str())));
             app.finish_animation();
         }
+    }
+    // `--gis PLACE`: the place found, its surroundings fetched and the GIS tab shown
+    if let Some(place) = &args.gis {
+        studio.app.open_place(place, args.language.unwrap_or(Language::English))?;
     }
     #[cfg(feature = "validator")]
     if let Some(language) = args.language {

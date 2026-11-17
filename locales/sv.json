@@ -1054,6 +1054,23 @@
     "Loads of": "Laster från",
     "None": "Inga",
     "Results of": "Resultat från",
-    "Values": "Värden"
+    "Values": "Värden",
+    "Parcels": "Fastigheter",
+    "Buildings": "Byggnader",
+    "Location": "Plats",
+    "Search": "Sök",
+    "Address, place, postcode or coordinates": "Adress, ort, postnummer eller koordinater",
+    "No place found": "Ingen plats hittades",
+    "Location from the model": "Plats från modellen",
+    "Surroundings": "Omgivning",
+    "The browser build does not fetch surroundings yet.": "Webbläsarversionen hämtar ännu inte omgivningen.",
+    "Radius": "Radie",
+    "Fetching the surroundings…": "Hämtar omgivningen…",
+    "Load surroundings": "Läs in omgivningen",
+    "Search a place first, or open a model with a georeference.": "Sök först en plats eller öppna en modell med georeferens.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Utan georeferens ligger platsen för den första inläsningen i projektets nollpunkt.",
+    "nothing found in this area": "inget hittades i det här området",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "Allt lästes inte in: området innehåller fler objekt än vad som hämtas på en gång.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Fastigheter och byggnader kommer från det nederländska fastighetsregistret via PDOK (endast Nederländerna). Förfrågan talar om för PDOK vilken plats du tittar på; inget annat skickas med."
   }
 }

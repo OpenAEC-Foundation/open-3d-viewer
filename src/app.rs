@@ -42,6 +42,7 @@ mod precut;
 mod levels;
 pub mod library;
 mod marks;
+mod gis;
 mod origin;
 mod origin_map;
 pub mod modeller;
@@ -345,6 +346,8 @@ pub struct App {
     pub schedule_scroll: (f32, f32),
     /// The IFC tab: how the model's IFCX file is built up.
     pub ifc: IfcTab,
+    /// The GIS tab: the place of the project and what was fetched around it.
+    pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
@@ -448,6 +451,8 @@ pub enum Message {
     ViewOrder(Option<String>),
     /// The place of the picked model or of its zero point, typed in.
     Origin(origin::Message),
+    /// The GIS tab: a place searched or chosen, the surroundings fetched.
+    Gis(gis::Message),
     /// Lay a view (by path) in the 3D view in full, or take it out again.
     ProjectView(Arc<str>),
     Loaded(Result<Arc<Model>, String>),
@@ -977,6 +982,7 @@ impl Default for App {
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
             ifc: IfcTab::default(),
+            gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
             drawings_pending: Default::default(),
@@ -1957,6 +1963,7 @@ impl App {
                 }
             }
             Message::Origin(m) => return self.update_origin(m),
+            Message::Gis(m) => return self.update_gis(m),
             Message::ViewOrder(order) => self.view_order = order,
             Message::ToggleFolder(path) => {
                 if !self.folded.remove(&path) {

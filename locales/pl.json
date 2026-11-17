@@ -1054,6 +1054,23 @@
     "Loads of": "Obciążenia z",
     "None": "Brak",
     "Results of": "Wyniki z",
-    "Values": "Wartości"
+    "Values": "Wartości",
+    "Parcels": "Działki",
+    "Buildings": "Budynki",
+    "Location": "Lokalizacja",
+    "Search": "Szukaj",
+    "Address, place, postcode or coordinates": "Adres, miejscowość, kod pocztowy lub współrzędne",
+    "No place found": "Nie znaleziono miejsca",
+    "Location from the model": "Lokalizacja z modelu",
+    "Surroundings": "Otoczenie",
+    "The browser build does not fetch surroundings yet.": "Wersja przeglądarkowa nie pobiera jeszcze otoczenia.",
+    "Radius": "Promień",
+    "Fetching the surroundings…": "Pobieranie otoczenia…",
+    "Load surroundings": "Wczytaj otoczenie",
+    "Search a place first, or open a model with a georeference.": "Najpierw wyszukaj miejsce albo otwórz model z georeferencją.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Bez georeferencji miejsce pierwszego wczytania leży w punkcie zerowym projektu.",
+    "nothing found in this area": "nic nie znaleziono na tym obszarze",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "Nie wszystko zostało wczytane: obszar zawiera więcej obiektów, niż jest pobieranych jednorazowo.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Działki i budynki pochodzą z holenderskiego katastru za pośrednictwem PDOK (tylko Holandia). Zapytanie informuje PDOK, które miejsce oglądasz; nic więcej nie jest przesyłane."
   }
 }

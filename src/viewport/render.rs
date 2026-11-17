@@ -154,6 +154,9 @@ pub struct ScenePrimitive {
     /// The lines drawn over the model with their colours (world), solid: the underlays', the
     /// views' in 3D.
     pub overlay: Arc<Vec<crate::views3d::Colored>>,
+    /// Filled triangles in their colours, drawn unlit with the model: what a structural analysis
+    /// model shows as solids (arrows, supports, the deformed profiles).
+    pub faces: Arc<Vec<crate::structural::diagrams::Face>>,
     /// The cut faces of the section box and plane in their hatches (`crate::caps`), drawn over
     /// the model's own cut fill.
     pub caps: Arc<crate::caps::CutFaces>,
@@ -282,6 +285,8 @@ pub struct ScenePipeline {
     /// The lines drawn over the model and what they were built from.
     overlay: Option<(wgpu::Buffer, u32)>,
     overlay_source: Arc<Vec<crate::views3d::Colored>>,
+    overlay_faces: Option<(wgpu::Buffer, u32)>,
+    overlay_faces_source: Arc<Vec<crate::structural::diagrams::Face>>,
     /// The cut faces in their hatches: their triangles, their lines, and what they were built from.
     cut_faces: Option<(wgpu::Buffer, u32)>,
     cut_lines: Option<(wgpu::Buffer, u32)>,
@@ -728,6 +733,8 @@ impl ScenePipeline {
             datum: None,
             overlay: None,
             overlay_source: Default::default(),
+            overlay_faces: None,
+            overlay_faces_source: Default::default(),
             cut_faces: None,
             cut_lines: None,
             cut_source: Default::default(),
@@ -953,6 +960,19 @@ impl ScenePipeline {
         self.overlay_source = primitive.overlay.clone();
     }
 
+    /// The filled triangles of the overlay, built again when they change.
+    fn upload_overlay_faces(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
+        if Arc::ptr_eq(&primitive.faces, &self.overlay_faces_source) {
+            return;
+        }
+        let vertices: Vec<Vertex> = primitive.faces.iter().flat_map(|(t, color)| t.map(|p| Vertex { position: p, normal: [0.0, 0.0, 1.0], color: *color, unit: 0 })).collect();
+        self.overlay_faces = (!vertices.is_empty()).then(|| {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("o3v.overlay_faces"), contents: bytemuck::cast_slice(&vertices), usage: wgpu::BufferUsages::VERTEX });
+            (buffer, vertices.len() as u32)
+        });
+        self.overlay_faces_source = primitive.faces.clone();
+    }
+
     /// The cut faces in their hatches, built again when they change.
     fn upload_cut_faces(&mut self, device: &wgpu::Device, primitive: &ScenePrimitive) {
         if Arc::ptr_eq(&primitive.caps, &self.cut_source) {
@@ -1066,6 +1086,7 @@ impl ScenePipeline {
         self.upload_model(device, primitive.model.as_ref(), primitive.explode.as_deref());
         self.upload_datum(device, primitive);
         self.upload_overlay(device, primitive);
+        self.upload_overlay_faces(device, primitive);
         self.upload_cut_faces(device, primitive);
         self.gather_structural_marks(device, primitive);
         if !self.offsets_written.as_ref().is_some_and(|o| Arc::ptr_eq(o, &primitive.offsets)) {
@@ -1296,6 +1317,13 @@ impl ScenePipeline {
                 pass.set_bind_group(0, &self.model_group, &[]);
                 let [(_, selected), (_, hovered)] = &self.structural_marked;
                 structural.draw(&mut pass, gpu, primitive.structural_shown.as_deref(), selected.as_ref(), hovered.as_ref());
+            }
+            // the solids of the overlay: unlit, in the depth of the model
+            if let Some((faces, count)) = &self.overlay_faces {
+                pass.set_pipeline(&self.flat);
+                pass.set_bind_group(0, &self.world_group, &[]);
+                pass.set_vertex_buffer(0, faces.slice(..));
+                pass.draw(0..*count, 0..1);
             }
             if primitive.settings.caps && mode != RenderMode::Wireframe {
                 pass.set_bind_group(0, &self.model_group, &[]);

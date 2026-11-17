@@ -98,15 +98,23 @@ impl App {
         #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         lines.extend(self.collab_marks());
         self.views_3d_labels = views.labels;
+        let mut faces = Vec::new();
         // the loads and results of a structural analysis model
         if let Some(model) = self.model.as_ref().filter(|m| !m.structural.is_empty() && self.analysis.anything()) {
             if self.model_tab_shown() {
-                let (drawn, figures) = crate::structural::diagrams::draw(&model.structural, &model.origins, &self.analysis);
-                lines.extend(drawn);
-                self.views_3d_labels.extend(figures);
+                // a model switched off in the models list shows nothing of what was computed for it
+                let on = self.structural_models_on(model);
+                let parts: Vec<_> = model.structural.iter().filter(|p| on.get(p.model as usize).copied().unwrap_or(true)).cloned().collect();
+                let drawn = crate::structural::diagrams::draw_all(&parts, &model.origins, &self.analysis);
+                lines.extend(drawn.lines);
+                faces = drawn.faces;
+                self.views_3d_labels.extend(drawn.labels);
             }
         }
         self.overlay_lines = Arc::new(lines);
+        if !(faces.is_empty() && self.overlay_faces.is_empty()) {
+            self.overlay_faces = Arc::new(faces);
+        }
     }
 }
 

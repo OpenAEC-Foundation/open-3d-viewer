@@ -13,7 +13,7 @@
 
 use crate::model::{GridLine, Layer, ProjectData};
 use bim_structural::*;
-use glam::{DVec2, DVec3};
+use glam::DVec3;
 use std::collections::BTreeMap;
 
 /// Arcs of a profile's outline stay within this of the true curve (metres).
@@ -100,50 +100,13 @@ pub fn solids(model: &AnalysisModel, origin: DVec3) -> Vec<Layer> {
         let Some((a, b)) = model.member_ends(member) else { continue };
         let Ok(f) = frame::member_frame(a, b, member.z_ref).or_else(|_| frame::member_frame(a, b, frame::default_z_ref(b - a))) else { continue };
         let layer = layers.entry(section.name.clone()).or_insert_with(|| Layer { name: section.name.clone(), color: STEEL, ..Layer::default() });
-        let loops = outline.loops();
-        // the profile's u along local y, its v along local z
-        let place = |p: DVec2, along: f64| f.origin + f.x * along + f.y * p.x + f.z * p.y - origin;
-        let push = |layer: &mut Layer, corners: &[DVec3], normal: DVec3| {
+        for (corners, normal) in crate::structural::solid::sweep(&outline.loops(), &f) {
             let first = layer.vertex_count() as u32;
             for c in corners {
-                layer.positions.extend(c.as_vec3().to_array());
+                layer.positions.extend((c - origin).as_vec3().to_array());
                 layer.normals.extend(normal.as_vec3().to_array());
             }
-            first
-        };
-        // the sides: a flat face per edge of every loop (holes run the other way round, so their
-        // faces look inward by the same rule)
-        for ring in &loops {
-            let n = ring.points.len();
-            for k in 0..n {
-                let (p, q) = (ring.points[k], ring.points[(k + 1) % n]);
-                let edge = q - p;
-                let out = (f.y * edge.y - f.z * edge.x).normalize_or_zero();
-                let first = push(layer, &[place(p, 0.0), place(q, 0.0), place(q, f.length), place(p, f.length)], out);
-                layer.indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
-            }
-        }
-        // the two ends: the outline with its holes, triangulated once
-        let mut flat: Vec<f64> = Vec::new();
-        let mut holes: Vec<usize> = Vec::new();
-        let mut points: Vec<DVec2> = Vec::new();
-        for ring in loops.iter().filter(|r| !r.hole).chain(loops.iter().filter(|r| r.hole)) {
-            if ring.hole {
-                holes.push(points.len());
-            }
-            for p in &ring.points {
-                flat.extend([p.x, p.y]);
-                points.push(*p);
-            }
-        }
-        let triangles = earcutr::earcut(&flat, &holes, 2).unwrap_or_default();
-        for (along, normal, flip) in [(0.0, -f.x, true), (f.length, f.x, false)] {
-            let corners: Vec<DVec3> = points.iter().map(|p| place(*p, along)).collect();
-            let first = push(layer, &corners, normal);
-            for t in triangles.chunks_exact(3) {
-                let (i, j, k) = (first + t[0] as u32, first + t[1] as u32, first + t[2] as u32);
-                layer.indices.extend(if flip { [i, k, j] } else { [i, j, k] });
-            }
+            layer.indices.extend([first, first + 1, first + 2]);
         }
     }
     layers.into_values().filter(|l| !l.indices.is_empty()).collect()

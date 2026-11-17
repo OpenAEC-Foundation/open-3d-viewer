@@ -1038,6 +1038,10 @@
     "Look at structural analysis models: loads and results": "Se beräkningsmodeller: laster och resultat",
     "Analysis": "Beräkning",
     "Moment My": "Moment My",
-    "Moment Mz": "Moment Mz"
+    "Moment Mz": "Moment Mz",
+    "Supports": "Upplag",
+    "Draws a symbol at every support and a circle at every released member end.": "Ritar en symbol vid varje upplag och en cirkel vid varje ledad stångände.",
+    "Previous result set": "Föregående resultat",
+    "Shows the results of the previous load case or combination.": "Visar resultaten för föregående lastfall eller kombination."
   }
 }

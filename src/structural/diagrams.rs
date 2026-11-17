@@ -10,6 +10,9 @@
 //!   taking [`REACH`] of the model's size.
 //! - **Reactions**: an arrow at every supported node, the force the support puts on the structure.
 //! - **Loads** of a load case: arrows at nodes, along members and on surfaces.
+//! - **Supports and releases**: at every supported node a symbol of what it holds (a square for a
+//!   fixed support, a triangle for a pinned one, a triangle on a line for a roller, a diamond for
+//!   the rest) and near every released member end a small circle.
 //!
 //! All of it is derived from the document; nothing is computed that the file does not hold.
 
@@ -27,6 +30,10 @@ const NEGATIVE: [u8; 4] = [220, 38, 38, 255];
 const DEFORMED: [u8; 4] = [22, 163, 74, 255];
 const REACTION: [u8; 4] = [124, 58, 237, 255];
 const LOAD: [u8; 4] = [217, 119, 6, 255];
+const SUPPORT: [u8; 4] = [8, 145, 178, 255];
+const RELEASE: [u8; 4] = [219, 39, 119, 255];
+/// The size of a support symbol, as a part of the model's size; it does not follow the scale.
+const SYMBOL: f64 = 0.012;
 
 /// An internal force of a member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +76,8 @@ pub struct Shown {
     pub force: Option<Force>,
     pub deformed: bool,
     pub reactions: bool,
+    /// The symbols of the supports and of the released member ends.
+    pub supports: bool,
     /// The load case whose loads are drawn, by its place among the model's load cases.
     pub loads: Option<usize>,
     /// Larger or smaller than [`REACH`]: 1 as it is.
@@ -82,6 +91,7 @@ pub enum Change {
     Force(Force),
     Deformed,
     Reactions,
+    Supports,
     /// The loads of the load case shown, on or off.
     Loads,
     /// The next (true) or previous load case, and result set.
@@ -99,6 +109,7 @@ impl Shown {
             Change::Force(force) => self.force = (self.force != Some(force)).then_some(force),
             Change::Deformed => self.deformed = !self.deformed,
             Change::Reactions => self.reactions = !self.reactions,
+            Change::Supports => self.supports = !self.supports,
             Change::Loads => self.loads = if self.loads.is_some() || cases == 0 { None } else { Some(0) },
             Change::Case(next) => self.loads = (cases > 0).then(|| step(self.loads.unwrap_or(if next { cases - 1 } else { 0 }), cases, next)),
             Change::Set(next) => self.set = step(self.set.min(sets.saturating_sub(1)), sets, next),
@@ -107,7 +118,7 @@ impl Shown {
     }
 
     pub fn anything(&self) -> bool {
-        self.force.is_some() || self.deformed || self.reactions || self.loads.is_some()
+        self.force.is_some() || self.deformed || self.reactions || self.supports || self.loads.is_some()
     }
 }
 
@@ -144,6 +155,9 @@ pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec
         }
         if let Some(case) = shown.loads.and_then(|k| doc.load_cases.get(k)) {
             loads(doc, case.id, reach * 0.6, &mut pen);
+        }
+        if shown.supports {
+            supports(doc, size * SYMBOL, &mut pen);
         }
     }
     (lines, labels)
@@ -259,6 +273,64 @@ fn reactions(doc: &AnalysisModel, table: &results::NodeTable, reach: f64, pen: &
     out
 }
 
+/// A symbol at every supported node and a circle near every released member end; `s` is the
+/// symbol's size.
+fn supports(doc: &AnalysisModel, s: f64, pen: &mut Pen) {
+    let (x, y, z) = (DVec3::X * s, DVec3::Y * s, DVec3::Z * s);
+    for node in &doc.nodes {
+        let Some(support) = &node.support else { continue };
+        let p = node.p;
+        let mut ring = |corners: &[DVec3]| {
+            for k in 0..corners.len() {
+                pen.line(corners[k], corners[(k + 1) % corners.len()], SUPPORT);
+            }
+        };
+        // a triangle under the node in both upright planes
+        let triangle = |ring: &mut dyn FnMut(&[DVec3])| {
+            ring(&[p, p - x - z * 1.6, p + x - z * 1.6]);
+            ring(&[p, p - y - z * 1.6, p + y - z * 1.6]);
+        };
+        match support.preset {
+            SupportPreset::Fixed => {
+                ring(&[p - x - y, p + x - y, p + x + y, p - x + y]);
+                ring(&[p - x - z, p + x - z, p + x + z, p - x + z]);
+                ring(&[p - y - z, p + y - z, p + y + z, p - y + z]);
+            }
+            SupportPreset::Pinned => triangle(&mut ring),
+            SupportPreset::Roller { .. } | SupportPreset::Sliding { .. } => {
+                triangle(&mut ring);
+                ring(&[p - x * 1.3 - z * 2.0, p + x * 1.3 - z * 2.0]);
+                ring(&[p - y * 1.3 - z * 2.0, p + y * 1.3 - z * 2.0]);
+            }
+            SupportPreset::Free => {}
+            SupportPreset::Spring | SupportPreset::Custom => {
+                ring(&[p - x, p - z, p + x, p + z]);
+                ring(&[p - y, p - z, p + y, p + z]);
+            }
+        }
+    }
+    for member in &doc.members {
+        let Some(f) = frame_of(doc, member) else { continue };
+        for (end, release) in member.releases.iter().enumerate() {
+            if release.is_none() {
+                continue;
+            }
+            // a little way in from the end, so that the circles of the members at a node stay apart
+            let inset = (s * 2.5).min(f.length * 0.25);
+            let c = if end == 0 { f.origin + f.x * inset } else { f.origin + f.x * (f.length - inset) };
+            let r = s * 0.7;
+            let around = |k: usize, u: DVec3, v: DVec3| {
+                let t = k as f64 / 12.0 * std::f64::consts::TAU;
+                c + (u * t.cos() + v * t.sin()) * r
+            };
+            for k in 0..12 {
+                pen.line(around(k, f.x, f.z), around(k + 1, f.x, f.z), RELEASE);
+                pen.line(around(k, f.x, f.y), around(k + 1, f.x, f.y), RELEASE);
+            }
+        }
+    }
+}
+
 /// The loads of a load case: arrows at nodes, along members and on the corners of surfaces.
 fn loads(doc: &AnalysisModel, case: Id, reach: f64, pen: &mut Pen) {
     let actions: Vec<&Action> = doc.actions.iter().filter(|a| a.load == LoadRef::Case(case)).collect();
@@ -355,8 +427,11 @@ mod tests {
         let mut m = AnalysisModel::new(1, "beam", SourceInfo::default());
         let node = |k: u64, x: f64| Node { id: sam_id(IdKind::Node, k), number: k.to_string(), p: DVec3::new(x, 0.0, 0.0), frame: None, support: None, origin: NodeOrigin::Analytical };
         m.nodes = vec![node(1, 0.0), node(2, 4.0)];
+        let held = [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Free, Dof::Free];
+        m.nodes[0].support = Some(Support { preset: support::classify(&held, Dimension::Space3d), dofs: held, frame: DofFrame::Global, named: None });
         let member = sam_id(IdKind::Member, 1);
         m.members.push(Member { id: member, number: "1".into(), kind: MemberKind::Beam, nodes: vec![m.nodes[0].id, m.nodes[1].id], geometry: Curve::Line, z_ref: DVec3::Z, orientation: Orientation::Default, section: None, section_rotation: 0.0, insertion: Insertion::default(), releases: [None, None], material: None, links: Vec::new() });
+        m.members[0].releases[1] = Some(Hinge { dofs: [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Free], named: None });
         let case = sam_id(IdKind::LoadCase, 1);
         m.load_cases.push(LoadCase { id: case, number: "1".into(), name: "Live".into(), action_type: ActionType::Variable, action_source: String::new(), self_weight: None, coefficient: 1.0 });
         let act = |k: u64, target: Target, kind: Load| Action { id: sam_id(IdKind::Action, k), load: LoadRef::Case(case), target, frame: LoadFrame::Global, kind, destabilising: false };
@@ -423,5 +498,9 @@ mod tests {
         let (lines, _) = drawn(Shown { loads: Some(0), scale: 1.0, ..Shown::default() });
         assert!(lines.len() > 15 && lines.iter().all(|(_, c)| *c == LOAD), "{}", lines.len());
         assert!(drawn(Shown { loads: Some(7), scale: 1.0, ..Shown::default() }).0.is_empty());
+        // the symbols of the supports, alone and of one size whatever the scale
+        let (symbols, labels) = drawn(Shown { supports: true, scale: 1.0, ..Shown::default() });
+        assert!(!symbols.is_empty() && labels.is_empty() && symbols.iter().all(|(_, c)| *c == SUPPORT || *c == RELEASE));
+        assert_eq!(drawn(Shown { supports: true, scale: 3.0, ..Shown::default() }).0, symbols);
     }
 }

@@ -1038,6 +1038,10 @@
     "Look at structural analysis models: loads and results": "Berechnungsmodelle ansehen: Lasten und Ergebnisse",
     "Analysis": "Berechnung",
     "Moment My": "Moment My",
-    "Moment Mz": "Moment Mz"
+    "Moment Mz": "Moment Mz",
+    "Supports": "Auflager",
+    "Draws a symbol at every support and a circle at every released member end.": "Zeichnet an jedem Auflager sein Symbol und an jedem gelenkigen Stabende einen Kreis.",
+    "Previous result set": "Vorheriges Ergebnis",
+    "Shows the results of the previous load case or combination.": "Zeigt die Ergebnisse des vorherigen Lastfalls oder der vorherigen Kombination."
   }
 }

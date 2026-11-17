@@ -1038,6 +1038,10 @@
     "Look at structural analysis models: loads and results": "Hesap modellerine bakın: yükler ve sonuçlar",
     "Analysis": "Hesap",
     "Moment My": "Moment My",
-    "Moment Mz": "Moment Mz"
+    "Moment Mz": "Moment Mz",
+    "Supports": "Mesnetler",
+    "Draws a symbol at every support and a circle at every released member end.": "Her mesnede bir sembol, her mafsallı çubuk ucuna bir daire çizer.",
+    "Previous result set": "Önceki sonuç",
+    "Shows the results of the previous load case or combination.": "Önceki yük durumunun veya kombinasyonun sonuçlarını gösterir."
   }
 }

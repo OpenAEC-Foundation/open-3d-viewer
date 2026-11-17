@@ -3,9 +3,12 @@
 //! type, layer, class, symbol, the values of their records and the IFC entity Vectorworks
 //! keeps for them); lines, arcs and the outlines of shapes without a fill as line work; what is
 //! on an invisible layer or in an invisible class starts switched off; the saved views of the
-//! document.
+//! document; its sheet layers as sheets, with the lines and texts drawn on them.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{Layer, ProjectData, SavedView, ViewCamera, ViewKind};
+use crate::model::{DraftText, Layer, ProjectData, SavedView, Sheet, SheetRect, ViewCamera, ViewKind};
+
+/// Metres in a point, the measure of letters on paper.
+const POINT: f32 = 0.0254 / 72.0;
 
 pub struct VwxLoader;
 
@@ -28,8 +31,9 @@ impl Loader for VwxLoader {
         progress.set(Phase::Convert);
         let scene = vwx_read::read(&data).map_err(|e| format!("Cannot read Vectorworks file: {e}"))?;
         let views = scene.views.iter().map(view).collect();
+        let project = ProjectData { sheets: scene.sheets.iter().map(sheet).collect(), ..ProjectData::default() };
         let layers = scene.meshes.into_iter().map(layer).collect();
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData::default() })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
     }
 }
 
@@ -47,6 +51,32 @@ fn view(view: &vwx_read::model::View) -> SavedView {
         style: None,
         drawing: None,
     }
+}
+
+/// A sheet layer of the document as a sheet: its number and title, and what is drawn on the
+/// paper itself (the lines and texts of its title block and notes). Its paper is taken to be
+/// what those cover. The views of the model it shows (its viewports) are not read yet.
+fn sheet(sheet: &vwx_read::model::Sheet) -> Sheet {
+    let texts: Vec<DraftText> = sheet
+        .texts
+        .iter()
+        .map(|t| DraftText {
+            element: t.id,
+            // the reader gives the top left corner of the box
+            at: [t.at[0], t.at[1] - t.height],
+            width: t.width,
+            height: t.height,
+            size: t.size * POINT,
+            align: 0,
+            angle: 0.0,
+            text: t.text.clone(),
+            face: crate::typeface::Face::default(),
+        })
+        .collect();
+    let corners = sheet.lines.iter().flatten().copied().chain(texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]]));
+    let paper = corners.map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union);
+    let title = [sheet.number.as_str(), sheet.title.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
+    Sheet { number: sheet.number.clone(), name: sheet.title.clone(), title, paper, lines: sheet.lines.clone(), texts, ..Sheet::default() }
 }
 
 /// The viewer layer of a reader mesh (both metres, Z up).
@@ -128,6 +158,26 @@ mod tests {
         let path = std::path::PathBuf::from(samples).join("ladder/2027/90_record.vwx");
         let model = super::super::load(&path).expect("Vectorworks sample");
         assert!(model.props.values().any(|p| p.contains(r#""Gegevens.Naam":"Balk-1""#)), "{:?}", model.props.values().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn sheet_layers_become_sheets() {
+        let from = vwx_read::model::Sheet {
+            id: 9,
+            number: "210".into(),
+            title: "Plans".into(),
+            lines: vec![[[0.0, 0.0], [0.841, 0.0]], [[0.841, 0.0], [0.841, 0.594]]],
+            texts: vec![vwx_read::model::Text { id: 12, text: "Sheet No.".into(), at: [0.7, 0.05, 0.0], width: 0.04, height: 0.005, size: 12.0, lines: 1, ..Default::default() }],
+            viewports: 2,
+        };
+        let sheet = super::sheet(&from);
+        assert_eq!((sheet.number.as_str(), sheet.name.as_str(), sheet.title.as_str()), ("210", "Plans", "210 Plans"));
+        assert_eq!(sheet.lines.len(), 2);
+        // the text box from its lower left corner; letters of 12 points
+        let text = &sheet.texts[0];
+        assert!((text.at[1] - 0.045).abs() < 1e-6 && (text.size - 0.0042333).abs() < 1e-6, "{text:?}");
+        let paper = sheet.paper.unwrap();
+        assert_eq!((paper.min, paper.max), ([0.0, 0.0], [0.841, 0.594]));
     }
 
     #[test]

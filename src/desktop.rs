@@ -4,7 +4,7 @@
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--product viewer|modeller|validator|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,loads,larger]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,supports,loads,next-set,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
@@ -454,9 +454,11 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             let change = match word.to_ascii_lowercase().as_str() {
                 "deformed" => Some(Change::Deformed),
                 "reactions" => Some(Change::Reactions),
+                "supports" => Some(Change::Supports),
                 "loads" => Some(Change::Loads),
                 "next-case" => Some(Change::Case(true)),
                 "next-set" => Some(Change::Set(true)),
+                "previous-set" => Some(Change::Set(false)),
                 "larger" => Some(Change::Scale(true)),
                 "smaller" => Some(Change::Scale(false)),
                 other => Force::parse(other).map(Change::Force),

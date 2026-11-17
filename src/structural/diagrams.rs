@@ -10,6 +10,9 @@
 //!   taking [`REACH`] of the model's size.
 //! - **Reactions**: an arrow at every supported node, the force the support puts on the structure.
 //! - **Loads** of a load case: arrows at nodes, along members and on surfaces.
+//! - **Supports and releases**: at every supported node a symbol of what it holds (a square for a
+//!   fixed support, a triangle for a pinned one, a triangle on a line for a roller, a diamond for
+//!   the rest) and near every released member end a small circle.
 //!
 //! All of it is derived from the document; nothing is computed that the file does not hold.
 
@@ -27,6 +30,10 @@ const NEGATIVE: [u8; 4] = [220, 38, 38, 255];
 const DEFORMED: [u8; 4] = [22, 163, 74, 255];
 const REACTION: [u8; 4] = [124, 58, 237, 255];
 const LOAD: [u8; 4] = [217, 119, 6, 255];
+const SUPPORT: [u8; 4] = [15, 118, 110, 255];
+const RELEASE: [u8; 4] = [219, 39, 119, 255];
+/// The size of a support symbol, as a part of the model's size; it does not follow the scale.
+const SYMBOL: f64 = 0.014;
 
 /// An internal force of a member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +68,26 @@ impl Force {
     }
 }
 
+/// How the line of an internal force is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Style {
+    /// The line with a stroke to the member at every station.
+    #[default]
+    Strokes,
+    /// The line alone, closed onto the member at its ends.
+    Outline,
+}
+
+/// Where the value of an internal force is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Values {
+    /// At the largest of the model.
+    #[default]
+    Model,
+    /// At the largest of every member.
+    Members,
+}
+
 /// What of the loads and results is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Shown {
@@ -69,10 +96,14 @@ pub struct Shown {
     pub force: Option<Force>,
     pub deformed: bool,
     pub reactions: bool,
+    /// The symbols of the supports and of the released member ends.
+    pub supports: bool,
     /// The load case whose loads are drawn, by its place among the model's load cases.
     pub loads: Option<usize>,
     /// Larger or smaller than [`REACH`]: 1 as it is.
     pub scale: f32,
+    pub style: Style,
+    pub values: Values,
 }
 
 /// A change of what is drawn.
@@ -82,6 +113,7 @@ pub enum Change {
     Force(Force),
     Deformed,
     Reactions,
+    Supports,
     /// The loads of the load case shown, on or off.
     Loads,
     /// The next (true) or previous load case, and result set.
@@ -89,6 +121,12 @@ pub enum Change {
     Set(bool),
     /// Larger (true) or smaller.
     Scale(bool),
+    /// The result set, or the load case whose loads are drawn (none: no loads), by its place.
+    SetAt(usize),
+    CaseAt(Option<usize>),
+    ScaleTo(f32),
+    Style(Style),
+    Values(Values),
 }
 
 impl Shown {
@@ -99,15 +137,21 @@ impl Shown {
             Change::Force(force) => self.force = (self.force != Some(force)).then_some(force),
             Change::Deformed => self.deformed = !self.deformed,
             Change::Reactions => self.reactions = !self.reactions,
+            Change::Supports => self.supports = !self.supports,
             Change::Loads => self.loads = if self.loads.is_some() || cases == 0 { None } else { Some(0) },
             Change::Case(next) => self.loads = (cases > 0).then(|| step(self.loads.unwrap_or(if next { cases - 1 } else { 0 }), cases, next)),
             Change::Set(next) => self.set = step(self.set.min(sets.saturating_sub(1)), sets, next),
+            Change::SetAt(at) => self.set = at.min(sets.saturating_sub(1)),
+            Change::CaseAt(at) => self.loads = at.filter(|k| *k < cases),
+            Change::ScaleTo(scale) => self.scale = if scale.is_finite() { scale.clamp(0.05, 20.0) } else { self.scale },
+            Change::Style(style) => self.style = style,
+            Change::Values(values) => self.values = values,
             Change::Scale(larger) => self.scale = (if self.scale > 0.0 { self.scale } else { 1.0 } * if larger { 1.5 } else { 1.0 / 1.5 }).clamp(0.05, 20.0),
         }
     }
 
     pub fn anything(&self) -> bool {
-        self.force.is_some() || self.deformed || self.reactions || self.loads.is_some()
+        self.force.is_some() || self.deformed || self.reactions || self.supports || self.loads.is_some()
     }
 }
 
@@ -128,7 +172,7 @@ pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec
         let mut pen = Pen { lines: &mut lines, at: &at };
         let results = doc.results.get(shown.set).and_then(|r| r.inline.as_ref());
         if let (Some(force), Some(table)) = (shown.force, results.and_then(|r| r.member_forces.as_ref())) {
-            if let Some((value, p)) = forces(doc, table, force, reach, &mut pen) {
+            for (value, p) in forces(doc, table, force, reach, shown, &mut pen) {
                 labels.push((format!("{} {}", force.symbol(), figure(value / 1e3, force.unit())), at(p)));
             }
         }
@@ -144,6 +188,9 @@ pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec
         }
         if let Some(case) = shown.loads.and_then(|k| doc.load_cases.get(k)) {
             loads(doc, case.id, reach * 0.6, &mut pen);
+        }
+        if shown.supports {
+            supports(doc, size * SYMBOL, &mut pen);
         }
     }
     (lines, labels)
@@ -191,13 +238,15 @@ fn frame_of(doc: &AnalysisModel, member: &Member) -> Option<frame::MemberFrame> 
     frame::member_frame(a, b, member.z_ref).or_else(|_| frame::member_frame(a, b, frame::default_z_ref(b - a))).ok()
 }
 
-/// The line of one internal force along every member; the largest value and where it stands.
-fn forces(doc: &AnalysisModel, table: &results::MemberTable, force: Force, reach: f64, pen: &mut Pen) -> Option<(f64, DVec3)> {
-    let values = table.comps.get(force.slot())?;
+/// The line of one internal force along every member; the largest value of the model, or of
+/// every member, and where it stands.
+fn forces(doc: &AnalysisModel, table: &results::MemberTable, force: Force, reach: f64, shown: &Shown, pen: &mut Pen) -> Vec<(f64, DVec3)> {
+    let Some(values) = table.comps.get(force.slot()) else { return Vec::new() };
     let most = values.iter().copied().filter(|v| v.is_finite()).fold(0.0_f64, |m, v| m.max(v.abs()));
     if most <= 0.0 {
-        return None;
+        return Vec::new();
     }
+    let mut peaks: Vec<(f64, DVec3)> = Vec::new();
     let mut peak: Option<(f64, DVec3)> = None;
     for (k, id) in table.member.iter().enumerate() {
         let (Some(member), Some(&from), Some(&to)) = (doc.member(*id), table.offsets.get(k), table.offsets.get(k + 1)) else { continue };
@@ -208,13 +257,18 @@ fn forces(doc: &AnalysisModel, table: &results::MemberTable, force: Force, reach
             Force::Vy => f.y,
             Force::Mz => -f.y,
         };
-        let stations = (from as usize..to as usize).filter_map(|s| Some((*table.x.get(s)?, *values.get(s)?))).filter(|(x, v)| x.is_finite() && v.is_finite());
+        let stations: Vec<(f64, f64)> = (from as usize..to as usize).filter_map(|s| Some((*table.x.get(s)?, *values.get(s)?))).filter(|(x, v)| x.is_finite() && v.is_finite()).collect();
         let mut before: Option<(DVec3, DVec3, f64)> = None;
-        for (x, v) in stations {
+        if shown.values == Values::Members {
+            peak = None;
+        }
+        for (at, &(x, v)) in stations.iter().enumerate() {
             let foot = f.origin + f.x * x;
             let head = foot + out * (v / most * reach);
             let color = if v >= 0.0 { POSITIVE } else { NEGATIVE };
-            pen.line(foot, head, color);
+            if shown.style == Style::Strokes || at == 0 || at + 1 == stations.len() {
+                pen.line(foot, head, color);
+            }
             if let Some((_, last, was)) = before {
                 pen.line(last, head, if (was + v) >= 0.0 { POSITIVE } else { NEGATIVE });
             }
@@ -223,8 +277,14 @@ fn forces(doc: &AnalysisModel, table: &results::MemberTable, force: Force, reach
             }
             before = Some((foot, head, v));
         }
+        if shown.values == Values::Members {
+            peaks.extend(peak.filter(|(v, _)| v.abs() > most * 1e-6));
+        }
     }
-    peak
+    if shown.values == Values::Model {
+        peaks.extend(peak);
+    }
+    peaks
 }
 
 /// The members between their displaced nodes; the largest displacement and where it is.
@@ -257,6 +317,80 @@ fn reactions(doc: &AnalysisModel, table: &results::NodeTable, reach: f64, pen: &
         out.push((f.length(), tail));
     }
     out
+}
+
+/// A symbol at every supported node and a circle near every released member end; `s` is the
+/// symbol's size. A pinned support is a pyramid with its top at the node on a hatched ground
+/// plate; a roller stands on a second plate under a gap; a fixed support is the ground plate at
+/// the node itself; anything else a diamond.
+fn supports(doc: &AnalysisModel, s: f64, pen: &mut Pen) {
+    let (x, y, z) = (DVec3::X * s, DVec3::Y * s, DVec3::Z * s);
+    // a square plate around `c` with the strokes of the ground under it
+    let plate = |pen: &mut Pen, c: DVec3, half: f64| {
+        let corners = [c - (x + y) * half, c + (x - y) * half, c + (x + y) * half, c - (x - y) * half];
+        for k in 0..4 {
+            pen.line(corners[k], corners[(k + 1) % 4], SUPPORT);
+        }
+        for k in 0..=4 {
+            let t = -half + 2.0 * half * k as f64 / 4.0;
+            pen.line(c + x * t - y * half, c + x * (t - 0.35) - y * half - z * 0.45, SUPPORT);
+            pen.line(c + y * t + x * half, c + y * (t - 0.35) + x * half - z * 0.45, SUPPORT);
+        }
+    };
+    let pyramid = |pen: &mut Pen, top: DVec3, base: DVec3| {
+        let corners = [base - x - y, base + x - y, base + x + y, base - x + y];
+        for k in 0..4 {
+            pen.line(top, corners[k], SUPPORT);
+            pen.line(corners[k], corners[(k + 1) % 4], SUPPORT);
+        }
+    };
+    for node in &doc.nodes {
+        let Some(support) = &node.support else { continue };
+        let p = node.p;
+        match support.preset {
+            SupportPreset::Fixed => {
+                plate(pen, p, 1.5);
+                pen.line(p - x * 1.5, p + x * 1.5, SUPPORT);
+                pen.line(p - y * 1.5, p + y * 1.5, SUPPORT);
+            }
+            SupportPreset::Pinned => {
+                pyramid(pen, p, p - z * 1.8);
+                plate(pen, p - z * 1.8, 1.5);
+            }
+            SupportPreset::Roller { .. } | SupportPreset::Sliding { .. } => {
+                pyramid(pen, p, p - z * 1.8);
+                plate(pen, p - z * 2.3, 1.5);
+            }
+            SupportPreset::Free => {}
+            SupportPreset::Spring | SupportPreset::Custom => {
+                for (u, v) in [(x, z), (y, z), (x, y)] {
+                    for (a, b) in [(p - u, p - v), (p - v, p + u), (p + u, p + v), (p + v, p - u)] {
+                        pen.line(a, b, SUPPORT);
+                    }
+                }
+            }
+        }
+    }
+    for member in &doc.members {
+        let Some(f) = frame_of(doc, member) else { continue };
+        for (end, release) in member.releases.iter().enumerate() {
+            if release.is_none() {
+                continue;
+            }
+            // a little way in from the end, so that the circles of the members at a node stay apart
+            let inset = (s * 2.5).min(f.length * 0.25);
+            let c = if end == 0 { f.origin + f.x * inset } else { f.origin + f.x * (f.length - inset) };
+            let r = s * 0.7;
+            let around = |k: usize, u: DVec3, v: DVec3| {
+                let t = k as f64 / 12.0 * std::f64::consts::TAU;
+                c + (u * t.cos() + v * t.sin()) * r
+            };
+            for k in 0..12 {
+                pen.line(around(k, f.x, f.z), around(k + 1, f.x, f.z), RELEASE);
+                pen.line(around(k, f.x, f.y), around(k + 1, f.x, f.y), RELEASE);
+            }
+        }
+    }
 }
 
 /// The loads of a load case: arrows at nodes, along members and on the corners of surfaces.
@@ -355,8 +489,11 @@ mod tests {
         let mut m = AnalysisModel::new(1, "beam", SourceInfo::default());
         let node = |k: u64, x: f64| Node { id: sam_id(IdKind::Node, k), number: k.to_string(), p: DVec3::new(x, 0.0, 0.0), frame: None, support: None, origin: NodeOrigin::Analytical };
         m.nodes = vec![node(1, 0.0), node(2, 4.0)];
+        let held = [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Free, Dof::Free];
+        m.nodes[0].support = Some(Support { preset: support::classify(&held, Dimension::Space3d), dofs: held, frame: DofFrame::Global, named: None });
         let member = sam_id(IdKind::Member, 1);
         m.members.push(Member { id: member, number: "1".into(), kind: MemberKind::Beam, nodes: vec![m.nodes[0].id, m.nodes[1].id], geometry: Curve::Line, z_ref: DVec3::Z, orientation: Orientation::Default, section: None, section_rotation: 0.0, insertion: Insertion::default(), releases: [None, None], material: None, links: Vec::new() });
+        m.members[0].releases[1] = Some(Hinge { dofs: [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Free], named: None });
         let case = sam_id(IdKind::LoadCase, 1);
         m.load_cases.push(LoadCase { id: case, number: "1".into(), name: "Live".into(), action_type: ActionType::Variable, action_source: String::new(), self_weight: None, coefficient: 1.0 });
         let act = |k: u64, target: Target, kind: Load| Action { id: sam_id(IdKind::Action, k), load: LoadRef::Case(case), target, frame: LoadFrame::Global, kind, destabilising: false };
@@ -423,5 +560,28 @@ mod tests {
         let (lines, _) = drawn(Shown { loads: Some(0), scale: 1.0, ..Shown::default() });
         assert!(lines.len() > 15 && lines.iter().all(|(_, c)| *c == LOAD), "{}", lines.len());
         assert!(drawn(Shown { loads: Some(7), scale: 1.0, ..Shown::default() }).0.is_empty());
+        // the symbols of the supports, alone and of one size whatever the scale
+        let (symbols, labels) = drawn(Shown { supports: true, scale: 1.0, ..Shown::default() });
+        assert!(!symbols.is_empty() && labels.is_empty() && symbols.iter().all(|(_, c)| *c == SUPPORT || *c == RELEASE));
+        assert_eq!(drawn(Shown { supports: true, scale: 3.0, ..Shown::default() }).0, symbols);
+    }
+
+    #[test]
+    fn a_force_line_is_drawn_with_or_without_strokes_and_named_per_member() {
+        let with = drawn(Shown { force: Some(Force::My), scale: 1.0, ..Shown::default() });
+        let without = drawn(Shown { force: Some(Force::My), scale: 1.0, style: Style::Outline, ..Shown::default() });
+        // the stroke at the middle station is left out; the peak is named as before
+        assert_eq!((with.0.len() - without.0.len(), &without.1), (1, &with.1));
+        let per_member = drawn(Shown { force: Some(Force::My), scale: 1.0, values: Values::Members, ..Shown::default() });
+        assert_eq!(per_member.1, with.1);
+        // a place or scale that is given takes effect at once
+        let mut shown = Shown { scale: 1.0, ..Shown::default() };
+        shown.apply(Change::SetAt(5), 3, 2);
+        shown.apply(Change::CaseAt(Some(2)), 3, 2);
+        shown.apply(Change::ScaleTo(2.5), 3, 2);
+        assert_eq!((shown.set, shown.loads, shown.scale), (1, Some(2), 2.5));
+        shown.apply(Change::CaseAt(Some(9)), 3, 2);
+        shown.apply(Change::ScaleTo(f32::NAN), 3, 2);
+        assert_eq!((shown.loads, shown.scale), (None, 2.5));
     }
 }

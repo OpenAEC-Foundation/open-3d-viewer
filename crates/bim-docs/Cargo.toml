@@ -6,7 +6,7 @@ authors = ["Open BIM Suite Contributors"]
 license = "LGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.96"
-repository = "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
 publish = false
 
 [dependencies]

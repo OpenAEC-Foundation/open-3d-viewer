@@ -78,7 +78,7 @@ pub fn json_schema() -> serde_json::Value {
     let mut schema = schemars::schema_for!(wire::Document);
     schema.insert(
         "$id".into(),
-        "https://github.com/OpenAEC-Foundation/open-3d-viewer/blob/main/crates/bim-structural/schema/sam-json-v1.schema.json".into(),
+        "https://github.com/OpenAEC-Foundation/open-bim-suite/blob/main/crates/bim-structural/schema/sam-json-v1.schema.json".into(),
     );
     schema.insert("title".into(), "sam-json v1".into());
     sorted(serde_json::to_value(&schema).expect("schema serialises"))

@@ -2,6 +2,7 @@
 //! ribbon on top, explorer left, 3D viewport centre, properties and layers right, status bar
 //! bottom.
 
+mod analysis_props;
 mod caps;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod cloud;
@@ -283,6 +284,8 @@ pub struct App {
     pub cloud_depth: bool,
     /// What of a structural analysis model's loads and results the 3D view draws.
     pub analysis: crate::structural::diagrams::Shown,
+    /// What is being typed in the scale field of the Analysis section, until Enter.
+    pub analysis_scale: Option<String>,
     /// How the points of a cloud are coloured.
     pub cloud_color: crate::cloud_color::CloudColor,
     /// A cloud is being meshed.
@@ -595,6 +598,9 @@ pub enum Message {
     ToggleCloudDepth,
     /// What of a structural analysis model's loads and results is drawn.
     Analysis(crate::structural::diagrams::Change),
+    /// Typed in the scale field of the Analysis section, and Enter there.
+    AnalysisScale(String),
+    AnalysisScaleDone,
     ToggleGridHeadsHidden,
     ToggleGridDims,
     ToggleLevels3d,
@@ -943,6 +949,7 @@ impl Default for App {
             point_size: 2.5,
             cloud_depth: true,
             analysis: crate::structural::diagrams::Shown { scale: 1.0, ..Default::default() },
+            analysis_scale: None,
             cloud_color: Default::default(),
             meshing: false,
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1213,10 +1220,22 @@ impl App {
 
     /// `camera` framing the whole model.
     fn fitted(&self, mut camera: Camera) -> Camera {
-        if let Some(b) = self.world_bounds() {
+        if let Some(b) = self.framing_bounds() {
             camera.fit(&b, self.aspect());
         }
         camera
+    }
+
+    /// What fitting the view frames (world space): the model, without a few small things that
+    /// stand far from the rest of it at rest (`ExplodeIndex::framed`). They stay in the model;
+    /// zooming to them shows them.
+    fn framing_bounds(&self) -> Option<Bounds> {
+        let at_rest = self.explode_bounds.is_none();
+        let current = |i: &&Arc<ExplodeIndex>| self.model.as_ref().is_some_and(|m| i.rest() == m.bounds);
+        match self.explode_index.as_ref().filter(|_| at_rest).filter(current).and_then(|i| i.framed()) {
+            Some(framed) => Some(transform_bounds(&framed, &self.model_matrix())),
+            None => self.world_bounds(),
+        }
     }
 
     /// The model's bounds in world space (after the up-axis override), as drawn: pulled apart
@@ -2237,7 +2256,17 @@ impl App {
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::CloudColor(color) => self.cloud_color = color,
             Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
+            Message::AnalysisScale(typed) => {
+                if let Some(change) = self.type_analysis_scale(typed) {
+                    let kept = self.analysis_scale.take();
+                    let task = self.update(Message::Analysis(change));
+                    self.analysis_scale = kept;
+                    return task;
+                }
+            }
+            Message::AnalysisScaleDone => self.analysis_scale = None,
             Message::Analysis(change) => {
+                self.analysis_scale = None;
                 let doc = self.model.as_ref().and_then(|m| m.structural.first()).map(|p| p.doc.clone());
                 let (cases, sets) = doc.as_ref().map_or((0, 0), |d| (d.load_cases.len(), d.results.len()));
                 self.analysis.apply(change, cases, sets);
@@ -3565,6 +3594,9 @@ impl App {
         let picked_entry = picked;
         let picked = picked.is_some();
         let drawn = self.drawn_properties(p, l);
+        if let Some(analysis) = self.analysis_properties(p, l) {
+            content = content.push(section(l.text("Rekenresultaten", "Analysis"))).push(analysis).push(rule::horizontal(1));
+        }
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() && drawn.is_none() {
             if let Some(view) = self.view_properties(p, l) {
                 content = content.push(section(l.text("Weergave", "View"))).push(view).push(rule::horizontal(1));
@@ -5187,6 +5219,28 @@ mod tests {
         let _ = app.update(Message::ShowAllElements);
         assert!(app.hidden.is_empty());
         assert_eq!(element_flags(&app, 20), 0);
+    }
+
+    #[test]
+    fn fitting_frames_the_model_not_a_stray_far_away() {
+        use crate::model::Layer;
+        // a slab of 200 triangles from 0,0 to 10,10, and one triangle a thousand kilometres away
+        let mut positions = Vec::new();
+        let mut elements = Vec::new();
+        for k in 0..100 {
+            let (x, y) = ((k % 10) as f32, (k / 10) as f32);
+            elements.push((k as u64 + 1, 6 * k, 6));
+            positions.extend_from_slice(&[x, y, 0.0, x + 1.0, y, 0.0, x + 1.0, y + 1.0, 0.0, x, y, 0.0, x + 1.0, y + 1.0, 0.0, x, y + 1.0, 0.0]);
+        }
+        elements.push((1000, 600, 3));
+        positions.extend_from_slice(&[1.0e6, 0.0, 0.0, 1.0e6 + 1.0, 0.0, 0.0, 1.0e6, 1.0, 0.0]);
+        let indices = (0..positions.len() as u32 / 3).collect();
+        let layer = Layer { name: "Map".into(), positions, indices, elements, ..Layer::default() };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("map.blend"), "Blender", vec![layer])));
+        app.fit();
+        assert!(app.camera.target.distance(Vec3::new(5.0, 5.0, 0.0)) < 1e-3, "{:?}", app.camera.target);
+        assert!(app.camera.scene_radius < 10.0, "{}", app.camera.scene_radius);
     }
 
     #[test]

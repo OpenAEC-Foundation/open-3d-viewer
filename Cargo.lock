@@ -4044,7 +4044,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "ply-reader"
 version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/ply-reader?rev=028c51906cd7d8a0e72d6103afe80ad668d2543d#028c51906cd7d8a0e72d6103afe80ad668d2543d"
+source = "git+https://github.com/OpenAEC-Foundation/ply-dll?rev=028c51906cd7d8a0e72d6103afe80ad668d2543d#028c51906cd7d8a0e72d6103afe80ad668d2543d"
 
 [[package]]
 name = "png"
@@ -4767,7 +4767,7 @@ dependencies = [
 [[package]]
 name = "rvt-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "flate2",
 ]
@@ -4775,7 +4775,7 @@ dependencies = [
 [[package]]
 name = "rvt-export"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "delaunator",
  "earcutr",
@@ -4788,7 +4788,7 @@ dependencies = [
 [[package]]
 name = "rvt-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "serde",
 ]
@@ -4796,7 +4796,7 @@ dependencies = [
 [[package]]
 name = "rvt-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "flate2",
  "rvt-core",
@@ -5122,7 +5122,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 [[package]]
 name = "skp-reader"
 version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/skp-reader?rev=31f8ef5bb9a8822771fbf008aa88e0f36444e01a#31f8ef5bb9a8822771fbf008aa88e0f36444e01a"
+source = "git+https://github.com/OpenAEC-Foundation/sketchup-dll?rev=31f8ef5bb9a8822771fbf008aa88e0f36444e01a#31f8ef5bb9a8822771fbf008aa88e0f36444e01a"
 dependencies = [
  "earcutr",
  "flate2",
@@ -5438,7 +5438,7 @@ dependencies = [
 [[package]]
 name = "tekla-core"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e#9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5447,7 +5447,7 @@ dependencies = [
 [[package]]
 name = "tekla-model"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e#9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
 dependencies = [
  "serde",
 ]
@@ -5455,7 +5455,7 @@ dependencies = [
 [[package]]
 name = "tekla-read"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e#9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
 dependencies = [
  "earcutr",
  "glam 0.30.10",
@@ -5529,7 +5529,7 @@ dependencies = [
 [[package]]
 name = "threedm-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5538,7 +5538,7 @@ dependencies = [
 [[package]]
 name = "threedm-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
 dependencies = [
  "glam 0.30.10",
  "threedm-core",
@@ -5547,7 +5547,7 @@ dependencies = [
 [[package]]
 name = "threedm-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3dm-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
 dependencies = [
  "earcutr",
  "glam 0.30.10",

@@ -1423,10 +1423,12 @@ impl Studio {
             };
             add("analysis.deformed", l.text("Vervorming", "Deformed shape"), "transform.flip-vertical", Change::Deformed, app.analysis.deformed, moved, l.text("Tekent de staven tussen hun verplaatste knopen, vergroot.", "Draws the members between their displaced nodes, enlarged."));
             add("analysis.reactions", l.text("Reacties", "Reactions"), "section.plane-z", Change::Reactions, app.analysis.reactions, held, l.text("Tekent bij elke oplegging de kracht op de constructie.", "Draws at every support the force on the structure."));
+            add("analysis.supports", l.text("Opleggingen", "Supports"), "section.plane-z", Change::Supports, app.analysis.supports, loaded, l.text("Tekent bij elke oplegging haar symbool en bij elk scharnierend staafeinde een cirkel.", "Draws a symbol at every support and a circle at every released member end."));
             add("analysis.loads", l.text("Belastingen", "Loads"), "file.import", Change::Loads, app.analysis.loads.is_some(), cases > 0, l.text("Tekent de belastingen van een belastinggeval als pijlen.", "Draws the loads of a load case as arrows."));
             add("analysis.case-next", l.text("Volgend geval", "Next case"), "page.next", Change::Case(true), false, cases > 1, l.text("Toont de belastingen van het volgende belastinggeval.", "Shows the loads of the next load case."));
             add("analysis.case-previous", l.text("Vorig geval", "Previous case"), "page.previous", Change::Case(false), false, cases > 1, l.text("Toont de belastingen van het vorige belastinggeval.", "Shows the loads of the previous load case."));
             add("analysis.set-next", l.text("Volgend resultaat", "Next result set"), "page.next", Change::Set(true), false, sets > 1, l.text("Toont de resultaten van het volgende belastinggeval of de volgende combinatie.", "Shows the results of the next load case or combination."));
+            add("analysis.set-previous", l.text("Vorig resultaat", "Previous result set"), "page.previous", Change::Set(false), false, sets > 1, l.text("Toont de resultaten van het vorige belastinggeval of de vorige combinatie.", "Shows the results of the previous load case or combination."));
             add("analysis.larger", l.text("Groter", "Larger"), "view.zoom-in", Change::Scale(true), false, loaded, l.text("Tekent de lijnen en pijlen groter.", "Draws the diagrams and arrows larger."));
             add("analysis.smaller", l.text("Kleiner", "Smaller"), "view.zoom-out", Change::Scale(false), false, loaded, l.text("Tekent de lijnen en pijlen kleiner.", "Draws the diagrams and arrows smaller."));
         }
@@ -2296,7 +2298,7 @@ impl Studio {
             RibbonPage::Analysis => vec![
                 (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
                 (l.text("Snedekrachten", "Internal forces"), vec![smalls(&["analysis.n", "analysis.vy", "analysis.vz"]), smalls(&["analysis.mx", "analysis.my", "analysis.mz"])]),
-                (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), smalls(&["analysis.set-next"])]),
+                (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
             ],

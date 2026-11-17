@@ -74,6 +74,8 @@ mod amf;
 mod ifcx;
 mod step;
 mod e2k;
+mod ifcfem;
+mod ifcfem_project;
 mod sam;
 mod rhino;
 mod blend;
@@ -291,7 +293,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &rhino::RhinoLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -336,7 +338,7 @@ pub fn featured_formats() -> (Vec<&'static str>, usize) {
 }
 
 /// Where the desktop app is downloaded.
-pub const DESKTOP_DOWNLOAD: &str = "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest";
+pub const DESKTOP_DOWNLOAD: &str = "https://github.com/OpenAEC-Foundation/open-bim-suite/releases/latest";
 
 /// Formats the desktop app opens but the browser build cannot (their readers open the file in
 /// parts from disk or load a native library): the format name and its extensions.

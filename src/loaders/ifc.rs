@@ -165,6 +165,45 @@ impl IfcLoader {
             }
             layer.props.push((id, serde_json::to_string(&props).map_err(|e| format!("IFC properties: {e}"))?));
         }
+        // the curves of annotations (IfcAnnotation: Rhino's curves, dimensions and leaders, plan
+        // symbols): lines of their element, beside its triangles where it has them
+        let with_props: BTreeSet<u64> = layers.values().flat_map(|l| l.props.iter().map(|p| p.0)).collect();
+        for curve in annotation_curves(header, result.metadata.length_unit_scale.unwrap_or(1.0)) {
+            let name = curve.layer.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "IfcAnnotation".to_string());
+            let layer = layers.entry((None, name.clone())).or_insert_with(|| Layer { name, color: [0.15, 0.15, 0.15], colors: Some(Vec::new()), ..Layer::default() });
+            let rgba = curve.color.unwrap_or([38, 38, 38, 255]);
+            let first = u32::try_from(layer.lines.len()).map_err(|_| "IFC: layer exceeds the line index limit")?;
+            for polyline in &curve.polylines {
+                let base = u32::try_from(layer.vertex_count()).map_err(|_| "IFC: layer exceeds the mesh index limit")?;
+                for p in polyline {
+                    let w = *p;
+                    layer.positions.extend((0..3).map(|k| (w[k] - anchor[k]) as f32));
+                    layer.normals.extend([0.0; 3]);
+                }
+                if let Some(colors) = layer.colors.as_mut() {
+                    colors.extend(std::iter::repeat_n(rgba, polyline.len()));
+                }
+                layer.lines.extend((0..polyline.len() as u32 - 1).flat_map(|k| [base + k, base + k + 1]));
+            }
+            let count = u32::try_from(layer.lines.len()).map_err(|_| "IFC: layer exceeds the line index limit")? - first;
+            if count == 0 {
+                continue;
+            }
+            let id = u64::from(curve.id);
+            layer.line_elements.push((id, first, count));
+            if !with_props.contains(&id) {
+                let mut props = std::collections::HashMap::new();
+                props.insert("IfcType".to_string(), "IfcAnnotation".to_string());
+                props.insert("ExpressId".to_string(), curve.id.to_string());
+                if let Some(name) = curve.name {
+                    props.insert("Name".into(), name);
+                }
+                if let Some(global_id) = curve.global_id {
+                    props.insert("GlobalId".into(), global_id);
+                }
+                layer.props.push((id, serde_json::to_string(&props).map_err(|e| format!("IFC properties: {e}"))?));
+            }
+        }
         if layers.is_empty() && !bare {
             return Err(format!("IFC: no supported geometry found ({})", result.metadata.schema_version));
         }
@@ -326,6 +365,119 @@ fn rd_to_wgs84(x: f64, y: f64) -> (f64, f64) {
 /// The axes of the file's grids (`IfcGrid`): each its tag and the two ends of its curve in the
 /// IFC world (metres), the grid's placement applied. An axis is a polyline (first to last point)
 /// or a line trimmed by points or parameters; other curves are left out.
+/// The curves of an `IfcAnnotation`: its polylines (IFC world metres, as the grids), name, id,
+/// presentation layer and colour (its curve style), from the `IfcIndexedPolyCurve` and
+/// `IfcPolyline` items of its representations, placed by its object placement.
+struct AnnotationCurves {
+    id: u32,
+    name: Option<String>,
+    global_id: Option<String>,
+    layer: Option<String>,
+    color: Option<[u8; 4]>,
+    polylines: Vec<Vec<[f64; 3]>>,
+}
+
+/// At most this many points of annotation curves are read from a file.
+const MAX_CURVE_POINTS: usize = 10_000_000;
+
+fn annotation_curves(content: &[u8], scale: f64) -> Vec<AnnotationCurves> {
+    use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner, IfcType};
+    let mut scanner = EntityScanner::new(content);
+    let mut decoder = EntityDecoder::new(content);
+    // first the presentation layers and curve colours, by the representations and items
+    let mut layer_of = std::collections::HashMap::<u32, String>::new();
+    let mut color_of = std::collections::HashMap::<u32, [u8; 4]>::new();
+    let mut annotations = Vec::new();
+    while let Some((id, keyword, start, end)) = scanner.next_entity() {
+        if keyword.eq_ignore_ascii_case("IFCPRESENTATIONLAYERASSIGNMENT") {
+            let Ok(e) = decoder.decode_at(start, end) else { continue };
+            let name = e.get_string(0).map(|s| decode_ifc_string(s).to_string()).unwrap_or_default();
+            for item in e.get_refs(2).unwrap_or_default() {
+                layer_of.insert(item, name.clone());
+            }
+        } else if keyword.eq_ignore_ascii_case("IFCSTYLEDITEM") {
+            let Ok(e) = decoder.decode_at(start, end) else { continue };
+            let Some(item) = e.get_ref(0) else { continue };
+            for style in e.get_refs(1).unwrap_or_default() {
+                if let Some(c) = curve_colour(&mut decoder, style) {
+                    color_of.insert(item, c);
+                }
+            }
+        } else if keyword.eq_ignore_ascii_case("IFCANNOTATION") {
+            annotations.push((id, start, end));
+        }
+    }
+    let mut out = Vec::new();
+    let mut budget = MAX_CURVE_POINTS;
+    for (id, start, end) in annotations {
+        let Ok(a) = decoder.decode_at(start, end) else { continue };
+        let placement = match ifc_lite_geometry::placement::resolve_object_placement(&a, &mut decoder) {
+            Ok(Some(m)) => glam::DMat4::from_cols_slice(m.as_slice()),
+            Ok(None) => glam::DMat4::IDENTITY,
+            Err(_) => continue,
+        };
+        let place = |p: [f64; 3]| (placement.transform_point3(glam::DVec3::from_array(p)) * scale).to_array();
+        let mut curves = AnnotationCurves {
+            id,
+            name: a.get_string(2).map(|s| decode_ifc_string(s).to_string()).filter(|s| !s.is_empty()),
+            global_id: a.get_string(0).map(|s| s.to_string()),
+            layer: None,
+            color: None,
+            polylines: Vec::new(),
+        };
+        let Some(shape) = a.get_ref(6).and_then(|r| decoder.decode_by_id(r).ok()) else { continue };
+        for rep_id in shape.get_refs(2).unwrap_or_default() {
+            let Ok(rep) = decoder.decode_by_id(rep_id) else { continue };
+            if curves.layer.is_none() {
+                curves.layer = layer_of.get(&rep_id).cloned();
+            }
+            for item_id in rep.get_refs(3).unwrap_or_default() {
+                let Ok(item) = decoder.decode_by_id(item_id) else { continue };
+                let points: Vec<[f64; 3]> = match item.ifc_type {
+                    IfcType::IfcIndexedPolyCurve => {
+                        let Some(list) = item.get_ref(0).and_then(|r| decoder.decode_by_id(r).ok()) else { continue };
+                        list.get_list(0).unwrap_or_default().iter().filter_map(|v| coords(v.as_list()?)).collect()
+                    }
+                    IfcType::IfcPolyline => item.get_refs(0).unwrap_or_default().into_iter().filter_map(|r| decoder.get_cartesian_point_fast(r)).map(|(x, y, z)| [x, y, z]).collect(),
+                    _ => continue,
+                };
+                if points.len() < 2 || points.len() > budget {
+                    continue;
+                }
+                budget -= points.len();
+                if curves.color.is_none() {
+                    curves.color = color_of.get(&item_id).copied();
+                }
+                curves.polylines.push(points.into_iter().map(place).collect());
+            }
+        }
+        if !curves.polylines.is_empty() {
+            out.push(curves);
+        }
+    }
+    out
+}
+
+/// A point of a coordinate list: two or three numbers.
+fn coords(c: &[ifc_lite_core::AttributeValue]) -> Option<[f64; 3]> {
+    Some([c.first()?.as_float()?, c.get(1)?.as_float()?, c.get(2).and_then(|v| v.as_float()).unwrap_or(0.0)])
+}
+
+/// The colour of an `IfcCurveStyle` (or of one inside a style assignment), as sRGB.
+fn curve_colour(decoder: &mut ifc_lite_core::EntityDecoder, style: u32) -> Option<[u8; 4]> {
+    use ifc_lite_core::IfcType;
+    let s = decoder.decode_by_id(style).ok()?;
+    match s.ifc_type {
+        IfcType::IfcCurveStyle => {
+            let c = decoder.decode_by_id(s.get_ref(3)?).ok()?;
+            let v = |k: usize| (c.get_float(k).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+            Some([v(1), v(2), v(3), 255])
+        }
+        IfcType::IfcPresentationStyleAssignment => s.get_refs(0)?.into_iter().find_map(|r| curve_colour(decoder, r)),
+        _ => None,
+    }
+}
+
 fn grid_lines(content: &[u8], scale: f64) -> Vec<(String, [f64; 3], [f64; 3])> {
     use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner};
     let mut scanner = EntityScanner::new(content);

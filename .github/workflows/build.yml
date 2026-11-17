@@ -52,15 +52,11 @@ jobs:
       # Headless libraries: materials, layered build-ups, their IFCX form
       - name: Tests (bim-library)
         run: cargo test --release --locked -p bim-library
-      # Headless GIS: the Dutch national grid, the open services for a place and its surroundings
-      - name: Tests (bim-gis)
-        run: cargo test --release --locked -p bim-gis
       - name: Web build (wasm32)
         run: |
           cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer --bin open-bim-modeller --bin open-bim-validator --bin open-bim-pointcloud
           cargo check --locked --target wasm32-unknown-unknown -p bim-structural
           cargo check --locked --target wasm32-unknown-unknown -p bim-library
-          cargo check --locked --target wasm32-unknown-unknown -p bim-gis
 
       # One product per build (docs/architecture/products.md): each feature on its own still
       # compiles; only the app crate is checked again

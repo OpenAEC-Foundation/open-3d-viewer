@@ -397,6 +397,7 @@ impl<'f> Scene<'f> {
 
     /// Adds meshes or points to the layer of `layer`; the first part drawn carries the props.
     fn draw(&mut self, geometry: &Geometry<'_>, layer: i32, xform: DMat4, color: Rgba, id: u64, props: &mut Option<String>) -> bool {
+        let color = ink(geometry, color);
         match geometry {
             Geometry::Meshes(meshes, _) => {
                 // the meshes within the triangle and vertex limits
@@ -556,6 +557,21 @@ fn display(c: Rgba) -> Rgba {
         [g[0], g[1], g[2], c[3]]
     } else {
         c
+    }
+}
+
+/// Curves, texts, dimensions and leaders in black (Rhino's default colour) draw dark, as ink,
+/// rather than in the viewer's grey for surfaces, which hardly shows lines and letters.
+fn ink(geometry: &Geometry<'_>, color: Rgba) -> Rgba {
+    let drafting = match geometry {
+        Geometry::Lines(..) | Geometry::Drawing { .. } => true,
+        Geometry::Meshes(_, kind) => *kind == "Text",
+        _ => false,
+    };
+    if drafting && color[..3] == display([0, 0, 0, 255])[..3] {
+        [38, 38, 38, color[3]]
+    } else {
+        color
     }
 }
 

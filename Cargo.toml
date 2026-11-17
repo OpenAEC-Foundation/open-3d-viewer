@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-gis"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-docs", "crates/bim-gis"]
 
 [lib]
 name = "open_3d_viewer"
@@ -70,6 +70,8 @@ bim-structural = { path = "crates/bim-structural" }
 bim-core = { path = "crates/bim-core" }
 # The modeller's libraries: materials, layered build-ups, profiles and linear types; headless, in this workspace
 bim-library = { path = "crates/bim-library" }
+# Docs: the documents of a project in a folder a sync tool keeps the same for everyone; headless, in this workspace
+bim-docs = { path = "crates/bim-docs" }
 # GIS: the Dutch national grid and the open services for a place and its surroundings; headless, in this workspace
 bim-gis = { path = "crates/bim-gis" }
 bytemuck = { version = "1", features = ["derive"] }
@@ -108,10 +110,12 @@ roxmltree = "0.20"
 opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762969f3897e67e1801a2199445b6cf83b5d", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "927475e81537c66ac9b8d3cff2ed2abef504d9be" }
+tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "0d5e384b552aabdfadbb8da2c4518b36daf09de4" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
+# Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
+vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
-threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "51c267f5475946bfa87e8d4f2be779b2c6139d83", default-features = false }
+threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -151,6 +155,8 @@ rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a
 rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
 rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
+# Docs shows when a file was changed in the time of this computer (MIT OR Apache-2.0; already built for bim-bcf)
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The BIM Validator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
 bim-bcf = { path = "crates/bim-bcf" }
 bim-validator-core = { path = "crates/bim-validator-core" }
@@ -209,4 +215,4 @@ opt-level = 2
 
 [dev-dependencies]
 # The 3dm writer of the Rhino tests
-threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "51c267f5475946bfa87e8d4f2be779b2c6139d83" }
+threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f" }

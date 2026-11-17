@@ -28,6 +28,7 @@ mod reports;
 mod layers;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
+mod docs;
 mod drafts;
 pub mod drawn_props;
 mod edit;
@@ -60,6 +61,7 @@ mod structural;
 mod underlays;
 mod views_in_3d;
 
+pub use docs::{DocsMessage, DocsTab};
 pub use ifc::{IfcTab, IfcView};
 pub use marks::DrawKind;
 #[cfg(test)]
@@ -266,6 +268,9 @@ pub struct App {
     /// The lines the 3D view draws over the model, with their colours: the underlays' and the
     /// views' in 3D (world), made again when they change.
     overlay_lines: Arc<Vec<crate::views3d::Colored>>,
+    /// The filled triangles drawn with them: the arrow heads, supports and deformed profiles of
+    /// a structural analysis model.
+    overlay_faces: Arc<Vec<crate::structural::diagrams::Face>>,
     /// The cut faces of the section box and plane in their hatches, and what they were made from.
     cut_faces: Arc<crate::caps::CutFaces>,
     cut_faces_key: Option<caps::CutFacesKey>,
@@ -346,6 +351,8 @@ pub struct App {
     pub schedule_scroll: (f32, f32),
     /// The IFC tab: how the model's IFCX file is built up.
     pub ifc: IfcTab,
+    /// Docs: the documents of the project folder.
+    pub docs: DocsTab,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -496,6 +503,8 @@ pub enum Message {
     ExplorerTab(ExplorerTab),
     /// The Library tab.
     Library(library::LibraryMessage),
+    /// Docs: the documents of the project folder.
+    Docs(docs::DocsMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -939,6 +948,7 @@ impl Default for App {
             cuts: Default::default(),
             underlays: Vec::new(),
             overlay_lines: Arc::new(Vec::new()),
+            overlay_faces: Arc::new(Vec::new()),
             cut_faces: Default::default(),
             cut_faces_key: None,
             cut_faces_running: false,
@@ -982,6 +992,7 @@ impl Default for App {
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
             ifc: IfcTab::default(),
+            docs: DocsTab::default(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -1828,7 +1839,9 @@ impl App {
                     return Task::batch([drawings, self.open(next, true)]);
                 }
                 self.remote_loaded();
-                return Task::batch([drawings, self.compute_schedules(), self.shot_after_delay()]);
+                // the register of the project folder, so the elements say which documents are about them
+                let register = self.docs_register();
+                return Task::batch([drawings, self.compute_schedules(), self.shot_after_delay(), register]);
             }
             Message::Loaded(Err(e)) => {
                 // one of several files does not read: the others still come
@@ -2123,6 +2136,7 @@ impl App {
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
+            Message::Docs(message) => return self.docs_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -2266,6 +2280,7 @@ impl App {
             Message::AnalysisScaleDone => self.analysis_scale = None,
             Message::Analysis(change) => {
                 self.analysis_scale = None;
+                let kinds = (self.analysis.hide_nodes, self.analysis.hide_members);
                 let doc = self.model.as_ref().and_then(|m| m.structural.first()).map(|p| p.doc.clone());
                 let (cases, sets) = doc.as_ref().map_or((0, 0), |d| (d.load_cases.len(), d.results.len()));
                 self.analysis.apply(change, cases, sets);
@@ -2279,6 +2294,9 @@ impl App {
                     }
                 }
                 self.refresh_overlay();
+                if kinds != (self.analysis.hide_nodes, self.analysis.hide_members) {
+                    self.refresh_structural_visibility();
+                }
             }
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
@@ -3556,6 +3574,10 @@ impl App {
     /// selection, the section box, then file, geometry and bounds. Labels and values share the
     /// width 2 : 3 and wrap, so long words never run into each other.
     fn properties_tab(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        // Docs shown: the project folder and the picked document, also without a model
+        if let Some(docs) = self.docs_properties(p, l) {
+            return docs;
+        }
         let Some(model) = &self.model else {
             return text(l.text("Open een model om de eigenschappen te zien", "Open a model to see its properties"))
                 .size(12)
@@ -3589,8 +3611,9 @@ impl App {
         let picked_entry = picked;
         let picked = picked.is_some();
         let drawn = self.drawn_properties(p, l);
-        if let Some(analysis) = self.analysis_properties(p, l) {
-            content = content.push(section(l.text("Rekenresultaten", "Analysis"))).push(analysis).push(rule::horizontal(1));
+        if let Some((visibility, results)) = self.analysis_properties(p, l) {
+            content = content.push(section(l.text("Zichtbaarheid", "Visibility"))).push(visibility).push(rule::horizontal(1));
+            content = content.push(section(l.text("Resultaten", "Results"))).push(results).push(rule::horizontal(1));
         }
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() && drawn.is_none() {
             if let Some(view) = self.view_properties(p, l) {
@@ -3700,6 +3723,10 @@ impl App {
                 content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
             }
             content = content.push(rule::horizontal(1));
+            // the documents of the project folder that are about this element (Docs)
+            if let Some(documents) = element.and_then(|id| self.docs_of_element(p, l, id)) {
+                content = content.push(section(l.text("Documenten", "Documents"))).push(documents).push(rule::horizontal(1));
+            }
         }
 
         // the picked grid line
@@ -3984,6 +4011,7 @@ impl App {
             structural_shown: self.structural.shown_marks.as_ref(),
             datum: Some(segments),
             overlay: self.overlay_lines.clone(),
+            faces: self.overlay_faces.clone(),
             caps: self.cut_faces.clone(),
         })
             .width(Fill)

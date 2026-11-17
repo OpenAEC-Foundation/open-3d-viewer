@@ -171,6 +171,7 @@ impl App {
         self.active_schedule = None;
         self.active_sheet = None; self.active_draft = None;
         self.active_doc_sheet = None;
+        self.docs.shown = false;
         self.load_view(None);
         self.ifc.shown = true;
     }

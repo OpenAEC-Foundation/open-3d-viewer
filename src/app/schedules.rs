@@ -110,6 +110,7 @@ impl App {
             self.active_sheet = None; self.active_draft = None;
             self.active_doc_sheet = None;
             self.ifc.shown = false;
+            self.docs.shown = false;
             self.load_view(None);
         }
         if self.active_schedule == i {
@@ -177,6 +178,10 @@ impl App {
     /// The workspace: the shown sheet, or the viewport with the table of the shown schedule
     /// under it.
     pub fn workspace_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        // Docs: the project folder fills the workspace, also without a model
+        if self.docs.shown {
+            return self.docs_page(p, l);
+        }
         if let Some(sheet) = self.doc_sheet_workspace(p, l) {
             return sheet;
         }

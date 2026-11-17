@@ -346,6 +346,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bim-docs"
+version = "0.1.0"
+dependencies = [
+ "ifcx-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bim-gis"
 version = "0.1.0"
 dependencies = [
@@ -3749,6 +3758,7 @@ version = "2026.47.1"
 dependencies = [
  "bim-bcf",
  "bim-core",
+ "bim-docs",
  "bim-gis",
  "bim-library",
  "bim-structural",
@@ -3757,6 +3767,7 @@ dependencies = [
  "cadmpeg-codec-step",
  "cadmpeg-ir",
  "cadmpeg-tessellate",
+ "chrono",
  "console_error_panic_hook",
  "e57",
  "earcutr",
@@ -3805,6 +3816,7 @@ dependencies = [
  "tobj",
  "ttf-parser",
  "ureq",
+ "vwx-read",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -5435,7 +5447,7 @@ dependencies = [
 [[package]]
 name = "tekla-core"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=927475e81537c66ac9b8d3cff2ed2abef504d9be#927475e81537c66ac9b8d3cff2ed2abef504d9be"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=0d5e384b552aabdfadbb8da2c4518b36daf09de4#0d5e384b552aabdfadbb8da2c4518b36daf09de4"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5444,7 +5456,7 @@ dependencies = [
 [[package]]
 name = "tekla-model"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=927475e81537c66ac9b8d3cff2ed2abef504d9be#927475e81537c66ac9b8d3cff2ed2abef504d9be"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=0d5e384b552aabdfadbb8da2c4518b36daf09de4#0d5e384b552aabdfadbb8da2c4518b36daf09de4"
 dependencies = [
  "serde",
 ]
@@ -5452,7 +5464,7 @@ dependencies = [
 [[package]]
 name = "tekla-read"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=927475e81537c66ac9b8d3cff2ed2abef504d9be#927475e81537c66ac9b8d3cff2ed2abef504d9be"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=0d5e384b552aabdfadbb8da2c4518b36daf09de4#0d5e384b552aabdfadbb8da2c4518b36daf09de4"
 dependencies = [
  "earcutr",
  "glam 0.30.10",
@@ -5526,7 +5538,7 @@ dependencies = [
 [[package]]
 name = "threedm-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=51c267f5475946bfa87e8d4f2be779b2c6139d83#51c267f5475946bfa87e8d4f2be779b2c6139d83"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=c03d1aa34aa562600e8c3433d29a9f809a7aad5f#c03d1aa34aa562600e8c3433d29a9f809a7aad5f"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5535,7 +5547,7 @@ dependencies = [
 [[package]]
 name = "threedm-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=51c267f5475946bfa87e8d4f2be779b2c6139d83#51c267f5475946bfa87e8d4f2be779b2c6139d83"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=c03d1aa34aa562600e8c3433d29a9f809a7aad5f#c03d1aa34aa562600e8c3433d29a9f809a7aad5f"
 dependencies = [
  "glam 0.30.10",
  "threedm-core",
@@ -5544,7 +5556,7 @@ dependencies = [
 [[package]]
 name = "threedm-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=51c267f5475946bfa87e8d4f2be779b2c6139d83#51c267f5475946bfa87e8d4f2be779b2c6139d83"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=c03d1aa34aa562600e8c3433d29a9f809a7aad5f#c03d1aa34aa562600e8c3433d29a9f809a7aad5f"
 dependencies = [
  "earcutr",
  "glam 0.30.10",
@@ -5973,6 +5985,43 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "vwx-core"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=624610a73f169812dd7bee90aed74e0b13eddcb1#624610a73f169812dd7bee90aed74e0b13eddcb1"
+dependencies = [
+ "flate2",
+ "serde",
+]
+
+[[package]]
+name = "vwx-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=624610a73f169812dd7bee90aed74e0b13eddcb1#624610a73f169812dd7bee90aed74e0b13eddcb1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "vwx-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=624610a73f169812dd7bee90aed74e0b13eddcb1#624610a73f169812dd7bee90aed74e0b13eddcb1"
+dependencies = [
+ "serde_json",
+ "vwx-core",
+ "vwx-model",
+ "vwx-xt",
+]
+
+[[package]]
+name = "vwx-xt"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=624610a73f169812dd7bee90aed74e0b13eddcb1#624610a73f169812dd7bee90aed74e0b13eddcb1"
+dependencies = [
+ "earcutr",
+ "spade",
+]
 
 [[package]]
 name = "walkdir"

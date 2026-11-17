@@ -15,12 +15,12 @@
 //! Units are converted to metres; Rhino is Z up; a model far from zero (survey coordinates)
 //! moves to a local origin, kept in the project information. Point clouds are thinned out while
 //! drawing; blocks, meshes and points are drawn up to limits, so that a damaged or hostile file
-//! cannot exhaust memory or run for ever. What is left out (lights, hidden objects, objects on layouts) is
-//! counted in the project information. Clipping planes are drawn; the one that clips the
+//! cannot exhaust memory or run for ever. What is left out (lights, objects on layouts) is
+//! counted in the project information; hidden objects go to hidden layers of their own. Clipping planes are drawn; the one that clips the
 //! perspective view is the section the model opens with.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
-use crate::model::{Layer, ProjectData};
+use crate::model::{Layer, ProjectData, SavedView, ViewCamera, ViewKind};
 use crate::section::SectionPlane;
 use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -46,13 +46,13 @@ impl Loader for RhinoLoader {
         let data = source.read()?;
         let file = threedm_read::read_with(&data, &threedm_read::Options { font: Some(crate::INTER_REGULAR) })?;
         progress.set(Phase::Convert);
-        let (layers, info, section) = convert(&file);
+        let (layers, info, section, views) = convert(&file);
         if layers.iter().all(|l| l.indices.is_empty() && l.lines.is_empty() && !(l.points && !l.positions.is_empty())) {
             // say why, e.g. polysurfaces saved without their render meshes
             let left_out = info.iter().find(|(k, _)| k == "Rhino objects left out").map_or("no objects", |(_, v)| v.as_str());
             return Err(format!("{}: nothing to draw in this Rhino file ({left_out})", source.name()));
         }
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, section, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, ..ProjectData::default() } })
     }
 }
 
@@ -85,8 +85,13 @@ struct Scene<'f> {
     blocks: HashMap<Uuid, usize>,
     objects: HashMap<Uuid, usize>,
     /// Viewer layers: meshes and points per Rhino layer (`None`: an object without a layer).
-    meshes: BTreeMap<Option<usize>, Layer>,
-    points: BTreeMap<Option<usize>, Layer>,
+    /// The viewer's layers by Rhino layer, and whether they hold its hidden objects.
+    meshes: BTreeMap<(Option<usize>, bool), Layer>,
+    points: BTreeMap<(Option<usize>, bool), Layer>,
+    /// Drawing hidden objects: they go to hidden layers of their own.
+    hiding: bool,
+    /// Hidden objects drawn (on those layers).
+    hidden_objects: usize,
     next_id: u64,
     /// The block definitions being drawn: one met again contains itself.
     expanding: HashSet<Uuid>,
@@ -173,6 +178,8 @@ impl<'f> Scene<'f> {
             blocks: file.blocks.iter().enumerate().map(|(k, b)| (b.id, k)).collect(),
             objects: file.objects.iter().enumerate().filter(|(_, o)| !o.attributes.id.is_nil()).map(|(k, o)| (o.attributes.id, k)).collect(),
             meshes: BTreeMap::new(),
+            hiding: false,
+            hidden_objects: 0,
             points: BTreeMap::new(),
             next_id: 1,
             expanding: HashSet::new(),
@@ -229,12 +236,12 @@ impl<'f> Scene<'f> {
     }
 
     fn viewer_layer(&mut self, layer: i32, points: bool) -> &mut Layer {
-        let key = self.layers.get(&layer).copied();
+        let key = (self.layers.get(&layer).copied(), self.hiding);
         if (if points { &self.points } else { &self.meshes }).contains_key(&key) {
             let map = if points { &mut self.points } else { &mut self.meshes };
             return map.get_mut(&key).unwrap();
         }
-        let (name, color, hidden) = match key {
+        let (name, color, hidden) = match key.0 {
             Some(k) => {
                 let color = display(opaque(self.file.layers[k].color));
                 let (path, shown) = self.lineage(k).clone();
@@ -243,10 +250,11 @@ impl<'f> Scene<'f> {
             None => ("Default".to_string(), display([0, 0, 0, 255]), false),
         };
         let map = if points { &mut self.points } else { &mut self.meshes };
+        let name = if key.1 { format!("{name} (hidden objects)") } else { name };
         map.entry(key).or_insert_with(|| Layer {
             name: if points { format!("{name} (points)") } else { name },
             color: [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0],
-            hidden,
+            hidden: hidden || key.1,
             points,
             colors: Some(Vec::new()),
             ..Layer::default()
@@ -342,7 +350,14 @@ impl<'f> Scene<'f> {
     fn run(&mut self) {
         let root = DMat4::from_scale(DVec3::splat(self.file.meters));
         let file = self.file;
-        for object in &file.objects {
+        if !file.lights.is_empty() {
+            self.skipped.insert("lights", file.lights.len());
+        }
+        // Hidden objects use the remaining drawing budget and do not choose the origin before
+        // visible geometry, even when they occur first in the file.
+        let objects = file.objects.iter().filter(|o| o.attributes.visible && o.attributes.mode != 1)
+            .chain(file.objects.iter().filter(|o| !o.attributes.visible || o.attributes.mode == 1));
+        for object in objects {
             let a = &object.attributes;
             if a.mode == 3 {
                 continue; // block definition geometry, drawn by its instances
@@ -351,10 +366,9 @@ impl<'f> Scene<'f> {
                 *self.skipped.entry("objects on layouts").or_default() += 1;
                 continue;
             }
-            if !a.visible || a.mode == 1 {
-                *self.skipped.entry("hidden objects").or_default() += 1;
-                continue;
-            }
+            // hidden objects (Hide, or hidden by mode) are read too, onto hidden layers of their
+            // own, so that they can be shown
+            self.hiding = !a.visible || a.mode == 1;
             let id = self.next_id;
             self.next_id += 1;
             match &object.geometry {
@@ -371,6 +385,7 @@ impl<'f> Scene<'f> {
                         *self.skipped.entry("block instances cut short (too many parts)").or_default() += 1;
                     }
                     *if drawn { self.drawn.entry("block instances") } else { self.skipped.entry("empty block instances") }.or_default() += 1;
+                    self.hidden_objects += usize::from(drawn && self.hiding);
                 }
                 geometry => {
                     let kind = match geometry {
@@ -389,6 +404,7 @@ impl<'f> Scene<'f> {
                     let mut first = Some(props);
                     if self.draw(geometry, a.layer, root, color, id, &mut first) {
                         *self.drawn.entry(plural(kind)).or_default() += 1;
+                        self.hidden_objects += usize::from(self.hiding);
                     }
                 }
             }
@@ -565,8 +581,37 @@ impl<'f> Scene<'f> {
         }
     }
 
-    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>) {
-        let mut layers: Vec<Layer> = std::mem::take(&mut self.meshes).into_values().chain(std::mem::take(&mut self.points).into_values()).collect();
+    /// The views saved by name, as saved 3D views with their camera (display coordinates).
+    fn views(&self) -> Vec<SavedView> {
+        let origin = self.origin.unwrap_or(DVec3::ZERO);
+        self.file
+            .named_views
+            .iter()
+            .filter(|v| v.direction != DVec3::ZERO && v.direction.is_finite() && v.location.is_finite())
+            .map(|v| SavedView {
+                name: v.name.clone(),
+                kind: ViewKind::ThreeD,
+                camera: Some(ViewCamera {
+                    eye: (v.location * self.file.meters - origin).as_vec3().to_array(),
+                    forward: v.direction.as_vec3().to_array(),
+                    perspective: v.perspective,
+                    fov_y: (v.perspective && v.fov_y.is_finite() && v.fov_y > 0.0).then_some(v.fov_y as f32),
+                }),
+                clip: None,
+                plan: None,
+                level: None,
+                folder: Vec::new(),
+                style: None,
+                drawing: None,
+            })
+            .collect()
+    }
+
+    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>) {
+        // the layers of hidden objects last
+        let (meshes, points) = (std::mem::take(&mut self.meshes), std::mem::take(&mut self.points));
+        let (shown, hidden): (Vec<_>, Vec<_>) = meshes.into_iter().chain(points).partition(|((_, hiding), _)| !hiding);
+        let mut layers: Vec<Layer> = shown.into_iter().chain(hidden).map(|(_, l)| l).collect();
         for layer in &mut layers {
             // one colour for the whole layer: no vertex colours
             let base = [0, 1, 2].map(|k| (layer.color[k] * 255.0).round() as u8);
@@ -599,6 +644,10 @@ impl<'f> Scene<'f> {
         if !file.damaged.is_empty() {
             info.push(("Rhino unreadable records".into(), list(&file.damaged)));
         }
+        if self.hidden_objects > 0 {
+            info.push(("Rhino hidden objects".into(), format!("{} (on hidden layers of their own)", self.hidden_objects)));
+        }
+        let views = self.views();
         let (section, clipping) = self.section();
         if clipping > 0 {
             let how = match (section.is_some(), clipping) {
@@ -608,7 +657,7 @@ impl<'f> Scene<'f> {
             };
             info.push(("Rhino clipping planes of the perspective view".into(), how));
         }
-        (layers, info, section)
+        (layers, info, section, views)
     }
 }
 
@@ -728,7 +777,7 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
     }
 }
 
-fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>) {
+fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>) {
     let mut scene = Scene::new(file);
     scene.run();
     scene.finish()
@@ -774,6 +823,7 @@ mod tests {
             &[0, 0, 255, 0],
             &[0; 16],
             &f64s(&[1.0, 0.0, 0.0, 0.5]),
+            &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &i32b(0)),
         ]);
         let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &glass), &[]))]);
         let model_attributes = w.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK, 1, 0, &cat(&[&[0], &[1], &id(40).0, &[0], &[0], &[1], &wstr("Chair")]));
@@ -826,7 +876,8 @@ mod tests {
         let (model, info) = load("house.3DM", rhino7());
         assert_eq!(model.format, "Rhino");
         let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["Walls", "Walls::Glass", "Hidden::Off parent child", "Walls (points)"]);
+        assert_eq!(names, ["Walls", "Walls::Glass", "Hidden::Off parent child", "Walls (points)", "Walls (hidden objects)"]);
+        assert!(model.layers[4].hidden);
         let walls = &model.layers[0];
         assert_eq!(walls.color, [200.0 / 255.0, 0.0, 0.0]);
         assert!(!walls.hidden);
@@ -863,8 +914,8 @@ mod tests {
         assert_eq!(points.point_count(), 3);
         assert_eq!(points.colors.as_ref().unwrap()[1], [0, 255, 0, 255]);
         assert_eq!(points.positions[2], -1.0);
-        // elements: slab, polysurface, extrusion, block instance, hidden-layer mesh
-        assert_eq!(model.props.len(), 5);
+        // elements: slab, polysurface, extrusion, block instance, hidden-layer mesh, hidden object
+        assert_eq!(model.props.len(), 6);
         let slab = model.props.values().find(|p| p.contains("\"Slab\"")).expect("slab props");
         let slab: serde_json::Value = serde_json::from_str(slab).unwrap();
         assert_eq!(slab["Type"], "Mesh");
@@ -879,8 +930,8 @@ mod tests {
         assert_eq!(entry(&info, "Rhino file version"), "Rhino 7 (archive version 70)");
         assert_eq!(entry(&info, "Rhino application"), "Rhinoceros 7");
         assert_eq!(entry(&info, "Rhino units"), "millimetres (converted to metres)");
-        assert_eq!(entry(&info, "Rhino objects drawn"), "1 block instances, 1 extrusions, 2 meshes, 1 point clouds, 1 polysurfaces");
-        assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects that could not be read, 1 curves, 1 hidden objects, 1 objects on layouts");
+        assert_eq!(entry(&info, "Rhino objects drawn"), "1 block instances, 1 extrusions, 3 meshes, 1 point clouds, 1 polysurfaces");
+        assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects that could not be read, 1 curves, 1 objects on layouts");
     }
 
     /// A Rhino 4 file: 4-byte chunk lengths, the attributes layout before Rhino 5, an
@@ -890,7 +941,7 @@ mod tests {
     fn rhino4_layout() {
         let w = W { big: false };
         let layers = w.table(TCODE_LAYER_TABLE, &[w.layer(0, "Default", [0, 0, 0, 0], true, id(1), Uuid::default(), 0)]);
-        let material = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&id(9).0, &i32b(0), &wstr("Oak"), &[0; 16], &[0; 4], &[150, 100, 50, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.0])]));
+        let material = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&id(9).0, &i32b(0), &wstr("Oak"), &[0; 16], &[0; 4], &[150, 100, 50, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.0]), &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &i32b(0))]));
         let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &cat(&[&[0x20], &material]), &[]))]);
         // a 1.x mesh: arrays of points, normals, texture coordinates, curvatures and colours
         let mut mesh = vec![0x10];
@@ -1062,7 +1113,7 @@ mod tests {
             w.layer(2, "Green", [0, 200, 0, 0], true, id(3), Uuid::default(), -1),
             w.layer(3, "Glass", [100, 100, 100, 0], true, id(4), Uuid::default(), 0),
         ]);
-        let glass = cat(&[&w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&0x0Cu32.to_le_bytes(), &i32b(0), &wstr("Glass")])), &[0; 16], &[0; 4], &[0, 0, 255, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.5])]);
+        let glass = cat(&[&w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&0x0Cu32.to_le_bytes(), &i32b(0), &wstr("Glass")])), &[0; 16], &[0; 4], &[0, 0, 255, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.5]), &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &i32b(0))]);
         let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &glass), &[]))]);
         let blocks = w.table(TCODE_INSTANCE_DEFINITION_TABLE, &[block(&w, id(50), "Chair", &[id(60)])]);
         // the chair: red by object, material by parent, on the default layer
@@ -1102,6 +1153,57 @@ mod tests {
         assert_eq!(mesh.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
         let cloud = &model.layers[1];
         assert_eq!(cloud.positions, [0.125, 0.0625, 1.0, 10.5, 20.25, 2.0]);
+    }
+
+    #[test]
+    fn named_view_cameras_follow_units_and_the_local_origin() {
+        let mut file = File::default();
+        file.meters = 0.001;
+        file.named_views.push(threedm_read::View {
+            id: Uuid::default(),
+            name: "Saved perspective".into(),
+            perspective: true,
+            location: DVec3::new(155_001_000.0, 463_002_000.0, 3_000.0),
+            direction: DVec3::NEG_Z,
+            up: DVec3::Y,
+            fov_y: 0.75,
+            height: 2_000.0,
+        });
+        let mut scene = Scene::new(&file);
+        scene.origin = Some(DVec3::new(155_000.0, 463_000.0, 0.0));
+        let views = scene.views();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].name, "Saved perspective");
+        let camera = views[0].camera.as_ref().unwrap();
+        assert_eq!(camera.eye, [1.0, 2.0, 3.0]);
+        assert_eq!(camera.forward, [0.0, 0.0, -1.0]);
+        assert!(camera.perspective);
+        assert_eq!(camera.fov_y, Some(0.75));
+    }
+
+    #[test]
+    fn visible_objects_keep_the_triangle_budget_and_origin_before_hidden_objects() {
+        let object = |name: &str, hidden: bool, x: f32, y: f32| threedm_read::RhinoObject {
+            attributes: Attributes { name: name.into(), visible: !hidden, ..Attributes::default() },
+            geometry: Geometry::Meshes(vec![Mesh {
+                positions: vec![[x, y, 0.0], [x + 1.0, y, 0.0], [x, y + 1.0, 0.0]],
+                faces: vec![[0, 1, 2, 2]],
+                triangles: 1,
+                ..Mesh::default()
+            }], "Mesh"),
+            user: Vec::new(),
+        };
+        let mut file = File::default();
+        file.meters = 1.0;
+        file.objects = vec![object("Hidden", true, 1_000_000_000.0, 1_000_000_000.0), object("Visible", false, 155_000.25, 463_000.5)];
+        let mut scene = Scene::new(&file);
+        scene.triangles = MAX_TRIANGLES - 1;
+        scene.run();
+        let (layers, info, _, _) = scene.finish();
+        let visible = layers.iter().find(|l| !l.hidden).unwrap();
+        assert_eq!(visible.triangle_count(), 1);
+        assert_eq!(visible.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
+        assert_eq!(entry(&info, "Rhino world origin (metres)"), "155000, 463000, 0");
     }
 
     /// Clipping planes (`clipping.3dm`, from make_clipping.py, in millimetres): each is drawn as
@@ -1262,16 +1364,17 @@ mod tests {
     /// meshes) and without them: layers and sublayers, a hidden and a locked layer, colours by
     /// layer, object and parent, a basic material with transparency, a PBR material, a layer
     /// material, colours per face, user text, an extrusion, a sphere, a mesh with vertex colours,
-    /// a block, points, a SubD, a curve, a text, a hatch, and a hidden object it leaves out. Both
+    /// a block, points, a SubD, a curve, a text, a hatch, and a hidden object (on a hidden layer). Both
     /// read the same.
     #[test]
     fn rhino9_layers_materials_colours_and_user_text() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
-        for (file, meshed) in [("everything_meshes.3dm", 2), ("everything_small.3dm", 14)] {
+        for (file, meshed) in [("everything_meshes.3dm", 3), ("everything_small.3dm", 15)] {
             let (model, info) = load(file, std::fs::read(dir.join(file)).unwrap());
             assert_eq!(entry(&info, "Rhino file version"), "Rhino 9 (archive version 90)");
-            assert_eq!(entry(&info, "Rhino objects drawn"), "1 SubD objects, 1 block instances, 1 curves, 1 extrusions, 1 hatches, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces, 1 texts", "{file}");
-            assert_eq!(entry(&info, "Rhino objects left out"), "1 hidden objects", "{file}");
+            assert_eq!(entry(&info, "Rhino objects drawn"), "1 SubD objects, 1 block instances, 1 curves, 1 extrusions, 1 hatches, 1 meshes, 1 point clouds, 1 points, 11 polysurfaces, 1 surfaces, 1 texts", "{file}");
+            assert_eq!(entry(&info, "Rhino objects left out"), "", "{file}");
+            assert_eq!(entry(&info, "Rhino hidden objects"), "1 (on hidden layers of their own)", "{file}");
             // the SubD, and the box on the hidden layer which Rhino left without a mesh, are meshed
             // by the viewer
             assert_eq!(entry(&info, "Rhino objects meshed by the viewer"), format!("{meshed} (saved without a render mesh)"), "{file}");
@@ -1300,7 +1403,7 @@ mod tests {
             assert!(colours("Coloured mesh").len() > 100);
             let props = &elements["Box user text"].1;
             assert_eq!((props["Fire rating"].as_str(), props["Supplier"].as_str()), (Some("60 min"), Some("ACME")));
-            assert!(!elements.contains_key("Hidden box"));
+            assert!(elements.contains_key("Hidden box"));
         }
     }
 

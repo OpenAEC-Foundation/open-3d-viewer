@@ -1206,10 +1206,22 @@ impl App {
 
     /// `camera` framing the whole model.
     fn fitted(&self, mut camera: Camera) -> Camera {
-        if let Some(b) = self.world_bounds() {
+        if let Some(b) = self.framing_bounds() {
             camera.fit(&b, self.aspect());
         }
         camera
+    }
+
+    /// What fitting the view frames (world space): the model, without a few small things that
+    /// stand far from the rest of it at rest (`ExplodeIndex::framed`). They stay in the model;
+    /// zooming to them shows them.
+    fn framing_bounds(&self) -> Option<Bounds> {
+        let at_rest = self.explode_bounds.is_none();
+        let current = |i: &&Arc<ExplodeIndex>| self.model.as_ref().is_some_and(|m| i.rest() == m.bounds);
+        match self.explode_index.as_ref().filter(|_| at_rest).filter(current).and_then(|i| i.framed()) {
+            Some(framed) => Some(transform_bounds(&framed, &self.model_matrix())),
+            None => self.world_bounds(),
+        }
     }
 
     /// The model's bounds in world space (after the up-axis override), as drawn: pulled apart
@@ -5169,6 +5181,28 @@ mod tests {
         let _ = app.update(Message::ShowAllElements);
         assert!(app.hidden.is_empty());
         assert_eq!(element_flags(&app, 20), 0);
+    }
+
+    #[test]
+    fn fitting_frames_the_model_not_a_stray_far_away() {
+        use crate::model::Layer;
+        // a slab of 200 triangles from 0,0 to 10,10, and one triangle a thousand kilometres away
+        let mut positions = Vec::new();
+        let mut elements = Vec::new();
+        for k in 0..100 {
+            let (x, y) = ((k % 10) as f32, (k / 10) as f32);
+            elements.push((k as u64 + 1, 6 * k, 6));
+            positions.extend_from_slice(&[x, y, 0.0, x + 1.0, y, 0.0, x + 1.0, y + 1.0, 0.0, x, y, 0.0, x + 1.0, y + 1.0, 0.0, x, y + 1.0, 0.0]);
+        }
+        elements.push((1000, 600, 3));
+        positions.extend_from_slice(&[1.0e6, 0.0, 0.0, 1.0e6 + 1.0, 0.0, 0.0, 1.0e6, 1.0, 0.0]);
+        let indices = (0..positions.len() as u32 / 3).collect();
+        let layer = Layer { name: "Map".into(), positions, indices, elements, ..Layer::default() };
+        let mut app = App::default();
+        app.set_model(Arc::new(Model::new(PathBuf::from("map.blend"), "Blender", vec![layer])));
+        app.fit();
+        assert!(app.camera.target.distance(Vec3::new(5.0, 5.0, 0.0)) < 1e-3, "{:?}", app.camera.target);
+        assert!(app.camera.scene_radius < 10.0, "{}", app.camera.scene_radius);
     }
 
     #[test]

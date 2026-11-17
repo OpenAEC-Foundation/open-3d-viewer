@@ -2212,7 +2212,7 @@ impl Studio {
         let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
         // (where the window has room for them beside the title)
         let room = self.width >= SOON_WIDTH;
-        let segments = segments.chain(["FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
+        let segments = segments.chain(["Docs", "FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })

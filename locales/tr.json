@@ -1123,6 +1123,13 @@
     "Without a georeference the place of the first load lies at the zero point of the project.": "Coğrafi referans yoksa ilk yüklemenin yeri projenin sıfır noktasında bulunur.",
     "nothing found in this area": "bu alanda hiçbir şey bulunamadı",
     "Not everything was loaded: the area holds more objects than are fetched at once.": "Her şey yüklenmedi: alanda bir seferde getirilenden daha fazla nesne var.",
-    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Parseller ve binalar PDOK aracılığıyla Hollanda tapu kadastrosundan gelir (yalnızca Hollanda). İstek, PDOK'a hangi yere baktığınızı bildirir; başka hiçbir şey gönderilmez."
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Parseller ve binalar PDOK aracılığıyla Hollanda tapu kadastrosundan gelir (yalnızca Hollanda). İstek, PDOK'a hangi yere baktığınızı bildirir; başka hiçbir şey gönderilmez.",
+    "updated": "güncellendi",
+    "unchanged": "değişmedi",
+    "Sent as": "Şu adla gönderildi",
+    "Party": "Taraf",
+    "Take in BCF": "BCF al",
+    "Send BCF": "BCF gönder",
+    "Send open issues only": "Yalnızca açık sorunları gönder"
   }
 }

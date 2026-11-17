@@ -265,6 +265,9 @@ pub struct App {
     /// The lines the 3D view draws over the model, with their colours: the underlays' and the
     /// views' in 3D (world), made again when they change.
     overlay_lines: Arc<Vec<crate::views3d::Colored>>,
+    /// The filled triangles drawn with them: the arrow heads, supports and deformed profiles of
+    /// a structural analysis model.
+    overlay_faces: Arc<Vec<crate::structural::diagrams::Face>>,
     /// The cut faces of the section box and plane in their hatches, and what they were made from.
     cut_faces: Arc<crate::caps::CutFaces>,
     cut_faces_key: Option<caps::CutFacesKey>,
@@ -934,6 +937,7 @@ impl Default for App {
             cuts: Default::default(),
             underlays: Vec::new(),
             overlay_lines: Arc::new(Vec::new()),
+            overlay_faces: Arc::new(Vec::new()),
             cut_faces: Default::default(),
             cut_faces_key: None,
             cut_faces_running: false,
@@ -2257,6 +2261,7 @@ impl App {
             Message::AnalysisScaleDone => self.analysis_scale = None,
             Message::Analysis(change) => {
                 self.analysis_scale = None;
+                let kinds = (self.analysis.hide_nodes, self.analysis.hide_members);
                 let doc = self.model.as_ref().and_then(|m| m.structural.first()).map(|p| p.doc.clone());
                 let (cases, sets) = doc.as_ref().map_or((0, 0), |d| (d.load_cases.len(), d.results.len()));
                 self.analysis.apply(change, cases, sets);
@@ -2270,6 +2275,9 @@ impl App {
                     }
                 }
                 self.refresh_overlay();
+                if kinds != (self.analysis.hide_nodes, self.analysis.hide_members) {
+                    self.refresh_structural_visibility();
+                }
             }
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
@@ -3580,8 +3588,9 @@ impl App {
         let picked_entry = picked;
         let picked = picked.is_some();
         let drawn = self.drawn_properties(p, l);
-        if let Some(analysis) = self.analysis_properties(p, l) {
-            content = content.push(section(l.text("Rekenresultaten", "Analysis"))).push(analysis).push(rule::horizontal(1));
+        if let Some((visibility, results)) = self.analysis_properties(p, l) {
+            content = content.push(section(l.text("Zichtbaarheid", "Visibility"))).push(visibility).push(rule::horizontal(1));
+            content = content.push(section(l.text("Resultaten", "Results"))).push(results).push(rule::horizontal(1));
         }
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() && drawn.is_none() {
             if let Some(view) = self.view_properties(p, l) {
@@ -3975,6 +3984,7 @@ impl App {
             structural_shown: self.structural.shown_marks.as_ref(),
             datum: Some(segments),
             overlay: self.overlay_lines.clone(),
+            faces: self.overlay_faces.clone(),
             caps: self.cut_faces.clone(),
         })
             .width(Fill)

@@ -10,6 +10,7 @@ pub mod diagrams;
 pub mod display;
 pub mod pick;
 pub mod remote;
+pub mod solid;
 
 use crate::model::{Bounds, Origin};
 use bim_structural::{

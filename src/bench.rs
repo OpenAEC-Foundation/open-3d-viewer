@@ -254,6 +254,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 structural_shown: None,
                 datum: None,
                 overlay: Default::default(),
+                faces: Default::default(),
                 caps: Default::default(),
                 moving: std::env::var_os("O3V_BENCH_STILL").is_none(),
             };
@@ -412,6 +413,7 @@ pub fn run(file: &Path, frames: u32, throughput: bool) -> Result<(), String> {
                 structural_shown: None,
                 datum: None,
                 overlay: Default::default(),
+                faces: Default::default(),
                 caps: Default::default(),
                 moving: std::env::var_os("O3V_BENCH_STILL").is_none(),
             };
@@ -696,6 +698,7 @@ mod tests {
             structural_shown: None,
             datum: None,
             overlay: Default::default(),
+            faces: Default::default(),
             caps: Default::default(),
             moving: false,
         };
@@ -859,6 +862,7 @@ mod tests {
                 structural_shown: None,
                 datum: None,
                 overlay: Default::default(),
+                faces: Default::default(),
                 caps: Default::default(),
                 moving: false,
             };

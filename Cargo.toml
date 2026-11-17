@@ -109,7 +109,7 @@ skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev =
 tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "7f724b69382af188ed830956a45f106c80c3adb9" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
-vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "2e183eb771d4a422ef8b632cf9550ffa2fe9b6f0" }
+vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "c88479872ee468ff65092274350f0aab744e11f8" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
 threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "225f8d4823876270d498afb2ff132228f7e7f8d4", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)

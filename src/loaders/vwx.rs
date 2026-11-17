@@ -6,7 +6,7 @@
 //! document; its sheet layers as sheets, with the lines and texts drawn on them and their
 //! viewports, each with the view of the model it shows.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{DraftText, Layer, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
+use crate::model::{DraftFill, DraftText, Layer, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 
 /// Metres in a point, the measure of letters on paper.
 const POINT: f32 = 0.0254 / 72.0;
@@ -111,7 +111,9 @@ fn sheet(sheet: &vwx_read::model::Sheet, views: &mut Vec<SavedView>) -> Sheet {
         .collect();
     let corners = sheet.lines.iter().flatten().copied().chain(texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]])).chain(viewports.iter().flat_map(|v| [v.rect.min, v.rect.max]));
     let paper = corners.map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union);
-    Sheet { lines: sheet.lines.clone(), texts, ..Sheet::new(sheet.number.clone(), sheet.title.clone(), paper, viewports) }
+    // what its section viewports cut, filled
+    let fills = sheet.fills.iter().map(|f| DraftFill { element: f.id, loops: vec![f.outline.clone()], color: f.color }).collect();
+    Sheet { lines: sheet.lines.clone(), texts, fills, ..Sheet::new(sheet.number.clone(), sheet.title.clone(), paper, viewports) }
 }
 
 /// A viewport as it lies on its sheet, showing view `view` of the model (none: its sheet has
@@ -232,6 +234,7 @@ mod tests {
             number: "210".into(),
             title: "Plans".into(),
             lines: vec![[[0.0, 0.0], [0.841, 0.0]], [[0.841, 0.0], [0.841, 0.594]]],
+            fills: vec![vwx_read::model::Fill { id: 21, outline: vec![[0.1, 0.1], [0.2, 0.1], [0.2, 0.2]], color: [136, 136, 136] }],
             texts: vec![vwx_read::model::Text { id: 12, text: "Sheet No.".into(), at: [0.7, 0.05, 0.0], width: 0.04, height: 0.005, size: 12.0, lines: 1, ..Default::default() }],
             viewports: vec![vwx_read::model::Viewport {
                 id: 14,
@@ -265,6 +268,7 @@ mod tests {
         assert_eq!(hidden, [2, 3]);
         assert_eq!((sheet.number.as_str(), sheet.name.as_str(), sheet.title.as_str()), ("210", "Plans", "210 Plans"));
         assert_eq!(sheet.lines.len(), 2);
+        assert_eq!((sheet.fills.len(), sheet.fills[0].color, sheet.fills[0].loops[0].len()), (1, [136, 136, 136], 3));
         // the text box from its lower left corner; letters of 12 points
         let text = &sheet.texts[0];
         assert!((text.at[1] - 0.045).abs() < 1e-6 && (text.size - 0.0042333).abs() < 1e-6, "{text:?}");

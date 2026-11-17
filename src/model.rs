@@ -34,6 +34,10 @@ pub struct Layer {
     /// A point cloud (LAS, LAZ, E57): every vertex is a point, drawn as a dot of a few pixels;
     /// no `indices`, `normals` or `elements`.
     pub points: bool,
+    /// Line segments (curves, text and hatch lines of CAD and NURBS models): pairs of vertex
+    /// indices, drawn unlit in their vertices' colours in every view mode. Their vertices are
+    /// not used by `indices`.
+    pub lines: Vec<u32>,
 }
 
 impl Layer {

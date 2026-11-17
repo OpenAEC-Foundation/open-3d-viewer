@@ -106,7 +106,7 @@ What works and what does not on Android:
 
 ## Viewer, Modeller and BIM Validator
 
-One code base, one app, three products. The switch at the top right of the window moves between them; each has its own ribbon, panels and start screen over the same open project:
+One code base, one app, three products. The switch at the top right of the window moves between them; each has its own ribbon, panels and start screen over the same open project. The switch names them shortly (**View**, **Collab**, **PointCloud**, **Struct**, **Modeller**); a product still in alpha is grey there, and its tooltip says so:
 
 - **Viewer**: open, look, measure and cut, as above.
 - **Modeller**: the **Model** tab with the base elements (below), and a **View** tab with the Viewer's display, camera, section and measure tools.

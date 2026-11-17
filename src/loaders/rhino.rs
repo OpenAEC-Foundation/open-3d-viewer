@@ -2737,4 +2737,51 @@ mod tests {
             assert!((ours - rhino).abs() <= allowed * rhino, "{name}: {ours} against {rhino} in Rhino");
         }
     }
+
+    /// A closed polysurface meshes into a closed mesh: the faces on either side of an edge share
+    /// its points (on Rhino's edge curve), so no crack opens between them. Every edge of the
+    /// welded mesh of each solid is used by two triangles.
+    #[test]
+    fn closed_polysurfaces_mesh_watertight() {
+        let solids = [
+            ("primitives", vec!["Sphere", "Cylinder", "Cone", "Torus", "Box"]),
+            ("booleans", vec!["Plate with holes", "Box and tower", "Sphere with a tunnel"]),
+            ("extrusions", vec!["Column", "Tube", "I-beam", "Beam"]),
+            ("mechanical", vec!["Flange", "Gear", "Bracket"]),
+            ("fillets", vec![]),
+        ];
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        for (file, names) in solids {
+            let Ok(data) = std::fs::read(dir.join(format!("{file}.3dm"))) else { continue };
+            let (model, _) = load(&format!("{file}.3dm"), data);
+            for layer in &model.layers {
+                for &(id, start, count) in &layer.elements {
+                    let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                    let name = props["Name"].as_str().unwrap_or_default();
+                    if !names.contains(&name) {
+                        continue;
+                    }
+                    // weld by exact position
+                    let mut ids: HashMap<[u32; 3], u32> = HashMap::new();
+                    let mut weld = |i: u32| {
+                        let k = [0, 1, 2].map(|c| layer.positions[3 * i as usize + c].to_bits());
+                        let n = ids.len() as u32;
+                        *ids.entry(k).or_insert(n)
+                    };
+                    let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+                    for t in layer.indices[start as usize..(start + count) as usize].chunks_exact(3) {
+                        let w = [weld(t[0]), weld(t[1]), weld(t[2])];
+                        for k in 0..3 {
+                            let (a, b) = (w[k], w[(k + 1) % 3]);
+                            if a != b {
+                                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+                            }
+                        }
+                    }
+                    let open = edges.values().filter(|&&n| n == 1).count();
+                    assert_eq!(open, 0, "{file} {name}: {open} open edges of {}", edges.len());
+                }
+            }
+        }
+    }
 }

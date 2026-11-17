@@ -3,11 +3,15 @@
 //! Rhino does when it opens such a file. Read as openNURBS writes it (`ON_Brep`, `ON_Extrusion`,
 //! the curve and surface classes): trim curves, surfaces, trims, loops and faces.
 //!
-//! A face is meshed in the parameter plane of its surface. An untrimmed face is a grid whose
-//! lines follow the bending and twist of the surface and lie on its kinks. A trimmed face's
-//! loops are sampled until the points on the surface lie within the tolerance of their chords
-//! (and at least once per grid cell on a curved surface), and a constrained Delaunay
-//! triangulation of the loops and the grid points inside them is kept within the loops. Planes,
+//! A face is meshed in the parameter plane of its surface. The faces on either side of an edge
+//! share its points: each edge is sampled once for what both faces need (measured by length,
+//! as the edge's curve and the faces' trims run at their own speeds), on Rhino's 3d curve of
+//! the edge and its vertices, so a closed polysurface meshes closed. An untrimmed face is a
+//! grid whose lines follow the bending and twist of the surface, lie on its kinks and meet its
+//! edges' samples (opposite edges share theirs). A trimmed face's loops are sampled until the
+//! points on the surface lie within the tolerance of their chords (and at least once per grid
+//! cell on a curved surface), and a constrained Delaunay triangulation of the loops and the
+//! grid points inside them is kept within the loops. Planes,
 //! NURBS surfaces (rational too), surfaces of revolution and sum surfaces are read, also as
 //! objects of their own; curves are lines, arcs, polylines, NURBS curves and polycurves.
 //! Extrusions are walls along their profiles and, when capped, flat caps, mitered ends
@@ -16,6 +20,7 @@
 use super::{err, Cur, Mesh, Uuid, R};
 use glam::{DVec2, DVec3};
 use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
+use std::collections::HashMap;
 
 const ON_LINE_CURVE: Uuid = Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0");
 const ON_ARC_CURVE: Uuid = Uuid::parse("CF33BE2A-09B4-11d4-BFFB-0010830122F0");
@@ -552,12 +557,18 @@ impl Surface {
         }
     }
 
-    /// A plane, or a NURBS surface of degree 1 with four control points: lines in its
+    /// A plane, or a NURBS surface of degree 1 with four control points in one plane: lines in its
     /// parameters are straight on it.
     fn is_flat(&self) -> bool {
         match self {
             Surface::Plane { .. } => true,
-            Surface::Nurbs(n) => n.order == [2, 2] && n.count == [2, 2] && n.cvs.iter().all(|c| c[3] == 1.0),
+            // four corners in one plane (a twisted one is a hyperbolic paraboloid)
+            Surface::Nurbs(n) if n.order == [2, 2] && n.count == [2, 2] && n.cvs.iter().all(|c| c[3] == 1.0) => {
+                let p = n.cvs.iter().map(|c| DVec3::new(c[0], c[1], c[2])).collect::<Vec<_>>();
+                let normal = (p[1] - p[0]).cross(p[2] - p[0]);
+                let size = (p[1] - p[0]).length().max((p[2] - p[0]).length()).max((p[3] - p[0]).length());
+                normal.normalize_or_zero().dot(p[3] - p[0]).abs() <= 1e-9 * size.max(1e-300)
+            }
             _ => false,
         }
     }
@@ -716,6 +727,20 @@ struct Trim {
     /// The part of the curve the trim uses, and whether it runs backwards.
     proxy: [f64; 2],
     reversed: bool,
+    /// The edge it trims along (-1 at a pole), and whether it runs against the edge.
+    edge: i32,
+    against: bool,
+    /// Its start and end vertices (the pole of a trim along one).
+    vertices: [i32; 2],
+}
+
+/// `ON_BrepEdge`: its 3d curve, the part of it used and whether it runs backwards, and its
+/// vertices.
+struct Edge {
+    curve: i32,
+    proxy: [f64; 2],
+    reversed: bool,
+    vertices: [i32; 2],
 }
 
 struct Loop {
@@ -758,7 +783,10 @@ fn read_trims(mut c: Cur<'_>) -> R<Vec<Trim>> {
         c.i32()?; // index
         let curve = c.i32()?;
         let proxy = read_interval(&mut c)?;
-        c.take(4 + 8 + 4 + 4 + 4 + 4 + 16)?; // edge, vertices, reversed 3d, type, iso, loop, tolerances
+        let edge = c.i32()?;
+        let vertices = [c.i32()?, c.i32()?];
+        let against = c.i32()? != 0;
+        c.take(4 + 4 + 4 + 16)?; // type, iso, loop, tolerances
         let mut reversed = false;
         if new {
             read_interval(&mut c)?; // domain
@@ -768,7 +796,43 @@ fn read_trims(mut c: Cur<'_>) -> R<Vec<Trim>> {
             c.take(48)?;
         }
         c.take(16)?; // legacy tolerances
-        out.push(Trim { curve, proxy, reversed });
+        out.push(Trim { curve, proxy, reversed, edge, against, vertices });
+    }
+    Ok(out)
+}
+
+/// `ON_BrepVertexArray`: the vertices' points.
+fn read_vertices(mut c: Cur<'_>) -> R<Vec<DVec3>> {
+    c.version()?;
+    let count = c.count(40)?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        c.i32()?;
+        out.push(read_point(&mut c)?);
+        read_ints(&mut c)?; // edges
+        c.f64()?; // tolerance
+    }
+    Ok(out)
+}
+
+/// `ON_BrepEdgeArray`.
+fn read_edges(mut c: Cur<'_>) -> R<Vec<Edge>> {
+    c.version()?;
+    let new = c.v.archive >= 3 && c.v.opennurbs >= 200_206_180;
+    let count = c.count(44)?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        c.i32()?;
+        let curve = c.i32()?;
+        let reversed = c.i32()? != 0;
+        let proxy = read_interval(&mut c)?;
+        let vertices = [c.i32()?, c.i32()?];
+        read_ints(&mut c)?; // trims
+        c.f64()?; // tolerance
+        if new {
+            read_interval(&mut c)?; // domain
+        }
+        out.push(Edge { curve, proxy, reversed, vertices });
     }
     Ok(out)
 }
@@ -805,49 +869,311 @@ fn read_faces(mut c: Cur<'_>) -> R<Vec<Face>> {
 /// Meshes of the faces of an `ON_Brep` from its chunks (2d curves, 3d curves, surfaces,
 /// vertices, edges, trims, loops, faces), one per face, with the face colours. Faces that cannot
 /// be meshed are left out. `vertices` counts the mesh vertices read or made so far.
+/// A side of an untrimmed face: a trim along one edge of the domain, straight in the parameter
+/// plane, from `start` to `end`.
+struct Side {
+    trim: usize,
+    /// 0 along v = v0, 1 along u = u1, 2 along v = v1, 3 along u = u0.
+    side: usize,
+    start: DVec2,
+    end: DVec2,
+}
+
+impl Side {
+    /// The direction of the domain the side runs along: u (0) for the bottom and top, v (1).
+    fn dir(&self) -> usize {
+        self.side % 2
+    }
+
+    /// The fraction along the trim at coordinate `x` of its direction, if the side spans it.
+    fn fraction_at(&self, x: f64) -> Option<f64> {
+        let d = self.dir();
+        let (a, b) = (self.start[d], self.end[d]);
+        let f = (x - a) / (b - a);
+        (b != a && f >= -1e-9 && f <= 1.0 + 1e-9).then_some(f.clamp(0.0, 1.0))
+    }
+
+    fn coordinate(&self, f: f64) -> f64 {
+        let d = self.dir();
+        self.start[d] + f * (self.end[d] - self.start[d])
+    }
+}
+
+/// The sides of a face whose single loop runs along the edges of its surface's domain, each a
+/// straight trim: an untrimmed face, meshed as a grid. `None` for a trimmed face.
+fn untrimmed_sides(lp: &Loop, trims: &[Trim], curves: &[Option<Curve>], dom: [[f64; 2]; 2]) -> Option<Vec<Side>> {
+    let e = [1e-9 * (dom[0][1] - dom[0][0]), 1e-9 * (dom[1][1] - dom[1][0])];
+    let mut out = Vec::new();
+    for &t in &lp.trims {
+        let k = usize::try_from(t).ok().filter(|&k| k < trims.len())?;
+        let trim = &trims[k];
+        let curve = usize::try_from(trim.curve).ok().and_then(|c| curves.get(c)).and_then(Option::as_ref)?;
+        let straight = matches!(curve, Curve::Line { .. }) || matches!(curve, Curve::Nurbs(n) if n.order == 2 && n.cvs.len() == 2 && n.cvs.iter().all(|c| c[3] == 1.0));
+        if !straight {
+            return None;
+        }
+        let [a, b] = if trim.reversed { [trim.proxy[1], trim.proxy[0]] } else { trim.proxy };
+        let (start, end) = (curve.point(a).truncate(), curve.point(b).truncate());
+        let on = |p: DVec2, side: usize| match side {
+            0 => (p.y - dom[1][0]).abs() <= e[1],
+            1 => (p.x - dom[0][1]).abs() <= e[0],
+            2 => (p.y - dom[1][1]).abs() <= e[1],
+            _ => (p.x - dom[0][0]).abs() <= e[0],
+        };
+        let side = (0..4).find(|&s| on(start, s) && on(end, s) && (start - end).length() > 0.0)?;
+        out.push(Side { trim: k, side, start, end });
+    }
+    (0..4).all(|s| out.iter().any(|x| x.side == s)).then_some(out)
+}
+
 pub(super) fn brep(parts: &[Cur<'_>; 8], size: f64, colors: &[Option<[u8; 4]>], vertices: &mut usize) -> R<Vec<Mesh>> {
     let curves = read_array(parts[0].clone(), |c| read_curve_object(c, 0))?;
+    let curves3 = read_array(parts[1].clone(), |c| read_curve_object(c, 0)).unwrap_or_default();
     let surfaces = read_array(parts[2].clone(), read_surface_object)?;
+    let points = read_vertices(parts[3].clone()).unwrap_or_default();
+    let edges = read_edges(parts[4].clone()).unwrap_or_default();
     let trims = read_trims(parts[5].clone())?;
     let loops = read_loops(parts[6].clone())?;
     let faces = read_faces(parts[7].clone())?;
     let tol = tolerance(size);
+    fn get<T>(v: &[T], i: i32) -> Option<usize> {
+        usize::try_from(i).ok().filter(|&i| i < v.len())
+    }
+    let trim_curve = |t: &Trim| get(&curves, t.curve).and_then(|c| curves[c].as_ref());
+    let surface_of = |face: usize| get(&surfaces, faces[face].surface).and_then(|s| surfaces[s].as_ref());
+    let vertex = |i: i32| get(&points, i).map(|v| points[v]).filter(|p| p.is_finite());
+    // the face of each loop
+    let mut loop_face = vec![None; loops.len()];
+    for (k, face) in faces.iter().enumerate() {
+        for &l in &face.loops {
+            if let Some(l) = get(&loops, l) {
+                loop_face[l] = Some(k);
+            }
+        }
+    }
+    // a trim's parameters in the order it is traced
+    let traced = |t: &Trim| if t.reversed { [t.proxy[1], t.proxy[0]] } else { t.proxy };
+    // Places along an edge are measured by length (from its start, as a fraction of the whole):
+    // the edge's 3d curve and the trims of the faces on either side run at their own speeds,
+    // but their lengths agree. A table of each trim's (on its surface) and each edge's curve.
+    let mut trim_lengths: HashMap<usize, Vec<(f64, f64)>> = HashMap::new();
+    for (l, lp) in loops.iter().enumerate() {
+        let Some(surface) = loop_face[l].and_then(surface_of) else { continue };
+        for &t in &lp.trims {
+            let Some(k) = get(&trims, t) else { continue };
+            let trim = &trims[k];
+            let (Some(_), Some(curve)) = (get(&edges, trim.edge), trim_curve(trim)) else { continue };
+            let [a, b] = traced(trim);
+            trim_lengths.insert(k, length_table(&|f| {
+                let uv = curve.point(a + f * (b - a));
+                surface.point(uv.x, uv.y)
+            }));
+        }
+    }
+    let edge_lengths: Vec<Option<Vec<(f64, f64)>>> = edges
+        .iter()
+        .map(|edge| {
+            let c = get(&curves3, edge.curve).and_then(|c| curves3[c].as_ref())?;
+            let [p0, p1] = edge.proxy;
+            Some(length_table(&|f| c.point(if edge.reversed { p1 - f * (p1 - p0) } else { p0 + f * (p1 - p0) })))
+        })
+        .collect();
+    // a fraction along trim `k` (in its direction) as a length fraction along its edge, and back
+    let to_edge = |k: usize, ft: f64| {
+        let s = trim_lengths.get(&k).map_or(ft, |t| lookup(t, ft, false));
+        if trims[k].against { 1.0 - s } else { s }
+    };
+    let to_trim = |k: usize, s: f64| {
+        let s = if trims[k].against { 1.0 - s } else { s };
+        trim_lengths.get(&k).map_or(s, |t| lookup(t, s, true))
+    };
+    // The samples of every edge, as length fractions along it: what each face along it needs,
+    // so that the faces on either side share their boundary points and meet without a crack.
+    let mut fractions: Vec<Vec<f64>> = vec![vec![0.0, 1.0]; edges.len()];
+    // the samples of trims along no edge (at a pole), as fractions along the trim
+    let mut own: HashMap<usize, Vec<f64>> = HashMap::new();
+    for (l, lp) in loops.iter().enumerate() {
+        let Some(surface) = loop_face[l].and_then(surface_of) else { continue };
+        let (bend, cell) = (if surface.is_flat() { 0 } else { 2 }, grid_cell(surface));
+        for &t in &lp.trims {
+            let Some(k) = get(&trims, t) else { continue };
+            let trim = &trims[k];
+            let Some(curve) = trim_curve(trim) else { continue };
+            let [a, b] = traced(trim);
+            if a == b {
+                continue;
+            }
+            let samples = curve.sample(a, b, tol, &|p| surface.point(p.x, p.y), bend, cell).into_iter().map(|s| (s - a) / (b - a));
+            match get(&edges, trim.edge) {
+                Some(e) => fractions[e].extend(samples.map(|f| to_edge(k, f))),
+                None => own.entry(k).or_default().extend(samples),
+            }
+        }
+    }
+    let tidy = |f: &mut Vec<f64>| {
+        f.retain(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0);
+        // the ends exactly, so that they take the vertices' points
+        f.iter_mut().for_each(|v| *v = if *v < 1e-7 { 0.0 } else if *v > 1.0 - 1e-7 { 1.0 } else { *v });
+        f.push(0.0);
+        f.push(1.0);
+        f.sort_by(f64::total_cmp);
+        // round trips through the grid's lines leave copies a hair apart
+        f.dedup_by(|x, y| (*x - *y).abs() < 1e-7);
+    };
+    // the untrimmed faces, meshed as grids
+    let sides: Vec<Option<Vec<Side>>> = faces
+        .iter()
+        .enumerate()
+        .map(|(k, face)| {
+            let surface = surface_of(k)?;
+            let [l] = face.loops[..] else { return None };
+            let lp = &loops[get(&loops, l)?];
+            untrimmed_sides(lp, &trims, &curves, surface.domain())
+        })
+        .collect();
+    // the fractions along a side's trim (its edge's, or its own at a pole)
+    let side_fractions = |fractions: &Vec<Vec<f64>>, own: &HashMap<usize, Vec<f64>>, side: &Side| -> Vec<f64> {
+        let trim = &trims[side.trim];
+        match get(&edges, trim.edge) {
+            Some(e) => fractions[e].iter().map(|&s| to_trim(side.trim, s)).collect(),
+            None => own.get(&side.trim).cloned().unwrap_or_else(|| vec![0.0, 1.0]),
+        }
+    };
+    // A grid's lines in each direction meet both its opposite sides, so the sides take the
+    // samples of each other (and the surface's kinks), and so do their neighbours, until none
+    // grows: then a grid face's edge points are its grid's and its neighbours' alike.
+    for (k, face_sides) in sides.iter().enumerate() {
+        let (Some(face_sides), Some(surface)) = (face_sides, surface_of(k)) else { continue };
+        for side in face_sides {
+            let trim = &trims[side.trim];
+            let kinks = surface.kinks(side.dir()).into_iter().filter_map(|x| side.fraction_at(x));
+            match get(&edges, trim.edge) {
+                Some(e) => fractions[e].extend(kinks.map(|f| to_edge(side.trim, f))),
+                None => own.entry(side.trim).or_default().extend(kinks),
+            }
+        }
+    }
+    fractions.iter_mut().for_each(tidy);
+    own.values_mut().for_each(tidy);
+    for _ in 0..16 {
+        let mut grew = false;
+        for face_sides in sides.iter().flatten() {
+            for dir in 0..2 {
+                let lines: Vec<f64> = face_sides.iter().filter(|s| s.dir() == dir).flat_map(|s| side_fractions(&fractions, &own, s).into_iter().map(|f| s.coordinate(f))).collect();
+                for side in face_sides.iter().filter(|s| s.dir() == dir) {
+                    let trim = &trims[side.trim];
+                    let add: Vec<f64> = lines.iter().filter_map(|&x| side.fraction_at(x)).collect();
+                    let (list, add): (&mut Vec<f64>, Vec<f64>) = match get(&edges, trim.edge) {
+                        Some(e) => (&mut fractions[e], add.iter().map(|&f| to_edge(side.trim, f)).collect()),
+                        None => (own.entry(side.trim).or_default(), add),
+                    };
+                    let before = list.len();
+                    list.extend(add);
+                    tidy(list);
+                    grew |= list.len() > before;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    // a point of an edge at a length fraction: its vertices at the ends, else its 3d curve
+    let edge_point = |e: usize, s: f64| -> Option<DVec3> {
+        let edge = &edges[e];
+        if s <= 0.0 || s >= 1.0 {
+            return vertex(edge.vertices[usize::from(s >= 1.0)]);
+        }
+        let table = edge_lengths[e].as_ref()?;
+        let c = get(&curves3, edge.curve).and_then(|c| curves3[c].as_ref())?;
+        let [p0, p1] = edge.proxy;
+        let f = lookup(table, s, true);
+        Some(c.point(if edge.reversed { p1 - f * (p1 - p0) } else { p0 + f * (p1 - p0) })).filter(|p| p.is_finite())
+    };
+    // the point of trim `k` at a fraction along it: on its edge (at the edge's own sample there,
+    // so that both faces take the very same point), or its pole
+    let trim_point = |k: usize, ft: f64| -> Option<DVec3> {
+        match get(&edges, trims[k].edge) {
+            Some(e) => {
+                let s = to_edge(k, ft);
+                let list = &fractions[e];
+                let i = list.partition_point(|&x| x < s);
+                let near = [i.checked_sub(1), Some(i)].into_iter().flatten().filter_map(|j| list.get(j).copied()).min_by(|a, b| (a - s).abs().total_cmp(&(b - s).abs()));
+                edge_point(e, near.filter(|n| (n - s).abs() < 1e-6).unwrap_or(s))
+            }
+            None => vertex(trims[k].vertices[0]),
+        }
+    };
     let mut out = Vec::new();
     for (k, face) in faces.iter().enumerate() {
-        let Some(Some(surface)) = usize::try_from(face.surface).ok().and_then(|s| surfaces.get(s)) else { continue };
-        let mut rings = Vec::new();
-        let mut complete = true;
-        let bend = if surface.is_flat() { 0 } else { 2 };
-        let cell = grid_cell(surface);
-        for &l in &face.loops {
-            let Some(lp) = usize::try_from(l).ok().and_then(|l| loops.get(l)) else { continue };
-            if lp.kind == 3 {
-                continue; // a slit has no inside
-            }
-            let mut ring = Vec::new();
-            for &t in &lp.trims {
-                let trim = usize::try_from(t).ok().and_then(|t| trims.get(t));
-                let curve = trim.and_then(|t| usize::try_from(t.curve).ok()).and_then(|c| curves.get(c)).and_then(Option::as_ref);
-                let (Some(trim), Some(curve)) = (trim, curve) else {
-                    complete = false;
+        let Some(surface) = surface_of(k) else { continue };
+        let mesh = if let Some(face_sides) = &sides[k] {
+            // a grid on the lines of its sides' samples
+            let lines = |dir: usize| {
+                let mut x: Vec<f64> = face_sides.iter().filter(|s| s.dir() == dir).flat_map(|s| side_fractions(&fractions, &own, s).into_iter().map(|f| s.coordinate(f))).collect();
+                x.sort_by(f64::total_cmp);
+                let dom = surface.domain()[dir];
+                x.dedup_by(|a, b| (*a - *b).abs() < 1e-7 * (dom[1] - dom[0]));
+                x
+            };
+            let boundary = |u: f64, v: f64| -> Option<DVec3> {
+                let dom = surface.domain();
+                let e = [1e-9 * (dom[0][1] - dom[0][0]), 1e-9 * (dom[1][1] - dom[1][0])];
+                face_sides.iter().find_map(|s| {
+                    let on = match s.side {
+                        0 => (v - dom[1][0]).abs() <= e[1],
+                        1 => (u - dom[0][1]).abs() <= e[0],
+                        2 => (v - dom[1][1]).abs() <= e[1],
+                        _ => (u - dom[0][0]).abs() <= e[0],
+                    };
+                    let f = s.fraction_at(if s.dir() == 0 { u } else { v })?;
+                    on.then(|| trim_point(s.trim, f)).flatten()
+                })
+            };
+            grid_mesh(surface, &lines(0), &lines(1), face.reversed, &boundary)
+        } else {
+            let mut rings = Vec::new();
+            let mut complete = true;
+            for &l in &face.loops {
+                let Some(lp) = get(&loops, l).map(|l| &loops[l]) else { continue };
+                if lp.kind == 3 {
+                    continue; // a slit has no inside
+                }
+                let mut ring: Vec<(DVec2, Option<DVec3>)> = Vec::new();
+                for &t in &lp.trims {
+                    let Some(kt) = get(&trims, t) else {
+                        complete = false;
+                        break;
+                    };
+                    let trim = &trims[kt];
+                    let Some(curve) = trim_curve(trim) else {
+                        complete = false;
+                        break;
+                    };
+                    let [a, b] = traced(trim);
+                    // the trim's samples in its direction: its edge's, or its own at a pole
+                    let mut along: Vec<f64> = match get(&edges, trim.edge) {
+                        Some(e) => fractions[e].iter().map(|&s| to_trim(kt, s)).collect(),
+                        None => own.get(&kt).cloned().unwrap_or_else(|| vec![0.0, 1.0]),
+                    };
+                    along.sort_by(f64::total_cmp);
+                    for &ft in &along[..along.len().saturating_sub(1)] {
+                        ring.push((curve.point(a + ft * (b - a)).truncate(), trim_point(kt, ft)));
+                    }
+                }
+                if !complete {
                     break;
-                };
-                let [a, b] = if trim.reversed { [trim.proxy[1], trim.proxy[0]] } else { trim.proxy };
-                let map = |p: DVec3| surface.point(p.x, p.y);
-                let params = curve.sample(a, b, tol, &map, bend, cell);
-                ring.extend(params[..params.len() - 1].iter().map(|&s| curve.point(s).truncate()));
+                }
+                if ring.len() >= 3 {
+                    rings.push(ring);
+                }
             }
             if !complete {
-                break;
+                continue;
             }
-            if ring.len() >= 3 {
-                rings.push(ring);
-            }
-        }
-        if !complete {
-            continue;
-        }
-        let Some(mut mesh) = face_mesh(surface, rings, face.reversed) else { continue };
+            face_mesh(surface, rings, face.reversed)
+        };
+        let Some(mut mesh) = mesh else { continue };
         if mesh.positions.len() > super::MAX_VERTICES - *vertices {
             return Err(super::TOO_MANY_VERTICES.into());
         }
@@ -856,6 +1182,48 @@ pub(super) fn brep(parts: &[Cur<'_>; 8], size: f64, colors: &[Option<[u8; 4]>], 
         out.push(mesh);
     }
     Ok(out)
+}
+
+/// Samples of a curve's length: (parameter fraction, length fraction) pairs, both from 0 to 1
+/// (the parameter fraction alone when the curve has no length).
+fn length_table(point: &dyn Fn(f64) -> DVec3) -> Vec<(f64, f64)> {
+    const N: usize = 256;
+    let mut table = Vec::with_capacity(N + 1);
+    let mut total = 0.0;
+    let mut last = point(0.0);
+    table.push((0.0, 0.0));
+    for i in 1..=N {
+        let f = i as f64 / N as f64;
+        let p = point(f);
+        let d = (p - last).length();
+        total += if d.is_finite() { d } else { 0.0 };
+        last = p;
+        table.push((f, total));
+    }
+    if total > 0.0 {
+        table.iter_mut().for_each(|e| e.1 /= total);
+    } else {
+        table.iter_mut().for_each(|e| e.1 = e.0);
+    }
+    table
+}
+
+/// The length fraction at a parameter fraction (`inverse`: the parameter fraction at a length
+/// fraction), by linear interpolation in a [`length_table`].
+fn lookup(table: &[(f64, f64)], x: f64, inverse: bool) -> f64 {
+    let key = |e: &(f64, f64)| if inverse { e.1 } else { e.0 };
+    let value = |e: &(f64, f64)| if inverse { e.0 } else { e.1 };
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let i = table.partition_point(|e| key(e) < x).clamp(1, table.len() - 1);
+    let (a, b) = (&table[i - 1], &table[i]);
+    let span = key(b) - key(a);
+    let t = if span > 0.0 { (x - key(a)) / span } else { 0.0 };
+    value(a) + t * (value(b) - value(a))
 }
 
 /// The absolute chord tolerance of an object of the given size (bounding box diagonal).
@@ -961,44 +1329,35 @@ fn divisions(surface: &Surface, dir: usize, range: [[f64; 2]; 2], dom: [[f64; 2]
     ((worst / MAX_ANGLE).ceil() as usize).clamp(1, MAX_GRID)
 }
 
-/// Whether a loop runs along the edges of the domain only: the face is untrimmed.
-fn on_domain_edges(ring: &[DVec2], dom: [[f64; 2]; 2]) -> bool {
-    let e = [1e-9 * (dom[0][1] - dom[0][0]), 1e-9 * (dom[1][1] - dom[1][0])];
-    let near = |a: f64, b: f64, e: f64| (a - b).abs() <= e;
-    let mut corners = [false; 4];
-    for p in ring {
-        let (u0, u1, v0, v1) = (near(p.x, dom[0][0], e[0]), near(p.x, dom[0][1], e[0]), near(p.y, dom[1][0], e[1]), near(p.y, dom[1][1], e[1]));
-        if !(u0 || u1 || v0 || v1) {
-            return false;
-        }
-        for (k, c) in [(u0 && v0), (u1 && v0), (u1 && v1), (u0 && v1)].into_iter().enumerate() {
-            corners[k] |= c;
-        }
-    }
-    corners.iter().all(|&c| c)
+/// The grid lines of a surface of its own over its domain: spaced so that the surface turns at
+/// most [`MAX_ANGLE`] between them, and on its kinks.
+fn domain_lines(surface: &Surface, dir: usize) -> Vec<f64> {
+    let dom = surface.domain();
+    let [a, b] = dom[dir];
+    let n = divisions(surface, dir, dom, dom);
+    let mut out: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
+    out.extend(surface.kinks(dir).into_iter().filter(|&k| k > a && k < b));
+    out.sort_by(f64::total_cmp);
+    out.dedup_by(|x, y| (*x - *y).abs() <= 1e-9 * (b - a));
+    out
 }
 
-/// The triangles of an untrimmed face: a grid over the domain, its lines spaced so that the
-/// surface turns at most [`MAX_ANGLE`] between them and laid on its kinks; each cell two
-/// triangles across its shorter diagonal. The edge points are the grid's, so no long triangle
-/// zigzags over the bending.
-fn grid_mesh(surface: &Surface, dom: [[f64; 2]; 2], reversed: bool) -> Option<Mesh> {
-    let lines = |dir: usize| {
-        let [a, b] = dom[dir];
-        let n = divisions(surface, dir, dom, dom);
-        let mut out: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
-        out.extend(surface.kinks(dir).into_iter().filter(|&k| k > a && k < b));
-        out.sort_by(f64::total_cmp);
-        out.dedup_by(|x, y| (*x - *y).abs() <= 1e-9 * (b - a));
-        out
-    };
-    let (us, vs) = (lines(0), lines(1));
+/// The triangles of an untrimmed face: a grid on the lines `us` and `vs` (the domain's ends
+/// included), each cell two triangles across its shorter diagonal; `boundary` gives the points
+/// it shares with its neighbours on the domain's edges. Its edge points are the grid's, so no
+/// long triangle zigzags over the bending (a Schwarz lantern).
+fn grid_mesh(surface: &Surface, us: &[f64], vs: &[f64], reversed: bool, boundary: &dyn Fn(f64, f64) -> Option<DVec3>) -> Option<Mesh> {
+    let dom = surface.domain();
     let (nu, nv) = (us.len(), vs.len());
+    if nu < 2 || nv < 2 {
+        return None;
+    }
     let mut points = Vec::with_capacity(nu * nv);
     let mut normals = Vec::with_capacity(nu * nv);
-    for &u in &us {
-        for &v in &vs {
-            points.push(surface.point(u, v));
+    for (i, &u) in us.iter().enumerate() {
+        for (j, &v) in vs.iter().enumerate() {
+            let edge = i == 0 || j == 0 || i + 1 == nu || j + 1 == nv;
+            points.push(edge.then(|| boundary(u, v)).flatten().unwrap_or_else(|| surface.point(u, v)));
             let n = surface.normal(u, v, dom);
             normals.push(if reversed { -n } else { n });
         }
@@ -1016,7 +1375,7 @@ fn grid_mesh(surface: &Surface, dom: [[f64; 2]; 2], reversed: bool) -> Option<Me
             let tris = if d(q[0], q[2]) <= d(q[1], q[3]) { [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] } else { [[q[0], q[1], q[3]], [q[1], q[2], q[3]]] };
             for t in tris {
                 let p = t.map(|k| points[k as usize]);
-                if (p[1] - p[0]).cross(p[2] - p[0]).length_squared() == 0.0 {
+                if p[0] == p[1] || p[1] == p[2] || p[2] == p[0] {
                     continue; // at a pole
                 }
                 let t = if reversed { [t[0], t[2], t[1]] } else { t };
@@ -1036,15 +1395,18 @@ fn grid_mesh(surface: &Surface, dom: [[f64; 2]; 2], reversed: bool) -> Option<Me
 
 /// The triangles of a face: its loops (in the surface's parameters) triangulated with the grid
 /// points inside them, on the surface.
-fn face_mesh(surface: &Surface, rings: Vec<Vec<DVec2>>, reversed: bool) -> Option<Mesh> {
+fn face_mesh(surface: &Surface, rings: Vec<Vec<(DVec2, Option<DVec3>)>>, reversed: bool) -> Option<Mesh> {
     let dom = surface.domain();
     if dom.as_flattened().iter().any(|v| !v.is_finite()) || dom.iter().any(|d| !(d[1] > d[0])) {
         return None;
     }
-    if rings.is_empty() || (rings.len() == 1 && on_domain_edges(&rings[0], dom)) {
-        // an untrimmed face: a grid over the whole domain
-        return grid_mesh(surface, dom, reversed);
+    if rings.is_empty() {
+        // a surface of its own: a grid over the whole domain
+        return grid_mesh(surface, &domain_lines(surface, 0), &domain_lines(surface, 1), reversed, &|_, _| None);
     }
+    // the boundary points the face shares with its neighbours, in the order of the loops
+    let shared: Vec<Option<DVec3>> = rings.iter().flatten().map(|(_, q)| *q).collect();
+    let rings: Vec<Vec<DVec2>> = rings.into_iter().map(|r| r.into_iter().map(|(p, _)| p).collect()).collect();
     // the loops' box in the parameter plane
     let mut lo = DVec2::splat(f64::INFINITY);
     let mut hi = DVec2::splat(f64::NEG_INFINITY);
@@ -1090,8 +1452,20 @@ fn face_mesh(surface: &Surface, rings: Vec<Vec<DVec2>>, reversed: bool) -> Optio
     let scaled: Vec<Vec<DVec2>> = rings.iter().map(|r| r.iter().map(|&p| to_plane(p)).collect()).collect();
 
     let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::new();
+    let mut fixed: HashMap<usize, DVec3> = HashMap::new();
+    let mut given = shared.iter();
     for ring in &scaled {
-        let handles: Vec<_> = ring.iter().filter_map(|p| cdt.insert(Point2::new(p.x, p.y)).ok()).collect();
+        let handles: Vec<_> = ring
+            .iter()
+            .filter_map(|p| {
+                let q = given.next().copied().flatten();
+                let h = cdt.insert(Point2::new(p.x, p.y)).ok()?;
+                if let Some(q) = q {
+                    fixed.entry(h.index()).or_insert(q);
+                }
+                Some(h)
+            })
+            .collect();
         for k in 0..handles.len() {
             let (a, b) = (handles[k], handles[(k + 1) % handles.len()]);
             if a != b {
@@ -1151,7 +1525,8 @@ fn face_mesh(surface: &Surface, rings: Vec<Vec<DVec2>>, reversed: bool) -> Optio
             if index[*i] == u32::MAX {
                 index[*i] = positions.len() as u32;
                 let uv = DVec2::new(points[*i].x / scale[0] + lo.x, points[*i].y / scale[1] + lo.y);
-                let p = surface.point(uv.x, uv.y);
+                // a boundary point on the edge it shares, else on the surface
+                let p = fixed.get(i).copied().unwrap_or_else(|| surface.point(uv.x, uv.y));
                 let normal = surface.normal(uv.x, uv.y, dom);
                 positions.push(p.to_array().map(|v| v as f32));
                 normals.push((if reversed { -normal } else { normal }).to_array().map(|v| v as f32));
@@ -1397,7 +1772,7 @@ mod tests {
         let plane = Surface::Plane { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Y, domain: [[0.0, 10.0], [0.0, 10.0]], extents: [[0.0, 10.0], [0.0, 10.0]] };
         let outer = vec![DVec2::new(0.0, 0.0), DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0), DVec2::new(0.0, 10.0)];
         let hole = vec![DVec2::new(4.0, 4.0), DVec2::new(4.0, 6.0), DVec2::new(6.0, 6.0), DVec2::new(6.0, 4.0)];
-        let mesh = face_mesh(&plane, vec![outer, hole], false).unwrap();
+        let mesh = face_mesh(&plane, [outer, hole].map(|r| r.into_iter().map(|p| (p, None)).collect()).to_vec(), false).unwrap();
         // the area of the square less the hole
         let p = |i: u32| DVec3::from(mesh.positions[i as usize].map(f64::from));
         let total: f64 = mesh.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).z).sum();

@@ -1,4 +1,4 @@
-//! Rhino 3D models (`.3dm`), Rhino 2 to 9. The file is read by the `threedm-read` crate
+//! Rhino 3D models (`.3dm`), Rhino 1 to 9. The file is read by the `threedm-read` crate
 //! ([rhino-dll](https://github.com/OpenAEC-Foundation/rhino-dll)): its layers, materials, block
 //! definitions and objects as meshes (exact geometry, SubD, texts and filled hatches meshed as
 //! Rhino meshes them), polylines (curves and hatch lines), points and block instances. This

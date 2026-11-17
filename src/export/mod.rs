@@ -184,7 +184,8 @@ mod tests {
             super::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.trim_end().ends_with("END-ISO-10303-21;"), "{}", path.display());
-            assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());
+            // (a model of curves only has no triangles)
+            assert!(text.contains("IFCTRIANGULATEDFACESET(") || text.contains("=IFCINDEXEDPOLYCURVE("), "{}: no geometry", path.display());
             assert!(text.contains("IFCPROPERTYSET(") && text.contains("'Rhino'"), "{}: no Rhino properties", path.display());
             if path.file_stem().is_some_and(|s| s == "drafting") {
                 // 7 curves, 6 texts and 5 hatches
@@ -200,8 +201,7 @@ mod tests {
                 let lines: usize = back.layers.iter().map(|l| l.lines.len() / 2).sum();
                 let curve_elements: usize = back.layers.iter().map(|l| l.line_elements.len()).sum();
                 let before: usize = model.layers.iter().map(|l| l.lines.len() / 2).sum();
-                // (a few hatch dashes of a fraction of a millimetre may not come back)
-                assert!(lines as f64 >= 0.99 * before as f64 && lines <= before, "{}: {lines} of {before} line segments read back", path.display());
+                assert_eq!(lines, before, "{}: line segments read back", path.display());
                 assert!(curve_elements >= 7, "{}: {curve_elements} curve elements", path.display());
                 let size = |m: &crate::model::Model| m.bounds.size();
                 let (a, b) = (size(&model), size(&back));

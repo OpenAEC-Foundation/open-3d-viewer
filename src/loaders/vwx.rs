@@ -5,9 +5,10 @@
 //! on an invisible layer or in an invisible class starts switched off; the saved views of the
 //! document; its sheet layers as sheets, with the lines and texts drawn on them and their
 //! viewports, each with the view of the model it shows; its grid lines (GridAxis objects), its
-//! spaces as rooms, and what the file says about itself as project information.
+//! spaces as rooms, and what the file says about itself as project information. Each design
+//! layer with 2D line work or texts is also a 2D drawing (its plan), where its texts show.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{DraftFill, DraftText, GridLine, Layer, ProjectData, Room, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
+use crate::model::{Draft, DraftFill, DraftKind, DraftLine, DraftText, GridLine, Layer, ProjectData, Room, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 
 /// Metres in a point, the measure of letters on paper.
 const POINT: f32 = 0.0254 / 72.0;
@@ -48,6 +49,7 @@ impl Loader for VwxLoader {
         project.info = info(&scene.info);
         project.grids = grids(&scene.meshes);
         project.rooms = rooms(&scene.meshes);
+        project.drafts = plans(&scene.meshes, &scene.texts);
         let layers = scene.meshes.into_iter().map(layer).collect();
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
     }
@@ -230,6 +232,62 @@ fn rooms(meshes: &[vwx_read::model::Mesh]) -> Vec<Room> {
     out
 }
 
+/// The ids of the 2D drawings of design layers: above those of the objects of a file.
+const PLAN_IDS: u64 = 1 << 40;
+/// The scale the plan of a design layer is drawn at.
+const PLAN_SCALE: f32 = 50.0;
+
+/// Each design layer with flat line work or texts as a 2D drawing seen from above: its line
+/// segments that lie flat (the 2D shapes, hatches and outlines of the layer) and its texts, in
+/// the metres of the model.
+fn plans(meshes: &[vwx_read::model::Mesh], texts: &[vwx_read::model::Text]) -> Vec<Draft> {
+    let mut names: Vec<&str> = meshes.iter().filter(|m| !m.lines.is_empty()).map(|m| m.layer.as_str()).chain(texts.iter().map(|t| t.layer.as_str())).filter(|n| !n.is_empty()).collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut out = Vec::new();
+    for (k, name) in names.into_iter().enumerate() {
+        let mut lines = Vec::new();
+        for mesh in meshes.iter().filter(|m| m.layer == name) {
+            let point = |v: u32| {
+                let i = v as usize * 3;
+                [mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]]
+            };
+            for &(element, first, count) in &mesh.line_elements {
+                for i in (first..first + count).step_by(2) {
+                    let (Some(&a), Some(&b)) = (mesh.lines.get(i as usize), mesh.lines.get(i as usize + 1)) else { continue };
+                    let (a, b) = (point(a), point(b));
+                    if (a[2] - b[2]).abs() < 1e-4 {
+                        lines.push(DraftLine { element, a: [a[0], a[1]], b: [b[0], b[1]] });
+                    }
+                }
+            }
+        }
+        let texts: Vec<DraftText> = texts
+            .iter()
+            .filter(|t| t.layer == name)
+            .map(|t| DraftText {
+                element: t.id,
+                // the reader gives the top left corner of the box
+                at: [t.at[0], t.at[1] - t.height],
+                width: t.width,
+                height: t.height,
+                // (the letters fill their lines, about 1.2 times their size each)
+                size: t.height / f32::from(t.lines.max(1)) / 1.2,
+                align: 0,
+                angle: 0.0,
+                text: t.text.clone(),
+                face: crate::typeface::Face::default(),
+            })
+            .collect();
+        if lines.is_empty() && texts.is_empty() {
+            continue;
+        }
+        let line_colors = vec![None; lines.len()];
+        out.push(Draft { id: PLAN_IDS + k as u64, name: name.to_string(), kind: DraftKind::Drawing, scale: PLAN_SCALE, lines, texts, dimensions: Vec::new(), line_colors, fills: Vec::new() });
+    }
+    out
+}
+
 /// The viewer layer of a reader mesh (both metres, Z up).
 fn layer(mesh: vwx_read::model::Mesh) -> Layer {
     Layer {
@@ -265,6 +323,18 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn design_layers_become_plans_with_their_texts() {
+        let mut mesh = grid_and_space();
+        mesh.layer = "GF".into();
+        let text = vwx_read::model::Text { id: 9, layer: "GF".into(), text: "Kitchen".into(), at: [1.0, 2.0, 0.0], width: 2.0, height: 0.6, size: 10.0, lines: 1 };
+        let plans = super::plans(&[mesh], &[text]);
+        assert_eq!(plans.len(), 1);
+        assert_eq!((plans[0].name.as_str(), plans[0].lines.len()), ("GF", 2));
+        assert_eq!(plans[0].lines[0], crate::model::DraftLine { element: 7, a: [0.0, 0.0], b: [0.0, 10.0] });
+        assert_eq!((plans[0].texts[0].text.as_str(), plans[0].texts[0].at), ("Kitchen", [1.0, 1.4]));
     }
 
     #[test]

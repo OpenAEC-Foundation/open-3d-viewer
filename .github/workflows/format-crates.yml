@@ -36,3 +36,10 @@ jobs:
               cargo test --manifest-path "$manifest" --features corpus-tests
             fi
           done
+      - name: Rhino reader tests and web compatibility
+        run: |
+          set -euo pipefail
+          manifest=$(python3 -c 'import json,sys; print(next(p["manifest_path"] for p in json.load(open(sys.argv[1]))["packages"] if p["name"] == "threedm-read"))' "$RUNNER_TEMP/model-dependencies.json")
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/format-crates/threedm-read"
+          cargo test --manifest-path "$manifest"
+          cargo check --manifest-path "$manifest" --target wasm32-unknown-unknown

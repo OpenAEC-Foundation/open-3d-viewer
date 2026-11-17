@@ -109,7 +109,7 @@ skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev =
 tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "927475e81537c66ac9b8d3cff2ed2abef504d9be" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
-threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "51c267f5475946bfa87e8d4f2be779b2c6139d83", default-features = false }
+threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -207,4 +207,4 @@ opt-level = 2
 
 [dev-dependencies]
 # The 3dm writer of the Rhino tests
-threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "51c267f5475946bfa87e8d4f2be779b2c6139d83" }
+threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f" }

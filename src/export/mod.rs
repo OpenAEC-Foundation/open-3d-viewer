@@ -194,6 +194,11 @@ mod tests {
                 assert!(text.contains("IFCCURVESTYLE("));
                 assert!(!text.contains("=IFCBUILDINGELEMENTPROXY("));
             }
+            if path.file_stem().is_some_and(|s| s == "dimensions") {
+                // 9 dimensions, 2 leaders and 2 circles (curves)
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 13);
+                assert!(text.contains("'Dimension'") && text.contains("'Leader'"));
+            }
             if path.file_stem().is_some_and(|s| s == "primitives") {
                 assert!(text.contains("=IFCBUILDINGELEMENTPROXY(") && text.contains("'Polysurface'"), "object type");
                 assert!(!text.contains("=IFCANNOTATION("));

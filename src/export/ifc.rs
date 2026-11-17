@@ -13,9 +13,9 @@
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
-//! - Curves (Rhino curves and hatch lines): an IfcIndexedPolyCurve per polyline in an
-//!   'Annotation' representation, styled with an IfcCurveStyle. An element of curves only, and
-//!   Rhino's texts and hatches, are IfcAnnotation.
+//! - Curves (Rhino curves, hatch lines, dimensions and leaders): an IfcIndexedPolyCurve per
+//!   polyline in an 'Annotation' representation, styled with an IfcCurveStyle. An element of
+//!   curves only, and Rhino's texts, hatches, dimensions and leaders, are IfcAnnotation.
 //! - The element's properties as one property set named after the source format, its materials
 //!   as IfcMaterial (one) or IfcMaterialConstituentSet (several), the model's layers as
 //!   IfcPresentationLayerAssignment.
@@ -389,7 +389,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     };
     let (class, predefined) = match (format, get("Type")) {
         // Rhino's drafting: annotations
-        ("Rhino", Some("Text" | "Hatch" | "Curve")) => ("IFCANNOTATION", "NOTDEFINED"),
+        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark")) => ("IFCANNOTATION", "NOTDEFINED"),
         _ => (class, predefined),
     };
     let rhino = format == "Rhino";

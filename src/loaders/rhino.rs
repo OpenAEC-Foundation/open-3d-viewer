@@ -333,7 +333,7 @@ impl<'f> Scene<'f> {
                 }
                 geometry => {
                     let kind = match geometry {
-                        Geometry::Meshes(_, kind) | Geometry::Points { kind, .. } | Geometry::Lines(_, kind) => *kind,
+                        Geometry::Meshes(_, kind) | Geometry::Points { kind, .. } | Geometry::Lines(_, kind) | Geometry::Drawing { kind, .. } => *kind,
                         _ => "",
                     };
                     let props = self.props(a, kind, None, &object.user);
@@ -501,6 +501,12 @@ impl<'f> Scene<'f> {
                 (self.seen, self.kept) = (seen, kept);
                 true
             }
+            Geometry::Drawing { lines, meshes, kind } => {
+                // dimensions and leaders: their lines, and their arrowheads and text, as one element
+                let drew_lines = self.draw(&Geometry::Lines(lines.clone(), kind), layer, xform, color, id, props);
+                let drew_meshes = self.draw(&Geometry::Meshes(meshes.clone(), kind), layer, xform, color, id, props);
+                drew_lines || drew_meshes
+            }
             _ => false,
         }
     }
@@ -565,6 +571,9 @@ fn plural(kind: &str) -> &'static str {
         "Curve" => "curves",
         "Hatch" => "hatches",
         "Text" => "texts",
+        "Dimension" => "dimensions",
+        "Leader" => "leaders",
+        "Center mark" => "center marks",
         _ => "objects",
     }
 }
@@ -1360,5 +1369,27 @@ mod tests {
             let (mid_x, mid_y) = ((low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0);
             assert!((mid_x - (x0 + x1) / 2.0).abs() < 0.15 * w && (mid_y - (y0 + y1) / 2.0).abs() < 0.15 * h, "{name}: around ({mid_x}, {mid_y})");
         }
+    }
+
+    /// Dimensions and leaders made in Rhino 9 (`dimensions.3dm`, from make_dimensions.py; the
+    /// reader checks their lines and texts against Rhino's): each is one element, drawn with
+    /// lines and filled arrowheads and text.
+    #[test]
+    fn dimensions_and_leaders_are_drawn() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino/dimensions.3dm");
+        let (model, info) = load("dimensions.3dm", std::fs::read(path).unwrap());
+        assert_eq!(entry(&info, "Rhino objects drawn"), "2 curves, 9 dimensions, 2 leaders");
+        let dims = model.layers.iter().find(|l| l.name == "Dimensions").unwrap();
+        let elements = |l: &Layer| l.elements.iter().map(|e| e.0).chain(l.line_elements.iter().map(|e| e.0)).collect::<HashSet<u64>>();
+        // nine dimensions and two circles
+        assert_eq!(elements(dims).len(), 11);
+        assert!(!dims.indices.is_empty() && !dims.lines.is_empty(), "lines, and arrowheads and text");
+        // the horizontal dimension's line, 10 mm long at 3 mm up, in metres
+        let p = |i: u32| [0, 1, 2].map(|k| dims.positions[3 * i as usize + k] as f64);
+        let found = dims.lines.chunks_exact(2).any(|s| {
+            let (a, b) = (p(s[0]), p(s[1]));
+            (a[1] - 0.003).abs() < 1e-9 && (b[1] - 0.003).abs() < 1e-9 && ((a[0] - b[0]).abs() - 0.010).abs() < 1e-9
+        });
+        assert!(found, "the dimension line of Horizontal");
     }
 }

@@ -237,6 +237,16 @@ fn fs_line(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(encode(faint(to_linear(in.color.rgb) * u.params.y, in.look)), in.color.a);
 }
 
+// The model's own lines (curves, text, hatches of CAD and NURBS models): unlit in their colours,
+// cut by the section box and plane as the faces are.
+@fragment
+fn fs_curve(in: VertexOut) -> @location(0) vec4<f32> {
+    if (clipped(in.world)) {
+        discard;
+    }
+    return vec4<f32>(encode(faint(to_linear(in.color.rgb), in.look)), in.color.a);
+}
+
 // ---- point clouds ---------------------------------------------------------------------------------
 // Each point is an instance: a strip of four vertices spread round it on screen, a square of the
 // same size in pixels whatever its distance (u.params.zw: half the size in clip units). The corner

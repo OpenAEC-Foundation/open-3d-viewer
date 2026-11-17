@@ -13,6 +13,9 @@
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
+//! - Curves (Rhino curves, hatch lines, dimensions and leaders): an IfcIndexedPolyCurve per
+//!   polyline in an 'Annotation' representation, styled with an IfcCurveStyle. An element of
+//!   curves only, and Rhino's texts, hatches, dimensions and leaders, are IfcAnnotation.
 //! - The element's properties as one property set named after the source format, its materials
 //!   as IfcMaterial (one) or IfcMaterialConstituentSet (several), the model's layers as
 //!   IfcPresentationLayerAssignment.
@@ -26,7 +29,7 @@
 
 use crate::document::Document;
 use crate::model::Model;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::Path;
@@ -89,6 +92,8 @@ enum Key {
 struct Product {
     key: Key,
     ranges: Vec<(usize, u32, u32)>,
+    /// Where its curves are drawn (layer, first index into `lines`, index count).
+    lines: Vec<(usize, u32, u32)>,
     /// The layer it is drawn in first, for its presentation layer.
     layer: String,
 }
@@ -106,16 +111,21 @@ fn base_layer_name(name: &str) -> &str {
 fn products(model: &Model) -> Vec<Product> {
     let mut out: Vec<Product> = Vec::new();
     let mut at: HashMap<Key, usize> = HashMap::new();
-    let mut push = |key: Key, range: (usize, u32, u32), layer: &str| {
-        if range.2 < 3 {
+    let mut add = |key: Key, range: (usize, u32, u32), layer: &str, curve: bool| {
+        if range.2 < if curve { 2 } else { 3 } {
             return;
         }
         let i = *at.entry(key.clone()).or_insert_with(|| {
-            out.push(Product { key, ranges: Vec::new(), layer: layer.to_string() });
+            out.push(Product { key, ranges: Vec::new(), lines: Vec::new(), layer: layer.to_string() });
             out.len() - 1
         });
-        out[i].ranges.push(range);
+        if curve {
+            out[i].lines.push(range);
+        } else {
+            out[i].ranges.push(range);
+        }
     };
+
     for (li, layer) in model.layers.iter().enumerate() {
         // Archicad openings are already cut from their walls. An IfcOpeningElement would need
         // IfcRelVoidsElement and no storey, which this writer does not write: left out.
@@ -127,14 +137,17 @@ fn products(model: &Model) -> Vec<Product> {
         let mut covered = 0u32;
         for &(id, first, count) in &layer.elements {
             if first > covered {
-                push(loose.clone(), (li, covered, first - covered), name);
+                add(loose.clone(), (li, covered, first - covered), name, false);
             }
-            push(Key::Element(id), (li, first, count), name);
+            add(Key::Element(id), (li, first, count), name, false);
             covered = covered.max(first + count);
         }
         let len = layer.indices.len() as u32;
         if len > covered {
-            push(loose, (li, covered, len - covered), name);
+            add(loose, (li, covered, len - covered), name, false);
+        }
+        for &(id, first, count) in &layer.line_elements {
+            add(Key::Element(id), (li, first, count), name, true);
         }
     }
     out
@@ -186,6 +199,8 @@ impl FaceSet {
 struct Body {
     origin: [i64; 3],
     sets: Vec<([u8; 4], FaceSet)>,
+    /// Polylines (quantised, relative to the placement) and their colours.
+    curves: Vec<([u8; 4], Vec<[i64; 3]>)>,
     min_z: f64,
 }
 
@@ -214,12 +229,37 @@ fn body(model: &Model, product: &Product, units: Units) -> Option<Body> {
             tris.push(([corners[0], corners[1], corners[2]], colour));
         }
     }
-    let mut min = [i64::MAX; 3];
-    for (t, _) in &tris {
-        for p in t {
-            for k in 0..3 {
-                min[k] = min[k].min(p[k]);
+    // the curves: segments joined into polylines where one ends at the next one's start
+    let mut curves: Vec<([u8; 4], Vec<[i64; 3]>)> = Vec::new();
+    for &(li, first, count) in &product.lines {
+        let layer = &model.layers[li];
+        let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let Some(segments) = layer.lines.get(first as usize..(first + count) as usize) else { continue };
+        let point = |i: u32| {
+            let p = layer.positions.get(3 * i as usize..3 * i as usize + 3)?;
+            p.iter().all(|v| v.is_finite()).then(|| [0, 1, 2].map(|k| units.quantise(p[k] as f64)))
+        };
+        let mut last: Option<u32> = None;
+        for s in segments.chunks_exact(2) {
+            let (Some(a), Some(b)) = (point(s[0]), point(s[1])) else {
+                last = None;
+                continue;
+            };
+            if last != Some(s[0]) || curves.is_empty() {
+                let colour = match &layer.colors {
+                    Some(c) => c.get(s[0] as usize).copied().unwrap_or([base[0], base[1], base[2], 255]),
+                    None => [base[0], base[1], base[2], 255],
+                };
+                curves.push((colour, vec![a]));
             }
+            curves.last_mut().unwrap().1.push(b);
+            last = Some(s[1]);
+        }
+    }
+    let mut min = [i64::MAX; 3];
+    for p in tris.iter().flat_map(|(t, _)| t).chain(curves.iter().flat_map(|(_, c)| c)) {
+        for k in 0..3 {
+            min[k] = min[k].min(p[k]);
         }
     }
     // the placement: the lower corner of the element, on whole millimetres
@@ -234,8 +274,15 @@ fn body(model: &Model, product: &Product, units: Units) -> Option<Body> {
         sets[i].1.triangle(t.map(|p| [0, 1, 2].map(|k| p[k] - origin[k])));
     }
     sets.retain(|(_, s)| !s.triangles.is_empty());
+    for (_, c) in &mut curves {
+        for p in c.iter_mut() {
+            *p = [0, 1, 2].map(|k| p[k] - origin[k]);
+        }
+        c.dedup();
+    }
+    curves.retain(|(_, c)| c.len() >= 2);
     let min_z = min[2] as f64 / 10f64.powi(units.decimals as i32);
-    (!sets.is_empty()).then_some(Body { origin, sets, min_z })
+    (!sets.is_empty() || !curves.is_empty()).then_some(Body { origin, sets, curves, min_z })
 }
 
 /// The IFC class and predefined type for an element of a Revit category (the viewer's batch
@@ -271,19 +318,40 @@ fn revit_class(category: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// The IFC class for a Tekla part, from its name (BEAM, COLUMN, ...), type and profile.
-fn tekla_class(name: &str, kind: &str, profile: &str) -> &'static str {
+/// The IFC class and predefined type of a Tekla object: by what the file says it is (its `Type`:
+/// column, beam, polybeam, contour plate, slab, pad or strip footing, weld, bolt group), else by
+/// its name (COLUMN, BEAM, ... and their Dutch words) and profile. A beam whose name says it
+/// braces or ties is a member.
+fn tekla_class(name: &str, kind: &str, profile: &str) -> (&'static str, &'static str) {
     let name = name.to_uppercase();
-    if name.contains("COLUMN") {
-        "IFCCOLUMN"
-    } else if name.contains("PLATE") || kind == "Contour plate" || profile.to_uppercase().starts_with("PL") {
-        "IFCPLATE"
-    } else if name.contains("BRAC") {
-        "IFCMEMBER"
-    } else if ["BEAM", "RAFTER", "PURLIN", "GIRDER", "JOIST"].iter().any(|k| name.contains(k)) {
-        "IFCBEAM"
+    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
+    let bracing = has(&["BRAC", "VERBAND", "TREK", "STAAF", "ROD", "TIE", "STRUT", "SCHOOR"]);
+    // a beam or column of a plate's section (a stiffener or a strip a connection made) is a plate
+    let plate_section = ["PL", "FL", "BL"].iter().any(|p| profile.to_uppercase().starts_with(p) && profile[p.len()..].starts_with(|c: char| c.is_ascii_digit()));
+    if plate_section && matches!(kind, "Column" | "Beam" | "Polybeam" | "Profile part" | "Contour plate") {
+        return ("IFCPLATE", "NOTDEFINED");
+    }
+    match kind {
+        "Column" => return ("IFCCOLUMN", "COLUMN"),
+        "Pad footing" => return ("IFCFOOTING", "PAD_FOOTING"),
+        "Strip footing" => return ("IFCFOOTING", "STRIP_FOOTING"),
+        "Slab" => return ("IFCSLAB", "FLOOR"),
+        "Weld" => return ("IFCFASTENER", "WELD"),
+        "Bolt group" => return ("IFCMECHANICALFASTENER", "BOLT"),
+        "Beam" | "Polybeam" if bracing => return ("IFCMEMBER", "BRACE"),
+        "Beam" | "Polybeam" => return ("IFCBEAM", "BEAM"),
+        _ => {}
+    }
+    if has(&["COLUMN", "KOLOM"]) {
+        ("IFCCOLUMN", "COLUMN")
+    } else if has(&["PLATE", "PLAAT"]) || kind == "Contour plate" || profile.to_uppercase().starts_with("PL") {
+        ("IFCPLATE", "NOTDEFINED")
+    } else if bracing {
+        ("IFCMEMBER", "BRACE")
+    } else if has(&["BEAM", "RAFTER", "PURLIN", "GIRDER", "JOIST", "LIGGER", "SPANT", "GORDING"]) {
+        ("IFCBEAM", "BEAM")
     } else {
-        "IFCMEMBER"
+        ("IFCMEMBER", "NOTDEFINED")
     }
 }
 
@@ -301,10 +369,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     let category = get("category").unwrap_or(layer);
     let (class, predefined) = match format {
         "Revit" => revit_class(category).unwrap_or(("IFCBUILDINGELEMENTPROXY", "NOTDEFINED")),
-        "Tekla Structures" if matches!(key, Key::Element(_)) => (
-            tekla_class(get("Name").unwrap_or(""), get("Type").unwrap_or(""), get("Profile").unwrap_or("")),
-            "NOTDEFINED",
-        ),
+        "Tekla Structures" if matches!(key, Key::Element(_)) => tekla_class(get("Name").unwrap_or(""), get("Type").unwrap_or(""), get("Profile").unwrap_or("")),
         "Archicad" => match category {
             "Wall" => ("IFCWALL", "NOTDEFINED"),
             "Slab" => ("IFCSLAB", "FLOOR"),
@@ -340,8 +405,14 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
         (None, Some(t)) => t.to_string(),
         _ => get("Name").or(get("Definition")).unwrap_or(category).to_string(),
     };
-    let object_type = ["type", "Profile", "Definition", "Mesh"].iter().find_map(|k| get(k)).map(str::to_string);
-    let tag = ["id", "Tekla id"].iter().find_map(|k| get(k)).map(str::to_string);
+    let (class, predefined) = match (format, get("Type")) {
+        // Rhino's drafting: annotations
+        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark")) => ("IFCANNOTATION", "NOTDEFINED"),
+        _ => (class, predefined),
+    };
+    let rhino = format == "Rhino";
+    let object_type = if rhino { get("Type") } else { ["type", "Profile", "Definition", "Mesh"].iter().find_map(|k| get(k)) }.map(str::to_string);
+    let tag = if rhino { get("Id") } else { ["id", "Tekla id"].iter().find_map(|k| get(k)) }.map(str::to_string);
     Identity { name, object_type, tag, class, predefined }
 }
 
@@ -416,6 +487,9 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     let precision = if units.millimetres { "1.E-02" } else { "1.E-05" };
     let context = f.add(format!("IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,{precision},#{world},#{north})"))?;
     let body_context = f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?;
+    // made when the first curve or annotation is written
+    let mut annotation_context: Option<u64> = None;
+    let mut curve_styles: HashMap<[u8; 4], u64> = HashMap::new();
 
     // project, site, building
     let info = |k: &str| model.project.info.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
@@ -470,6 +544,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     let mut by_build_up: Vec<(Layered, Vec<u64>)> = Vec::new();
     let mut by_layer: Vec<(String, Vec<u64>)> = Vec::new();
     let mut material_ids: HashMap<String, u64> = HashMap::new();
+    // the GlobalIds the source file gives its elements (Tekla's, from its object GUIDs), once each
+    let mut own_ids: HashSet<String> = HashSet::new();
     for product in products(model) {
         let Some(body) = body(model, &product, units) else { continue };
         let props = match product.key {
@@ -480,7 +556,12 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             Key::Element(id) => format!("element/{id}"),
             Key::Layer(name) => format!("layer/{name}"),
         };
-        let who = identity(&model.format, &product.key, &product.layer, &props);
+        let mut who = identity(&model.format, &product.key, &product.layer, &props);
+        if body.sets.is_empty() {
+            // curves only
+            who.class = "IFCANNOTATION";
+        }
+        let annotation = who.class == "IFCANNOTATION";
 
         // its storey: the level it names, else the highest level at or below its lowest point
         let level = props.iter().find(|(k, _)| k == "level").map(|(_, v)| v.as_str());
@@ -528,8 +609,47 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             f.add(format!("IFCSTYLEDITEM(#{item},(#{style}),$)"))?;
             items.push(item);
         }
-        let representation = f.add(format!("IFCSHAPEREPRESENTATION(#{body_context},'Body','Tessellation',{})", refs(&items)))?;
-        let shape = f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{representation}))"))?;
+        let mut curve_items = Vec::new();
+        for (colour, points) in &body.curves {
+            let style = match curve_styles.get(colour) {
+                Some(&s) => s,
+                None => {
+                    let s = curve_style(&mut f, *colour)?;
+                    curve_styles.insert(*colour, s);
+                    s
+                }
+            };
+            let mut coords = String::with_capacity(points.len() * 30);
+            coords.push_str("IFCCARTESIANPOINTLIST3D((");
+            for (i, p) in points.iter().enumerate() {
+                if i > 0 {
+                    coords.push(',');
+                }
+                let _ = write!(coords, "({},{},{})", fixed(p[0], units.decimals), fixed(p[1], units.decimals), fixed(p[2], units.decimals));
+            }
+            coords.push_str("))");
+            let list = f.add(coords)?;
+            let item = f.add(format!("IFCINDEXEDPOLYCURVE(#{list},$,.F.)"))?;
+            f.add(format!("IFCSTYLEDITEM(#{item},(#{style}),$)"))?;
+            curve_items.push(item);
+        }
+        if annotation || !curve_items.is_empty() {
+            if annotation_context.is_none() {
+                annotation_context = Some(f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Annotation','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?);
+            }
+        }
+        let mut representations = Vec::new();
+        if !items.is_empty() {
+            representations.push(if annotation {
+                f.add(format!("IFCSHAPEREPRESENTATION(#{},'Annotation','Tessellation',{})", annotation_context.unwrap_or(body_context), refs(&items)))?
+            } else {
+                f.add(format!("IFCSHAPEREPRESENTATION(#{body_context},'Body','Tessellation',{})", refs(&items)))?
+            });
+        }
+        if !curve_items.is_empty() {
+            representations.push(f.add(format!("IFCSHAPEREPRESENTATION(#{},'Annotation','Curve3D',{})", annotation_context.unwrap_or(body_context), refs(&curve_items)))?);
+        }
+        let shape = f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,{})", refs(&representations)))?;
         let at = [body.origin[0], body.origin[1], body.origin[2] - elevation];
         let point = f.add(format!(
             "IFCCARTESIANPOINT(({},{},{}))",
@@ -539,18 +659,30 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         ))?;
         let axes = f.add(format!("IFCAXIS2PLACEMENT3D(#{point},$,$)"))?;
         let placement = f.add(format!("IFCLOCALPLACEMENT(#{storey_placement},#{axes})"))?;
+        // its own GlobalId where its file gives one (so the IFC matches the source's own export),
+        // else one derived from the file and the element
+        let global_id = own_global_id(&props).filter(|g| own_ids.insert(g.clone())).unwrap_or_else(|| ids.get(&key));
         let head = format!(
             "{}({},$,{},$,{},#{placement},#{shape},{}",
             who.class,
-            text(&ids.get(&key)),
+            text(&global_id),
             text(&who.name),
             opt(who.object_type.as_deref()),
             opt(who.tag.as_deref()),
         );
         let element = f.add(match who.class {
+            // an annotation has no tag or predefined type in IFC 4
+            "IFCANNOTATION" => format!(
+                "IFCANNOTATION({},$,{},$,{},#{placement},#{shape})",
+                text(&ids.get(&key)),
+                text(&who.name),
+                opt(who.object_type.as_deref())
+            ),
             "IFCDOOR" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCWINDOW" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCREINFORCINGBAR" => format!("{head},$,$,$,$,.{}.,$)", who.predefined),
+            // nominal diameter and length unknown here
+            "IFCMECHANICALFASTENER" => format!("{head},$,$,.{}.)", who.predefined),
             // the tag is the long name; an element of its storey, not a composite
             "IFCSPACE" => format!("{head},.ELEMENT.,.{}.,$)", who.predefined),
             _ => format!("{head},.{}.)", who.predefined),
@@ -564,8 +696,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             contained[storey].push(element);
         }
         // a build-up is a layer set; else the materials the properties name
-        let build_up = layered(&props);
-        let mats = if build_up.is_some() { Vec::new() } else { materials(&props) };
+        let build_up = if annotation { None } else { layered(&props) };
+        let mats = if build_up.is_some() || annotation { Vec::new() } else { materials(&props) };
         if let Some(build_up) = build_up {
             match by_build_up.iter_mut().find(|(b, _)| *b == build_up) {
                 Some((_, list)) => list.push(element),
@@ -579,8 +711,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             }
         }
         match by_layer.iter_mut().find(|(l, _)| *l == product.layer) {
-            Some((_, list)) => list.push(representation),
-            None => by_layer.push((product.layer.clone(), vec![representation])),
+            Some((_, list)) => list.extend(&representations),
+            None => by_layer.push((product.layer.clone(), representations)),
         }
     }
 
@@ -670,6 +802,14 @@ fn surface_style(f: &mut Step<impl Write>, c: [u8; 4]) -> io::Result<u64> {
     f.add(format!("IFCSURFACESTYLE({},.BOTH.,(#{shading}))", text(&name)))
 }
 
+/// A curve style for a colour (sRGB8; curves are drawn opaque).
+fn curve_style(f: &mut Step<impl Write>, c: [u8; 4]) -> io::Result<u64> {
+    let ratio = |v: u8| real(v as f64 / 255.0);
+    let colour = f.add(format!("IFCCOLOURRGB($,{},{},{})", ratio(c[0]), ratio(c[1]), ratio(c[2])))?;
+    let name = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    f.add(format!("IFCCURVESTYLE({},$,$,#{colour},$)", text(&name)))
+}
+
 /// A property set of text values for one object (none when there are no values).
 fn property_set(
     f: &mut Step<impl Write>,
@@ -706,6 +846,13 @@ impl<W: Write> Step<'_, W> {
         writeln!(self.out, "#{id}={};", entity.as_ref())?;
         Ok(id)
     }
+}
+
+/// The GlobalId an element's source gives it (`IFC GlobalId`, as the Tekla reader derives it from
+/// the object's GUID), when it is one: 22 characters of IFC's base-64 alphabet.
+fn own_global_id(props: &[(String, String)]) -> Option<String> {
+    let id = props.iter().find(|(k, _)| k == "IFC GlobalId").map(|(_, v)| v.trim().trim_matches('"'))?;
+    (id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')).then(|| id.to_string())
 }
 
 /// Stable GlobalIds: a 128-bit hash of the file name and a key, in IFC's base-64 form.
@@ -876,6 +1023,63 @@ mod tests {
         let mut out = Vec::new();
         write(model, &Document::from_model(model), "test.ifc", &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn tekla_objects_get_the_class_of_what_they_are() {
+        assert_eq!(tekla_class("KOLOM", "Column", "HEA300"), ("IFCCOLUMN", "COLUMN"));
+        assert_eq!(tekla_class("SPANT", "Beam", "IPE400"), ("IFCBEAM", "BEAM"));
+        assert_eq!(tekla_class("WINDVERBAND", "Beam", "L80/8"), ("IFCMEMBER", "BRACE"));
+        assert_eq!(tekla_class("LUIFELLIGGER", "Polybeam", "IPE200"), ("IFCBEAM", "BEAM"));
+        assert_eq!(tekla_class("VLOER", "Slab", "200"), ("IFCSLAB", "FLOOR"));
+        assert_eq!(tekla_class("POER", "Pad footing", "1500*1500"), ("IFCFOOTING", "PAD_FOOTING"));
+        assert_eq!(tekla_class("FUNDERINGSBALK", "Strip footing", "600*800"), ("IFCFOOTING", "STRIP_FOOTING"));
+        assert_eq!(tekla_class("WELD", "Weld", ""), ("IFCFASTENER", "WELD"));
+        // a strip of plate a connection made as a column or beam
+        assert_eq!(tekla_class("PLAAT", "Column", "PL10*150"), ("IFCPLATE", "NOTDEFINED"));
+        assert_eq!(tekla_class("SCHOTJE", "Beam", "FL80*10"), ("IFCPLATE", "NOTDEFINED"));
+        // a file that does not say what the part is: by its name, in English or Dutch, or profile
+        assert_eq!(tekla_class("COLUMN", "Profile part", "HEA200").0, "IFCCOLUMN");
+        assert_eq!(tekla_class("GORDING", "Profile part", "UNP160").0, "IFCBEAM");
+        assert_eq!(tekla_class("P1", "Contour plate", "PL10").0, "IFCPLATE");
+    }
+
+    /// Two Tekla parts: a column with its GUID, and a beam whose GlobalId the column already has.
+    fn tekla_model() -> Model {
+        let (p1, i1) = cube([0.0, 0.0, 0.0]);
+        let (p2, i2) = cube([0.0, 0.0, 4.2]);
+        let mut positions = p1;
+        positions.extend(p2);
+        let mut indices = i1;
+        indices.extend(i2.iter().map(|i| i + 8));
+        let (positions, normals, indices) = flat_shaded(&positions, &indices);
+        let parts = Layer {
+            name: "Class 2".into(),
+            positions,
+            normals,
+            indices,
+            elements: vec![(5701, 0, 36), (5726, 36, 36)],
+            props: vec![
+                (5701, r#"{"Name":"KOLOM","Type":"Column","Profile":"HEA300","Material":"S355J2","Class":"2","Tekla id":5701,"IFC GlobalId":"0jkHcwGzv0G8EA3Z1pFnsL"}"#.into()),
+                (5726, r#"{"Name":"LIGGER","Type":"Beam","Profile":"IPE300","Material":"S355J2","Class":"3","Tekla id":5726,"IFC GlobalId":"0jkHcwGzv0G8EA3Z1pFnsL"}"#.into()),
+            ],
+            ..Layer::default()
+        };
+        let mut m = Model::new(PathBuf::from("hal.db1"), "Tekla Structures", vec![parts]);
+        m.project.levels = vec![("+0".into(), 0.0), ("+4200".into(), 4.2)];
+        m
+    }
+
+    #[test]
+    fn tekla_parts_keep_their_own_global_ids_on_their_levels() {
+        let s = ifc(&tekla_model());
+        let column = s.lines().find(|l| l.contains("=IFCCOLUMN(")).unwrap();
+        assert!(column.contains("('0jkHcwGzv0G8EA3Z1pFnsL',$,'KOLOM',$,'HEA300',") && column.ends_with(",'5701',.COLUMN.);"), "{column}");
+        // a GlobalId twice: the second element gets one of its own
+        let beam = s.lines().find(|l| l.contains("=IFCBEAM(")).unwrap();
+        assert!(!beam.contains("0jkHcwGzv0G8EA3Z1pFnsL") && beam.ends_with(",'5726',.BEAM.);"), "{beam}");
+        assert_eq!(s.matches("=IFCBUILDINGSTOREY(").count(), 2);
+        assert_eq!(own_global_id(&[("IFC GlobalId".into(), "not a guid".into())]), None);
     }
 
     #[test]

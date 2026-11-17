@@ -166,6 +166,49 @@ mod tests {
         assert!(saved >= 3, "only {saved} test models saved");
     }
 
+    /// Every Rhino test model saves as IFC: polysurfaces, extrusions, meshes and SubD as
+    /// IfcBuildingElementProxy with their Rhino object type and id, curves, texts and hatches as
+    /// IfcAnnotation (curves as polylines), each with its Rhino properties.
+    #[test]
+    fn saves_rhino_models_as_ifc() {
+        let dir = std::env::temp_dir().join(format!("o3v-rhino-ifc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut saved = 0;
+        for entry in std::fs::read_dir(repo_file("test-models/rhino")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "3dm") {
+                continue;
+            }
+            let model = loaders::load(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let out = dir.join(path.file_stem().unwrap()).with_extension("ifc");
+            super::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let text = std::fs::read_to_string(&out).unwrap();
+            assert!(text.trim_end().ends_with("END-ISO-10303-21;"), "{}", path.display());
+            assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());
+            assert!(text.contains("IFCPROPERTYSET(") && text.contains("'Rhino'"), "{}: no Rhino properties", path.display());
+            if path.file_stem().is_some_and(|s| s == "drafting") {
+                // 7 curves, 6 texts and 5 hatches
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 18);
+                assert!(text.matches("=IFCINDEXEDPOLYCURVE(").count() >= 7);
+                assert!(text.contains("'Annotation','Curve3D'") && text.contains("'Annotation','Tessellation'"));
+                assert!(text.contains("IFCCURVESTYLE("));
+                assert!(!text.contains("=IFCBUILDINGELEMENTPROXY("));
+            }
+            if path.file_stem().is_some_and(|s| s == "dimensions") {
+                // 9 dimensions, 2 leaders and 2 circles (curves)
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 13);
+                assert!(text.contains("'Dimension'") && text.contains("'Leader'"));
+            }
+            if path.file_stem().is_some_and(|s| s == "primitives") {
+                assert!(text.contains("=IFCBUILDINGELEMENTPROXY(") && text.contains("'Polysurface'"), "object type");
+                assert!(!text.contains("=IFCANNOTATION("));
+            }
+            saved += 1;
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(saved >= 10, "only {saved} Rhino models saved");
+    }
+
     /// Files are written new and put in place at the end: an existing file only with `replace`,
     /// and never through a link left at the temporary name.
     #[test]

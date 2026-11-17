@@ -1063,9 +1063,9 @@ impl Studio {
         Look::new(self.prefs.theme(), self.prefs.workspace(), self.prefs.statusbar()).with_text_size(self.prefs.text_size())
     }
 
-    /// The width of the left panel: the Collaborator's lists need more than the explorer's tree.
+    /// The width of the left panel: the Validator's lists need more than the explorer's tree.
     fn left_width(&self) -> f32 {
-        if self.product() == Product::Collaborator { self.prefs.left_width.max(340.0) } else { self.prefs.left_width }
+        if self.product() == Product::Validator { self.prefs.left_width.max(340.0) } else { self.prefs.left_width }
     }
 
     fn l(&self) -> Language {
@@ -1244,8 +1244,8 @@ impl Studio {
                 .enabled(!app.selected_modelled().is_empty()),
         ];
         // through the clashes with the keys: the next and the one before, accept, reject, issue
-        // (the Collaborator's, which the web build leaves out)
-        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        // (the Validator's, which the web build leaves out)
+        #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         list.extend([
             Command::new("clash.next", l.text("Volgende clash", "Next clash"), go(Message::Collab(crate::app::collab::Event::Step(1)))).shortcut(key('j')).enabled(!app.collab.clashes.is_empty()),
             Command::new("clash.previous", l.text("Vorige clash", "Previous clash"), go(Message::Collab(crate::app::collab::Event::Step(-1)))).shortcut(key('k')).enabled(!app.collab.clashes.is_empty()),
@@ -1350,7 +1350,7 @@ impl Studio {
         for &product in &self.products {
             list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
-        // the Collaborator's commands: issues, checks, clashes and the rule set
+        // the Validator's commands: issues, checks, clashes and the rule set
         // Pointcloud: how the points show, the meshes, exports and drawing made of a cloud (on the
         // desktop) and the card with what the file holds and how the jobs are done
         {
@@ -1439,9 +1439,9 @@ impl Studio {
             }
         }
         for planned in PLANNED {
-            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             let message = planned.event().map(|e| go(Message::Collab(e)));
-            #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+            #[cfg(not(all(feature = "validator", not(target_arch = "wasm32"))))]
             let message: Option<Msg> = None;
             list.push(Command::new(planned.id, planned.label(l), message.clone().unwrap_or(Msg::Dialog(None))).icon(small(planned.icon), large(planned.icon)).enabled(message.is_some()).detail(planned.detail(l)));
         }
@@ -1527,7 +1527,7 @@ impl Studio {
     pub fn update(&mut self, message: Msg) -> Task<Msg> {
         // the Viewer only looks at a view: its bar has no tools to dimension, write or cut
         self.app.annotates = self.product() != Product::Viewer;
-        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         {
             self.app.collab.language = self.l();
             self.app.collab.refresh();
@@ -1588,7 +1588,7 @@ impl Studio {
                 let started = self.dev_opens(id, &message);
                 let task = self.app.update(message).map(move |m| Msg::Project(id, m));
                 // a model changed and the rule set asks for it: the clash tests run again
-                #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+                #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
                 let task = if self.app.collab.rerun_due() { Task::batch([task, Task::done(Msg::Project(id, Message::Collab(crate::app::collab::Event::Clash)))]) } else { task };
                 if started {
                     if let Some(&shown) = self.dev.as_mut().and_then(|d| d.tab.take()).and_then(|t| self.tabs.get(t)) {
@@ -2225,7 +2225,7 @@ impl Studio {
         // One tab: the main command of a group large, the rest small in columns of three
         let tools: Vec<&str> = Tool::ALL.iter().map(|t| Self::tool_id(*t)).collect();
         let (first_tools, more_tools) = tools.split_at(3.min(tools.len()));
-        // the Viewer's tools, also the View tab of the Modeller and the Collaborator
+        // the Viewer's tools, also the View tab of the Modeller and the Validator
         let view_groups = || {
             let mut measure = vec![smalls(first_tools)];
             for column in more_tools.chunks(3) {
@@ -2470,7 +2470,7 @@ impl Studio {
                     l.text("Open een puntenwolk (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) om hem te bekijken, te meten, door te snijden en er een mesh van te maken.", "Open a point cloud (LAS, LAZ, E57, PLY, PTS, PTX, PCD, XYZ) to look at it, measure it, cut it and make a mesh of it."),
                     open(K::Primary),
                 ),
-                Product::Collaborator => (
+                Product::Validator => (
                     "team.add",
                     l.text("Geen modellen geopend", "No models open"),
                     l.text(
@@ -2551,15 +2551,15 @@ impl Studio {
         body.into()
     }
 
-    /// The left panel of the product shown, with its title: the explorer, or in the Collaborator
+    /// The left panel of the product shown, with its title: the explorer, or in the Validator
     /// the project's models, issues and checks.
     fn left_panel(&self, look: Look) -> (&'static str, Element<'_, Msg>) {
         let l = self.l();
         match self.product() {
-            Product::Collaborator => {
-                #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            Product::Validator => {
+                #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
                 let body = container(Self::pane(self.app.collab_body(look, l))).padding([4, 8]).width(Length::Fill).height(Length::Fill);
-                #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+                #[cfg(not(all(feature = "validator", not(target_arch = "wasm32"))))]
                 let body = {
                     let models: Vec<&str> = self.app.models.iter().map(|m| m.model.path.file_name().and_then(|n| n.to_str()).unwrap_or("3D")).collect();
                     container(crate::product::collaboration_panel(look, l, models)).padding([4, 8]).width(Length::Fill).height(Length::Fill)
@@ -3383,7 +3383,7 @@ mod tests {
         let _ = studio.update(Msg::RibbonTab(3));
         assert_eq!(studio.ribbon_page(), RibbonPage::View);
         // another product opens on its first tab
-        let _ = studio.update(Msg::Product(Product::Collaborator));
+        let _ = studio.update(Msg::Product(Product::Validator));
         assert_eq!(studio.ribbon_page(), RibbonPage::Collaborate);
         assert_eq!(studio.left_panel(studio.look()).0, "Collaboration");
         // the commands to come are there but do nothing yet; the switch marks the product shown
@@ -3391,7 +3391,7 @@ mod tests {
         for planned in PLANNED {
             assert!(commands.iter().any(|c| c.id == planned.id && c.enabled), "{}", planned.id);
         }
-        assert!(commands.iter().any(|c| c.id == Product::Collaborator.command() && c.kind == openaec_ui::design::command::CommandKind::Mode(true)));
+        assert!(commands.iter().any(|c| c.id == Product::Validator.command() && c.kind == openaec_ui::design::command::CommandKind::Mode(true)));
     }
 
     #[test]
@@ -3419,9 +3419,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("o3v-products-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut studio = Studio::new(App::default()).with_settings_in(dir.clone());
-        studio.set_product(Product::Collaborator);
+        studio.set_product(Product::Validator);
         let again = Studio::new(App::default()).with_settings_in(dir.clone());
-        assert_eq!(again.product(), Product::Collaborator);
+        assert_eq!(again.product(), Product::Validator);
         let _ = std::fs::remove_dir_all(&dir);
         // older preferences have no product: the Viewer
         let prefs: Prefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
@@ -3437,11 +3437,11 @@ mod tests {
         studio.set_product(Product::Viewer);
         assert_eq!(studio.product(), Product::Modeller);
         let names = accessibility(&studio).summary();
-        assert!(!names.iter().any(|n| n == "Tab: Viewer" || n == "Tab: BIM Collaborator"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "Tab: Viewer" || n == "Tab: BIM Validator"), "{names:?}");
         assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
         // a product binary: its own name in the title and About
-        let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Collaborator));
-        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Collaborator], Product::Collaborator, format!("Open BIM Collaborator {VERSION}")));
+        let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Validator));
+        assert_eq!((alone.products.clone(), alone.product(), alone.title()), (vec![Product::Validator], Product::Validator, format!("Open BIM Validator {VERSION}")));
         assert_eq!(Studio::new(App::default()).title(), format!("Open BIM Suite {VERSION}"));
     }
 

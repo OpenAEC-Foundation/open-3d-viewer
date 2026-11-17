@@ -11,14 +11,16 @@
 //!   location, rotation and scale under its parent's) and whether it is hidden in viewports;
 //! - a `Mesh`: its vertices, face corners and faces, as arrays of structs (`mvert`, `mloop`,
 //!   `mpoly`, to 3.x) or as attribute layers (`position`, `.corner_vert`, the face offsets and
-//!   `material_index`, from 4.0); its materials' viewport colours.
+//!   `material_index`, from 4.0); its materials' viewport colours;
+//! - the unit scale of the scene the file was saved in (`FileGlobal.curscene`, its
+//!   `unit.scale_length`): how many metres a Blender unit is, 0.001 in a scene set to millimetres.
 //!
 //! Left out: what Blender works out when it opens the file (modifiers, geometry nodes, instanced
 //! collections), curves, texts and other objects without a mesh, linked libraries, big-endian
-//! files. Blender's metres and Z up are the model's.
+//! files. Blender units become metres by the scene's unit scale; Blender's Z up is the model's.
 
-use super::{Loader, Source, DEFAULT_COLOR};
-use crate::model::Layer;
+use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
+use crate::model::{Layer, ProjectData};
 use glam::{Mat4, Quat, Vec3};
 use std::collections::HashMap;
 
@@ -34,14 +36,26 @@ impl Loader for BlendLoader {
     }
 
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
+        self.load_with(source, &Progress::default()).map(|l| l.layers)
+    }
+
+    fn load_with(&self, source: &Source, progress: &Progress) -> Result<Loaded, String> {
+        progress.set(Phase::Read);
         let data = source.read()?;
         let data = unpack(&data)?;
         let file = File::parse(&data)?;
+        progress.set(Phase::Convert);
         let layers = layers(&file);
         if layers.is_empty() {
             return Err("Blender: the file has no mesh objects".into());
         }
-        Ok(layers)
+        // a scene in other units than metres says so in the file properties
+        let mut info = Vec::new();
+        let scale = unit_scale(&file);
+        if scale != 1.0 {
+            info.push(("Blender unit".to_string(), format!("{scale} m")));
+        }
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
     }
 }
 
@@ -525,9 +539,23 @@ fn material_colors(object: View, mesh: View) -> Vec<Option<[f32; 3]>> {
         .collect()
 }
 
-/// The mesh objects of a file as layers, in the order of the file.
+/// How many metres a Blender unit is: the unit scale of the scene the file was saved in (0.001 in
+/// a scene set to millimetres), else of its first scene; 1 when that scene has no unit system, in
+/// which lengths have no unit, or names no usable scale.
+fn unit_scale(file: &File) -> f32 {
+    let current = file.blocks.iter().find(|b| &b.code == b"GLOB").and_then(|b| file.view(b)).and_then(|global| global.follow(&["curscene"]));
+    let scene = current.or_else(|| file.blocks.iter().find(|b| &b.code[..2] == b"SC" && b.code[2] == 0).and_then(|b| file.view(b)));
+    let Some(unit) = scene.and_then(|s| s.part(&["unit"])) else { return 1.0 };
+    if unit.int(&["system"]) == Some(0) {
+        return 1.0;
+    }
+    unit.floats(&["scale_length"]).and_then(|s| s.first().copied()).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(1.0)
+}
+
+/// The mesh objects of a file as layers, in the order of the file, in metres.
 fn layers(file: &File) -> Vec<Layer> {
     let mut out = Vec::new();
+    let to_metres = Mat4::from_scale(Vec3::splat(unit_scale(file)));
     // a mesh many objects share is read once
     let mut meshes: HashMap<usize, std::rc::Rc<Mesh>> = HashMap::new();
     for block in file.blocks.iter().filter(|b| &b.code[..2] == b"OB" && b.code[2] == 0) {
@@ -543,7 +571,7 @@ fn layers(file: &File) -> Vec<Layer> {
         let colors = material_colors(object, data);
         let base = colors.iter().flatten().next().copied().unwrap_or(DEFAULT_COLOR);
         let mixed = colors.iter().flatten().any(|c| *c != base) || (colors.iter().any(Option::is_none) && colors.iter().any(Option::is_some));
-        let to_world = world(object, 0);
+        let to_world = to_metres * world(object, 0);
         let points: Vec<Vec3> = mesh.points.iter().map(|p| to_world.transform_point3(*p)).collect();
         let name = object.name();
         let mut layer = Layer { name: name.clone(), color: base, ..Layer::default() };
@@ -600,6 +628,76 @@ mod tests {
         let area: f32 = cut.iter().map(|t| (points[t[1] as usize] - points[t[0] as usize]).cross(points[t[2] as usize] - points[t[0] as usize]).length() / 2.0).sum();
         assert!((area - 3.0).abs() < 1e-4, "{area}");
         assert_eq!(triangles(&points, &[0, 1, 2, 3]).len(), 2);
+    }
+
+    /// A file of scenes, each with a unit scale and a unit system (0 none, 1 metric, 2 imperial),
+    /// saved in the scene `current` (none: a file that names no scene as the one on screen).
+    fn scenes(scenes: &[(f32, u8)], current: Option<usize>) -> Vec<u8> {
+        let strings = |tag: &[u8; 4], all: &[&str]| {
+            let mut d = tag.to_vec();
+            d.extend((all.len() as u32).to_le_bytes());
+            for s in all {
+                d.extend(s.as_bytes());
+                d.push(0);
+            }
+            d.resize(d.len().div_ceil(4) * 4, 0);
+            d
+        };
+        let mut dna = b"SDNA".to_vec();
+        dna.extend(strings(b"NAME", &["scale_length", "system", "_pad[3]", "unit", "*curscene"]));
+        dna.extend(strings(b"TYPE", &["char", "float", "UnitSettings", "Scene", "FileGlobal"]));
+        dna.extend(b"TLEN");
+        for size in [1u16, 4, 8, 8, 8, 0] {
+            dna.extend(size.to_le_bytes());
+        }
+        dna.extend(b"STRC");
+        dna.extend(3u32.to_le_bytes());
+        // UnitSettings { float scale_length; char system; char _pad[3]; }, Scene { UnitSettings unit; },
+        // FileGlobal { Scene *curscene; }: per struct its type and fields, each a type and a name
+        for fields in [&[2u16, 3, 1, 0, 0, 1, 0, 2][..], &[3, 1, 2, 3], &[4, 1, 3, 4]] {
+            for v in fields {
+                dna.extend(v.to_le_bytes());
+            }
+        }
+        let block = |code: &[u8; 4], kind: u32, old: u64, data: &[u8]| {
+            let mut b = code.to_vec();
+            b.extend((data.len() as u32).to_le_bytes());
+            b.extend(old.to_le_bytes());
+            b.extend(kind.to_le_bytes());
+            b.extend(1u32.to_le_bytes());
+            b.extend(data);
+            b
+        };
+        let address = |k: usize| 0x2000 + 0x100 * k as u64;
+        let mut file = b"BLENDER-v405".to_vec();
+        if let Some(k) = current {
+            file.extend(block(b"GLOB", 2, 0x1000, &address(k).to_le_bytes()));
+        }
+        for (k, (scale, system)) in scenes.iter().enumerate() {
+            let mut scene = scale.to_le_bytes().to_vec();
+            scene.extend([*system, 0, 0, 0]);
+            file.extend(block(b"SC\0\0", 1, address(k), &scene));
+        }
+        file.extend(block(b"DNA1", 0, 0x3000, &dna));
+        file.extend(block(b"ENDB", 0, 0, &[]));
+        file
+    }
+
+    #[test]
+    fn a_blender_unit_is_what_the_scene_on_screen_says() {
+        let scale = |all: &[(f32, u8)], current| unit_scale(&File::parse(&scenes(all, current)).unwrap());
+        // a scene in millimetres, and the scene the file was saved in among several
+        assert_eq!(scale(&[(0.001, 1)], Some(0)), 0.001);
+        assert_eq!(scale(&[(1.0, 1), (0.001, 1)], Some(1)), 0.001);
+        assert_eq!(scale(&[(1.0, 1), (0.001, 1)], Some(0)), 1.0);
+        // imperial units scale alike; without a unit system a Blender unit is a metre
+        assert_eq!(scale(&[(0.3048, 2)], Some(0)), 0.3048);
+        assert_eq!(scale(&[(0.001, 0)], Some(0)), 1.0);
+        // a file that names no scene takes its first; a scale that is no size counts as 1
+        assert_eq!(scale(&[(0.01, 1), (5.0, 1)], None), 0.01);
+        assert_eq!(scale(&[(0.0, 1)], Some(0)), 1.0);
+        assert_eq!(scale(&[(f32::NAN, 1)], Some(0)), 1.0);
+        assert_eq!(scale(&[], None), 1.0);
     }
 
     /// Files of several Blender versions (`BLEND_FILES`: a folder of `.blend` files, read-only;

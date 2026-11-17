@@ -94,8 +94,8 @@ impl App {
         let mut lines: Vec<Colored> = self.underlay_segments().into_iter().map(|s| (s, UNDERLAY)).collect();
         let views = self.views_in_3d_now();
         lines.extend(views.lines);
-        // what the Collaborator points at: the clash picked
-        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        // what the Validator points at: the clash picked
+        #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         lines.extend(self.collab_marks());
         self.views_3d_labels = views.labels;
         // the loads and results of a structural analysis model

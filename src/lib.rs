@@ -16,7 +16,7 @@ pub mod app;
 mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
 pub mod document;
 #[cfg(windows)]

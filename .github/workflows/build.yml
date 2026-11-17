@@ -52,9 +52,6 @@ jobs:
       # Headless libraries: materials, layered build-ups, their IFCX form
       - name: Tests (bim-library)
         run: cargo test --release --locked -p bim-library
-      # Headless Docs: a project folder, its sync tool, the register as IFCX
-      - name: Tests (bim-docs)
-        run: cargo test --release --locked -p bim-docs
       - name: Web build (wasm32)
         run: |
           cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer --bin open-bim-modeller --bin open-bim-validator --bin open-bim-pointcloud

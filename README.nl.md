@@ -347,7 +347,7 @@ open-3d-viewer --bench BESTAND|synthetic:N|structural:N[+...] [--frames 300] [--
 
 `--bench` neemt ook gegenereerde scenario's: `synthetic:N` (N blokken, elk een element), `structural:N` (een 3D-raamwerk van N staven met knopen, opleggingen en scharnieren), of meerdere verbonden met `+`, zoals `structural:100000+synthetic:100000`.
 
-Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.11`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert.
+Versies volgen het OpenAEC-schema `JJJJ.W.N`: jaar, ISO-week zonder voorloopnul, en een volgnummer binnen de week dat bij 0 begint, zoals `2026.45.11`. Een tag `vJJJJ.W.N` start [`release.yml`](.github/workflows/release.yml), dat de release test, bouwt en ondertekent voor Windows, macOS en Linux en hem publiceert. Als het secret `VIEWER_STUDIO_RELEASE_TOKEN` is ingesteld, kopieert het de release ook naar [open-3d-viewer-studio](https://github.com/OpenAEC-Foundation/open-3d-viewer-studio), de repository met alleen de releases en een README.
 
 Open BIM Suite hoort bij de familie van apps van de [OpenAEC Foundation](https://github.com/OpenAEC-Foundation).
 

@@ -11,6 +11,10 @@
 # GPU. The SuperCloud builds its own image (OpenAEC Linux) from the AppImage, so no Docker image
 # of the viewer is built here (OpenAEC-Blueprint#61).
 #
+# The release is also copied to OpenAEC-Foundation/open-3d-viewer-studio, the repository that holds
+# only the viewer's releases and a README. That needs the secret VIEWER_STUDIO_RELEASE_TOKEN: a
+# token that may write the contents of that repository alone. Without it the copy is left out.
+#
 # A dry run (Run workflow on a branch, dry_run on, no tag) builds and signs everything with the
 # version in Cargo.toml and publishes nothing; the signatures are in the job summaries.
 name: Release
@@ -600,3 +604,32 @@ jobs:
             pre=(--prerelease)
           fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Open BIM Suite ${NUMBER}" --notes-file notes.md "${pre[@]}" assets/*
+      # The viewer has a repository of its own that holds only the releases and a README: the same
+      # release goes there too, with a line above its notes that says where the source is. Whatever
+      # happens here, the release above stays as it is.
+      - name: Copy the release to open-3d-viewer-studio
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.VIEWER_STUDIO_RELEASE_TOKEN }}
+          COPY_TO: OpenAEC-Foundation/open-3d-viewer-studio
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::notice::VIEWER_STUDIO_RELEASE_TOKEN is not set; the release is not copied to $COPY_TO"; exit 0
+          fi
+          if gh release view "$TAG" --repo "$COPY_TO" > /dev/null 2>&1; then
+            echo "::notice::$COPY_TO already has a release $TAG; left as it is"; exit 0
+          fi
+          {
+            echo "Dit is een kopie van [de release in ${GITHUB_REPOSITORY#*/}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}), waar de broncode staat. De bestanden zijn dezelfde: hun controlesommen komen overeen."
+            echo
+            cat notes.md
+          } > copy-notes.md
+          pre=()
+          if [[ "$PRERELEASE" == true ]]; then
+            pre=(--prerelease)
+          fi
+          # that repository has no source: the tag goes on its main branch
+          gh release create "$TAG" --repo "$COPY_TO" --target main --title "Open BIM Suite ${NUMBER}" --notes-file copy-notes.md "${pre[@]}" assets/* || {
+            echo "::warning::the release $TAG was not copied to $COPY_TO"; exit 1
+          }

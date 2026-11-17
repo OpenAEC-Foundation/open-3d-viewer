@@ -1,6 +1,6 @@
-# Read-only access to the private format readers (rvt-dll, vwx-dll, 3dm-dll and the standalone
-# readers): one deploy key per repository, each private key in a secret of its own whose name
-# starts with SSH_KEY_ (SSH_KEY_RVT_DLL, SSH_KEY_3DM_DLL, ..), its comment the repository's
+# Read-only access to the private format readers (revit-dll, rhino-dll, sketchup-dll, tekla-dll,
+# ply-dll, ..): one deploy key per repository, each private key in a secret of its own whose name
+# starts with SSH_KEY_ (SSH_KEY_REVIT_DLL, SSH_KEY_RHINO_DLL, ..), its comment the repository's
 # address (git@github.com:OpenAEC-Foundation/<repository>.git), which tells ssh-agent which key
 # opens which repository. A new reader needs a new key and a new secret, nothing here.
 name: Private reader keys
@@ -17,7 +17,8 @@ runs:
       env:
         ALL_SECRETS: ${{ inputs.secrets }}
       run: |
-        keys=$(printf '%s' "$ALL_SECRETS" | jq -r 'to_entries[] | select(.key | startswith("SSH_KEY_")) | .value')
+        # jq on Windows ends every line with CRLF, and ssh-add rejects such a key ("invalid format")
+        keys=$(printf '%s' "$ALL_SECRETS" | jq -r 'to_entries[] | select(.key | startswith("SSH_KEY_")) | .value' | tr -d '\r')
         count=$(printf '%s\n' "$keys" | grep -c "BEGIN OPENSSH PRIVATE KEY" || true)
         echo "Private reader keys: $count"
         {

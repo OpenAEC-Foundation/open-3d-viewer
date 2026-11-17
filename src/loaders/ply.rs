@@ -1,5 +1,5 @@
-//! Adapter from the independent ply-reader file reader to the app's scene model. A PLY file
-//! without faces is a point cloud (as scanners, photogrammetry and CloudCompare write them): its
+//! Adapter from the independent PLY reader (crate ply-reader, repository ply-dll) to the app's
+//! scene model. A PLY file without faces is a point cloud (as scanners, photogrammetry and CloudCompare write them): its
 //! vertices become points, read here with full precision, in their colour, else their intensity
 //! as grey, else a colour by height; a classification gives a layer per class as for LAS.
 //! Thinned out evenly to [`MAX_POINTS`](super::pointcloud::MAX_POINTS); far coordinates move to

@@ -2,7 +2,7 @@ name: Build
 
 # Tests, the web build check and the desktop app for Windows, Linux and macOS, on every push to
 # main and every pull request. Releases come from release.yml (a tag vYYYY.W.N). The desktop app
-# includes Revit through the private rvt-dll library.
+# includes Revit through the private revit-dll library.
 on:
   push:
     branches: [main]

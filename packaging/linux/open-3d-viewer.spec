@@ -8,7 +8,7 @@ Version:        %{number}
 Release:        1
 Summary:        3D model viewer for AEC files
 License:        LGPL-3.0-or-later
-URL:            https://github.com/OpenAEC-Foundation/open-3d-viewer
+URL:            https://github.com/OpenAEC-Foundation/open-bim-suite
 
 %description
 Open 3D Viewer Studio opens IFC, Revit, SketchUp, Tekla, Archicad, DWG/DXF,

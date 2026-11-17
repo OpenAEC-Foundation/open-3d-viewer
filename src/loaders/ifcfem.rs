@@ -335,6 +335,11 @@ fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
         let name = args.get(2).and_then(|a| string(a)).unwrap_or_default();
         let word = |k: usize| args.get(k).map(|a| a.trim_matches('.').to_string()).unwrap_or_default();
         if word(5) == "LOAD_COMBINATION" {
+            // a file may give its load groups once per analysis model: one of a name is one
+            if let Some(same) = model.combinations.iter().find(|c| c.name == name) {
+                load_of.insert(n, LoadRef::Combination(same.id));
+                continue;
+            }
             let id = sam_id(IdKind::Combination, n);
             let purpose = match args.get(9).and_then(|a| string(a)).unwrap_or_default().as_str() {
                 "UGT" | "ULS" => Purpose::Uls,
@@ -344,6 +349,10 @@ fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
             model.combinations.push(Combination { id, number: (model.combinations.len() + 1).to_string(), name, purpose, terms: Vec::new() });
             load_of.insert(n, LoadRef::Combination(id));
         } else {
+            if let Some(same) = model.load_cases.iter().find(|c| c.name == name) {
+                load_of.insert(n, LoadRef::Case(same.id));
+                continue;
+            }
             let id = sam_id(IdKind::LoadCase, n);
             let action_type = match word(6).as_str() {
                 "PERMANENT_G" => ActionType::Permanent,
@@ -379,7 +388,7 @@ fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
     for (kind, name) in [(false, "IFCSTRUCTURALPOINTACTION"), (true, "IFCSTRUCTURALLINEARACTION")] {
         for (n, args) in file.of(name) {
             let (Some(item), Some(load)) = (acts_on.get(&n), args.get(7).and_then(|a| reference(a))) else { continue };
-            let Some(case) = in_group.iter().find(|(_, members)| members.contains(&n)).and_then(|(group, _)| load_of.get(group)).copied() else { continue };
+            let Some(case) = in_group.iter().filter(|(_, members)| members.contains(&n)).find_map(|(group, _)| load_of.get(group)).copied() else { continue };
             let frame = if args.get(8).is_some_and(|f| f.contains("LOCAL")) { LoadFrame::Local } else { LoadFrame::Global };
             let id = sam_id(IdKind::Action, n);
             if kind {
@@ -524,7 +533,9 @@ DATA;
 #1648=IFCSTRUCTURALLOADLINEARFORCE('q 1',$,IFCLINEARFORCEMEASURE(0.),IFCLINEARFORCEMEASURE(-375.),$,$,$);
 #1649=IFCSTRUCTURALLINEARACTION('v',$,'staaflast 1',$,$,$,$,#1648,.LOCAL_COORDS.,$,.TRUE_LENGTH.,.CONST.);
 #1650=IFCRELCONNECTSSTRUCTURALACTIVITY('w',$,$,$,#439,#1649);
-#2089=IFCRELASSIGNSTOGROUP('x',$,$,$,(#1622,#1649),$,#23);
+#87=IFCSTRUCTURALLOADGROUP('y',$,'Eigen gewicht',$,$,.LOAD_CASE.,.NOTDEFINED.,.NOTDEFINED.,$,$);
+#2088=IFCRELASSIGNSTOGROUP('z',$,$,$,(#98,#109,#439,#1622,#1649),$,#91);
+#2089=IFCRELASSIGNSTOGROUP('x',$,$,$,(#1622,#1649),$,#87);
 #2096=IFCPROPERTYSINGLEVALUE('Inhoud',$,IFCTEXT('#1=IFCSTRUCTURALCURVEMEMBER(, (((('),$);
 #2100=IFCSTRUCTURALRESULTGROUP('i',$,'Resultaten Eigen gewicht',$,'geval',.FIRST_ORDER_THEORY.,$,.T.);
 #2101=IFCSTRUCTURALLOADSINGLEDISPLACEMENT('u 2',0.,0.,-0.012,0.,0.,0.);
@@ -587,7 +598,8 @@ END-ISO-10303-21;
         let reactions = payload.reactions.as_ref().expect("reactions");
         assert_eq!((reactions.node.as_slice(), reactions.comps[2].as_slice(), reactions.comps[4].as_slice()), ([model.nodes[0].id].as_slice(), [6000.0].as_slice(), [-18000.0].as_slice()));
 
-        // a force on node 2 and a line load along the member, both in the load case
+        // a force on node 2 and a line load along the member, both in the load case: the file names
+        // it twice, and holds them under the second, but it is one case
         let case = LoadRef::Case(model.load_cases[0].id);
         assert_eq!(model.actions.len(), 2);
         assert!(matches!(&model.actions[0], Action { load, target: Target::Node(n), frame: LoadFrame::Global, kind: Load::NodalForce { f, .. }, .. } if *load == case && *n == model.nodes[1].id && *f == DVec3::new(2600.0, 0.0, 0.0)));

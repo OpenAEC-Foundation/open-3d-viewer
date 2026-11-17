@@ -58,7 +58,8 @@ impl super::Writer for IfcWriter {
 #[derive(Clone, Copy)]
 struct Units {
     millimetres: bool,
-    /// Decimals written for coordinates (0.01 mm).
+    /// Decimals written for coordinates: 0.01 mm, finer for a small model (a millionth of its
+    /// size), so that its thin parts keep their triangles.
     decimals: u32,
     /// One millimetre in quantised coordinates.
     mm: i64,
@@ -68,10 +69,12 @@ impl Units {
     fn of(model: &Model) -> Self {
         let unitless = matches!(model.format.as_str(), "OBJ" | "STL" | "PLY");
         if unitless && model.bounds.is_valid() && model.bounds.size().iter().any(|&s| s > 500.0) {
-            Units { millimetres: true, decimals: 2, mm: 100 }
-        } else {
-            Units { millimetres: false, decimals: 5, mm: 100 }
+            return Units { millimetres: true, decimals: 2, mm: 100 };
         }
+        // metres: to 0.01 mm, or a millionth of the model's size when that is smaller
+        let size = if model.bounds.is_valid() { model.bounds.size().iter().fold(0.0f64, |m, &s| m.max(s as f64)) } else { 0.0 };
+        let decimals = if size > 0.0 && size.is_finite() { ((-(size * 1e-6).log10()).ceil() as i64).clamp(5, 9) as u32 } else { 5 };
+        Units { millimetres: false, decimals, mm: 10i64.pow(decimals - 3) }
     }
 
     /// Quantised coordinate of a model value.
@@ -338,6 +341,7 @@ fn tekla_class(name: &str, kind: &str, profile: &str) -> (&'static str, &'static
         "Slab" => return ("IFCSLAB", "FLOOR"),
         "Weld" => return ("IFCFASTENER", "WELD"),
         "Bolt group" => return ("IFCMECHANICALFASTENER", "BOLT"),
+        "Rebar group" | "Single rebar" => return ("IFCREINFORCINGBAR", "NOTDEFINED"),
         "Beam" | "Polybeam" if bracing => return ("IFCMEMBER", "BRACE"),
         "Beam" | "Polybeam" => return ("IFCBEAM", "BEAM"),
         _ => {}
@@ -407,7 +411,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     };
     let (class, predefined) = match (format, get("Type")) {
         // Rhino's drafting: annotations
-        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark")) => ("IFCANNOTATION", "NOTDEFINED"),
+        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark" | "Clipping plane")) => ("IFCANNOTATION", "NOTDEFINED"),
         _ => (class, predefined),
     };
     let rhino = format == "Rhino";
@@ -484,7 +488,7 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     let origin = f.add("IFCCARTESIANPOINT((0.,0.,0.))")?;
     let world = f.add(format!("IFCAXIS2PLACEMENT3D(#{origin},$,$)"))?;
     let north = f.add("IFCDIRECTION((0.,1.))")?;
-    let precision = if units.millimetres { "1.E-02" } else { "1.E-05" };
+    let precision = format!("1.E-{:02}", units.decimals);
     let context = f.add(format!("IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,{precision},#{world},#{north})"))?;
     let body_context = f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?;
     // made when the first curve or annotation is written
@@ -1035,6 +1039,8 @@ mod tests {
         assert_eq!(tekla_class("POER", "Pad footing", "1500*1500"), ("IFCFOOTING", "PAD_FOOTING"));
         assert_eq!(tekla_class("FUNDERINGSBALK", "Strip footing", "600*800"), ("IFCFOOTING", "STRIP_FOOTING"));
         assert_eq!(tekla_class("WELD", "Weld", ""), ("IFCFASTENER", "WELD"));
+        assert_eq!(tekla_class("BEUGEL", "Rebar group", ""), ("IFCREINFORCINGBAR", "NOTDEFINED"));
+        assert_eq!(tekla_class("STAAF", "Single rebar", ""), ("IFCREINFORCINGBAR", "NOTDEFINED"));
         // a strip of plate a connection made as a column or beam
         assert_eq!(tekla_class("PLAAT", "Column", "PL10*150"), ("IFCPLATE", "NOTDEFINED"));
         assert_eq!(tekla_class("SCHOTJE", "Beam", "FL80*10"), ("IFCPLATE", "NOTDEFINED"));

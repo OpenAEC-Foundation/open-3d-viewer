@@ -184,7 +184,9 @@ mod tests {
             super::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.trim_end().ends_with("END-ISO-10303-21;"), "{}", path.display());
-            assert!(text.contains("IFCTRIANGULATEDFACESET("), "{}: no geometry", path.display());
+            // triangles, or only curves (linetypes.3dm) as polylines
+            let geometry = text.contains("IFCTRIANGULATEDFACESET(") || text.contains("=IFCINDEXEDPOLYCURVE(");
+            assert!(geometry, "{}: no geometry", path.display());
             assert!(text.contains("IFCPROPERTYSET(") && text.contains("'Rhino'"), "{}: no Rhino properties", path.display());
             if path.file_stem().is_some_and(|s| s == "drafting") {
                 // 7 curves, 6 texts and 5 hatches
@@ -194,10 +196,33 @@ mod tests {
                 assert!(text.contains("IFCCURVESTYLE("));
                 assert!(!text.contains("=IFCBUILDINGELEMENTPROXY("));
             }
+            // read back, the curves are lines again: of their elements, in their places
+            if path.file_stem().is_some_and(|s| s == "drafting" || s == "linetypes") {
+                let back = loaders::load(&out).unwrap_or_else(|e| panic!("{}: {e}", out.display()));
+                let lines: usize = back.layers.iter().map(|l| l.lines.len() / 2).sum();
+                let curve_elements: usize = back.layers.iter().map(|l| l.line_elements.len()).sum();
+                let before: usize = model.layers.iter().map(|l| l.lines.len() / 2).sum();
+                assert_eq!(lines, before, "{}: line segments read back", path.display());
+                assert!(curve_elements >= 7, "{}: {curve_elements} curve elements", path.display());
+                let size = |m: &crate::model::Model| m.bounds.size();
+                let (a, b) = (size(&model), size(&back));
+                assert!((0..3).all(|k| (a[k] - b[k]).abs() < 1e-4), "{}: {a:?} against {b:?}", path.display());
+            }
             if path.file_stem().is_some_and(|s| s == "dimensions") {
                 // 9 dimensions, 2 leaders and 2 circles (curves)
                 assert_eq!(text.matches("=IFCANNOTATION(").count(), 13);
                 assert!(text.contains("'Dimension'") && text.contains("'Leader'"));
+            }
+            // the triangles of a small model (the stair is 4.4 mm high) are not lost to the
+            // coordinate grid
+            if path.file_stem().is_some_and(|s| s == "stairs") {
+                let written: usize = text
+                    .split("IFCTRIANGULATEDFACESET(")
+                    .skip(1)
+                    .map(|set| set.split(",$)").next().unwrap_or("").matches("),(").count() + 1)
+                    .sum();
+                let drawn = model.triangle_count();
+                assert!(written as f64 >= 0.98 * drawn as f64, "stairs: {written} of {drawn} triangles written");
             }
             if path.file_stem().is_some_and(|s| s == "primitives") {
                 assert!(text.contains("=IFCBUILDINGELEMENTPROXY(") && text.contains("'Polysurface'"), "object type");

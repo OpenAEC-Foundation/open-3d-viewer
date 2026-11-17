@@ -7,7 +7,9 @@
 //!   side of the fibre it stretches (+My stretches +z, +Mz stretches −y). The largest value of
 //!   the model takes [`REACH`] of the model's size.
 //! - **Deformed shape**: the members between their nodes as displaced, the largest displacement
-//!   taking [`REACH`] of the model's size.
+//!   taking [`REACH`] of the model's size; a member with a section also as the solid of its
+//!   profile there. The file gives displacements at the nodes only, so a member stays straight
+//!   between them.
 //! - **Reactions**: an arrow at every supported node, the force the support puts on the structure.
 //! - **Loads** of a load case: arrows at nodes, along members and on surfaces.
 //! - **Supports and releases**: at every supported node a symbol of what it holds (a square for a
@@ -28,9 +30,11 @@ pub const REACH: f64 = 0.12;
 const POSITIVE: [u8; 4] = [37, 99, 235, 255];
 const NEGATIVE: [u8; 4] = [220, 38, 38, 255];
 const DEFORMED: [u8; 4] = [22, 163, 74, 255];
+const DEFORMED_SOLID: [u8; 4] = [74, 222, 128, 255];
 const REACTION: [u8; 4] = [124, 58, 237, 255];
 const LOAD: [u8; 4] = [217, 119, 6, 255];
-const SUPPORT: [u8; 4] = [15, 118, 110, 255];
+const SUPPORT: [u8; 4] = [20, 150, 140, 255];
+const SUPPORT_EDGE: [u8; 4] = [15, 80, 76, 255];
 const RELEASE: [u8; 4] = [219, 39, 119, 255];
 /// The size of a support symbol, as a part of the model's size; it does not follow the scale.
 const SYMBOL: f64 = 0.014;
@@ -88,6 +92,18 @@ pub enum Values {
     Members,
 }
 
+/// A filled triangle in display coordinates with its colour, as the cut faces are.
+pub type Face = ([[f32; 3]; 3], [u8; 4]);
+
+/// How the deformed shape is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeformedAs {
+    /// The members' lines, and the solid of every member that has a section.
+    #[default]
+    Profiles,
+    Lines,
+}
+
 /// What of the loads and results is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Shown {
@@ -104,6 +120,11 @@ pub struct Shown {
     pub scale: f32,
     pub style: Style,
     pub values: Values,
+    pub deformed_as: DeformedAs,
+    /// The node glyphs, the member axes and the figures beside the lines, left out.
+    pub hide_nodes: bool,
+    pub hide_members: bool,
+    pub hide_values: bool,
 }
 
 /// A change of what is drawn.
@@ -127,6 +148,16 @@ pub enum Change {
     ScaleTo(f32),
     Style(Style),
     Values(Values),
+    DeformedAs(DeformedAs),
+    /// Each given as it is to be, not switched: the internal force (none: no line), the deformed
+    /// shape, the reactions, the supports, and whether nodes, members and figures show.
+    ForceIs(Option<Force>),
+    DeformedOn(bool),
+    ReactionsOn(bool),
+    SupportsOn(bool),
+    NodesOn(bool),
+    MembersOn(bool),
+    ValuesOn(bool),
 }
 
 impl Shown {
@@ -144,6 +175,14 @@ impl Shown {
             Change::SetAt(at) => self.set = at.min(sets.saturating_sub(1)),
             Change::CaseAt(at) => self.loads = at.filter(|k| *k < cases),
             Change::ScaleTo(scale) => self.scale = if scale.is_finite() { scale.clamp(0.05, 20.0) } else { self.scale },
+            Change::DeformedAs(how) => self.deformed_as = how,
+            Change::ForceIs(force) => self.force = force,
+            Change::DeformedOn(on) => self.deformed = on,
+            Change::ReactionsOn(on) => self.reactions = on,
+            Change::SupportsOn(on) => self.supports = on,
+            Change::NodesOn(on) => self.hide_nodes = !on,
+            Change::MembersOn(on) => self.hide_members = !on,
+            Change::ValuesOn(on) => self.hide_values = !on,
             Change::Style(style) => self.style = style,
             Change::Values(values) => self.values = values,
             Change::Scale(larger) => self.scale = (if self.scale > 0.0 { self.scale } else { 1.0 } * if larger { 1.5 } else { 1.0 / 1.5 }).clamp(0.05, 20.0),
@@ -157,9 +196,24 @@ impl Shown {
 
 /// The lines and figures of `shown` for `parts`, in display coordinates.
 pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec<Colored>, Vec<(String, [f32; 3])>) {
-    let (mut lines, mut labels) = (Vec::new(), Vec::new());
+    let drawn = draw_all(parts, origins, shown);
+    (drawn.lines, drawn.labels)
+}
+
+/// What [`draw_all`] gives: lines, filled triangles (arrow heads, supports, the solids of the
+/// deformed shape) and figures.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Drawing {
+    pub lines: Vec<Colored>,
+    pub faces: Vec<Face>,
+    pub labels: Vec<(String, [f32; 3])>,
+}
+
+/// The lines, filled triangles and figures of `shown` for `parts`, in display coordinates.
+pub fn draw_all(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> Drawing {
+    let (mut lines, mut faces, mut labels) = (Vec::new(), Vec::new(), Vec::new());
     if !shown.anything() {
-        return (lines, labels);
+        return Drawing::default();
     }
     for part in parts {
         let doc = &part.doc;
@@ -169,7 +223,7 @@ pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec
         let (low, high) = doc.nodes.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), n| (lo.min(n.p), hi.max(n.p)));
         let size = if low.cmple(high).all() { (high - low).length().max(1.0) } else { 1.0 };
         let reach = size * REACH * f64::from(if shown.scale > 0.0 { shown.scale } else { 1.0 });
-        let mut pen = Pen { lines: &mut lines, at: &at };
+        let mut pen = Pen { lines: &mut lines, faces: &mut faces, at: &at };
         let results = doc.results.get(shown.set).and_then(|r| r.inline.as_ref());
         if let (Some(force), Some(table)) = (shown.force, results.and_then(|r| r.member_forces.as_ref())) {
             for (value, p) in forces(doc, table, force, reach, shown, &mut pen) {
@@ -177,7 +231,7 @@ pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec
             }
         }
         if let (true, Some(table)) = (shown.deformed, results.and_then(|r| r.node_displacements.as_ref())) {
-            if let Some((value, p)) = deformed(doc, table, reach, &mut pen) {
+            if let Some((value, p)) = deformed(doc, table, reach, shown.deformed_as, &mut pen) {
                 labels.push((format!("u {}", figure(value * 1e3, "mm")), at(p)));
             }
         }
@@ -193,7 +247,10 @@ pub fn draw(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> (Vec
             supports(doc, size * SYMBOL, &mut pen);
         }
     }
-    (lines, labels)
+    if shown.hide_values {
+        labels.clear();
+    }
+    Drawing { lines, faces, labels }
 }
 
 /// A figure with its unit, in three significant digits.
@@ -202,11 +259,15 @@ fn figure(value: f64, unit: &str) -> String {
     format!("{value:.digits$} {unit}")
 }
 
-/// Draws lines in display coordinates from world points.
+/// Draws lines and filled triangles in display coordinates from world points.
 struct Pen<'a> {
     lines: &'a mut Vec<Colored>,
+    faces: &'a mut Vec<Face>,
     at: &'a dyn Fn(DVec3) -> [f32; 3],
 }
+
+/// Where the light that shades the filled triangles comes from.
+const LIGHT: DVec3 = DVec3::new(0.35, 0.25, 0.9);
 
 impl Pen<'_> {
     fn line(&mut self, a: DVec3, b: DVec3, color: [u8; 4]) {
@@ -215,7 +276,62 @@ impl Pen<'_> {
         }
     }
 
-    /// An arrow from `tail` to `tip`, its head a fifth of its length.
+    /// A filled triangle, darker the more its face turns from the light.
+    fn face(&mut self, corners: [DVec3; 3], normal: DVec3, color: [u8; 4]) {
+        if !corners.iter().all(|c| c.is_finite()) {
+            return;
+        }
+        let lit = 0.5 + 0.5 * normal.normalize_or_zero().dot(LIGHT.normalize()).abs();
+        let shade = |c: u8| (f64::from(c) * lit).round().clamp(0.0, 255.0) as u8;
+        self.faces.push((corners.map(|c| (self.at)(c)), [shade(color[0]), shade(color[1]), shade(color[2]), color[3]]));
+    }
+
+    /// A flat face of four corners in order.
+    fn quad(&mut self, c: [DVec3; 4], color: [u8; 4]) {
+        let normal = (c[1] - c[0]).cross(c[2] - c[0]);
+        self.face([c[0], c[1], c[2]], normal, color);
+        self.face([c[0], c[2], c[3]], normal, color);
+    }
+
+    /// A block: the square of half-width `half` around `top` in the plane of `u` and `v`, and
+    /// `depth` down along `w` from there.
+    fn block(&mut self, top: DVec3, u: DVec3, v: DVec3, w: DVec3, half: f64, depth: f64, color: [u8; 4]) {
+        let corner = |a: f64, b: f64, down: f64| top + u * (a * half) + v * (b * half) - w * down;
+        let ring = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        self.quad(ring.map(|(a, b)| corner(a, b, 0.0)), color);
+        self.quad(ring.map(|(a, b)| corner(a, b, depth)), color);
+        for k in 0..4 {
+            let ((a, b), (c, d)) = (ring[k], ring[(k + 1) % 4]);
+            self.quad([corner(a, b, 0.0), corner(c, d, 0.0), corner(c, d, depth), corner(a, b, depth)], color);
+        }
+    }
+
+    /// A round bar or cone from `a` (radius `ra`) to `b` (radius `rb`), closed at both ends.
+    fn round(&mut self, a: DVec3, b: DVec3, ra: f64, rb: f64, color: [u8; 4]) {
+        let along = (b - a).normalize_or_zero();
+        if along == DVec3::ZERO {
+            return;
+        }
+        let side = frame::default_z_ref(along).cross(along).normalize_or_zero();
+        let up = along.cross(side);
+        const SIDES: usize = 10;
+        let around = |k: usize| {
+            let t = k as f64 / SIDES as f64 * std::f64::consts::TAU;
+            side * t.cos() + up * t.sin()
+        };
+        for k in 0..SIDES {
+            let (d0, d1) = (around(k), around(k + 1));
+            let (a0, a1, b0, b1) = (a + d0 * ra, a + d1 * ra, b + d0 * rb, b + d1 * rb);
+            let normal = (a1 - a0).cross(b0 - a0);
+            self.face([a0, a1, b1], normal, color);
+            self.face([a0, b1, b0], normal, color);
+            self.face([a, a1, a0], along, color);
+            self.face([b, b0, b1], along, color);
+        }
+    }
+
+    /// An arrow from `tail` to `tip`: a round shaft and a cone for its head, a quarter of its
+    /// length. Its centre line is drawn too, for where only lines show.
     fn arrow(&mut self, tail: DVec3, tip: DVec3, color: [u8; 4]) {
         let shaft = tip - tail;
         let length = shaft.length();
@@ -223,12 +339,9 @@ impl Pen<'_> {
             return;
         }
         self.line(tail, tip, color);
-        let along = shaft / length;
-        let side = frame::default_z_ref(along).cross(along).normalize_or_zero();
-        let up = along.cross(side);
-        for wing in [side, -side, up, -up] {
-            self.line(tip, tip - along * length * 0.22 + wing * length * 0.09, color);
-        }
+        let neck = tip - shaft * 0.25;
+        self.round(tail, neck, length * 0.018, length * 0.018, color);
+        self.round(neck, tip, length * 0.07, 0.0, color);
     }
 }
 
@@ -287,17 +400,28 @@ fn forces(doc: &AnalysisModel, table: &results::MemberTable, force: Force, reach
     peaks
 }
 
-/// The members between their displaced nodes; the largest displacement and where it is.
-fn deformed(doc: &AnalysisModel, table: &results::NodeTable, reach: f64, pen: &mut Pen) -> Option<(f64, DVec3)> {
+/// The members between their displaced nodes, as lines and (`how`) as the solids of their
+/// profiles; the largest displacement and where it is.
+fn deformed(doc: &AnalysisModel, table: &results::NodeTable, reach: f64, how: DeformedAs, pen: &mut Pen) -> Option<(f64, DVec3)> {
     let moved: std::collections::HashMap<Id, DVec3> = table.node.iter().enumerate().filter_map(|(k, id)| Some((*id, DVec3::new(*table.comps[0].get(k)?, *table.comps[1].get(k)?, *table.comps[2].get(k)?)))).filter(|(_, u)| u.is_finite()).collect();
     let most = moved.values().fold(0.0_f64, |m, u| m.max(u.length()));
     if most <= 0.0 {
         return None;
     }
     let place = |id: Id| doc.node(id).map(|n| n.p + moved.get(&id).copied().unwrap_or(DVec3::ZERO) * (reach / most));
+    // a profile's outline is made once, however many members have it
+    let mut outlines: std::collections::HashMap<Id, Option<Vec<section::Loop>>> = std::collections::HashMap::new();
     for member in &doc.members {
-        if let (Some(a), Some(b)) = (member.nodes.first().and_then(|id| place(*id)), member.nodes.last().and_then(|id| place(*id))) {
-            pen.line(a, b, DEFORMED);
+        let (Some(a), Some(b)) = (member.nodes.first().and_then(|id| place(*id)), member.nodes.last().and_then(|id| place(*id))) else { continue };
+        pen.line(a, b, DEFORMED);
+        if how != DeformedAs::Profiles {
+            continue;
+        }
+        let Some(section) = member.section.and_then(|(id, _)| doc.section(id)) else { continue };
+        let loops = outlines.entry(section.id).or_insert_with(|| section::outline(&section.shape, 0.001, 8).ok().map(|o| o.loops()));
+        let (Some(loops), Ok(f)) = (loops.as_ref(), frame::member_frame(a, b, member.z_ref).or_else(|_| frame::member_frame(a, b, frame::default_z_ref(b - a)))) else { continue };
+        for (corners, normal) in super::solid::sweep(loops, &f) {
+            pen.face(corners, normal, DEFORMED_SOLID);
         }
     }
     let (id, u) = moved.iter().max_by(|a, b| a.1.length().total_cmp(&b.1.length()))?;
@@ -320,28 +444,27 @@ fn reactions(doc: &AnalysisModel, table: &results::NodeTable, reach: f64, pen: &
 }
 
 /// A symbol at every supported node and a circle near every released member end; `s` is the
-/// symbol's size. A pinned support is a pyramid with its top at the node on a hatched ground
-/// plate; a roller stands on a second plate under a gap; a fixed support is the ground plate at
-/// the node itself; anything else a diamond.
+/// symbol's size. A pinned support is a pyramid with its top at the node on a ground plate; a
+/// roller stands on a second plate under a gap; a fixed support is a block under the node;
+/// anything else a diamond. Each is solid, with the strokes of the ground under its plate.
 fn supports(doc: &AnalysisModel, s: f64, pen: &mut Pen) {
-    let (x, y, z) = (DVec3::X * s, DVec3::Y * s, DVec3::Z * s);
-    // a square plate around `c` with the strokes of the ground under it
-    let plate = |pen: &mut Pen, c: DVec3, half: f64| {
-        let corners = [c - (x + y) * half, c + (x - y) * half, c + (x + y) * half, c - (x - y) * half];
-        for k in 0..4 {
-            pen.line(corners[k], corners[(k + 1) % 4], SUPPORT);
-        }
+    let (x, y, z) = (DVec3::X, DVec3::Y, DVec3::Z);
+    // a plate with its top at `top` and the strokes of the ground under it
+    let plate = |pen: &mut Pen, top: DVec3, half: f64| {
+        pen.block(top, x, y, z, half, s * 0.3, SUPPORT);
+        let under = top - z * s * 0.3;
         for k in 0..=4 {
             let t = -half + 2.0 * half * k as f64 / 4.0;
-            pen.line(c + x * t - y * half, c + x * (t - 0.35) - y * half - z * 0.45, SUPPORT);
-            pen.line(c + y * t + x * half, c + y * (t - 0.35) + x * half - z * 0.45, SUPPORT);
+            pen.line(under + x * t - y * half, under + x * (t - s * 0.35) - y * half - z * s * 0.45, SUPPORT);
+            pen.line(under + y * t + x * half, under + y * (t - s * 0.35) + x * half - z * s * 0.45, SUPPORT);
         }
     };
     let pyramid = |pen: &mut Pen, top: DVec3, base: DVec3| {
-        let corners = [base - x - y, base + x - y, base + x + y, base - x + y];
+        let corners = [base + (-x - y) * s, base + (x - y) * s, base + (x + y) * s, base + (-x + y) * s];
         for k in 0..4 {
-            pen.line(top, corners[k], SUPPORT);
-            pen.line(corners[k], corners[(k + 1) % 4], SUPPORT);
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            pen.face([top, a, b], (a - top).cross(b - top), SUPPORT);
+            pen.line(top, a, SUPPORT_EDGE);
         }
     };
     for node in &doc.nodes {
@@ -349,24 +472,27 @@ fn supports(doc: &AnalysisModel, s: f64, pen: &mut Pen) {
         let p = node.p;
         match support.preset {
             SupportPreset::Fixed => {
-                plate(pen, p, 1.5);
-                pen.line(p - x * 1.5, p + x * 1.5, SUPPORT);
-                pen.line(p - y * 1.5, p + y * 1.5, SUPPORT);
+                pen.block(p, x, y, z, s * 1.1, s * 0.9, SUPPORT);
+                plate(pen, p - z * s * 0.9, s * 1.6);
             }
             SupportPreset::Pinned => {
-                pyramid(pen, p, p - z * 1.8);
-                plate(pen, p - z * 1.8, 1.5);
+                pyramid(pen, p, p - z * s * 1.8);
+                plate(pen, p - z * s * 1.8, s * 1.6);
             }
             SupportPreset::Roller { .. } | SupportPreset::Sliding { .. } => {
-                pyramid(pen, p, p - z * 1.8);
-                plate(pen, p - z * 2.3, 1.5);
+                pyramid(pen, p, p - z * s * 1.8);
+                pen.block(p - z * s * 1.8, x, y, z, s * 1.2, s * 0.2, SUPPORT);
+                plate(pen, p - z * s * 2.4, s * 1.6);
             }
             SupportPreset::Free => {}
             SupportPreset::Spring | SupportPreset::Custom => {
-                for (u, v) in [(x, z), (y, z), (x, y)] {
-                    for (a, b) in [(p - u, p - v), (p - v, p + u), (p + u, p + v), (p + v, p - u)] {
-                        pen.line(a, b, SUPPORT);
+                let tips = [p + x * s, p + y * s, p - x * s, p - y * s];
+                for k in 0..4 {
+                    let (a, b) = (tips[k], tips[(k + 1) % 4]);
+                    for apex in [p + z * s, p - z * s] {
+                        pen.face([apex, a, b], (a - apex).cross(b - apex), SUPPORT);
                     }
+                    pen.line(a, b, SUPPORT_EDGE);
                 }
             }
         }
@@ -552,9 +678,10 @@ mod tests {
         let (lines, labels) = drawn(Shown { deformed: true, scale: 1.0, ..Shown::default() });
         assert_eq!((lines.len(), labels[0].0.as_str()), (1, "u 2.00 mm"));
         assert!(lines[0].1 == DEFORMED && (lines[0].0[1][2] + 0.48).abs() < 1e-4, "{lines:?}");
-        // an arrow of five lines per reaction, pointing up into the node
+        // an arrow per reaction, pointing up into the node: its centre line here, its shaft and
+        // head among the faces
         let (lines, labels) = drawn(Shown { reactions: true, scale: 1.0, ..Shown::default() });
-        assert_eq!((lines.len(), labels.len(), labels[0].0.as_str()), (10, 2, "10.0 kN"));
+        assert_eq!((lines.len(), labels.len(), labels[0].0.as_str()), (2, 2, "10.0 kN"));
         assert!(lines.iter().all(|(_, c)| *c == REACTION));
         // the line load as a row of arrows under their top line, and the point load at its node
         let (lines, _) = drawn(Shown { loads: Some(0), scale: 1.0, ..Shown::default() });
@@ -562,8 +689,42 @@ mod tests {
         assert!(drawn(Shown { loads: Some(7), scale: 1.0, ..Shown::default() }).0.is_empty());
         // the symbols of the supports, alone and of one size whatever the scale
         let (symbols, labels) = drawn(Shown { supports: true, scale: 1.0, ..Shown::default() });
-        assert!(!symbols.is_empty() && labels.is_empty() && symbols.iter().all(|(_, c)| *c == SUPPORT || *c == RELEASE));
+        assert!(!symbols.is_empty() && labels.is_empty() && symbols.iter().all(|(_, c)| *c == SUPPORT || *c == SUPPORT_EDGE || *c == RELEASE));
         assert_eq!(drawn(Shown { supports: true, scale: 3.0, ..Shown::default() }).0, symbols);
+    }
+
+    #[test]
+    fn arrows_supports_and_the_deformed_profile_are_solid() {
+        let all = |shown: Shown| draw_all(&beam(), &[Origin::default()], &shown);
+        // an arrow has a shaft and a head; a pinned support a pyramid on a plate
+        assert!(all(Shown { reactions: true, scale: 1.0, ..Shown::default() }).faces.len() >= 2 * 40);
+        assert!(all(Shown { supports: true, scale: 1.0, ..Shown::default() }).faces.len() >= 4 + 12);
+        // the beam has no section: its deformed shape is a line; with a tube it is a solid too,
+        // unless lines are asked for
+        assert!(all(Shown { deformed: true, scale: 1.0, ..Shown::default() }).faces.is_empty());
+        let mut parts = beam();
+        let mut doc = (*parts[0].doc).clone();
+        let section = sam_id(IdKind::Section, 1);
+        let shape = Shape::Chs { d: 0.1, t: 0.005 };
+        let (props, props_source) = section::compute(&shape, None);
+        doc.sections.push(Section { id: section, name: "CHS 100x5".into(), shape, props, props_source, imported: None, material: None });
+        doc.members[0].section = Some((section, None));
+        doc.rebuild_index();
+        parts[0] = StructuralPart::new(0, Arc::new(doc));
+        let solid = draw_all(&parts, &[Origin::default()], &Shown { deformed: true, scale: 1.0, ..Shown::default() });
+        assert!(solid.faces.len() > 40 && solid.faces.iter().all(|(_, c)| c[1] > c[0] && c[1] > c[2]), "green, shaded");
+        // the free end went down by the reach: the solid's lowest point follows it
+        let lowest = solid.faces.iter().flat_map(|(t, _)| t.iter().map(|p| p[2])).fold(f32::MAX, f32::min);
+        assert!((lowest + (4.0 * REACH) as f32 + 0.05).abs() < 0.01, "{lowest}");
+        let lines = draw_all(&parts, &[Origin::default()], &Shown { deformed: true, scale: 1.0, deformed_as: DeformedAs::Lines, ..Shown::default() });
+        assert!(lines.faces.is_empty() && lines.lines == solid.lines);
+        // figures can be left out; what is shown is given as it is to be
+        assert!(!solid.labels.is_empty() && draw_all(&parts, &[Origin::default()], &Shown { deformed: true, scale: 1.0, hide_values: true, ..Shown::default() }).labels.is_empty());
+        let mut shown = Shown::default();
+        for change in [Change::ForceIs(Some(Force::Mz)), Change::DeformedOn(true), Change::ReactionsOn(true), Change::SupportsOn(true), Change::NodesOn(false), Change::MembersOn(false), Change::ValuesOn(false)] {
+            shown.apply(change, 1, 1);
+        }
+        assert_eq!((shown.force, shown.deformed, shown.reactions, shown.supports, shown.hide_nodes, shown.hide_members, shown.hide_values), (Some(Force::Mz), true, true, true, true, true, true));
     }
 
     #[test]

@@ -206,6 +206,9 @@ pub struct ProjectData {
     /// Drawings without a model (Revit, beta): legends and drafting views, with their lines,
     /// texts and dimensions.
     pub drafts: Vec<Draft>,
+    /// The cut the file opens with, in display coordinates (Rhino: the clipping plane that clips
+    /// its perspective view).
+    pub section: Option<crate::section::SectionPlane>,
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,

@@ -55,7 +55,7 @@ jobs:
         run: cargo test --release --locked -p bim-library
       - name: Web build (wasm32)
         run: |
-          cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer --bin open-bim-modeller --bin open-bim-collaborator --bin open-bim-pointcloud
+          cargo check --locked --target wasm32-unknown-unknown --lib --bin open-3d-viewer --bin open-bim-modeller --bin open-bim-validator --bin open-bim-pointcloud
           cargo check --locked --target wasm32-unknown-unknown -p bim-structural
           cargo check --locked --target wasm32-unknown-unknown -p bim-library
 
@@ -65,7 +65,7 @@ jobs:
         run: |
           cargo check --locked --target wasm32-unknown-unknown --no-default-features --features viewer --lib --bin open-3d-viewer
           cargo check --locked --target wasm32-unknown-unknown --no-default-features --features modeller --lib --bin open-bim-modeller
-          cargo check --locked --target wasm32-unknown-unknown --no-default-features --features collaborator --lib --bin open-bim-collaborator
+          cargo check --locked --target wasm32-unknown-unknown --no-default-features --features validator --lib --bin open-bim-validator
           cargo check --locked --target wasm32-unknown-unknown --no-default-features --features pointcloud --lib --bin open-bim-pointcloud
 
   desktop:

@@ -104,15 +104,15 @@ What works and what does not on Android:
 - **Section box and section plane** cut the model open, with the cut faces filled. The box can fit the selection.
 - **Exploded view** pulls the model apart per storey or per element, by a percentage per axis.
 
-## Viewer, Modeller and BIM Collaborator
+## Viewer, Modeller and BIM Validator
 
 One code base, one app, three products. The switch at the top right of the window moves between them; each has its own ribbon, panels and start screen over the same open project:
 
 - **Viewer**: open, look, measure and cut, as above.
 - **Modeller**: the **Model** tab with the base elements (below), and a **View** tab with the Viewer's display, camera, section and measure tools.
-- **BIM Collaborator** (an outline): the project's models together, with issues (BCF), checking against IDS, comments and sharing to come. Its ribbon already shows those commands, not working yet, and its panel says what each will hold.
+- **BIM Validator** (an outline): the project's models together, with issues (BCF), checking against IDS, comments and sharing to come. Its ribbon already shows those commands, not working yet, and its panel says what each will hold.
 
-The window opens in the product used last; `--product viewer|modeller|collaborator` on the command line and `?product=modeller` in the browser pick one. Which modules each product uses, and how each builds: [`docs/architecture/products.md`](docs/architecture/products.md).
+The window opens in the product used last; `--product viewer|modeller|validator` on the command line and `?product=modeller` in the browser pick one. Which modules each product uses, and how each builds: [`docs/architecture/products.md`](docs/architecture/products.md).
 
 ## Modelling (beta)
 
@@ -187,7 +187,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 | [`.github/workflows/`](.github/workflows/) | `build.yml` tests every change, `release.yml` builds and signs a release, `live.yml` publishes the browser version, `android.yml` builds the Android APK |
 | [`scripts/`](scripts/) | The README images, the B2 icon copy and the product video, all made by script |
 | [`test-models/`](test-models/) | The models the tests open |
-| [`docs/architecture/`](docs/architecture/) | How one code base is three products: the Viewer, the Modeller and the BIM Collaborator |
+| [`docs/architecture/`](docs/architecture/) | How one code base is three products: the Viewer, the Modeller and the BIM Validator |
 
 The readers for SketchUp, Tekla and PLY, and the Revit library, live in their own OpenAEC repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). This repository pins each to a fixed commit.
 
@@ -314,13 +314,13 @@ Requires Rust 1.96 or later (with the MSVC toolchain on Windows) and read access
 
 For work on the interface, `powershell -File scripts/dev.ps1 [-Model FILE]` (Windows) keeps a debug build open that rebuilds and restarts after every change to the source, usually within 10–20 s. It reopens the files that were open, each in its tab, and the title names the branch. A failed build leaves the last viewer open, with the errors in `target/dev/build.log`; `scripts/dev.ps1 -Stop` stops it.
 
-One code base builds three products ([`docs/architecture/products.md`](docs/architecture/products.md)). `cargo build --release` builds the Studio, `open-3d-viewer`, with all three and the switch between them, and `open-bim-modeller` and `open-bim-collaborator`, each one product alone. A build that holds one product only is a build of its own: `cargo build --release --no-default-features --features modeller --bin open-bim-modeller` (likewise `viewer` with `--bin open-3d-viewer`, `collaborator` with `--bin open-bim-collaborator`). Releases ship the Studio and the MCP server; the product binaries are not packaged yet.
+One code base builds three products ([`docs/architecture/products.md`](docs/architecture/products.md)). `cargo build --release` builds the Studio, `open-3d-viewer`, with all three and the switch between them, and `open-bim-modeller` and `open-bim-validator`, each one product alone. A build that holds one product only is a build of its own: `cargo build --release --no-default-features --features modeller --bin open-bim-modeller` (likewise `viewer` with `--bin open-3d-viewer`, `validator` with `--bin open-bim-validator`). Releases ship the Studio and the MCP server; the product binaries are not packaged yet.
 
 The command line:
 
 ```
 open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light] [--language en|nl|de|fr]
-               [--product viewer|modeller|collaborator]
+               [--product viewer|modeller|validator]
 open-3d-viewer [FILE] --screenshot OUT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAME] [--explode X,Y,Z]
 open-3d-viewer FILE --save-as OUT.ifc

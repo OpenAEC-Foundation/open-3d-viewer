@@ -1,4 +1,4 @@
-//! The BIM Collaborator's work on the open project: issues (BCF), information checks (IDS, the
+//! The BIM Validator's work on the open project: issues (BCF), information checks (IDS, the
 //! built-in model checks, the BIM basis ILS profile) and clash tests, kept together in a rule
 //! set. The panel lists what each found; a click goes to it in the model.
 //!
@@ -145,8 +145,8 @@ pub fn compare_models(model: &Model, old: u32, new: u32) -> Comparison {
     out
 }
 
-/// Where the Collaborator keeps who you are: beside the preferences.
-/// Where the Collaborator keeps the folder the project is shared through.
+/// Where the Validator keeps who you are: beside the preferences.
+/// Where the Validator keeps the folder the project is shared through.
 fn share_file() -> Option<PathBuf> {
     // a test starts as a first run: it does not take over what the person set on this machine
     if cfg!(test) {
@@ -155,7 +155,7 @@ fn share_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-share.txt"))
 }
 
-/// Where the Collaborator keeps the house its reports are in the style of.
+/// Where the Validator keeps the house its reports are in the style of.
 fn house_file() -> Option<PathBuf> {
     // a test starts as a first run: it does not take over what the person set on this machine
     if cfg!(test) {
@@ -164,7 +164,7 @@ fn house_file() -> Option<PathBuf> {
     Some(crate::remote_link::settings_dir()?.join("collaborator-house.json"))
 }
 
-/// Where the Collaborator keeps the BCF server of the project.
+/// Where the Validator keeps the BCF server of the project.
 fn server_file() -> Option<PathBuf> {
     // a test starts as a first run: it does not take over what the person set on this machine
     if cfg!(test) {
@@ -348,7 +348,7 @@ pub struct Checked {
     pub report: Result<Arc<ValidationReport>, String>,
 }
 
-/// The Collaborator's state of a project.
+/// The Validator's state of a project.
 pub struct State {
     pub tab: Tab,
     pub issues: Issues,
@@ -3026,7 +3026,7 @@ impl App {
         Ok(())
     }
 
-    /// The Collaborator's panel: its tabs, and under them the issues, the checks or the clashes.
+    /// The Validator's panel: its tabs, and under them the issues, the checks or the clashes.
     pub fn collab_body(&self, look: Look, l: Language) -> Element<'_, Message> {
         let p = self.theme.palette();
         let state = &self.collab;
@@ -4013,7 +4013,7 @@ impl App {
         list.into()
     }
 
-    /// A remote command of the Collaborator (`collab_…`): what a person does in its panel,
+    /// A remote command of the Validator (`collab_…`): what a person does in its panel,
     /// answered at once; checks and clash tests run before the answer.
     pub(crate) fn collab_command(&mut self, cmd: &str, a: &serde_json::Value) -> Result<serde_json::Value, String> {
         use serde_json::json;

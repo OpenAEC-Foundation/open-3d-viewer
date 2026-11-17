@@ -33,7 +33,8 @@ const NOT_CARRYING: [&str; 2] = ["Curtain panels", "Curtain wall mullions"];
 /// `None` when nothing says (a proxy).
 pub fn ifc_class(format: &str, layer: &str, props: &[(String, String)]) -> Option<String> {
     let get = |k: &str| props.iter().find(|(p, _)| p == k).map(|(_, v)| v.trim()).filter(|v| !v.is_empty());
-    let class = match get("IfcType").or_else(|| get("Class")) {
+    // `Class` is an IFC class in IFCX, but a number in Tekla (its part class): only an Ifc… counts
+    let class = match get("IfcType").or_else(|| get("Class").filter(|c| c.to_ascii_lowercase().starts_with("ifc"))) {
         Some(class) => class.to_uppercase(),
         None => crate::export::ifc::export_class(format, layer, props).to_string(),
     };
@@ -78,6 +79,9 @@ mod tests {
         assert_eq!(load_bearing("Revit", "Walls", &props(&[("category", "Structural foundations")])), Some(true));
         assert_eq!(load_bearing("Revit", "", &props(&[("category", "Furniture and casework")])), Some(false));
         assert_eq!(load_bearing("Revit", "", &props(&[("category", "Curtain wall mullions")])), Some(false));
+        // Tekla: its class is a number; what the part is says the class
+        assert_eq!(ifc_class("Tekla Structures", "Class 2", &props(&[("Class", "2"), ("Type", "Column"), ("Name", "KOLOM")])).as_deref(), Some("IFCCOLUMN"));
+        assert_eq!(load_bearing("Tekla Structures", "Class 9", &props(&[("Class", "9"), ("Type", "Pad footing"), ("Name", "POER")])), Some(true));
         // nothing says: a proxy, or a format without classes
         assert_eq!(load_bearing("IFC", "", &props(&[("IfcType", "IfcBuildingElementProxy")])), None);
         assert_eq!(load_bearing("SketchUp", "Layer0", &props(&[("Name", "Sofa")])), None);

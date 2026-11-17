@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn extracted_readers_remain_registered() {
-        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP"), ("3dm", "Rhino"), ("vwx", "Vectorworks")] {
+        for (extension, name) in [("skp", "SketchUp"), ("db1", "Tekla Structures"), ("ply", "PLY"), ("ndw", "Allplan"), ("dgn", "MicroStation DGN"), ("pln", "Archicad"), ("pla", "Archicad"), ("3mf", "3MF"), ("dae", "COLLADA"), ("fbx", "FBX"), ("off", "OFF"), ("3ds", "3DS"), ("geojson", "GeoJSON"), ("gml", "CityGML"), ("citygml", "CityGML"), ("usdz", "USD"), ("las", "LAS"), ("laz", "LAS"), ("e57", "E57"), ("xyz", "XYZ"), ("txt", "XYZ"), ("csv", "XYZ"), ("asc", "XYZ"), ("pts", "PTS"), ("ptx", "PTX"), ("pcd", "PCD"), ("shp", "Shapefile"), ("wrl", "VRML / X3D"), ("x3d", "VRML / X3D"), ("x3dv", "VRML / X3D"), ("amf", "AMF"), ("ifcx", "IFCX"), ("stp", "STEP"), ("step", "STEP"), ("stpz", "STEP"), ("3dm", "Rhino"), ("vwx", "Vectorworks"), ("sta", "Vectorworks")] {
             let loader = registry().into_iter().find(|l| l.extensions().contains(&extension)).expect(extension);
             assert_eq!(loader.name(), name);
         }

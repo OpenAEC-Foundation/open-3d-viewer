@@ -5,7 +5,7 @@
 //!   else one storey; each element is contained in its level, or the storey it stands on.
 //! - One IFC element per element of the model (Revit elements, Tekla parts, SketchUp components,
 //!   glTF nodes) and one per layer for geometry outside elements (OBJ objects, STL, PLY). The
-//!   class follows the Revit category, the Tekla part name or the Archicad element (IfcWall,
+//!   class follows the Revit category, the Tekla part name or the Archicad or Vectorworks element (IfcWall,
 //!   IfcSlab, IfcBeam, ...); anything else is an IfcBuildingElementProxy.
 //! - Archicad openings (already cut from their walls) are left out; Archicad library objects,
 //!   drawn as boxes of any kind, are IfcBuildingElementProxy; Archicad meshes are
@@ -316,6 +316,13 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             "Roof" => ("IFCSLAB", "ROOF"),
             "Mesh" => ("IFCGEOGRAPHICELEMENT", "TERRAIN"),
             "Zone" => ("IFCSPACE", "SPACE"),
+            _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
+        },
+        // Vectorworks: the object type as the vwx reader names it
+        "Vectorworks" => match category {
+            "wall" => ("IFCWALL", "NOTDEFINED"),
+            "slab" => ("IFCSLAB", "FLOOR"),
+            "roof" | "roof element" => ("IFCSLAB", "ROOF"),
             _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
         },
         // an element this viewer modelled says its class itself

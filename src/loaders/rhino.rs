@@ -350,7 +350,14 @@ impl<'f> Scene<'f> {
     fn run(&mut self) {
         let root = DMat4::from_scale(DVec3::splat(self.file.meters));
         let file = self.file;
-        for object in &file.objects {
+        if !file.lights.is_empty() {
+            self.skipped.insert("lights", file.lights.len());
+        }
+        // Hidden objects use the remaining drawing budget and do not choose the origin before
+        // visible geometry, even when they occur first in the file.
+        let objects = file.objects.iter().filter(|o| o.attributes.visible && o.attributes.mode != 1)
+            .chain(file.objects.iter().filter(|o| !o.attributes.visible || o.attributes.mode == 1));
+        for object in objects {
             let a = &object.attributes;
             if a.mode == 3 {
                 continue; // block definition geometry, drawn by its instances
@@ -580,7 +587,7 @@ impl<'f> Scene<'f> {
         self.file
             .named_views
             .iter()
-            .filter(|v| v.direction != DVec3::ZERO && v.location.is_finite())
+            .filter(|v| v.direction != DVec3::ZERO && v.direction.is_finite() && v.location.is_finite())
             .map(|v| SavedView {
                 name: v.name.clone(),
                 kind: ViewKind::ThreeD,
@@ -588,7 +595,7 @@ impl<'f> Scene<'f> {
                     eye: (v.location * self.file.meters - origin).as_vec3().to_array(),
                     forward: v.direction.as_vec3().to_array(),
                     perspective: v.perspective,
-                    fov_y: (v.perspective && v.fov_y > 0.0).then_some(v.fov_y as f32),
+                    fov_y: (v.perspective && v.fov_y.is_finite() && v.fov_y > 0.0).then_some(v.fov_y as f32),
                 }),
                 clip: None,
                 plan: None,
@@ -816,6 +823,7 @@ mod tests {
             &[0, 0, 255, 0],
             &[0; 16],
             &f64s(&[1.0, 0.0, 0.0, 0.5]),
+            &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &i32b(0)),
         ]);
         let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &glass), &[]))]);
         let model_attributes = w.versioned(TCODE_MODEL_ATTRIBUTES_CHUNK, 1, 0, &cat(&[&[0], &[1], &id(40).0, &[0], &[0], &[1], &wstr("Chair")]));
@@ -933,7 +941,7 @@ mod tests {
     fn rhino4_layout() {
         let w = W { big: false };
         let layers = w.table(TCODE_LAYER_TABLE, &[w.layer(0, "Default", [0, 0, 0, 0], true, id(1), Uuid::default(), 0)]);
-        let material = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&id(9).0, &i32b(0), &wstr("Oak"), &[0; 16], &[0; 4], &[150, 100, 50, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.0])]));
+        let material = w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&id(9).0, &i32b(0), &wstr("Oak"), &[0; 16], &[0; 4], &[150, 100, 50, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.0]), &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &i32b(0))]));
         let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &cat(&[&[0x20], &material]), &[]))]);
         // a 1.x mesh: arrays of points, normals, texture coordinates, curvatures and colours
         let mut mesh = vec![0x10];
@@ -1105,7 +1113,7 @@ mod tests {
             w.layer(2, "Green", [0, 200, 0, 0], true, id(3), Uuid::default(), -1),
             w.layer(3, "Glass", [100, 100, 100, 0], true, id(4), Uuid::default(), 0),
         ]);
-        let glass = cat(&[&w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&0x0Cu32.to_le_bytes(), &i32b(0), &wstr("Glass")])), &[0; 16], &[0; 4], &[0, 0, 255, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.5])]);
+        let glass = cat(&[&w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &cat(&[&0x0Cu32.to_le_bytes(), &i32b(0), &wstr("Glass")])), &[0; 16], &[0; 4], &[0, 0, 255, 0], &[0; 16], &f64s(&[1.0, 0.0, 0.0, 0.5]), &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &i32b(0))]);
         let materials = w.table(TCODE_MATERIAL_TABLE, &[w.chunk(TCODE_MATERIAL_RECORD, &w.object(ON_MATERIAL, &w.versioned(TCODE_ANONYMOUS_CHUNK, 1, 0, &glass), &[]))]);
         let blocks = w.table(TCODE_INSTANCE_DEFINITION_TABLE, &[block(&w, id(50), "Chair", &[id(60)])]);
         // the chair: red by object, material by parent, on the default layer
@@ -1145,6 +1153,57 @@ mod tests {
         assert_eq!(mesh.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
         let cloud = &model.layers[1];
         assert_eq!(cloud.positions, [0.125, 0.0625, 1.0, 10.5, 20.25, 2.0]);
+    }
+
+    #[test]
+    fn named_view_cameras_follow_units_and_the_local_origin() {
+        let mut file = File::default();
+        file.meters = 0.001;
+        file.named_views.push(threedm_read::View {
+            id: Uuid::default(),
+            name: "Saved perspective".into(),
+            perspective: true,
+            location: DVec3::new(155_001_000.0, 463_002_000.0, 3_000.0),
+            direction: DVec3::NEG_Z,
+            up: DVec3::Y,
+            fov_y: 0.75,
+            height: 2_000.0,
+        });
+        let mut scene = Scene::new(&file);
+        scene.origin = Some(DVec3::new(155_000.0, 463_000.0, 0.0));
+        let views = scene.views();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].name, "Saved perspective");
+        let camera = views[0].camera.as_ref().unwrap();
+        assert_eq!(camera.eye, [1.0, 2.0, 3.0]);
+        assert_eq!(camera.forward, [0.0, 0.0, -1.0]);
+        assert!(camera.perspective);
+        assert_eq!(camera.fov_y, Some(0.75));
+    }
+
+    #[test]
+    fn visible_objects_keep_the_triangle_budget_and_origin_before_hidden_objects() {
+        let object = |name: &str, hidden: bool, x: f32, y: f32| threedm_read::RhinoObject {
+            attributes: Attributes { name: name.into(), visible: !hidden, ..Attributes::default() },
+            geometry: Geometry::Meshes(vec![Mesh {
+                positions: vec![[x, y, 0.0], [x + 1.0, y, 0.0], [x, y + 1.0, 0.0]],
+                faces: vec![[0, 1, 2, 2]],
+                triangles: 1,
+                ..Mesh::default()
+            }], "Mesh"),
+            user: Vec::new(),
+        };
+        let mut file = File::default();
+        file.meters = 1.0;
+        file.objects = vec![object("Hidden", true, 1_000_000_000.0, 1_000_000_000.0), object("Visible", false, 155_000.25, 463_000.5)];
+        let mut scene = Scene::new(&file);
+        scene.triangles = MAX_TRIANGLES - 1;
+        scene.run();
+        let (layers, info, _, _) = scene.finish();
+        let visible = layers.iter().find(|l| !l.hidden).unwrap();
+        assert_eq!(visible.triangle_count(), 1);
+        assert_eq!(visible.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
+        assert_eq!(entry(&info, "Rhino world origin (metres)"), "155000, 463000, 0");
     }
 
     /// Clipping planes (`clipping.3dm`, from make_clipping.py, in millimetres): each is drawn as
@@ -1344,7 +1403,7 @@ mod tests {
             assert!(colours("Coloured mesh").len() > 100);
             let props = &elements["Box user text"].1;
             assert_eq!((props["Fire rating"].as_str(), props["Supplier"].as_str()), (Some("60 min"), Some("ACME")));
-            assert!(!elements.contains_key("Hidden box"));
+            assert!(elements.contains_key("Hidden box"));
         }
     }
 

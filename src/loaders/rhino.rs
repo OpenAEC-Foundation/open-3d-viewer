@@ -1117,7 +1117,7 @@ mod tests {
         let plane = model.project.section.expect("a section");
         assert!((plane.normal - glam::Vec3::Z).length() < 1e-6 && (plane.offset - 0.005).abs() < 1e-7, "{plane:?}");
         assert!(plane.cuts(glam::Vec3::new(0.005, 0.005, 0.008)) && !plane.cuts(glam::Vec3::new(0.005, 0.005, 0.002)));
-        let props: Vec<serde_json::Value> = model.layers.iter().flat_map(|l| &l.props).map(|(_, p)| serde_json::from_str(p).unwrap()).filter(|p: &serde_json::Value| p["Type"] == "Clipping plane").collect();
+        let props: Vec<serde_json::Value> = model.props.values().map(|p| serde_json::from_str(p).unwrap()).filter(|p: &serde_json::Value| p["Type"] == "Clipping plane").collect();
         let clips = |name: &str| props.iter().find(|p| p["Name"] == name).unwrap_or_else(|| panic!("{name}"))["Clips"].as_str().unwrap().to_string();
         assert_eq!((clips("Cut"), clips("Slab"), clips("Off")), ("Perspective".into(), "Top".into(), "no view (off)".into()));
         assert!(props.iter().any(|p| p["Name"] == "Slab" && p["Clipping depth (m)"] == "0.002"));

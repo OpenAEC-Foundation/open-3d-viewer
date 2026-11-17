@@ -106,7 +106,8 @@ roxmltree = "0.20"
 opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762969f3897e67e1801a2199445b6cf83b5d", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/skp-reader", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-tekla-reader = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "a17caa4f66a171bb4765f6f546b4eec24c0acace" }
+# db1-dll, under its former name: the CI deploy key (FORMAT_CRATES_SSH_KEYS) is mapped to that URL
+tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-reader", rev = "9cd5e01a5216d15bfe6fb84fa4a12e7fb23fbd9e" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-reader", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
 threedm-read = { git = "https://github.com/OpenAEC-Foundation/3dm-dll", rev = "225f8d4823876270d498afb2ff132228f7e7f8d4", default-features = false }

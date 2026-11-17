@@ -29,7 +29,7 @@
 
 use crate::document::Document;
 use crate::model::Model;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::Path;
@@ -318,19 +318,40 @@ fn revit_class(category: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// The IFC class for a Tekla part, from its name (BEAM, COLUMN, ...), type and profile.
-fn tekla_class(name: &str, kind: &str, profile: &str) -> &'static str {
+/// The IFC class and predefined type of a Tekla object: by what the file says it is (its `Type`:
+/// column, beam, polybeam, contour plate, slab, pad or strip footing, weld, bolt group), else by
+/// its name (COLUMN, BEAM, ... and their Dutch words) and profile. A beam whose name says it
+/// braces or ties is a member.
+fn tekla_class(name: &str, kind: &str, profile: &str) -> (&'static str, &'static str) {
     let name = name.to_uppercase();
-    if name.contains("COLUMN") {
-        "IFCCOLUMN"
-    } else if name.contains("PLATE") || kind == "Contour plate" || profile.to_uppercase().starts_with("PL") {
-        "IFCPLATE"
-    } else if name.contains("BRAC") {
-        "IFCMEMBER"
-    } else if ["BEAM", "RAFTER", "PURLIN", "GIRDER", "JOIST"].iter().any(|k| name.contains(k)) {
-        "IFCBEAM"
+    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
+    let bracing = has(&["BRAC", "VERBAND", "TREK", "STAAF", "ROD", "TIE", "STRUT", "SCHOOR"]);
+    // a beam or column of a plate's section (a stiffener or a strip a connection made) is a plate
+    let plate_section = ["PL", "FL", "BL"].iter().any(|p| profile.to_uppercase().starts_with(p) && profile[p.len()..].starts_with(|c: char| c.is_ascii_digit()));
+    if plate_section && matches!(kind, "Column" | "Beam" | "Polybeam" | "Profile part" | "Contour plate") {
+        return ("IFCPLATE", "NOTDEFINED");
+    }
+    match kind {
+        "Column" => return ("IFCCOLUMN", "COLUMN"),
+        "Pad footing" => return ("IFCFOOTING", "PAD_FOOTING"),
+        "Strip footing" => return ("IFCFOOTING", "STRIP_FOOTING"),
+        "Slab" => return ("IFCSLAB", "FLOOR"),
+        "Weld" => return ("IFCFASTENER", "WELD"),
+        "Bolt group" => return ("IFCMECHANICALFASTENER", "BOLT"),
+        "Beam" | "Polybeam" if bracing => return ("IFCMEMBER", "BRACE"),
+        "Beam" | "Polybeam" => return ("IFCBEAM", "BEAM"),
+        _ => {}
+    }
+    if has(&["COLUMN", "KOLOM"]) {
+        ("IFCCOLUMN", "COLUMN")
+    } else if has(&["PLATE", "PLAAT"]) || kind == "Contour plate" || profile.to_uppercase().starts_with("PL") {
+        ("IFCPLATE", "NOTDEFINED")
+    } else if bracing {
+        ("IFCMEMBER", "BRACE")
+    } else if has(&["BEAM", "RAFTER", "PURLIN", "GIRDER", "JOIST", "LIGGER", "SPANT", "GORDING"]) {
+        ("IFCBEAM", "BEAM")
     } else {
-        "IFCMEMBER"
+        ("IFCMEMBER", "NOTDEFINED")
     }
 }
 
@@ -348,10 +369,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     let category = get("category").unwrap_or(layer);
     let (class, predefined) = match format {
         "Revit" => revit_class(category).unwrap_or(("IFCBUILDINGELEMENTPROXY", "NOTDEFINED")),
-        "Tekla Structures" if matches!(key, Key::Element(_)) => (
-            tekla_class(get("Name").unwrap_or(""), get("Type").unwrap_or(""), get("Profile").unwrap_or("")),
-            "NOTDEFINED",
-        ),
+        "Tekla Structures" if matches!(key, Key::Element(_)) => tekla_class(get("Name").unwrap_or(""), get("Type").unwrap_or(""), get("Profile").unwrap_or("")),
         "Archicad" => match category {
             "Wall" => ("IFCWALL", "NOTDEFINED"),
             "Slab" => ("IFCSLAB", "FLOOR"),
@@ -526,6 +544,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     let mut by_build_up: Vec<(Layered, Vec<u64>)> = Vec::new();
     let mut by_layer: Vec<(String, Vec<u64>)> = Vec::new();
     let mut material_ids: HashMap<String, u64> = HashMap::new();
+    // the GlobalIds the source file gives its elements (Tekla's, from its object GUIDs), once each
+    let mut own_ids: HashSet<String> = HashSet::new();
     for product in products(model) {
         let Some(body) = body(model, &product, units) else { continue };
         let props = match product.key {
@@ -639,10 +659,13 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
         ))?;
         let axes = f.add(format!("IFCAXIS2PLACEMENT3D(#{point},$,$)"))?;
         let placement = f.add(format!("IFCLOCALPLACEMENT(#{storey_placement},#{axes})"))?;
+        // its own GlobalId where its file gives one (so the IFC matches the source's own export),
+        // else one derived from the file and the element
+        let global_id = own_global_id(&props).filter(|g| own_ids.insert(g.clone())).unwrap_or_else(|| ids.get(&key));
         let head = format!(
             "{}({},$,{},$,{},#{placement},#{shape},{}",
             who.class,
-            text(&ids.get(&key)),
+            text(&global_id),
             text(&who.name),
             opt(who.object_type.as_deref()),
             opt(who.tag.as_deref()),
@@ -658,6 +681,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             "IFCDOOR" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCWINDOW" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCREINFORCINGBAR" => format!("{head},$,$,$,$,.{}.,$)", who.predefined),
+            // nominal diameter and length unknown here
+            "IFCMECHANICALFASTENER" => format!("{head},$,$,.{}.)", who.predefined),
             // the tag is the long name; an element of its storey, not a composite
             "IFCSPACE" => format!("{head},.ELEMENT.,.{}.,$)", who.predefined),
             _ => format!("{head},.{}.)", who.predefined),
@@ -821,6 +846,13 @@ impl<W: Write> Step<'_, W> {
         writeln!(self.out, "#{id}={};", entity.as_ref())?;
         Ok(id)
     }
+}
+
+/// The GlobalId an element's source gives it (`IFC GlobalId`, as the Tekla reader derives it from
+/// the object's GUID), when it is one: 22 characters of IFC's base-64 alphabet.
+fn own_global_id(props: &[(String, String)]) -> Option<String> {
+    let id = props.iter().find(|(k, _)| k == "IFC GlobalId").map(|(_, v)| v.trim().trim_matches('"'))?;
+    (id.len() == 22 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')).then(|| id.to_string())
 }
 
 /// Stable GlobalIds: a 128-bit hash of the file name and a key, in IFC's base-64 form.
@@ -991,6 +1023,63 @@ mod tests {
         let mut out = Vec::new();
         write(model, &Document::from_model(model), "test.ifc", &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn tekla_objects_get_the_class_of_what_they_are() {
+        assert_eq!(tekla_class("KOLOM", "Column", "HEA300"), ("IFCCOLUMN", "COLUMN"));
+        assert_eq!(tekla_class("SPANT", "Beam", "IPE400"), ("IFCBEAM", "BEAM"));
+        assert_eq!(tekla_class("WINDVERBAND", "Beam", "L80/8"), ("IFCMEMBER", "BRACE"));
+        assert_eq!(tekla_class("LUIFELLIGGER", "Polybeam", "IPE200"), ("IFCBEAM", "BEAM"));
+        assert_eq!(tekla_class("VLOER", "Slab", "200"), ("IFCSLAB", "FLOOR"));
+        assert_eq!(tekla_class("POER", "Pad footing", "1500*1500"), ("IFCFOOTING", "PAD_FOOTING"));
+        assert_eq!(tekla_class("FUNDERINGSBALK", "Strip footing", "600*800"), ("IFCFOOTING", "STRIP_FOOTING"));
+        assert_eq!(tekla_class("WELD", "Weld", ""), ("IFCFASTENER", "WELD"));
+        // a strip of plate a connection made as a column or beam
+        assert_eq!(tekla_class("PLAAT", "Column", "PL10*150"), ("IFCPLATE", "NOTDEFINED"));
+        assert_eq!(tekla_class("SCHOTJE", "Beam", "FL80*10"), ("IFCPLATE", "NOTDEFINED"));
+        // a file that does not say what the part is: by its name, in English or Dutch, or profile
+        assert_eq!(tekla_class("COLUMN", "Profile part", "HEA200").0, "IFCCOLUMN");
+        assert_eq!(tekla_class("GORDING", "Profile part", "UNP160").0, "IFCBEAM");
+        assert_eq!(tekla_class("P1", "Contour plate", "PL10").0, "IFCPLATE");
+    }
+
+    /// Two Tekla parts: a column with its GUID, and a beam whose GlobalId the column already has.
+    fn tekla_model() -> Model {
+        let (p1, i1) = cube([0.0, 0.0, 0.0]);
+        let (p2, i2) = cube([0.0, 0.0, 4.2]);
+        let mut positions = p1;
+        positions.extend(p2);
+        let mut indices = i1;
+        indices.extend(i2.iter().map(|i| i + 8));
+        let (positions, normals, indices) = flat_shaded(&positions, &indices);
+        let parts = Layer {
+            name: "Class 2".into(),
+            positions,
+            normals,
+            indices,
+            elements: vec![(5701, 0, 36), (5726, 36, 36)],
+            props: vec![
+                (5701, r#"{"Name":"KOLOM","Type":"Column","Profile":"HEA300","Material":"S355J2","Class":"2","Tekla id":5701,"IFC GlobalId":"0jkHcwGzv0G8EA3Z1pFnsL"}"#.into()),
+                (5726, r#"{"Name":"LIGGER","Type":"Beam","Profile":"IPE300","Material":"S355J2","Class":"3","Tekla id":5726,"IFC GlobalId":"0jkHcwGzv0G8EA3Z1pFnsL"}"#.into()),
+            ],
+            ..Layer::default()
+        };
+        let mut m = Model::new(PathBuf::from("hal.db1"), "Tekla Structures", vec![parts]);
+        m.project.levels = vec![("+0".into(), 0.0), ("+4200".into(), 4.2)];
+        m
+    }
+
+    #[test]
+    fn tekla_parts_keep_their_own_global_ids_on_their_levels() {
+        let s = ifc(&tekla_model());
+        let column = s.lines().find(|l| l.contains("=IFCCOLUMN(")).unwrap();
+        assert!(column.contains("('0jkHcwGzv0G8EA3Z1pFnsL',$,'KOLOM',$,'HEA300',") && column.ends_with(",'5701',.COLUMN.);"), "{column}");
+        // a GlobalId twice: the second element gets one of its own
+        let beam = s.lines().find(|l| l.contains("=IFCBEAM(")).unwrap();
+        assert!(!beam.contains("0jkHcwGzv0G8EA3Z1pFnsL") && beam.ends_with(",'5726',.BEAM.);"), "{beam}");
+        assert_eq!(s.matches("=IFCBUILDINGSTOREY(").count(), 2);
+        assert_eq!(own_global_id(&[("IFC GlobalId".into(), "not a guid".into())]), None);
     }
 
     #[test]

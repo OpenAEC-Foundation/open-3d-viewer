@@ -191,7 +191,7 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions, op 
 | [`test-models/`](test-models/) | De modellen die de tests openen |
 | [`docs/architecture/`](docs/architecture/) | Hoe één codebase drie producten is: de Viewer, de Modeller en de BIM Collaborator |
 
-De lezers voor SketchUp, Tekla en PLY, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`tekla-reader`](https://github.com/OpenAEC-Foundation/tekla-reader), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). Deze repository legt elk vast op een vaste commit.
+De lezers voor SketchUp, Tekla en PLY, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`skp-reader`](https://github.com/OpenAEC-Foundation/skp-reader), [`db1-dll`](https://github.com/OpenAEC-Foundation/db1-dll), [`ply-reader`](https://github.com/OpenAEC-Foundation/ply-reader), [`rvt-dll`](https://github.com/OpenAEC-Foundation/rvt-dll)). Deze repository legt elk vast op een vaste commit.
 
 ## Uitwisseling
 

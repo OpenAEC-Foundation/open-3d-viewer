@@ -435,7 +435,7 @@ mod tests {
         let snapshot = Snapshot {
             paper_mm: [297.0, 210.0],
             title: "KOLOM A [K1]".into(),
-            views: vec![SnapshotView { id: 9, origin_mm: [100.0, 50.0], scale: 20.0, frame: [[0.0; 3]; 3], shortening: Vec::new() }],
+            views: vec![SnapshotView { id: 9, origin_mm: [100.0, 50.0], scale: 20.0, frame: [[0.0; 3]; 3], shortening: [Vec::new(), Vec::new()] }],
             items: vec![
                 item(0, None, Shape::Line { from: [5.0, 5.0], to: [292.0, 5.0] }),
                 item(7, Some([255, 0, 0]), Shape::Text { at: [10.0, 20.0], angle: 0.0, height: 3.6, width: 3.6, text: "K1".into(), font: "Arial".into() }),

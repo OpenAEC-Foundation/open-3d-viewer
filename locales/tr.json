@@ -1099,6 +1099,7 @@
     "Link to selection": "Seçime bağla",
     "Select elements in the model to link this document to them.": "Bu belgeyi bağlamak için modelde öğeler seçin.",
     "Document": "Belge",
-    "Documents": "Belgeler"
+    "Documents": "Belgeler",
+    "The documents of the project: status, revisions and links to the model": "Projenin belgeleri: durum, revizyonlar ve modelle bağlantılar"
   }
 }

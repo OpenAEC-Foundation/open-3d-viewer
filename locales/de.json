@@ -1099,6 +1099,7 @@
     "Link to selection": "Mit Auswahl verknüpfen",
     "Select elements in the model to link this document to them.": "Wählen Sie Elemente im Modell aus, um dieses Dokument mit ihnen zu verknüpfen.",
     "Document": "Dokument",
-    "Documents": "Dokumente"
+    "Documents": "Dokumente",
+    "The documents of the project: status, revisions and links to the model": "Die Dokumente des Projekts: Status, Revisionen und Verknüpfungen mit dem Modell"
   }
 }

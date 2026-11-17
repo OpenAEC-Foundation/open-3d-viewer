@@ -1,9 +1,10 @@
 //! Docs: the documents of the project (`bim-docs`).
 //!
 //! The project is a folder that a sync tool or a network drive keeps the same for everyone:
-//! Dropbox, SharePoint through OneDrive, Synology Drive, or any shared folder. The Docs tab fills
-//! the workspace with it: the folders on the left, the files of the picked folder beside them,
-//! with the status and revision that were recorded of each and what the sync tool is doing to it.
+//! Dropbox, SharePoint through OneDrive, Synology Drive, or any shared folder. Docs is a product
+//! on the switch at the top of the window: its page fills the workspace with the files of the
+//! picked folder, with the status and revision that were recorded of each and what the sync tool
+//! is doing to it; the folders are the left pane.
 //!
 //! Nothing stands over the list. Choosing the folder, opening a file, its title and status,
 //! recording a revision and linking it to the selected elements are sections of the right pane.
@@ -29,6 +30,8 @@ pub struct DocsTab {
     /// Its tab is open, and shown (it fills the workspace).
     pub open: bool,
     pub shown: bool,
+    /// Docs is the product shown: the folders are the left pane, not part of the page.
+    pub in_product: bool,
     /// The project folder, and whether it is being read.
     pub folder: Option<PathBuf>,
     pub reading: bool,
@@ -76,6 +79,7 @@ impl DocsTab {
         DocsTab {
             open: false,
             shown: false,
+            in_product: false,
             folder: None,
             reading: false,
             listing: Arc::default(),
@@ -275,6 +279,12 @@ fn element_key(props: &serde_json::Value, id: u64) -> String {
     ["GlobalId", "UniqueId", "Id"].iter().find_map(|key| props.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty())).map_or_else(|| format!("#{id}"), str::to_string)
 }
 
+/// Whether the suite reads a file of this name as a model, by its extension.
+fn suite_reads(path: &str) -> bool {
+    let extension = path.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_ascii_lowercase());
+    crate::loaders::supported_extensions().contains(&extension.as_str())
+}
+
 fn size_text(bytes: u64) -> String {
     match bytes {
         b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
@@ -349,14 +359,14 @@ impl App {
                     let _ = file.parent().map(std::fs::create_dir_all);
                     let _ = std::fs::write(file, folder.to_string_lossy().as_bytes());
                 }
-                self.docs = DocsTab { open: self.docs.open, shown: self.docs.shown, folder: Some(folder), ..DocsTab::empty() };
+                self.docs = DocsTab { open: self.docs.open, shown: self.docs.shown, in_product: self.docs.in_product, folder: Some(folder), ..DocsTab::empty() };
                 return self.docs_read();
             }
             DocsMessage::Leave => {
                 if let Some(file) = folder_file() {
                     let _ = std::fs::remove_file(file);
                 }
-                self.docs = DocsTab { open: self.docs.open, shown: self.docs.shown, ..DocsTab::empty() };
+                self.docs = DocsTab { open: self.docs.open, shown: self.docs.shown, in_product: self.docs.in_product, ..DocsTab::empty() };
             }
             DocsMessage::Refresh => return self.docs_read(),
             DocsMessage::Read(read) => self.docs_take(*read),
@@ -471,7 +481,7 @@ impl App {
     /// path in the folder) picked: for the command line, where no message runs. The folder is
     /// not kept as the person's choice.
     pub fn docs_at(&mut self, folder: PathBuf, pick: Option<&str>) {
-        self.docs = DocsTab { open: true, folder: Some(folder.clone()), ..DocsTab::empty() };
+        self.docs = DocsTab { open: true, in_product: self.docs.in_product, folder: Some(folder.clone()), ..DocsTab::empty() };
         self.show_docs();
         self.docs_take(read_project(folder));
         if let Some(path) = pick.map(|p| p.replace('\\', "/")) {
@@ -683,13 +693,41 @@ impl App {
         }
         about.retain(|part| !part.is_empty());
         let header = row![text(name).size(14).font(FONT_BOLD).color(p.text), text(about.join(" · ")).size(11).color(p.text_muted)].spacing(10).align_y(Center);
-        let tree = scrollable(self.docs_tree(p, l)).width(230).height(Fill);
         let files = scrollable(self.docs_files(p, l)).width(Fill).height(Fill);
-        container(column![container(header).padding([8, 12]), rule::horizontal(1), row![tree, rule::vertical(1), files].height(Fill)])
+        // in the Docs product the folders are the left pane; elsewhere they stand beside the files
+        let body: Element<'_, Message> = if docs.in_product {
+            files.into()
+        } else {
+            row![scrollable(self.docs_tree(p, l)).width(230).height(Fill), rule::vertical(1), files].height(Fill).into()
+        };
+        container(column![container(header).padding([8, 12]), rule::horizontal(1), body])
             .width(Fill)
             .height(Fill)
             .style(move |_| p.panel())
             .into()
+    }
+
+    /// The folders of the project folder as the left pane of the Docs product.
+    pub fn docs_tree_pane(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        if self.docs.folder.is_none() {
+            return container(text(l.text("Nog geen projectmap gekozen.", "No project folder chosen yet.")).size(12).color(p.text_muted)).padding(8).into();
+        }
+        scrollable(self.docs_tree(p, l)).height(Fill).into()
+    }
+
+    /// The picked file, when it is in the project folder.
+    pub fn docs_picked(&self) -> Option<&File> {
+        self.docs.pick.as_deref().and_then(|path| self.docs.listing.file(path))
+    }
+
+    /// Whether the suite reads the picked file as a model.
+    pub fn docs_reads_picked(&self) -> bool {
+        self.docs_picked().is_some_and(|file| suite_reads(&file.path))
+    }
+
+    /// Whether the picked document can be linked now: elements of the model are selected.
+    pub fn docs_can_link(&self) -> bool {
+        self.docs.pick.is_some() && self.sel.items().iter().any(|item| matches!(item, Pickable::Element(_)))
     }
 
     /// The folders of the project as a tree; the one whose files show is marked.
@@ -883,10 +921,8 @@ impl App {
             ));
         }
         if file.is_some() {
-            let extension = path.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_ascii_lowercase());
-            let reads = crate::loaders::supported_extensions().contains(&extension.as_str());
             let mut open = row![].spacing(4);
-            if reads {
+            if suite_reads(path) {
                 open = open.push(action(l.text("Openen in de suite", "Open in the suite"), DocsMessage::OpenModel { add: false }));
                 if self.model.is_some() {
                     open = open.push(action(l.text("Toevoegen aan model", "Add to the model"), DocsMessage::OpenModel { add: true }));

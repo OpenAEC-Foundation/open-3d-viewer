@@ -31,7 +31,6 @@ point at elements of a model.
 - Rights and approvals per person. Who can reach the folder takes part.
 - The browser build. A synced folder is on the desktop only.
 - Web links to a file at the sync service.
-- A product of its own on the switch. Docs is a page every product opens; it can become a product.
 
 ## Anti-goals
 
@@ -95,10 +94,13 @@ from the file's size and time against the revision's. Nothing is written for it.
 
 ### In the window
 
-- A command "Docs" in the shared view groups of the ribbon, so every product has it. It opens a
-  document tab that fills the workspace, also when no model is open.
-- The page: the folder tree on the left, the files of the picked folder on the right (name, status,
-  revision, changed, size, marks). A line of text above them says which folder and which sync tool.
+- Docs is a product on the switch at the top of the window, in every desktop build. Its ribbon has
+  a tab Docs (the project folder; opening and linking the picked document) and the shared View tab.
+- Its page fills the workspace, also when no model is open: the files of the picked folder (name,
+  status, revision, changed, size; a document's title and marks under its name). A line of text
+  above them says which folder and which sync tool. The folders are the left pane.
+- The other products do not show the page. The properties of a selected element list the documents
+  about it there, and a click on one goes to Docs.
 - No buttons above the list. Choosing the folder, refreshing, opening, the status, recording a
   revision and the links are sections of the right pane, as with the IFCX tab.
 - With elements selected and a document picked: "Link to selection". A link in the right pane

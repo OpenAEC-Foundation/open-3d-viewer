@@ -51,7 +51,7 @@ other products should not offer). Until then the product decides only what its i
 | `crates/bim-core`, `src/app/modeller.rs`: the kernel and the modelling tools | – | ✓ | – | **Modeller**; first module behind `modeller` |
 | validator and BCF crates of the draft validator branch | – | – | ✓ | **Validator**, behind `validator` |
 | `src/explode.rs`: exploded view | ✓ | – | ✓ | shared |
-| `crates/bim-docs`, `src/app/docs.rs`: Docs, the documents of the project folder (desktop) | ✓ | ✓ | ✓ | shared; a page every product opens from its ribbon, which can become a product of its own |
+| `crates/bim-docs`, `src/app/docs.rs`: Docs, the documents of the project folder (desktop) | link | link | link | **Docs**, a product of its own on the switch in every desktop build; the other products only list the documents of a selected element, and a click on one goes to Docs |
 | `src/remote.rs`, `src/mcp.rs`, `open-3d-viewer-mcp` | ✓ | ✓ | ✓ | shared; tools per product later |
 | `src/desktop.rs`, `src/web.rs`, `gpu`, `managed`, `bench` | ✓ | ✓ | ✓ | shared platform code |
 

@@ -4,8 +4,8 @@
 # A tag vYYYY.W.N starts it; Cargo.toml must carry YYYY.W.N. The signing keys are the secrets
 # of the OpenAEC organisation, under the same names as in the Blueprint. A platform whose keys
 # are missing is not signed; the release notes say so per file, and such a release is published
-# as a pre-release. The private format readers (rvt-dll and the standalone readers) are fetched
-# with the read-only deploy keys in FORMAT_CRATES_SSH_KEYS, as in build.yml.
+# as a pre-release. The private format readers (revit-dll and the standalone readers) are fetched
+# with their read-only deploy keys (the SSH_KEY_ secrets, .github/actions/reader-keys), as in build.yml.
 #
 # Linux is built for x86_64 and arm64 (the SuperCloud's servers are ARM), each tested without a
 # GPU. The SuperCloud builds its own image (OpenAEC Linux) from the AppImage, so no Docker image
@@ -51,10 +51,9 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - name: Read-only access to the private format readers
-        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        uses: ./.github/actions/reader-keys
         with:
-          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
-          log-public-key: false
+          secrets: ${{ toJSON(secrets) }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -111,10 +110,9 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - name: Read-only access to the private format readers
-        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        uses: ./.github/actions/reader-keys
         with:
-          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
-          log-public-key: false
+          secrets: ${{ toJSON(secrets) }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: System libraries and packaging tools
@@ -159,7 +157,7 @@ jobs:
           Priority: optional
           Architecture: ${DEB_ARCH}
           Maintainer: OpenAEC Foundation <info@open-aec.com>
-          Homepage: https://github.com/OpenAEC-Foundation/open-3d-viewer
+          Homepage: https://github.com/OpenAEC-Foundation/open-bim-suite
           Description: 3D model viewer for AEC files
            Opens IFC, Revit, SketchUp, Tekla, Archicad, DWG/DXF, CityJSON,
            LandXML, glTF, OBJ, STL and PLY models, measures and sections them,
@@ -240,10 +238,9 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - name: Read-only access to the private format readers
-        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        uses: ./.github/actions/reader-keys
         with:
-          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
-          log-public-key: false
+          secrets: ${{ toJSON(secrets) }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the viewer and the MCP server
@@ -374,10 +371,9 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - name: Read-only access to the private format readers
-        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        uses: ./.github/actions/reader-keys
         with:
-          ssh-private-key: ${{ secrets.FORMAT_CRATES_SSH_KEYS }}
-          log-public-key: false
+          secrets: ${{ toJSON(secrets) }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -594,7 +590,7 @@ jobs:
           | Linux: \`SHA256SUMS\`, \`.deb\`, \`.rpm\`, AppImage en \`.tar.gz\` (OpenPGP, \`.asc\`) | $(yes "$GPG_SIGNED") |
           | Alle pakketten: build-attestatie via GitHub | ja |
 
-          Controleren: \`sha256sum -c SHA256SUMS\`, \`gpg --verify SHA256SUMS.asc SHA256SUMS\` (OpenAEC-sleutel \`${OPENAEC_GPG_FINGERPRINT}\`, publiek in [\`docs/openaec-releases.asc\`](https://github.com/OpenAEC-Foundation/open-3d-viewer/blob/main/docs/openaec-releases.asc)) en \`gh attestation verify BESTAND --repo OpenAEC-Foundation/open-3d-viewer\`.
+          Controleren: \`sha256sum -c SHA256SUMS\`, \`gpg --verify SHA256SUMS.asc SHA256SUMS\` (OpenAEC-sleutel \`${OPENAEC_GPG_FINGERPRINT}\`, publiek in [\`docs/openaec-releases.asc\`](https://github.com/OpenAEC-Foundation/open-bim-suite/blob/main/docs/openaec-releases.asc)) en \`gh attestation verify BESTAND --repo OpenAEC-Foundation/open-bim-suite\`.
 
           Alle tests en controles van de repository zijn geslaagd voordat deze release werd gebouwd.
           EOF

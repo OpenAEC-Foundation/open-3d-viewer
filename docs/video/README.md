@@ -5,12 +5,12 @@ Alles om de productvideo van Open 3D Viewer Studio te monteren, ook op een ander
 ## Ophalen
 
 ```bash
-git clone https://github.com/OpenAEC-Foundation/open-3d-viewer.git
-cd open-3d-viewer
+git clone https://github.com/OpenAEC-Foundation/open-bim-suite.git
+cd open-bim-suite
 git checkout feat/blueprint-shell
 ```
 
-Zolang [#21](https://github.com/OpenAEC-Foundation/open-3d-viewer/pull/21) niet is samengevoegd, staat het materiaal alleen op de branch `feat/blueprint-shell`. Daarna staat het op `main`.
+Zolang [#21](https://github.com/OpenAEC-Foundation/open-bim-suite/pull/21) niet is samengevoegd, staat het materiaal alleen op de branch `feat/blueprint-shell`. Daarna staat het op `main`.
 
 ## Wat er staat
 
@@ -36,7 +36,7 @@ De totale lengte is 40 seconden.
 - **Huisstijl:** accentkleur `#D97706` (oranje) en marineblauw `#0F1B2D` voor de kaarten. Het lettertype is Inter: `assets/fonts/Inter-Regular.ttf` en `Inter-SemiBold.ttf`.
 - **Logo en app-icoon:** `assets/logo.svg` en `assets/icons/icon.png` (512 px).
 - **Schermafbeeldingen van de README:** `docs/images/readme/`, 1440x900. Daarin staan de thema's, de Bestand-pagina, de instellingen, de sneltoetsen, het bovenaanzicht, uit elkaar en de Revit-staat.
-- **Links:** de browserversie op https://open-3d-viewer.open-aec.com en de downloads op https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest.
+- **Links:** de browserversie op https://open-3d-viewer.open-aec.com en de downloads op https://github.com/OpenAEC-Foundation/open-bim-suite/releases/latest.
 
 ## Om te weten
 

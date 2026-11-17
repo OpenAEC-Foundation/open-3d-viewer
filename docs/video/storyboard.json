@@ -14,8 +14,8 @@
   "duration_s": 40.0,
   "links": {
     "web": "https://open-3d-viewer.open-aec.com",
-    "download": "https://github.com/OpenAEC-Foundation/open-3d-viewer/releases/latest",
-    "repository": "https://github.com/OpenAEC-Foundation/open-3d-viewer"
+    "download": "https://github.com/OpenAEC-Foundation/open-bim-suite/releases/latest",
+    "repository": "https://github.com/OpenAEC-Foundation/open-bim-suite"
   },
   "license": "LGPL-3.0-or-later",
   "brand": {

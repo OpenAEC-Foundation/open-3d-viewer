@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
-//!                  [--language en|nl] [--product viewer|modeller|collaborator|pointcloud] [--no-remote]
+//!                  [--language en|nl] [--product viewer|modeller|validator|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,supports,loads,next-set,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
@@ -52,7 +52,7 @@ struct Args {
     draft: Option<String>,
     /// For `--screenshot` with `--draft`: the element of the file to pick in that drawing.
     pick: Option<u64>,
-    /// For `--screenshot` of the Collaborator: a BCF file to open, an IDS to check on, and what
+    /// For `--screenshot` of the Validator: a BCF file to open, an IDS to check on, and what
     /// to run and show (`issues`, `check`, `clash`).
     bcf: Option<PathBuf>,
     ids: Option<PathBuf>,
@@ -101,7 +101,7 @@ fn parse_args() -> Result<Args, String> {
             "--language" => {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
-            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|collaborator|pointcloud")?),
+            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|pointcloud")?),
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback|cloud")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
@@ -192,7 +192,7 @@ pub fn main() {
 }
 
 /// The desktop app as `edition`: the Studio (`open-3d-viewer`) or one product alone
-/// (`open-bim-modeller`, `open-bim-collaborator`).
+/// (`open-bim-modeller`, `open-bim-validator`).
 pub fn main_as(edition: crate::product::Edition) {
     let args = match parse_args() {
         Ok(a) => Args { edition, ..a },
@@ -509,11 +509,11 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             app.finish_animation();
         }
     }
-    #[cfg(feature = "collaborator")]
+    #[cfg(feature = "validator")]
     if let Some(language) = args.language {
         studio.app.collab.language = language;
     }
-    #[cfg(feature = "collaborator")]
+    #[cfg(feature = "validator")]
     studio.app.collab_now(args.bcf.as_deref(), args.ids.as_deref(), args.collab.as_deref())?;
     // `--sheet all` and `--drawing all`: every sheet and every plan, section and elevation of the
     // file, each in an image of its own (OUT-sheet-03.png); the one being drawn is named first,

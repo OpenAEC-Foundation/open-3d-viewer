@@ -1948,6 +1948,8 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -3788,8 +3790,10 @@ dependencies = [
  "signal-hook",
  "skp-reader",
  "stl_io",
- "tekla-reader",
+ "tekla-read",
  "tempfile",
+ "threedm-core",
+ "threedm-read",
  "tobj",
  "ttf-parser",
  "ureq",
@@ -4029,7 +4033,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "ply-reader"
 version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/ply-reader?rev=028c51906cd7d8a0e72d6103afe80ad668d2543d#028c51906cd7d8a0e72d6103afe80ad668d2543d"
+source = "git+https://github.com/OpenAEC-Foundation/ply-dll?rev=028c51906cd7d8a0e72d6103afe80ad668d2543d#028c51906cd7d8a0e72d6103afe80ad668d2543d"
 
 [[package]]
 name = "png"
@@ -4752,7 +4756,7 @@ dependencies = [
 [[package]]
 name = "rvt-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "flate2",
 ]
@@ -4760,7 +4764,7 @@ dependencies = [
 [[package]]
 name = "rvt-export"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "delaunator",
  "earcutr",
@@ -4773,7 +4777,7 @@ dependencies = [
 [[package]]
 name = "rvt-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "serde",
 ]
@@ -4781,7 +4785,7 @@ dependencies = [
 [[package]]
 name = "rvt-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rvt-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
+source = "git+https://github.com/OpenAEC-Foundation/revit-dll?rev=a1d9447b5f319497e44f41ecf81033edfd7e5c12#a1d9447b5f319497e44f41ecf81033edfd7e5c12"
 dependencies = [
  "flate2",
  "rvt-core",
@@ -5107,7 +5111,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 [[package]]
 name = "skp-reader"
 version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/skp-reader?rev=31f8ef5bb9a8822771fbf008aa88e0f36444e01a#31f8ef5bb9a8822771fbf008aa88e0f36444e01a"
+source = "git+https://github.com/OpenAEC-Foundation/sketchup-dll?rev=31f8ef5bb9a8822771fbf008aa88e0f36444e01a#31f8ef5bb9a8822771fbf008aa88e0f36444e01a"
 dependencies = [
  "earcutr",
  "flate2",
@@ -5260,6 +5264,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spade"
+version = "2.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
+dependencies = [
+ "hashbrown 0.16.1",
+ "num-traits",
+ "robust",
+ "smallvec",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5409,14 +5425,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "tekla-reader"
-version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=a17caa4f66a171bb4765f6f546b4eec24c0acace#a17caa4f66a171bb4765f6f546b4eec24c0acace"
+name = "tekla-core"
+version = "0.3.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
 dependencies = [
- "earcutr",
  "flate2",
  "glam 0.30.10",
+]
+
+[[package]]
+name = "tekla-model"
+version = "0.3.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "tekla-read"
+version = "0.3.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
+dependencies = [
+ "earcutr",
+ "glam 0.30.10",
  "serde_json",
+ "tekla-core",
+ "tekla-model",
 ]
 
 [[package]]
@@ -5426,10 +5460,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5479,6 +5513,37 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "threedm-core"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+dependencies = [
+ "flate2",
+ "glam 0.30.10",
+]
+
+[[package]]
+name = "threedm-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+dependencies = [
+ "glam 0.30.10",
+ "threedm-core",
+]
+
+[[package]]
+name = "threedm-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=225f8d4823876270d498afb2ff132228f7e7f8d4#225f8d4823876270d498afb2ff132228f7e7f8d4"
+dependencies = [
+ "earcutr",
+ "glam 0.30.10",
+ "spade",
+ "threedm-core",
+ "threedm-model",
+ "ttf-parser",
 ]
 
 [[package]]

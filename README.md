@@ -345,7 +345,7 @@ open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300] [--thr
 
 `--bench` also takes generated scenarios: `synthetic:N` (N boxes, each an element), `structural:N` (a 3D frame of N members with nodes, supports and hinges), or several joined with `+`, such as `structural:100000+synthetic:100000`.
 
-Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.11`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it.
+Versions follow the OpenAEC scheme `YYYY.W.N`: year, ISO week without a leading zero, and a number within the week that starts at 0, such as `2026.45.11`. A tag `vYYYY.W.N` starts [`release.yml`](.github/workflows/release.yml), which tests, builds and signs the release for Windows, macOS and Linux and publishes it. With the secret `VIEWER_STUDIO_RELEASE_TOKEN` set, it also copies the release to [open-3d-viewer-studio](https://github.com/OpenAEC-Foundation/open-3d-viewer-studio), the repository that holds only the releases and a README.
 
 Open BIM Suite is part of the [OpenAEC Foundation](https://github.com/OpenAEC-Foundation) family of apps.
 

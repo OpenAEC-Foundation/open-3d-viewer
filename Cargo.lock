@@ -1948,6 +1948,8 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -5261,6 +5263,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spade"
+version = "2.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
+dependencies = [
+ "hashbrown 0.16.1",
+ "num-traits",
+ "robust",
+ "smallvec",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5905,7 +5919,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vwx-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=ad4042e5739dfad6f35285ac7f0589d59a1f36cc#ad4042e5739dfad6f35285ac7f0589d59a1f36cc"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1#2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1"
 dependencies = [
  "flate2",
  "serde",
@@ -5914,7 +5928,7 @@ dependencies = [
 [[package]]
 name = "vwx-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=ad4042e5739dfad6f35285ac7f0589d59a1f36cc#ad4042e5739dfad6f35285ac7f0589d59a1f36cc"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1#2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1"
 dependencies = [
  "serde",
 ]
@@ -5922,11 +5936,21 @@ dependencies = [
 [[package]]
 name = "vwx-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=ad4042e5739dfad6f35285ac7f0589d59a1f36cc#ad4042e5739dfad6f35285ac7f0589d59a1f36cc"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1#2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1"
 dependencies = [
  "serde_json",
  "vwx-core",
  "vwx-model",
+ "vwx-xt",
+]
+
+[[package]]
+name = "vwx-xt"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/vwx-dll?rev=2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1#2fe0eb923fd3d2f0a6eadfe29c43e91bc7c7dfc1"
+dependencies = [
+ "earcutr",
+ "spade",
 ]
 
 [[package]]

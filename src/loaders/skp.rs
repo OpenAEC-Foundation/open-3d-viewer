@@ -1,4 +1,5 @@
-//! Adapter from the independent skp-reader file reader to the app's scene model.
+//! Adapter from the independent SketchUp reader (crate skp-reader, repository sketchup-dll) to
+//! the app's scene model.
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{Layer, ProjectData};
 

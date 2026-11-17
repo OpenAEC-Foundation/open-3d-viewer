@@ -303,6 +303,7 @@ pub fn read(text: &str, file: &str) -> Result<AnalysisModel, String> {
         .collect();
     // a member by its line and storey, for its loads
     let mut members: HashMap<(String, usize), Id> = HashMap::new();
+    let mut lengths: HashMap<Id, f64> = HashMap::new();
     for l in lines("LINE ASSIGNS") {
         let (Some(name), Some(storey)) = (l.at(1), l.at(2).and_then(|s| storey_at.get(s).copied())) else { continue };
         let Some(bar) = bars.get(name) else { continue };
@@ -314,6 +315,7 @@ pub fn read(text: &str, file: &str) -> Result<AnalysisModel, String> {
         members.insert((name.to_string(), storey), id);
         let (pa, pb) = (model.nodes.iter().find(|n| n.id == a).map(|n| n.p), model.nodes.iter().find(|n| n.id == b).map(|n| n.p));
         let axis = pb.zip(pa).map_or(DVec3::X, |(pb, pa)| pb - pa);
+        lengths.insert(id, axis.length());
         // end releases: a bending or twisting moment let go at the start (I) or the end (J)
         let mut releases: [Option<Hinge>; 2] = [None, None];
         for word in l.name("RELEASE").unwrap_or_default().split_whitespace() {
@@ -479,12 +481,14 @@ pub fn read(text: &str, file: &str) -> Result<AnalysisModel, String> {
             let Some(&member) = members.get(&(name.to_string(), storey)) else { continue };
             let (dir, frame) = direction(&l);
             let kind = l.name("TYPE").unwrap_or_default().to_ascii_uppercase();
+            // the file places a load at a part of the member's length
+            let span = lengths.get(&member).copied().unwrap_or(0.0);
             let load = match (kind.as_str(), l.number("FVAL")) {
                 ("UNIFF", Some(q)) => Some(Load::MemberDistributed { dir, moment: false, dist: Distribution::Uniform(q * force / length) }),
                 ("UNIFM", Some(q)) => Some(Load::MemberDistributed { dir, moment: true, dist: Distribution::Uniform(q * force) }),
-                ("POINTF", Some(f)) => Some(Load::MemberPoint { x: l.number("RDIST").unwrap_or(0.5), f: dir * f * force, m: DVec3::ZERO }),
+                ("POINTF", Some(f)) => Some(Load::MemberPoint { x: l.number("RDIST").unwrap_or(0.5) * span, f: dir * f * force, m: DVec3::ZERO }),
                 ("TRAPF", _) => match (l.number("RDISTA"), l.number("RDISTB"), l.number("FVALA"), l.number("FVALB")) {
-                    (Some(a), Some(b), Some(q1), Some(q2)) => Some(Load::MemberDistributed { dir, moment: false, dist: Distribution::Trapezoidal { a, b, q1: q1 * force / length, q2: q2 * force / length } }),
+                    (Some(a), Some(b), Some(q1), Some(q2)) => Some(Load::MemberDistributed { dir, moment: false, dist: Distribution::Trapezoidal { a: a * span, b: b * span, q1: q1 * force / length, q2: q2 * force / length } }),
                     _ => None,
                 },
                 _ => None,

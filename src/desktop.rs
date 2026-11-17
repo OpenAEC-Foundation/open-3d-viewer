@@ -4,7 +4,7 @@
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
 //!                  [--language en|nl] [--product viewer|modeller|collaborator|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
-//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds]
+//!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,loads,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
@@ -67,6 +67,8 @@ struct Args {
     cloud_color: Option<crate::cloud_color::CloudColor>,
     /// For `--screenshot`: the clouds without their depth shading.
     flat_clouds: bool,
+    /// For `--screenshot`: what of a structural analysis model is drawn, by name.
+    analysis: Vec<String>,
     view: Option<ViewPreset>,
     bench: Option<PathBuf>,
     ortho: bool,
@@ -120,6 +122,7 @@ fn parse_args() -> Result<Args, String> {
                 args.size = Some((w.parse().map_err(|_| "--size WxH")?, h.parse().map_err(|_| "--size WxH")?));
             }
             "--flat-clouds" => args.flat_clouds = true,
+            "--analysis" => args.analysis.extend(value()?.split(',').map(|s| s.trim().to_string())),
             "--cloud-color" => {
                 use crate::cloud_color::CloudColor as C;
                 args.cloud_color = Some(match value()?.as_str() {
@@ -434,6 +437,23 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             eprintln!("meshed {}: {} in {:.2} s", done.file.display(), done.figures(), done.seconds);
             app.add_model(Arc::new(loaders::load(&done.file)?));
             app.fit();
+        }
+        // the loads and results of a structural analysis model
+        for word in &args.analysis {
+            use crate::structural::diagrams::{Change, Force};
+            let change = match word.to_ascii_lowercase().as_str() {
+                "deformed" => Some(Change::Deformed),
+                "reactions" => Some(Change::Reactions),
+                "loads" => Some(Change::Loads),
+                "next-case" => Some(Change::Case(true)),
+                "next-set" => Some(Change::Set(true)),
+                "larger" => Some(Change::Scale(true)),
+                "smaller" => Some(Change::Scale(false)),
+                other => Force::parse(other).map(Change::Force),
+            };
+            if let Some(change) = change {
+                let _ = app.update(Message::Analysis(change));
+            }
         }
         // the model pulled apart, framed as F would
         if let Some(amount) = args.explode {

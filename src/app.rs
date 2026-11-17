@@ -279,6 +279,8 @@ pub struct App {
     pub point_size: f32,
     /// Shade the points of a cloud by depth (eye-dome lighting).
     pub cloud_depth: bool,
+    /// What of a structural analysis model's loads and results the 3D view draws.
+    pub analysis: crate::structural::diagrams::Shown,
     /// How the points of a cloud are coloured.
     pub cloud_color: crate::cloud_color::CloudColor,
     /// A cloud is being meshed.
@@ -585,6 +587,8 @@ pub enum Message {
     CloudColor(crate::cloud_color::CloudColor),
     /// Shade the points of a cloud by depth, or not.
     ToggleCloudDepth,
+    /// What of a structural analysis model's loads and results is drawn.
+    Analysis(crate::structural::diagrams::Change),
     ToggleGridHeadsHidden,
     ToggleGridDims,
     ToggleLevels3d,
@@ -932,6 +936,7 @@ impl Default for App {
             ambient: false,
             point_size: 2.5,
             cloud_depth: true,
+            analysis: crate::structural::diagrams::Shown { scale: 1.0, ..Default::default() },
             cloud_color: Default::default(),
             meshing: false,
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -2222,6 +2227,21 @@ impl App {
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::CloudColor(color) => self.cloud_color = color,
             Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
+            Message::Analysis(change) => {
+                let doc = self.model.as_ref().and_then(|m| m.structural.first()).map(|p| p.doc.clone());
+                let (cases, sets) = doc.as_ref().map_or((0, 0), |d| (d.load_cases.len(), d.results.len()));
+                self.analysis.apply(change, cases, sets);
+                // which load case and result set that is
+                if let Some(doc) = doc {
+                    let case = self.analysis.loads.and_then(|k| doc.load_cases.get(k)).map(|c| format!("Loads: {}", c.name));
+                    let set = (self.analysis.force.is_some() || self.analysis.deformed || self.analysis.reactions).then(|| doc.results.get(self.analysis.set).map(|r| format!("Results: {}", r.name))).flatten();
+                    let said: Vec<String> = [case, set].into_iter().flatten().collect();
+                    if !said.is_empty() {
+                        self.status = Status::Loaded(said.join(" · "));
+                    }
+                }
+                self.refresh_overlay();
+            }
             Message::ToggleGridHeadsHidden => self.grid_heads_hidden = !self.grid_heads_hidden,
             Message::ToggleGridDims => self.grid_dims = !self.grid_dims,
             Message::ToggleLevels3d => self.levels_3d = !self.levels_3d,

@@ -3749,6 +3749,7 @@ version = "2026.47.1"
 dependencies = [
  "bim-bcf",
  "bim-core",
+ "bim-docs",
  "bim-library",
  "bim-structural",
  "bim-validator-core",
@@ -3756,6 +3757,7 @@ dependencies = [
  "cadmpeg-codec-step",
  "cadmpeg-ir",
  "cadmpeg-tessellate",
+ "chrono",
  "console_error_panic_hook",
  "e57",
  "earcutr",

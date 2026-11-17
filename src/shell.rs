@@ -1199,6 +1199,11 @@ impl Studio {
             Command::new("section.reset", l.text("Herstellen", "Reset"), go(Message::ResetSection))
                 .icon(small("section.reset-box"), large("section.reset-box"))
                 .enabled(app.section_on || app.plane.is_some()),
+            // Docs: the documents of the project folder (a synced folder is on the desktop only)
+            Command::new("view.docs", "Docs", go(Message::Docs(crate::app::DocsMessage::Open)))
+                .icon(small("project.folder"), large("project.folder"))
+                .toggle(app.docs.shown)
+                .enabled(cfg!(not(target_arch = "wasm32"))),
             Command::new("view.ifc", l.text("IFC-structuur", "IFC structure"), go(Message::OpenIfc))
                 .icon(small("panel.model-tree"), large("panel.model-tree"))
                 .toggle(app.ifc.shown)
@@ -2236,6 +2241,7 @@ impl Studio {
                 (l.text("Weergave", "Display"), vec![smalls(&["view.solid", "view.wireframe", "view.edges", "view.hidden"]), smalls(&["view.shadows"])]),
                 (l.text("Tonen", "Show"), vec![smalls(&["view.grid", "view.grid-lines", "view.grid-dims"]), smalls(&["view.levels-3d", "view.views-3d", "view.flip-up"])]),
                 ("IFC", vec![large("view.ifc")]),
+                ("Docs", vec![large("view.docs")]),
                 (l.text("Camera", "Camera"), vec![large("view.3d"), large("camera.fit"), smalls(&["camera.iso", "camera.top", "camera.front"]), smalls(&["camera.right", "camera.perspective", "camera.ortho"])]),
                 (l.text("Selectie", "Selection"), vec![smalls(&["object.hide", "object.isolate", "object.show-all"]), smalls(&["selection.layer"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("section.plane"), smalls(&["section.flip", "section.selection", "section.fill"]), smalls(&["section.reset"])]),
@@ -2441,7 +2447,7 @@ impl Studio {
         let l = self.l();
         let p = palette(look);
         let app = &self.app;
-        let workspace: Element<'_, Msg> = if app.model.is_none() && !matches!(app.status, Status::Loading { .. }) {
+        let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
@@ -2504,7 +2510,8 @@ impl Studio {
             middle = middle.push(w::document_tabs(look, &tabs, active, small("window.close"), Msg::SelectProject, Msg::CloseProject, Msg::SelectProject));
         }
         let doc_tabs = app.doc_tabs();
-        if app.model.is_some() && doc_tabs.len() > 1 {
+        // Docs opens without a model too
+        if (app.model.is_some() || app.docs.open) && doc_tabs.len() > 1 {
             let tabs: Vec<DocumentTab<'_>> = doc_tabs
                 .iter()
                 .map(|&t| if t == DocTab::Model { DocumentTab::pinned(model_name) } else { DocumentTab::new(app.tab_title(t), false) })

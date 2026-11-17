@@ -27,6 +27,7 @@ mod reports;
 mod layers;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
+mod docs;
 mod drafts;
 pub mod drawn_props;
 mod edit;
@@ -58,6 +59,7 @@ mod structural;
 mod underlays;
 mod views_in_3d;
 
+pub use docs::{DocsMessage, DocsTab};
 pub use ifc::{IfcTab, IfcView};
 pub use marks::DrawKind;
 #[cfg(test)]
@@ -342,6 +344,8 @@ pub struct App {
     pub schedule_scroll: (f32, f32),
     /// The IFC tab: how the model's IFCX file is built up.
     pub ifc: IfcTab,
+    /// Docs: the documents of the project folder.
+    pub docs: DocsTab,
     /// The schedules of the model, once computed (they follow the model), and whether they are
     /// being computed.
     pub schedules: Vec<crate::model::Schedule>,
@@ -488,6 +492,8 @@ pub enum Message {
     ExplorerTab(ExplorerTab),
     /// The Library tab.
     Library(library::LibraryMessage),
+    /// Docs: the documents of the project folder.
+    Docs(docs::DocsMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -970,6 +976,7 @@ impl Default for App {
             active_schedule: None,
             schedule_scroll: (0.0, 0.0),
             ifc: IfcTab::default(),
+            docs: DocsTab::default(),
             schedules: Vec::new(),
             schedules_pending: false,
             drawings_pending: Default::default(),
@@ -2095,6 +2102,7 @@ impl App {
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
+            Message::Docs(message) => return self.docs_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -3518,6 +3526,10 @@ impl App {
     /// selection, the section box, then file, geometry and bounds. Labels and values share the
     /// width 2 : 3 and wrap, so long words never run into each other.
     fn properties_tab(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        // Docs shown: the project folder and the picked document, also without a model
+        if let Some(docs) = self.docs_properties(p, l) {
+            return docs;
+        }
         let Some(model) = &self.model else {
             return text(l.text("Open een model om de eigenschappen te zien", "Open a model to see its properties"))
                 .size(12)

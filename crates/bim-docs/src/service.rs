@@ -135,7 +135,7 @@ pub fn mounts(registry: &str) -> Vec<Mount> {
 /// What this computer says: the OneDrive folders of the environment and, on Windows, of the
 /// registry.
 pub fn known() -> Known {
-    let mut mounts = Vec::new();
+    let mut mounts: Vec<Mount> = Vec::new();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

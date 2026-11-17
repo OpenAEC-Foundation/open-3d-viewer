@@ -822,6 +822,25 @@ mod tests {
     }
 
     #[test]
+    fn a_register_entry_of_docs_layers_over_the_model_and_its_element_carries_the_document() {
+        let mut document = bim_docs::Document::new("0b5c1c0e-7a52-4f6e-9a55-3a1d6a0c9f01", "drawings/A-101.pdf");
+        document.title = "Ground floor plan".into();
+        document.link(bim_docs::ElementLink { key: "w1".into(), path: "w1".into(), name: "Wall".into(), model: "base.ifcx".into() });
+        let entry = serde_json::to_string(&document.to_ifcx("test", "2026-11-17T09:00:00Z")).unwrap();
+        let alone = crate::loaders::load_stack(&[bytes("base.ifcx", BASE)], &Progress::default()).expect("the model");
+        let model = crate::loaders::load_stack(&[bytes("base.ifcx", BASE), bytes("entry.ifcx", &entry)], &Progress::default()).expect("the model with the entry over it");
+        // the model is as it was: the document's own node is no element and draws nothing
+        let shape = |m: &crate::model::Model| m.layers.iter().map(|l| (l.name.clone(), l.elements.len(), l.indices.len())).collect::<Vec<_>>();
+        assert_eq!(shape(&model), shape(&alone));
+        // and the wall says which document is about it
+        let wall = layer(&model, "IfcWall");
+        let props = &model.props[&wall.elements[0].0];
+        for said in ["::name\":\"Ground floor plan\"", "::file\":\"drawings/A-101.pdf\"", "::status\":\"work\""] {
+            assert!(props.contains(&format!("\"openaec::document::0b5c1c0e-7a52-4f6e-9a55-3a1d6a0c9f01{said}")), "{said} in {props}");
+        }
+    }
+
+    #[test]
     fn reads_local_imports_under_the_file() {
         let dir = std::env::temp_dir().join(format!("o3v-ifcx-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

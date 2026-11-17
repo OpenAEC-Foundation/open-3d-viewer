@@ -113,6 +113,8 @@ enum RibbonPart {
 
 /// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1360.0;
+/// The products to come, named on the switch but not to be chosen yet.
+const SOON: [&str; 2] = ["FM", "Environment"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -2254,7 +2256,7 @@ impl Studio {
         let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
         // (where the window has room for them beside the title)
         let room = self.width >= SOON_WIDTH;
-        let segments = segments.chain(["Docs", "FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
+        let segments = segments.chain(SOON.map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
@@ -3435,6 +3437,10 @@ mod tests {
         let _ = studio.update(Msg::Product(Product::Docs));
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Docs, RibbonPage::Docs));
         assert!(studio.app.docs.open && studio.app.docs.shown, "its page shows");
+        // it is on the switch once: a product there is, is no product to come; it stands where it
+        // was announced, after the Modeller
+        assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
+        assert_eq!(Product::ALL.last(), Some(&Product::Docs));
         // no project folder yet: the page asks for one
         assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
         // with one: its folders are the left pane, its files the page

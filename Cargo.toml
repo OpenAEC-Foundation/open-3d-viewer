@@ -92,6 +92,9 @@ lopdf = { version = "0.47", default-features = false }
 # .3dm meshes (MIT OR Apache-2.0). Rhino .3dm needs no other dependency: src/loaders/rhino.rs is
 # written from McNeel's openNURBS source (published for reading 3dm files); no openNURBS code is built.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Constrained Delaunay triangulation of the trimmed faces of Rhino polysurfaces saved without
+# their render meshes (MIT OR Apache-2.0, pure Rust)
+spade = "2.13"
 # Mesh formats
 gltf = { version = "1.4", default-features = false, features = ["import", "names", "utils"] }
 tobj = { version = "4", default-features = false }

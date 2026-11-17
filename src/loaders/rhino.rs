@@ -1,12 +1,16 @@
-//! Rhino 3D models (`.3dm`), Rhino 4 to 8 (archive versions 4, 5, 50, 60, 70 and 80). The
+//! Rhino 3D models (`.3dm`), Rhino 2 to 9 (archive versions 2, 3, 4, 5, 50, 60, 70, 80 and 90). The
 //! reader is written from McNeel's openNURBS source, which McNeel publishes as the reference for
 //! reading and writing 3dm files: the chunked archive (4- and 8-byte chunk lengths), the
 //! properties, settings, material, layer, block definition and object tables, and of each object
 //! its class data, its attributes and its user data. Nothing of openNURBS is compiled in.
 //!
 //! What is drawn: meshes; the render meshes Rhino stores with polysurfaces (Breps), surfaces and
-//! extrusions (the analysis meshes when there are no render meshes); block instances with their
-//! nested blocks and transforms; point clouds and points as point layers. One layer per Rhino
+//! extrusions (the analysis meshes when there are no render meshes), and when a file has none
+//! (saved by a script or another program, or with "save small") a mesh the viewer makes from the
+//! exact geometry, as Rhino does on opening it ([`tessellate`]), Rhino 2's own polysurface
+//! layout included; block instances with their
+//! nested blocks and transforms; SubD objects by their limit surface ([`subd`]); point clouds
+//! and points as point layers. One layer per Rhino
 //! layer (its full path, `Parent::Child`), in the layer colour, hidden when the layer or one of
 //! its parents is off; the members of a block instance on a layer that is off go to that hidden
 //! layer. Every object is a pickable element with its name, object type, layer, id,
@@ -18,8 +22,8 @@
 //! (survey coordinates) moves to a local origin, kept in the project information. Point clouds
 //! are thinned out while drawing; blocks, meshes and points are drawn up to limits, so that a
 //! damaged or hostile file cannot exhaust memory or run for ever. Curves, annotations,
-//! hatches, lights, SubD objects (Rhino stores no mesh for them) and polysurfaces or extrusions
-//! saved without a mesh ("save small") are left out and counted in the project information.
+//! hatches, lights and polysurfaces on surfaces the viewer cannot evaluate (offset surfaces) are
+//! left out and counted in the project information.
 //! Hidden objects, objects on layouts and block definition geometry outside an instance are not
 //! drawn.
 
@@ -28,6 +32,9 @@ use crate::model::{Layer, ProjectData};
 use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
+
+mod subd;
+mod tessellate;
 
 pub struct RhinoLoader;
 
@@ -527,6 +534,8 @@ struct Mesh {
     triangles: usize,
     /// The colour of the Brep face this mesh belongs to (Rhino 7 and later), over the object's.
     color: Option<[u8; 4]>,
+    /// Made by the viewer from the exact geometry: the file has no mesh for it.
+    computed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1012,7 +1021,7 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize)
         return Ok(if meshes.is_empty() { Geometry::Skipped("polysurfaces without a render mesh") } else { Geometry::Meshes(meshes, kind) });
     }
     if class == ON_EXTRUSION {
-        let mut meshes = read_extrusion(&mut c, vertices)?;
+        let (mut meshes, shape, minor) = read_extrusion(&mut c, vertices)?;
         if meshes.is_empty() {
             // Rhino 5: the meshes are user data of the extrusion
             if let Some((_, data)) = object.userdata.iter().find(|(id, _)| *id == ON_V5_EXTRUSION_MESH_CACHE) {
@@ -1030,7 +1039,21 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize)
                 }
             }
         }
+        if meshes.is_empty() {
+            // no mesh in the file: walls and caps from the profile and path
+            match tessellate::extrusion(&shape, minor, vertices) {
+                Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+                mesh => meshes.extend(mesh.ok().flatten()),
+            }
+        }
         return Ok(if meshes.is_empty() { Geometry::Skipped("extrusions without a render mesh") } else { Geometry::Meshes(meshes, "Extrusion") });
+    }
+    if tessellate::is_surface(class) {
+        return Ok(match tessellate::surface_object(class, c, vertices) {
+            Ok(Some(mesh)) => Geometry::Meshes(vec![mesh], "Surface"),
+            Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+            _ => Geometry::Skipped("surfaces without a mesh"),
+        });
     }
     if class == ON_INSTANCE_REF {
         let (major, _) = c.version()?;
@@ -1064,7 +1087,12 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize)
         return Ok(Geometry::Points { points: c.take(24)?, colors: None, kind: "Point" });
     }
     if class == ON_SUBD {
-        return Ok(Geometry::Skipped("SubD objects (no mesh in the file)"));
+        // Rhino keeps no mesh of a SubD: its limit surface, from the control net
+        return Ok(match subd::subd(c, vertices) {
+            Ok(Some(mesh)) => Geometry::Meshes(vec![mesh], "SubD"),
+            Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+            _ => Geometry::Skipped("SubD objects that could not be read"),
+        });
     }
     Ok(Geometry::Skipped(match object_type {
         1 | 2 => "points",
@@ -1156,29 +1184,56 @@ fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
     Ok(mesh)
 }
 
-/// `ON_Brep` (chunk version 3.x): the curves, surfaces and topology are skipped as chunks; the
-/// face count, then the render meshes (or else the analysis meshes) of the faces. Returns the
-/// meshes and the face count.
+/// `ON_Brep` (chunk version 3.x): the curves, surfaces and topology as chunks; the face count,
+/// then the render meshes (or else the analysis meshes) of the faces. A Brep saved without
+/// meshes is meshed from its surfaces and trims ([`tessellate::brep`]). Returns the meshes and
+/// the face count.
 fn read_brep(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, usize)> {
     let (major, minor) = c.version()?;
+    if major == 2 {
+        // Rhino 2: its own layout; a polysurface that cannot be read is left out
+        let mut mesh = |c: &mut Cur<'_>, vertices: &mut usize| -> R<Option<Mesh>> {
+            Ok(match c.object()? {
+                Some(o) if o.class == ON_MESH => {
+                    let mut d = o.data;
+                    Some(read_mesh(&mut d, vertices)?)
+                }
+                _ => None,
+            })
+        };
+        let _ = minor;
+        return match tessellate::brep_v2(c, vertices, &mut mesh) {
+            Err(e) if e == TOO_MANY_VERTICES => Err(e),
+            r => Ok(r.unwrap_or_default()),
+        };
+    }
     if major != 3 {
-        // Rhino 1 and 2 trimmed surfaces
+        // Rhino 1 trimmed surfaces
         return Ok((Vec::new(), 0));
     }
-    // 2d curves, 3d curves, surfaces, vertices, edges, trims, loops
-    for _ in 0..7 {
-        c.chunk()?;
+    // 2d curves, 3d curves, surfaces, vertices, edges, trims, loops, faces
+    let mut parts = Vec::with_capacity(8);
+    for _ in 0..8 {
+        parts.push(c.chunk()?.body);
     }
-    let faces = c.chunk()?.body;
+    let parts: [Cur<'_>; 8] = parts.try_into().map_err(|_| "Rhino 3dm: a damaged polysurface")?;
+    let faces = parts[7].clone();
     let face_count = {
         let mut f = faces.clone();
         f.version()?;
         f.i32()?.max(0) as usize
     };
     let face_colors = brep_face_colors(faces).unwrap_or_default();
-    c.take(48)?; // bounding box
+    let low = DVec3::new(c.f64()?, c.f64()?, c.f64()?);
+    let high = DVec3::new(c.f64()?, c.f64()?, c.f64()?);
+    let size = (high - low).length();
+    // a Brep that cannot be meshed is left out, as one without meshes was before
+    let computed = |vertices: &mut usize| match tessellate::brep(&parts, size, &face_colors, vertices) {
+        Err(e) if e == TOO_MANY_VERTICES => Err(e),
+        meshes => Ok((meshes.unwrap_or_default(), face_count)),
+    };
     if minor < 1 {
-        return Ok((Vec::new(), face_count));
+        return computed(vertices);
     }
     let mut out = Vec::new();
     for _ in 0..2 {
@@ -1200,6 +1255,9 @@ fn read_brep(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, usize)> {
         if !out.is_empty() || c.left() == 0 {
             break;
         }
+    }
+    if out.is_empty() {
+        return computed(vertices);
     }
     Ok((out, face_count))
 }
@@ -1225,20 +1283,19 @@ fn brep_face_colors(mut c: Cur<'_>) -> R<Vec<Option<[u8; 4]>>> {
     (0..count).map(|_| c.color().map(|color| (color != [255; 4]).then_some(color))).collect()
 }
 
-/// `ON_Extrusion`: the profile and path are skipped; from chunk version 1.3 (Rhino 6) the mesh
-/// cache, of which the render mesh (or else the first) is taken.
-fn read_extrusion(c: &mut Cur<'_>, vertices: &mut usize) -> R<Vec<Mesh>> {
+/// `ON_Extrusion`: the profile and path (the shape, meshed when the file has no mesh) and, from
+/// chunk version 1.3 (Rhino 6), the mesh cache, of which the render mesh (or else the first) is
+/// taken.
+fn read_extrusion(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, tessellate::Extrusion, i32)> {
     let (mut b, major, minor) = c.versioned(TCODE_ANONYMOUS_CHUNK)?;
     if major != 1 {
         return err("an extrusion of an unknown version");
     }
-    b.object()?; // profile
-    b.take(48 + 16 + 24 + 2 + 48 + 16 + 1)?; // path, domain, up, normals, path domain, transposed
+    let profile = tessellate::read_curve_object(&mut b, 0).unwrap_or(None);
+    let (shape, minor) = tessellate::read_extrusion_shape(&mut b, profile, minor)?;
     if minor < 3 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), shape, minor));
     }
-    b.i32()?; // profile count
-    b.take(2)?; // caps
     let (mut cache, _, _) = b.versioned(TCODE_ANONYMOUS_CHUNK)?;
     let mut meshes: Vec<(Uuid, Mesh)> = Vec::new();
     while cache.u8()? == 1 {
@@ -1250,7 +1307,8 @@ fn read_extrusion(c: &mut Cur<'_>, vertices: &mut usize) -> R<Vec<Mesh>> {
         }
     }
     let k = meshes.iter().position(|(id, _)| *id == RENDER_MESH_ID).unwrap_or(0);
-    Ok(if meshes.is_empty() { Vec::new() } else { vec![meshes.swap_remove(k).1] })
+    let meshes = if meshes.is_empty() { Vec::new() } else { vec![meshes.swap_remove(k).1] };
+    Ok((meshes, shape, minor))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1303,6 +1361,8 @@ struct Scene<'f> {
     /// What was drawn and what was left out, by kind.
     drawn: BTreeMap<&'static str, usize>,
     skipped: BTreeMap<&'static str, usize>,
+    /// The objects drawn with meshes the viewer made (by the address of their meshes).
+    meshed: HashSet<usize>,
 }
 
 /// The colour an object is drawn in: sRGB and alpha.
@@ -1381,6 +1441,7 @@ impl<'f> Scene<'f> {
             origin: None,
             drawn: BTreeMap::new(),
             skipped: BTreeMap::new(),
+            meshed: HashSet::new(),
         }
     }
 
@@ -1625,6 +1686,9 @@ impl<'f> Scene<'f> {
                 if let Some(p) = props.take() {
                     target.props.push((id, p));
                 }
+                if meshes.iter().any(|m| m.computed) {
+                    self.meshed.insert(meshes.as_ptr() as usize);
+                }
                 true
             }
             Geometry::Points { points, colors, .. } => {
@@ -1691,6 +1755,9 @@ impl<'f> Scene<'f> {
         if !self.drawn.is_empty() {
             info.push(("Rhino objects drawn".into(), list(&self.drawn)));
         }
+        if !self.meshed.is_empty() {
+            info.push(("Rhino objects meshed by the viewer".into(), format!("{} (saved without a render mesh)", self.meshed.len())));
+        }
         if self.stride > 1 {
             info.push(("Rhino points".into(), format!("{} in the file, every {}th drawn", self.total_points, self.stride)));
         }
@@ -1722,6 +1789,7 @@ fn plural(kind: &str) -> &'static str {
         "Extrusion" => "extrusions",
         "Point cloud" => "point clouds",
         "Point" => "points",
+        "SubD" => "SubD objects",
         _ => "objects",
     }
 }
@@ -1753,9 +1821,16 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
         if f.iter().any(|&i| i >= n) {
             continue;
         }
-        triangles.push([f[0], f[1], f[2]]);
-        if f[2] != f[3] {
-            triangles.push([f[0], f[2], f[3]]);
+        if f[2] == f[3] {
+            triangles.push([f[0], f[1], f[2]]);
+            continue;
+        }
+        // a quad splits along its shorter diagonal, as Rhino draws it (a bent quad differs)
+        let d = |a: u32, b: u32| (DVec3::from(mesh.positions[a as usize].map(f64::from)) - DVec3::from(mesh.positions[b as usize].map(f64::from))).length_squared();
+        if d(f[0], f[2]) <= d(f[1], f[3]) {
+            triangles.extend([[f[0], f[1], f[2]], [f[0], f[2], f[3]]]);
+        } else {
+            triangles.extend([[f[0], f[1], f[3]], [f[1], f[2], f[3]]]);
         }
     }
     if let Some(normals) = &mesh.normals {
@@ -2164,7 +2239,7 @@ mod tests {
         assert_eq!(entry(&info, "Rhino application"), "Rhinoceros 7");
         assert_eq!(entry(&info, "Rhino units"), "millimetres (converted to metres)");
         assert_eq!(entry(&info, "Rhino objects drawn"), "1 block instances, 1 extrusions, 2 meshes, 1 point clouds, 1 polysurfaces");
-        assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects (no mesh in the file), 1 curves, 1 hidden objects, 1 objects on layouts");
+        assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects that could not be read, 1 curves, 1 hidden objects, 1 objects on layouts");
     }
 
     /// A Rhino 4 file: 4-byte chunk lengths, the attributes layout before Rhino 5, an
@@ -2429,5 +2504,341 @@ mod tests {
         assert_eq!(mesh.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
         let cloud = &model.layers[1];
         assert_eq!(cloud.positions, [0.125, 0.0625, 1.0, 10.5, 20.25, 2.0]);
+    }
+
+    /// Models made in Rhino 9 and saved without render meshes (`test-models/rhino`, from a script
+    /// as Rhino writes files it never drew): every polysurface and extrusion is meshed by the
+    /// viewer, with sound triangles.
+    #[test]
+    fn polysurfaces_and_extrusions_without_meshes_are_meshed() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        // objects meshed: a block definition's members once, however often it is placed
+        for (name, objects) in [("primitives", 7), ("booleans", 3), ("extrusions", 5), ("freeform", 5), ("building", 12), ("tower", 10), ("mechanical", 3), ("stairs", 22), ("blocks", 8), ("dome", 2), ("roofs", 3)] {
+            let data = std::fs::read(dir.join(format!("{name}.3dm"))).unwrap();
+            let (model, info) = load(&format!("{name}.3dm"), data);
+            assert!(info.iter().all(|(k, _)| k != "Rhino objects left out"), "{name}: {info:?}");
+            assert_eq!(entry(&info, "Rhino objects meshed by the viewer"), format!("{objects} (saved without a render mesh)"), "{name}");
+            let mut triangles = 0;
+            for layer in &model.layers {
+                assert!(layer.positions.iter().chain(&layer.normals).all(|v| v.is_finite()), "{name}");
+                assert!(layer.normals.chunks_exact(3).all(|n| (n[0] * n[0] + n[1] * n[1] + n[2] * n[2] - 1.0).abs() < 1e-3), "{name}: unit normals");
+                triangles += layer.indices.len() / 3;
+            }
+            assert!(triangles > 50 * objects, "{name}: {triangles} triangles");
+        }
+    }
+
+    /// The area of every object meshed by the viewer is the area Rhino computes for its exact
+    /// geometry (`AreaMassProperties`), to within the chordal error of the mesh: trims, holes
+    /// and caps are all there, and nothing is meshed twice.
+    #[test]
+    fn meshed_areas_match_rhino() {
+        // file, object name, area in model units (square millimetres) as Rhino 9 computes it
+        let expected = [
+        ("primitives", "Sphere", 314.1593),
+        ("primitives", "Cylinder", 351.8584),
+        ("primitives", "Cone", 185.6094),
+        ("primitives", "Torus", 394.7842),
+        ("primitives", "Box", 448.0000),
+        ("primitives", "Plane", 560.0000),
+        ("primitives", "Wavy patch", 329.3163),
+        ("booleans", "Plate with holes", 999.0885),
+        ("booleans", "Box and tower", 510.7964),
+        ("booleans", "Sphere with a tunnel", 403.0810),
+        ("extrusions", "Column", 89.5354),
+        ("extrusions", "Tube", 257.9200),
+        ("extrusions", "I-beam", 125.0400),
+        ("extrusions", "Wave wall", 34.4615),
+        ("extrusions", "Beam", 81.2000),
+        ("freeform", "Vase", 139.9704),
+        ("freeform", "Revolved", 120.2451),
+        ("freeform", "Sweep", 59.8317),
+        ("freeform", "Patch with a hole", 127.7938),
+        ("freeform", "Edge surface", 44.4351),
+        ("building", "Window 1", 5.0480),
+        ("building", "Window 2", 5.0480),
+        ("building", "Window 3", 5.0480),
+        ("building", "Window 4", 5.0480),
+        ("building", "Walls", 317.0467),
+        ("building", "Ground slab", 390.8000),
+        ("building", "Roof", 440.9390),
+        ("building", "Column 1", 4.0212),
+        ("building", "Column 2", 4.0212),
+        ("building", "Column 3", 4.0212),
+        ("building", "Column 4", 4.0212),
+        ("building", "Column 5", 4.0212),
+        ("tower", "Twisted tower", 2152.8922),
+        ("tower", "Balcony 1", 299.8000),
+        ("tower", "Balcony 2", 299.8000),
+        ("tower", "Balcony 3", 299.8000),
+        ("tower", "Balcony 4", 299.8000),
+        ("tower", "Balcony 5", 299.8000),
+        ("tower", "Balcony 6", 299.8000),
+        ("tower", "Balcony 7", 299.8000),
+        ("tower", "Ring slab", 202.9469),
+        ("tower", "Canopy", 175.5441),
+        ("mechanical", "Flange", 855.8850),
+        ("mechanical", "Gear", 316.6037),
+        ("mechanical", "Bracket", 220.2145),
+        ("stairs", "Column", 11.8752),
+        ("stairs", "Step 1", 3.5360),
+        ("stairs", "Step 2", 3.5360),
+        ("stairs", "Step 3", 3.5360),
+        ("stairs", "Step 4", 3.5360),
+        ("stairs", "Step 5", 3.5360),
+        ("stairs", "Step 6", 3.5360),
+        ("stairs", "Step 7", 3.5360),
+        ("stairs", "Step 8", 3.5360),
+        ("stairs", "Step 9", 3.5360),
+        ("stairs", "Step 10", 3.5360),
+        ("stairs", "Step 11", 3.5360),
+        ("stairs", "Step 12", 3.5360),
+        ("stairs", "Step 13", 3.5360),
+        ("stairs", "Step 14", 3.5360),
+        ("stairs", "Step 15", 3.5360),
+        ("stairs", "Step 16", 3.5360),
+        ("stairs", "Step 17", 3.5360),
+        ("stairs", "Step 18", 3.5360),
+        ("stairs", "Step 19", 3.5360),
+        ("stairs", "Step 20", 3.5360),
+        ("stairs", "Handrail", 3.6224),
+        ("dome", "Dome", 408.1008),
+        ("dome", "Drum", 320.6938),
+        ("roofs", "Hypar", 125.2610),
+        ("roofs", "SubD blob", 106.3228),
+        ("roofs", "Ribbon", 30.7790),
+        // three table sets of four chairs (nested blocks) and a mirrored chair
+        ("blocks", "", 26.1531),
+        ];
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let mut areas: HashMap<(String, String), f64> = HashMap::new();
+        for name in ["primitives", "booleans", "extrusions", "freeform", "building", "tower", "mechanical", "stairs", "dome", "roofs", "blocks"] {
+            let (model, _) = load(&format!("{name}.3dm"), std::fs::read(dir.join(format!("{name}.3dm"))).unwrap());
+            for layer in &model.layers {
+                let p = |i: u32| DVec3::from_slice(&layer.positions[3 * i as usize..3 * i as usize + 3].iter().map(|&v| v as f64).collect::<Vec<_>>());
+                for &(id, start, count) in &layer.elements {
+                    let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                    let object = props["Name"].as_str().unwrap_or_default().to_string();
+                    let tris = &layer.indices[start as usize..(start + count) as usize];
+                    let area: f64 = tris.chunks_exact(3).map(|t| 0.5 * (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length()).sum();
+                    *areas.entry((name.to_string(), object)).or_default() += area;
+                }
+            }
+        }
+        let mut wrong = Vec::new();
+        for (file, object, rhino) in expected {
+            // the models are in millimetres, the viewer in metres
+            // an empty name: the whole file
+            let ours = 1e6 * areas.iter().filter(|((f, o), _)| f == file && (object.is_empty() || o == object)).map(|(_, a)| a).sum::<f64>();
+            if (ours - rhino).abs() > 0.015 * rhino {
+                wrong.push(format!("{file} {object}: {ours:.3} against {rhino} in Rhino"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("
+"));
+    }
+
+    /// A Rhino 9 file with what a model usually holds, saved as Rhino saves it (with render
+    /// meshes) and without them: layers and sublayers, a hidden and a locked layer, colours by
+    /// layer, object and parent, a basic material with transparency, a PBR material, a layer
+    /// material, colours per face, user text, an extrusion, a sphere, a mesh with vertex colours,
+    /// a block, points, a SubD, and what the viewer leaves out (a hidden object, a curve, a text,
+    /// a hatch). Both read the same.
+    #[test]
+    fn rhino9_layers_materials_colours_and_user_text() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        for (file, meshed) in [("everything_meshes.3dm", 2), ("everything_small.3dm", 14)] {
+            let (model, info) = load(file, std::fs::read(dir.join(file)).unwrap());
+            assert_eq!(entry(&info, "Rhino file version"), "Rhino 9 (archive version 90)");
+            assert_eq!(entry(&info, "Rhino objects drawn"), "1 SubD objects, 1 block instances, 1 extrusions, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces", "{file}");
+            assert_eq!(entry(&info, "Rhino objects left out"), "1 annotations, 1 curves, 1 hatches, 1 hidden objects", "{file}");
+            // the SubD, and the box on the hidden layer which Rhino left without a mesh, are meshed
+            // by the viewer
+            assert_eq!(entry(&info, "Rhino objects meshed by the viewer"), format!("{meshed} (saved without a render mesh)"), "{file}");
+            let layer = |name: &str| model.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{file}: no layer {name}"));
+            assert_eq!(layer("Walls::Interior").color, [40.0 / 255.0, 40.0 / 255.0, 200.0 / 255.0]);
+            assert!(layer("Hidden layer").hidden && !layer("Locked layer").hidden);
+            assert_eq!(layer("Misc (points)").point_count(), 101);
+            // element name -> its colours and properties
+            let mut elements: HashMap<String, (Vec<[u8; 4]>, serde_json::Value)> = HashMap::new();
+            for l in &model.layers {
+                for &(id, start, count) in &l.elements {
+                    let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                    let mut colours: Vec<[u8; 4]> = l.indices[start as usize..(start + count) as usize].iter().filter_map(|&i| l.colors.as_ref().map(|c| c[i as usize])).collect();
+                    colours.sort();
+                    colours.dedup();
+                    elements.insert(props["Name"].as_str().unwrap_or_default().to_string(), (colours, props));
+                }
+            }
+            let colours = |name: &str| elements.get(name).unwrap_or_else(|| panic!("{file}: no {name}")).0.clone();
+            assert_eq!(colours("Box object colour"), [[250, 200, 0, 255]]);
+            assert_eq!(colours("Box basic material"), [[220, 30, 30, 128]], "half transparent");
+            assert_eq!(colours("Box PBR material"), [[30, 80, 220, 255]]);
+            assert_eq!(colours("Box layer material"), [[40, 180, 60, 255]]);
+            assert_eq!(colours("Box face colours").len(), 6);
+            assert_eq!(colours("Crate by parent"), [[0, 200, 200, 255]]);
+            assert!(colours("Coloured mesh").len() > 100);
+            let props = &elements["Box user text"].1;
+            assert_eq!((props["Fire rating"].as_str(), props["Supplier"].as_str()), (Some("60 min"), Some("ACME")));
+            assert!(!elements.contains_key("Hidden box"));
+        }
+    }
+
+    /// SubD objects made in Rhino 9 (`subd.3dm`, from make_subd.py): smooth, with creased edges,
+    /// an open patch with corners, triangles, a pentagon, semi-sharp edges of constant and of
+    /// varying sharpness, a dart and a fine ring. Rhino keeps no mesh of them; the viewer's mesh
+    /// of the limit surface has the area Rhino computes for its exact NURBS form, within 0.5%.
+    #[test]
+    fn subd_limit_surfaces_match_rhino() {
+        // name, area in square millimetres of the limit surface (SubD.ToBrep) in Rhino 9
+        let expected = [
+            ("Smooth box", 20.3797),
+            ("Creased top", 28.7320),
+            ("Open patch", 20.0852),
+            ("Triangle ball", 24.2780),
+            ("Pentagon prism", 16.7190),
+            ("Sharp box", 24.2653),
+            ("Varying sharp box", 24.1884),
+            ("Dart", 38.6362),
+            ("Ring", 117.3877),
+        ];
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino/subd.3dm");
+        let (model, info) = load("subd.3dm", std::fs::read(path).unwrap());
+        assert_eq!(entry(&info, "Rhino objects drawn"), "9 SubD objects");
+        let mut areas = HashMap::new();
+        for layer in &model.layers {
+            let p = |i: u32| DVec3::from_slice(&layer.positions[3 * i as usize..3 * i as usize + 3].iter().map(|&v| v as f64).collect::<Vec<_>>());
+            for &(id, start, count) in &layer.elements {
+                let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                assert_eq!(props["Type"], "SubD");
+                let tris = &layer.indices[start as usize..(start + count) as usize];
+                let area: f64 = tris.chunks_exact(3).map(|t| 0.5 * (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length()).sum();
+                areas.insert(props["Name"].as_str().unwrap().to_string(), 1e6 * area);
+            }
+        }
+        for (name, rhino) in expected {
+            let ours = areas[name];
+            assert!((ours - rhino).abs() <= 0.005 * rhino, "{name}: {ours} against {rhino} in Rhino");
+        }
+    }
+
+    /// Shapes that once meshed wrong, made in Rhino 9 (`regress.3dm`, from make_regress.py) after
+    /// models of McNeel's openNURBS examples: a short conical band of a rational circle (thin
+    /// slivers along an edge of almost collinear points cut across the circle), strips of arcs
+    /// meeting at kinks (triangles over a kink zigzagged and added area), and a mesh of bent
+    /// quads (split along the shorter diagonal, as Rhino does).
+    #[test]
+    fn slivers_kinks_and_bent_quads_keep_their_area() {
+        // name, area in Rhino 9, allowed deviation
+        let expected = [
+            ("Lens band", 8.120637, 0.015),
+            ("Thin ring", 2.513274, 0.015),
+            ("Arc strip", 3.792911, 0.015),
+            ("Arc band", 28.262329, 0.015),
+            ("Twisted arc strip", 6.055392, 0.015),
+            ("Bent quads", 37.749172, 0.0001),
+        ];
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino/regress.3dm");
+        let (model, _) = load("regress.3dm", std::fs::read(path).unwrap());
+        let mut areas = HashMap::new();
+        for layer in &model.layers {
+            let p = |i: u32| DVec3::from_slice(&layer.positions[3 * i as usize..3 * i as usize + 3].iter().map(|&v| v as f64).collect::<Vec<_>>());
+            for &(id, start, count) in &layer.elements {
+                let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                let tris = &layer.indices[start as usize..(start + count) as usize];
+                let area: f64 = tris.chunks_exact(3).map(|t| 0.5 * (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length()).sum();
+                areas.insert(props["Name"].as_str().unwrap().to_string(), 1e6 * area);
+            }
+        }
+        for (name, rhino, allowed) in expected {
+            let ours = areas[name];
+            assert!((ours - rhino).abs() <= allowed * rhino, "{name}: {ours} against {rhino} in Rhino");
+        }
+    }
+
+    /// A closed polysurface meshes into a closed mesh: the faces on either side of an edge share
+    /// its points (on Rhino's edge curve), so no crack opens between them. Every edge of the
+    /// welded mesh of each solid is used by two triangles.
+    #[test]
+    fn closed_polysurfaces_mesh_watertight() {
+        let solids = [
+            ("primitives", vec!["Sphere", "Cylinder", "Cone", "Torus", "Box"]),
+            ("booleans", vec!["Plate with holes", "Box and tower", "Sphere with a tunnel"]),
+            ("extrusions", vec!["Column", "Tube", "I-beam", "Beam"]),
+            ("mechanical", vec!["Flange", "Gear", "Bracket"]),
+            ("fillets", vec![]),
+        ];
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        for (file, names) in solids {
+            let Ok(data) = std::fs::read(dir.join(format!("{file}.3dm"))) else { continue };
+            let (model, _) = load(&format!("{file}.3dm"), data);
+            for layer in &model.layers {
+                for &(id, start, count) in &layer.elements {
+                    let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                    let name = props["Name"].as_str().unwrap_or_default();
+                    if !names.contains(&name) {
+                        continue;
+                    }
+                    // weld by exact position
+                    let mut ids: HashMap<[u32; 3], u32> = HashMap::new();
+                    let mut weld = |i: u32| {
+                        let k = [0, 1, 2].map(|c| layer.positions[3 * i as usize + c].to_bits());
+                        let n = ids.len() as u32;
+                        *ids.entry(k).or_insert(n)
+                    };
+                    let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+                    for t in layer.indices[start as usize..(start + count) as usize].chunks_exact(3) {
+                        let w = [weld(t[0]), weld(t[1]), weld(t[2])];
+                        for k in 0..3 {
+                            let (a, b) = (w[k], w[(k + 1) % 3]);
+                            if a != b {
+                                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+                            }
+                        }
+                    }
+                    let open = edges.values().filter(|&&n| n == 1).count();
+                    assert_eq!(open, 0, "{file} {name}: {open} open edges of {}", edges.len());
+                }
+            }
+        }
+    }
+
+    /// A polysurface as Rhino 2 wrote it (`ON_Brep::ReadOld200`): its curves and surface inline,
+    /// its trims numbered in order. A unit square meshes into a face of area 1.
+    #[test]
+    fn rhino2_polysurfaces_are_read() {
+        let w = W { big: false };
+        let line_class = Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0");
+        // ON_PolyCurve inline, of one line
+        let poly = |a: [f64; 3], b: [f64; 3]| {
+            let line = cat(&[&[0x10], &f64s(&a), &f64s(&b), &f64s(&[0.0, 1.0]), &i32b(3)]);
+            cat(&[&[0x10], &i32b(1), &i32b(0), &i32b(0), &[0; 48], &i32b(2), &f64s(&[0.0, 1.0]), &w.object(line_class, &line, &[])])
+        };
+        let square = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut data = cat(&[&i32b(1), &i32b(4), &i32b(1), &i32b(4), &i32b(1), &[0; 48]]);
+        for k in 0..4 {
+            data.extend(poly(square[k], square[(k + 1) % 4])); // trims in the parameter plane
+        }
+        for k in 0..4 {
+            data.extend(poly(square[k], square[(k + 1) % 4])); // edges
+        }
+        // ON_NurbsSurface inline: a bilinear patch over the unit square, u along x
+        let cvs: Vec<f64> = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]].iter().flat_map(|[x, y]| [*x, *y, 0.0]).collect();
+        data.extend(cat(&[&[0x10], &i32b(3), &i32b(0), &i32b(2), &i32b(2), &i32b(2), &i32b(2), &i32b(0), &i32b(0), &[0; 48], &i32b(2), &f64s(&[0.0, 1.0]), &i32b(2), &f64s(&[0.0, 1.0]), &i32b(4), &f64s(&cvs)]));
+        // the face, its outer loop and its trims
+        data.extend(cat(&[&i32b(0), &i32b(0), &i32b(0), &i32b(0), &[0; 48], &i32b(1), &i32b(0), &i32b(0), &[0; 32], &i32b(4)]));
+        for k in 0..4 {
+            data.extend(cat(&[&i32b(k), &i32b(-1), &[1], &i32b(k), &i32b(0), &i32b(0), &i32b(0), &f64s(&[0.0, 0.0])]));
+        }
+        data.push(0); // no render mesh
+        let mut c = Cur { data: &data, pos: 0, v: Versions { archive: 2, opennurbs: 0 } };
+        let mut vertices = 0;
+        let (meshes, faces) = super::tessellate::brep_v2(&mut c, &mut vertices, &mut |_, _| Ok(None)).unwrap();
+        assert_eq!((meshes.len(), faces), (1, 1));
+        let m = &meshes[0];
+        let p = |i: u32| DVec3::from(m.positions[i as usize].map(f64::from));
+        let area: f64 = m.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).length()).sum();
+        assert!((area - 1.0).abs() < 1e-9, "{area}");
+        assert_eq!(c.left(), 0, "the whole record is read");
     }
 }

@@ -2,12 +2,16 @@
 # ply-dll, ..): one deploy key per repository, each private key in a secret of its own whose name
 # starts with SSH_KEY_ (SSH_KEY_REVIT_DLL, SSH_KEY_RHINO_DLL, ..), its comment the repository's
 # address (git@github.com:OpenAEC-Foundation/<repository>.git), which tells ssh-agent which key
-# opens which repository. A new reader needs a new key and a new secret, nothing here.
+# opens which repository.
+#
+# The workflow names the secrets it passes, so this action gets the deploy keys and no other
+# secret. A new reader needs a new key, a new secret, and that secret's name in the step that
+# calls this action in build.yml, format-crates.yml, live.yml and release.yml.
 name: Private reader keys
-description: Loads every SSH_KEY_ secret into ssh-agent for Cargo's git dependencies.
+description: Loads the deploy keys of the private readers into ssh-agent for Cargo's git dependencies.
 inputs:
-  secrets:
-    description: The job's secrets, as `toJSON(secrets)`.
+  keys:
+    description: The private keys, one after another, each from its own SSH_KEY_ secret.
     required: true
 runs:
   using: composite
@@ -15,10 +19,10 @@ runs:
     - name: Collect the keys
       shell: bash
       env:
-        ALL_SECRETS: ${{ inputs.secrets }}
+        READER_KEYS: ${{ inputs.keys }}
       run: |
-        # jq on Windows ends every line with CRLF, and ssh-add rejects such a key ("invalid format")
-        keys=$(printf '%s' "$ALL_SECRETS" | jq -r 'to_entries[] | select(.key | startswith("SSH_KEY_")) | .value' | tr -d '\r')
+        # ssh-add rejects a key whose lines end with CRLF ("invalid format")
+        keys=$(printf '%s' "$READER_KEYS" | tr -d '\r')
         count=$(printf '%s\n' "$keys" | grep -c "BEGIN OPENSSH PRIVATE KEY" || true)
         echo "Private reader keys: $count"
         {

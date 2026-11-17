@@ -33,7 +33,17 @@ impl Loader for VwxLoader {
         let scene = vwx_read::read(&data).map_err(|e| format!("Cannot read Vectorworks file: {e}"))?;
         // the saved views, then the views the viewports of the sheets show
         let mut views: Vec<SavedView> = scene.views.iter().map(view).collect();
-        let project = ProjectData { sheets: scene.sheets.iter().map(|s| sheet(s, &mut views)).collect(), ..ProjectData::default() };
+        let mut project = ProjectData { sheets: scene.sheets.iter().map(|s| sheet(s, &mut views)).collect(), ..ProjectData::default() };
+        // a viewport shows some of the layers and classes only: its view leaves out the objects
+        // of the others
+        for (from, sheet) in scene.sheets.iter().zip(&project.sheets) {
+            for (from, viewport) in from.viewports.iter().zip(&sheet.viewports) {
+                let hidden = left_out(from, &scene.meshes);
+                if let (Some(view), false) = (viewport.view, hidden.is_empty()) {
+                    project.switched_off.insert(crate::model::view3d_key(view), hidden);
+                }
+            }
+        }
         let layers = scene.meshes.into_iter().map(layer).collect();
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
     }
@@ -114,6 +124,13 @@ fn sheet(sheet: &vwx_read::model::Sheet, views: &mut Vec<SavedView>) -> Sheet {
     let corners = sheet.lines.iter().flatten().copied().chain(texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]])).chain(viewports.iter().flat_map(|v| [v.rect.min, v.rect.max]));
     let paper = corners.map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union);
     Sheet { lines: sheet.lines.clone(), texts, ..Sheet::new(sheet.number.clone(), sheet.title.clone(), paper, viewports) }
+}
+
+/// The objects a viewport does not show: those on the design layers and in the classes it
+/// leaves out.
+fn left_out(viewport: &vwx_read::model::Viewport, meshes: &[vwx_read::model::Mesh]) -> std::collections::HashSet<u64> {
+    let hides = |m: &&vwx_read::model::Mesh| viewport.hidden_layers.contains(&m.layer) || viewport.hidden_classes.contains(&m.class);
+    meshes.iter().filter(hides).flat_map(|m| m.props.iter().map(|p| p.0)).collect()
 }
 
 /// The viewer layer of a reader mesh (both metres, Z up).
@@ -205,7 +222,18 @@ mod tests {
             title: "Plans".into(),
             lines: vec![[[0.0, 0.0], [0.841, 0.0]], [[0.841, 0.0], [0.841, 0.594]]],
             texts: vec![vwx_read::model::Text { id: 12, text: "Sheet No.".into(), at: [0.7, 0.05, 0.0], width: 0.04, height: 0.005, size: 12.0, lines: 1, ..Default::default() }],
-            viewports: vec![vwx_read::model::Viewport { id: 14, name: "Front Elevation".into(), min: [0.1, 0.2], max: [0.6, 0.45], scale: 50.0, origin: [0.2, 0.25], forward: [0.0, 1.0, 0.0], up: [0.0, 0.0, 1.0] }],
+            viewports: vec![vwx_read::model::Viewport {
+                id: 14,
+                name: "Front Elevation".into(),
+                min: [0.1, 0.2],
+                max: [0.6, 0.45],
+                scale: 50.0,
+                origin: [0.2, 0.25],
+                forward: [0.0, 1.0, 0.0],
+                up: [0.0, 0.0, 1.0],
+                hidden_layers: vec!["01-Slab".into()],
+                hidden_classes: vec!["Space".into()],
+            }],
         };
         let mut views = vec![super::view(&vwx_read::model::View { name: "Aanzicht A".into(), forward: [0.0, 0.6, -0.8], up: [0.0, 0.8, 0.6] })];
         let sheet = super::sheet(&from, &mut views);
@@ -213,6 +241,12 @@ mod tests {
         let viewport = &sheet.viewports[0];
         assert_eq!((viewport.title.as_str(), viewport.view, viewport.scale.as_str(), viewport.ratio), ("Front Elevation", Some(1), "1:50", 0.02));
         assert_eq!((views[1].name.as_str(), views[1].camera.unwrap().forward), ("Front Elevation", [0.0, 1.0, 0.0]));
+        // it leaves out what is on a layer or in a class it does not show
+        let mesh = |layer: &str, class: &str, id: u64| vwx_read::model::Mesh { layer: layer.into(), class: class.into(), props: vec![(id, String::new())], ..Default::default() };
+        let meshes = [mesh("00-Slab", "Floor", 1), mesh("01-Slab", "Floor", 2), mesh("00-Floor", "Space", 3)];
+        let mut hidden: Vec<u64> = super::left_out(&from.viewports[0], &meshes).into_iter().collect();
+        hidden.sort();
+        assert_eq!(hidden, [2, 3]);
         assert_eq!((sheet.number.as_str(), sheet.name.as_str(), sheet.title.as_str()), ("210", "Plans", "210 Plans"));
         assert_eq!(sheet.lines.len(), 2);
         // the text box from its lower left corner; letters of 12 points

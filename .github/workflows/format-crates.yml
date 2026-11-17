@@ -6,6 +6,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# One run at a time per branch or pull request; a newer push cancels the older one.
+concurrency:
+  group: format-crates-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   readers:
     runs-on: ubuntu-latest

@@ -113,6 +113,8 @@ enum RibbonPart {
 
 /// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1360.0;
+/// The products to come, named on the switch but not to be chosen yet.
+const SOON: [&str; 2] = ["FM", "Environment"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -799,6 +801,21 @@ impl Studio {
         self.save_prefs();
     }
 
+    /// Docs is a product: its page is open while it is the product shown, and closed in the
+    /// others. Opening it reads the project folder again.
+    fn docs_follow_product(&mut self) -> Task<Msg> {
+        let docs = self.product() == Product::Docs;
+        self.app.docs.in_product = docs;
+        match (docs, self.app.docs.open) {
+            (true, false) => self.app.update(Message::Docs(crate::app::DocsMessage::Open)).map(Msg::App),
+            (false, true) => {
+                let _ = self.app.update(Message::Docs(crate::app::DocsMessage::Close));
+                Task::none()
+            }
+            _ => Task::none(),
+        }
+    }
+
     /// The ribbon tab shown.
     fn ribbon_page(&self) -> RibbonPage {
         let pages = self.product().pages();
@@ -1197,6 +1214,26 @@ impl Studio {
             Command::new("section.reset", l.text("Herstellen", "Reset"), go(Message::ResetSection))
                 .icon(small("section.reset-box"), large("section.reset-box"))
                 .enabled(app.section_on || app.plane.is_some()),
+            // Docs: the project folder, and opening and linking the picked document
+            Command::new("docs.folder", l.text("Projectmap", "Project folder"), go(Message::Docs(crate::app::DocsMessage::Choose))).icon(small("project.folder"), large("project.folder")),
+            Command::new("docs.refresh", l.text("Vernieuwen", "Refresh"), go(Message::Docs(crate::app::DocsMessage::Refresh)))
+                .icon(small("view.reset-camera"), large("view.reset-camera"))
+                .enabled(app.docs.folder.is_some()),
+            Command::new("docs.leave", l.text("Loslaten", "Let go"), go(Message::Docs(crate::app::DocsMessage::Leave)))
+                .icon(small("edit.clear-all"), large("edit.clear-all"))
+                .enabled(app.docs.folder.is_some()),
+            Command::new("docs.open", l.text("Openen in de suite", "Open in the suite"), go(Message::Docs(crate::app::DocsMessage::OpenModel { add: false })))
+                .icon(small("file.open"), large("file.open"))
+                .enabled(app.docs_reads_picked()),
+            Command::new("docs.open-outside", l.text("Openen in programma", "Open in its program"), go(Message::Docs(crate::app::DocsMessage::OpenOutside)))
+                .icon(small("file.import"), large("file.import"))
+                .enabled(app.docs_picked().is_some()),
+            Command::new("docs.reveal", l.text("Tonen in map", "Show in folder"), go(Message::Docs(crate::app::DocsMessage::Reveal)))
+                .icon(small("panel.left"), large("panel.left"))
+                .enabled(app.docs_picked().is_some()),
+            Command::new("docs.link", l.text("Koppelen aan selectie", "Link to selection"), go(Message::Docs(crate::app::DocsMessage::Link)))
+                .icon(small("grid.end-couple"), large("grid.end-couple"))
+                .enabled(app.docs_can_link()),
             Command::new("view.ifc", l.text("IFC-structuur", "IFC structure"), go(Message::OpenIfc))
                 .icon(small("panel.model-tree"), large("panel.model-tree"))
                 .toggle(app.ifc.shown)
@@ -1535,10 +1572,15 @@ impl Studio {
         }
         // the app knows whether the Modeller is shown: there an opened file's walls have grips
         self.app.modeller.in_modeller = self.product() == Product::Modeller;
+        // a document picked at an element of the model opens in Docs, the product
+        if matches!(message, Msg::App(Message::Docs(crate::app::DocsMessage::Show(_)))) {
+            self.set_product(Product::Docs);
+        }
         let task = self.handle(message);
         self.app.modeller.in_modeller = self.product() == Product::Modeller;
+        let docs = self.docs_follow_product();
         self.keep_dev_session();
-        task
+        Task::batch([task, docs])
     }
 
     fn handle(&mut self, message: Msg) -> Task<Msg> {
@@ -2214,7 +2256,7 @@ impl Studio {
         let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
         // (where the window has room for them beside the title)
         let room = self.width >= SOON_WIDTH;
-        let segments = segments.chain(["Docs", "FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
+        let segments = segments.chain(SOON.map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
@@ -2299,6 +2341,12 @@ impl Studio {
                 (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
+            ],
+            // the project folder, the picked document, and its link with the model
+            RibbonPage::Docs => vec![
+                (l.text("Projectmap", "Project folder"), vec![large("docs.folder"), smalls(&["docs.refresh", "docs.leave"])]),
+                (l.text("Document", "Document"), vec![large("docs.open"), smalls(&["docs.open-outside", "docs.reveal"])]),
+                (l.text("Model", "Model"), vec![large("docs.link")]),
             ],
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
@@ -2447,11 +2495,11 @@ impl Studio {
         let l = self.l();
         let p = palette(look);
         let app = &self.app;
-        let workspace: Element<'_, Msg> = if app.model.is_none() && !matches!(app.status, Status::Loading { .. }) {
+        let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer => (
+                Product::Viewer | Product::Docs => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2510,7 +2558,8 @@ impl Studio {
             middle = middle.push(w::document_tabs(look, &tabs, active, small("window.close"), Msg::SelectProject, Msg::CloseProject, Msg::SelectProject));
         }
         let doc_tabs = app.doc_tabs();
-        if app.model.is_some() && doc_tabs.len() > 1 {
+        // Docs opens without a model too; in its own product it then needs no tab
+        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 {
             let tabs: Vec<DocumentTab<'_>> = doc_tabs
                 .iter()
                 .map(|&t| if t == DocTab::Model { DocumentTab::pinned(model_name) } else { DocumentTab::new(app.tab_title(t), false) })
@@ -2572,6 +2621,8 @@ impl Studio {
                 };
                 (l.text("Samenwerken", "Collaboration"), body.into())
             }
+            // Docs: the folders of the project folder
+            Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
             Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
@@ -3367,6 +3418,66 @@ mod tests {
         assert!(studio.app.dimension_tool && studio.command("annotate.dimension").kind == openaec_ui::design::command::CommandKind::Toggle(true));
         // the door and window tools are on the Model tab
         assert!(studio.command("model.door").enabled && studio.command("model.window").enabled);
+    }
+
+    /// A project folder for a test: `drawings/A-101.pdf` and `notes.docx`.
+    fn project_folder(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("o3v-shell-docs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("drawings")).expect("folder");
+        std::fs::write(root.join("drawings/A-101.pdf"), b"plan").expect("file");
+        std::fs::write(root.join("notes.docx"), b"notes").expect("file");
+        root
+    }
+
+    #[test]
+    fn docs_is_a_product_with_its_ribbon_its_page_and_the_folders_in_the_left_pane() {
+        let root = project_folder("product");
+        let mut studio = Studio::new(App::default());
+        let _ = studio.update(Msg::Product(Product::Docs));
+        assert_eq!((studio.product(), studio.ribbon_page()), (Product::Docs, RibbonPage::Docs));
+        assert!(studio.app.docs.open && studio.app.docs.shown, "its page shows");
+        // it is on the switch once: a product there is, is no product to come; it stands where it
+        // was announced, after the Modeller
+        assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
+        assert_eq!(Product::ALL.last(), Some(&Product::Docs));
+        // no project folder yet: the page asks for one
+        assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
+        // with one: its folders are the left pane, its files the page
+        studio.app.docs_at(root.clone(), None);
+        let _ = studio.update(Msg::Resized(1600.0));
+        assert_eq!(studio.left_panel(studio.look()).0, "Project folder");
+        {
+            let mut ui = iced_test::simulator(studio.view());
+            assert!(ui.find("drawings").is_ok() && ui.find("notes.docx").is_ok());
+        }
+        // the ribbon's commands follow what is picked: a text opens in its program, not in the suite
+        assert!(studio.command("docs.refresh").enabled);
+        assert!(!studio.command("docs.open-outside").enabled && !studio.command("docs.link").enabled);
+        let _ = studio.update(Msg::App(Message::Docs(crate::app::DocsMessage::Pick("notes.docx".into()))));
+        assert!(studio.command("docs.open-outside").enabled && studio.command("docs.reveal").enabled);
+        assert!(!studio.command("docs.open").enabled);
+        // in another product Docs is closed: it is no tab of theirs, and no command of their ribbon
+        let _ = studio.update(Msg::Product(Product::Viewer));
+        assert!(!studio.app.docs.open && !studio.app.docs.shown);
+        assert!(studio.default_commands().iter().all(|c| c.id != "view.docs"));
+        // back in Docs the folder is still there
+        let _ = studio.update(Msg::Product(Product::Docs));
+        assert!(studio.app.docs.shown && studio.app.docs.folder.as_deref() == Some(root.as_path()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_document_of_an_element_opens_in_the_docs_product() {
+        let root = project_folder("show");
+        let mut studio = Studio::new(App::default());
+        studio.app.docs.folder = Some(root.clone());
+        assert_eq!(studio.product(), Product::Viewer);
+        let _ = studio.update(Msg::App(Message::Docs(crate::app::DocsMessage::Show("drawings/A-101.pdf".into()))));
+        assert_eq!(studio.product(), Product::Docs);
+        assert!(studio.app.docs.shown);
+        assert_eq!(studio.app.docs.pick.as_deref(), Some("drawings/A-101.pdf"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

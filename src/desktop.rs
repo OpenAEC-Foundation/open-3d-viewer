@@ -2,13 +2,13 @@
 //!
 //! Usage:
 //!   open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-contrast-light]
-//!                  [--language en|nl] [--product viewer|modeller|validator|pointcloud] [--no-remote]
+//!                  [--language en|nl] [--product viewer|modeller|validator|docs|pointcloud] [--no-remote]
 //!                  [--gpu-backend dx12|vulkan|gl] [--present-mode vsync|no_vsync|fifo|mailbox]
 //!   open-3d-viewer [FILE] --screenshot OUT.png [--size 1600x1000] [--mode solid|wireframe|edges|hidden] [--cloud-color stored|elevation|intensity|class] [--flat-clouds] [--analysis N,Vy,Vz,Mx,My,Mz,deformed,reactions,supports,loads,next-set,larger]
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
-//!                  [--recent PATH]...
+//!                  [--recent PATH]... [--docs FOLDER [--doc FILE]]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
@@ -57,6 +57,9 @@ struct Args {
     bcf: Option<PathBuf>,
     ids: Option<PathBuf>,
     collab: Option<String>,
+    /// Docs on this project folder, and the file in it to pick (its path in the folder).
+    docs: Option<PathBuf>,
+    doc: Option<String>,
     /// For `--screenshot`: recent files, besides FILE.
     recent: Vec<PathBuf>,
     screenshot: Option<PathBuf>,
@@ -101,7 +104,7 @@ fn parse_args() -> Result<Args, String> {
             "--language" => {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
-            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|pointcloud")?),
+            "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|docs|pointcloud")?),
             "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback|cloud")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
@@ -113,6 +116,8 @@ fn parse_args() -> Result<Args, String> {
             "--bcf" => args.bcf = Some(PathBuf::from(value()?)),
             "--ids" => args.ids = Some(PathBuf::from(value()?)),
             "--collab" => args.collab = Some(value()?),
+            "--docs" => args.docs = Some(PathBuf::from(value()?)),
+            "--doc" => args.doc = Some(value()?),
             "--recent" => args.recent.push(PathBuf::from(value()?)),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
@@ -182,6 +187,10 @@ fn parse_args() -> Result<Args, String> {
             _ if s.starts_with("--") => return Err(format!("unknown option {s}")),
             _ => args.file = Some(PathBuf::from(a)),
         }
+    }
+    // Docs on a folder is the Docs product, unless another one was asked for
+    if args.docs.is_some() && args.product.is_none() {
+        args.product = Some(crate::product::Product::Docs);
     }
     Ok(args)
 }
@@ -266,6 +275,10 @@ fn initial_state(args: &Args) -> App {
     app.camera.ortho = args.ortho;
     if args.view_tab {
         app.tab = app::RibbonTab::View;
+    }
+    // Docs on a project folder, read here (no message has run yet); also without a model
+    if let Some(folder) = &args.docs {
+        app.docs_at(folder.clone(), args.doc.as_deref());
     }
     app
 }

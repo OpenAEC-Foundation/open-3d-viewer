@@ -51,6 +51,7 @@ impl App {
             self.active_sheet = None;
             self.active_schedule = None;
             self.ifc.shown = false;
+            self.docs.shown = false;
             self.active_doc_sheet = None;
         }
         Task::none()

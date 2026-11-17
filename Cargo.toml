@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-docs"]
 
 [lib]
 name = "open_3d_viewer"
@@ -70,6 +70,8 @@ bim-structural = { path = "crates/bim-structural" }
 bim-core = { path = "crates/bim-core" }
 # The modeller's libraries: materials, layered build-ups, profiles and linear types; headless, in this workspace
 bim-library = { path = "crates/bim-library" }
+# Docs: the documents of a project in a folder a sync tool keeps the same for everyone; headless, in this workspace
+bim-docs = { path = "crates/bim-docs" }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
 serde = { version = "1", features = ["derive"] }
@@ -151,6 +153,8 @@ rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a
 rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
 rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "a1d9447b5f319497e44f41ecf81033edfd7e5c12" }
+# Docs shows when a file was changed in the time of this computer (MIT OR Apache-2.0; already built for bim-bcf)
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The BIM Validator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
 bim-bcf = { path = "crates/bim-bcf" }
 bim-validator-core = { path = "crates/bim-validator-core" }

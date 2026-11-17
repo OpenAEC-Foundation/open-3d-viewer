@@ -45,6 +45,7 @@ impl App {
         if i.is_some() {
             self.active_schedule = None;
             self.ifc.shown = false;
+            self.docs.shown = false;
             self.active_doc_sheet = None;
             self.active_draft = None;
         }

@@ -75,6 +75,7 @@ mod ifcx;
 mod step;
 mod e2k;
 mod ifcfem;
+mod ifcfem_project;
 mod sam;
 mod rhino;
 mod blend;

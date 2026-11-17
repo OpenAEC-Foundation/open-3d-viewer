@@ -13,7 +13,8 @@
 //!   (`IfcStructuralCurveReaction` with a load configuration of stations in metres from the start).
 //!
 //! The file is in SI units (metres, newtons), as the model is. The
-//! checks and the program's own project in the property sets are not read. A member's end forces
+//! checks are not read. The program's own project in the property sets gives the profiles, the
+//! grid and the levels (see `ifcfem_project`). A member's end forces
 //! are left out where the file also gives its force lines, which hold them.
 //!
 //! Of the loads, the forces on nodes (`IfcStructuralPointAction`) and the constant line loads along
@@ -45,12 +46,24 @@ impl Loader for IfcFemLoader {
         let data = source.read()?;
         let text = String::from_utf8_lossy(data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data));
         progress.set(Phase::Convert);
-        let model = read(&text, &source.name()).map_err(|e| format!("{}: {e}", source.name()))?;
+        let mut model = read(&text, &source.name()).map_err(|e| format!("{}: {e}", source.name()))?;
+        // the profiles, grid and levels of the project the file carries along
+        let carried = super::ifcfem_project::find(&text);
+        if let Some(carried) = &carried {
+            super::ifcfem_project::sections(&mut model, carried);
+            let duplicates = model.rebuild_index();
+            debug_assert!(duplicates.is_empty(), "{duplicates:?}");
+        }
         let doc = SamDocument { origin: DVec3::ZERO, source: model.source.clone(), models: vec![model] };
         let origin = super::sam::anchor(&doc);
         let mut info = super::sam::info(&doc, origin);
         info[0].1 = "Structural analysis results (IFC, .ifcfemresults)".to_string();
-        Ok(Loaded { project: ProjectData { info, ..ProjectData::default() }, layers: Vec::new(), views: Vec::new(), origin: Some(origin), structural: doc.models })
+        let mut project = ProjectData { info, ..ProjectData::default() };
+        if let Some(carried) = &carried {
+            super::ifcfem_project::grid(&doc.models[0], carried, origin, &mut project);
+        }
+        let layers = super::ifcfem_project::solids(&doc.models[0], origin);
+        Ok(Loaded { project, layers, views: Vec::new(), origin: Some(origin), structural: doc.models })
     }
 }
 
@@ -184,7 +197,7 @@ fn numbers(arg: &str) -> Vec<f64> {
 }
 
 /// A string without its quotes, with `''` and the `\X2\…\X0\` escapes resolved.
-fn string(arg: &str) -> Option<String> {
+pub(super) fn string(arg: &str) -> Option<String> {
     let s = arg.trim().strip_prefix('\'')?.strip_suffix('\'')?.replace("''", "'");
     let mut out = String::new();
     let mut rest = s.as_str();

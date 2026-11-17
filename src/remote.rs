@@ -457,10 +457,20 @@ impl App {
                 let sheets = self.document.sheets().iter().map(|s| ("sheet", s.title.clone(), s.path.clone()));
                 let all: Vec<(&str, String, String)> = plans.chain(sections).chain(sheets).collect();
                 let Some(name) = a.get("name").and_then(|v| v.as_str()) else {
-                    return Ok(json!({ "drawings": all.iter().map(|(kind, name, _)| json!({ "kind": kind, "name": name })).collect::<Vec<_>>() }));
+                    let drafts = self.model.as_ref().map(|m| m.project.drafts.iter().map(|d| json!({ "kind": "2d drawing", "name": d.name })).collect::<Vec<_>>()).unwrap_or_default();
+                    return Ok(json!({ "drawings": all.iter().map(|(kind, name, _)| json!({ "kind": kind, "name": name })).chain(drafts).collect::<Vec<_>>() }));
                 };
                 let wanted = name.to_lowercase();
                 let found = all.iter().find(|d| d.1.to_lowercase() == wanted).or_else(|| all.iter().find(|d| d.1.to_lowercase().contains(&wanted)));
+                // else a drawing the model's file holds without a model: a legend, a drafting
+                // view, a 2D drawing
+                if found.is_none() {
+                    let drafts = self.model.as_ref().map(|m| m.project.drafts.iter().map(|d| d.name.to_lowercase()).collect::<Vec<_>>()).unwrap_or_default();
+                    if let Some(i) = drafts.iter().position(|d| *d == wanted).or_else(|| drafts.iter().position(|d| d.contains(&wanted))) {
+                        let _ = self.update(Message::OpenDraft(i));
+                        return Ok(json!({ "opened": drafts[i], "kind": "2d drawing" }));
+                    }
+                }
                 let (kind, name, path) = found.ok_or_else(|| format!("no drawing named '{name}'; call open_drawing without a name to list them"))?.clone();
                 let message = if kind == "sheet" { Message::OpenDocSheet(path.as_str().into()) } else { Message::OpenPlan(path.as_str().into()) };
                 let _ = self.update(message);

@@ -2944,7 +2944,9 @@ mod tests {
             ("Text 6", [0.0545, -20.1977, 8.1241, -18.9836]),
         ];
         let texts = model.layers.iter().find(|l| l.name == "Text").unwrap();
-        for (name, [x0, y0, x1, y1]) in rhino {
+        for (name, outline) in rhino {
+            // the model is in millimetres, the viewer in metres
+            let [x0, y0, x1, y1] = outline.map(|v| v / 1000.0);
             let mut low = [f64::MAX; 3];
             let mut high = [f64::MIN; 3];
             for &(id, start, count) in &texts.elements {

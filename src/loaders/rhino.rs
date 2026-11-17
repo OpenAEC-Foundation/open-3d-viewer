@@ -1,4 +1,4 @@
-//! Rhino 3D models (`.3dm`), Rhino 2 to 9. The file is read by the `threedm-read` crate
+//! Rhino 3D models (`.3dm`), Rhino 1 to 9. The file is read by the `threedm-read` crate
 //! ([rhino-dll](https://github.com/OpenAEC-Foundation/rhino-dll)): its layers, materials, block
 //! definitions and objects as meshes (exact geometry, SubD, texts and filled hatches meshed as
 //! Rhino meshes them), polylines (curves and hatch lines), points and block instances. This
@@ -397,6 +397,7 @@ impl<'f> Scene<'f> {
 
     /// Adds meshes or points to the layer of `layer`; the first part drawn carries the props.
     fn draw(&mut self, geometry: &Geometry<'_>, layer: i32, xform: DMat4, color: Rgba, id: u64, props: &mut Option<String>) -> bool {
+        let color = ink(geometry, color);
         match geometry {
             Geometry::Meshes(meshes, _) => {
                 // the meshes within the triangle and vertex limits
@@ -559,6 +560,21 @@ fn display(c: Rgba) -> Rgba {
     }
 }
 
+/// Curves, texts, dimensions and leaders in black (Rhino's default colour) draw dark, as ink,
+/// rather than in the viewer's grey for surfaces, which hardly shows lines and letters.
+fn ink(geometry: &Geometry<'_>, color: Rgba) -> Rgba {
+    let drafting = match geometry {
+        Geometry::Lines(..) | Geometry::Drawing { .. } => true,
+        Geometry::Meshes(_, kind) => *kind == "Text",
+        _ => false,
+    };
+    if drafting && color[..3] == display([0, 0, 0, 255])[..3] {
+        [38, 38, 38, color[3]]
+    } else {
+        color
+    }
+}
+
 fn plural(kind: &str) -> &'static str {
     match kind {
         "Mesh" => "meshes",
@@ -574,6 +590,7 @@ fn plural(kind: &str) -> &'static str {
         "Dimension" => "dimensions",
         "Leader" => "leaders",
         "Center mark" => "center marks",
+        "Text dot" => "text dots",
         _ => "objects",
     }
 }

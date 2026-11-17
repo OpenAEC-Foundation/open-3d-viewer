@@ -3,13 +3,15 @@
 //! Rhino does when it opens such a file. Read as openNURBS writes it (`ON_Brep`, `ON_Extrusion`,
 //! the curve and surface classes): trim curves, surfaces, trims, loops and faces.
 //!
-//! A face is meshed in the parameter plane of its surface: its trim loops are sampled until the
-//! points on the surface lie within the tolerance of their chords, a grid follows the bending of
-//! the surface, and a constrained Delaunay triangulation of the boundary and the grid points
-//! inside it is kept where it lies within the loops. Planes, NURBS surfaces (rational too),
-//! surfaces of revolution and sum surfaces are read; curves are lines, arcs, polylines, NURBS
-//! curves and polycurves. Extrusions are walls along their profiles and, when capped, flat caps.
-//! Other surfaces (offset surfaces, proxies) are left out.
+//! A face is meshed in the parameter plane of its surface. An untrimmed face is a grid whose
+//! lines follow the bending and twist of the surface and lie on its kinks. A trimmed face's
+//! loops are sampled until the points on the surface lie within the tolerance of their chords
+//! (and at least once per grid cell on a curved surface), and a constrained Delaunay
+//! triangulation of the loops and the grid points inside them is kept within the loops. Planes,
+//! NURBS surfaces (rational too), surfaces of revolution and sum surfaces are read, also as
+//! objects of their own; curves are lines, arcs, polylines, NURBS curves and polycurves.
+//! Extrusions are walls along their profiles and, when capped, flat caps, mitered ends
+//! included. Other surfaces (offset surfaces, proxies) are left out.
 
 use super::{err, Cur, Mesh, Uuid, R};
 use glam::{DVec2, DVec3};
@@ -92,6 +94,12 @@ impl Nurbs {
         span(&self.knots, self.degree(), self.cvs.len(), t)
     }
 
+    /// The knots inside the domain where the curve is only continuous (multiplicity of at least
+    /// the degree): its kinks.
+    fn kinks(&self) -> Vec<f64> {
+        kinks(&self.knots, self.degree(), self.domain())
+    }
+
     /// The distinct knots inside the domain, each span split in `degree` parts.
     fn breaks(&self) -> Vec<f64> {
         let [a, b] = self.domain();
@@ -115,6 +123,23 @@ impl Nurbs {
         d[..=p].copy_from_slice(&self.cvs[i - p..=i]);
         homogeneous(de_boor(p, &self.knots, i, &mut d[..=p], t))
     }
+}
+
+/// The knots strictly inside `domain` repeated at least `degree` times.
+fn kinks(knots: &[f64], degree: usize, domain: [f64; 2]) -> Vec<f64> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < knots.len() {
+        let mut j = i;
+        while j < knots.len() && knots[j] == knots[i] {
+            j += 1;
+        }
+        if j - i >= degree.max(1) && knots[i] > domain[0] && knots[i] < domain[1] {
+            out.push(knots[i]);
+        }
+        i = j;
+    }
+    out
 }
 
 fn span(knots: &[f64], p: usize, count: usize, t: f64) -> usize {
@@ -212,6 +237,26 @@ impl Curve {
         }
     }
 
+    /// Parameters inside the domain where the curve may have a kink: polyline corners, the joins
+    /// of polycurve segments and knots of full multiplicity.
+    fn kinks(&self) -> Vec<f64> {
+        let [a, b] = self.domain();
+        let inner = |t: &[f64]| t.iter().copied().filter(|&s| s > a && s < b).collect::<Vec<_>>();
+        match self {
+            Curve::Polyline { t, .. } => inner(t),
+            Curve::Poly { segments, t } => {
+                let mut out = inner(t);
+                for (k, c) in segments.iter().enumerate() {
+                    let d = c.domain();
+                    out.extend(c.kinks().into_iter().map(|s| lerp_param(s, d, [t[k], t[k + 1]])));
+                }
+                out
+            }
+            Curve::Nurbs(n) => n.kinks(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Parameters to start sampling from, over the whole domain: the ends, kinks, knots and
     /// the parts of arcs and spans.
     fn breaks(&self) -> Vec<f64> {
@@ -236,18 +281,25 @@ impl Curve {
 
     /// Parameters on `[a, b]` (decreasing when `b < a`), where the image of the curve under
     /// `map` lies within the tolerance of its chords. Every piece between breaks is split at
-    /// least `min_depth` times (on a curved surface even a straight trim bends).
-    fn sample(&self, a: f64, b: f64, tol: f64, map: &dyn Fn(DVec3) -> DVec3, min_depth: u32) -> Vec<f64> {
+    /// least `min_depth` times (on a curved surface even a straight trim bends), and, for a trim
+    /// on a curved surface, until no piece spans more than one `cell` of the face's grid in
+    /// the parameter plane: a boundary coarser than the grid makes long triangles that zigzag
+    /// over the bending (a Schwarz lantern) and add area.
+    fn sample(&self, a: f64, b: f64, tol: f64, map: &dyn Fn(DVec3) -> DVec3, min_depth: u32, cell: Option<DVec2>) -> Vec<f64> {
         let (lo, hi) = (a.min(b), a.max(b));
         let mut params: Vec<f64> = self.breaks().into_iter().filter(|&s| s > lo && s < hi).collect();
         params.push(lo);
         params.push(hi);
         params.sort_by(f64::total_cmp);
         params.dedup();
-        let eval = |s: f64| map(self.point(s));
+        let eval = |s: f64| {
+            let c = self.point(s);
+            (c, map(c))
+        };
+        let step = Step { tol, min_depth, cell };
         let mut out = vec![params[0]];
         for w in params.windows(2) {
-            refine(w[0], eval(w[0]), w[1], eval(w[1]), tol, &eval, &mut out, 0, min_depth);
+            refine(w[0], eval(w[0]), w[1], eval(w[1]), &step, &eval, &mut out, 0);
         }
         if b < a {
             out.reverse();
@@ -256,20 +308,30 @@ impl Curve {
     }
 }
 
-/// Adds the parameters after `a` up to `b`, bisecting while the curve is off the chord at a
-/// quarter, half or three quarters of the way (the middle alone misses an S bend), or while
-/// shallower than `min_depth`.
-#[allow(clippy::too_many_arguments)]
-fn refine(a: f64, pa: DVec3, b: f64, pb: DVec3, tol: f64, eval: &dyn Fn(f64) -> DVec3, out: &mut Vec<f64>, depth: u32, min_depth: u32) {
+/// When [`refine`] splits a piece of curve.
+struct Step {
+    tol: f64,
+    min_depth: u32,
+    cell: Option<DVec2>,
+}
+
+/// A point of a curve and its image.
+type Sample = (DVec3, DVec3);
+
+/// Adds the parameters after `a` up to `b`, bisecting while the image is off the chord at a
+/// quarter, half or three quarters of the way (the middle alone misses an S bend), while
+/// shallower than the minimum depth, or while the piece spans more than a grid cell.
+fn refine(a: f64, (ca, pa): Sample, b: f64, (cb, pb): Sample, step: &Step, eval: &dyn Fn(f64) -> Sample, out: &mut Vec<f64>, depth: u32) {
     let m = 0.5 * (a + b);
-    let pm = eval(m);
+    let sm = eval(m);
     let chord = pb - pa;
     let len = chord.length();
     let off = |p: DVec3| if len > 0.0 { (p - pa).cross(chord).length() / len } else { (p - pa).length() };
-    let worst = off(pm).max(off(eval(0.75 * a + 0.25 * b))).max(off(eval(0.25 * a + 0.75 * b)));
-    if depth < MAX_DEPTH && (depth < min_depth || (worst.is_finite() && worst > tol.max(CHORD_RATIO * len))) {
-        refine(a, pa, m, pm, tol, eval, out, depth + 1, min_depth);
-        refine(m, pm, b, pb, tol, eval, out, depth + 1, min_depth);
+    let worst = off(sm.1).max(off(eval(0.75 * a + 0.25 * b).1)).max(off(eval(0.25 * a + 0.75 * b).1));
+    let wide = step.cell.is_some_and(|c| (cb.x - ca.x).abs() > c.x || (cb.y - ca.y).abs() > c.y);
+    if depth < MAX_DEPTH && (depth < step.min_depth || wide || (worst.is_finite() && worst > step.tol.max(CHORD_RATIO * len))) {
+        refine(a, (ca, pa), m, sm, step, eval, out, depth + 1);
+        refine(m, sm, b, (cb, pb), step, eval, out, depth + 1);
     } else {
         out.push(b);
     }
@@ -474,6 +536,22 @@ impl Surface {
         }
     }
 
+    /// Parameters along u (`dir` 0) or v (1) where the surface may have a crease.
+    fn kinks(&self, dir: usize) -> Vec<f64> {
+        match self {
+            Surface::Plane { .. } => Vec::new(),
+            Surface::Nurbs(n) => kinks(&n.knots[dir], n.order[dir] - 1, n.domain()[dir]),
+            Surface::Revolution { transposed, curve, .. } => {
+                if (dir == 1) != *transposed {
+                    curve.kinks()
+                } else {
+                    Vec::new()
+                }
+            }
+            Surface::Sum { curves, .. } => curves[dir].kinks(),
+        }
+    }
+
     /// A plane, or a NURBS surface of degree 1 with four control points: lines in its
     /// parameters are straight on it.
     fn is_flat(&self) -> bool {
@@ -507,8 +585,27 @@ impl Surface {
 
 fn read_surface_object(c: &mut Cur<'_>) -> R<Option<Surface>> {
     let Some(o) = c.object()? else { return Ok(None) };
-    let mut c = o.data;
-    let class = o.class;
+    read_surface(o.class, o.data)
+}
+
+/// Whether objects of this class are surfaces the viewer can evaluate.
+pub(super) fn is_surface(class: Uuid) -> bool {
+    class == ON_PLANE_SURFACE || ON_NURBS_SURFACE.contains(&class) || ON_REV_SURFACE.contains(&class) || ON_SUM_SURFACE.contains(&class)
+}
+
+/// A surface object of its own (not the face of a polysurface), as programs writing 3dm files
+/// with openNURBS store one: meshed over its whole domain.
+pub(super) fn surface_object(class: Uuid, data: Cur<'_>, vertices: &mut usize) -> R<Option<Mesh>> {
+    let Some(surface) = read_surface(class, data)? else { return Ok(None) };
+    let Some(mesh) = face_mesh(&surface, Vec::new(), false) else { return Ok(None) };
+    if mesh.positions.len() > super::MAX_VERTICES - *vertices {
+        return Err(super::TOO_MANY_VERTICES.into());
+    }
+    *vertices += mesh.positions.len();
+    Ok(Some(mesh))
+}
+
+fn read_surface(class: Uuid, mut c: Cur<'_>) -> R<Option<Surface>> {
     if class == ON_PLANE_SURFACE {
         let (major, minor) = c.version()?;
         if major != 1 {
@@ -721,6 +818,7 @@ pub(super) fn brep(parts: &[Cur<'_>; 8], size: f64, colors: &[Option<[u8; 4]>], 
         let mut rings = Vec::new();
         let mut complete = true;
         let bend = if surface.is_flat() { 0 } else { 2 };
+        let cell = grid_cell(surface);
         for &l in &face.loops {
             let Some(lp) = usize::try_from(l).ok().and_then(|l| loops.get(l)) else { continue };
             if lp.kind == 3 {
@@ -736,7 +834,7 @@ pub(super) fn brep(parts: &[Cur<'_>; 8], size: f64, colors: &[Option<[u8; 4]>], 
                 };
                 let [a, b] = if trim.reversed { [trim.proxy[1], trim.proxy[0]] } else { trim.proxy };
                 let map = |p: DVec3| surface.point(p.x, p.y);
-                let params = curve.sample(a, b, tol, &map, bend);
+                let params = curve.sample(a, b, tol, &map, bend, cell);
                 ring.extend(params[..params.len() - 1].iter().map(|&s| curve.point(s).truncate()));
             }
             if !complete {
@@ -749,7 +847,7 @@ pub(super) fn brep(parts: &[Cur<'_>; 8], size: f64, colors: &[Option<[u8; 4]>], 
         if !complete {
             continue;
         }
-        let Some(mut mesh) = face_mesh(surface, rings, face.reversed, tol) else { continue };
+        let Some(mut mesh) = face_mesh(surface, rings, face.reversed) else { continue };
         if mesh.positions.len() > super::MAX_VERTICES - *vertices {
             return Err(super::TOO_MANY_VERTICES.into());
         }
@@ -795,24 +893,52 @@ fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
     (p - (a + t * ab)).length()
 }
 
+/// The size of a grid cell of a curved surface in its parameters, over its whole domain; `None`
+/// for a flat one.
+fn grid_cell(surface: &Surface) -> Option<DVec2> {
+    if surface.is_flat() {
+        return None;
+    }
+    let d = surface.domain();
+    if d.iter().any(|d| !(d[1] > d[0])) || d.as_flattened().iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    Some(DVec2::new((d[0][1] - d[0][0]) / divisions(surface, 0, d, d) as f64, (d[1][1] - d[1][0]) / divisions(surface, 1, d, d) as f64))
+}
+
 /// How many parts the surface bends into along u (`dir` 0) or v (1) over `range`, so that a part
 /// turns at most [`MAX_ANGLE`].
 fn divisions(surface: &Surface, dir: usize, range: [[f64; 2]; 2], dom: [[f64; 2]; 2]) -> usize {
     const SAMPLES: usize = 32;
     let other = 1 - dir;
     let mut worst: f64 = 0.0;
+    // evenly, and just before and after every kink, so that a crease is not stepped over
+    let [lo, hi] = range[dir];
+    let mut params: Vec<f64> = (0..=SAMPLES).map(|i| lo + (hi - lo) * i as f64 / SAMPLES as f64).collect();
+    let eps = 1e-6 * (hi - lo);
+    for k in surface.kinks(dir).into_iter().filter(|&k| k > lo && k < hi) {
+        params.extend([k - eps, k + eps]);
+    }
+    params.sort_by(f64::total_cmp);
     for k in 0..3 {
         let w = range[other][0] + (range[other][1] - range[other][0]) * (0.1 + 0.4 * k as f64);
         let uv = |s: f64| if dir == 0 { (s, w) } else { (w, s) };
         let mut turn = 0.0;
         let mut bend = 0.0;
-        let mut last: Option<(DVec3, DVec3, DVec3)> = None; // point, direction, normal
-        for i in 0..=SAMPLES {
-            let s = range[dir][0] + (range[dir][1] - range[dir][0]) * i as f64 / SAMPLES as f64;
+        let mut twist = 0.0;
+        // the surface's direction across: it turns along a twisted (ruled) surface
+        let h = 1e-6 * (dom[other][1] - dom[other][0]);
+        let across = |u: f64, v: f64| {
+            let (a, b) = if dir == 0 { ((u, (v - h).max(dom[1][0])), (u, (v + h).min(dom[1][1]))) } else { (((u - h).max(dom[0][0]), v), ((u + h).min(dom[0][1]), v)) };
+            (surface.point(b.0, b.1) - surface.point(a.0, a.1)).normalize_or_zero()
+        };
+        let mut last: Option<(DVec3, DVec3, DVec3, DVec3)> = None; // point, direction, normal, across
+        for &s in &params {
             let (u, v) = uv(s);
             let p = surface.point(u, v);
             let n = surface.normal(u, v, dom);
-            if let Some((q, d, m)) = last {
+            let x = across(u, v);
+            if let Some((q, d, m, y)) = last {
                 let e = (p - q).normalize_or_zero();
                 if d != DVec3::ZERO && e != DVec3::ZERO {
                     turn += d.angle_between(e);
@@ -820,36 +946,104 @@ fn divisions(surface: &Surface, dir: usize, range: [[f64; 2]; 2], dom: [[f64; 2]
                 if m != DVec3::ZERO && n != DVec3::ZERO {
                     bend += m.angle_between(n);
                 }
-                last = Some((p, if e == DVec3::ZERO { d } else { e }, n));
+                if y != DVec3::ZERO && x != DVec3::ZERO {
+                    twist += y.angle_between(x);
+                }
+                last = Some((p, if e == DVec3::ZERO { d } else { e }, n, x));
             } else {
-                last = Some((p, DVec3::ZERO, n));
+                last = Some((p, DVec3::ZERO, n, x));
             }
         }
-        if turn.is_finite() && bend.is_finite() {
-            worst = worst.max(turn).max(bend);
+        if turn.is_finite() && bend.is_finite() && twist.is_finite() {
+            worst = worst.max(turn).max(bend).max(twist);
         }
     }
     ((worst / MAX_ANGLE).ceil() as usize).clamp(1, MAX_GRID)
 }
 
+/// Whether a loop runs along the edges of the domain only: the face is untrimmed.
+fn on_domain_edges(ring: &[DVec2], dom: [[f64; 2]; 2]) -> bool {
+    let e = [1e-9 * (dom[0][1] - dom[0][0]), 1e-9 * (dom[1][1] - dom[1][0])];
+    let near = |a: f64, b: f64, e: f64| (a - b).abs() <= e;
+    let mut corners = [false; 4];
+    for p in ring {
+        let (u0, u1, v0, v1) = (near(p.x, dom[0][0], e[0]), near(p.x, dom[0][1], e[0]), near(p.y, dom[1][0], e[1]), near(p.y, dom[1][1], e[1]));
+        if !(u0 || u1 || v0 || v1) {
+            return false;
+        }
+        for (k, c) in [(u0 && v0), (u1 && v0), (u1 && v1), (u0 && v1)].into_iter().enumerate() {
+            corners[k] |= c;
+        }
+    }
+    corners.iter().all(|&c| c)
+}
+
+/// The triangles of an untrimmed face: a grid over the domain, its lines spaced so that the
+/// surface turns at most [`MAX_ANGLE`] between them and laid on its kinks; each cell two
+/// triangles across its shorter diagonal. The edge points are the grid's, so no long triangle
+/// zigzags over the bending.
+fn grid_mesh(surface: &Surface, dom: [[f64; 2]; 2], reversed: bool) -> Option<Mesh> {
+    let lines = |dir: usize| {
+        let [a, b] = dom[dir];
+        let n = divisions(surface, dir, dom, dom);
+        let mut out: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
+        out.extend(surface.kinks(dir).into_iter().filter(|&k| k > a && k < b));
+        out.sort_by(f64::total_cmp);
+        out.dedup_by(|x, y| (*x - *y).abs() <= 1e-9 * (b - a));
+        out
+    };
+    let (us, vs) = (lines(0), lines(1));
+    let (nu, nv) = (us.len(), vs.len());
+    let mut points = Vec::with_capacity(nu * nv);
+    let mut normals = Vec::with_capacity(nu * nv);
+    for &u in &us {
+        for &v in &vs {
+            points.push(surface.point(u, v));
+            let n = surface.normal(u, v, dom);
+            normals.push(if reversed { -n } else { n });
+        }
+    }
+    if points.iter().any(|p| !p.is_finite()) {
+        return None;
+    }
+    let at = |i: usize, j: usize| (i * nv + j) as u32;
+    let mut mesh = Mesh::default();
+    for i in 0..nu - 1 {
+        for j in 0..nv - 1 {
+            // counterclockwise in the parameter plane, along Su x Sv
+            let q = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+            let d = |a: u32, b: u32| (points[a as usize] - points[b as usize]).length_squared();
+            let tris = if d(q[0], q[2]) <= d(q[1], q[3]) { [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] } else { [[q[0], q[1], q[3]], [q[1], q[2], q[3]]] };
+            for t in tris {
+                let p = t.map(|k| points[k as usize]);
+                if (p[1] - p[0]).cross(p[2] - p[0]).length_squared() == 0.0 {
+                    continue; // at a pole
+                }
+                let t = if reversed { [t[0], t[2], t[1]] } else { t };
+                mesh.faces.push([t[0], t[1], t[2], t[2]]);
+            }
+        }
+    }
+    if mesh.faces.is_empty() {
+        return None;
+    }
+    mesh.triangles = mesh.faces.len();
+    mesh.positions = points.iter().map(|p| p.to_array().map(|v| v as f32)).collect();
+    mesh.normals = Some(normals.iter().map(|n| n.to_array().map(|v| v as f32)).collect());
+    mesh.computed = true;
+    Some(mesh)
+}
+
 /// The triangles of a face: its loops (in the surface's parameters) triangulated with the grid
 /// points inside them, on the surface.
-fn face_mesh(surface: &Surface, mut rings: Vec<Vec<DVec2>>, reversed: bool, tol: f64) -> Option<Mesh> {
+fn face_mesh(surface: &Surface, rings: Vec<Vec<DVec2>>, reversed: bool) -> Option<Mesh> {
     let dom = surface.domain();
     if dom.as_flattened().iter().any(|v| !v.is_finite()) || dom.iter().any(|d| !(d[1] > d[0])) {
         return None;
     }
-    if rings.is_empty() {
-        // an untrimmed face: the whole domain
-        let corners = [(0, 0), (1, 0), (1, 1), (0, 1)].map(|(i, j)| DVec2::new(dom[0][i], dom[1][j]));
-        let mut ring = Vec::new();
-        for k in 0..4 {
-            let (a, b) = (corners[k], corners[(k + 1) % 4]);
-            let line = Curve::Line { from: a.extend(0.0), to: b.extend(0.0), t: [0.0, 1.0] };
-            let params = line.sample(0.0, 1.0, tol, &|p| surface.point(p.x, p.y), if surface.is_flat() { 0 } else { 2 });
-            ring.extend(params[..params.len() - 1].iter().map(|&s| a.lerp(b, s)));
-        }
-        rings.push(ring);
+    if rings.is_empty() || (rings.len() == 1 && on_domain_edges(&rings[0], dom)) {
+        // an untrimmed face: a grid over the whole domain
+        return grid_mesh(surface, dom, reversed);
     }
     // the loops' box in the parameter plane
     let mut lo = DVec2::splat(f64::INFINITY);
@@ -866,9 +1060,16 @@ fn face_mesh(surface: &Surface, mut rings: Vec<Vec<DVec2>>, reversed: bool, tol:
     // grid cell per unit, so that its triangles follow the bending (a thin pipe's run along it,
     // never across it); a flat one with its parameters scaled to lengths on the surface.
     let mut n = [divisions(surface, 0, range, dom), divisions(surface, 1, range, dom)];
+    // at least as fine as the cells its trims were sampled by
+    if let Some(cell) = grid_cell(surface) {
+        n[0] = n[0].max((((hi.x - lo.x) / cell.x).ceil() as usize).clamp(1, MAX_GRID));
+        n[1] = n[1].max((((hi.y - lo.y) / cell.y).ceil() as usize).clamp(1, MAX_GRID));
+    }
     let curved = n[0] > 1 || n[1] > 1;
     let scale = if curved {
-        n = n.map(|k| k.max(2));
+        // a straight direction keeps one cell: its triangles run from edge to edge, as a
+        // cylinder's should (a row in between, about as high as the circle's sag, would tilt
+        // them into a Schwarz lantern and add area)
         [n[0] as f64 / (hi.x - lo.x), n[1] as f64 / (hi.y - lo.y)]
     } else {
         let mut scale = [0.0; 2];
@@ -901,9 +1102,19 @@ fn face_mesh(surface: &Surface, mut rings: Vec<Vec<DVec2>>, reversed: bool, tol:
     // the grid points inside the loops, away from them
     if curved {
         let segments: Vec<(DVec2, DVec2)> = scaled.iter().flat_map(|r| (0..r.len()).map(move |k| (r[k], r[(k + 1) % r.len()]))).collect();
-        for i in 1..n[0] {
-            for j in 1..n[1] {
-                let p = DVec2::new(i as f64, j as f64);
+        // grid lines: evenly, and on the kinks of the surface so that no triangle cuts a crease
+        let lines = |dir: usize| {
+            let (l, sc) = if dir == 0 { (lo.x, scale[0]) } else { (lo.y, scale[1]) };
+            let mut out: Vec<f64> = (1..n[dir]).map(|i| i as f64).collect();
+            out.extend(surface.kinks(dir).into_iter().map(|k| (k - l) * sc).filter(|&g| g > 0.0 && g < n[dir] as f64));
+            out.sort_by(f64::total_cmp);
+            out.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            out
+        };
+        let (us, vs) = (lines(0), lines(1));
+        for &i in &us {
+            for &j in &vs {
+                let p = DVec2::new(i, j);
                 if inside(&scaled, p) && segments.iter().all(|&(a, b)| distance_to_segment(p, a, b) > 0.3) {
                     let _ = cdt.insert(Point2::new(p.x, p.y));
                 }
@@ -917,7 +1128,10 @@ fn face_mesh(surface: &Surface, mut rings: Vec<Vec<DVec2>>, reversed: bool, tol:
         let [a, b, c] = f.vertices().map(|v| v.fix().index());
         let (pa, pb, pc) = (points[a], points[b], points[c]);
         let twice = (pb - pa).perp_dot(pc - pa);
-        if twice.abs() < 1e-300 || !inside(&scaled, (pa + pb + pc) / 3.0) {
+        // a sliver along a boundary of almost collinear points (rounding): no area on the
+        // surface, but on a curved one its corners can lie far apart
+        let longest = (pb - pa).length_squared().max((pc - pb).length_squared()).max((pa - pc).length_squared());
+        if twice.abs() <= 1e-9 * longest || !inside(&scaled, (pa + pb + pc) / 3.0) {
             continue;
         }
         // counterclockwise in the parameter plane is along Su × Sv
@@ -969,6 +1183,8 @@ pub(super) struct Extrusion {
     pub(super) up: DVec3,
     pub(super) profiles: i32,
     pub(super) caps: [bool; 2],
+    /// The normals of the miter planes at the ends, in the profile's plane coordinates.
+    pub(super) miters: [Option<DVec3>; 2],
 }
 
 /// Reads the shape of an extrusion from its chunk, after the profile; returns the minor version.
@@ -977,8 +1193,11 @@ pub(super) fn read_extrusion_shape(b: &mut Cur<'_>, profile: Option<Curve>, mino
     let to = read_point(b)?;
     let t = read_interval(b)?;
     let up = read_point(b)?;
-    b.take(2 + 48 + 16 + 1)?; // miter normals (flags and vectors), path domain, transposed
-    let mut e = Extrusion { profile, from, to, t, up, profiles: 1, caps: [false; 2] };
+    let have = [b.bool()?, b.bool()?];
+    let normals = [read_point(b)?, read_point(b)?];
+    b.take(16 + 1)?; // path domain, transposed
+    let miters = [0, 1].map(|k| Some(normals[k]).filter(|_| have[k]));
+    let mut e = Extrusion { profile, from, to, t, up, profiles: 1, caps: [false; 2], miters };
     if minor >= 1 {
         e.profiles = b.i32()?;
         if minor >= 2 {
@@ -986,6 +1205,27 @@ pub(super) fn read_extrusion_shape(b: &mut Cur<'_>, profile: Option<Curve>, mino
         }
     }
     Ok((e, minor))
+}
+
+/// The axis and angle (sine, cosine) that turn the profile plane into a miter plane of normal
+/// `n`; `None` when `n` leaves it as it is or is not valid (`ON_Extrusion::m_Nz_min`).
+fn miter_plane(n: DVec3) -> Option<(DVec3, f64, f64)> {
+    if !(n.z > 1.0 / 64.0) || (n.length() - 1.0).abs() > 1e-6 || (n.x == 0.0 && n.y == 0.0) {
+        return None;
+    }
+    let a = DVec3::new(-n.y, n.x, 0.0);
+    let sin = a.length();
+    Some((a / sin, sin, n.z))
+}
+
+/// A profile point in the miter plane of normal `n` (in the profile's coordinates): scaled
+/// across the tilt so that its projection on the profile plane stays where it was, then turned
+/// into the plane.
+fn miter(n: Option<DVec3>, q: DVec2) -> DVec3 {
+    let Some((a, sin, cos)) = n.and_then(miter_plane) else { return q.extend(0.0) };
+    let c = 1.0 - 1.0 / cos;
+    let v = DVec3::new((1.0 - c * a.y * a.y) * q.x + c * a.x * a.y * q.y, c * a.x * a.y * q.x + (1.0 - c * a.x * a.x) * q.y, 0.0);
+    v * cos + a.cross(v) * sin + a * a.dot(v) * (1.0 - cos)
 }
 
 /// The mesh of an extrusion: walls along its profiles and its caps. `None` when it has no
@@ -1017,7 +1257,7 @@ pub(super) fn extrusion(e: &Extrusion, minor: i32, vertices: &mut usize) -> R<Op
     let mut polygons: Vec<(Vec<DVec2>, bool)> = Vec::new();
     for p in &profiles {
         let [a, b] = p.domain();
-        let params = p.sample(a, b, tol, &|q| q, 0);
+        let params = p.sample(a, b, tol, &|q| q, 0, None);
         let mut ring: Vec<DVec2> = params.iter().map(|&s| p.point(s).truncate()).collect();
         let closed = ring.len() > 2 && ring[0].distance(ring[ring.len() - 1]) <= 1e-9 * size.max(1.0);
         if closed {
@@ -1031,7 +1271,17 @@ pub(super) fn extrusion(e: &Extrusion, minor: i32, vertices: &mut usize) -> R<Op
         return Ok(None);
     }
     let caps = if minor >= 2 { e.caps } else { [polygons[0].1; 2] };
-    let to3 = |q: DVec2, at: DVec3| at + q.x * x + q.y * y;
+    // a profile point at an end: in the end's miter plane when it has one
+    // (`ON_GetEndCapTransformation`), its projection along the path unchanged
+    let ends = [bottom, top];
+    let place = |end: usize, q: DVec2| {
+        let l = miter(e.miters[end], q);
+        ends[end] + l.x * x + l.y * y + l.z * z
+    };
+    let end_normal = |end: usize| {
+        let n = e.miters[end].filter(|n| miter_plane(*n).is_some()).unwrap_or(DVec3::Z);
+        (n.x * x + n.y * y + n.z * z).normalize_or_zero()
+    };
     let mut positions: Vec<DVec3> = Vec::new();
     let mut normals: Vec<DVec3> = Vec::new();
     let mut faces = Vec::new();
@@ -1053,7 +1303,7 @@ pub(super) fn extrusion(e: &Extrusion, minor: i32, vertices: &mut usize) -> R<Op
             let ni = if *closed || s > 0 { smooth(normal_of((s + segs - 1) % segs)) } else { here };
             let nj = if *closed || s + 1 < segs { smooth(normal_of((s + 1) % segs)) } else { here };
             let base = positions.len() as u32;
-            positions.extend([to3(ring[i], bottom), to3(ring[j], bottom), to3(ring[j], top), to3(ring[i], top)]);
+            positions.extend([place(0, ring[i]), place(0, ring[j]), place(1, ring[j]), place(1, ring[i])]);
             normals.extend([ni, nj, nj, ni]);
             if outward > 0.0 {
                 faces.push([base, base + 1, base + 2, base + 3]);
@@ -1075,12 +1325,12 @@ pub(super) fn extrusion(e: &Extrusion, minor: i32, vertices: &mut usize) -> R<Op
         }
         let corners: Vec<DVec2> = closed.iter().flat_map(|r| r.iter().copied()).collect();
         if let Ok(tris) = earcutr::earcut(&flat, &holes, 2) {
-            for (end, at, normal) in [(0, bottom, -z), (1, top, z)] {
+            for (end, normal) in [(0, -end_normal(0)), (1, end_normal(1))] {
                 if !caps[end] {
                     continue;
                 }
                 let base = positions.len() as u32;
-                positions.extend(corners.iter().map(|&q| to3(q, at)));
+                positions.extend(corners.iter().map(|&q| place(end, q)));
                 normals.extend(std::iter::repeat_n(normal, corners.len()));
                 for t in tris.chunks_exact(3) {
                     let (a, b, c) = (t[0] as u32, t[1] as u32, t[2] as u32);
@@ -1134,10 +1384,10 @@ mod tests {
     #[test]
     fn sampling_follows_the_tolerance() {
         let c = Curve::Nurbs(quarter());
-        let params = c.sample(0.0, 1.0, 1e-4, &|p| p, 0);
+        let params = c.sample(0.0, 1.0, 1e-4, &|p| p, 0, None);
         // a quarter circle in parts that turn at most about 9 degrees
         assert!(params.len() >= 10 && params.len() < 40, "{}", params.len());
-        let back = c.sample(1.0, 0.0, 1e-4, &|p| p, 0);
+        let back = c.sample(1.0, 0.0, 1e-4, &|p| p, 0, None);
         assert_eq!(back.first(), Some(&1.0));
         assert_eq!(back.last(), Some(&0.0));
     }
@@ -1147,7 +1397,7 @@ mod tests {
         let plane = Surface::Plane { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Y, domain: [[0.0, 10.0], [0.0, 10.0]], extents: [[0.0, 10.0], [0.0, 10.0]] };
         let outer = vec![DVec2::new(0.0, 0.0), DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0), DVec2::new(0.0, 10.0)];
         let hole = vec![DVec2::new(4.0, 4.0), DVec2::new(4.0, 6.0), DVec2::new(6.0, 6.0), DVec2::new(6.0, 4.0)];
-        let mesh = face_mesh(&plane, vec![outer, hole], false, 1e-3).unwrap();
+        let mesh = face_mesh(&plane, vec![outer, hole], false).unwrap();
         // the area of the square less the hole
         let p = |i: u32| DVec3::from(mesh.positions[i as usize].map(f64::from));
         let total: f64 = mesh.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).z).sum();
@@ -1155,11 +1405,33 @@ mod tests {
     }
 
     #[test]
+    fn a_miter_tilts_the_end_and_keeps_the_footprint() {
+        // a 1 by 1 square tube, 2 high, its top cut at 45 degrees
+        let square = Curve::Polyline { points: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)].map(|(x, y)| DVec3::new(x, y, 0.0)).to_vec(), t: vec![0.0, 1.0, 2.0, 3.0, 4.0] };
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let e = Extrusion { profile: Some(square), from: DVec3::ZERO, to: DVec3::new(0.0, 0.0, 2.0), t: [0.0, 1.0], up: DVec3::Y, profiles: 1, caps: [true, true], miters: [None, Some(DVec3::new(0.0, -h, h))] };
+        let mut vertices = 0;
+        let mesh = extrusion(&e, 2, &mut vertices).unwrap().unwrap();
+        let p = |i: u32| DVec3::from(mesh.positions[i as usize].map(f64::from));
+        let tri = |f: &[u32; 4]| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).length();
+        let total: f64 = mesh.faces.iter().map(|f| if f[2] == f[3] { tri(f) } else { tri(f) + 0.5 * (p(f[2]) - p(f[0])).cross(p(f[3]) - p(f[0])).length() }).sum();
+        // the miter plane passes through the path's end at the profile's corner (0, 0): the top
+        // rises from 2 at y = 0 to 3 at y = 1. Bottom 1, top sqrt 2, walls 2 and 3 high at
+        // y = 0 and y = 1, and two trapezoids from 2 to 3
+        let expected = 1.0 + std::f64::consts::SQRT_2 + 2.0 + 3.0 + 2.0 * 2.5;
+        assert!((total - expected).abs() < 1e-6, "{total} against {expected}");
+        // the top's footprint is the square's
+        for v in &mesh.positions {
+            assert!(v[0] > -1e-6 && v[0] < 1.0 + 1e-6 && v[1] > -1e-6 && v[1] < 1.0 + 1e-6);
+        }
+    }
+
+    #[test]
     fn a_cylinder_of_revolution_bends_into_parts() {
         let line = Curve::Line { from: DVec3::new(1.0, 0.0, 0.0), to: DVec3::new(1.0, 0.0, 2.0), t: [0.0, 2.0] };
         let tau = std::f64::consts::TAU;
         let s = Surface::Revolution { from: DVec3::ZERO, axis: DVec3::Z, angle: [0.0, tau], t: [0.0, tau], transposed: false, curve: line };
-        let mesh = face_mesh(&s, Vec::new(), false, 1e-4).unwrap();
+        let mesh = face_mesh(&s, Vec::new(), false).unwrap();
         for (p, n) in mesh.positions.iter().zip(mesh.normals.as_ref().unwrap()) {
             let r = (p[0] * p[0] + p[1] * p[1]).sqrt();
             assert!((r - 1.0).abs() < 1e-5);

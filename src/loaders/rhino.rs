@@ -1047,6 +1047,13 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize)
         }
         return Ok(if meshes.is_empty() { Geometry::Skipped("extrusions without a render mesh") } else { Geometry::Meshes(meshes, "Extrusion") });
     }
+    if tessellate::is_surface(class) {
+        return Ok(match tessellate::surface_object(class, c, vertices) {
+            Ok(Some(mesh)) => Geometry::Meshes(vec![mesh], "Surface"),
+            Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+            _ => Geometry::Skipped("surfaces without a mesh"),
+        });
+    }
     if class == ON_INSTANCE_REF {
         let (major, _) = c.version()?;
         if major != 1 {
@@ -1796,9 +1803,16 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
         if f.iter().any(|&i| i >= n) {
             continue;
         }
-        triangles.push([f[0], f[1], f[2]]);
-        if f[2] != f[3] {
-            triangles.push([f[0], f[2], f[3]]);
+        if f[2] == f[3] {
+            triangles.push([f[0], f[1], f[2]]);
+            continue;
+        }
+        // a quad splits along its shorter diagonal, as Rhino draws it (a bent quad differs)
+        let d = |a: u32, b: u32| (DVec3::from(mesh.positions[a as usize].map(f64::from)) - DVec3::from(mesh.positions[b as usize].map(f64::from))).length_squared();
+        if d(f[0], f[2]) <= d(f[1], f[3]) {
+            triangles.extend([[f[0], f[1], f[2]], [f[0], f[2], f[3]]]);
+        } else {
+            triangles.extend([[f[0], f[1], f[3]], [f[1], f[2], f[3]]]);
         }
     }
     if let Some(normals) = &mesh.normals {
@@ -2687,6 +2701,40 @@ mod tests {
         for (name, rhino) in expected {
             let ours = areas[name];
             assert!((ours - rhino).abs() <= 0.005 * rhino, "{name}: {ours} against {rhino} in Rhino");
+        }
+    }
+
+    /// Shapes that once meshed wrong, made in Rhino 9 (`regress.3dm`, from make_regress.py) after
+    /// models of McNeel's openNURBS examples: a short conical band of a rational circle (thin
+    /// slivers along an edge of almost collinear points cut across the circle), strips of arcs
+    /// meeting at kinks (triangles over a kink zigzagged and added area), and a mesh of bent
+    /// quads (split along the shorter diagonal, as Rhino does).
+    #[test]
+    fn slivers_kinks_and_bent_quads_keep_their_area() {
+        // name, area in Rhino 9, allowed deviation
+        let expected = [
+            ("Lens band", 8.120637, 0.015),
+            ("Thin ring", 2.513274, 0.015),
+            ("Arc strip", 3.792911, 0.015),
+            ("Arc band", 28.262329, 0.015),
+            ("Twisted arc strip", 6.055392, 0.015),
+            ("Bent quads", 37.749172, 0.0001),
+        ];
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino/regress.3dm");
+        let (model, _) = load("regress.3dm", std::fs::read(path).unwrap());
+        let mut areas = HashMap::new();
+        for layer in &model.layers {
+            let p = |i: u32| DVec3::from_slice(&layer.positions[3 * i as usize..3 * i as usize + 3].iter().map(|&v| v as f64).collect::<Vec<_>>());
+            for &(id, start, count) in &layer.elements {
+                let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                let tris = &layer.indices[start as usize..(start + count) as usize];
+                let area: f64 = tris.chunks_exact(3).map(|t| 0.5 * (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length()).sum();
+                areas.insert(props["Name"].as_str().unwrap().to_string(), 1e6 * area);
+            }
+        }
+        for (name, rhino, allowed) in expected {
+            let ours = areas[name];
+            assert!((ours - rhino).abs() <= allowed * rhino, "{name}: {ours} against {rhino} in Rhino");
         }
     }
 }

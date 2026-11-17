@@ -1,0 +1,35 @@
+# Read-only access to the private format readers (rvt-dll, vwx-dll, 3dm-dll and the standalone
+# readers): one deploy key per repository, each private key in a secret of its own whose name
+# starts with SSH_KEY_ (SSH_KEY_RVT_DLL, SSH_KEY_3DM_DLL, ..), its comment the repository's
+# address (git@github.com:OpenAEC-Foundation/<repository>.git), which tells ssh-agent which key
+# opens which repository. A new reader needs a new key and a new secret, nothing here.
+name: Private reader keys
+description: Loads every SSH_KEY_ secret into ssh-agent for Cargo's git dependencies.
+inputs:
+  secrets:
+    description: The job's secrets, as `toJSON(secrets)`.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Collect the keys
+      shell: bash
+      env:
+        ALL_SECRETS: ${{ inputs.secrets }}
+      run: |
+        keys=$(printf '%s' "$ALL_SECRETS" | jq -r 'to_entries[] | select(.key | startswith("SSH_KEY_")) | .value')
+        count=$(printf '%s\n' "$keys" | grep -c "BEGIN OPENSSH PRIVATE KEY" || true)
+        echo "Private reader keys: $count"
+        {
+          echo 'READER_SSH_KEYS<<END_OF_READER_SSH_KEYS'
+          printf '%s\n' "$keys"
+          echo 'END_OF_READER_SSH_KEYS'
+        } >> "$GITHUB_ENV"
+    - name: Load them into ssh-agent
+      uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+      with:
+        ssh-private-key: ${{ env.READER_SSH_KEYS }}
+        log-public-key: false
+    - name: Forget them outside ssh-agent
+      shell: bash
+      run: echo "READER_SSH_KEYS=" >> "$GITHUB_ENV"

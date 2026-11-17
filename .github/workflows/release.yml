@@ -54,10 +54,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-      - name: Read-only access to the private format readers
+      # The deploy keys of the private readers, each by its name: the action gets these and no
+      # other secret. A new reader's secret is named here and in the same step of build.yml,
+      # format-crates.yml and live.yml.
+      - &reader-keys
+        name: Read-only access to the private format readers
         uses: ./.github/actions/reader-keys
         with:
-          secrets: ${{ toJSON(secrets) }}
+          keys: |
+            ${{ secrets.SSH_KEY_3DM_DLL }}
+            ${{ secrets.SSH_KEY_PLY_DLL }}
+            ${{ secrets.SSH_KEY_PLY_READER }}
+            ${{ secrets.SSH_KEY_REVIT_DLL }}
+            ${{ secrets.SSH_KEY_RHINO_DLL }}
+            ${{ secrets.SSH_KEY_RVT_DLL }}
+            ${{ secrets.SSH_KEY_SKETCHUP_DLL }}
+            ${{ secrets.SSH_KEY_SKP_READER }}
+            ${{ secrets.SSH_KEY_TEKLA_DLL }}
+            ${{ secrets.SSH_KEY_TEKLA_READER }}
+            ${{ secrets.SSH_KEY_VWX_DLL }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -113,10 +128,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-      - name: Read-only access to the private format readers
-        uses: ./.github/actions/reader-keys
-        with:
-          secrets: ${{ toJSON(secrets) }}
+      - *reader-keys
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: System libraries and packaging tools
@@ -241,10 +253,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-      - name: Read-only access to the private format readers
-        uses: ./.github/actions/reader-keys
-        with:
-          secrets: ${{ toJSON(secrets) }}
+      - *reader-keys
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the viewer and the MCP server
@@ -374,10 +383,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-      - name: Read-only access to the private format readers
-        uses: ./.github/actions/reader-keys
-        with:
-          secrets: ${{ toJSON(secrets) }}
+      - *reader-keys
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin

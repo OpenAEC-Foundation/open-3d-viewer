@@ -34,6 +34,10 @@ pub struct Layer {
     /// A point cloud (LAS, LAZ, E57): every vertex is a point, drawn as a dot of a few pixels;
     /// no `indices`, `normals` or `elements`.
     pub points: bool,
+    /// Line segments (curves, text and hatch lines of CAD and NURBS models): pairs of vertex
+    /// indices, drawn unlit in their vertices' colours in every view mode. Their vertices are
+    /// not used by `indices`.
+    pub lines: Vec<u32>,
 }
 
 impl Layer {
@@ -935,7 +939,7 @@ impl Model {
     /// Builds a model from layers: drops empty layers and computes the bounds.
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
         let props: HashMap<u64, String> = layers.iter_mut().flat_map(|l| std::mem::take(&mut l.props)).collect();
-        layers.retain(|l| (l.points || !l.indices.is_empty()) && !l.positions.is_empty());
+        layers.retain(|l| (l.points || !l.indices.is_empty() || !l.lines.is_empty()) && !l.positions.is_empty());
         layers.iter_mut().for_each(unshare_element_vertices);
         let layers: Vec<Layer> = layers
             .into_iter()
@@ -1113,7 +1117,7 @@ impl Model {
                 }
                 layer
             })
-            .filter(|l| l.points || !l.indices.is_empty())
+            .filter(|l| l.points || !l.indices.is_empty() || !l.lines.is_empty())
             .collect();
         let mut project = self.project.clone();
         project.walls.retain(|id, _| !gone.contains(id));

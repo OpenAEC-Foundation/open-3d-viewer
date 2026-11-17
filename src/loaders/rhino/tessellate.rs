@@ -372,6 +372,26 @@ pub(super) fn read_curve_object(c: &mut Cur<'_>, depth: usize) -> R<Option<Curve
     }
 }
 
+/// A curve object as a polyline within the chord tolerance of its size; `None` when the class is
+/// not a curve the viewer reads.
+pub(super) fn curve_object(class: Uuid, c: &mut Cur<'_>) -> Option<Vec<DVec3>> {
+    let curve = read_curve(class, c, 0).ok()??;
+    Some(polyline(&curve))
+}
+
+/// The points of a curve within the chord tolerance of its size.
+pub(super) fn polyline(curve: &Curve) -> Vec<DVec3> {
+    let [a, b] = curve.domain();
+    let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+    for s in curve.breaks().into_iter().chain((0..=8).map(|k| a + (b - a) * k as f64 / 8.0)) {
+        let p = curve.point(s);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    let params = curve.sample(a, b, tolerance((hi - lo).length()), &|p| p, 0, None);
+    params.iter().map(|&s| curve.point(s)).collect()
+}
+
 fn read_curve(class: Uuid, c: &mut Cur<'_>, depth: usize) -> R<Option<Curve>> {
     if depth > MAX_CURVE_DEPTH {
         return err("polycurves nested too deep");

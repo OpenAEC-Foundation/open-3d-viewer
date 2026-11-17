@@ -25,7 +25,7 @@ impl Loader for TeklaLoader {
         project.info.extend(document.info);
         let meshes = document.meshes;
         let layers = meshes.into_iter().map(|mesh| Layer {
-            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false
+            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new()
         }).collect();
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project })
     }

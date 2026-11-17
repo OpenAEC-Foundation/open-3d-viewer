@@ -201,6 +201,8 @@ struct GpuLayer {
     features: Option<(wgpu::Buffer, u32)>,
     /// Triangles that enclose volume (cut fill), built on first use.
     solid: Option<(wgpu::Buffer, u32)>,
+    /// The layer's own line segments (curves, text, hatches) as a line list.
+    lines: Option<(wgpu::Buffer, u32)>,
     /// The triangles as they lie in `indices`: by where they are and how large (`chunks`).
     chunks: Vec<chunks::Chunk>,
 }
@@ -230,6 +232,7 @@ pub struct ScenePipeline {
     /// Flat coloured triangles, not cut by the section: the cut faces in their hatches.
     flat: wgpu::RenderPipeline,
     flat_lines: wgpu::RenderPipeline,
+    curves: wgpu::RenderPipeline,
     points: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     /// The opaque surfaces into the depth the ambient shadows read.
@@ -566,6 +569,8 @@ impl ScenePipeline {
         // The cut faces in their hatches: unlit, and not cut away by the section they stand on.
         let flat = make_pipeline("o3v.flat", wgpu::PrimitiveTopology::TriangleList, "fs_point", None, wgpu::DepthBiasState::default(), true);
         let flat_lines = make_pipeline("o3v.flat_lines", wgpu::PrimitiveTopology::LineList, "fs_point", None, wgpu::DepthBiasState::default(), true);
+        // the model's own lines: unlit, cut by the section box and plane
+        let curves = make_pipeline("o3v.curves", wgpu::PrimitiveTopology::LineList, "fs_curve", Some(wgpu::BlendState::ALPHA_BLENDING), wgpu::DepthBiasState::default(), true);
         // Point clouds: a square per point (instance), unlit.
         let point_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
         let points = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -689,6 +694,7 @@ impl ScenePipeline {
             lines,
             flat,
             flat_lines,
+            curves,
             points,
             blit,
             shadow_depth,
@@ -844,6 +850,14 @@ impl ScenePipeline {
                 contents: bytemuck::cast_slice(&chunked.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
+            let lines = (!layer.lines.is_empty()).then(|| {
+                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("o3v.layer.lines"),
+                    contents: bytemuck::cast_slice(&layer.lines),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                (buffer, layer.lines.len() as u32)
+            });
             self.layers.push(GpuLayer {
                 vertices,
                 indices,
@@ -851,6 +865,7 @@ impl ScenePipeline {
                 points: 0,
                 features: None,
                 solid: None,
+                lines,
                 chunks: chunked.chunks,
             });
         }
@@ -1264,6 +1279,18 @@ impl ScenePipeline {
                     }
                 }
             }
+            // the layers' own lines (curves, text, hatches) in every mode, unlit in their colours
+            if self.layers.iter().any(|l| l.lines.is_some()) {
+                pass.set_pipeline(&self.curves);
+                pass.set_bind_group(0, &self.model_group, &[]);
+                for (i, layer) in self.layers.iter().enumerate() {
+                    if let (true, Some((lines, count))) = (visible(i), &layer.lines) {
+                        pass.set_vertex_buffer(0, layer.vertices.slice(..));
+                        pass.set_index_buffer(lines.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..*count, 0, 0..1);
+                    }
+                }
+            }
             // member axes and nodes, after the lit layers and point clouds, before the cut fill
             if let (Some(structural), Some(gpu)) = (&self.structural, &self.gpu_structural) {
                 pass.set_bind_group(0, &self.model_group, &[]);
@@ -1390,7 +1417,7 @@ fn upload_points(device: &wgpu::Device, layer: &crate::model::Layer, base: [u8; 
         usage: wgpu::BufferUsages::INDEX,
         mapped_at_creation: false,
     });
-    GpuLayer { vertices, indices, index_count: 0, points: n as u32, features: None, solid: None, chunks: Vec::new() }
+    GpuLayer { vertices, indices, index_count: 0, points: n as u32, features: None, solid: None, lines: None, chunks: Vec::new() }
 }
 
 /// Units per row of the offsets texture; `OFFSETS_WIDTH` in scene.wgsl. With WebGL2's 2048 rows

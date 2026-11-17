@@ -105,6 +105,7 @@ impl Loader for RvtLoader {
                     }).collect(),
                     hidden: false,
                     points: false,
+                    lines: Vec::new(),
                 }
             })
             .collect::<Vec<Layer>>();

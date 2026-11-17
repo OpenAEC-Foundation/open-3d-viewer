@@ -601,6 +601,7 @@ mod tests {
             props: Vec::new(),
             hidden: false,
             points: false,
+            lines: Vec::new(),
         }
     }
 

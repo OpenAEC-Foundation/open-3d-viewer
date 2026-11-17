@@ -33,6 +33,7 @@ use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 
+mod drafting;
 mod subd;
 mod tessellate;
 
@@ -57,7 +58,7 @@ impl Loader for RhinoLoader {
         let file = read(&data)?;
         progress.set(Phase::Convert);
         let (layers, info) = convert(&file);
-        if layers.iter().all(|l| l.indices.is_empty() && !(l.points && !l.positions.is_empty())) {
+        if layers.iter().all(|l| l.indices.is_empty() && l.lines.is_empty() && !(l.points && !l.positions.is_empty())) {
             // say why, e.g. polysurfaces saved without their render meshes
             let left_out = info.iter().find(|(k, _)| k == "Rhino objects left out").map_or("no objects", |(_, v)| v.as_str());
             return Err(format!("{}: nothing to draw in this Rhino file ({left_out})", source.name()));
@@ -87,6 +88,10 @@ const TCODE_OBJECT_TABLE: u32 = 0x1000_0013;
 const TCODE_PROPERTIES_TABLE: u32 = 0x1000_0014;
 const TCODE_SETTINGS_TABLE: u32 = 0x1000_0015;
 const TCODE_INSTANCE_DEFINITION_TABLE: u32 = 0x1000_0021;
+const TCODE_HATCHPATTERN_TABLE: u32 = 0x1000_0022;
+const TCODE_DIMSTYLE_TABLE: u32 = 0x1000_0020;
+const TCODE_DIMSTYLE_RECORD: u32 = 0x2000_8075;
+const TCODE_HATCHPATTERN_RECORD: u32 = 0x2000_8077;
 const TCODE_PROPERTIES_APPLICATION: u32 = 0x2000_8024;
 const TCODE_PROPERTIES_OPENNURBS_VERSION: u32 = 0xA000_0026;
 const TCODE_SETTINGS_UNITSANDTOLS: u32 = 0x2000_8031;
@@ -546,6 +551,12 @@ enum Geometry<'a> {
     /// Points as stored, three doubles (24 bytes) each, and their colours (4 bytes each): read
     /// only while drawing, so that a large cloud is thinned out without a copy of every point.
     Points { points: &'a [u8], colors: Option<&'a [u8]>, kind: &'static str },
+    /// Polylines (curves, and the lines of text and hatches) and the object type to show.
+    Lines(Vec<Vec<DVec3>>, &'static str),
+    /// A hatch, filled or drawn in its pattern's lines when drawn.
+    Hatch(drafting::Hatch),
+    /// A text, set in its dimension style's height when drawn.
+    Text(drafting::Text),
     /// Not drawn: why, for the count in the project information.
     Skipped(&'static str),
 }
@@ -567,6 +578,8 @@ struct File<'a> {
     layers: Vec<RhinoLayer>,
     materials: Vec<Material>,
     blocks: Vec<BlockDefinition>,
+    patterns: Vec<drafting::HatchPattern>,
+    dim_styles: Vec<drafting::DimStyle>,
     objects: Vec<RhinoObject<'a>>,
     /// Records that could not be read, by table.
     damaged: BTreeMap<&'static str, usize>,
@@ -620,6 +633,19 @@ fn read(data: &[u8]) -> R<File<'_>> {
             TCODE_INSTANCE_DEFINITION_TABLE => table(body, TCODE_INSTANCE_DEFINITION_RECORD, &mut file, "block definitions", |mut c, f| {
                 if let Some(object) = c.object()?.filter(|o| o.class == ON_INSTANCE_DEFINITION) {
                     f.blocks.push(read_block_definition(object.data)?);
+                }
+                Ok(())
+            }),
+            TCODE_DIMSTYLE_TABLE => table(body, TCODE_DIMSTYLE_RECORD, &mut file, "dimension styles", |mut c, f| {
+                if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_DIM_STYLE) {
+                    f.dim_styles.extend(drafting::read_dim_style(object.data)?);
+                }
+                Ok(())
+            }),
+            TCODE_HATCHPATTERN_TABLE => table(body, TCODE_HATCHPATTERN_RECORD, &mut file, "hatch patterns", |mut c, f| {
+                let position = f.patterns.len() as i32;
+                if let Some(object) = c.object()?.filter(|o| o.class == drafting::ON_HATCH_PATTERN) {
+                    f.patterns.push(drafting::read_pattern(object.data, position)?);
                 }
                 Ok(())
             }),
@@ -1093,6 +1119,21 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize)
             Err(e) if e == TOO_MANY_VERTICES => return Err(e),
             _ => Geometry::Skipped("SubD objects that could not be read"),
         });
+    }
+    if class == drafting::ON_TEXT {
+        return Ok(match drafting::read_text(&mut c) {
+            Ok(text) => Geometry::Text(text),
+            Err(_) => Geometry::Skipped("texts that could not be read"),
+        });
+    }
+    if class == drafting::ON_HATCH {
+        return Ok(match drafting::read_hatch(&mut c) {
+            Ok(h) => Geometry::Hatch(h),
+            Err(_) => Geometry::Skipped("hatches that could not be read"),
+        });
+    }
+    if let Some(polyline) = tessellate::curve_object(class, &mut c) {
+        return Ok(Geometry::Lines(vec![polyline], "Curve"));
     }
     Ok(Geometry::Skipped(match object_type {
         1 | 2 => "points",
@@ -1589,7 +1630,9 @@ impl<'f> Scene<'f> {
                 }
                 geometry => {
                     let kind = match geometry {
-                        Geometry::Meshes(_, kind) | Geometry::Points { kind, .. } => *kind,
+                        Geometry::Meshes(_, kind) | Geometry::Points { kind, .. } | Geometry::Lines(_, kind) => *kind,
+                        Geometry::Hatch(_) => "Hatch",
+                        Geometry::Text(_) => "Text",
                         _ => "",
                     };
                     let props = self.props(a, kind, None, &object.user);
@@ -1654,6 +1697,20 @@ impl<'f> Scene<'f> {
     /// Adds meshes or points to the layer of `layer`; the first part drawn carries the props.
     fn draw(&mut self, geometry: &Geometry<'_>, layer: i32, xform: DMat4, color: Rgba, id: u64, props: &mut Option<String>) -> bool {
         match geometry {
+            Geometry::Text(text) => {
+                let style = self.file.dim_styles.iter().find(|d| d.id == text.style()).or(self.file.dim_styles.first());
+                let shape = Geometry::Meshes(text.mesh(style).into_iter().collect(), "Text");
+                self.draw(&shape, layer, xform, color, id, props)
+            }
+            Geometry::Hatch(h) => {
+                // in its pattern's lines, or filled (a solid or gradient pattern, or none found)
+                let pattern = self.file.patterns.iter().find(|p| p.index == h.pattern());
+                let shape = match pattern.filter(|p| !p.solid) {
+                    Some(p) => Geometry::Lines(h.lines(p), "Hatch"),
+                    None => Geometry::Meshes(h.fill().into_iter().collect(), "Hatch"),
+                };
+                self.draw(&shape, layer, xform, color, id, props)
+            }
             Geometry::Meshes(meshes, _) => {
                 // the meshes within the triangle and vertex limits
                 let fits: Vec<&Mesh> = meshes
@@ -1690,6 +1747,26 @@ impl<'f> Scene<'f> {
                     self.meshed.insert(meshes.as_ptr() as usize);
                 }
                 true
+            }
+            Geometry::Lines(polylines, _) => {
+                let first = polylines.iter().flatten().map(|p| xform.transform_point3(*p)).find(|p| p.is_finite());
+                let origin = self.origin(first);
+                let target = self.viewer_layer(layer, false);
+                let before = target.lines.len();
+                for line in polylines {
+                    let points: Vec<DVec3> = line.iter().map(|p| xform.transform_point3(*p) - origin).collect();
+                    if points.len() < 2 || points.iter().any(|p| !p.is_finite()) {
+                        continue;
+                    }
+                    let base = (target.positions.len() / 3) as u32;
+                    for p in &points {
+                        target.positions.extend(p.to_array().map(|v| v as f32));
+                        target.normals.extend([0.0; 3]);
+                    }
+                    target.colors.get_or_insert_with(Vec::new).extend(std::iter::repeat_n(color, points.len()));
+                    target.lines.extend((0..points.len() as u32 - 1).flat_map(|k| [base + k, base + k + 1]));
+                }
+                target.lines.len() > before
             }
             Geometry::Points { points, colors, .. } => {
                 let count = points.len() / 24;
@@ -1790,6 +1867,9 @@ fn plural(kind: &str) -> &'static str {
         "Point cloud" => "point clouds",
         "Point" => "points",
         "SubD" => "SubD objects",
+        "Curve" => "curves",
+        "Hatch" => "hatches",
+        "Text" => "texts",
         _ => "objects",
     }
 }
@@ -2642,16 +2722,16 @@ mod tests {
     /// meshes) and without them: layers and sublayers, a hidden and a locked layer, colours by
     /// layer, object and parent, a basic material with transparency, a PBR material, a layer
     /// material, colours per face, user text, an extrusion, a sphere, a mesh with vertex colours,
-    /// a block, points, a SubD, and what the viewer leaves out (a hidden object, a curve, a text,
-    /// a hatch). Both read the same.
+    /// a block, points, a SubD, a curve, a text, a hatch, and a hidden object it leaves out. Both
+    /// read the same.
     #[test]
     fn rhino9_layers_materials_colours_and_user_text() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
         for (file, meshed) in [("everything_meshes.3dm", 2), ("everything_small.3dm", 14)] {
             let (model, info) = load(file, std::fs::read(dir.join(file)).unwrap());
             assert_eq!(entry(&info, "Rhino file version"), "Rhino 9 (archive version 90)");
-            assert_eq!(entry(&info, "Rhino objects drawn"), "1 SubD objects, 1 block instances, 1 extrusions, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces", "{file}");
-            assert_eq!(entry(&info, "Rhino objects left out"), "1 annotations, 1 curves, 1 hatches, 1 hidden objects", "{file}");
+            assert_eq!(entry(&info, "Rhino objects drawn"), "1 SubD objects, 1 block instances, 1 curves, 1 extrusions, 1 hatches, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces, 1 texts", "{file}");
+            assert_eq!(entry(&info, "Rhino objects left out"), "1 hidden objects", "{file}");
             // the SubD, and the box on the hidden layer which Rhino left without a mesh, are meshed
             // by the viewer
             assert_eq!(entry(&info, "Rhino objects meshed by the viewer"), format!("{meshed} (saved without a render mesh)"), "{file}");
@@ -2840,5 +2920,55 @@ mod tests {
         let area: f64 = m.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).length()).sum();
         assert!((area - 1.0).abs() < 1e-9, "{area}");
         assert_eq!(c.left(), 0, "the whole record is read");
+    }
+
+    /// Curves, texts and hatches made in Rhino 9 (`drafting.3dm`, from make_drafting.py). Its
+    /// dimension style draws texts twice their height in model space; each text covers the area
+    /// Rhino's outlines of it cover (in the viewer's typeface, so a little narrower or wider).
+    #[test]
+    fn curves_texts_and_hatches_are_drawn() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino/drafting.3dm");
+        let (model, info) = load("drafting.3dm", std::fs::read(path).unwrap());
+        assert_eq!(entry(&info, "Rhino objects drawn"), "7 curves, 5 hatches, 6 texts");
+        let curves = model.layers.iter().find(|l| l.name == "Curves").unwrap();
+        assert!(curves.lines.len() > 7 * 2 * 8, "curves are drawn as line segments");
+        let hatches = model.layers.iter().find(|l| l.name == "Hatches").unwrap();
+        assert!(!hatches.indices.is_empty() && !hatches.lines.is_empty(), "a solid fill and pattern lines");
+        // Rhino's outlines of the texts: x and y from and to
+        let rhino = [
+            ("Text 1", [0.1097, -12.0170, 8.1377, -10.9966]),
+            ("Text 2", [0.1858, -16.0426, 8.7031, -13.4591]),
+            ("Text 3", [15.0327, -12.2938, 18.7485, -9.4007]),
+            ("Text 4", [24.7322, -11.8019, 31.4700, -7.4428]),
+            ("Text 5", [37.8264, -12.5164, 42.2054, -11.5007]),
+            ("Text 6", [0.0545, -20.1977, 8.1241, -18.9836]),
+        ];
+        let texts = model.layers.iter().find(|l| l.name == "Text").unwrap();
+        for (name, outline) in rhino {
+            // the model is in millimetres, the viewer in metres
+            let [x0, y0, x1, y1] = outline.map(|v| v / 1000.0);
+            let mut low = [f64::MAX; 3];
+            let mut high = [f64::MIN; 3];
+            for &(id, start, count) in &texts.elements {
+                let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                if props["Name"].as_str() != Some(name) {
+                    continue;
+                }
+                for &i in &texts.indices[start as usize..(start + count) as usize] {
+                    for c in 0..3 {
+                        let v = texts.positions[3 * i as usize + c] as f64;
+                        low[c] = low[c].min(v);
+                        high[c] = high[c].max(v);
+                    }
+                }
+            }
+            assert!(low[0] < high[0], "{name} is drawn");
+            let (w, h) = (x1 - x0, y1 - y0);
+            let (ours_w, ours_h) = (high[0] - low[0], high[1] - low[1]);
+            assert!((ours_h - h).abs() < 0.15 * h, "{name}: {ours_h} high against {h} in Rhino");
+            assert!((ours_w - w).abs() < 0.2 * w, "{name}: {ours_w} wide against {w} in Rhino");
+            let (mid_x, mid_y) = ((low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0);
+            assert!((mid_x - (x0 + x1) / 2.0).abs() < 0.15 * w && (mid_y - (y0 + y1) / 2.0).abs() < 0.15 * h, "{name}: around ({mid_x}, {mid_y})");
+        }
     }
 }

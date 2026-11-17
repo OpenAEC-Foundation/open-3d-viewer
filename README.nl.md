@@ -108,7 +108,7 @@ De schermafbeeldingen tonen de Engelse interface; in **Instellingen** zet je de 
 
 ## Viewer, Modeller en BIM Validator
 
-Eén codebase, één app, drie producten. De schakelaar rechtsboven in het venster wisselt ertussen; elk heeft een eigen lint, eigen panelen en een eigen startscherm over hetzelfde open project:
+Eén codebase, één app, drie producten. De schakelaar rechtsboven in het venster wisselt ertussen; elk heeft een eigen lint, eigen panelen en een eigen startscherm over hetzelfde open project. Op de schakelaar staan korte namen (**View**, **Collab**, **PointCloud**, **Struct**, **Modeller**); een product dat nog in alfa is, is daar grijs, en de tooltip zegt dat erbij:
 
 - **Viewer**: openen, bekijken, meten en doorsnijden, zoals hierboven.
 - **Modeller**: het tabblad **Modelleren** met de basiselementen (hieronder), en een tabblad **Beeld** met de weergave, camera, doorsnede en meten van de Viewer.

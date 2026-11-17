@@ -18,7 +18,7 @@ runs:
         ALL_SECRETS: ${{ inputs.secrets }}
       run: |
         # jq on Windows ends every line with CRLF, and ssh-add rejects such a key ("invalid format")
-        keys=$(printf '%s' "$ALL_SECRETS" | jq -r 'to_entries[] | select(.key | startswith("SSH_KEY_")) | .value' | tr -d '')
+        keys=$(printf '%s' "$ALL_SECRETS" | jq -r 'to_entries[] | select(.key | startswith("SSH_KEY_")) | .value' | tr -d '\r')
         count=$(printf '%s\n' "$keys" | grep -c "BEGIN OPENSSH PRIVATE KEY" || true)
         echo "Private reader keys: $count"
         {

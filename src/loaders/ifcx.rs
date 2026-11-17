@@ -12,15 +12,17 @@
 //! are); one layer per class, spaces, openings and virtual elements hidden as in IFC. Meshes
 //! (`usd::usdgeom::mesh`: `points`, `faceVertexIndices`, optional `faceVertexCounts`) are placed with
 //! the `usd::xformop` transforms of their node and its parents, coloured by the nearest
-//! `bsi::ifc::presentation::diffuseColor` and `opacity` (or a glTF `baseColorFactor`), flat
+//! `bsi::ifc::presentation::diffuseColor` and `opacity` (or a glTF `baseColorFactor`, or the `openaec::appearance` IFCX Explorer writes), flat
 //! shaded; `invisible` nodes are left out. Point clouds (`points::array`, `points::base64`) are
 //! drawn as points. Metres, Z up. Curves (`usd::usdgeom::basiscurves`), `pcd::base64` clouds,
 //! textures, georeferencing and imports from the web (the schema files on ifcx.dev) are not read.
+//!
+//! A file is parsed into the document model of `ifcx-core` (ifcx-rs), shared with IFCX Explorer;
+//! the composition and the scene, storeys and `o3v::` views are this viewer's own.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
 use glam::{DMat4, DVec3};
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -60,40 +62,39 @@ impl Loader for IfcxLoader {
     }
 }
 
-#[derive(Deserialize)]
-struct File {
-    #[serde(default)]
-    header: Option<Header>,
-    #[serde(default)]
-    imports: Option<Vec<Import>>,
-    data: Vec<Node>,
+/// Whether a path adds to a child of another node (`a/b`: child `b` of `a`). A path that begins
+/// with a slash (`/elements/0021…`, as IFCX Explorer writes its nodes) is a name of its own.
+fn nested(path: &str) -> bool {
+    !path.starts_with('/') && path.contains('/')
 }
 
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct Header {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    ifcx_version: Option<String>,
-    #[serde(default)]
-    author: Option<String>,
+/// The node a path starts from: the part before its first slash, or the whole path where it
+/// begins with one.
+fn head(path: &str) -> &str {
+    if path.starts_with('/') {
+        return path;
+    }
+    path.split('/').next().unwrap_or(path)
 }
 
-#[derive(Deserialize)]
-struct Import {
-    uri: String,
+/// Whether an `openaec::element` attribute holds elements this suite modelled (one, or an array
+/// of the element and its connections). IFCX Explorer writes a description under the same name
+/// (its category, materials, storey): that node is drawn from its mesh as any other.
+fn modelled(definition: &Value) -> bool {
+    let element = |v: &Value| serde_json::from_value::<bim_core::Element>(v.clone()).is_ok();
+    match definition {
+        Value::Array(all) => !all.is_empty() && all.iter().all(element),
+        one => element(one),
+    }
 }
 
-#[derive(Deserialize)]
-struct Node {
-    path: String,
-    #[serde(default)]
-    children: Option<BTreeMap<String, Option<String>>>,
-    #[serde(default)]
-    inherits: Option<BTreeMap<String, Option<String>>>,
-    #[serde(default)]
-    attributes: Option<serde_json::Map<String, Value>>,
+/// An IFCX file as `ifcx-core` reads it: its header, imports and nodes (`data`).
+type File = ifcx_core::IfcxDocument;
+
+/// What a header gives, where it gives it (`ifcx-core` reads what a file leaves out as empty).
+fn given(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// One read file and its name.
@@ -105,7 +106,7 @@ struct Read {
 fn parse(source: &Source) -> Result<File, String> {
     let data = source.read()?;
     let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data);
-    serde_json::from_slice::<File>(data).map_err(|e| format!("IFCX: {} is not an IFCX file ({e})", source.name()))
+    ifcx_core::parser::from_slice(data).map_err(|e| format!("IFCX: {} is not an IFCX file ({e})", source.name()))
 }
 
 /// Reads a file after the local files it imports (they are layered under it).
@@ -116,7 +117,7 @@ fn read_with_imports(source: &Source, files: &mut Vec<Read>, seen: &mut HashSet<
     }
     let file = parse(source)?;
     if let Some(dir) = source.path().and_then(|p| p.parent()) {
-        for import in file.imports.iter().flatten() {
+        for import in &file.imports {
             let uri = import.uri.trim();
             if uri.contains("://") || !uri.to_ascii_lowercase().ends_with(".ifcx") {
                 continue;
@@ -190,8 +191,11 @@ impl Composer<'_> {
         node
     }
 
-    /// The node at `head/child/..`.
+    /// The node at `head/child/..`; a path that begins with a slash is the name of a node.
     fn resolve(&mut self, target: &str) -> Option<Rc<Composed>> {
+        if target.starts_with('/') {
+            return Some(self.compose(target));
+        }
         let mut parts = target.split('/').filter(|p| !p.is_empty());
         let mut node = self.compose(parts.next()?);
         for part in parts {
@@ -279,6 +283,15 @@ fn color(node: &Composed) -> Option<[f32; 4]> {
     };
     if let Some(c) = node.attribute("gltf::material").and_then(|m| m.get("pbrMetallicRoughness")?.get("baseColorFactor")).and_then(rgb) {
         return Some(c);
+    }
+    // as IFCX Explorer writes it: `openaec::appearance` with a `color` and an `opacity`
+    if let Some(appearance) = node.attribute("openaec::appearance") {
+        if let Some(mut c) = appearance.get("color").and_then(rgb) {
+            if let Some(opacity) = appearance.get("opacity").and_then(number) {
+                c[3] = opacity.clamp(0.0, 1.0) as f32;
+            }
+            return Some(c);
+        }
     }
     let mut c = node.attribute("bsi::ifc::presentation::diffuseColor").and_then(rgb)?;
     if let Some(opacity) = node.attribute("bsi::ifc::presentation::opacity").and_then(number) {
@@ -419,7 +432,7 @@ impl Scene {
         }
         // a modelled element: its definitions (its own and its connections') come back, its mesh is
         // made from them again
-        if let Some(definition) = node.attribute("openaec::element") {
+        if let Some(definition) = node.attribute("openaec::element").filter(|d| modelled(d)) {
             match definition {
                 Value::Array(all) => self.definitions.extend(all.iter().cloned()),
                 one => self.definitions.push(one.clone()),
@@ -578,32 +591,32 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     let mut used = HashSet::new();
     for read in files {
         for node in &read.file.data {
-            let targets = node.children.iter().flatten().filter_map(|(_, t)| t.as_ref());
-            let targets = targets.chain(node.inherits.iter().flatten().filter_map(|(_, t)| t.as_ref()));
-            used.extend(targets.map(|t| t.split('/').next().unwrap_or(t).to_string()));
+            let targets = node.children.values().flatten();
+            let targets = targets.chain(node.inherits.values().flatten());
+            used.extend(targets.map(|t| head(t).to_string()));
             let entry = flat.entry(node.path.clone()).or_default();
-            for (name, child) in node.children.iter().flatten() {
+            for (name, child) in &node.children {
                 entry.children.insert(name.clone(), child.clone());
             }
-            for (name, target) in node.inherits.iter().flatten() {
+            for (name, target) in &node.inherits {
                 match target {
                     Some(target) => entry.inherits.insert(name.clone(), target.clone()),
                     None => entry.inherits.remove(name),
                 };
             }
-            for (key, value) in node.attributes.iter().flatten() {
+            for (key, value) in &node.attributes {
                 entry.attributes.insert(key.clone(), Rc::new(value.clone()));
             }
         }
     }
     let mut deep = HashSet::new();
-    for path in flat.keys() {
+    for path in flat.keys().filter(|p| nested(p)) {
         let parts: Vec<&str> = path.split('/').collect();
         for n in 1..parts.len() {
             deep.insert(parts[..n].join("/"));
         }
     }
-    let mut roots: Vec<&String> = flat.keys().filter(|p| !p.contains('/') && !used.contains(*p)).collect();
+    let mut roots: Vec<&String> = flat.keys().filter(|p| !nested(p) && !used.contains(*p)).collect();
     roots.sort();
     if roots.is_empty() && !flat.is_empty() {
         return Err("IFCX: every node is held by another (a cycle); nothing to draw".into());
@@ -629,19 +642,19 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         }
     }
     layers.extend(scene.clouds.into_values());
-    let header = files.last().and_then(|r| r.file.header.as_ref());
+    let header = files.last().map(|r| &r.file.header);
     let mut info = vec![
-        ("IFCX version".to_string(), header.and_then(|h| h.ifcx_version.clone()).unwrap_or_default()),
+        ("IFCX version".to_string(), header.and_then(|h| given(&h.ifcx_version)).unwrap_or_default()),
         ("IFCX files".to_string(), files.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", ")),
         ("IFCX elements".to_string(), scene.elements.to_string()),
     ];
-    if let Some(id) = files.first().and_then(|r| r.file.header.as_ref()?.id.clone()) {
+    if let Some(id) = files.first().and_then(|r| given(&r.file.header.id)) {
         info.push(("IFCX id".into(), id));
     }
-    if let Some(author) = header.and_then(|h| h.author.clone()) {
+    if let Some(author) = header.and_then(|h| given(&h.author)) {
         info.push(("IFCX author".into(), author));
     }
-    let remote: usize = files.iter().flat_map(|r| r.file.imports.iter().flatten()).filter(|i| i.uri.contains("://")).count();
+    let remote: usize = files.iter().flat_map(|r| &r.file.imports).filter(|i| i.uri.contains("://")).count();
     if remote > 0 {
         info.push(("IFCX imports not read (web)".into(), remote.to_string()));
     }
@@ -656,7 +669,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     let mut drawings: Vec<(String, Value)> = Vec::new();
     for node in files.iter().flat_map(|r| &r.file.data) {
         let own: serde_json::Map<String, Value> =
-            node.attributes.iter().flatten().filter(|(k, _)| k.starts_with("o3v::")).map(|(k, v)| (k.clone(), v.clone())).collect();
+            node.attributes.iter().filter(|(k, _)| k.starts_with("o3v::")).map(|(k, v)| (k.clone(), v.clone())).collect();
         if own.is_empty() {
             continue;
         }
@@ -738,6 +751,26 @@ mod tests {
 
     fn layer<'a>(model: &'a crate::model::Model, name: &str) -> &'a Layer {
         model.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("no layer {name}"))
+    }
+
+    #[test]
+    fn paths_that_begin_with_a_slash_are_names_of_their_own() {
+        // as IFCX Explorer writes: a project holding an element by its full path, the element
+        // with its mesh and a part of its own
+        let file = r#"{"header":{"ifcxVersion":"ifcx_alpha"},"imports":[],"data":[
+            {"path":"/project","children":{"wall":"/elements/a"},"attributes":{"bsi::ifc::class":{"code":"IfcProject"}}},
+            {"path":"/elements/a","children":{"part-0":"/elements/b"},"attributes":{"bsi::ifc::class":{"code":"IfcWall"}}},
+            {"path":"/elements/b","attributes":{"bsi::ifc::class":{"code":"IfcBuildingElementProxy"},"usd::usdgeom::mesh":{"points":[[0,0,0],[1,0,0],[0,1,0]],"faceVertexIndices":[0,1,2]}}}
+        ]}"#;
+        let model = crate::loaders::load_with(&bytes("explorer.ifcx", file), &Progress::default()).expect("IFCX with absolute paths");
+        assert_eq!(model.layers.iter().map(|l| l.indices.len() / 3).sum::<usize>(), 1);
+        assert!(nested("a/b") && !nested("/elements/a") && !nested("a"));
+        assert_eq!((head("a/b"), head("/elements/a")), ("a", "/elements/a"));
+        // IFCX Explorer's description of an element under openaec::element: the mesh is drawn
+        let described = file.replace(r#""bsi::ifc::class":{"code":"IfcBuildingElementProxy"}"#, r#""bsi::ifc::class":{"code":"IfcBuildingElementProxy"},"openaec::element":{"category":"Overige bouwdelen","role":"component"}"#);
+        let model = crate::loaders::load_with(&bytes("described.ifcx", &described), &Progress::default()).expect("IFCX with a description");
+        assert_eq!(model.layers.iter().map(|l| l.indices.len() / 3).sum::<usize>(), 1);
+        assert!(!modelled(&serde_json::json!({"category": "Overige bouwdelen"})));
     }
 
     #[test]

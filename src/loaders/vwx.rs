@@ -89,6 +89,11 @@ fn sheet(sheet: &vwx_read::model::Sheet, views: &mut Vec<SavedView>) -> Sheet {
         .viewports
         .iter()
         .map(|v| {
+            // a section viewport: the sheet has the drawing of its cut among its lines, which a
+            // view of the whole model would only cover
+            if v.section {
+                return placed(v, None);
+            }
             // the model as the viewport looks at it: a parallel view of its own
             views.push(SavedView {
                 name: v.name.clone(),
@@ -101,29 +106,35 @@ fn sheet(sheet: &vwx_read::model::Sheet, views: &mut Vec<SavedView>) -> Sheet {
                 style: None,
                 drawing: None,
             });
-            SheetViewport {
-                title: v.name.clone(),
-                view: Some(views.len() - 1),
-                rect: SheetRect { min: v.min, max: v.max },
-                estimated: false,
-                scale: format!("1:{}", v.scale),
-                detail: None,
-                label: None,
-                origin: v.origin,
-                ratio: 1.0 / v.scale.max(f32::MIN_POSITIVE),
-                drawing: None,
-                anchor: None,
-                turn: [1.0, 0.0],
-                draft: None,
-                written: None,
-                face: crate::typeface::Face::default(),
-                split: None,
-            }
+            placed(v, Some(views.len() - 1))
         })
         .collect();
     let corners = sheet.lines.iter().flatten().copied().chain(texts.iter().flat_map(|t| [t.at, [t.at[0] + t.width, t.at[1] + t.height]])).chain(viewports.iter().flat_map(|v| [v.rect.min, v.rect.max]));
     let paper = corners.map(|p| SheetRect { min: p, max: p }).reduce(SheetRect::union);
     Sheet { lines: sheet.lines.clone(), texts, ..Sheet::new(sheet.number.clone(), sheet.title.clone(), paper, viewports) }
+}
+
+/// A viewport as it lies on its sheet, showing view `view` of the model (none: its sheet has
+/// its drawing).
+fn placed(v: &vwx_read::model::Viewport, view: Option<usize>) -> SheetViewport {
+    SheetViewport {
+        title: v.name.clone(),
+        view,
+        rect: SheetRect { min: v.min, max: v.max },
+        estimated: false,
+        scale: format!("1:{}", v.scale),
+        detail: None,
+        label: None,
+        origin: v.origin,
+        ratio: 1.0 / v.scale.max(f32::MIN_POSITIVE),
+        drawing: None,
+        anchor: None,
+        turn: [1.0, 0.0],
+        draft: None,
+        written: None,
+        face: crate::typeface::Face::default(),
+        split: None,
+    }
 }
 
 /// The objects a viewport does not show: those on the design layers and in the classes it
@@ -231,6 +242,7 @@ mod tests {
                 origin: [0.2, 0.25],
                 forward: [0.0, 1.0, 0.0],
                 up: [0.0, 0.0, 1.0],
+                section: false,
                 hidden_layers: vec!["01-Slab".into()],
                 hidden_classes: vec!["Space".into()],
             }],
@@ -241,6 +253,10 @@ mod tests {
         let viewport = &sheet.viewports[0];
         assert_eq!((viewport.title.as_str(), viewport.view, viewport.scale.as_str(), viewport.ratio), ("Front Elevation", Some(1), "1:50", 0.02));
         assert_eq!((views[1].name.as_str(), views[1].camera.unwrap().forward), ("Front Elevation", [0.0, 1.0, 0.0]));
+        // a section viewport has its drawing on the sheet, and no view of the model
+        let section = vwx_read::model::Sheet { viewports: vec![vwx_read::model::Viewport { section: true, ..from.viewports[0].clone() }], ..from.clone() };
+        let before = views.len();
+        assert_eq!((super::sheet(&section, &mut views).viewports[0].view, views.len()), (None, before));
         // it leaves out what is on a layer or in a class it does not show
         let mesh = |layer: &str, class: &str, id: u64| vwx_read::model::Mesh { layer: layer.into(), class: class.into(), props: vec![(id, String::new())], ..Default::default() };
         let meshes = [mesh("00-Slab", "Floor", 1), mesh("01-Slab", "Floor", 2), mesh("00-Floor", "Space", 3)];

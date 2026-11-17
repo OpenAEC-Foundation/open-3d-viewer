@@ -111,10 +111,8 @@ enum RibbonPart {
     Smalls(Vec<&'static str>),
 }
 
-/// From what width of the window the title bar names the products to come, and says how far
-/// along a product is.
+/// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1360.0;
-const STAGE_WIDTH: f32 = 1000.0;
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -1348,7 +1346,7 @@ impl Studio {
         // the switch at the top right; no shortcuts of their own until one is set
         let shown = self.product();
         for &product in &self.products {
-            list.push(Command::new(product.command(), product.label(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
+            list.push(Command::new(product.command(), product.full_name(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
         // the Validator's commands: issues, checks, clashes and the rule set
         // Pointcloud: how the points show, the meshes, exports and drawing made of a cloud (on the
@@ -1418,10 +1416,12 @@ impl Studio {
             };
             add("analysis.deformed", l.text("Vervorming", "Deformed shape"), "transform.flip-vertical", Change::Deformed, app.analysis.deformed, moved, l.text("Tekent de staven tussen hun verplaatste knopen, vergroot.", "Draws the members between their displaced nodes, enlarged."));
             add("analysis.reactions", l.text("Reacties", "Reactions"), "section.plane-z", Change::Reactions, app.analysis.reactions, held, l.text("Tekent bij elke oplegging de kracht op de constructie.", "Draws at every support the force on the structure."));
+            add("analysis.supports", l.text("Opleggingen", "Supports"), "section.plane-z", Change::Supports, app.analysis.supports, loaded, l.text("Tekent bij elke oplegging haar symbool en bij elk scharnierend staafeinde een cirkel.", "Draws a symbol at every support and a circle at every released member end."));
             add("analysis.loads", l.text("Belastingen", "Loads"), "file.import", Change::Loads, app.analysis.loads.is_some(), cases > 0, l.text("Tekent de belastingen van een belastinggeval als pijlen.", "Draws the loads of a load case as arrows."));
             add("analysis.case-next", l.text("Volgend geval", "Next case"), "page.next", Change::Case(true), false, cases > 1, l.text("Toont de belastingen van het volgende belastinggeval.", "Shows the loads of the next load case."));
             add("analysis.case-previous", l.text("Vorig geval", "Previous case"), "page.previous", Change::Case(false), false, cases > 1, l.text("Toont de belastingen van het vorige belastinggeval.", "Shows the loads of the previous load case."));
             add("analysis.set-next", l.text("Volgend resultaat", "Next result set"), "page.next", Change::Set(true), false, sets > 1, l.text("Toont de resultaten van het volgende belastinggeval of de volgende combinatie.", "Shows the results of the next load case or combination."));
+            add("analysis.set-previous", l.text("Vorig resultaat", "Previous result set"), "page.previous", Change::Set(false), false, sets > 1, l.text("Toont de resultaten van het vorige belastinggeval of de vorige combinatie.", "Shows the results of the previous load case or combination."));
             add("analysis.larger", l.text("Groter", "Larger"), "view.zoom-in", Change::Scale(true), false, loaded, l.text("Tekent de lijnen en pijlen groter.", "Draws the diagrams and arrows larger."));
             add("analysis.smaller", l.text("Kleiner", "Smaller"), "view.zoom-out", Change::Scale(false), false, loaded, l.text("Tekent de lijnen en pijlen kleiner.", "Draws the diagrams and arrows smaller."));
         }
@@ -2175,9 +2175,15 @@ impl Studio {
         let c = look.color;
         let shown = self.product();
         let segment = move |product: Product, on: bool, message: Msg| -> Element<'_, Msg> {
-            let label = text(product.label()).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(if on { c.text } else { c.text_secondary });
-            // beside its name: that it is not ready to work with yet
-            let label = row![label].extend(product.stage().filter(|_| self.width >= STAGE_WIDTH).map(|stage| text(stage).size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_secondary).into())).spacing(5).align_y(iced::Alignment::Center);
+            // grey while it is not ready to work with yet; its tooltip says how far along it is
+            let ink = if on {
+                c.text
+            } else if product.stage().is_some() {
+                c.text_disabled
+            } else {
+                c.text_secondary
+            };
+            let label = text(product.label()).size(font::SIZE_BODY).font(if on { fonts::STRONG } else { fonts::MEDIUM }).color(ink);
             let control = button(container(label).height(Length::Fill).align_y(iced::alignment::Vertical::Center))
                 .height(22)
                 .padding([0, 10])
@@ -2199,16 +2205,16 @@ impl Studio {
         };
         if self.compact() {
             let next = self.products[(self.products.iter().position(|&p| p == shown).unwrap_or(0) + 1) % self.products.len()];
-            return w::with_tooltip(look, segment(shown, true, Msg::Product(next)), next.purpose(l), None);
+            return w::with_tooltip(look, segment(shown, true, Msg::Product(next)), next.purpose(l), next.stage());
         }
-        let segments = self.products.iter().map(|&p| w::with_tooltip(look, segment(p, p == shown, Msg::Product(p)), p.purpose(l), None));
+        let segments = self.products.iter().map(|&p| w::with_tooltip(look, segment(p, p == shown, Msg::Product(p)), p.purpose(l), p.stage()));
         // the products to come: named, not to be chosen yet (names as the products', the same in
         // every language)
         let soon = |name: &'static str| -> Element<'_, Msg> { container(text(name).size(font::SIZE_BODY).font(fonts::MEDIUM).color(c.text_disabled)).height(22).padding([0, 8]).align_y(iced::alignment::Vertical::Center).into() };
         let note: Element<'_, Msg> = container(text("(coming soon)").size(font::SIZE_BODY - 2.0).font(fonts::BODY).color(c.text_disabled)).height(22).padding(iced::Padding { right: 8.0, ..iced::Padding::ZERO }).align_y(iced::alignment::Vertical::Center).into();
         // (where the window has room for them beside the title)
         let room = self.width >= SOON_WIDTH;
-        let segments = segments.chain(["FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
+        let segments = segments.chain(["Docs", "FM", "Environment"].map(soon).into_iter().filter(move |_| room)).chain(room.then_some(note));
         container(row(segments).spacing(2).align_y(iced::Alignment::Center))
             .padding(2)
             .style(move |_| container::Style { border: iced::Border { color: c.border, width: 1.0, radius: radius::MEDIUM.into() }, ..Default::default() })
@@ -2290,7 +2296,7 @@ impl Studio {
             RibbonPage::Analysis => vec![
                 (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
                 (l.text("Snedekrachten", "Internal forces"), vec![smalls(&["analysis.n", "analysis.vy", "analysis.vz"]), smalls(&["analysis.mx", "analysis.my", "analysis.mz"])]),
-                (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), smalls(&["analysis.set-next"])]),
+                (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
             ],
@@ -3437,7 +3443,7 @@ mod tests {
         studio.set_product(Product::Viewer);
         assert_eq!(studio.product(), Product::Modeller);
         let names = accessibility(&studio).summary();
-        assert!(!names.iter().any(|n| n == "Tab: Viewer" || n == "Tab: BIM Validator"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "Tab: Collab" || n == "Tab: PointCloud"), "{names:?}");
         assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
         // a product binary: its own name in the title and About
         let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Validator));

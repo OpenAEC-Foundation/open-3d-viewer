@@ -1,8 +1,9 @@
 //! Vectorworks (.vwx documents and .sta templates) via the OpenAEC vwx reader: one layer per
 //! Vectorworks layer and class, the drawn objects pickable, with their properties (name, object
-//! type, layer, class, symbol).
+//! type, layer, class, symbol); what is in an invisible class starts switched off; the saved
+//! views of the document.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{Layer, ProjectData};
+use crate::model::{Layer, ProjectData, SavedView, ViewCamera, ViewKind};
 
 pub struct VwxLoader;
 
@@ -24,8 +25,25 @@ impl Loader for VwxLoader {
         let data = source.read()?;
         progress.set(Phase::Convert);
         let scene = vwx_read::read(&data).map_err(|e| format!("Cannot read Vectorworks file: {e}"))?;
+        let views = scene.views.iter().map(view).collect();
         let layers = scene.meshes.into_iter().map(layer).collect();
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData::default() })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData::default() })
+    }
+}
+
+/// A saved view of the document: the way it looks at the model. Vectorworks' saved views are
+/// read as parallel views, which fit the model.
+fn view(view: &vwx_read::model::View) -> SavedView {
+    SavedView {
+        name: view.name.clone(),
+        kind: ViewKind::ThreeD,
+        camera: Some(ViewCamera { eye: [0.0; 3], forward: view.forward, perspective: false, fov_y: None }),
+        clip: None,
+        plan: None,
+        level: None,
+        folder: Vec::new(),
+        style: None,
+        drawing: None,
     }
 }
 
@@ -42,6 +60,8 @@ fn layer(mesh: vwx_read::model::Mesh) -> Layer {
         props: mesh.props,
         hidden: mesh.hidden,
         points: false,
+        lines: Vec::new(),
+        line_elements: Vec::new(),
     }
 }
 
@@ -74,6 +94,27 @@ mod tests {
         let layer = &model.layers[0];
         assert!(layer.name.starts_with("Ontwerplaag-1"), "{}", layer.name);
         assert_eq!(layer.elements.len(), 2);
+    }
+
+    /// `140_saved_view` of the ladder: a view saved as "Aanzicht A" after the model was turned
+    /// 60 degrees about x and 45 about z.
+    #[test]
+    fn reads_the_saved_views_of_a_vectorworks_file() {
+        let Some(samples) = std::env::var_os("VWX_SAMPLES") else { return };
+        let path = std::path::PathBuf::from(samples).join("ladder/2027/140_saved_view.vwx");
+        let model = super::super::load(&path).expect("Vectorworks sample");
+        let view = model.views.iter().find(|v| v.name == "Aanzicht A").expect("the saved view");
+        let forward = view.camera.expect("its camera").forward;
+        // down at 30 degrees
+        assert!((forward[2] + 0.5).abs() < 1e-5 && (forward[0] + forward[1]).abs() < 1e-5, "{forward:?}");
+    }
+
+    #[test]
+    fn saved_views_look_the_way_the_file_says() {
+        let saved = super::view(&vwx_read::model::View { name: "Aanzicht A".into(), forward: [0.0, 0.6, -0.8], up: [0.0, 0.8, 0.6] });
+        assert_eq!((saved.name.as_str(), saved.kind), ("Aanzicht A", super::ViewKind::ThreeD));
+        let camera = saved.camera.unwrap();
+        assert_eq!((camera.forward, camera.perspective), ([0.0, 0.6, -0.8], false));
     }
 
     #[test]

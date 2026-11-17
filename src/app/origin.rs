@@ -87,7 +87,7 @@ impl App {
 
     /// Where the file of a model says it lies: latitude and longitude (degrees), of its map
     /// conversion when it has one, else of its site.
-    fn located(entry: &ModelEntry) -> Option<(f64, f64)> {
+    pub(super) fn located(entry: &ModelEntry) -> Option<(f64, f64)> {
         let info = &entry.model.project.info;
         let value = ["Georeference latitude, longitude", "Site latitude, longitude"].iter().find_map(|key| info.iter().find(|(k, _)| k == key))?;
         let (lat, lon) = value.1.split_once(',')?;
@@ -130,7 +130,7 @@ impl App {
 
     /// Combines the models again, each at the place it was moved to; one model that was not
     /// moved shows as it was loaded.
-    fn replace_models(&mut self) {
+    pub(super) fn replace_models(&mut self) {
         let picked = self.picked_model;
         let sources: Vec<Arc<Model>> = self.models.iter().map(|entry| entry.model.clone()).collect();
         let moves: Vec<DVec3> = self.models.iter().map(|entry| entry.placed.moved).collect();
@@ -154,7 +154,8 @@ impl App {
             // a model's own zero is drawn where the scene shifted it to
             let shift = scene.origins.get(first).map_or(DVec3::ZERO, |o| o.shift);
             first += entry.model.origins.len().max(1);
-            if entry.visible {
+            // a map layer fetched in the GIS tab lies in the project's own frame: no zero of its own
+            if entry.visible && !self.is_map_layer(&entry.model) {
                 out.push(((shift + entry.placed.zero).as_vec3(), entry.model.file_name(), self.picked_model == Some(i)));
             }
         }

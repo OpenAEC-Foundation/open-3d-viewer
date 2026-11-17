@@ -1106,6 +1106,23 @@
     "Select elements in the model to link this document to them.": "Selezionare elementi nel modello per collegarvi questo documento.",
     "Document": "Documento",
     "Documents": "Documenti",
-    "The documents of the project: status, revisions and links to the model": "I documenti del progetto: stato, revisioni e collegamenti con il modello"
+    "The documents of the project: status, revisions and links to the model": "I documenti del progetto: stato, revisioni e collegamenti con il modello",
+    "Parcels": "Particelle",
+    "Buildings": "Edifici",
+    "Location": "Posizione",
+    "Search": "Cerca",
+    "Address, place, postcode or coordinates": "Indirizzo, luogo, codice postale o coordinate",
+    "No place found": "Nessun luogo trovato",
+    "Location from the model": "Posizione dal modello",
+    "Surroundings": "Dintorni",
+    "The browser build does not fetch surroundings yet.": "La versione per browser non carica ancora i dintorni.",
+    "Radius": "Raggio",
+    "Fetching the surroundings…": "Caricamento dei dintorni…",
+    "Load surroundings": "Carica i dintorni",
+    "Search a place first, or open a model with a georeference.": "Cerca prima un luogo oppure apri un modello georeferenziato.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Senza georeferenziazione, il luogo del primo caricamento si trova nel punto zero del progetto.",
+    "nothing found in this area": "niente trovato in quest'area",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "Non è stato caricato tutto: l'area contiene più oggetti di quanti ne vengano scaricati in una volta.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Particelle ed edifici provengono dal catasto olandese tramite PDOK (solo Paesi Bassi). La richiesta comunica a PDOK quale luogo si sta guardando; non viene inviato altro."
   }
 }

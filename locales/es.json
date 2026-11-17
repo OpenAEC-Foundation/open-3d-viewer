@@ -1106,6 +1106,23 @@
     "Select elements in the model to link this document to them.": "Seleccione elementos en el modelo para vincularles este documento.",
     "Document": "Documento",
     "Documents": "Documentos",
-    "The documents of the project: status, revisions and links to the model": "Los documentos del proyecto: estado, revisiones y vínculos con el modelo"
+    "The documents of the project: status, revisions and links to the model": "Los documentos del proyecto: estado, revisiones y vínculos con el modelo",
+    "Parcels": "Parcelas",
+    "Buildings": "Edificios",
+    "Location": "Ubicación",
+    "Search": "Buscar",
+    "Address, place, postcode or coordinates": "Dirección, lugar, código postal o coordenadas",
+    "No place found": "No se encontró ningún lugar",
+    "Location from the model": "Ubicación según el modelo",
+    "Surroundings": "Entorno",
+    "The browser build does not fetch surroundings yet.": "La versión para navegador aún no carga el entorno.",
+    "Radius": "Radio",
+    "Fetching the surroundings…": "Cargando el entorno…",
+    "Load surroundings": "Cargar el entorno",
+    "Search a place first, or open a model with a georeference.": "Busque primero un lugar o abra un modelo con georreferencia.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Sin georreferencia, el lugar de la primera carga queda en el punto cero del proyecto.",
+    "nothing found in this area": "no se encontró nada en esta zona",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "No se cargó todo: la zona contiene más objetos de los que se obtienen de una vez.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Las parcelas y los edificios proceden del catastro neerlandés a través de PDOK (solo Países Bajos). La consulta indica a PDOK qué lugar está viendo; no se envía nada más."
   }
 }

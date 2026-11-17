@@ -1106,6 +1106,23 @@
     "Select elements in the model to link this document to them.": "Bu belgeyi bağlamak için modelde öğeler seçin.",
     "Document": "Belge",
     "Documents": "Belgeler",
-    "The documents of the project: status, revisions and links to the model": "Projenin belgeleri: durum, revizyonlar ve modelle bağlantılar"
+    "The documents of the project: status, revisions and links to the model": "Projenin belgeleri: durum, revizyonlar ve modelle bağlantılar",
+    "Parcels": "Parseller",
+    "Buildings": "Binalar",
+    "Location": "Konum",
+    "Search": "Ara",
+    "Address, place, postcode or coordinates": "Adres, yer, posta kodu veya koordinatlar",
+    "No place found": "Yer bulunamadı",
+    "Location from the model": "Modelden alınan konum",
+    "Surroundings": "Çevre",
+    "The browser build does not fetch surroundings yet.": "Tarayıcı sürümü henüz çevreyi getirmiyor.",
+    "Radius": "Yarıçap",
+    "Fetching the surroundings…": "Çevre getiriliyor…",
+    "Load surroundings": "Çevreyi yükle",
+    "Search a place first, or open a model with a georeference.": "Önce bir yer arayın veya coğrafi referanslı bir model açın.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Coğrafi referans yoksa ilk yüklemenin yeri projenin sıfır noktasında bulunur.",
+    "nothing found in this area": "bu alanda hiçbir şey bulunamadı",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "Her şey yüklenmedi: alanda bir seferde getirilenden daha fazla nesne var.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Parseller ve binalar PDOK aracılığıyla Hollanda tapu kadastrosundan gelir (yalnızca Hollanda). İstek, PDOK'a hangi yere baktığınızı bildirir; başka hiçbir şey gönderilmez."
   }
 }

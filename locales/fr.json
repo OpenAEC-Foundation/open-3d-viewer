@@ -1106,6 +1106,23 @@
     "Select elements in the model to link this document to them.": "Sélectionnez des éléments dans le modèle pour y lier ce document.",
     "Document": "Document",
     "Documents": "Documents",
-    "The documents of the project: status, revisions and links to the model": "Les documents du projet : statut, révisions et liens avec le modèle"
+    "The documents of the project: status, revisions and links to the model": "Les documents du projet : statut, révisions et liens avec le modèle",
+    "Parcels": "Parcelles",
+    "Buildings": "Bâtiments",
+    "Location": "Emplacement",
+    "Search": "Rechercher",
+    "Address, place, postcode or coordinates": "Adresse, lieu, code postal ou coordonnées",
+    "No place found": "Aucun lieu trouvé",
+    "Location from the model": "Emplacement d'après le modèle",
+    "Surroundings": "Environs",
+    "The browser build does not fetch surroundings yet.": "La version navigateur ne charge pas encore les environs.",
+    "Radius": "Rayon",
+    "Fetching the surroundings…": "Chargement des environs…",
+    "Load surroundings": "Charger les environs",
+    "Search a place first, or open a model with a georeference.": "Recherchez d'abord un lieu ou ouvrez un modèle géoréférencé.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Sans géoréférence, le lieu du premier chargement se trouve au point zéro du projet.",
+    "nothing found in this area": "rien trouvé dans cette zone",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "Tout n'a pas été chargé : la zone contient plus d'objets qu'il n'en est récupéré en une fois.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Les parcelles et les bâtiments proviennent du cadastre néerlandais via PDOK (Pays-Bas uniquement). La requête indique à PDOK le lieu que vous consultez ; rien d'autre n'est transmis."
   }
 }

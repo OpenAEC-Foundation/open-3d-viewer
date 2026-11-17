@@ -112,9 +112,9 @@ enum RibbonPart {
 }
 
 /// From what width of the window the title bar names the products to come.
-const SOON_WIDTH: f32 = 1360.0;
+const SOON_WIDTH: f32 = 1410.0;
 /// The products to come, named on the switch but not to be chosen yet.
-const SOON: [&str; 2] = ["FM", "Environment"];
+const SOON: [&str; 3] = ["FM", "Environment", "GIS"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;

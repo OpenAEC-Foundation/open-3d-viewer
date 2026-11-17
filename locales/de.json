@@ -1106,6 +1106,23 @@
     "Select elements in the model to link this document to them.": "Wählen Sie Elemente im Modell aus, um dieses Dokument mit ihnen zu verknüpfen.",
     "Document": "Dokument",
     "Documents": "Dokumente",
-    "The documents of the project: status, revisions and links to the model": "Die Dokumente des Projekts: Status, Revisionen und Verknüpfungen mit dem Modell"
+    "The documents of the project: status, revisions and links to the model": "Die Dokumente des Projekts: Status, Revisionen und Verknüpfungen mit dem Modell",
+    "Parcels": "Flurstücke",
+    "Buildings": "Gebäude",
+    "Location": "Standort",
+    "Search": "Suchen",
+    "Address, place, postcode or coordinates": "Adresse, Ort, Postleitzahl oder Koordinaten",
+    "No place found": "Kein Ort gefunden",
+    "Location from the model": "Standort aus dem Modell",
+    "Surroundings": "Umgebung",
+    "The browser build does not fetch surroundings yet.": "Die Browserversion lädt noch keine Umgebung.",
+    "Radius": "Radius",
+    "Fetching the surroundings…": "Umgebung wird geladen…",
+    "Load surroundings": "Umgebung laden",
+    "Search a place first, or open a model with a georeference.": "Suchen Sie zuerst einen Ort oder öffnen Sie ein Modell mit Georeferenz.",
+    "Without a georeference the place of the first load lies at the zero point of the project.": "Ohne Georeferenz liegt der Ort des ersten Ladens im Nullpunkt des Projekts.",
+    "nothing found in this area": "nichts in diesem Gebiet gefunden",
+    "Not everything was loaded: the area holds more objects than are fetched at once.": "Nicht alles wurde geladen: Das Gebiet enthält mehr Objekte, als auf einmal abgerufen werden.",
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "Flurstücke und Gebäude stammen vom niederländischen Kataster über PDOK (nur Niederlande). Die Anfrage teilt PDOK mit, welchen Ort Sie betrachten; sonst wird nichts übermittelt."
   }
 }

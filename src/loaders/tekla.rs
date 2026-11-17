@@ -450,7 +450,7 @@ mod tests {
     fn drawing(kind: char, mark: &str, snapshot: Option<Snapshot>) -> Drawing {
         let record = DrawingRecord { id: 1, kind, mark: mark.into(), drawing_type: 1, file: "D1.dg".into(), name: "KOLOM".into() };
         let metadata = Some(Metadata { fields: vec![("Width".into(), "420".into()), ("Height".into(), "297".into())] });
-        Drawing { record, metadata, snapshot, note: None }
+        Drawing { record, metadata, snapshot, note: None, definition: None, definition_note: None }
     }
 
     #[test]

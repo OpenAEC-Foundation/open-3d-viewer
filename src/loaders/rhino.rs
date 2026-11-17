@@ -15,14 +15,16 @@
 //! Units are converted to metres; Rhino is Z up; a model far from zero (survey coordinates)
 //! moves to a local origin, kept in the project information. Point clouds are thinned out while
 //! drawing; blocks, meshes and points are drawn up to limits, so that a damaged or hostile file
-//! cannot exhaust memory or run for ever. What is left out (annotations other than texts, text
-//! dots, lights, hidden objects, objects on layouts) is counted in the project information.
+//! cannot exhaust memory or run for ever. What is left out (lights, hidden objects, objects on layouts) is
+//! counted in the project information. Clipping planes are drawn; the one that clips the
+//! perspective view is the section the model opens with.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
+use crate::section::SectionPlane;
 use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use threedm_read::{Attributes, File, Geometry, Material, Mesh, RhinoLayer, Uuid};
+use threedm_read::{Attributes, ClippingPlane, File, Geometry, Material, Mesh, RhinoLayer, Uuid};
 
 pub struct RhinoLoader;
 
@@ -44,13 +46,13 @@ impl Loader for RhinoLoader {
         let data = source.read()?;
         let file = threedm_read::read_with(&data, &threedm_read::Options { font: Some(crate::INTER_REGULAR) })?;
         progress.set(Phase::Convert);
-        let (layers, info) = convert(&file);
+        let (layers, info, section) = convert(&file);
         if layers.iter().all(|l| l.indices.is_empty() && l.lines.is_empty() && !(l.points && !l.positions.is_empty())) {
             // say why, e.g. polysurfaces saved without their render meshes
             let left_out = info.iter().find(|(k, _)| k == "Rhino objects left out").map_or("no objects", |(_, v)| v.as_str());
             return Err(format!("{}: nothing to draw in this Rhino file ({left_out})", source.name()));
         }
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: ProjectData { info, section, ..ProjectData::default() } })
     }
 }
 
@@ -270,6 +272,45 @@ impl<'f> Scene<'f> {
         Paint { color, material }
     }
 
+    /// What a clipping plane clips: the views (by name), how deep and which objects.
+    fn clip_props(&self, p: &ClippingPlane) -> Vec<(String, String)> {
+        let views: Vec<&str> = self.file.views.iter().filter(|v| p.enabled && p.viewports.contains(&v.id)).map(|v| v.name.as_str()).collect();
+        let mut out = vec![("Clips".to_string(), if views.is_empty() { "no view (off)".to_string() } else { views.join(", ") })];
+        if let Some(d) = p.depth {
+            out.push(("Clipping depth (m)".into(), format!("{}", d * self.file.meters)));
+        }
+        if let Some(s) = &p.selection {
+            let what = format!("{} objects, {} layers", s.objects.len(), s.layers.len());
+            out.push(("Clips only".into(), if s.except { format!("all but {what}") } else { what }));
+        }
+        out
+    }
+
+    /// The cut the file opens with: the first clipping plane in model space that clips a
+    /// perspective view of the file, as a section plane in display coordinates. Clipping planes
+    /// that clip to a depth or clip only some objects are not taken: the viewer's section plane
+    /// cuts everything beyond it.
+    fn section(&self) -> (Option<SectionPlane>, usize) {
+        let perspective: Vec<Uuid> = self.file.views.iter().filter(|v| v.perspective).map(|v| v.id).collect();
+        let planes: Vec<&ClippingPlane> = self
+            .file
+            .objects
+            .iter()
+            .filter(|o| o.attributes.mode != 3 && o.attributes.space != 2)
+            .filter_map(|o| match &o.geometry {
+                Geometry::ClippingPlane(p) if p.enabled && p.viewports.iter().any(|v| perspective.contains(v)) => Some(p),
+                _ => None,
+            })
+            .collect();
+        let origin = self.origin.unwrap_or(DVec3::ZERO);
+        let section = planes.iter().find(|p| p.depth.is_none() && p.selection.is_none()).and_then(|p| {
+            let normal = p.normal.normalize_or_zero();
+            let at = p.origin * self.file.meters - origin;
+            (normal != DVec3::ZERO && at.is_finite()).then(|| SectionPlane { normal: normal.as_vec3(), offset: normal.dot(at) as f32 })
+        });
+        (section, planes.len())
+    }
+
     /// Element properties: name, object type, layer, id, material, block, user text.
     fn props(&mut self, a: &Attributes, kind: &str, block: Option<&str>, user: &[(String, String)]) -> String {
         let mut p = serde_json::Map::new();
@@ -334,9 +375,16 @@ impl<'f> Scene<'f> {
                 geometry => {
                     let kind = match geometry {
                         Geometry::Meshes(_, kind) | Geometry::Points { kind, .. } | Geometry::Lines(_, kind) | Geometry::Drawing { kind, .. } => *kind,
+                        Geometry::ClippingPlane(_) => "Clipping plane",
                         _ => "",
                     };
-                    let props = self.props(a, kind, None, &object.user);
+                    let props = match geometry {
+                        Geometry::ClippingPlane(p) => {
+                            let user: Vec<_> = self.clip_props(p).into_iter().chain(object.user.iter().cloned()).collect();
+                            self.props(a, kind, None, &user)
+                        }
+                        _ => self.props(a, kind, None, &object.user),
+                    };
                     let color = self.paint(a, None).rgba();
                     let mut first = Some(props);
                     if self.draw(geometry, a.layer, root, color, id, &mut first) {
@@ -508,11 +556,16 @@ impl<'f> Scene<'f> {
                 let drew_meshes = self.draw(&Geometry::Meshes(meshes.clone(), kind), layer, xform, color, id, props);
                 drew_lines || drew_meshes
             }
+            Geometry::ClippingPlane(p) => {
+                // its rectangle, as Rhino draws it
+                let ring = p.corners.iter().chain(&p.corners[..1]).copied().collect();
+                self.draw(&Geometry::Lines(vec![ring], "Clipping plane"), layer, xform, color, id, props)
+            }
             _ => false,
         }
     }
 
-    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>) {
+    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>) {
         let mut layers: Vec<Layer> = std::mem::take(&mut self.meshes).into_values().chain(std::mem::take(&mut self.points).into_values()).collect();
         for layer in &mut layers {
             // one colour for the whole layer: no vertex colours
@@ -546,7 +599,16 @@ impl<'f> Scene<'f> {
         if !file.damaged.is_empty() {
             info.push(("Rhino unreadable records".into(), list(&file.damaged)));
         }
-        (layers, info)
+        let (section, clipping) = self.section();
+        if clipping > 0 {
+            let how = match (section.is_some(), clipping) {
+                (true, 1) => "1, the section plane".to_string(),
+                (true, n) => format!("{n}, the first the section plane"),
+                (false, n) => format!("{n}, not cut (to a depth or of some objects only)"),
+            };
+            info.push(("Rhino clipping planes of the perspective view".into(), how));
+        }
+        (layers, info, section)
     }
 }
 
@@ -591,6 +653,7 @@ fn plural(kind: &str) -> &'static str {
         "Leader" => "leaders",
         "Center mark" => "center marks",
         "Text dot" => "text dots",
+        "Clipping plane" => "clipping planes",
         _ => "objects",
     }
 }
@@ -665,7 +728,7 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
     }
 }
 
-fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>) {
+fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>) {
     let mut scene = Scene::new(file);
     scene.run();
     scene.finish()
@@ -1039,6 +1102,28 @@ mod tests {
         assert_eq!(mesh.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
         let cloud = &model.layers[1];
         assert_eq!(cloud.positions, [0.125, 0.0625, 1.0, 10.5, 20.25, 2.0]);
+    }
+
+    /// Clipping planes (`clipping.3dm`, from make_clipping.py, in millimetres): each is drawn as
+    /// its rectangle; the one that clips the Perspective view (normal up, at 5 mm) is the section
+    /// the file opens with, cutting away the top half of the 10 mm box; the one that clips the Top
+    /// view only to a depth, and the one that is off, are not.
+    #[test]
+    fn the_clipping_plane_of_the_perspective_view_is_the_section() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, info) = load("clipping.3dm", std::fs::read(dir.join("clipping.3dm")).unwrap());
+        assert_eq!(entry(&info, "Rhino objects drawn"), "3 clipping planes, 1 polysurfaces");
+        assert_eq!(entry(&info, "Rhino clipping planes of the perspective view"), "1, the section plane");
+        let plane = model.project.section.expect("a section");
+        assert!((plane.normal - glam::Vec3::Z).length() < 1e-6 && (plane.offset - 0.005).abs() < 1e-7, "{plane:?}");
+        assert!(plane.cuts(glam::Vec3::new(0.005, 0.005, 0.008)) && !plane.cuts(glam::Vec3::new(0.005, 0.005, 0.002)));
+        let props: Vec<serde_json::Value> = model.props.values().map(|p| serde_json::from_str(p).unwrap()).filter(|p: &serde_json::Value| p["Type"] == "Clipping plane").collect();
+        let clips = |name: &str| props.iter().find(|p| p["Name"] == name).unwrap_or_else(|| panic!("{name}"))["Clips"].as_str().unwrap().to_string();
+        assert_eq!((clips("Cut"), clips("Slab"), clips("Off")), ("Perspective".into(), "Top".into(), "no view (off)".into()));
+        assert!(props.iter().any(|p| p["Name"] == "Slab" && p["Clipping depth (m)"] == "0.002"));
+        // each a closed rectangle of four lines (two indices each)
+        let indices: usize = model.layers.iter().map(|l| l.line_elements.iter().map(|e| e.2 as usize).sum::<usize>()).sum();
+        assert_eq!(indices, 3 * 4 * 2);
     }
 
     /// Models made in Rhino 9 and saved without render meshes (`test-models/rhino`, from a script

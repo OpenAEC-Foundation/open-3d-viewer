@@ -341,6 +341,7 @@ fn tekla_class(name: &str, kind: &str, profile: &str) -> (&'static str, &'static
         "Slab" => return ("IFCSLAB", "FLOOR"),
         "Weld" => return ("IFCFASTENER", "WELD"),
         "Bolt group" => return ("IFCMECHANICALFASTENER", "BOLT"),
+        "Rebar group" | "Single rebar" => return ("IFCREINFORCINGBAR", "NOTDEFINED"),
         "Beam" | "Polybeam" if bracing => return ("IFCMEMBER", "BRACE"),
         "Beam" | "Polybeam" => return ("IFCBEAM", "BEAM"),
         _ => {}
@@ -453,7 +454,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     };
     let (class, predefined) = match (format, get("Type")) {
         // Rhino's drafting: annotations
-        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark")) => ("IFCANNOTATION", "NOTDEFINED"),
+        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark" | "Clipping plane")) => ("IFCANNOTATION", "NOTDEFINED"),
         _ => (class, predefined),
     };
     let rhino = format == "Rhino";
@@ -1094,6 +1095,8 @@ mod tests {
         assert_eq!(tekla_class("POER", "Pad footing", "1500*1500"), ("IFCFOOTING", "PAD_FOOTING"));
         assert_eq!(tekla_class("FUNDERINGSBALK", "Strip footing", "600*800"), ("IFCFOOTING", "STRIP_FOOTING"));
         assert_eq!(tekla_class("WELD", "Weld", ""), ("IFCFASTENER", "WELD"));
+        assert_eq!(tekla_class("BEUGEL", "Rebar group", ""), ("IFCREINFORCINGBAR", "NOTDEFINED"));
+        assert_eq!(tekla_class("STAAF", "Single rebar", ""), ("IFCREINFORCINGBAR", "NOTDEFINED"));
         // a strip of plate a connection made as a column or beam
         assert_eq!(tekla_class("PLAAT", "Column", "PL10*150"), ("IFCPLATE", "NOTDEFINED"));
         assert_eq!(tekla_class("SCHOTJE", "Beam", "FL80*10"), ("IFCPLATE", "NOTDEFINED"));

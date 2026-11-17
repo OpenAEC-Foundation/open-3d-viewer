@@ -5428,7 +5428,7 @@ dependencies = [
 [[package]]
 name = "tekla-core"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=927475e81537c66ac9b8d3cff2ed2abef504d9be#927475e81537c66ac9b8d3cff2ed2abef504d9be"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5437,7 +5437,7 @@ dependencies = [
 [[package]]
 name = "tekla-model"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=927475e81537c66ac9b8d3cff2ed2abef504d9be#927475e81537c66ac9b8d3cff2ed2abef504d9be"
 dependencies = [
  "serde",
 ]
@@ -5445,7 +5445,7 @@ dependencies = [
 [[package]]
 name = "tekla-read"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=7f724b69382af188ed830956a45f106c80c3adb9#7f724b69382af188ed830956a45f106c80c3adb9"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=927475e81537c66ac9b8d3cff2ed2abef504d9be#927475e81537c66ac9b8d3cff2ed2abef504d9be"
 dependencies = [
  "earcutr",
  "glam 0.30.10",
@@ -5519,7 +5519,7 @@ dependencies = [
 [[package]]
 name = "threedm-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=17ff39732611d84590f60d888dc46b963cc1c1ff#17ff39732611d84590f60d888dc46b963cc1c1ff"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=51c267f5475946bfa87e8d4f2be779b2c6139d83#51c267f5475946bfa87e8d4f2be779b2c6139d83"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5528,7 +5528,7 @@ dependencies = [
 [[package]]
 name = "threedm-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=17ff39732611d84590f60d888dc46b963cc1c1ff#17ff39732611d84590f60d888dc46b963cc1c1ff"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=51c267f5475946bfa87e8d4f2be779b2c6139d83#51c267f5475946bfa87e8d4f2be779b2c6139d83"
 dependencies = [
  "glam 0.30.10",
  "threedm-core",
@@ -5537,7 +5537,7 @@ dependencies = [
 [[package]]
 name = "threedm-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=17ff39732611d84590f60d888dc46b963cc1c1ff#17ff39732611d84590f60d888dc46b963cc1c1ff"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=51c267f5475946bfa87e8d4f2be779b2c6139d83#51c267f5475946bfa87e8d4f2be779b2c6139d83"
 dependencies = [
  "earcutr",
  "glam 0.30.10",

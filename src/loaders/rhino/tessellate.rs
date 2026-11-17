@@ -367,18 +367,18 @@ fn finite(v: &[f64]) -> R<()> {
 /// A curve written with `WriteObject`; `None` for a null object or one of another class.
 pub(super) fn read_curve_object(c: &mut Cur<'_>, depth: usize) -> R<Option<Curve>> {
     match c.object()? {
-        Some(o) => read_curve(o.class, o.data, depth),
+        Some(mut o) => read_curve(o.class, &mut o.data, depth),
         None => Ok(None),
     }
 }
 
-fn read_curve(class: Uuid, mut c: Cur<'_>, depth: usize) -> R<Option<Curve>> {
+fn read_curve(class: Uuid, c: &mut Cur<'_>, depth: usize) -> R<Option<Curve>> {
     if depth > MAX_CURVE_DEPTH {
         return err("polycurves nested too deep");
     }
     if class == ON_LINE_CURVE {
         c.version()?;
-        let (from, to, t) = (read_point(&mut c)?, read_point(&mut c)?, read_interval(&mut c)?);
+        let (from, to, t) = (read_point(c)?, read_point(c)?, read_interval(c)?);
         finite(&[from.x, from.y, from.z, to.x, to.y, to.z, t[0], t[1]])?;
         return Ok(Some(Curve::Line { from, to, t }));
     }
@@ -387,21 +387,21 @@ fn read_curve(class: Uuid, mut c: Cur<'_>, depth: usize) -> R<Option<Curve>> {
         if major != 1 {
             return Ok(None);
         }
-        let origin = read_point(&mut c)?;
-        let x = read_point(&mut c)?;
-        let y = read_point(&mut c)?;
+        let origin = read_point(c)?;
+        let x = read_point(c)?;
+        let y = read_point(c)?;
         c.take(24 + 32)?; // z axis, plane equation
         let radius = c.f64()?;
         c.take(72)?; // three points on the circle
-        let angle = read_interval(&mut c)?;
-        let t = read_interval(&mut c)?;
+        let angle = read_interval(c)?;
+        let t = read_interval(c)?;
         finite(&[origin.x, origin.y, origin.z, x.x, x.y, x.z, y.x, y.y, y.z, radius, angle[0], angle[1], t[0], t[1]])?;
         return Ok(Some(Curve::Arc { origin, x, y, radius, angle, t }));
     }
     if class == ON_POLYLINE_CURVE {
         c.version()?;
         let n = c.count(24)?;
-        let points = (0..n).map(|_| read_point(&mut c)).collect::<R<Vec<_>>>()?;
+        let points = (0..n).map(|_| read_point(c)).collect::<R<Vec<_>>>()?;
         let m = c.count(8)?;
         let t = (0..m).map(|_| c.f64()).collect::<R<Vec<_>>>()?;
         if n < 2 || m != n || t.windows(2).any(|w| !(w[1] >= w[0])) || points.iter().any(|p| !p.is_finite()) {
@@ -453,7 +453,7 @@ fn read_curve(class: Uuid, mut c: Cur<'_>, depth: usize) -> R<Option<Curve>> {
         let t = (0..n).map(|_| c.f64()).collect::<R<Vec<_>>>()?;
         let mut segments = Vec::with_capacity(count);
         for _ in 0..count {
-            match read_curve_object(&mut c, depth + 1)? {
+            match read_curve_object(c, depth + 1)? {
                 Some(s) => segments.push(s),
                 None => return Ok(None),
             }
@@ -596,7 +596,8 @@ impl Surface {
 
 fn read_surface_object(c: &mut Cur<'_>) -> R<Option<Surface>> {
     let Some(o) = c.object()? else { return Ok(None) };
-    read_surface(o.class, o.data)
+    let mut data = o.data;
+    read_surface(o.class, &mut data)
 }
 
 /// Whether objects of this class are surfaces the viewer can evaluate.
@@ -607,7 +608,8 @@ pub(super) fn is_surface(class: Uuid) -> bool {
 /// A surface object of its own (not the face of a polysurface), as programs writing 3dm files
 /// with openNURBS store one: meshed over its whole domain.
 pub(super) fn surface_object(class: Uuid, data: Cur<'_>, vertices: &mut usize) -> R<Option<Mesh>> {
-    let Some(surface) = read_surface(class, data)? else { return Ok(None) };
+    let mut data = data;
+    let Some(surface) = read_surface(class, &mut data)? else { return Ok(None) };
     let Some(mesh) = face_mesh(&surface, Vec::new(), false) else { return Ok(None) };
     if mesh.positions.len() > super::MAX_VERTICES - *vertices {
         return Err(super::TOO_MANY_VERTICES.into());
@@ -616,18 +618,18 @@ pub(super) fn surface_object(class: Uuid, data: Cur<'_>, vertices: &mut usize) -
     Ok(Some(mesh))
 }
 
-fn read_surface(class: Uuid, mut c: Cur<'_>) -> R<Option<Surface>> {
+fn read_surface(class: Uuid, c: &mut Cur<'_>) -> R<Option<Surface>> {
     if class == ON_PLANE_SURFACE {
         let (major, minor) = c.version()?;
         if major != 1 {
             return Ok(None);
         }
-        let origin = read_point(&mut c)?;
-        let x = read_point(&mut c)?;
-        let y = read_point(&mut c)?;
+        let origin = read_point(c)?;
+        let x = read_point(c)?;
+        let y = read_point(c)?;
         c.take(24 + 32)?; // z axis, plane equation
-        let domain = [read_interval(&mut c)?, read_interval(&mut c)?];
-        let extents = if minor >= 1 { [read_interval(&mut c)?, read_interval(&mut c)?] } else { domain };
+        let domain = [read_interval(c)?, read_interval(c)?];
+        let extents = if minor >= 1 { [read_interval(c)?, read_interval(c)?] } else { domain };
         finite(&[origin.x, origin.y, origin.z, x.x, x.y, x.z, y.x, y.y, y.z])?;
         finite(domain.as_flattened())?;
         finite(extents.as_flattened())?;
@@ -691,16 +693,16 @@ fn read_surface(class: Uuid, mut c: Cur<'_>) -> R<Option<Surface>> {
         if major != 1 && major != 2 {
             return Ok(None);
         }
-        let from = read_point(&mut c)?;
-        let to = read_point(&mut c)?;
-        let angle = read_interval(&mut c)?;
-        let t = if major == 2 { read_interval(&mut c)? } else { [angle[0].min(angle[1]), angle[0].max(angle[1])] };
+        let from = read_point(c)?;
+        let to = read_point(c)?;
+        let angle = read_interval(c)?;
+        let t = if major == 2 { read_interval(c)? } else { [angle[0].min(angle[1]), angle[0].max(angle[1])] };
         c.take(48)?; // bounding box
         let transposed = c.i32()? != 0;
         if !c.bool()? {
             return Ok(None);
         }
-        let Some(curve) = read_curve_object(&mut c, 0)? else { return Ok(None) };
+        let Some(curve) = read_curve_object(c, 0)? else { return Ok(None) };
         let axis = (to - from).normalize_or_zero();
         finite(&[from.x, from.y, from.z, angle[0], angle[1], t[0], t[1]])?;
         if axis == DVec3::ZERO || !(t[1] > t[0]) {
@@ -710,9 +712,9 @@ fn read_surface(class: Uuid, mut c: Cur<'_>) -> R<Option<Surface>> {
     }
     if ON_SUM_SURFACE.contains(&class) {
         c.version()?;
-        let base = read_point(&mut c)?;
+        let base = read_point(c)?;
         c.take(48)?; // bounding box
-        let (Some(a), Some(b)) = (read_curve_object(&mut c, 0)?, read_curve_object(&mut c, 0)?) else { return Ok(None) };
+        let (Some(a), Some(b)) = (read_curve_object(c, 0)?, read_curve_object(c, 0)?) else { return Ok(None) };
         finite(&[base.x, base.y, base.z])?;
         return Ok(Some(Surface::Sum { base, curves: Box::new([a, b]) }));
     }
@@ -866,9 +868,6 @@ fn read_faces(mut c: Cur<'_>) -> R<Vec<Face>> {
     Ok(out)
 }
 
-/// Meshes of the faces of an `ON_Brep` from its chunks (2d curves, 3d curves, surfaces,
-/// vertices, edges, trims, loops, faces), one per face, with the face colours. Faces that cannot
-/// be meshed are left out. `vertices` counts the mesh vertices read or made so far.
 /// A side of an untrimmed face: a trim along one edge of the domain, straight in the parameter
 /// plane, from `start` to `end`.
 struct Side {
@@ -926,15 +925,113 @@ fn untrimmed_sides(lp: &Loop, trims: &[Trim], curves: &[Option<Curve>], dom: [[f
     (0..4).all(|s| out.iter().any(|x| x.side == s)).then_some(out)
 }
 
+/// The parts of an `ON_Brep` the meshing uses.
+struct BrepParts {
+    curves: Vec<Option<Curve>>,
+    curves3: Vec<Option<Curve>>,
+    surfaces: Vec<Option<Surface>>,
+    points: Vec<DVec3>,
+    edges: Vec<Edge>,
+    trims: Vec<Trim>,
+    loops: Vec<Loop>,
+    faces: Vec<Face>,
+}
+
+/// Meshes of the faces of an `ON_Brep` from its chunks (2d curves, 3d curves, surfaces,
+/// vertices, edges, trims, loops, faces), one per face, with the face colours. Faces that cannot
+/// be meshed are left out. `vertices` counts the mesh vertices read or made so far.
 pub(super) fn brep(parts: &[Cur<'_>; 8], size: f64, colors: &[Option<[u8; 4]>], vertices: &mut usize) -> R<Vec<Mesh>> {
-    let curves = read_array(parts[0].clone(), |c| read_curve_object(c, 0))?;
-    let curves3 = read_array(parts[1].clone(), |c| read_curve_object(c, 0)).unwrap_or_default();
-    let surfaces = read_array(parts[2].clone(), read_surface_object)?;
-    let points = read_vertices(parts[3].clone()).unwrap_or_default();
-    let edges = read_edges(parts[4].clone()).unwrap_or_default();
-    let trims = read_trims(parts[5].clone())?;
-    let loops = read_loops(parts[6].clone())?;
-    let faces = read_faces(parts[7].clone())?;
+    let parts = BrepParts {
+        curves: read_array(parts[0].clone(), |c| read_curve_object(c, 0))?,
+        curves3: read_array(parts[1].clone(), |c| read_curve_object(c, 0)).unwrap_or_default(),
+        surfaces: read_array(parts[2].clone(), read_surface_object)?,
+        points: read_vertices(parts[3].clone()).unwrap_or_default(),
+        edges: read_edges(parts[4].clone()).unwrap_or_default(),
+        trims: read_trims(parts[5].clone())?,
+        loops: read_loops(parts[6].clone())?,
+        faces: read_faces(parts[7].clone())?,
+    };
+    mesh_brep(&parts, size, colors, vertices)
+}
+
+/// `ON_Brep::ReadOld200`: a polysurface as Rhino 2 wrote it (chunk version 2), after its
+/// version: its trims' 2d curves, its edges' 3d curves and its faces' NURBS surfaces inline,
+/// then its faces with their loops and trims, then the render meshes of its faces (when they
+/// are saved, `meshes` holds them). Returns the meshes of the faces and the face count.
+pub(super) fn brep_v2(c: &mut Cur<'_>, vertices: &mut usize, meshes: &mut dyn FnMut(&mut Cur<'_>, &mut usize) -> R<Option<Mesh>>) -> R<(Vec<Mesh>, usize)> {
+    let [face_count, edge_count, loop_count, trim_count] = [c.i32()?, c.i32()?, c.i32()?, c.i32()?];
+    if face_count < 1 || edge_count < 1 || loop_count < 1 || trim_count < 1 || [face_count, edge_count, loop_count, trim_count].iter().any(|&n| n as usize > c.left()) {
+        return err("a Rhino 2 polysurface of an unknown form");
+    }
+    c.i32()?; // outer flag
+    let low = read_point(c)?;
+    let high = read_point(c)?;
+    let poly = ON_POLY_CURVE[0];
+    let curves = (0..trim_count).map(|_| read_curve(poly, c, 0)).collect::<R<Vec<_>>>()?;
+    let curves3 = (0..edge_count).map(|_| read_curve(poly, c, 0)).collect::<R<Vec<_>>>()?;
+    let surfaces = (0..face_count).map(|_| read_surface(ON_NURBS_SURFACE[0], c)).collect::<R<Vec<_>>>()?;
+    let mut faces = Vec::new();
+    let mut loops = Vec::new();
+    let mut trims = Vec::new();
+    for f in 0..face_count {
+        c.i32()?; // index
+        c.i32()?; // material
+        let reversed = c.i32()? != 0;
+        c.i32()?; // type
+        c.take(48)?; // bounding box
+        let loop_total = c.count(28)?;
+        let mut face_loops = Vec::with_capacity(loop_total);
+        for _ in 0..loop_total {
+            c.i32()?; // index
+            let kind = match c.i32()? {
+                0 => 1,
+                1 => 2,
+                -1 => 3,
+                _ => 0,
+            };
+            c.take(32)?; // 2d bounding box
+            let n = c.count(33)?;
+            let mut loop_trims = Vec::with_capacity(n);
+            for _ in 0..n {
+                let index = trims.len() as i32;
+                c.i32()?; // legacy index
+                c.i32()?; // twin
+                c.u8()?; // whether it kept its edge
+                let edge = c.i32()?;
+                let against = c.i32()? != 0;
+                c.take(8 + 16)?; // continuity, monotonicity, tolerances
+                let curve = usize::try_from(index).ok().and_then(|i| curves.get(i)).and_then(Option::as_ref);
+                let proxy = curve.map_or([0.0, 1.0], Curve::domain);
+                trims.push(Trim { curve: index, proxy, reversed: false, edge: if edge >= 0 && edge < edge_count { edge } else { -1 }, against, vertices: [-1, -1] });
+                loop_trims.push(index);
+            }
+            face_loops.push(loops.len() as i32);
+            loops.push(Loop { trims: loop_trims, kind });
+        }
+        faces.push(Face { loops: face_loops, surface: f, reversed });
+    }
+    // the render meshes, when saved
+    let mut saved = Vec::new();
+    for _ in 0..face_count {
+        if c.left() == 0 {
+            break;
+        }
+        if c.bool()? {
+            if let Some(mesh) = meshes(c, vertices)? {
+                saved.push(mesh);
+            }
+        }
+    }
+    if !saved.is_empty() {
+        return Ok((saved, face_count as usize));
+    }
+    let edges = curves3.iter().enumerate().map(|(i, c)| Edge { curve: i as i32, proxy: c.as_ref().map_or([0.0, 1.0], Curve::domain), reversed: false, vertices: [-1, -1] }).collect();
+    let parts = BrepParts { curves, curves3, surfaces, points: Vec::new(), edges, trims, loops, faces };
+    Ok((mesh_brep(&parts, (high - low).length(), &[], vertices)?, face_count as usize))
+}
+
+fn mesh_brep(parts: &BrepParts, size: f64, colors: &[Option<[u8; 4]>], vertices: &mut usize) -> R<Vec<Mesh>> {
+    let BrepParts { curves, curves3, surfaces, points, edges, trims, loops, faces } = parts;
     let tol = tolerance(size);
     fn get<T>(v: &[T], i: i32) -> Option<usize> {
         usize::try_from(i).ok().filter(|&i| i < v.len())

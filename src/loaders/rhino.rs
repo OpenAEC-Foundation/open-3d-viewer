@@ -1,4 +1,4 @@
-//! Rhino 3D models (`.3dm`), Rhino 4 to 9 (archive versions 4, 5, 50, 60, 70, 80 and 90). The
+//! Rhino 3D models (`.3dm`), Rhino 2 to 9 (archive versions 2, 3, 4, 5, 50, 60, 70, 80 and 90). The
 //! reader is written from McNeel's openNURBS source, which McNeel publishes as the reference for
 //! reading and writing 3dm files: the chunked archive (4- and 8-byte chunk lengths), the
 //! properties, settings, material, layer, block definition and object tables, and of each object
@@ -7,7 +7,8 @@
 //! What is drawn: meshes; the render meshes Rhino stores with polysurfaces (Breps), surfaces and
 //! extrusions (the analysis meshes when there are no render meshes), and when a file has none
 //! (saved by a script or another program, or with "save small") a mesh the viewer makes from the
-//! exact geometry, as Rhino does on opening it ([`tessellate`]); block instances with their
+//! exact geometry, as Rhino does on opening it ([`tessellate`]), Rhino 2's own polysurface
+//! layout included; block instances with their
 //! nested blocks and transforms; SubD objects by their limit surface ([`subd`]); point clouds
 //! and points as point layers. One layer per Rhino
 //! layer (its full path, `Parent::Child`), in the layer colour, hidden when the layer or one of
@@ -1189,8 +1190,25 @@ fn read_mesh(c: &mut Cur<'_>, vertices: &mut usize) -> R<Mesh> {
 /// the face count.
 fn read_brep(c: &mut Cur<'_>, vertices: &mut usize) -> R<(Vec<Mesh>, usize)> {
     let (major, minor) = c.version()?;
+    if major == 2 {
+        // Rhino 2: its own layout; a polysurface that cannot be read is left out
+        let mut mesh = |c: &mut Cur<'_>, vertices: &mut usize| -> R<Option<Mesh>> {
+            Ok(match c.object()? {
+                Some(o) if o.class == ON_MESH => {
+                    let mut d = o.data;
+                    Some(read_mesh(&mut d, vertices)?)
+                }
+                _ => None,
+            })
+        };
+        let _ = minor;
+        return match tessellate::brep_v2(c, vertices, &mut mesh) {
+            Err(e) if e == TOO_MANY_VERTICES => Err(e),
+            r => Ok(r.unwrap_or_default()),
+        };
+    }
     if major != 3 {
-        // Rhino 1 and 2 trimmed surfaces
+        // Rhino 1 trimmed surfaces
         return Ok((Vec::new(), 0));
     }
     // 2d curves, 3d curves, surfaces, vertices, edges, trims, loops, faces
@@ -2783,5 +2801,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A polysurface as Rhino 2 wrote it (`ON_Brep::ReadOld200`): its curves and surface inline,
+    /// its trims numbered in order. A unit square meshes into a face of area 1.
+    #[test]
+    fn rhino2_polysurfaces_are_read() {
+        let w = W { big: false };
+        let line_class = Uuid::parse("4ED7D4DB-E947-11d3-BFE5-0010830122F0");
+        // ON_PolyCurve inline, of one line
+        let poly = |a: [f64; 3], b: [f64; 3]| {
+            let line = cat(&[&[0x10], &f64s(&a), &f64s(&b), &f64s(&[0.0, 1.0]), &i32b(3)]);
+            cat(&[&[0x10], &i32b(1), &i32b(0), &i32b(0), &[0; 48], &i32b(2), &f64s(&[0.0, 1.0]), &w.object(line_class, &line, &[])])
+        };
+        let square = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut data = cat(&[&i32b(1), &i32b(4), &i32b(1), &i32b(4), &i32b(1), &[0; 48]]);
+        for k in 0..4 {
+            data.extend(poly(square[k], square[(k + 1) % 4])); // trims in the parameter plane
+        }
+        for k in 0..4 {
+            data.extend(poly(square[k], square[(k + 1) % 4])); // edges
+        }
+        // ON_NurbsSurface inline: a bilinear patch over the unit square, u along x
+        let cvs: Vec<f64> = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]].iter().flat_map(|[x, y]| [*x, *y, 0.0]).collect();
+        data.extend(cat(&[&[0x10], &i32b(3), &i32b(0), &i32b(2), &i32b(2), &i32b(2), &i32b(2), &i32b(0), &i32b(0), &[0; 48], &i32b(2), &f64s(&[0.0, 1.0]), &i32b(2), &f64s(&[0.0, 1.0]), &i32b(4), &f64s(&cvs)]));
+        // the face, its outer loop and its trims
+        data.extend(cat(&[&i32b(0), &i32b(0), &i32b(0), &i32b(0), &[0; 48], &i32b(1), &i32b(0), &i32b(0), &[0; 32], &i32b(4)]));
+        for k in 0..4 {
+            data.extend(cat(&[&i32b(k), &i32b(-1), &[1], &i32b(k), &i32b(0), &i32b(0), &i32b(0), &f64s(&[0.0, 0.0])]));
+        }
+        data.push(0); // no render mesh
+        let mut c = Cur { data: &data, pos: 0, v: Versions { archive: 2, opennurbs: 0 } };
+        let mut vertices = 0;
+        let (meshes, faces) = super::tessellate::brep_v2(&mut c, &mut vertices, &mut |_, _| Ok(None)).unwrap();
+        assert_eq!((meshes.len(), faces), (1, 1));
+        let m = &meshes[0];
+        let p = |i: u32| DVec3::from(m.positions[i as usize].map(f64::from));
+        let area: f64 = m.faces.iter().map(|f| 0.5 * (p(f[1]) - p(f[0])).cross(p(f[2]) - p(f[0])).length()).sum();
+        assert!((area - 1.0).abs() < 1e-9, "{area}");
+        assert_eq!(c.left(), 0, "the whole record is read");
     }
 }

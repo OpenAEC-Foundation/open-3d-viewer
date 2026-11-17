@@ -1509,6 +1509,8 @@ impl App {
         // the product shown stays the one it was
         self.modeller = modeller::Modeller { in_modeller: self.modeller.in_modeller, ..modeller::Modeller::default() };
         self.set_scene(model.clone());
+        // the cut the file opens with (Rhino: the clipping plane of its perspective view)
+        self.plane = model.project.section;
         // the file with its levels is where the modelled project's history starts
         self.settle_modelled();
         self.adopt_elements(&model);

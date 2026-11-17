@@ -410,7 +410,7 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
     };
     let (class, predefined) = match (format, get("Type")) {
         // Rhino's drafting: annotations
-        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark")) => ("IFCANNOTATION", "NOTDEFINED"),
+        ("Rhino", Some("Text" | "Hatch" | "Curve" | "Dimension" | "Leader" | "Center mark" | "Clipping plane")) => ("IFCANNOTATION", "NOTDEFINED"),
         _ => (class, predefined),
     };
     let rhino = format == "Rhino";

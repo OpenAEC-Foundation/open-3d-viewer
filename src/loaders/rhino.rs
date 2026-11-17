@@ -2598,4 +2598,49 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("
 "));
     }
+
+    /// A Rhino 9 file with what a model usually holds, saved as Rhino saves it (with render
+    /// meshes) and without them: layers and sublayers, a hidden and a locked layer, colours by
+    /// layer, object and parent, a basic material with transparency, a PBR material, a layer
+    /// material, colours per face, user text, an extrusion, a sphere, a mesh with vertex colours,
+    /// a block, points, and what the viewer leaves out (a hidden object, a SubD, a curve, a text,
+    /// a hatch). Both read the same.
+    #[test]
+    fn rhino9_layers_materials_colours_and_user_text() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        for (file, meshed) in [("everything_meshes.3dm", 1), ("everything_small.3dm", 13)] {
+            let (model, info) = load(file, std::fs::read(dir.join(file)).unwrap());
+            assert_eq!(entry(&info, "Rhino file version"), "Rhino 9 (archive version 90)");
+            assert_eq!(entry(&info, "Rhino objects drawn"), "1 block instances, 1 extrusions, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces", "{file}");
+            assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects (no mesh in the file), 1 annotations, 1 curves, 1 hatches, 1 hidden objects", "{file}");
+            // the box on the hidden layer, which Rhino left without a mesh, is meshed by the viewer
+            assert_eq!(entry(&info, "Rhino objects meshed by the viewer"), format!("{meshed} (saved without a render mesh)"), "{file}");
+            let layer = |name: &str| model.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{file}: no layer {name}"));
+            assert_eq!(layer("Walls::Interior").color, [40.0 / 255.0, 40.0 / 255.0, 200.0 / 255.0]);
+            assert!(layer("Hidden layer").hidden && !layer("Locked layer").hidden);
+            assert_eq!(layer("Misc (points)").point_count(), 101);
+            // element name -> its colours and properties
+            let mut elements: HashMap<String, (Vec<[u8; 4]>, serde_json::Value)> = HashMap::new();
+            for l in &model.layers {
+                for &(id, start, count) in &l.elements {
+                    let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                    let mut colours: Vec<[u8; 4]> = l.indices[start as usize..(start + count) as usize].iter().filter_map(|&i| l.colors.as_ref().map(|c| c[i as usize])).collect();
+                    colours.sort();
+                    colours.dedup();
+                    elements.insert(props["Name"].as_str().unwrap_or_default().to_string(), (colours, props));
+                }
+            }
+            let colours = |name: &str| elements.get(name).unwrap_or_else(|| panic!("{file}: no {name}")).0.clone();
+            assert_eq!(colours("Box object colour"), [[250, 200, 0, 255]]);
+            assert_eq!(colours("Box basic material"), [[220, 30, 30, 128]], "half transparent");
+            assert_eq!(colours("Box PBR material"), [[30, 80, 220, 255]]);
+            assert_eq!(colours("Box layer material"), [[40, 180, 60, 255]]);
+            assert_eq!(colours("Box face colours").len(), 6);
+            assert_eq!(colours("Crate by parent"), [[0, 200, 200, 255]]);
+            assert!(colours("Coloured mesh").len() > 100);
+            let props = &elements["Box user text"].1;
+            assert_eq!((props["Fire rating"].as_str(), props["Supplier"].as_str()), (Some("60 min"), Some("ACME")));
+            assert!(!elements.contains_key("Hidden box"));
+        }
+    }
 }

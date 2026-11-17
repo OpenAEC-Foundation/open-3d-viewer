@@ -16,11 +16,13 @@
 //! shaded; `invisible` nodes are left out. Point clouds (`points::array`, `points::base64`) are
 //! drawn as points. Metres, Z up. Curves (`usd::usdgeom::basiscurves`), `pcd::base64` clouds,
 //! textures, georeferencing and imports from the web (the schema files on ifcx.dev) are not read.
+//!
+//! A file is parsed into the document model of `ifcx-core` (ifcx-rs), shared with IFCX Explorer;
+//! the composition and the scene, storeys and `o3v::` views are this viewer's own.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
 use crate::model::{Layer, ProjectData};
 use glam::{DMat4, DVec3};
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -60,40 +62,13 @@ impl Loader for IfcxLoader {
     }
 }
 
-#[derive(Deserialize)]
-struct File {
-    #[serde(default)]
-    header: Option<Header>,
-    #[serde(default)]
-    imports: Option<Vec<Import>>,
-    data: Vec<Node>,
-}
+/// An IFCX file as `ifcx-core` reads it: its header, imports and nodes (`data`).
+type File = ifcx_core::IfcxDocument;
 
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct Header {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    ifcx_version: Option<String>,
-    #[serde(default)]
-    author: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Import {
-    uri: String,
-}
-
-#[derive(Deserialize)]
-struct Node {
-    path: String,
-    #[serde(default)]
-    children: Option<BTreeMap<String, Option<String>>>,
-    #[serde(default)]
-    inherits: Option<BTreeMap<String, Option<String>>>,
-    #[serde(default)]
-    attributes: Option<serde_json::Map<String, Value>>,
+/// What a header gives, where it gives it (`ifcx-core` reads what a file leaves out as empty).
+fn given(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// One read file and its name.
@@ -105,7 +80,7 @@ struct Read {
 fn parse(source: &Source) -> Result<File, String> {
     let data = source.read()?;
     let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data);
-    serde_json::from_slice::<File>(data).map_err(|e| format!("IFCX: {} is not an IFCX file ({e})", source.name()))
+    ifcx_core::parser::from_slice(data).map_err(|e| format!("IFCX: {} is not an IFCX file ({e})", source.name()))
 }
 
 /// Reads a file after the local files it imports (they are layered under it).
@@ -116,7 +91,7 @@ fn read_with_imports(source: &Source, files: &mut Vec<Read>, seen: &mut HashSet<
     }
     let file = parse(source)?;
     if let Some(dir) = source.path().and_then(|p| p.parent()) {
-        for import in file.imports.iter().flatten() {
+        for import in &file.imports {
             let uri = import.uri.trim();
             if uri.contains("://") || !uri.to_ascii_lowercase().ends_with(".ifcx") {
                 continue;
@@ -578,20 +553,20 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     let mut used = HashSet::new();
     for read in files {
         for node in &read.file.data {
-            let targets = node.children.iter().flatten().filter_map(|(_, t)| t.as_ref());
-            let targets = targets.chain(node.inherits.iter().flatten().filter_map(|(_, t)| t.as_ref()));
+            let targets = node.children.values().flatten();
+            let targets = targets.chain(node.inherits.values().flatten());
             used.extend(targets.map(|t| t.split('/').next().unwrap_or(t).to_string()));
             let entry = flat.entry(node.path.clone()).or_default();
-            for (name, child) in node.children.iter().flatten() {
+            for (name, child) in &node.children {
                 entry.children.insert(name.clone(), child.clone());
             }
-            for (name, target) in node.inherits.iter().flatten() {
+            for (name, target) in &node.inherits {
                 match target {
                     Some(target) => entry.inherits.insert(name.clone(), target.clone()),
                     None => entry.inherits.remove(name),
                 };
             }
-            for (key, value) in node.attributes.iter().flatten() {
+            for (key, value) in &node.attributes {
                 entry.attributes.insert(key.clone(), Rc::new(value.clone()));
             }
         }
@@ -629,19 +604,19 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
         }
     }
     layers.extend(scene.clouds.into_values());
-    let header = files.last().and_then(|r| r.file.header.as_ref());
+    let header = files.last().map(|r| &r.file.header);
     let mut info = vec![
-        ("IFCX version".to_string(), header.and_then(|h| h.ifcx_version.clone()).unwrap_or_default()),
+        ("IFCX version".to_string(), header.and_then(|h| given(&h.ifcx_version)).unwrap_or_default()),
         ("IFCX files".to_string(), files.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", ")),
         ("IFCX elements".to_string(), scene.elements.to_string()),
     ];
-    if let Some(id) = files.first().and_then(|r| r.file.header.as_ref()?.id.clone()) {
+    if let Some(id) = files.first().and_then(|r| given(&r.file.header.id)) {
         info.push(("IFCX id".into(), id));
     }
-    if let Some(author) = header.and_then(|h| h.author.clone()) {
+    if let Some(author) = header.and_then(|h| given(&h.author)) {
         info.push(("IFCX author".into(), author));
     }
-    let remote: usize = files.iter().flat_map(|r| r.file.imports.iter().flatten()).filter(|i| i.uri.contains("://")).count();
+    let remote: usize = files.iter().flat_map(|r| &r.file.imports).filter(|i| i.uri.contains("://")).count();
     if remote > 0 {
         info.push(("IFCX imports not read (web)".into(), remote.to_string()));
     }
@@ -656,7 +631,7 @@ fn convert(files: &[Read]) -> Result<Loaded, String> {
     let mut drawings: Vec<(String, Value)> = Vec::new();
     for node in files.iter().flat_map(|r| &r.file.data) {
         let own: serde_json::Map<String, Value> =
-            node.attributes.iter().flatten().filter(|(k, _)| k.starts_with("o3v::")).map(|(k, v)| (k.clone(), v.clone())).collect();
+            node.attributes.iter().filter(|(k, _)| k.starts_with("o3v::")).map(|(k, v)| (k.clone(), v.clone())).collect();
         if own.is_empty() {
             continue;
         }

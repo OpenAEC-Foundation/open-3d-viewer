@@ -673,12 +673,47 @@ fn earth(ground: HashMap<(usize, Option<u64>), Vec<Segment>>, closed: &[Fill], b
         }
         let base = base.unwrap_or_else(|| segments.iter().flatten().map(|p| p[1]).fold(f32::INFINITY, f32::min) - EARTH);
         // under each piece of the line a strip down to the base; a piece seen end on has none
-        let loops: Vec<Vec<[f32; 2]>> = segments.iter().filter(|[a, b]| (a[0] - b[0]).abs() > 1e-5 && a[1].min(b[1]) > base).map(|&[a, b]| vec![a, b, [b[0], base], [a[0], base]]).collect();
+        let mut loops: Vec<Vec<[f32; 2]>> = segments.iter().filter(|[a, b]| (a[0] - b[0]).abs() > 1e-5 && a[1].min(b[1]) > base).map(|&[a, b]| vec![a, b, [b[0], base], [a[0], base]]).collect();
+        // a pit cut in the terrain (a building pad): between its two walls, which are seen end on,
+        // the earth starts at their foot
+        let mut walls: Vec<[f32; 2]> = segments.iter().filter(|[a, b]| (a[0] - b[0]).abs() <= 1e-5 && (a[1] - b[1]).abs() > 1e-5).map(|[a, b]| [a[0], a[1].min(b[1])]).collect();
+        walls.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        walls.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-4);
+        let covered = |u: f32| segments.iter().any(|[a, b]| (a[0] - b[0]).abs() > 1e-5 && u > a[0].min(b[0]) && u < a[0].max(b[0]));
+        for pair in walls.windows(2) {
+            let (left, right) = (pair[0], pair[1]);
+            let foot = left[1].max(right[1]);
+            if right[0] - left[0] > 1e-3 && foot > base && !covered((left[0] + right[0]) / 2.0) {
+                loops.push(vec![[left[0], foot], [right[0], foot], [right[0], base], [left[0], base]]);
+            }
+        }
         if !loops.is_empty() {
             fills.push(Fill { layer, element, loops, ..Fill::default() });
         }
     }
     fills
+}
+
+#[cfg(test)]
+mod earth_tests {
+    use super::*;
+
+    #[test]
+    fn the_earth_under_a_pit_starts_at_the_foot_of_its_walls() {
+        // terrain at 0 from 0 to 4 and from 6 to 10, a pit from 4 to 6 with walls down to -0.5
+        let line = vec![[[0.0, 0.0], [4.0, 0.0]], [[4.0, 0.0], [4.0, -0.5]], [[6.0, -0.5], [6.0, 0.0]], [[6.0, 0.0], [10.0, 0.0]]];
+        let ground: HashMap<(usize, Option<u64>), Vec<Segment>> = [((0, Some(1)), line)].into_iter().collect();
+        let fills = earth(ground, &[], Some(-2.0));
+        let loops = &fills[0].loops;
+        assert_eq!(loops.len(), 3, "{loops:?}");
+        // the strip under the pit: from its foot down to the base
+        let pit = loops.iter().find(|l| l.iter().all(|p| p[0] >= 4.0 && p[0] <= 6.0)).expect("under the pit");
+        let top = pit.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
+        assert!((top + 0.5).abs() < 1e-6, "{pit:?}");
+        // a terrain without a pit has no such strip
+        let plain: HashMap<(usize, Option<u64>), Vec<Segment>> = [((0, Some(1)), vec![[[0.0, 0.0], [10.0, 0.0]]])].into_iter().collect();
+        assert_eq!(earth(plain, &[], Some(-2.0))[0].loops.len(), 1);
+    }
 }
 
 /// The axes a 3D view is drawn along, from the direction it looks in: to the right and up on
@@ -1489,3 +1524,4 @@ mod tests {
         assert!(half.below.iter().flatten().all(|q| !near(*q, [4.0, 2.0, 3.0])));
     }
 }
+

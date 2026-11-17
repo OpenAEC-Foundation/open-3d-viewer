@@ -2,6 +2,7 @@
 //! ribbon on top, explorer left, 3D viewport centre, properties and layers right, status bar
 //! bottom.
 
+mod analysis_props;
 mod caps;
 #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
 mod cloud;
@@ -281,6 +282,8 @@ pub struct App {
     pub cloud_depth: bool,
     /// What of a structural analysis model's loads and results the 3D view draws.
     pub analysis: crate::structural::diagrams::Shown,
+    /// What is being typed in the scale field of the Analysis section, until Enter.
+    pub analysis_scale: Option<String>,
     /// How the points of a cloud are coloured.
     pub cloud_color: crate::cloud_color::CloudColor,
     /// A cloud is being meshed.
@@ -589,6 +592,9 @@ pub enum Message {
     ToggleCloudDepth,
     /// What of a structural analysis model's loads and results is drawn.
     Analysis(crate::structural::diagrams::Change),
+    /// Typed in the scale field of the Analysis section, and Enter there.
+    AnalysisScale(String),
+    AnalysisScaleDone,
     ToggleGridHeadsHidden,
     ToggleGridDims,
     ToggleLevels3d,
@@ -937,6 +943,7 @@ impl Default for App {
             point_size: 2.5,
             cloud_depth: true,
             analysis: crate::structural::diagrams::Shown { scale: 1.0, ..Default::default() },
+            analysis_scale: None,
             cloud_color: Default::default(),
             meshing: false,
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -2227,7 +2234,17 @@ impl App {
             Message::ToggleAmbient => self.ambient = !self.ambient,
             Message::CloudColor(color) => self.cloud_color = color,
             Message::ToggleCloudDepth => self.cloud_depth = !self.cloud_depth,
+            Message::AnalysisScale(typed) => {
+                if let Some(change) = self.type_analysis_scale(typed) {
+                    let kept = self.analysis_scale.take();
+                    let task = self.update(Message::Analysis(change));
+                    self.analysis_scale = kept;
+                    return task;
+                }
+            }
+            Message::AnalysisScaleDone => self.analysis_scale = None,
             Message::Analysis(change) => {
+                self.analysis_scale = None;
                 let doc = self.model.as_ref().and_then(|m| m.structural.first()).map(|p| p.doc.clone());
                 let (cases, sets) = doc.as_ref().map_or((0, 0), |d| (d.load_cases.len(), d.results.len()));
                 self.analysis.apply(change, cases, sets);
@@ -3551,6 +3568,9 @@ impl App {
         let picked_entry = picked;
         let picked = picked.is_some();
         let drawn = self.drawn_properties(p, l);
+        if let Some(analysis) = self.analysis_properties(p, l) {
+            content = content.push(section(l.text("Rekenresultaten", "Analysis"))).push(analysis).push(rule::horizontal(1));
+        }
         if self.selected.is_none() && self.structural.selected.is_empty() && self.picked_grid.is_none() && drawn.is_none() {
             if let Some(view) = self.view_properties(p, l) {
                 content = content.push(section(l.text("Weergave", "View"))).push(view).push(rule::horizontal(1));

@@ -12,9 +12,12 @@
 //!   (`IfcStructuralPointReaction`) and the internal forces along the members
 //!   (`IfcStructuralCurveReaction` with a load configuration of stations in metres from the start).
 //!
-//! The file is in SI units (metres, newtons), as the model is. Loads on members and nodes, the
+//! The file is in SI units (metres, newtons), as the model is. The
 //! checks and the program's own project in the property sets are not read. A member's end forces
 //! are left out where the file also gives its force lines, which hold them.
+//!
+//! Of the loads, the forces on nodes (`IfcStructuralPointAction`) and the constant line loads along
+//! members (`IfcStructuralLinearAction`) are read, each in the load case whose group it is in.
 
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::ProjectData;
@@ -59,7 +62,7 @@ struct File<'a> {
 }
 
 /// The types that are read; the rest (property sets of megabytes among them) is passed over.
-const READ: [&str; 21] = [
+const READ: [&str; 24] = [
     "IFCCARTESIANPOINT",
     "IFCVERTEXPOINT",
     "IFCEDGE",
@@ -81,6 +84,9 @@ const READ: [&str; 21] = [
     "IFCSTRUCTURALLOADSINGLEDISPLACEMENT",
     "IFCSTRUCTURALLOADCONFIGURATION",
     "IFCPROJECT",
+    "IFCSTRUCTURALPOINTACTION",
+    "IFCSTRUCTURALLINEARACTION",
+    "IFCSTRUCTURALLOADLINEARFORCE",
 ];
 
 impl<'a> File<'a> {
@@ -355,6 +361,26 @@ fn read(text: &str, file_name: &str) -> Result<AnalysisModel, String> {
             in_group.entry(group).or_default().extend(references(args.get(4).copied().unwrap_or_default()));
         }
     }
+    // the loads: a force on a node, or a line load along a whole member, in the load case whose
+    // group they are in
+    for (kind, name) in [(false, "IFCSTRUCTURALPOINTACTION"), (true, "IFCSTRUCTURALLINEARACTION")] {
+        for (n, args) in file.of(name) {
+            let (Some(item), Some(load)) = (acts_on.get(&n), args.get(7).and_then(|a| reference(a))) else { continue };
+            let Some(case) = in_group.iter().find(|(_, members)| members.contains(&n)).and_then(|(group, _)| load_of.get(group)).copied() else { continue };
+            let frame = if args.get(8).is_some_and(|f| f.contains("LOCAL")) { LoadFrame::Local } else { LoadFrame::Global };
+            let id = sam_id(IdKind::Action, n);
+            if kind {
+                let (Some(member), Some(q)) = (member_of.get(item), file.args(load, "IFCSTRUCTURALLOADLINEARFORCE")) else { continue };
+                let q = DVec3::new(number(q.get(1).copied().unwrap_or("$")).unwrap_or(0.0), number(q.get(2).copied().unwrap_or("$")).unwrap_or(0.0), number(q.get(3).copied().unwrap_or("$")).unwrap_or(0.0));
+                if q.length() > 0.0 {
+                    model.actions.push(Action { id, load: case, target: Target::Member { id: *member, span: None }, frame, kind: Load::MemberDistributed { dir: q.normalize(), moment: false, dist: Distribution::Uniform(q.length()) }, destabilising: false });
+                }
+            } else if let (Some(node), Some(v)) = (node_of.get(item), six(&file, load)) {
+                model.actions.push(Action { id, load: case, target: Target::Node(*node), frame, kind: Load::NodalForce { f: DVec3::new(v[0], v[1], v[2]), m: DVec3::new(v[3], v[4], v[5]) }, destabilising: false });
+            }
+        }
+    }
+    model.actions.sort_by_key(|a| a.load);
     for (n, args) in file.of("IFCSTRUCTURALRESULTGROUP") {
         let name = args.get(2).and_then(|a| string(a)).unwrap_or_default();
         let (mut displacements, mut reactions) = (results::NodeTable::default(), results::NodeTable::default());
@@ -479,6 +505,13 @@ DATA;
 #440=IFCRELCONNECTSSTRUCTURALMEMBER('g',$,$,$,#439,#98,$,$,$,$);
 #450=IFCBOUNDARYNODECONDITION('scharnier',IFCBOOLEAN(.T.),IFCBOOLEAN(.T.),IFCBOOLEAN(.T.),IFCBOOLEAN(.T.),IFCBOOLEAN(.F.),IFCBOOLEAN(.F.));
 #441=IFCRELCONNECTSSTRUCTURALMEMBER('h',$,$,$,#439,#109,#450,$,$,$);
+#1621=IFCSTRUCTURALLOADSINGLEFORCE('last 1',IFCFORCEMEASURE(2600.),IFCFORCEMEASURE(0.),IFCFORCEMEASURE(0.),IFCTORQUEMEASURE(0.),IFCTORQUEMEASURE(0.),IFCTORQUEMEASURE(0.));
+#1622=IFCSTRUCTURALPOINTACTION('t',$,'knooplast 1',$,$,$,$,#1621,.GLOBAL_COORDS.,$);
+#1623=IFCRELCONNECTSSTRUCTURALACTIVITY('u',$,$,$,#109,#1622);
+#1648=IFCSTRUCTURALLOADLINEARFORCE('q 1',$,IFCLINEARFORCEMEASURE(0.),IFCLINEARFORCEMEASURE(-375.),$,$,$);
+#1649=IFCSTRUCTURALLINEARACTION('v',$,'staaflast 1',$,$,$,$,#1648,.LOCAL_COORDS.,$,.TRUE_LENGTH.,.CONST.);
+#1650=IFCRELCONNECTSSTRUCTURALACTIVITY('w',$,$,$,#439,#1649);
+#2089=IFCRELASSIGNSTOGROUP('x',$,$,$,(#1622,#1649),$,#23);
 #2096=IFCPROPERTYSINGLEVALUE('Inhoud',$,IFCTEXT('#1=IFCSTRUCTURALCURVEMEMBER(, (((('),$);
 #2100=IFCSTRUCTURALRESULTGROUP('i',$,'Resultaten Eigen gewicht',$,'geval',.FIRST_ORDER_THEORY.,$,.T.);
 #2101=IFCSTRUCTURALLOADSINGLEDISPLACEMENT('u 2',0.,0.,-0.012,0.,0.,0.);
@@ -540,6 +573,12 @@ END-ISO-10303-21;
         assert_eq!((displacements.node.as_slice(), displacements.comps[2].as_slice()), ([model.nodes[1].id].as_slice(), [-0.012].as_slice()));
         let reactions = payload.reactions.as_ref().expect("reactions");
         assert_eq!((reactions.node.as_slice(), reactions.comps[2].as_slice(), reactions.comps[4].as_slice()), ([model.nodes[0].id].as_slice(), [6000.0].as_slice(), [-18000.0].as_slice()));
+
+        // a force on node 2 and a line load along the member, both in the load case
+        let case = LoadRef::Case(model.load_cases[0].id);
+        assert_eq!(model.actions.len(), 2);
+        assert!(matches!(&model.actions[0], Action { load, target: Target::Node(n), frame: LoadFrame::Global, kind: Load::NodalForce { f, .. }, .. } if *load == case && *n == model.nodes[1].id && *f == DVec3::new(2600.0, 0.0, 0.0)));
+        assert!(matches!(&model.actions[1], Action { load, target: Target::Member { id, span: None }, frame: LoadFrame::Local, kind: Load::MemberDistributed { dir, dist: Distribution::Uniform(q), .. }, .. } if *load == case && *id == model.members[0].id && *dir == DVec3::NEG_Z && *q == 375.0));
 
         let second = &model.results[1];
         assert_eq!((&second.for_, second.theory, second.linear, second.available.is_empty()), (&ResultFor::Combination(combination.id), Theory::Second, false, true));

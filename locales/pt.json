@@ -1042,6 +1042,18 @@
     "Supports": "Apoios",
     "Draws a symbol at every support and a circle at every released member end.": "Desenha um símbolo em cada apoio e um círculo em cada extremidade de barra articulada.",
     "Previous result set": "Resultado anterior",
-    "Shows the results of the previous load case or combination.": "Mostra os resultados do caso de carga ou da combinação anterior."
+    "Shows the results of the previous load case or combination.": "Mostra os resultados do caso de carga ou da combinação anterior.",
+    "Case": "Caso",
+    "Combination": "Combinação",
+    "Envelope": "Envolvente",
+    "Force lines": "Linhas de esforços",
+    "Largest of the model": "O maior do modelo",
+    "Largest per member": "O maior por barra",
+    "Line only": "Só a linha",
+    "Line with strokes": "Linha com traços",
+    "Loads of": "Cargas de",
+    "None": "Nenhuma",
+    "Results of": "Resultados de",
+    "Values": "Valores"
   }
 }

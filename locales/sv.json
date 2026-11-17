@@ -1042,6 +1042,18 @@
     "Supports": "Upplag",
     "Draws a symbol at every support and a circle at every released member end.": "Ritar en symbol vid varje upplag och en cirkel vid varje ledad stångände.",
     "Previous result set": "Föregående resultat",
-    "Shows the results of the previous load case or combination.": "Visar resultaten för föregående lastfall eller kombination."
+    "Shows the results of the previous load case or combination.": "Visar resultaten för föregående lastfall eller kombination.",
+    "Case": "Lastfall",
+    "Combination": "Kombination",
+    "Envelope": "Omslutande",
+    "Force lines": "Snittkraftslinjer",
+    "Largest of the model": "Störst i modellen",
+    "Largest per member": "Störst per stång",
+    "Line only": "Endast linjen",
+    "Line with strokes": "Linje med streck",
+    "Loads of": "Laster från",
+    "None": "Inga",
+    "Results of": "Resultat från",
+    "Values": "Värden"
   }
 }

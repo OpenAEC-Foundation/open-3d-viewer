@@ -3788,7 +3788,7 @@ dependencies = [
  "signal-hook",
  "skp-reader",
  "stl_io",
- "tekla-reader",
+ "tekla-read",
  "tempfile",
  "tobj",
  "ttf-parser",
@@ -5409,14 +5409,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "tekla-reader"
-version = "0.2.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=c446ef82053d0aed0283681f9d593f27c89cc087#c446ef82053d0aed0283681f9d593f27c89cc087"
+name = "tekla-core"
+version = "0.3.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=4198c4f3344a80b10b060b2e0ead1aef0be06362#4198c4f3344a80b10b060b2e0ead1aef0be06362"
 dependencies = [
- "earcutr",
  "flate2",
  "glam 0.30.10",
+]
+
+[[package]]
+name = "tekla-model"
+version = "0.3.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=4198c4f3344a80b10b060b2e0ead1aef0be06362#4198c4f3344a80b10b060b2e0ead1aef0be06362"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "tekla-read"
+version = "0.3.0"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-reader?rev=4198c4f3344a80b10b060b2e0ead1aef0be06362#4198c4f3344a80b10b060b2e0ead1aef0be06362"
+dependencies = [
+ "earcutr",
+ "glam 0.30.10",
  "serde_json",
+ "tekla-core",
+ "tekla-model",
 ]
 
 [[package]]

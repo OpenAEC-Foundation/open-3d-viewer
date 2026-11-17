@@ -1,12 +1,12 @@
-//! Adapter from the independent tekla-reader file reader to the app's scene model: the parts as
+//! Adapter from the independent tekla-read file reader to the app's scene model: the parts as
 //! layers, the grids as the levels and grid lines of the project, the saved model views, and the
 //! drawings of the model folder as sheets.
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{DraftFill, DraftText, GridLine, Layer, PlanRange, ProjectData, SavedView, Sheet, SheetRect, ViewCamera, ViewKind};
 use crate::section::SectionBox;
 use glam::Vec3;
-use tekla_reader::drawings::{Drawing, Shape, Snapshot};
-use tekla_reader::{Grid, ModelView};
+use tekla_read::drawings::{Drawing, Shape, Snapshot};
+use tekla_read::{Grid, ModelView};
 
 pub struct TeklaLoader;
 
@@ -27,9 +27,9 @@ impl Loader for TeklaLoader {
         // drawings in its folder.
         let folder = source.path().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
         let mut document = if let Some(path) = source.path() {
-            tekla_reader::read_path(path)?
+            tekla_read::read_path(path)?
         } else {
-            tekla_reader::read(&source.read()?)?
+            tekla_read::read(&source.read()?)?
         };
         progress.set(Phase::Convert);
         let mut project = ProjectData::default();
@@ -46,7 +46,7 @@ impl Loader for TeklaLoader {
         if !document.drawings.is_empty() {
             match &folder {
                 Some(folder) => {
-                    let drawings = tekla_reader::drawings::read_folder(folder, &document.drawings);
+                    let drawings = tekla_read::drawings::read_folder(folder, &document.drawings);
                     let shown = drawings.iter().filter(|d| d.snapshot.is_some()).count();
                     project.info.push(("Tekla drawings".into(), drawings.len().to_string()));
                     if shown < drawings.len() {
@@ -331,8 +331,8 @@ fn segments(radius: f64, sweep: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tekla_reader::drawings::{Item, Metadata, SnapshotView};
-    use tekla_reader::DrawingRecord;
+    use tekla_read::drawings::{Item, Metadata, SnapshotView};
+    use tekla_read::DrawingRecord;
 
     fn grid() -> Grid {
         Grid {

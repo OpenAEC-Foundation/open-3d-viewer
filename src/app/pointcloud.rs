@@ -10,6 +10,8 @@
 //! - **Surface mesh**: a surface through the points in all directions (walls, ceilings, objects).
 //! - **Closed mesh**: a surface fitted to the points voxel by voxel, with small gaps closed and
 //!   flat parts simplified; the slowest and the best for buildings.
+//! - **Faces**: the flat faces of walls, floors, ceilings and roofs and the round columns and
+//!   pipes the points show, each as a face of its own in the colour of its kind.
 //! - **Export of the points**: all of them, a share of them, or those in the section box, as LAS,
 //!   LAZ, E57, PLY, XYZ, PTS or CSV.
 //! - **Export of the mesh** made last: OBJ, PLY, STL, DXF, DWG or IFC.
@@ -42,6 +44,8 @@ pub enum Mesh {
     Terrain,
     Surface,
     Closed,
+    /// Not a mesh of the surface but the flat faces and cylinders found in the points.
+    Faces,
 }
 
 impl Mesh {
@@ -51,6 +55,7 @@ impl Mesh {
             Mesh::Terrain => "terrain",
             Mesh::Surface => "surface",
             Mesh::Closed => "closed",
+            Mesh::Faces => "faces",
         }
     }
 }
@@ -225,11 +230,16 @@ pub struct Meshed {
     pub parts: u32,
     /// How far the points lie from a closed mesh (metres): the mean, and what 95 % stay within.
     pub deviation: Option<(f64, f64)>,
+    /// Of detected faces: the walls, floors, ceilings, sloped faces and cylinders found.
+    pub faces: Option<[usize; 5]>,
 }
 
 impl Meshed {
     /// The figures of the mesh in a line.
     pub fn figures(&self) -> String {
+        if let Some([walls, floors, ceilings, sloped, cylinders]) = self.faces {
+            return format!("{walls} walls, {floors} floors, {ceilings} ceilings, {sloped} sloped faces, {cylinders} cylinders");
+        }
         let mut text = format!("{} vertices, {} triangles, {} open edges, {} parts", grouped(self.vertices as u64), grouped(self.triangles as u64), grouped(self.open_edges), self.parts);
         if let Some((mean, most)) = self.deviation {
             text.push_str(&format!(", deviation {:.1} mm (95 %: {:.1} mm)", mean * 1000.0, most * 1000.0));
@@ -583,6 +593,7 @@ pub fn mesh(cloud: &Source, kind: Mesh, settings: &Settings, section: Option<Ori
     let inside = |p: &pointcloud_core::Point| section.is_none_or(|b| b.contains(p.xyz));
     let cell = settings.voxel.map_or(0.0, |mm| mm as f64 / 1000.0);
     let mut deviation = None;
+    let mut faces = None;
     let (vertices, triangles) = match kind {
         Mesh::Terrain => {
             let config = pointcloud_core::MeshConfig { max_vertices: settings.vertices, ..Default::default() };
@@ -605,11 +616,29 @@ pub fn mesh(cloud: &Source, kind: Mesh, settings: &Settings, section: Option<Ori
             deviation = (report.deviation.samples > 0).then_some((report.deviation.mean, report.deviation.p95));
             (mesh.vertices.len(), mesh.triangles.len())
         }
+        Mesh::Faces => {
+            use pointcloud_core::surfaces::{self, FaceClass};
+            // read through an index of the cloud on disk, as the closed mesher
+            let index = ops::build_index(&points, &ops::IndexOptions::default(), &mut |_| keep_going()).map_err(say)?;
+            let layers = [surfaces::SurfaceSource { points: pointcloud_core::region_source::RegionSource::new(&points, Some(&index), Default::default()), cloud: Some(&points) }];
+            let region = section.map_or(pointcloud_core::region_source::EVERYWHERE, |b| b.aabb());
+            let accept = |_: usize, _: u64, p: &pointcloud_core::Point| inside(p);
+            let found = surfaces::detect_surfaces(&layers, 0, region, &Default::default(), &accept, &mut |_| keep_going()).map_err(say)?;
+            if found.planes.is_empty() && found.cylinders.is_empty() {
+                return Err(format!("No faces found in {name}"));
+            }
+            surfaces::write_faces_obj(&found, &source, &[]).map_err(say)?;
+            let count = |class: FaceClass| found.planes.iter().filter(|f| f.class == class).count();
+            faces = Some([count(FaceClass::Wall), count(FaceClass::Floor), count(FaceClass::Ceiling), count(FaceClass::Sloped), found.cylinders.len()]);
+            let mesh = pointcloud_core::read_obj_mesh(&source).map_err(say)?;
+            (mesh.vertices.len(), mesh.triangles.len())
+        }
     };
     to_view(&source, &shown, cloud.origin).map_err(io)?;
+
     // how the triangles hang together, corners at one position counted as one
     let topology = pointcloud_core::mesh_topology_by_position(&pointcloud_core::read_obj_mesh(&source).map_err(say)?);
-    Ok(Meshed { file: shown, source, vertices, triangles, seconds: start.elapsed().as_secs_f32(), open_edges: topology.open_edges, parts: topology.components, deviation })
+    Ok(Meshed { file: shown, source, vertices, triangles, seconds: start.elapsed().as_secs_f32(), open_edges: topology.open_edges, parts: topology.components, deviation, faces })
 }
 
 /// Writes the mesh of `source`, in the coordinates of the cloud's file and Z up as the library
@@ -795,6 +824,41 @@ mod tests {
         let to = folder.join("plan.dxf");
         let said = drawing(&cloud.file, &to, source_box(&section, cloud.origin), View::Plan, &AtomicBool::new(false)).unwrap();
         assert!(to.is_file() && said.contains("plan.dxf"), "{said}");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_faces_of_a_room_are_found() {
+        // a room of 4 by 3 m and 2.5 m high: its floor, ceiling and four walls, a point every 2.5 cm
+        let folder = std::env::temp_dir().join(format!("o3v-cloud-faces-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("room.xyz");
+        let (nx, ny, nz) = (160, 120, 100);
+        let step = 0.025;
+        let mut points = String::new();
+        for i in 0..=nx {
+            for j in 0..=ny {
+                let (x, y) = (i as f64 * step, j as f64 * step);
+                points.push_str(&format!("{x} {y} 0\n{x} {y} 2.5\n"));
+            }
+        }
+        for k in 1..nz {
+            let z = k as f64 * step;
+            for i in 0..=nx {
+                let x = i as f64 * step;
+                points.push_str(&format!("{x} 0 {z}\n{x} 3 {z}\n"));
+            }
+            for j in 1..ny {
+                let y = j as f64 * step;
+                points.push_str(&format!("0 {y} {z}\n4 {y} {z}\n"));
+            }
+        }
+        std::fs::write(&file, points).unwrap();
+        let cloud = Source { file, origin: [0.0; 3] };
+        let done = mesh(&cloud, Mesh::Faces, &Settings::default(), None, &AtomicBool::new(false)).unwrap();
+        let [walls, floors, ceilings, _, _] = done.faces.unwrap();
+        assert!(walls == 4 && floors + ceilings == 2, "{}", done.figures());
+        assert!(done.file.is_file() && done.triangles > 0);
         let _ = std::fs::remove_dir_all(&folder);
     }
 

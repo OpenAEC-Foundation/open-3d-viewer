@@ -1007,6 +1007,8 @@
     "Neighbours per vertex (surface)": "Nachbarn je Eckpunkt (Fläche)",
     "Longest edge, times the usual (surface)": "Längste Kante, mal die übliche (Fläche)",
     "Share of the points (closed)": "Anteil der Punkte (geschlossen)",
-    "Share of the points (export)": "Anteil der Punkte (Export)"
+    "Share of the points (export)": "Anteil der Punkte (Export)",
+    "Faces": "Flächen",
+    "Finds the flat walls, floors, ceilings and roofs and the round columns and pipes in the points, each as a face of its own in the colour of its kind. Put the section box around the room you need.": "Findet die ebenen Wände, Böden, Decken und Dächer sowie die runden Stützen und Rohre in den Punkten, jede als eigene Fläche in der Farbe ihrer Art. Legen Sie die Schnittbox um den Raum, den Sie brauchen."
   }
 }

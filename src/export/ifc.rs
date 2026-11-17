@@ -13,6 +13,9 @@
 //! - Body: one IfcTriangulatedFaceSet per colour, relative to the element's placement, welded,
 //!   without degenerate triangles, `Closed` when every edge joins two triangles, styled with one
 //!   shared IfcSurfaceStyle per colour.
+//! - Curves (Rhino curves and hatch lines): an IfcIndexedPolyCurve per polyline in an
+//!   'Annotation' representation, styled with an IfcCurveStyle. An element of curves only, and
+//!   Rhino's texts and hatches, are IfcAnnotation.
 //! - The element's properties as one property set named after the source format, its materials
 //!   as IfcMaterial (one) or IfcMaterialConstituentSet (several), the model's layers as
 //!   IfcPresentationLayerAssignment.
@@ -89,6 +92,8 @@ enum Key {
 struct Product {
     key: Key,
     ranges: Vec<(usize, u32, u32)>,
+    /// Where its curves are drawn (layer, first index into `lines`, index count).
+    lines: Vec<(usize, u32, u32)>,
     /// The layer it is drawn in first, for its presentation layer.
     layer: String,
 }
@@ -106,16 +111,21 @@ fn base_layer_name(name: &str) -> &str {
 fn products(model: &Model) -> Vec<Product> {
     let mut out: Vec<Product> = Vec::new();
     let mut at: HashMap<Key, usize> = HashMap::new();
-    let mut push = |key: Key, range: (usize, u32, u32), layer: &str| {
-        if range.2 < 3 {
+    let mut add = |key: Key, range: (usize, u32, u32), layer: &str, curve: bool| {
+        if range.2 < if curve { 2 } else { 3 } {
             return;
         }
         let i = *at.entry(key.clone()).or_insert_with(|| {
-            out.push(Product { key, ranges: Vec::new(), layer: layer.to_string() });
+            out.push(Product { key, ranges: Vec::new(), lines: Vec::new(), layer: layer.to_string() });
             out.len() - 1
         });
-        out[i].ranges.push(range);
+        if curve {
+            out[i].lines.push(range);
+        } else {
+            out[i].ranges.push(range);
+        }
     };
+
     for (li, layer) in model.layers.iter().enumerate() {
         // Archicad openings are already cut from their walls. An IfcOpeningElement would need
         // IfcRelVoidsElement and no storey, which this writer does not write: left out.
@@ -127,14 +137,17 @@ fn products(model: &Model) -> Vec<Product> {
         let mut covered = 0u32;
         for &(id, first, count) in &layer.elements {
             if first > covered {
-                push(loose.clone(), (li, covered, first - covered), name);
+                add(loose.clone(), (li, covered, first - covered), name, false);
             }
-            push(Key::Element(id), (li, first, count), name);
+            add(Key::Element(id), (li, first, count), name, false);
             covered = covered.max(first + count);
         }
         let len = layer.indices.len() as u32;
         if len > covered {
-            push(loose, (li, covered, len - covered), name);
+            add(loose, (li, covered, len - covered), name, false);
+        }
+        for &(id, first, count) in &layer.line_elements {
+            add(Key::Element(id), (li, first, count), name, true);
         }
     }
     out
@@ -186,6 +199,8 @@ impl FaceSet {
 struct Body {
     origin: [i64; 3],
     sets: Vec<([u8; 4], FaceSet)>,
+    /// Polylines (quantised, relative to the placement) and their colours.
+    curves: Vec<([u8; 4], Vec<[i64; 3]>)>,
     min_z: f64,
 }
 
@@ -214,12 +229,37 @@ fn body(model: &Model, product: &Product, units: Units) -> Option<Body> {
             tris.push(([corners[0], corners[1], corners[2]], colour));
         }
     }
-    let mut min = [i64::MAX; 3];
-    for (t, _) in &tris {
-        for p in t {
-            for k in 0..3 {
-                min[k] = min[k].min(p[k]);
+    // the curves: segments joined into polylines where one ends at the next one's start
+    let mut curves: Vec<([u8; 4], Vec<[i64; 3]>)> = Vec::new();
+    for &(li, first, count) in &product.lines {
+        let layer = &model.layers[li];
+        let base = layer.color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let Some(segments) = layer.lines.get(first as usize..(first + count) as usize) else { continue };
+        let point = |i: u32| {
+            let p = layer.positions.get(3 * i as usize..3 * i as usize + 3)?;
+            p.iter().all(|v| v.is_finite()).then(|| [0, 1, 2].map(|k| units.quantise(p[k] as f64)))
+        };
+        let mut last: Option<u32> = None;
+        for s in segments.chunks_exact(2) {
+            let (Some(a), Some(b)) = (point(s[0]), point(s[1])) else {
+                last = None;
+                continue;
+            };
+            if last != Some(s[0]) || curves.is_empty() {
+                let colour = match &layer.colors {
+                    Some(c) => c.get(s[0] as usize).copied().unwrap_or([base[0], base[1], base[2], 255]),
+                    None => [base[0], base[1], base[2], 255],
+                };
+                curves.push((colour, vec![a]));
             }
+            curves.last_mut().unwrap().1.push(b);
+            last = Some(s[1]);
+        }
+    }
+    let mut min = [i64::MAX; 3];
+    for p in tris.iter().flat_map(|(t, _)| t).chain(curves.iter().flat_map(|(_, c)| c)) {
+        for k in 0..3 {
+            min[k] = min[k].min(p[k]);
         }
     }
     // the placement: the lower corner of the element, on whole millimetres
@@ -234,8 +274,15 @@ fn body(model: &Model, product: &Product, units: Units) -> Option<Body> {
         sets[i].1.triangle(t.map(|p| [0, 1, 2].map(|k| p[k] - origin[k])));
     }
     sets.retain(|(_, s)| !s.triangles.is_empty());
+    for (_, c) in &mut curves {
+        for p in c.iter_mut() {
+            *p = [0, 1, 2].map(|k| p[k] - origin[k]);
+        }
+        c.dedup();
+    }
+    curves.retain(|(_, c)| c.len() >= 2);
     let min_z = min[2] as f64 / 10f64.powi(units.decimals as i32);
-    (!sets.is_empty()).then_some(Body { origin, sets, min_z })
+    (!sets.is_empty() || !curves.is_empty()).then_some(Body { origin, sets, curves, min_z })
 }
 
 /// The IFC class and predefined type for an element of a Revit category (the viewer's batch
@@ -358,8 +405,14 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
         (None, Some(t)) => t.to_string(),
         _ => get("Name").or(get("Definition")).unwrap_or(category).to_string(),
     };
-    let object_type = ["type", "Profile", "Definition", "Mesh"].iter().find_map(|k| get(k)).map(str::to_string);
-    let tag = ["id", "Tekla id"].iter().find_map(|k| get(k)).map(str::to_string);
+    let (class, predefined) = match (format, get("Type")) {
+        // Rhino's drafting: annotations
+        ("Rhino", Some("Text" | "Hatch" | "Curve")) => ("IFCANNOTATION", "NOTDEFINED"),
+        _ => (class, predefined),
+    };
+    let rhino = format == "Rhino";
+    let object_type = if rhino { get("Type") } else { ["type", "Profile", "Definition", "Mesh"].iter().find_map(|k| get(k)) }.map(str::to_string);
+    let tag = if rhino { get("Id") } else { ["id", "Tekla id"].iter().find_map(|k| get(k)) }.map(str::to_string);
     Identity { name, object_type, tag, class, predefined }
 }
 
@@ -434,6 +487,9 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
     let precision = if units.millimetres { "1.E-02" } else { "1.E-05" };
     let context = f.add(format!("IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,{precision},#{world},#{north})"))?;
     let body_context = f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?;
+    // made when the first curve or annotation is written
+    let mut annotation_context: Option<u64> = None;
+    let mut curve_styles: HashMap<[u8; 4], u64> = HashMap::new();
 
     // project, site, building
     let info = |k: &str| model.project.info.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
@@ -500,7 +556,12 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             Key::Element(id) => format!("element/{id}"),
             Key::Layer(name) => format!("layer/{name}"),
         };
-        let who = identity(&model.format, &product.key, &product.layer, &props);
+        let mut who = identity(&model.format, &product.key, &product.layer, &props);
+        if body.sets.is_empty() {
+            // curves only
+            who.class = "IFCANNOTATION";
+        }
+        let annotation = who.class == "IFCANNOTATION";
 
         // its storey: the level it names, else the highest level at or below its lowest point
         let level = props.iter().find(|(k, _)| k == "level").map(|(_, v)| v.as_str());
@@ -548,8 +609,47 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             f.add(format!("IFCSTYLEDITEM(#{item},(#{style}),$)"))?;
             items.push(item);
         }
-        let representation = f.add(format!("IFCSHAPEREPRESENTATION(#{body_context},'Body','Tessellation',{})", refs(&items)))?;
-        let shape = f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{representation}))"))?;
+        let mut curve_items = Vec::new();
+        for (colour, points) in &body.curves {
+            let style = match curve_styles.get(colour) {
+                Some(&s) => s,
+                None => {
+                    let s = curve_style(&mut f, *colour)?;
+                    curve_styles.insert(*colour, s);
+                    s
+                }
+            };
+            let mut coords = String::with_capacity(points.len() * 30);
+            coords.push_str("IFCCARTESIANPOINTLIST3D((");
+            for (i, p) in points.iter().enumerate() {
+                if i > 0 {
+                    coords.push(',');
+                }
+                let _ = write!(coords, "({},{},{})", fixed(p[0], units.decimals), fixed(p[1], units.decimals), fixed(p[2], units.decimals));
+            }
+            coords.push_str("))");
+            let list = f.add(coords)?;
+            let item = f.add(format!("IFCINDEXEDPOLYCURVE(#{list},$,.F.)"))?;
+            f.add(format!("IFCSTYLEDITEM(#{item},(#{style}),$)"))?;
+            curve_items.push(item);
+        }
+        if annotation || !curve_items.is_empty() {
+            if annotation_context.is_none() {
+                annotation_context = Some(f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Annotation','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?);
+            }
+        }
+        let mut representations = Vec::new();
+        if !items.is_empty() {
+            representations.push(if annotation {
+                f.add(format!("IFCSHAPEREPRESENTATION(#{},'Annotation','Tessellation',{})", annotation_context.unwrap_or(body_context), refs(&items)))?
+            } else {
+                f.add(format!("IFCSHAPEREPRESENTATION(#{body_context},'Body','Tessellation',{})", refs(&items)))?
+            });
+        }
+        if !curve_items.is_empty() {
+            representations.push(f.add(format!("IFCSHAPEREPRESENTATION(#{},'Annotation','Curve3D',{})", annotation_context.unwrap_or(body_context), refs(&curve_items)))?);
+        }
+        let shape = f.add(format!("IFCPRODUCTDEFINITIONSHAPE($,$,{})", refs(&representations)))?;
         let at = [body.origin[0], body.origin[1], body.origin[2] - elevation];
         let point = f.add(format!(
             "IFCCARTESIANPOINT(({},{},{}))",
@@ -571,6 +671,13 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             opt(who.tag.as_deref()),
         );
         let element = f.add(match who.class {
+            // an annotation has no tag or predefined type in IFC 4
+            "IFCANNOTATION" => format!(
+                "IFCANNOTATION({},$,{},$,{},#{placement},#{shape})",
+                text(&ids.get(&key)),
+                text(&who.name),
+                opt(who.object_type.as_deref())
+            ),
             "IFCDOOR" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCWINDOW" => format!("{head},$,$,.{}.,.NOTDEFINED.,$)", who.predefined),
             "IFCREINFORCINGBAR" => format!("{head},$,$,$,$,.{}.,$)", who.predefined),
@@ -589,8 +696,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             contained[storey].push(element);
         }
         // a build-up is a layer set; else the materials the properties name
-        let build_up = layered(&props);
-        let mats = if build_up.is_some() { Vec::new() } else { materials(&props) };
+        let build_up = if annotation { None } else { layered(&props) };
+        let mats = if build_up.is_some() || annotation { Vec::new() } else { materials(&props) };
         if let Some(build_up) = build_up {
             match by_build_up.iter_mut().find(|(b, _)| *b == build_up) {
                 Some((_, list)) => list.push(element),
@@ -604,8 +711,8 @@ pub fn write(model: &Model, document: &Document, file_name: &str, out: &mut impl
             }
         }
         match by_layer.iter_mut().find(|(l, _)| *l == product.layer) {
-            Some((_, list)) => list.push(representation),
-            None => by_layer.push((product.layer.clone(), vec![representation])),
+            Some((_, list)) => list.extend(&representations),
+            None => by_layer.push((product.layer.clone(), representations)),
         }
     }
 
@@ -693,6 +800,14 @@ fn surface_style(f: &mut Step<impl Write>, c: [u8; 4]) -> io::Result<u64> {
     let shading = f.add(format!("IFCSURFACESTYLESHADING(#{colour},{})", real(1.0 - c[3] as f64 / 255.0)))?;
     let name = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
     f.add(format!("IFCSURFACESTYLE({},.BOTH.,(#{shading}))", text(&name)))
+}
+
+/// A curve style for a colour (sRGB8; curves are drawn opaque).
+fn curve_style(f: &mut Step<impl Write>, c: [u8; 4]) -> io::Result<u64> {
+    let ratio = |v: u8| real(v as f64 / 255.0);
+    let colour = f.add(format!("IFCCOLOURRGB($,{},{},{})", ratio(c[0]), ratio(c[1]), ratio(c[2])))?;
+    let name = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    f.add(format!("IFCCURVESTYLE({},$,$,#{colour},$)", text(&name)))
 }
 
 /// A property set of text values for one object (none when there are no values).

@@ -3,7 +3,7 @@
 //! bottom.
 
 mod caps;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod cloud;
 mod export_drawing;
 #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -14,18 +14,18 @@ mod grids;
 mod hatch;
 mod ifc;
 mod ifc_graph;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod inform;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod clash_words;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod room_checks;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod shape_checks;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 mod reports;
 mod layers;
-#[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
 mod drafts;
 pub mod drawn_props;
@@ -236,8 +236,8 @@ pub struct App {
     pub library: bim_library::Library,
     /// The Library tab's open groups and pick.
     pub library_view: library::LibraryView,
-    /// The BIM Collaborator's issues, checks and clashes of this project.
-    #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+    /// The BIM Validator's issues, checks and clashes of this project.
+    #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     pub collab: collab::State,
     /// The project document (IfcX): the levels of the model and those added.
     pub document: Document,
@@ -305,7 +305,7 @@ pub struct App {
     /// The dimension tool of the sheets is on.
     pub dimension_tool: bool,
     /// The view's bar offers its tools to dimension, write and cut (the Modeller and the
-    /// Collaborator; the Viewer only looks).
+    /// Validator; the Viewer only looks).
     pub annotates: bool,
     /// A view's tab draws it as a sheet does: on paper, its cut in ink (else over the model
     /// as the 3D view shows it).
@@ -488,7 +488,7 @@ pub enum Message {
     ExplorerTab(ExplorerTab),
     /// The Library tab.
     Library(library::LibraryMessage),
-    #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
     Pointcloud(pointcloud::Event),
@@ -914,7 +914,7 @@ impl Default for App {
             explorer_tab: ExplorerTab::Model,
             library: bim_library::Library::starter(),
             library_view: library::LibraryView::default(),
-            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             collab: collab::State::default(),
             document: Document::default(),
             level_form: None,
@@ -1573,7 +1573,7 @@ impl App {
         ));
         self.document.recognise(&model);
         self.model = Some(model);
-        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         self.collab.model_changed();
         self.section = None;
         self.section_on = false;
@@ -2095,7 +2095,7 @@ impl App {
             }
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
-            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
             Message::Pointcloud(event) => return self.pointcloud_update(event),
@@ -2884,8 +2884,8 @@ impl App {
                 looks = (0..index.len()).map(|u| if u == 0 { [0.0; 4] } else { element(u).and_then(|id| view.get(&id)).map_or([0.0; 4], crate::units::unit_look) }).collect();
             }
         }
-        // the Collaborator's colours (the web build leaves them out)
-        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        // the Validator's colours (the web build leaves them out)
+        #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         {
             // coloured by a property: each element in the colour of its value
             if let Some(painted) = self.painted_looks(index.len(), |u| index.owner(u)) {
@@ -3902,9 +3902,9 @@ impl App {
     /// The 3D viewport with its overlays; the shell's workspace.
     pub fn viewport_view(&self, p: Palette, l: Language) -> Element<'_, Message> {
         // a picture for a report: the model alone, without the cube, the grids and the hints
-        #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+        #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
         let clean = self.collab.report_job.is_some();
-        #[cfg(not(all(feature = "collaborator", not(target_arch = "wasm32"))))]
+        #[cfg(not(all(feature = "validator", not(target_arch = "wasm32"))))]
         let clean = false;
         let settings = RenderSettings {
             mode: self.mode,

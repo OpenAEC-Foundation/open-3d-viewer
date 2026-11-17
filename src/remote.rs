@@ -365,7 +365,7 @@ impl App {
                 call.answer(answer);
                 return task;
             }
-            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             "collab_export" if matches!(call.args.get("kind").and_then(|v| v.as_str()), Some("pdf" | "issues_pdf")) => {
                 let (answer, task) = self.collab_pdf_remote(&call.args);
                 call.answer(answer);
@@ -499,7 +499,7 @@ impl App {
                 self.measurements.clear();
                 Ok(json!({ "cleared": n }))
             }
-            #[cfg(all(feature = "collaborator", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             cmd if cmd.starts_with("collab_") => self.collab_command(cmd, a),
             "cancel" => {
                 let _ = self.update(Message::Escape);

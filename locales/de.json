@@ -1082,6 +1082,7 @@
     "Record revision": "Revision festhalten",
     "Link to selection": "Mit Auswahl verknüpfen",
     "Select elements in the model to link this document to them.": "Wählen Sie Elemente im Modell aus, um dieses Dokument mit ihnen zu verknüpfen.",
-    "Document": "Dokument"
+    "Document": "Dokument",
+    "Documents": "Dokumente"
   }
 }

@@ -1082,6 +1082,7 @@
     "Record revision": "Revizyonu kaydet",
     "Link to selection": "Seçime bağla",
     "Select elements in the model to link this document to them.": "Bu belgeyi bağlamak için modelde öğeler seçin.",
-    "Document": "Belge"
+    "Document": "Belge",
+    "Documents": "Belgeler"
   }
 }

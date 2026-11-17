@@ -38,6 +38,8 @@ pub struct DocsTab {
     pub sync: Option<Sync>,
     /// How many files each folder holds, with the folders under it.
     counts: HashMap<String, usize>,
+    /// The register of the folder was read, by Docs itself or for a model that opened.
+    known: bool,
     /// The folder whose files show (`""` for the project folder itself), the folders of the tree
     /// that are open, and the picked file.
     pub at: String,
@@ -80,6 +82,7 @@ impl DocsTab {
             register: Register::default(),
             sync: None,
             counts: HashMap::new(),
+            known: false,
             at: String::new(),
             opened: HashSet::new(),
             pick: None,
@@ -133,6 +136,10 @@ pub enum DocsMessage {
     Link,
     Unlink(String),
     Go(String),
+    /// Open Docs at the document of this file (its path in the project folder).
+    Show(String),
+    /// The register of this project folder as it was read for a model, before Docs was opened.
+    Known(Box<(PathBuf, Register)>),
 }
 
 /// The folder of the tree that lists the documents whose file is gone: no file has this name.
@@ -185,6 +192,30 @@ fn read_task(folder: PathBuf) -> Task<Message> {
 #[cfg(target_arch = "wasm32")]
 fn read_task(folder: PathBuf) -> Task<Message> {
     Task::done(Message::Docs(DocsMessage::Read(Box::new(Read { folder, result: Err("Docs works in the desktop app".into()) }))))
+}
+
+/// Reads the register of the project folder on a thread of its own, for a model that opened.
+#[cfg(not(target_arch = "wasm32"))]
+fn register_task(folder: PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let register = Register::read(&folder);
+                let _ = tx.send((folder, register));
+            });
+            rx.await.ok()
+        },
+        |read| match read {
+            Some(read) => Message::Docs(DocsMessage::Known(Box::new(read))),
+            None => Message::Docs(DocsMessage::Known(Box::new((PathBuf::new(), Register::default())))),
+        },
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn register_task(_folder: PathBuf) -> Task<Message> {
+    Task::none()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -400,6 +431,21 @@ impl App {
                 d.elements.retain(|e| e.key != key);
                 d.elements.len() != before
             }),
+            DocsMessage::Show(path) => {
+                self.docs.open = true;
+                self.show_docs();
+                self.docs_go_to(&path);
+                // the others may have changed the folder since it was read
+                return self.docs_read();
+            }
+            DocsMessage::Known(known) => {
+                let (folder, register) = *known;
+                // still this project folder, and Docs has not read it itself meanwhile
+                if self.docs.folder.as_ref() == Some(&folder) && !self.docs.known {
+                    self.docs.register = register;
+                    self.docs.known = true;
+                }
+            }
             DocsMessage::Go(key) => {
                 let Some(model) = self.model.clone() else { return Task::none() };
                 // the key is somewhere in the element's properties: only those are taken apart
@@ -429,15 +475,66 @@ impl App {
         self.show_docs();
         self.docs_take(read_project(folder));
         if let Some(path) = pick.map(|p| p.replace('\\', "/")) {
-            // its folder shows, and the folders above it are open in the tree
-            let mut folder = path.rsplit_once('/').map_or("", |(folder, _)| folder);
-            self.docs.at = folder.to_string();
-            while !folder.is_empty() {
-                self.docs.opened.insert(folder.to_string());
-                folder = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
-            }
-            let _ = self.docs_update(DocsMessage::Pick(path));
+            self.docs_go_to(&path);
         }
+    }
+
+    /// Whether the register of the project folder is still to be read: a folder is chosen and
+    /// nothing was read of it yet.
+    pub(super) fn docs_wants_register(&self) -> bool {
+        self.docs.folder.is_some() && !self.docs.known && !self.docs.reading
+    }
+
+    /// Reads the register of the project folder when a model opens and Docs was not opened yet,
+    /// so the model's elements can say which documents are about them. Only the register: the
+    /// folder itself is read when Docs opens.
+    pub(super) fn docs_register(&self) -> Task<Message> {
+        match self.docs.folder.clone().filter(|_| self.docs_wants_register()) {
+            Some(folder) => register_task(folder),
+            None => Task::none(),
+        }
+    }
+
+    /// Goes to the document of the file at `path`: its folder shows, the folders above it are
+    /// open in the tree, and it is picked.
+    fn docs_go_to(&mut self, path: &str) {
+        let mut folder = path.rsplit_once('/').map_or("", |(folder, _)| folder);
+        self.docs.at = folder.to_string();
+        while !folder.is_empty() {
+            self.docs.opened.insert(folder.to_string());
+            folder = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
+        }
+        let _ = self.docs_update(DocsMessage::Pick(path.to_string()));
+    }
+
+    /// The documents of the project folder that are about element `id` of the model, for the
+    /// right pane; none when no document is linked to it. A document goes to Docs.
+    pub(super) fn docs_of_element(&self, p: Palette, l: Language, id: u64) -> Option<Element<'_, Message>> {
+        if self.docs.register.documents.is_empty() {
+            return None;
+        }
+        let props: serde_json::Value = self.model.as_ref()?.props.get(&id).and_then(|props| serde_json::from_str(props).ok()).unwrap_or_default();
+        let key = element_key(&props, id);
+        let mut rows = Column::new().spacing(2);
+        let mut any = false;
+        for document in self.docs.register.about(&key) {
+            any = true;
+            let mut said = vec![standing_text(document.status, l).to_string()];
+            if !document.revision.is_empty() {
+                said.push(document.revision.clone());
+            }
+            rows = rows.push(
+                button(column![
+                    text(document.name().to_string()).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph),
+                    row![text(said.remove(0)).size(11).color(p.text_muted)].push(said.pop().map(|revision| text(revision).size(11).color(p.text_muted))).spacing(8),
+                ])
+                .padding([2, 6])
+                .width(Fill)
+                .style(move |_, s| p.row_button(s))
+                .on_press(Message::Docs(DocsMessage::Show(document.file.clone()))),
+            );
+        }
+        any.then(|| rows.into())
     }
 
     /// Shows the Docs tab again, as it was.
@@ -490,6 +587,7 @@ impl App {
                 }
                 docs.listing = Arc::new(listing);
                 docs.register = register;
+                docs.known = true;
                 docs.sync = Some(sync);
                 docs.notice = None;
             }
@@ -1044,6 +1142,68 @@ mod tests {
         send(&mut app, DocsMessage::Open);
         send(&mut app, DocsMessage::Unlink("g-10".into()));
         assert_eq!(Register::read(&root).of("drawings/A-101.pdf").map(|d| d.elements.len()), Some(1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_selected_element_lists_the_documents_about_it_and_one_opens_in_docs() {
+        let root = project("element", &["drawings/plans/A-101.pdf", "notes.txt"]);
+        let mut app = opened(&root);
+        app.set_model(model());
+        app.sel.set(Some(Pickable::Element(10)));
+        app.selection_changed();
+        send(&mut app, DocsMessage::Open);
+        send(&mut app, DocsMessage::Pick("drawings/plans/A-101.pdf".into()));
+        send(&mut app, DocsMessage::Title("Ground floor plan".into()));
+        send(&mut app, DocsMessage::SaveTitle);
+        send(&mut app, DocsMessage::Standing(Standing::Shared));
+        send(&mut app, DocsMessage::Link);
+        // back at the model, the wall says which document is about it
+        let _ = app.update(Message::SelectTab(0));
+        assert!(shows(&app, "DOCUMENTS") && shows(&app, "Ground floor plan"));
+        assert!(shows(&app, "Shared"));
+        // the other wall has none
+        app.sel.set(Some(Pickable::Element(20)));
+        app.selection_changed();
+        assert!(!shows(&app, "DOCUMENTS") && !shows(&app, "Ground floor plan"));
+        // the document opens in Docs: its folder shows, open in the tree, and it is picked
+        send(&mut app, DocsMessage::Show("drawings/plans/A-101.pdf".into()));
+        assert!(app.docs.shown);
+        assert_eq!((app.docs.at.as_str(), app.docs.pick.as_deref()), ("drawings/plans", Some("drawings/plans/A-101.pdf")));
+        assert!(app.docs.opened.contains("drawings") && app.docs.opened.contains("drawings/plans"));
+        assert_eq!(app.docs.title, "Ground floor plan");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_register_is_read_for_a_model_before_docs_was_opened() {
+        let root = project("known", &["drawings/A-101.pdf"]);
+        // someone linked the plan to wall 10 before
+        {
+            let mut app = opened(&root);
+            app.set_model(model());
+            app.sel.set(Some(Pickable::Element(10)));
+            app.selection_changed();
+            send(&mut app, DocsMessage::Open);
+            send(&mut app, DocsMessage::Folder("drawings".into()));
+            send(&mut app, DocsMessage::Pick("drawings/A-101.pdf".into()));
+            send(&mut app, DocsMessage::Link);
+        }
+        // a fresh start with that folder chosen, Docs not opened
+        let mut app = App::default();
+        assert!(!app.docs_wants_register(), "no folder, nothing to read");
+        app.docs.folder = Some(root.clone());
+        assert!(app.docs_wants_register());
+        // the register of another folder is not this project's
+        send(&mut app, DocsMessage::Known(Box::new((root.join("drawings"), Register::read(&root)))));
+        assert!(app.docs_wants_register() && app.docs.register.documents.is_empty());
+        send(&mut app, DocsMessage::Known(Box::new((root.clone(), Register::read(&root)))));
+        assert!(!app.docs_wants_register());
+        app.set_model(model());
+        app.sel.set(Some(Pickable::Element(10)));
+        app.selection_changed();
+        assert!(shows(&app, "DOCUMENTS") && shows(&app, "A-101.pdf"));
+        assert!(!app.docs.open, "Docs itself stays closed");
         let _ = std::fs::remove_dir_all(root);
     }
 

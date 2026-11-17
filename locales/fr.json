@@ -1082,6 +1082,7 @@
     "Record revision": "Enregistrer la révision",
     "Link to selection": "Lier à la sélection",
     "Select elements in the model to link this document to them.": "Sélectionnez des éléments dans le modèle pour y lier ce document.",
-    "Document": "Document"
+    "Document": "Document",
+    "Documents": "Documents"
   }
 }

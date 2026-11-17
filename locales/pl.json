@@ -1082,6 +1082,7 @@
     "Record revision": "Zapisz rewizję",
     "Link to selection": "Połącz z zaznaczeniem",
     "Select elements in the model to link this document to them.": "Zaznacz elementy w modelu, aby połączyć z nimi ten dokument.",
-    "Document": "Dokument"
+    "Document": "Dokument",
+    "Documents": "Dokumenty"
   }
 }

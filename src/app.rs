@@ -1808,7 +1808,9 @@ impl App {
                     return Task::batch([drawings, self.open(next, true)]);
                 }
                 self.remote_loaded();
-                return Task::batch([drawings, self.compute_schedules(), self.shot_after_delay()]);
+                // the register of the project folder, so the elements say which documents are about them
+                let register = self.docs_register();
+                return Task::batch([drawings, self.compute_schedules(), self.shot_after_delay(), register]);
             }
             Message::Loaded(Err(e)) => {
                 // one of several files does not read: the others still come
@@ -3671,6 +3673,10 @@ impl App {
                 content = content.push(row![container(prop_row(p, label, v)).width(Fill), pick].spacing(2).align_y(Center));
             }
             content = content.push(rule::horizontal(1));
+            // the documents of the project folder that are about this element (Docs)
+            if let Some(documents) = element.and_then(|id| self.docs_of_element(p, l, id)) {
+                content = content.push(section(l.text("Documenten", "Documents"))).push(documents).push(rule::horizontal(1));
+            }
         }
 
         // the picked grid line

@@ -1082,6 +1082,7 @@
     "Record revision": "Registrera revision",
     "Link to selection": "Länka till markeringen",
     "Select elements in the model to link this document to them.": "Markera element i modellen för att länka det här dokumentet till dem.",
-    "Document": "Dokument"
+    "Document": "Dokument",
+    "Documents": "Dokument"
   }
 }

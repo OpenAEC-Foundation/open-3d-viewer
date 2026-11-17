@@ -184,8 +184,9 @@ mod tests {
             super::save(&model, &crate::document::Document::from_model(&model), &out, true).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let text = std::fs::read_to_string(&out).unwrap();
             assert!(text.trim_end().ends_with("END-ISO-10303-21;"), "{}", path.display());
-            // (a model of curves only has no triangles)
-            assert!(text.contains("IFCTRIANGULATEDFACESET(") || text.contains("=IFCINDEXEDPOLYCURVE("), "{}: no geometry", path.display());
+            // triangles, or only curves (linetypes.3dm) as polylines
+            let geometry = text.contains("IFCTRIANGULATEDFACESET(") || text.contains("=IFCINDEXEDPOLYCURVE(");
+            assert!(geometry, "{}: no geometry", path.display());
             assert!(text.contains("IFCPROPERTYSET(") && text.contains("'Rhino'"), "{}: no Rhino properties", path.display());
             if path.file_stem().is_some_and(|s| s == "drafting") {
                 // 7 curves, 6 texts and 5 hatches

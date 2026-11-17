@@ -355,6 +355,47 @@ fn tekla_class(name: &str, kind: &str, profile: &str) -> (&'static str, &'static
     }
 }
 
+/// The IFC class and predefined type of a Vectorworks object: the entity Vectorworks itself
+/// keeps for it in its IFC data (`IfcDoor`, `IfcWallStandardCase`, a type entity for the things
+/// of that type), or else by the kind of object the reader names.
+fn vectorworks_class(entity: &str, category: &str) -> (&'static str, &'static str) {
+    match entity.strip_suffix("Type").unwrap_or(entity) {
+        "IfcWall" | "IfcWallStandardCase" => ("IFCWALL", "NOTDEFINED"),
+        "IfcSlab" => ("IFCSLAB", "FLOOR"),
+        // a roof plane is a slab of the roof in IFC 4
+        "IfcRoof" => ("IFCSLAB", "ROOF"),
+        "IfcColumn" => ("IFCCOLUMN", "COLUMN"),
+        "IfcBeam" => ("IFCBEAM", "BEAM"),
+        "IfcMember" => ("IFCMEMBER", "NOTDEFINED"),
+        "IfcDoor" => ("IFCDOOR", "DOOR"),
+        "IfcWindow" => ("IFCWINDOW", "WINDOW"),
+        "IfcStair" => ("IFCSTAIR", "NOTDEFINED"),
+        "IfcRamp" => ("IFCRAMP", "NOTDEFINED"),
+        "IfcRailing" => ("IFCRAILING", "NOTDEFINED"),
+        "IfcSpace" => ("IFCSPACE", "SPACE"),
+        "IfcCovering" => ("IFCCOVERING", "CEILING"),
+        "IfcCurtainWall" => ("IFCCURTAINWALL", "NOTDEFINED"),
+        "IfcFooting" => ("IFCFOOTING", "NOTDEFINED"),
+        "IfcPlate" => ("IFCPLATE", "NOTDEFINED"),
+        "IfcFurniture" | "IfcFurnishingElement" => ("IFCFURNITURE", "NOTDEFINED"),
+        "IfcSanitaryTerminal" => ("IFCSANITARYTERMINAL", "NOTDEFINED"),
+        "IfcLightFixture" => ("IFCLIGHTFIXTURE", "NOTDEFINED"),
+        _ => match category {
+            "wall" => ("IFCWALL", "NOTDEFINED"),
+            "slab" => ("IFCSLAB", "FLOOR"),
+            "roof" | "roof element" => ("IFCSLAB", "ROOF"),
+            "door" => ("IFCDOOR", "DOOR"),
+            "window" => ("IFCWINDOW", "WINDOW"),
+            "stair" => ("IFCSTAIR", "NOTDEFINED"),
+            "space" => ("IFCSPACE", "SPACE"),
+            "column" => ("IFCCOLUMN", "COLUMN"),
+            "beam" => ("IFCBEAM", "BEAM"),
+            "railing" => ("IFCRAILING", "NOTDEFINED"),
+            _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
+        },
+    }
+}
+
 /// Name, object type, tag, IFC class and predefined type of an element.
 struct Identity {
     name: String,
@@ -383,13 +424,8 @@ fn identity(format: &str, key: &Key, layer: &str, props: &[(String, String)]) ->
             "Zone" => ("IFCSPACE", "SPACE"),
             _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
         },
-        // Vectorworks: the object type as the vwx reader names it
-        "Vectorworks" => match category {
-            "wall" => ("IFCWALL", "NOTDEFINED"),
-            "slab" => ("IFCSLAB", "FLOOR"),
-            "roof" | "roof element" => ("IFCSLAB", "ROOF"),
-            _ => ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"),
-        },
+        // Vectorworks: the IFC entity the file gives the object, else what the object is
+        "Vectorworks" => vectorworks_class(get("IFC").unwrap_or(""), category),
         // an element this viewer modelled says its class itself
         _ => match get("class").unwrap_or("") {
             "IfcWall" => ("IFCWALL", "NOTDEFINED"),
@@ -986,6 +1022,19 @@ fn timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vectorworks_objects_take_the_class_their_file_gives_them() {
+        // the entity of the IFC data Vectorworks keeps, also for the things of a type
+        assert_eq!(vectorworks_class("IfcWallStandardCase", "wall"), ("IFCWALL", "NOTDEFINED"));
+        assert_eq!(vectorworks_class("IfcDoor", "door"), ("IFCDOOR", "DOOR"));
+        assert_eq!(vectorworks_class("IfcColumn", "beam"), ("IFCCOLUMN", "COLUMN"));
+        assert_eq!(vectorworks_class("IfcSanitaryTerminalType", "symbol"), ("IFCSANITARYTERMINAL", "NOTDEFINED"));
+        // without IFC data: by what the object is
+        assert_eq!(vectorworks_class("", "window"), ("IFCWINDOW", "WINDOW"));
+        assert_eq!(vectorworks_class("", "roof"), ("IFCSLAB", "ROOF"));
+        assert_eq!(vectorworks_class("IfcSomethingElse", "extrude"), ("IFCBUILDINGELEMENTPROXY", "NOTDEFINED"));
+    }
     use crate::model::{flat_shaded, Layer, Model};
     use std::path::PathBuf;
 

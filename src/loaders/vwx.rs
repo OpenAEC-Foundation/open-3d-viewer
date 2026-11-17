@@ -1,7 +1,9 @@
 //! Vectorworks (.vwx documents and .sta templates) via the OpenAEC vwx reader: one layer per
 //! Vectorworks layer and class, the drawn objects pickable, with their properties (name, object
-//! type, layer, class, symbol); what is in an invisible class starts switched off; the saved
-//! views of the document.
+//! type, layer, class, symbol, the values of their records and the IFC entity Vectorworks
+//! keeps for them); lines, arcs and the outlines of shapes without a fill as line work; what is
+//! on an invisible layer or in an invisible class starts switched off; the saved views of the
+//! document.
 use super::{Loaded, Loader, Phase, Progress, Source};
 use crate::model::{Layer, ProjectData, SavedView, ViewCamera, ViewKind};
 
@@ -60,8 +62,8 @@ fn layer(mesh: vwx_read::model::Mesh) -> Layer {
         props: mesh.props,
         hidden: mesh.hidden,
         points: false,
-        lines: Vec::new(),
-        line_elements: Vec::new(),
+        lines: mesh.lines,
+        line_elements: mesh.line_elements,
     }
 }
 
@@ -107,6 +109,25 @@ mod tests {
         let forward = view.camera.expect("its camera").forward;
         // down at 30 degrees
         assert!((forward[2] + 0.5).abs() < 1e-5 && (forward[0] + forward[1]).abs() < 1e-5, "{forward:?}");
+    }
+
+    /// `02_line` of the ladder: a line is line work, pickable.
+    #[test]
+    fn reads_the_line_work_of_a_vectorworks_file() {
+        let Some(samples) = std::env::var_os("VWX_SAMPLES") else { return };
+        let path = std::path::PathBuf::from(samples).join("ladder/2027/02_line.vwx");
+        let model = super::super::load(&path).expect("Vectorworks sample");
+        let layer = model.layers.iter().find(|l| !l.lines.is_empty()).expect("a layer with a line");
+        assert_eq!((layer.lines.len(), layer.line_elements.len()), (2, 1));
+    }
+
+    /// `90_record` of the ladder: the line with the record `Gegevens`, field `Naam`.
+    #[test]
+    fn reads_the_records_of_a_vectorworks_file() {
+        let Some(samples) = std::env::var_os("VWX_SAMPLES") else { return };
+        let path = std::path::PathBuf::from(samples).join("ladder/2027/90_record.vwx");
+        let model = super::super::load(&path).expect("Vectorworks sample");
+        assert!(model.props.values().any(|p| p.contains(r#""Gegevens.Naam":"Balk-1""#)), "{:?}", model.props.values().collect::<Vec<_>>());
     }
 
     #[test]

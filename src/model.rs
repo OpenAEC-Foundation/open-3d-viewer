@@ -38,6 +38,9 @@ pub struct Layer {
     /// indices, drawn unlit in their vertices' colours in every view mode. Their vertices are
     /// not used by `indices`.
     pub lines: Vec<u32>,
+    /// The curves among the line segments that are elements: (element id, first index into
+    /// `lines`, index count), as `elements` for the triangles.
+    pub line_elements: Vec<(u64, u32, u32)>,
 }
 
 impl Layer {
@@ -939,7 +942,7 @@ impl Model {
     /// Builds a model from layers: drops empty layers and computes the bounds.
     pub fn new(path: PathBuf, format: impl Into<String>, mut layers: Vec<Layer>) -> Self {
         let props: HashMap<u64, String> = layers.iter_mut().flat_map(|l| std::mem::take(&mut l.props)).collect();
-        layers.retain(|l| (l.points || !l.indices.is_empty()) && !l.positions.is_empty());
+        layers.retain(|l| (l.points || !l.indices.is_empty() || !l.lines.is_empty()) && !l.positions.is_empty());
         layers.iter_mut().for_each(unshare_element_vertices);
         let layers: Vec<Layer> = layers
             .into_iter()
@@ -1115,9 +1118,27 @@ impl Model {
                     layer.indices = indices;
                     layer.elements = elements;
                 }
+                if layer.line_elements.iter().any(|e| gone.contains(&e.0)) {
+                    // the curves of the elements gone; segments of no element stay
+                    let mut lines = Vec::with_capacity(layer.lines.len());
+                    let mut elements = Vec::with_capacity(layer.line_elements.len());
+                    let mut at = 0usize;
+                    for &(id, first, count) in &layer.line_elements {
+                        let (first, end) = ((first as usize).min(layer.lines.len()), ((first + count) as usize).min(layer.lines.len()));
+                        lines.extend_from_slice(&layer.lines[at.min(first)..first]);
+                        if !gone.contains(&id) {
+                            elements.push((id, lines.len() as u32, (end - first) as u32));
+                            lines.extend_from_slice(&layer.lines[first..end]);
+                        }
+                        at = at.max(end);
+                    }
+                    lines.extend_from_slice(&layer.lines[at.min(layer.lines.len())..]);
+                    layer.lines = lines;
+                    layer.line_elements = elements;
+                }
                 layer
             })
-            .filter(|l| l.points || !l.indices.is_empty())
+            .filter(|l| l.points || !l.indices.is_empty() || !l.lines.is_empty())
             .collect();
         let mut project = self.project.clone();
         project.walls.retain(|id, _| !gone.contains(id));

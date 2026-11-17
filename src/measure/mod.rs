@@ -514,6 +514,7 @@ mod tests {
             hidden: false,
             points: false,
             lines: Vec::new(),
+            line_elements: Vec::new(),
         }
     }
 

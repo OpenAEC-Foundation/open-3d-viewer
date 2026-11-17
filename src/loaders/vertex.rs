@@ -177,7 +177,7 @@ fn decode(buf: &[u8]) -> Result<Loaded, String> {
         }
         let elements = l["elements"].as_array().into_iter().flatten().filter_map(|e| Some((e[0].as_u64()?, e[1].as_u64()? as u32, e[2].as_u64()? as u32))).collect();
         let props = l["props"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_u64()?, p[1].as_str()?.to_string()))).collect();
-        layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false, points: false, lines: Vec::new() });
+        layers.push(Layer { name: l["name"].as_str().unwrap_or("Layer").to_string(), color, positions, normals, colors, indices, elements, props, hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new() });
     }
     // the drawings of a project, after the layers: per drawing its lines (x and y of both ends,
     // metres), the widths of their pens and, when the header says so, their colours; its texts

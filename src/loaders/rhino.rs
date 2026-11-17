@@ -8,7 +8,8 @@
 //! extrusions (the analysis meshes when there are no render meshes), and when a file has none
 //! (saved by a script or another program, or with "save small") a mesh the viewer makes from the
 //! exact geometry, as Rhino does on opening it ([`tessellate`]); block instances with their
-//! nested blocks and transforms; point clouds and points as point layers. One layer per Rhino
+//! nested blocks and transforms; SubD objects by their limit surface ([`subd`]); point clouds
+//! and points as point layers. One layer per Rhino
 //! layer (its full path, `Parent::Child`), in the layer colour, hidden when the layer or one of
 //! its parents is off; the members of a block instance on a layer that is off go to that hidden
 //! layer. Every object is a pickable element with its name, object type, layer, id,
@@ -20,9 +21,8 @@
 //! (survey coordinates) moves to a local origin, kept in the project information. Point clouds
 //! are thinned out while drawing; blocks, meshes and points are drawn up to limits, so that a
 //! damaged or hostile file cannot exhaust memory or run for ever. Curves, annotations,
-//! hatches, lights, SubD objects (Rhino stores no mesh for them) and polysurfaces on surfaces
-//! the viewer cannot evaluate (offset surfaces) are left out and counted in the project
-//! information.
+//! hatches, lights and polysurfaces on surfaces the viewer cannot evaluate (offset surfaces) are
+//! left out and counted in the project information.
 //! Hidden objects, objects on layouts and block definition geometry outside an instance are not
 //! drawn.
 
@@ -32,6 +32,7 @@ use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 
+mod subd;
 mod tessellate;
 
 pub struct RhinoLoader;
@@ -1078,7 +1079,12 @@ fn read_geometry<'a>(object: Object<'a>, object_type: u32, vertices: &mut usize)
         return Ok(Geometry::Points { points: c.take(24)?, colors: None, kind: "Point" });
     }
     if class == ON_SUBD {
-        return Ok(Geometry::Skipped("SubD objects (no mesh in the file)"));
+        // Rhino keeps no mesh of a SubD: its limit surface, from the control net
+        return Ok(match subd::subd(c, vertices) {
+            Ok(Some(mesh)) => Geometry::Meshes(vec![mesh], "SubD"),
+            Err(e) if e == TOO_MANY_VERTICES => return Err(e),
+            _ => Geometry::Skipped("SubD objects that could not be read"),
+        });
     }
     Ok(Geometry::Skipped(match object_type {
         1 | 2 => "points",
@@ -1758,6 +1764,7 @@ fn plural(kind: &str) -> &'static str {
         "Extrusion" => "extrusions",
         "Point cloud" => "point clouds",
         "Point" => "points",
+        "SubD" => "SubD objects",
         _ => "objects",
     }
 }
@@ -2200,7 +2207,7 @@ mod tests {
         assert_eq!(entry(&info, "Rhino application"), "Rhinoceros 7");
         assert_eq!(entry(&info, "Rhino units"), "millimetres (converted to metres)");
         assert_eq!(entry(&info, "Rhino objects drawn"), "1 block instances, 1 extrusions, 2 meshes, 1 point clouds, 1 polysurfaces");
-        assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects (no mesh in the file), 1 curves, 1 hidden objects, 1 objects on layouts");
+        assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects that could not be read, 1 curves, 1 hidden objects, 1 objects on layouts");
     }
 
     /// A Rhino 4 file: 4-byte chunk lengths, the attributes layout before Rhino 5, an
@@ -2603,17 +2610,18 @@ mod tests {
     /// meshes) and without them: layers and sublayers, a hidden and a locked layer, colours by
     /// layer, object and parent, a basic material with transparency, a PBR material, a layer
     /// material, colours per face, user text, an extrusion, a sphere, a mesh with vertex colours,
-    /// a block, points, and what the viewer leaves out (a hidden object, a SubD, a curve, a text,
+    /// a block, points, a SubD, and what the viewer leaves out (a hidden object, a curve, a text,
     /// a hatch). Both read the same.
     #[test]
     fn rhino9_layers_materials_colours_and_user_text() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
-        for (file, meshed) in [("everything_meshes.3dm", 1), ("everything_small.3dm", 13)] {
+        for (file, meshed) in [("everything_meshes.3dm", 2), ("everything_small.3dm", 14)] {
             let (model, info) = load(file, std::fs::read(dir.join(file)).unwrap());
             assert_eq!(entry(&info, "Rhino file version"), "Rhino 9 (archive version 90)");
-            assert_eq!(entry(&info, "Rhino objects drawn"), "1 block instances, 1 extrusions, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces", "{file}");
-            assert_eq!(entry(&info, "Rhino objects left out"), "1 SubD objects (no mesh in the file), 1 annotations, 1 curves, 1 hatches, 1 hidden objects", "{file}");
-            // the box on the hidden layer, which Rhino left without a mesh, is meshed by the viewer
+            assert_eq!(entry(&info, "Rhino objects drawn"), "1 SubD objects, 1 block instances, 1 extrusions, 1 meshes, 1 point clouds, 1 points, 10 polysurfaces, 1 surfaces", "{file}");
+            assert_eq!(entry(&info, "Rhino objects left out"), "1 annotations, 1 curves, 1 hatches, 1 hidden objects", "{file}");
+            // the SubD, and the box on the hidden layer which Rhino left without a mesh, are meshed
+            // by the viewer
             assert_eq!(entry(&info, "Rhino objects meshed by the viewer"), format!("{meshed} (saved without a render mesh)"), "{file}");
             let layer = |name: &str| model.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{file}: no layer {name}"));
             assert_eq!(layer("Walls::Interior").color, [40.0 / 255.0, 40.0 / 255.0, 200.0 / 255.0]);
@@ -2641,6 +2649,44 @@ mod tests {
             let props = &elements["Box user text"].1;
             assert_eq!((props["Fire rating"].as_str(), props["Supplier"].as_str()), (Some("60 min"), Some("ACME")));
             assert!(!elements.contains_key("Hidden box"));
+        }
+    }
+
+    /// SubD objects made in Rhino 9 (`subd.3dm`, from make_subd.py): smooth, with creased edges,
+    /// an open patch with corners, triangles, a pentagon, semi-sharp edges of constant and of
+    /// varying sharpness, a dart and a fine ring. Rhino keeps no mesh of them; the viewer's mesh
+    /// of the limit surface has the area Rhino computes for its exact NURBS form, within 0.5%.
+    #[test]
+    fn subd_limit_surfaces_match_rhino() {
+        // name, area in square millimetres of the limit surface (SubD.ToBrep) in Rhino 9
+        let expected = [
+            ("Smooth box", 20.3797),
+            ("Creased top", 28.7320),
+            ("Open patch", 20.0852),
+            ("Triangle ball", 24.2780),
+            ("Pentagon prism", 16.7190),
+            ("Sharp box", 24.2653),
+            ("Varying sharp box", 24.1884),
+            ("Dart", 38.6362),
+            ("Ring", 117.3877),
+        ];
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino/subd.3dm");
+        let (model, info) = load("subd.3dm", std::fs::read(path).unwrap());
+        assert_eq!(entry(&info, "Rhino objects drawn"), "9 SubD objects");
+        let mut areas = HashMap::new();
+        for layer in &model.layers {
+            let p = |i: u32| DVec3::from_slice(&layer.positions[3 * i as usize..3 * i as usize + 3].iter().map(|&v| v as f64).collect::<Vec<_>>());
+            for &(id, start, count) in &layer.elements {
+                let props: serde_json::Value = serde_json::from_str(&model.props[&id]).unwrap();
+                assert_eq!(props["Type"], "SubD");
+                let tris = &layer.indices[start as usize..(start + count) as usize];
+                let area: f64 = tris.chunks_exact(3).map(|t| 0.5 * (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length()).sum();
+                areas.insert(props["Name"].as_str().unwrap().to_string(), 1e6 * area);
+            }
+        }
+        for (name, rhino) in expected {
+            let ours = areas[name];
+            assert!((ours - rhino).abs() <= 0.005 * rhino, "{name}: {ours} against {rhino} in Rhino");
         }
     }
 }

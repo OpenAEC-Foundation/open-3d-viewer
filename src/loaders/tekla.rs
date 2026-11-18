@@ -68,11 +68,26 @@ impl Loader for TeklaLoader {
                 None => project.info.push(("Tekla drawings".into(), format!("{} (they are read from the model folder, on the desktop)", document.drawings.len()))),
             }
         }
-        let layers = document.meshes.into_iter().map(|mesh| Layer {
-            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new(), line_elements: Vec::new()
-        }).collect();
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
+        // the analysis models, with their summary and notes
+        let mut structural = super::tekla_analysis::models(&document.structural, &document.catalogues.materials, &source.name());
+        if !structural.is_empty() {
+            let doc = bim_structural::SamDocument { origin: glam::DVec3::ZERO, source: Default::default(), models: structural };
+            let info = super::sam::info(&doc, glam::DVec3::ZERO);
+            project.info.extend(info.into_iter().skip_while(|(k, _)| k != "Analysis models"));
+            structural = doc.models;
+        }
+        Ok(Loaded { structural, origin: None, layers: layers(document.meshes), views, project })
     }
+}
+
+/// The parts (and what else the reader draws) as layers.
+fn layers(meshes: Vec<tekla_read::Mesh>) -> Vec<Layer> {
+    meshes
+        .into_iter()
+        .map(|mesh| Layer {
+            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new(), line_elements: Vec::new()
+        })
+        .collect()
 }
 
 /// The levels of the grids (their Z lines, by label, low to high) and their X and Y lines, drawn
@@ -242,6 +257,15 @@ fn draw(sheet: &mut Sheet, s: &Snapshot) {
                 };
                 for k in 0..n {
                     line(at(k), at(k + 1));
+                }
+            }
+            // an open polyline (a hand-drawn one): its edges, straight or bulged
+            Shape::Polyline { edges } => {
+                for &(from, to, bulge) in edges {
+                    let points = arc(from, to, bulge);
+                    for w in points.windows(2) {
+                        line(p(w[0]), p(w[1]));
+                    }
                 }
             }
             Shape::Polygon { edges, fill } => {
@@ -466,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_drawing_is_a_sheet_with_what_its_snapshot_draws() {
-        let item = |object: u32, colour: Option<[u8; 3]>, shape: Shape| Item { object, colour, shape };
+        let item = |object: u32, colour: Option<[u8; 3]>, shape: Shape| Item { object, kind: 0, colour, shape };
         let snapshot = Snapshot {
             paper_mm: [297.0, 210.0],
             title: "KOLOM A [K1]".into(),

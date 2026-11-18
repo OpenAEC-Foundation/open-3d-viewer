@@ -4592,7 +4592,7 @@ mod tests {
 
     /// Two boxes as elements 1 and 2 of one layer, the second sunk into the first.
     fn two_blocks() -> Model {
-        let mut layer = Layer { name: "Walls".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new() };
+        let mut layer = Layer { name: "Walls".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), splats: None };
         for (id, lo, hi) in [(1u64, [0.0f32, 0.0, 0.0], [4.0f32, 0.2, 3.0]), (2, [1.0, -1.0, 1.0], [1.3, 1.0, 1.3])] {
             let first = layer.indices.len() as u32;
             let base = (layer.positions.len() / 3) as u32;
@@ -4869,7 +4869,7 @@ mod tests {
     #[test]
     fn a_sign_behind_a_wall_is_out_of_sight() {
         // a room of 8 × 6 m; a wall across it at x = 4; a sign at x = 7 on the far side wall
-        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new() };
+        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), splats: None };
         let boxes: [(u64, &str, &str, [f32; 3], [f32; 3]); 3] = [(1, "IfcSpace", "0.01", [0.0, 0.0, 0.0], [8.0, 6.0, 3.0]), (2, "IfcWall", "Wand", [4.0, 0.0, 0.0], [4.1, 6.0, 3.0]), (3, "IfcBuildingElementProxy", "Vluchtwegbord", [7.9, 2.8, 2.2], [7.95, 3.2, 2.4])];
         for (id, class, name, lo, hi) in boxes {
             let first = layer.indices.len() as u32;

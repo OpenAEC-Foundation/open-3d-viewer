@@ -603,6 +603,7 @@ mod tests {
             points: false,
             lines: Vec::new(),
             line_elements: Vec::new(),
+            splats: None,
         }
     }
 

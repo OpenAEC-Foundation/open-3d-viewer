@@ -30,6 +30,27 @@ impl Loader for GltfLoader {
         true
     }
 
+    fn load_with(&self, source: &Source, progress: &super::Progress) -> Result<super::Loaded, String> {
+        progress.set(super::Phase::Read);
+        // a splat scene (KHR_gaussian_splatting) goes to the splat reader: the glTF crate turns
+        // the extension's attributes down
+        let data = source.read()?;
+        if splat_read::gltf::is_splat(&data) {
+            let base = source.path().and_then(Path::parent).map(Path::to_path_buf);
+            let path = source.path().map(Path::to_path_buf);
+            let external = |uri: &str| {
+                let file = referenced_file(base.as_deref()?, uri)?;
+                super::check_reference(path.as_deref()?, &file).ok()?;
+                std::fs::read(file).ok()
+            };
+            let splats = splat_read::gltf::read(&data, &external).map_err(|e| format!("{}: {e}", source.name()))?;
+            return Ok(super::splat::loaded(splats, &source.stem()));
+        }
+        drop(data);
+        let layers = self.load(source)?;
+        Ok(super::Loaded { structural: Vec::new(), origin: None, layers, views: Vec::new(), project: crate::model::ProjectData::default() })
+    }
+
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         let (doc, buffers, images) = match source.path() {
             Some(path) => import_file(path)?,

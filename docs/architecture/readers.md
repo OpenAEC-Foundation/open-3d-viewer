@@ -81,6 +81,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 |---|---:|---|---|
 | VRML and X3D (`.wrl`, `.x3d`) | 1,024 | in the app | New repository. |
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
+| Gaussian splats (splat `.ply`, `.spz`, glTF with `KHR_gaussian_splatting`) | 85 (`splat.rs`, tests besides) | `splat-dll` (one crate, `splat-read`, public) | Apart from the start (2026-11-18): the PLY and glTF loaders hand a splat file to it, the adapter only copies its splats into a point layer with `SplatData`. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
 | COPC (`.copc.laz`) | in `las.rs` | the `las` crate's COPC reader (MIT) | Adapter: the app picks which octree levels to read for its point limit, the crate reads them. Added 2026-11-18. |

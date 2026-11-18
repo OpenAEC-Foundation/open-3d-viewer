@@ -3824,6 +3824,7 @@ dependencies = [
  "tempfile",
  "threedm-core",
  "threedm-read",
+ "threemf-read",
  "tobj",
  "ttf-parser",
  "ureq",
@@ -5607,6 +5608,24 @@ dependencies = [
  "threedm-core",
  "threedm-model",
  "ttf-parser",
+]
+
+[[package]]
+name = "threemf-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/3mf-dll?rev=d2cbf02a606aa3f7d4956d5fcd2cc5e79a649c27#d2cbf02a606aa3f7d4956d5fcd2cc5e79a649c27"
+
+[[package]]
+name = "threemf-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/3mf-dll?rev=d2cbf02a606aa3f7d4956d5fcd2cc5e79a649c27#d2cbf02a606aa3f7d4956d5fcd2cc5e79a649c27"
+dependencies = [
+ "flate2",
+ "glam 0.30.10",
+ "image",
+ "roxmltree 0.20.0",
+ "threemf-model",
+ "zip 9.3.0",
 ]
 
 [[package]]

@@ -81,8 +81,9 @@ Together this is some 30,000 lines of format knowledge in the app.
 |---|---:|---|---|
 | VRML and X3D (`.wrl`, `.x3d`) | 1,024 | in the app | New repository. |
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
-| PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
+| PCD, PTX, XYZ, ASC grid, OFF, AMF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
+| 3MF (`.3mf`) | 30 | `3mf-dll` (`threemf-model`, `threemf-read`) | Moved; the adapter only maps. |
 
 ## Moved so far
 
@@ -98,6 +99,10 @@ Together this is some 30,000 lines of format knowledge in the app.
 - 2026-11-18, Revit: how the browser orders the views (`rvt_export::browser`) and the typefaces
   of the texts (`rvt_read::fonts`; 429 lines and three tests left the app, which copies the
   reader's `Organization` and `FontFace` into its `ViewOrder` and `Face`).
+
+- 2026-11-18, 3MF: the whole reader (`src/loaders/threemf.rs`, 347 lines and three tests) moved
+  unchanged into `3mf-dll`, which then gained the materials, beam lattice and slice extensions and
+  the project files of slicers.
 
 ## Order
 

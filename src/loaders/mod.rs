@@ -574,6 +574,16 @@ mod tests {
     }
 
     #[test]
+    fn loads_3mf_through_its_reader() {
+        let model = load(&repo_file("test-models/test-sphere.3mf")).expect("3MF sphere");
+        assert_eq!(model.format, "3MF");
+        assert!(model.triangle_count() > 1000, "{}", model.triangle_count());
+        // a 10 mm radius sphere, in metres
+        assert!(model.bounds.size().iter().all(|&s| (s - 0.02).abs() < 0.001), "{:?}", model.bounds.size());
+        assert!(model.props.values().any(|p| p.contains("\"Object id\"")));
+    }
+
+    #[test]
     fn rejects_unknown_extension() {
         let error = load(Path::new("x.unknownext")).unwrap_err();
         assert_eq!(error, "Unsupported file type: .unknownext");

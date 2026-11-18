@@ -559,6 +559,12 @@ pub enum Msg {
     NativeWindow(u64),
     CloseWindow,
     Update,
+    /// The Planner's web frame loads its page again.
+    PlannerReload,
+    /// The page of the Planner's web frame opens in the system's browser.
+    PlannerBrowser,
+    /// What laying, hiding or reloading the Planner's web frame gave.
+    PlannerFrame(Result<(), String>),
     /// Opens the desktop app's download page (from [`Dialog::DesktopOnly`]).
     DownloadDesktop,
 }
@@ -595,6 +601,9 @@ pub struct Studio {
     height: f32,
     /// Whether the window has told its size (it does when it changes, not always when it opens).
     sized: bool,
+    /// The window is open, and where the Planner's web frame was last laid in it (`None`: hidden).
+    window_open: bool,
+    planner_shown: Option<[f32; 4]>,
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
@@ -686,6 +695,8 @@ impl Studio {
             width: 1280.0,
             height: 800.0,
             sized: false,
+            window_open: false,
+            planner_shown: None,
             compact_panel: None,
             ribbon_folded: false,
             edition: Edition::Studio,
@@ -909,6 +920,36 @@ impl Studio {
             Page::Extensions => SettingsPage::Extensions,
             _ => SettingsPage::General,
         };
+    }
+
+    /// Where the Planner's web frame lies in the window, in the window's own units (layout units
+    /// times the interface size): the whole workspace, from under the ribbon to the status bar.
+    /// `None` when it is hidden: another product, File, or a dialog, which the app draws itself
+    /// and which a frame over the window would cover.
+    pub fn planner_area(&self) -> Option<[f32; 4]> {
+        use openaec_ui::design::shell::{RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
+        if self.product() != Product::Planner || self.backstage || self.dialog.is_some() || !self.window_open {
+            return None;
+        }
+        let folded = self.compact() && self.ribbon_folded;
+        let top = TITLEBAR + RIBBON_TABS + if folded { 0.0 } else { RIBBON };
+        let scale = self.prefs.scale() as f32;
+        Some([0.0, top * scale, self.width * scale, (self.height - top - STATUSBAR).max(1.0) * scale])
+    }
+
+    /// [`Studio::update`], and then the Planner's web frame laid where the window now has its
+    /// workspace, when that changed: the frame follows the product, the window and the ribbon.
+    pub fn update_with_frame(&mut self, message: Msg) -> Task<Msg> {
+        let task = self.update(message);
+        let area = self.planner_area();
+        if area == self.planner_shown {
+            return task;
+        }
+        self.planner_shown = area;
+        #[cfg(all(feature = "planner", windows))]
+        return Task::batch([task, iced::window::latest().and_then(move |id| iced::window::run(id, move |window| crate::planner_frame::place(&window, area))).map(Msg::PlannerFrame)]);
+        #[cfg(not(all(feature = "planner", windows)))]
+        task
     }
 
     /// The size of the 3D view in a window of `width` x `height`, with the panels as they are.
@@ -1258,6 +1299,8 @@ impl Studio {
                 .enabled(app.section_on || app.plane.is_some()),
             // Docs: the project folder, and opening and linking the picked document
             Command::new("docs.folder", l.text("Projectmap", "Project folder"), go(Message::Docs(crate::app::DocsMessage::Choose))).icon(small("project.folder"), large("project.folder")),
+            Command::new("planner.reload", l.text("Vernieuwen", "Refresh"), Msg::PlannerReload).icon(small("view.reset-camera"), large("view.reset-camera")),
+            Command::new("planner.browser", l.text("In browser openen", "Open in browser"), Msg::PlannerBrowser).icon(small("file.import"), large("file.import")),
             Command::new("gis.map", l.text("Kaart laden", "Load map"), go(Message::Gis(crate::app::GisMessage::Map(crate::app::MapMessage::Fetch(l))))).icon(small("view.top"), large("view.top")).detail(l.text("Legt de kaart die in het tabblad GIS rechts gekozen is onder het project: de achtergrondkaart, de luchtfoto of een eigen WMS-dienst.", "Lays the map chosen in the GIS tab on the right under the project: the background map, the aerial photograph or a WMS service of your own.")),
             Command::new("geo.fetch", l.text("Sonderingen laden", "Load soundings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Fetch(l))))).icon(small("draw.coordinate"), large("draw.coordinate")).detail(l.text("Haalt de sonderingen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the soundings around the place from the Dutch register of the subsurface and puts them in the model.")),
             Command::new("geo.borings", l.text("Boringen laden", "Load borings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::FetchBorings(l))))).icon(small("pile.columns"), large("pile.columns")).detail(l.text("Haalt de geotechnische boringen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.")),
@@ -1996,7 +2039,10 @@ impl Studio {
                 return iced::window::latest().and_then(iced::window::toggle_maximize);
             }
             Msg::ResizeEdge(direction) => return iced::window::latest().and_then(move |id| iced::window::drag_resize(id, direction)),
-            Msg::WindowOpened(id) => return iced::window::raw_id::<Msg>(id).map(Msg::NativeWindow),
+            Msg::WindowOpened(id) => {
+                self.window_open = true;
+                return iced::window::raw_id::<Msg>(id).map(Msg::NativeWindow);
+            }
             Msg::NativeWindow(_raw) => {
                 // between displays with a different scale the window keeps its size (`dpi_drag`)
                 #[cfg(windows)]
@@ -2044,6 +2090,18 @@ impl Studio {
                     FeedbackMsg::Send => {}
                 }
             }
+            Msg::PlannerReload => {
+                #[cfg(all(feature = "planner", windows))]
+                return iced::window::latest().and_then(|id| iced::window::run(id, |_| crate::planner_frame::reload())).map(Msg::PlannerFrame);
+            }
+            Msg::PlannerBrowser => {
+                if let Err(e) = open_url(PLANNER_URL) {
+                    self.app.status = Status::Error(e);
+                }
+            }
+            // a frame that could not be made says why in the status bar; the page under it stays
+            Msg::PlannerFrame(Err(e)) => self.app.status = Status::Error(e),
+            Msg::PlannerFrame(Ok(())) => {}
             Msg::DownloadDesktop => {
                 if let Err(e) = open_url(crate::loaders::DESKTOP_DOWNLOAD) {
                     self.app.status = Status::Error(e);
@@ -2422,6 +2480,8 @@ impl Studio {
             ],
             // roads, structures and rail: the pages are there, their tools are still to come
             RibbonPage::Infra | RibbonPage::Civil | RibbonPage::Rail => vec![(l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])])],
+            // the page itself is the program; the ribbon only loads it again or opens it outside
+            RibbonPage::Planner => vec![("Planner", vec![large("planner.reload"), large("planner.browser")])],
             // the ground under the project: what was investigated
             RibbonPage::Geo => vec![
                 (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
@@ -2575,13 +2635,26 @@ impl Studio {
 
     fn document_area(&self, look: Look) -> Element<'_, Msg> {
         let l = self.l();
+        // the Planner is a web page in a frame over the whole workspace: no panels, no tabs. This
+        // lies under the frame, and shows while the page is not there (a dialog, no web view)
+        if self.product() == Product::Planner {
+            let explanation = l.text(
+                "De webversie van Open Planner Studio opent hier in een webframe. Blijft dit leeg, dan ontbreekt de webweergave van het systeem of is er geen internet.",
+                "The web version of Open Planner Studio opens here in a web frame. If this stays empty, the system's web view is missing or there is no internet.",
+            );
+            return container(w::empty_state(look, large("drawing.plan"), "Open Planner Studio", explanation, Some(cm::button(look, &self.command("planner.browser"), K::Secondary, D::Regular))))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_| container::Style { background: Some(look.color.workspace.into()), ..Default::default() })
+                .into();
+        }
         let p = palette(look);
         let app = &self.app;
         let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer | Product::Docs | Product::Gis => (
+                Product::Viewer | Product::Docs | Product::Gis | Product::Planner => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2705,7 +2778,7 @@ impl Studio {
             }
             // Docs: the folders of the project folder
             Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
-            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Gis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Gis | Product::Planner => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
 
@@ -2933,6 +3006,9 @@ fn desktop_only_text(l: Language, format: &str) -> String {
 }
 
 /// Opens `url` in the browser: a new tab on the web, the default browser on the desktop.
+/// The page the Planner shows in its web frame.
+pub(crate) const PLANNER_URL: &str = "https://open-planner-studio.open-aec.com/";
+
 fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     return crate::web::open_url(url);
@@ -2995,7 +3071,7 @@ pub fn run(studio: Studio, icon: Option<iced::window::Icon>, antialiasing: bool)
     #[cfg(not(target_arch = "wasm32"))]
     let studio = Studio { update: if crate::managed::managed() { None } else { upd::check_installed(studio.edition.app_id(), VERSION) }, ..studio };
     let initial = std::sync::Mutex::new(Some(studio));
-    let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update, Studio::view)
+    let builder = iced::application(move || (initial.lock().unwrap_or_else(|e| e.into_inner()).take().expect("the application boots once"), Task::none()), Studio::update_with_frame, Studio::view)
         .title(Studio::title)
         .subscription(Studio::subscription)
         .theme(|s: &Studio| s.prefs.theme().iced())
@@ -3487,7 +3563,7 @@ mod tests {
         studio.dialog = Some(Dialog::Settings);
         studio.settings_page = SettingsPage::Extensions;
         let mut ui = iced_test::simulator(studio.view());
-        for product in Product::ALL {
+        for product in studio.extensions() {
             assert!(ui.find(product.full_name()).is_ok(), "{product:?}");
         }
     }
@@ -3584,6 +3660,44 @@ mod tests {
     }
 
     #[test]
+    fn the_planner_lays_its_web_frame_over_the_workspace_and_hides_it_elsewhere() {
+        use openaec_ui::design::shell::{RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
+        let mut studio = Studio::new(App::default());
+        // a web frame in the window: on Windows, for now
+        assert_eq!(studio.products.contains(&Product::Planner), cfg!(windows));
+        if !Product::Planner.built() {
+            return;
+        }
+        let _ = studio.update(Msg::Product(Product::Planner));
+        assert_eq!((studio.product(), studio.ribbon_page()), (Product::Planner, RibbonPage::Planner));
+        // no window yet: no frame; under it the page names the program and opens it outside
+        assert_eq!(studio.planner_area(), None);
+        {
+            let mut ui = iced_test::simulator(studio.view());
+            assert!(ui.find("Open Planner Studio").is_ok() && ui.find("Open in browser").is_ok());
+        }
+        // the frame is the workspace: the window's width, from under the ribbon to the status bar
+        studio.window_open = true;
+        let _ = studio.update(Msg::Sized(iced::Size::new(1400.0, 900.0)));
+        let (top, scale) = (TITLEBAR + RIBBON_TABS + RIBBON, studio.prefs.scale() as f32);
+        assert_eq!(studio.planner_area(), Some([0.0, top * scale, 1400.0 * scale, (900.0 - top - STATUSBAR) * scale]));
+        // it follows the window
+        let _ = studio.update(Msg::Sized(iced::Size::new(1000.0, 700.0)));
+        assert_eq!(studio.planner_area().map(|[_, _, w, h]| (w, h)), Some((1000.0 * scale, (700.0 - top - STATUSBAR) * scale)));
+        // a dialog and File are drawn by the app, which a frame would cover: it hides for them
+        studio.dialog = Some(Dialog::Settings);
+        assert_eq!(studio.planner_area(), None);
+        studio.dialog = None;
+        studio.backstage = true;
+        assert_eq!(studio.planner_area(), None);
+        studio.backstage = false;
+        assert!(studio.planner_area().is_some());
+        // and for every other product
+        let _ = studio.update(Msg::Product(Product::Viewer));
+        assert_eq!(studio.planner_area(), None);
+    }
+
+    #[test]
     fn docs_is_a_product_with_its_ribbon_its_page_and_the_folders_in_the_left_pane() {
         let root = project_folder("product");
         let mut studio = Studio::new(App::default());
@@ -3591,9 +3705,9 @@ mod tests {
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Docs, RibbonPage::Docs));
         assert!(studio.app.docs.open && studio.app.docs.shown, "its page shows");
         // it is on the switch once: a product there is, is no product to come; it stands where it
-        // was announced, after the Modeller (GIS came after it)
+        // was announced, after the Modeller (GIS and the Planner came after it)
         assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
-        assert_eq!(Product::ALL.last(), Some(&Product::Gis));
+        assert_eq!(Product::ALL.last(), Some(&Product::Planner));
         // no project folder yet: the page asks for one
         assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
         // with one: its folders are the left pane, its files the page
@@ -3640,7 +3754,7 @@ mod tests {
         let tabs = |studio: &Studio| -> Vec<String> { accessibility(studio).summary().into_iter().filter(|n| n.starts_with("Tab: ")).collect() };
         // the switch names the three products; the Viewer's ribbon has one tab, without modelling
         let shown = tabs(&studio);
-        for product in Product::ALL {
+        for product in studio.extensions() {
             assert!(shown.contains(&format!("Tab: {}", product.label())), "{shown:?}");
         }
         assert!(shown.contains(&"Tab: Home".to_string()) && !shown.contains(&"Tab: Model".to_string()), "{shown:?}");

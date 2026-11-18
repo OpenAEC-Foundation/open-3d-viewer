@@ -32,10 +32,13 @@ pub enum Product {
     /// Where the project lies and what lies around it: the place, the parcels and buildings,
     /// the terrain.
     Gis,
+    /// Open Planner Studio, the planning program of the same house: its web version in a web frame
+    /// (a trial, on Windows).
+    Planner,
 }
 
 impl Product {
-    pub const ALL: [Product; 7] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs, Product::Gis];
+    pub const ALL: [Product; 8] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs, Product::Gis, Product::Planner];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
@@ -47,6 +50,7 @@ impl Product {
             Product::Analysis => "analysis",
             Product::Docs => "docs",
             Product::Gis => "gis",
+            Product::Planner => "planner",
         }
     }
 
@@ -61,6 +65,7 @@ impl Product {
             "analysis" | "structural-analysis" => Some(Product::Analysis),
             "docs" | "documents" => Some(Product::Docs),
             "gis" | "gic" => Some(Product::Gis),
+            "planner" => Some(Product::Planner),
             _ => None,
         }
     }
@@ -76,6 +81,7 @@ impl Product {
             Product::Analysis => "Struct",
             Product::Docs => "Docs",
             Product::Gis => "GIC",
+            Product::Planner => "Planner",
         }
     }
 
@@ -89,6 +95,7 @@ impl Product {
             Product::Analysis => "Structural Analysis",
             Product::Docs => "Docs",
             Product::Gis => "GIS Infra Civil",
+            Product::Planner => "Planner",
         }
     }
 
@@ -97,7 +104,7 @@ impl Product {
     pub fn stage(self) -> Option<&'static str> {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
-            Product::Pointcloud | Product::Analysis | Product::Docs | Product::Gis => Some("(alpha)"),
+            Product::Pointcloud | Product::Analysis | Product::Docs | Product::Gis | Product::Planner => Some("(alpha)"),
             Product::Viewer | Product::Validator => None,
         }
     }
@@ -112,6 +119,7 @@ impl Product {
             Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
             Product::Docs => l.text("De documenten van het project: status, versies en koppelingen met het model", "The documents of the project: status, revisions and links to the model"),
             Product::Gis => l.text("GIS, infra en civiel: de kaart, de omgeving, het terrein en de ondergrond van het project", "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project"),
+            Product::Planner => l.text("De planning van het project: de webversie van Open Planner Studio in een webframe", "The planning of the project: the web version of Open Planner Studio in a web frame"),
         }
     }
 
@@ -125,6 +133,7 @@ impl Product {
             Product::Analysis => "product.analysis",
             Product::Docs => "product.docs",
             Product::Gis => "product.gis",
+            Product::Planner => "product.planner",
         }
     }
 
@@ -138,6 +147,7 @@ impl Product {
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
             Product::Docs => &[RibbonPage::Docs, RibbonPage::View],
             Product::Gis => &[RibbonPage::Gis, RibbonPage::Infra, RibbonPage::Civil, RibbonPage::Rail, RibbonPage::Geo, RibbonPage::View],
+            Product::Planner => &[RibbonPage::Planner],
         }
     }
 
@@ -151,6 +161,7 @@ impl Product {
             Product::Analysis => "Open BIM Structural Analysis",
             Product::Docs => "Open BIM Docs",
             Product::Gis => "Open BIM GIC",
+            Product::Planner => "Open BIM Planner",
         }
     }
 
@@ -164,6 +175,7 @@ impl Product {
             Product::Analysis => "open-bim-analysis",
             Product::Docs => "open-bim-docs",
             Product::Gis => "open-bim-gis",
+            Product::Planner => "open-bim-planner",
         }
     }
 
@@ -180,6 +192,8 @@ impl Product {
             Product::Docs => cfg!(not(target_arch = "wasm32")),
             // part of the viewer: map layers and terrain are models like any other
             Product::Gis => cfg!(feature = "viewer"),
+            // a web frame in the window: where the build holds one (Windows, for now)
+            Product::Planner => cfg!(all(feature = "planner", windows)),
         }
     }
 
@@ -263,6 +277,8 @@ pub enum RibbonPage {
     Civil,
     /// Rail: tracks, turnouts and clearance. Its tools are still to come.
     Rail,
+    /// Planner: the web frame of Open Planner Studio.
+    Planner,
 }
 
 impl RibbonPage {
@@ -279,6 +295,7 @@ impl RibbonPage {
             RibbonPage::Analysis => l.text("Rekenmodel", "Analysis"),
             RibbonPage::Docs => "Docs",
             RibbonPage::Gis => "GIS",
+            RibbonPage::Planner => "Planner",
             RibbonPage::Geo => l.text("Geotechniek", "Geotechnics"),
             RibbonPage::Infra => "Infra",
             RibbonPage::Civil => l.text("Civiel", "Civil"),
@@ -418,8 +435,8 @@ mod tests {
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
         // the switch: short names, and the four in alpha are the grey ones
-        assert_eq!(Product::ALL.map(Product::label), ["View", "Validator", "PointCloud", "Struct", "Modeller", "Docs", "GIC"]);
-        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true, true]);
+        assert_eq!(Product::ALL.map(Product::label), ["View", "Validator", "PointCloud", "Struct", "Modeller", "Docs", "GIC", "Planner"]);
+        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true, true, true]);
     }
 
     #[test]
@@ -430,7 +447,7 @@ mod tests {
         names.dedup();
         ids.sort();
         ids.dedup();
-        assert_eq!((names.len(), ids.len()), (7, 7));
+        assert_eq!((names.len(), ids.len()), (8, 8));
         // the Studio is what was released as the viewer: same name, same installer id
         assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);
@@ -452,6 +469,8 @@ mod tests {
         assert_eq!(Product::Validator.pages()[0], RibbonPage::Collaborate);
         assert_eq!(Product::Pointcloud.pages()[0], RibbonPage::Cloud);
         assert_eq!(Product::Docs.pages(), [RibbonPage::Docs, RibbonPage::View]);
+        // the Planner is a web page: its one tab is its own
+        assert_eq!(Product::Planner.pages(), [RibbonPage::Planner]);
     }
 
     #[test]

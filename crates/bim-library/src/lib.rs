@@ -20,6 +20,7 @@
 //! Lengths are metres.
 
 pub mod buildup;
+pub mod drawing;
 pub mod ifcx;
 pub mod inb;
 pub mod library;
@@ -75,6 +76,9 @@ pub enum LibraryError {
     BadProfile(String),
     /// A system type's bays or rows are not wider than its members.
     BadGrid,
+    /// A drawing standard names a scale, a pen or a style it does not have, or a line style's
+    /// dashes lack a gap; the text says which.
+    UnknownSetting(String),
 }
 
 impl std::fmt::Display for LibraryError {
@@ -88,6 +92,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::Unreadable(why) => write!(f, "Not a library: {why}"),
             LibraryError::BadProfile(why) => write!(f, "Not a profile: {why}"),
             LibraryError::BadGrid => f.write_str("A system's bays and rows must be wider than its members."),
+            LibraryError::UnknownSetting(key) => write!(f, "The drawing standard has no \"{key}\"."),
         }
     }
 }

@@ -1189,6 +1189,12 @@
     "Opens soundings from GEF files and puts them in the model.": "Apre sondaggi da file GEF e li inserisce nel modello.",
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, infrastrutture e opere civili: la mappa, i dintorni, il terreno e il sottosuolo del progetto",
     "Geotechnics": "Geotecnica",
-    "Civil": "Opere civili"
+    "Civil": "Opere civili",
+    "Frame steel": "Acciaio del telaio",
+    "In walls": "Nei muri",
+    "Steel is missing around the frame:": "Manca acciaio attorno al telaio:",
+    "all; e.g. *sandwich*": "tutti; es. *sandwich*",
+    "no": "senza",
+    "without steel in": "senza acciaio in"
   }
 }

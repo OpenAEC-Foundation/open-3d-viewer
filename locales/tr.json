@@ -1189,6 +1189,12 @@
     "Opens soundings from GEF files and puts them in the model.": "GEF dosyalarından sondajları açar ve modele koyar.",
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, altyapı ve inşaat: projenin haritası, çevresi, arazisi ve zemini",
     "Geotechnics": "Geoteknik",
-    "Civil": "İnşaat mühendisliği"
+    "Civil": "İnşaat mühendisliği",
+    "Frame steel": "Kasa çeliği",
+    "In walls": "Duvarlarda",
+    "Steel is missing around the frame:": "Kasanın çevresinde çelik eksik:",
+    "all; e.g. *sandwich*": "tümü; örn. *sandwich*",
+    "no": "yok",
+    "without steel in": "çeliksiz, içinde"
   }
 }

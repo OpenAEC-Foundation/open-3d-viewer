@@ -50,6 +50,9 @@ pub enum Kind {
     Near,
     /// The second stands in the line of sight to the first (a sight-line test).
     Hidden,
+    /// The opening `a` lacks steel around it (a frame test): which sides, as the bits of
+    /// [`crate::collab::frame`], is in the clash's distance.
+    Unframed,
 }
 
 /// A clash of element `a` of the first set with element `b` of the second.

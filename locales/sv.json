@@ -1189,6 +1189,12 @@
     "Opens soundings from GEF files and puts them in the model.": "Öppnar sonderingar från GEF-filer och lägger dem i modellen.",
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, infrastruktur och anläggning: kartan, omgivningen, terrängen och undergrunden i projektet",
     "Geotechnics": "Geoteknik",
-    "Civil": "Anläggning"
+    "Civil": "Anläggning",
+    "Frame steel": "Karmstål",
+    "In walls": "I väggar",
+    "Steel is missing around the frame:": "Stål saknas runt karmen:",
+    "all; e.g. *sandwich*": "alla; t.ex. *sandwich*",
+    "no": "ingen",
+    "without steel in": "utan stål i"
   }
 }

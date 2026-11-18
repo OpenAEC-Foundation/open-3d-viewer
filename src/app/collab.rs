@@ -204,7 +204,7 @@ impl Reach {
     pub fn of(kind: Kind, depth: f32, a: (Vec3, Vec3), b: (Vec3, Vec3)) -> Reach {
         match kind {
             Kind::Near => Reach::Near,
-            Kind::Hidden => Reach::Partly,
+            Kind::Hidden | Kind::Unframed => Reach::Partly,
             Kind::Inside => Reach::Through,
             Kind::Crossing => {
                 let size = |x: (Vec3, Vec3)| x.1 - x.0;
@@ -631,7 +631,7 @@ impl State {
         if names != self.rule_names {
             self.rule_names = names;
         }
-        let amounts: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| match c.kind { ClashKind::Hard => c.tolerance_mm, ClashKind::Clearance => c.clearance_mm, ClashKind::Sight => c.sight_m }).collect()).unwrap_or_default();
+        let amounts: Vec<f32> = self.rules().map(|r| r.clashes.iter().map(|c| match c.kind { ClashKind::Hard => c.tolerance_mm, ClashKind::Clearance => c.clearance_mm, ClashKind::Sight => c.sight_m, ClashKind::Frame => c.frame_reach_mm }).collect()).unwrap_or_default();
         // what is typed stays as typed while it says the same amount
         let same = |typed: &String, amount: f32| typed.trim().replace(',', ".").parse::<f32>().ok() == Some(amount);
         if amounts.len() != self.amounts.len() || !self.amounts.iter().zip(&amounts).all(|(t, a)| same(t, *a) || t.trim().is_empty() || t.ends_with(['.', ','])) {
@@ -839,6 +839,8 @@ pub enum Event {
     ClashProperty(usize, String),
     ClashValue(usize, String),
     ClashSightNames(usize, String),
+    /// The walls a frame test takes, by type or name, as typed.
+    ClashFrameWalls(usize, String),
     ClashSightShare(usize, String),
     ClashKindOf(usize, ClashKind),
     ClashAmount(usize, String),
@@ -1050,6 +1052,57 @@ fn run_clashes(model: &Model, models: &[(String, std::ops::Range<usize>)], rules
         };
         let (a, b): (Vec<usize>, Vec<usize>) = (side(&rule.a).into_iter().filter(in_scope).collect(), side(&rule.b).into_iter().filter(in_scope).collect());
         let solids = |side: &[usize]| side.iter().map(|&k| items[k].solid.clone()).collect::<Vec<_>>();
+        if rule.kind == ClashKind::Frame {
+            // each opening of the first side in a wall the test takes: the sides no steel of the
+            // second side frames; a pane within another opening is that opening's
+            let lower = |k: usize| format!("{} {}", items[k].class, model.layers[items[k].layer].name).to_ascii_lowercase();
+            let walls: Vec<usize> = (0..items.len()).filter(|&k| { let l = lower(k); l.starts_with("ifcwall") || l.ends_with("/ walls") || l.ends_with(" walls") || l.starts_with("swall") }).collect();
+            let bounds = |k: usize| (items[k].solid.min, items[k].solid.max);
+            let steel: Vec<crate::collab::frame::Bounds> = b.iter().map(|&k| bounds(k)).collect();
+            let reach = rule.frame_reach_mm.max(0.0) / 1000.0;
+            for &o in &a {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let (lo, hi) = bounds(o);
+                if (hi.x - lo.x).max(hi.y - lo.y) < 0.2 || a.iter().any(|&p| p != o && crate::collab::frame::within(bounds(o), bounds(p))) {
+                    continue;
+                }
+                // the wall it is in: the smallest whose box holds its middle
+                let mid = (lo + hi) / 2.0;
+                let host = walls.iter().copied().filter(|&w| { let (wl, wh) = bounds(w); mid.cmpge(wl - Vec3::splat(0.15)).all() && mid.cmple(wh + Vec3::splat(0.15)).all() })
+                    .min_by(|&x, &y| { let v = |k: usize| { let (l, h) = bounds(k); (h - l).x * (h - l).y * (h - l).z }; v(x).total_cmp(&v(y)) });
+                let wall_name = host.and_then(|w| model.props.get(&items[w].id).and_then(|p| field(p, "type").or_else(|| field(p, "Name")))).unwrap_or("");
+                if !rule.frame_walls.trim().is_empty() && (host.is_none() || !rule.takes_frame_wall(wall_name)) {
+                    continue;
+                }
+                let door = lower(o).contains("door") || lower(o).contains("deur");
+                let missing = crate::collab::frame::missing((lo, hi), host.map(bounds), &steel, reach, !door);
+                if missing == 0 {
+                    continue;
+                }
+                let ia = &items[o];
+                let ib = host.map_or(ia, |w| &items[w]);
+                rows.push(ClashRow {
+                    rule: rule.name.clone(),
+                    a: ia.id,
+                    b: ib.id,
+                    a_name: element_name(model, ia.id),
+                    b_name: element_name(model, ib.id),
+                    kind: Kind::Unframed,
+                    at: mid.to_array(),
+                    // the sides that are missing, as bits
+                    distance: missing as f32,
+                    decision: Decision::Open,
+                    group: rows.len(),
+                    copy: false,
+                    key: String::new(),
+                    fresh: false,
+                    reach: Reach::Partly,
+                });
+            }
+            continue;
+        }
         if rule.kind == ClashKind::Sight {
             // each element of the first side has to be seen from the room it is in: from places
             // at eye height all over it (or, without a room, around it), no further off than the
@@ -1586,6 +1639,7 @@ impl App {
             Kind::Inside => l.text("Het ene element ligt binnen het andere", "One element lies inside the other").to_string(),
             Kind::Near => format!("{} {mm} mm", l.text("De elementen liggen op", "The elements are apart by")),
             Kind::Hidden => format!("{} {:.0}% {}", l.text("Het eerste element is vanaf", "The first element is out of sight from"), row.distance * 100.0, l.text("van de plekken in zijn ruimte niet te zien: het tweede staat ervoor", "of the places in its room: the second stands before it")),
+            Kind::Unframed => format!("{} {}", l.text("Om het kozijn ontbreekt staal:", "Steel is missing around the frame:"), crate::collab::frame::words(row.distance as u8, l == Language::Dutch)),
         };
         let reach = self.model.as_ref().and_then(|m| Some(m.element_bounds(row.a)?.radius().max(m.element_bounds(row.b)?.radius()))).unwrap_or(2.0);
         topic.viewpoints.push(self.collab_viewpoint_at(Vec3::from_array(row.at), reach.min(6.0), &[row.a, row.b]));
@@ -2026,11 +2080,12 @@ impl App {
                         Kind::Inside => "inside",
                         Kind::Near => "clearance",
                         Kind::Hidden => "out of sight",
+                        Kind::Unframed => "steel missing",
                     };
                     let at = self.collab_to_world(Vec3::from_array(c.at));
                     let guid = |id| self.collab_guid_of(id).unwrap_or_default();
                     out.push_str(&format!("{},{},{kind},{:.0},{},{},{},{},{},{:.3},{:.3},{:.3}
-", quote(&c.rule), c.group + 1, c.distance * 1000.0, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
+", quote(&c.rule), c.group + 1, if c.kind == Kind::Unframed { 0.0 } else { c.distance * 1000.0 }, c.decision.key(), quote(&c.a_name), quote(&c.b_name), guid(c.a), guid(c.b), at[0], at[1], at[2]));
                 }
                 out
             }
@@ -2585,6 +2640,11 @@ impl App {
                     rule.sight_names = typed;
                 }
             }
+            Event::ClashFrameWalls(k, typed) => {
+                if let Some(rule) = self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)) {
+                    rule.frame_walls = typed;
+                }
+            }
             Event::ClashSightShare(k, typed) => {
                 if let (Some(rule), Ok(pct)) = (self.collab.rules_mut().and_then(|r| r.clashes.get_mut(k)), typed.trim().trim_end_matches('%').replace(',', ".").parse::<f32>()) {
                     if (0.0..=100.0).contains(&pct) {
@@ -2614,6 +2674,7 @@ impl App {
                             ClashKind::Hard => rule.tolerance_mm = mm,
                             ClashKind::Clearance => rule.clearance_mm = mm,
                             ClashKind::Sight => rule.sight_m = mm,
+                            ClashKind::Frame => rule.frame_reach_mm = mm,
                         }
                     }
                 }
@@ -3689,6 +3750,7 @@ impl App {
                             kind(l.text("Doorsnijding", "Crossing"), hard, ClashKind::Hard),
                             kind(l.text("Vrije ruimte", "Clearance"), rule.kind == ClashKind::Clearance, ClashKind::Clearance),
                             kind(l.text("Zichtlijn", "Sight line"), rule.kind == ClashKind::Sight, ClashKind::Sight),
+                            kind(l.text("Kozijnstaal", "Frame steel"), rule.kind == ClashKind::Frame, ClashKind::Frame),
                             Space::new().width(Length::Fill),
                             container(w::text_field(look, "", amount, Some(move |t| go(Event::ClashAmount(k, t))), D::Compact, None)).width(64),
                             w::secondary(look, if rule.kind == ClashKind::Sight { "m" } else { "mm" }),
@@ -3717,6 +3779,12 @@ impl App {
                             container(w::text_field(look, "*exit*, *vlucht*", &rule.sight_names, (rule.kind == ClashKind::Sight).then_some(move |t| go(Event::ClashSightNames(k, t))), D::Compact, None)).width(Length::FillPortion(3)),
                             container(w::text_field(look, "%", state.sight_shares.get(k).map(String::as_str).unwrap_or(""), (rule.kind == ClashKind::Sight).then_some(move |t| go(Event::ClashSightShare(k, t))), D::Compact, None)).width(Length::FillPortion(1)),
                             w::secondary(look, l.text("% zonder zicht", "% out of sight")),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                        row![
+                            w::secondary(look, l.text("In wanden", "In walls")).width(96),
+                            container(w::text_field(look, l.text("alle; bijv. *sandwich*", "all; e.g. *sandwich*"), &rule.frame_walls, (rule.kind == ClashKind::Frame).then_some(move |t| go(Event::ClashFrameWalls(k, t))), D::Compact, None)).width(Length::Fill),
                         ]
                         .spacing(4)
                         .align_y(Alignment::Center),
@@ -3837,6 +3905,7 @@ impl App {
                 Kind::Inside => (l.text("ligt erin", "lies inside").to_string(), Tone::Error),
                 Kind::Near => (format!("{mm} mm {}", l.text("ertussen", "apart")), Tone::Warning),
                 Kind::Hidden => (format!("{:.0}% {}", clash.distance * 100.0, l.text("niet te zien", "out of sight")), Tone::Error),
+                Kind::Unframed => (format!("{}: {}", l.text("geen", "no"), crate::collab::frame::words(clash.distance as u8, l == Language::Dutch)), Tone::Error),
             };
             let what = if clash.fresh { format!("{} · {what}", l.text("nieuw", "new")) } else { what };
             match clash.decision {
@@ -4429,6 +4498,7 @@ impl App {
                         "index": k, "rule": c.rule, "a": c.a, "b": c.b, "a_name": c.a_name, "b_name": c.b_name,
                         "kind": format!("{:?}", c.kind), "distance_mm": (c.distance * 1000.0).round(), "decision": c.decision.key(),
                         "group": c.group, "double": c.copy, "new": c.fresh, "reach": c.reach.key(),
+                        "missing": (c.kind == Kind::Unframed).then(|| crate::collab::frame::words(c.distance as u8, false)),
                     })).collect::<Vec<_>>() }))
                 }
                 "group" => {
@@ -4895,6 +4965,54 @@ mod tests {
         // half may be without sight of it: then it passes; and without the wall too
         let lenient = ClashRule { sight_blocked_pct: 60.0, ..rule.clone() };
         assert!(run_clashes(&model, &models, &[lenient], &AtomicBool::new(false)).is_empty());
+    }
+
+    #[test]
+    fn a_frame_test_finds_the_steel_missing_around_windows_and_doors() {
+        // a sandwich wall along x with a window (posts and a lintel, no sill) and a door (nothing
+        // around it); a window in a brick wall is not tested
+        let mut layer = Layer { name: "L".into(), color: [0.8; 3], positions: Vec::new(), normals: Vec::new(), colors: None, indices: Vec::new(), elements: Vec::new(), props: Vec::new(), hidden: false, points: false, lines: Vec::new(), line_elements: Vec::new(), texturing: None };
+        let boxes: [(u64, &str, &str, [f32; 3], [f32; 3]); 8] = [
+            (1, "IfcWall", "Sandwichpaneel 120", [0.0, 0.0, 0.0], [6.0, 0.135, 3.0]),
+            (2, "IfcWindow", "Raam", [1.0, 0.03, 1.0], [1.9, 0.1, 2.8]),
+            (3, "IfcColumn", "Stijl", [0.9, -0.12, 0.0], [0.96, 0.0, 3.0]),
+            (4, "IfcColumn", "Stijl", [1.94, -0.12, 0.0], [2.0, 0.0, 3.0]),
+            (5, "IfcBeam", "Latei", [0.9, -0.1, 2.8], [2.0, 0.0, 2.88]),
+            (6, "IfcDoor", "Deur", [3.0, 0.03, 0.0], [4.0, 0.1, 2.4]),
+            (7, "IfcWall", "Metselwerk", [0.0, 10.0, 0.0], [6.0, 10.2, 3.0]),
+            (8, "IfcWindow", "Raam", [1.0, 10.05, 1.0], [1.9, 10.15, 2.8]),
+        ];
+        for (id, class, name, lo, hi) in boxes {
+            let first = layer.indices.len() as u32;
+            let base = (layer.positions.len() / 3) as u32;
+            for i in 0..8 {
+                layer.positions.extend([if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]);
+                layer.normals.extend([0.0, 0.0, 1.0]);
+            }
+            for q in [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]] {
+                layer.indices.extend([q[0], q[1], q[2], q[0], q[2], q[3]].map(|i: u32| base + i));
+            }
+            layer.elements.push((id, first, layer.indices.len() as u32 - first));
+            layer.props.push((id, format!("{{\"IfcType\":\"{class}\",\"Name\":\"{name}\",\"GlobalId\":\"g{id}\"}}")));
+        }
+        let model = Model::new(PathBuf::from("frames.ifc"), "IFC", vec![layer]);
+        let models = vec![("frames.ifc".to_string(), 0..1)];
+        let rule = ClashRule {
+            name: "frames".into(),
+            kind: ClashKind::Frame,
+            a: Selector { classes: vec!["IfcWindow*".into(), "IfcDoor*".into()], ..Selector::default() },
+            b: Selector { classes: vec!["IfcBeam*".into(), "IfcColumn*".into()], ..Selector::default() },
+            frame_reach_mm: 250.0,
+            frame_walls: "*sandwich*".into(),
+            ..ClashRule::default()
+        };
+        let mut found = run_clashes(&model, &models, std::slice::from_ref(&rule), &AtomicBool::new(false));
+        found.sort_by_key(|c| c.a);
+        use crate::collab::frame::{BOTTOM, LEFT, RIGHT, TOP};
+        assert_eq!(found.iter().map(|c| (c.a, c.b, c.kind, c.distance as u8)).collect::<Vec<_>>(), [(2, 1, Kind::Unframed, BOTTOM), (6, 1, Kind::Unframed, LEFT | RIGHT | TOP)], "{found:?}");
+        // all walls: the window in brickwork lacks everything
+        let all = ClashRule { frame_walls: String::new(), ..rule };
+        assert_eq!(run_clashes(&model, &models, &[all], &AtomicBool::new(false)).len(), 3);
     }
 
     #[test]

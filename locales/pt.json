@@ -1212,6 +1212,12 @@
     "Load borings": "Carregar furos",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Obtém os furos geotécnicos em redor do local do registo neerlandês do subsolo e coloca-os no modelo.",
     "Opens borings from GEF files and puts them in the model.": "Abre furos a partir de ficheiros GEF e coloca-os no modelo.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Cria um modelo 3D do subsolo a partir dos furos carregados: cada local assume as camadas do furo mais próximo."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Cria um modelo 3D do subsolo a partir dos furos carregados: cada local assume as camadas do furo mais próximo.",
+    "Frame steel": "Aço do caixilho",
+    "In walls": "Nas paredes",
+    "Steel is missing around the frame:": "Falta aço à volta do caixilho:",
+    "all; e.g. *sandwich*": "todas; p. ex. *sandwich*",
+    "no": "sem",
+    "without steel in": "sem aço em"
   }
 }

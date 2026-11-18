@@ -1212,6 +1212,12 @@
     "Load borings": "Charger les forages",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Récupère les forages géotechniques autour du lieu dans le registre néerlandais du sous-sol et les place dans le modèle.",
     "Opens borings from GEF files and puts them in the model.": "Ouvre des forages à partir de fichiers GEF et les place dans le modèle.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crée un modèle 3D du sous-sol à partir des forages chargés : chaque lieu reprend les couches du forage le plus proche."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crée un modèle 3D du sous-sol à partir des forages chargés : chaque lieu reprend les couches du forage le plus proche.",
+    "Frame steel": "Acier d'encadrement",
+    "In walls": "Dans les murs",
+    "Steel is missing around the frame:": "Il manque de l'acier autour du cadre :",
+    "all; e.g. *sandwich*": "tous ; p. ex. *sandwich*",
+    "no": "pas de",
+    "without steel in": "sans acier dans"
   }
 }

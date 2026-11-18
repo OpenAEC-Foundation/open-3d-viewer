@@ -1212,6 +1212,12 @@
     "Load borings": "Cargar sondeos",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Obtiene los sondeos geotécnicos alrededor del lugar del registro neerlandés del subsuelo y los coloca en el modelo.",
     "Opens borings from GEF files and puts them in the model.": "Abre sondeos desde archivos GEF y los coloca en el modelo.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modelo 3D del subsuelo a partir de los sondeos cargados: cada lugar toma las capas del sondeo más cercano."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modelo 3D del subsuelo a partir de los sondeos cargados: cada lugar toma las capas del sondeo más cercano.",
+    "Frame steel": "Acero de marco",
+    "In walls": "En muros",
+    "Steel is missing around the frame:": "Falta acero alrededor del marco:",
+    "all; e.g. *sandwich*": "todos; p. ej. *sandwich*",
+    "no": "sin",
+    "without steel in": "sin acero en"
   }
 }

@@ -516,10 +516,71 @@ fn write_topic(topic: &Topic, three: bool) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
+/// What taking in the issues of another did to the issues here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Merged {
+    /// Issues that were not here yet.
+    pub added: usize,
+    /// Issues here that the other changed later, or remarked on.
+    pub updated: usize,
+    /// Issues both have the same.
+    pub unchanged: usize,
+}
+
+impl Topic {
+    /// When the issue last changed: the latest of its own dates and those of its comments (ISO
+    /// dates compare as text).
+    pub fn stamp(&self) -> &str {
+        let mut latest = self.creation_date.as_str().max(self.modified_date.as_str());
+        for c in &self.comments {
+            latest = latest.max(c.date.as_str()).max(c.modified_date.as_str());
+        }
+        latest
+    }
+}
+
 impl Issues {
     /// No issues yet, to be written as BCF 2.1.
     pub fn new() -> Issues {
         Issues { version: "2.1".into(), ..Issues::default() }
+    }
+
+    /// Takes in the issues another sent, without losing what was done here: an issue that is new
+    /// is added; of one both have, the one changed last stands, with the comments of both.
+    pub fn merge(&mut self, theirs: Issues) -> Merged {
+        let mut done = Merged::default();
+        for topic in theirs.topics {
+            match self.topics.iter_mut().find(|t| t.guid == topic.guid) {
+                None => {
+                    self.topics.push(topic);
+                    done.added += 1;
+                }
+                Some(mine) => {
+                    let new_remarks: Vec<Comment> = topic.comments.iter().filter(|c| !mine.comments.iter().any(|d| d.guid == c.guid)).cloned().collect();
+                    let newer = topic.stamp() > mine.stamp();
+                    if newer {
+                        let own: Vec<Comment> = mine.comments.iter().filter(|c| !topic.comments.iter().any(|d| d.guid == c.guid)).cloned().collect();
+                        *mine = topic;
+                        mine.comments.extend(own);
+                    } else {
+                        mine.comments.extend(new_remarks.iter().cloned());
+                    }
+                    mine.comments.sort_by(|a, b| a.date.cmp(&b.date));
+                    if newer || !new_remarks.is_empty() {
+                        done.updated += 1;
+                    } else {
+                        done.unchanged += 1;
+                    }
+                }
+            }
+        }
+        done
+    }
+
+    /// The issues that pass `keep`, as an archive of their own to send: the project and version
+    /// stay, the files that belong to no issue too.
+    pub fn only(&self, keep: impl Fn(&Topic) -> bool) -> Issues {
+        Issues { topics: self.topics.iter().filter(|t| keep(t)).cloned().collect(), ..self.clone() }
     }
 
     /// Reads a `.bcfzip` / `.bcf` archive.
@@ -662,6 +723,45 @@ impl Issues {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn taking_in_another_s_issues_keeps_what_was_done_here() {
+        let mut mine = Issues::new();
+        let mut kept = Topic::new("Duct through beam", "an");
+        kept.creation_date = "2026-11-01T09:00:00Z".into();
+        kept.modified_date = kept.creation_date.clone();
+        let mut answered = Topic::new("Door too narrow", "an");
+        answered.creation_date = "2026-11-02T09:00:00Z".into();
+        answered.modified_date = answered.creation_date.clone();
+        answered.comment("Mine, said here", "an", None);
+        answered.comments[0].date = "2026-11-03T09:00:00Z".into();
+        answered.modified_date = "2026-11-03T09:00:00Z".into();
+        mine.topics = vec![kept.clone(), answered.clone()];
+        // the other answered one issue, left one alone and made a new one
+        let mut theirs = Issues::new();
+        let mut reply = answered.clone();
+        reply.comments.clear();
+        reply.status = "Resolved".into();
+        reply.modified_date = "2026-11-05T09:00:00Z".into();
+        reply.comment("Widened to 0.95 m", "bo", None);
+        reply.comments[0].date = "2026-11-05T09:00:00Z".into();
+        reply.modified_date = "2026-11-05T09:00:00Z".into();
+        let fresh = Topic::new("Sprinkler under duct", "bo");
+        theirs.topics = vec![kept.clone(), reply, fresh.clone()];
+        let done = mine.merge(theirs.clone());
+        assert_eq!(done, Merged { added: 1, updated: 1, unchanged: 1 });
+        assert_eq!(mine.topics.len(), 3);
+        let merged = &mine.topics[1];
+        assert_eq!(merged.status, "Resolved", "the later change stands");
+        let said: Vec<&str> = merged.comments.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(said, ["Mine, said here", "Widened to 0.95 m"], "with the comments of both, by date");
+        // the same file again changes nothing
+        assert_eq!(mine.merge(theirs), Merged { added: 0, updated: 0, unchanged: 3 });
+        // and a part of the issues goes out as an archive of its own
+        let open = mine.only(|t| t.status != "Resolved");
+        assert_eq!(open.topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["Duct through beam", "Sprinkler under duct"]);
+        assert_eq!(Issues::read(&open.write().unwrap()).unwrap().topics.len(), 2);
+    }
 
     #[test]
     fn issues_written_as_bcf_3_read_back_the_same() {

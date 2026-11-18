@@ -407,6 +407,11 @@ pub struct State {
     pub route_shown: Option<u64>,
     /// The issues are written as BCF 3.0, not 2.1.
     pub bcf3: bool,
+    /// The BCF files taken in and sent out, the last first; and who the next one goes to.
+    pub exchanges: Vec<Exchange>,
+    pub party: String,
+    /// Whether a file sent holds the open issues only.
+    pub send_open: bool,
     /// The clashes of the run before that this run no longer found, and whether the list shows
     /// them; whether this run was compared with one before; whether it is of a selection only.
     pub resolved: Vec<crate::collab::rules::ClashMemo>,
@@ -518,6 +523,9 @@ impl Default for State {
             routes: HashMap::new(),
             route_shown: None,
             bcf3: false,
+            exchanges: Vec::new(),
+            party: String::new(),
+            send_open: true,
             resolved: Vec::new(),
             show_resolved: false,
             compared: false,
@@ -677,6 +685,33 @@ fn closed(status: &str) -> bool {
 
 fn go(event: Event) -> Message {
     Message::Collab(event)
+}
+
+/// A BCF file that went between this project and another party.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Exchange {
+    /// Taken in from the party (true) or sent to it.
+    pub incoming: bool,
+    pub file: String,
+    /// Who sent it or whom it went to.
+    pub party: String,
+    pub date: String,
+    /// Issues in the file; of one taken in, those new here and those changed here.
+    pub issues: usize,
+    pub added: usize,
+    pub updated: usize,
+}
+
+/// The name most of `names` are (the first of those most named); empty without names.
+fn most<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let mut count: Vec<(&str, usize)> = Vec::new();
+    for name in names.filter(|n| !n.is_empty()) {
+        match count.iter_mut().find(|(n, _)| *n == name) {
+            Some(c) => c.1 += 1,
+            None => count.push((name, 1)),
+        }
+    }
+    count.iter().rev().max_by_key(|(_, c)| *c).map(|(n, _)| n.to_string()).unwrap_or_default()
 }
 
 /// A file a dialog asks for.
@@ -862,6 +897,12 @@ pub enum Event {
     Sync,
     /// Whether the issues are written as BCF 3.0 (else 2.1).
     Bcf3(bool),
+    /// Who the next BCF file goes to, as typed.
+    Party(String),
+    SendOpen(bool),
+    /// Send the issues to the party as a BCF file: asks where, then writes.
+    Send,
+    SendTo(Option<PathBuf>),
     /// The clash picked, or else the group open: decided on, or made an issue of.
     DecidePicked(Decision),
     IssueFromPicked,
@@ -2037,11 +2078,11 @@ impl App {
             self.collab.rule_sets = RuleSet::built_in(l == Language::Dutch);
         }
         // a file dialog answered: its notice goes
-        if matches!(event, Event::Opened(..) | Event::SaveIssuesTo(_) | Event::SaveRulesTo(_) | Event::ExportTo(..)) && self.collab.dialog_open {
+        if matches!(event, Event::Opened(..) | Event::SaveIssuesTo(_) | Event::SendTo(_) | Event::SaveRulesTo(_) | Event::ExportTo(..)) && self.collab.dialog_open {
             self.collab.dialog_open = false;
             self.collab.notice = None;
         }
-        let asks = matches!(event, Event::Open(_) | Event::SaveIssues | Event::SaveRules | Event::Export(_));
+        let asks = matches!(event, Event::Open(_) | Event::SaveIssues | Event::Send | Event::SaveRules | Event::Export(_));
         let task = self.collab_dispatch(event);
         // a file dialog asked for: say it is coming until it answers
         if asks {
@@ -2074,12 +2115,32 @@ impl App {
             Event::Opened(File::Bcf, Some(path)) => match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| Issues::read(&bytes)) {
                 Ok(issues) => {
                     let count = issues.topics.len();
-                    self.collab.issues = issues;
-                    self.collab.issues_path = Some(path);
-                    self.collab.issues_changed = false;
-                    self.collab.topic = None;
+                    let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    // who it comes from: the name typed, else who wrote most of it
+                    let party = if self.collab.party.trim().is_empty() {
+                        most(issues.topics.iter().map(|t| if t.modified_author.is_empty() { t.creation_author.as_str() } else { t.modified_author.as_str() }))
+                    } else {
+                        self.collab.party.trim().to_string()
+                    };
+                    let done = if self.collab.issues.topics.is_empty() {
+                        self.collab.issues = issues;
+                        self.collab.issues_path = Some(path);
+                        self.collab.issues_changed = false;
+                        self.collab.topic = None;
+                        self.collab_note(Tone::Success, format!("{count} {}", l.text("issues geopend", "issues opened")));
+                        bim_bcf::issues::Merged { added: count, ..Default::default() }
+                    } else {
+                        // issues are here already: what the file brings is taken in with them
+                        let done = self.collab.issues.merge(issues);
+                        self.collab.issues_changed |= done.added + done.updated > 0;
+                        self.collab_note(
+                            Tone::Success,
+                            format!("{file}: {} {}, {} {}, {} {}", done.added, l.text("nieuw", "new"), done.updated, l.text("bijgewerkt", "updated"), done.unchanged, l.text("ongewijzigd", "unchanged")),
+                        );
+                        done
+                    };
+                    self.collab.exchanges.insert(0, Exchange { incoming: true, file, party, date: bim_bcf::issues::now(), issues: count, added: done.added, updated: done.updated });
                     self.collab.tab = Tab::Issues;
-                    self.collab_note(Tone::Success, format!("{count} {}", l.text("issues geopend", "issues opened")));
                 }
                 Err(e) => self.collab_note(Tone::Error, e),
             },
@@ -2110,6 +2171,25 @@ impl App {
                 return ask_file(make, true, |path| Message::Collab(Event::SaveIssuesTo(path)));
             }
             Event::Bcf3(on) => self.collab.bcf3 = on,
+            Event::Party(name) => self.collab.party = name,
+            Event::SendOpen(on) => self.collab.send_open = on,
+            Event::Send => {
+                let party: String = self.collab.party.trim().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
+                let name = format!("issues-{}{}.bcf", if party.is_empty() { String::new() } else { format!("{party}-") }, &bim_bcf::issues::now()[..10]);
+                return ask_file(move || rfd::AsyncFileDialog::new().add_filter("BCF", &["bcf", "bcfzip"]).set_file_name(name.clone()), true, |path| Message::Collab(Event::SendTo(path)));
+            }
+            Event::SendTo(Some(path)) => {
+                let open_only = self.collab.send_open;
+                let out = self.collab.issues.only(|t| !open_only || !closed(&t.status));
+                match out.write_as(self.collab.bcf3).and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())) {
+                    Ok(()) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        self.collab_note(Tone::Success, format!("{} {} ({} issues)", l.text("Verstuurd als", "Sent as"), path.display(), out.topics.len()));
+                        self.collab.exchanges.insert(0, Exchange { incoming: false, file, party: self.collab.party.trim().to_string(), date: bim_bcf::issues::now(), issues: out.topics.len(), added: 0, updated: 0 });
+                    }
+                    Err(e) => self.collab_note(Tone::Error, e),
+                }
+            }
             Event::SaveIssuesTo(Some(path)) => match self.collab.issues.write_as(self.collab.bcf3).and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string())) {
                 Ok(()) => {
                     self.collab_note(Tone::Success, format!("{} {}", l.text("Opgeslagen:", "Saved:"), path.display()));
@@ -2131,7 +2211,7 @@ impl App {
                     self.collab_note(Tone::Success, format!("{} {}", l.text("Opgeslagen:", "Saved:"), path.display()));
                 }
             }
-            Event::SaveIssuesTo(None) | Event::SaveRulesTo(None) | Event::ExportTo(_, None) => {}
+            Event::SaveIssuesTo(None) | Event::SendTo(None) | Event::SaveRulesTo(None) | Event::ExportTo(_, None) => {}
             Event::Topic(guid) => {
                 self.collab.topic = guid.clone();
                 self.collab.labels_text = guid.as_ref().and_then(|g| self.collab.issues.topics.iter().find(|t| &t.guid == g)).map(|t| t.labels.join(", ")).unwrap_or_default();
@@ -3136,6 +3216,26 @@ impl App {
         .spacing(6)
         .wrap()]
         .spacing(6);
+        // BCF files to and from the other parties: take one in, send one, and what went before
+        list = list.push(
+            row![
+                container(w::text_field(look, l.text("Partij", "Party"), &state.party, Some(|t| go(Event::Party(t))), D::Compact, None)).width(Length::Fill),
+                w::button(look, l.text("BCF innemen", "Take in BCF"), K::Secondary, D::Compact, None, Some(go(Event::Open(File::Bcf)))),
+                w::button(look, l.text("BCF versturen", "Send BCF"), K::Secondary, D::Compact, None, (!state.issues.topics.is_empty()).then(|| go(Event::Send))),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        );
+        list = list.push(w::checkbox(look, l.text("Alleen open issues versturen", "Send open issues only"), state.send_open, Some(|on| go(Event::SendOpen(on)))));
+        for e in state.exchanges.iter().take(6) {
+            let what = if e.incoming {
+                format!("↓ {} · {} {}, {} {}", e.file, e.added, l.text("nieuw", "new"), e.updated, l.text("bijgewerkt", "updated"))
+            } else {
+                format!("↑ {} · {} issues", e.file, e.issues)
+            };
+            let whom = if e.party.is_empty() { e.date.chars().take(10).collect::<String>() } else { format!("{} · {}", e.party, e.date.chars().take(10).collect::<String>()) };
+            list = list.push(named(column![text(what).size(12), w::secondary(look, whom)].spacing(1), Node::new(Role::Row, format!("{} {}", if e.incoming { "BCF in" } else { "BCF out" }, e.file))));
+        }
         list = list.push(
             button(row![text(if state.setup_open { "▾" } else { "▸" }).size(12).color(p.text_secondary), w::secondary(look, l.text("Delen en huisstijl", "Sharing and house style"))].spacing(6).align_y(Alignment::Center))
                 .padding([2, 0])
@@ -4174,7 +4274,7 @@ impl App {
                         let _ = self.collab_handle(Event::Opened(File::Bcf, Some(path)));
                         match &self.collab.notice {
                             Some((Tone::Error, e)) => Err(e.clone()),
-                            _ => Ok(json!({ "issues": self.collab.issues.topics.len(), "version": self.collab.issues.version })),
+                            _ => Ok(json!({ "issues": self.collab.issues.topics.len(), "version": self.collab.issues.version, "exchange": self.collab.exchanges.first() })),
                         }
                     }
                     "save" => {
@@ -4187,7 +4287,23 @@ impl App {
                             _ => Ok(json!({ "saved": path.display().to_string(), "issues": self.collab.issues.topics.len() })),
                         }
                     }
-                    other => Err(format!("collab_bcf: unknown action {other} (open, save)")),
+                    "send" => {
+                        if let Some(party) = text("party") {
+                            self.collab.party = party;
+                        }
+                        if let Some(open) = a.get("open_only").and_then(|v| v.as_bool()) {
+                            self.collab.send_open = open;
+                        }
+                        if let Some(version) = text("version") {
+                            self.collab.bcf3 = version.starts_with('3');
+                        }
+                        let _ = self.collab_handle(Event::SendTo(Some(path.clone())));
+                        match &self.collab.notice {
+                            Some((Tone::Error, e)) => Err(e.clone()),
+                            _ => Ok(json!({ "sent": path.display().to_string(), "exchanges": self.collab.exchanges })),
+                        }
+                    }
+                    other => Err(format!("collab_bcf: unknown action {other} (open, save, send)")),
                 }
             }
             "collab_rules" => match action.as_str() {
@@ -4476,6 +4592,47 @@ mod tests {
 
     fn row(rule: &str, a: u64, b: u64, at: [f32; 3]) -> ClashRow {
         ClashRow { rule: rule.into(), a, b, a_name: format!("E{a}"), b_name: format!("E{b}"), kind: Kind::Crossing, at, distance: 0.01, decision: Decision::Open, group: 0, copy: false, key: String::new(), fresh: false, reach: Reach::Partly }
+    }
+
+    #[test]
+    fn a_bcf_from_another_party_is_taken_in_with_the_issues_here_and_one_is_sent_back() {
+        let dir = std::env::temp_dir().join(format!("o3v-bcf-exchange-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::default();
+        app.collab.author = "an".into();
+        // two issues of our own
+        let mut ours = Issues::new();
+        let mut duct = Topic::new("Duct through beam", "an");
+        duct.creation_date = "2026-11-01T09:00:00Z".into();
+        duct.modified_date = duct.creation_date.clone();
+        let mut door = Topic::new("Door too narrow", "an");
+        door.status = "Closed".into();
+        ours.topics = vec![duct.clone(), door];
+        std::fs::write(dir.join("ours.bcf"), ours.write().unwrap()).unwrap();
+        let _ = app.collab_handle(Event::Opened(File::Bcf, Some(dir.join("ours.bcf"))));
+        assert_eq!((app.collab.issues.topics.len(), app.collab.exchanges.len()), (2, 1));
+        // the installer answers the duct and sends an issue of its own
+        let mut reply = duct.clone();
+        reply.status = "Resolved".into();
+        reply.comment("Moved 150 mm down", "bo", None);
+        let mut theirs = Issues::new();
+        theirs.topics = vec![reply, Topic::new("Sprinkler under duct", "bo")];
+        std::fs::write(dir.join("from-installer.bcf"), theirs.write().unwrap()).unwrap();
+        let _ = app.collab_handle(Event::Opened(File::Bcf, Some(dir.join("from-installer.bcf"))));
+        assert_eq!(app.collab.issues.topics.len(), 3, "taken in with ours, not in their place");
+        let taken = &app.collab.exchanges[0];
+        assert_eq!((taken.incoming, taken.file.as_str(), taken.party.as_str(), taken.issues, taken.added, taken.updated), (true, "from-installer.bcf", "bo", 2, 1, 1));
+        assert_eq!(app.collab.issues.topics[0].status, "Resolved");
+        assert!(app.collab.issues_changed);
+        // and the open issues go back to them
+        app.collab.party = "Installer".into();
+        let _ = app.collab_handle(Event::SendTo(Some(dir.join("to-installer.bcf"))));
+        let sent = Issues::read(&std::fs::read(dir.join("to-installer.bcf")).unwrap()).unwrap();
+        assert_eq!(sent.topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["Sprinkler under duct"], "the open ones only");
+        let out = &app.collab.exchanges[0];
+        assert_eq!((out.incoming, out.party.as_str(), out.issues), (false, "Installer", 1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

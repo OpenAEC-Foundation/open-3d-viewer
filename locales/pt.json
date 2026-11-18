@@ -1395,6 +1395,12 @@
     "Tile": "Mosaico",
     "Turned": "Rodado",
     "Key": "Chave",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Para desenhos a 1:50. Um material ainda não pode escolher uma trama desta lista: é desenhado com a do seu tipo."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Para desenhos a 1:50. Um material ainda não pode escolher uma trama desta lista: é desenhado com a do seu tipo.",
+    "Frame steel": "Aço do caixilho",
+    "In walls": "Nas paredes",
+    "Steel is missing around the frame:": "Falta aço à volta do caixilho:",
+    "all; e.g. *sandwich*": "todas; p. ex. *sandwich*",
+    "no": "sem",
+    "without steel in": "sem aço em"
   }
 }

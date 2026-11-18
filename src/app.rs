@@ -168,6 +168,8 @@ pub struct App {
     add_queue: Vec<loaders::Source>,
     /// Models read from the queue that the scene does not show yet.
     scene_stale: bool,
+    /// What laying the added models on the first by their grids did, for the status bar.
+    aligned: Vec<String>,
     /// The files of the last model when they layer over each other (IFCX) and that model: a
     /// file of the same kind added next composes with them into that model.
     layer_stack: (Vec<loaders::Source>, Option<u64>),
@@ -959,6 +961,7 @@ impl Default for App {
             adding_model: false,
             add_queue: Vec::new(),
             scene_stale: false,
+            aligned: Vec::new(),
             layer_stack: (Vec::new(), None),
             loading_stack: (Vec::new(), false),
             visible: Vec::new(),
@@ -1671,9 +1674,45 @@ impl App {
         }
         let first = self.models.last().map_or(0, |entry| entry.layers.end);
         self.models.push(ModelEntry::new(model, first));
+        self.align_added();
+        self.combine_models();
+    }
+
+    /// Lays the model added last on the first by the grids they share (see [`crate::align`]): the
+    /// architect's and the structural engineer's model often each have their own zero point. The
+    /// move is the model's own, as when typed in the right pane, so it shows there and can be
+    /// changed.
+    fn align_added(&mut self) {
+        let [reference, .., added] = self.models.as_slice() else { return };
+        if reference.placed.turned != 0.0 || added.placed.moved != glam::DVec3::ZERO {
+            return;
+        }
+        let Some(aligned) = crate::align::on_grids(&reference.model.project.grids, &added.model.project.grids) else { return };
+        let by = aligned.by + reference.placed.moved;
+        if by.length() < 0.001 {
+            return;
+        }
+        let name = added.model.file_name();
+        self.aligned.push(format!("{name} laid on the first model by {} grids ({:.3}, {:.3} m)", aligned.grids, by.x, by.y));
+        if let Some(added) = self.models.last_mut() {
+            added.placed.moved = by;
+        }
+    }
+
+    /// Builds the scene of the open models, each at its place, and says what was aligned.
+    fn combine_models(&mut self) {
         let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
-        self.set_scene(Arc::new(Model::combine(&sources)));
+        let moves: Vec<glam::DVec3> = self.models.iter().map(|entry| entry.placed.moved).collect();
+        let turns: Vec<f64> = self.models.iter().map(|entry| entry.placed.turned).collect();
+        self.set_scene(Arc::new(Model::combine_placed(&sources, &moves, &turns)));
         self.restore_model_visibility();
+        if !self.aligned.is_empty() {
+            let said = std::mem::take(&mut self.aligned).join(" · ");
+            if let Status::Loaded(loaded) = &mut self.status {
+                loaded.push_str(" · ");
+                loaded.push_str(&said);
+            }
+        }
     }
 
     /// Files to add after the one that is loading (see `add_queue`).
@@ -1691,15 +1730,14 @@ impl App {
         }
         let first = self.models.last().map_or(0, |entry| entry.layers.end);
         self.models.push(ModelEntry::new(model, first));
+        self.align_added();
         self.scene_stale = true;
     }
 
     /// Builds the scene again from the open models.
     fn rebuild_scene(&mut self) {
-        let sources: Vec<_> = self.models.iter().map(|entry| entry.model.clone()).collect();
-        if sources.len() > 1 {
-            self.set_scene(Arc::new(Model::combine(&sources)));
-            self.restore_model_visibility();
+        if self.models.len() > 1 {
+            self.combine_models();
         }
     }
 
@@ -5373,6 +5411,31 @@ mod tests {
             ..Layer::default()
         };
         Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn an_added_model_is_laid_on_the_first_by_the_grids_they_share() {
+        use crate::model::GridLine;
+        let with_grids = |name: &str, id: u64, x: f32, off: [f32; 2]| {
+            let mut model = (*named_square(name, id, x)).clone();
+            let g = |n: &str, a: [f32; 2], b: [f32; 2]| GridLine { name: n.into(), a: [a[0] + off[0], a[1] + off[1], 0.0], b: [b[0] + off[0], b[1] + off[1], 0.0] };
+            model.project.grids = vec![g("1", [0.0, -5.0], [0.0, 5.0]), g("A", [-5.0, 0.0], [5.0, 0.0]), g("2", [6.0, -5.0], [6.0, 5.0])];
+            Arc::new(model)
+        };
+        let mut app = App::default();
+        // the architect's square at x 10 with its grids from 10; the structural engineer's the same
+        // square at x 0 with its grids from 0: once laid on each other the squares coincide
+        app.set_model(with_grids("architect", 7, 10.0, [10.0, 3.0]));
+        app.add_model(with_grids("structure", 8, 0.0, [0.0, 0.0]));
+        assert_eq!(app.models[1].placed.moved, glam::DVec3::new(10.0, 3.0, 0.0));
+        let Status::Loaded(said) = &app.status else { panic!("{:?}", app.status) };
+        assert!(said.contains("structure.rvt laid on the first model by 3 grids"), "{said}");
+        let scene = app.model.clone().unwrap();
+        let x = |layer: usize| scene.layers[layer].positions[0];
+        assert_eq!(x(1), x(0), "the squares lie on each other");
+        // a model without shared grids stays where it is
+        app.add_model(named_square("other", 9, 40.0));
+        assert_eq!(app.models[2].placed.moved, glam::DVec3::ZERO);
     }
 
     /// Two unit squares facing +Z, element 10 at z = 0 under element 20 at z = 1.

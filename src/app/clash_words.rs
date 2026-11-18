@@ -86,6 +86,7 @@ fn words(a: &str, b: &str, kind: Kind, reach: Reach, copy: bool, l: Language) ->
             (Kind::Near, _) => l.text("te dicht bij", "too near"),
             (Kind::Hidden, _) => l.text("niet te zien achter", "out of sight behind"),
             (Kind::Inside, _) => l.text("in", "inside"),
+            (Kind::Unframed, _) => l.text("zonder staal in", "without steel in"),
             (_, Reach::Through) => l.text("door", "through"),
             (_, Reach::Graze) => l.text("schampt", "grazes"),
             _ => l.text("kruist", "crosses"),

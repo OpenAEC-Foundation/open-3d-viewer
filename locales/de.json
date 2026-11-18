@@ -1395,6 +1395,12 @@
     "Tile": "Kachel",
     "Turned": "Gedreht",
     "Key": "Schlüssel",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Für Zeichnungen im Maßstab 1:50. Ein Material kann noch keine Schraffur aus dieser Liste wählen: Es wird mit der seiner Art gezeichnet."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Für Zeichnungen im Maßstab 1:50. Ein Material kann noch keine Schraffur aus dieser Liste wählen: Es wird mit der seiner Art gezeichnet.",
+    "Frame steel": "Rahmenstahl",
+    "In walls": "In Wänden",
+    "Steel is missing around the frame:": "Um den Rahmen fehlt Stahl:",
+    "all; e.g. *sandwich*": "alle; z. B. *sandwich*",
+    "no": "kein",
+    "without steel in": "ohne Stahl in"
   }
 }

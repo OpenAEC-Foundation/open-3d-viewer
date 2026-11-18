@@ -1395,6 +1395,12 @@
     "Tile": "Ruta",
     "Turned": "Vriden",
     "Key": "Nyckel",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "För ritningar i skala 1:50. Ett material kan ännu inte välja en skraffering ur den här listan: det ritas med den för sitt slag."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "För ritningar i skala 1:50. Ett material kan ännu inte välja en skraffering ur den här listan: det ritas med den för sitt slag.",
+    "Frame steel": "Karmstål",
+    "In walls": "I väggar",
+    "Steel is missing around the frame:": "Stål saknas runt karmen:",
+    "all; e.g. *sandwich*": "alla; t.ex. *sandwich*",
+    "no": "ingen",
+    "without steel in": "utan stål i"
   }
 }

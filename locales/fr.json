@@ -1395,6 +1395,12 @@
     "Tile": "Tuile",
     "Turned": "Tourné",
     "Key": "Clé",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Pour les dessins au 1:50. Un matériau ne peut pas encore choisir une hachure de cette liste : il est dessiné avec celle de son type."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Pour les dessins au 1:50. Un matériau ne peut pas encore choisir une hachure de cette liste : il est dessiné avec celle de son type.",
+    "Frame steel": "Acier d'encadrement",
+    "In walls": "Dans les murs",
+    "Steel is missing around the frame:": "Il manque de l'acier autour du cadre :",
+    "all; e.g. *sandwich*": "tous ; p. ex. *sandwich*",
+    "no": "pas de",
+    "without steel in": "sans acier dans"
   }
 }

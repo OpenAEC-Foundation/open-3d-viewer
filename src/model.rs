@@ -41,6 +41,41 @@ pub struct Layer {
     /// The curves among the line segments that are elements: (element id, first index into
     /// `lines`, index count), as `elements` for the triangles.
     pub line_elements: Vec<(u64, u32, u32)>,
+    /// Images on the surfaces (textured materials and decals), when any vertex shows one.
+    pub texturing: Option<Box<Texturing>>,
+}
+
+/// The images on a layer's surfaces: per vertex what it shows of which image, and the images.
+#[derive(Debug, Clone, Default)]
+pub struct Texturing {
+    /// One per vertex, as `positions`; drawn without images when the lengths differ.
+    pub vertices: Vec<TexVertex>,
+    pub images: Vec<Arc<TextureImage>>,
+}
+
+/// What a vertex shows of the images of its layer: the material's image repeats across the
+/// surface; a decal's shows only within 0..1 of its coordinates.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexVertex {
+    /// u, v in the material's image, then u, v in the decal's.
+    pub uv: [f32; 4],
+    /// The material's image and the decal's, by index + 1 into [`Texturing::images`] (0 none).
+    pub image: [u16; 2],
+    /// How much the material's image replaces the surface colour, and the decal's opacity
+    /// (255 all); then whether the material's image also gives transparency (1).
+    pub amount: [u8; 4],
+}
+
+/// An image a surface shows: straight sRGB pixels, row by row from the top.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextureImage {
+    /// The image file as the model names it.
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA8, `width * height * 4` bytes.
+    pub rgba: Vec<u8>,
 }
 
 impl Layer {

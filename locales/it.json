@@ -1395,6 +1395,12 @@
     "Tile": "Riquadro",
     "Turned": "Ruotato",
     "Key": "Chiave",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Per disegni in scala 1:50. Un materiale non può ancora scegliere un tratteggio da questo elenco: viene disegnato con quello del suo tipo."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Per disegni in scala 1:50. Un materiale non può ancora scegliere un tratteggio da questo elenco: viene disegnato con quello del suo tipo.",
+    "Frame steel": "Acciaio del telaio",
+    "In walls": "Nei muri",
+    "Steel is missing around the frame:": "Manca acciaio attorno al telaio:",
+    "all; e.g. *sandwich*": "tutti; es. *sandwich*",
+    "no": "senza",
+    "without steel in": "senza acciaio in"
   }
 }

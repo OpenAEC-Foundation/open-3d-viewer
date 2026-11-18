@@ -1395,6 +1395,12 @@
     "Tile": "Ficha",
     "Turned": "Girado",
     "Key": "Clave",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Para dibujos a 1:50. Un material aún no puede elegir un rayado de esta lista: se dibuja con el de su tipo."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Para dibujos a 1:50. Un material aún no puede elegir un rayado de esta lista: se dibuja con el de su tipo.",
+    "Frame steel": "Acero de marco",
+    "In walls": "En muros",
+    "Steel is missing around the frame:": "Falta acero alrededor del marco:",
+    "all; e.g. *sandwich*": "todos; p. ej. *sandwich*",
+    "no": "sin",
+    "without steel in": "sin acero en"
   }
 }

@@ -1395,6 +1395,12 @@
     "Tile": "Kafelek",
     "Turned": "Obrócony",
     "Key": "Klucz",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Dla rysunków w skali 1:50. Materiał nie może jeszcze wybrać kreskowania z tej listy: jest rysowany kreskowaniem swojego rodzaju."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Dla rysunków w skali 1:50. Materiał nie może jeszcze wybrać kreskowania z tej listy: jest rysowany kreskowaniem swojego rodzaju.",
+    "Frame steel": "Stal ościeżnicy",
+    "In walls": "W ścianach",
+    "Steel is missing around the frame:": "Wokół ościeżnicy brakuje stali:",
+    "all; e.g. *sandwich*": "wszystkie; np. *sandwich*",
+    "no": "brak",
+    "without steel in": "bez stali w"
   }
 }

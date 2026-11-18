@@ -1395,6 +1395,12 @@
     "Tile": "Kutucuk",
     "Turned": "Döndürülmüş",
     "Key": "Anahtar",
-    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "1:50 ölçekli çizimler için. Bir malzeme henüz bu listeden bir tarama seçemez: kendi türününkiyle çizilir."
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "1:50 ölçekli çizimler için. Bir malzeme henüz bu listeden bir tarama seçemez: kendi türününkiyle çizilir.",
+    "Frame steel": "Kasa çeliği",
+    "In walls": "Duvarlarda",
+    "Steel is missing around the frame:": "Kasanın çevresinde çelik eksik:",
+    "all; e.g. *sandwich*": "tümü; örn. *sandwich*",
+    "no": "yok",
+    "without steel in": "çeliksiz, içinde"
   }
 }

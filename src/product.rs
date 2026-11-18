@@ -60,7 +60,7 @@ impl Product {
             "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
             "analysis" | "structural-analysis" => Some(Product::Analysis),
             "docs" | "documents" => Some(Product::Docs),
-            "gis" => Some(Product::Gis),
+            "gis" | "gic" => Some(Product::Gis),
             _ => None,
         }
     }
@@ -75,7 +75,7 @@ impl Product {
             Product::Pointcloud => "PointCloud",
             Product::Analysis => "Struct",
             Product::Docs => "Docs",
-            Product::Gis => "GIS",
+            Product::Gis => "GIC",
         }
     }
 
@@ -88,7 +88,7 @@ impl Product {
             Product::Pointcloud => "Pointcloud",
             Product::Analysis => "Structural Analysis",
             Product::Docs => "Docs",
-            Product::Gis => "GIS",
+            Product::Gis => "GIS Infra Civil",
         }
     }
 
@@ -111,7 +111,7 @@ impl Product {
             Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
             Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
             Product::Docs => l.text("De documenten van het project: status, versies en koppelingen met het model", "The documents of the project: status, revisions and links to the model"),
-            Product::Gis => l.text("Waar het project ligt en wat eromheen ligt: de plek, percelen en panden, het terrein", "Where the project lies and what lies around it: the place, parcels and buildings, the terrain"),
+            Product::Gis => l.text("GIS, infra en civiel: de kaart, de omgeving, het terrein en de ondergrond van het project", "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project"),
         }
     }
 
@@ -137,7 +137,7 @@ impl Product {
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
             Product::Docs => &[RibbonPage::Docs, RibbonPage::View],
-            Product::Gis => &[RibbonPage::Gis, RibbonPage::View],
+            Product::Gis => &[RibbonPage::Gis, RibbonPage::Infra, RibbonPage::Civil, RibbonPage::Rail, RibbonPage::Geo, RibbonPage::View],
         }
     }
 
@@ -150,7 +150,7 @@ impl Product {
             Product::Pointcloud => "Open BIM Pointcloud",
             Product::Analysis => "Open BIM Structural Analysis",
             Product::Docs => "Open BIM Docs",
-            Product::Gis => "Open BIM GIS",
+            Product::Gis => "Open BIM GIC",
         }
     }
 
@@ -253,8 +253,16 @@ pub enum RibbonPage {
     Analysis,
     /// Docs: the project folder, and opening and linking the picked document.
     Docs,
-    /// GIS: the surroundings and the terrain of the place.
+    /// GIS: the map, the surroundings and the terrain of the place.
     Gis,
+    /// Geotechnics: the ground under the project as it was investigated.
+    Geo,
+    /// Infrastructure: roads, pipes and cables. Its tools are still to come.
+    Infra,
+    /// Civil engineering: bridges, viaducts, tunnels and other structures. Its tools are still to come.
+    Civil,
+    /// Rail: tracks, turnouts and clearance. Its tools are still to come.
+    Rail,
 }
 
 impl RibbonPage {
@@ -271,6 +279,10 @@ impl RibbonPage {
             RibbonPage::Analysis => l.text("Rekenmodel", "Analysis"),
             RibbonPage::Docs => "Docs",
             RibbonPage::Gis => "GIS",
+            RibbonPage::Geo => l.text("Geotechniek", "Geotechnics"),
+            RibbonPage::Infra => "Infra",
+            RibbonPage::Civil => l.text("Civiel", "Civil"),
+            RibbonPage::Rail => "Rail",
         }
     }
 }
@@ -406,7 +418,7 @@ mod tests {
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
         // the switch: short names, and the four in alpha are the grey ones
-        assert_eq!(Product::ALL.map(Product::label), ["View", "Validator", "PointCloud", "Struct", "Modeller", "Docs", "GIS"]);
+        assert_eq!(Product::ALL.map(Product::label), ["View", "Validator", "PointCloud", "Struct", "Modeller", "Docs", "GIC"]);
         assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true, true]);
     }
 

@@ -621,9 +621,23 @@ impl App {
         Ok(path)
     }
 
+    /// The schema `save_file` writes a `.ifc` in: `schema` (IFC4, IFC4X3), else IFC 4. Only for a
+    /// `.ifc`.
+    pub(crate) fn save_schema_of(a: &Value, path: &std::path::Path) -> Result<crate::export::IfcSchema, String> {
+        let Some(name) = a.get("schema").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) else {
+            return Ok(crate::export::IfcSchema::Ifc4);
+        };
+        let schema = crate::export::IfcSchema::parse(name).ok_or_else(|| format!("unknown schema {name}: IFC4 or IFC4X3"))?;
+        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ifc")) {
+            return Err("a schema is for a .ifc path".into());
+        }
+        Ok(schema)
+    }
+
     fn remote_save(&mut self, call: RemoteCall) -> Task<Message> {
-        match self.save_target(&call.args) {
-            Ok(path) => {
+        match self.save_target(&call.args).and_then(|path| Self::save_schema_of(&call.args, &path).map(|schema| (path, schema))) {
+            Ok((path, schema)) => {
+                self.save_schema = schema;
                 let task = self.start_save(path, flag(&call.args, "overwrite").unwrap_or(false));
                 self.remote.pending_save.push(call);
                 task

@@ -184,6 +184,16 @@ pub fn standing_of(root: &Path, path: &str) -> Result<Standing, String> {
     Ok(standing(&String::from_utf8_lossy(&git(root, &["status", "--porcelain", "--", path])?)))
 }
 
+/// The branch the checkout is on; the version's hash when it is on none.
+pub fn branch(root: &Path) -> Option<String> {
+    let name = String::from_utf8_lossy(&git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?).trim().to_string();
+    if name != "HEAD" && !name.is_empty() {
+        return Some(name);
+    }
+    let hash = String::from_utf8_lossy(&git(root, &["rev-parse", "HEAD"]).ok()?).trim().to_string();
+    (!hash.is_empty()).then_some(hash)
+}
+
 /// The file at `path` as it was in the version `hash`.
 pub fn content(root: &Path, path: &str, hash: &str) -> Result<Vec<u8>, String> {
     if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -300,6 +310,9 @@ mod tests {
         std::fs::write(root.join("model/new.ifc"), b"new").unwrap();
         assert_eq!(standing_of(&root, "model/new.ifc").unwrap(), Standing::New);
         assert!(history(&root, "model/new.ifc", 20).unwrap().is_empty());
+        // the branch the checkout is on, for an address on the website
+        let on = branch(&root).expect("a branch");
+        assert!(!on.is_empty() && on != "HEAD", "{on}");
         let _ = std::fs::remove_dir_all(root);
     }
 }

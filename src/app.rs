@@ -2358,6 +2358,8 @@ impl App {
                     Err(e) => Status::Error(e),
                 };
             }
+            // in Docs Backspace goes to the folder above, as in a file manager
+            Message::DeletePicked if self.docs.shown => return self.docs_update(DocsMessage::Up),
             Message::DeletePicked => {
                 if self.tool_backspace() {
                     // a length typed for what a tool draws: its last character goes
@@ -2601,6 +2603,8 @@ impl App {
             }
             // Enter while a distance is typed in a move puts the move down
             Message::MeasureFinish if self.tool_enter() => {}
+            // in Docs Enter opens the picked file
+            Message::MeasureFinish if self.docs.shown => return self.docs_update(DocsMessage::Enter),
             Message::MeasureFinish if self.put_grab_down() => {}
             Message::MeasureFinish if self.edit_enter() => {}
             // Enter while Rotate waits for its centre: about the 3D cursor
@@ -2725,6 +2729,9 @@ impl App {
                     Key::Named(Named::Enter) => Some(Message::MeasureFinish),
                     // what is picked on a sheet or a view; not while a text field takes the key
                     Key::Named(Named::Delete | Named::Backspace) => Some(Message::DeletePicked),
+                    // through the list of files of Docs, as in a file manager
+                    Key::Named(Named::ArrowUp) => Some(Message::Docs(DocsMessage::Step(-1))),
+                    Key::Named(Named::ArrowDown) => Some(Message::Docs(DocsMessage::Step(1))),
                     _ => None,
                 }
             }

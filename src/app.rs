@@ -470,6 +470,11 @@ pub enum Message {
     /// File > Export IFC 4x3: ask where, then save the model as a `.ifc` in that schema.
     SaveIfcDialog(export::IfcSchema),
     SavePicked(Option<PathBuf>),
+    /// The film of how the model is built: asking where to write it, where that is, and what
+    /// came of it (what was written, or why not).
+    BuildFilmDialog,
+    BuildFilmPicked(Option<PathBuf>),
+    BuildFilmDone(Result<(PathBuf, String), String>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
     Mode(RenderMode),
@@ -1135,6 +1140,43 @@ fn pick_model_task(add: bool) -> Task<Message> {
 fn save_name(model: &Model) -> String {
     let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
     format!("{stem}.{}", export::registry()[0].extensions()[0])
+}
+
+/// Asks where to write the film of how the model is built: a video, or its USD stage alone.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_film_dialog_task(model: &Model) -> Task<Message> {
+    let name = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
+    let mut dialog = rfd::AsyncFileDialog::new().set_title("Build film").set_file_name(format!("{name}.mp4")).add_filter("Video (MP4)", &["mp4"]).add_filter("USD", &["usda"]);
+    if let Some(dir) = crate::managed::dialog_folder(model.path.parent().map(PathBuf::from), crate::managed::work_folder()) {
+        dialog = dialog.set_directory(dir);
+    }
+    Task::perform(async move { dialog.save_file().await.map(|f| f.path().to_path_buf()) }, Message::BuildFilmPicked)
+}
+
+/// A browser cannot start the program that renders the film.
+#[cfg(target_arch = "wasm32")]
+fn build_film_dialog_task(_model: &Model) -> Task<Message> {
+    Task::done(Message::BuildFilmDone(Err("The build film needs the desktop app".into())))
+}
+
+/// Writes the film on a worker thread: rendering takes minutes.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_film_task(model: Arc<Model>, path: PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::build_film::render(&model, &path, crate::build_film::SECONDS).map(|said| (path, said)));
+            });
+            rx.await.unwrap_or_else(|_| Err("film thread stopped".to_string()))
+        },
+        Message::BuildFilmDone,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_film_task(_model: Arc<Model>, _path: PathBuf) -> Task<Message> {
+    Task::none()
 }
 
 /// Asks where to save the model, one filter per writer.
@@ -1942,6 +1984,32 @@ impl App {
                 return ifc_dialog_task(model, schema);
             }
             Message::SavePicked(None) => self.save_schema = export::IfcSchema::Ifc4,
+            Message::BuildFilmDialog => {
+                let Some(model) = &self.model else { return Task::none() };
+                if matches!(self.status, Status::Loading { .. } | Status::Saving { .. }) {
+                    return Task::none();
+                }
+                return build_film_dialog_task(model);
+            }
+            Message::BuildFilmPicked(None) => {}
+            Message::BuildFilmPicked(Some(mut path)) => {
+                let Some(model) = self.model.clone() else { return Task::none() };
+                if path.extension().is_none() {
+                    path.set_extension("mp4");
+                }
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status = Status::Saving { file, since: Instant::now() };
+                return build_film_task(model, path);
+            }
+            Message::BuildFilmDone(result) => {
+                self.status = match result {
+                    Ok((path, said)) => {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        Status::Loaded(format!("{file}: {said}"))
+                    }
+                    Err(e) => Status::Error(e),
+                };
+            }
             // the dialog asked before replacing a file
             Message::SavePicked(Some(path)) => return self.start_save(path, true),
             Message::Saved(result) => {

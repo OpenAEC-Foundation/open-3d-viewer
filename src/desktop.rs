@@ -285,7 +285,7 @@ fn build_film(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let file = args.file.as_ref().ok_or("--build-film needs a FILE to film")?;
     let model = loaders::load(file)?;
     let start = web_time::Instant::now();
-    let said = crate::build_film::render(&model, out, args.film_seconds.unwrap_or(20.0))?;
+    let said = crate::build_film::render(&model, out, args.film_seconds.unwrap_or(crate::build_film::SECONDS))?;
     println!("{} -> {} ({said}) in {:.1} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }

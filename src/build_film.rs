@@ -16,6 +16,8 @@ use std::fmt::Write as _;
 
 /// The height of a band of elements that appear together (metres).
 pub const BAND: f32 = 1.0;
+/// How long a film runs when nothing else is asked (seconds).
+pub const SECONDS: f32 = 20.0;
 /// Frames per second of the film and time codes per second of the stage.
 pub const FPS: u32 = 24;
 

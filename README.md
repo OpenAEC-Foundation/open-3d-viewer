@@ -141,7 +141,7 @@ For now this covers the Netherlands (RD New and WGS 84; data of the Dutch land r
 
 ## A film of how it is built (a first step)
 
-`open-3d-viewer FILE --build-film OUT.mp4` writes a film in which the model is built up: its elements appear in order while a camera turns round it. There is no button for it in the window yet.
+`open-3d-viewer FILE --build-film OUT.mp4` writes a film in which the model is built up: its elements appear in order while a camera turns round it. In the window it is **Build film** in the File group of the Home tab: it asks where to write the film and says in the status bar when it is done.
 
 - **The order**: by the phases of the file where it has them (Revit), and within a phase from the ground up in bands of a metre. What a later phase demolishes goes out when that phase starts. A planning per element is not read yet.
 - **The stage**: the model is written as a USD file (`.usda`), one mesh per element with its visibility over time. `--build-film OUT.usda` writes that file alone, for any program that reads USD.

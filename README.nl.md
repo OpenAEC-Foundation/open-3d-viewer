@@ -143,7 +143,7 @@ Voorlopig is dit voor Nederland (RD New en WGS 84; gegevens van het Kadaster via
 
 ## Een film van hoe het gebouwd wordt (een eerste stap)
 
-`open-3d-viewer BESTAND --build-film UIT.mp4` schrijft een film waarin het model wordt opgebouwd: de elementen verschijnen op volgorde terwijl een camera eromheen draait. In het venster zit er nog geen knop voor.
+`open-3d-viewer BESTAND --build-film UIT.mp4` schrijft een film waarin het model wordt opgebouwd: de elementen verschijnen op volgorde terwijl een camera eromheen draait. In het venster is het **Bouwfilm** in de groep Bestand van het tabblad Start: die vraagt waar de film moet komen en meldt in de statusbalk wanneer hij klaar is.
 
 - **De volgorde**: volgens de fasen van het bestand waar het die heeft (Revit), en binnen een fase van onder naar boven in banden van een meter. Wat een latere fase sloopt, verdwijnt als die fase begint. Een planning per element wordt nog niet gelezen.
 - **Het toneel**: het model wordt als USD-bestand (`.usda`) geschreven, één mesh per element met zijn zichtbaarheid in de tijd. `--build-film UIT.usda` schrijft alleen dat bestand, voor elk programma dat USD leest.

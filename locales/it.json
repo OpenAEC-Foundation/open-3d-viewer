@@ -310,6 +310,8 @@
     "Save": "Salva",
     "Save BCF": "Salva BCF",
     "Save as": "Salva con nome",
+    "Build film…": "Film di costruzione…",
+    "Writes a film in which the model is built up (Blender renders it)": "Scrive un filmato in cui il modello viene costruito (Blender lo renderizza)",
     "Save as…": "Salva con nome…",
     "Export IFC 4x3": "Esporta come IFC 4x3",
     "Export IFC 4x3…": "Esporta come IFC 4x3…",

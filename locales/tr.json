@@ -310,6 +310,8 @@
     "Save": "Kaydet",
     "Save BCF": "BCF kaydet",
     "Save as": "Farklı kaydet",
+    "Build film…": "Yapım filmi…",
+    "Writes a film in which the model is built up (Blender renders it)": "Modelin adım adım kurulduğu bir film yazar (Blender işler)",
     "Save as…": "Farklı kaydet…",
     "Export IFC 4x3": "IFC 4x3 olarak dışa aktar",
     "Export IFC 4x3…": "IFC 4x3 olarak dışa aktar…",

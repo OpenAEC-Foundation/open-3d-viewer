@@ -6,9 +6,10 @@
 //! document; its sheet layers as sheets, with the lines and texts drawn on them and their
 //! viewports, each with the view of the model it shows; its grid lines (GridAxis objects), its
 //! spaces as rooms, and what the file says about itself as project information. Each design
-//! layer with 2D line work or texts is also a 2D drawing (its plan), where its texts show.
+//! layer with 2D line work or texts is also a 2D drawing (its plan), where its texts show. Its
+//! stories are the levels; its worksheets are schedules, with the rows Vectorworks worked out.
 use super::{Loaded, Loader, Phase, Progress, Source};
-use crate::model::{Draft, DraftFill, DraftKind, DraftLine, DraftText, GridLine, Layer, ProjectData, Room, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
+use crate::model::{Draft, DraftFill, Later, Schedule, ScheduleRow, DraftKind, DraftLine, DraftText, GridLine, Layer, ProjectData, Room, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 
 /// Metres in a point, the measure of letters on paper.
 const POINT: f32 = 0.0254 / 72.0;
@@ -50,6 +51,9 @@ impl Loader for VwxLoader {
         project.grids = grids(&scene.meshes);
         project.rooms = rooms(&scene.meshes);
         project.drafts = plans(&scene.meshes, &scene.texts);
+        project.levels = levels(&scene.stories);
+        let worksheets = scene.worksheets.clone();
+        project.schedules = Later::new(move || worksheets.iter().map(schedule).collect());
         let layers = scene.meshes.into_iter().map(layer).collect();
         Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
     }
@@ -232,6 +236,51 @@ fn rooms(meshes: &[vwx_read::model::Mesh]) -> Vec<Room> {
     out
 }
 
+/// The stories of the document as levels: name and elevation, from the lowest up.
+fn levels(stories: &[vwx_read::model::Story]) -> Vec<(String, f32)> {
+    let mut out: Vec<(String, f32)> = stories.iter().map(|s| (s.name.clone(), s.elevation as f32)).collect();
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
+}
+
+/// A worksheet as a schedule: its columns by letter, a row per row of the worksheet, and in
+/// place of a database row the rows Vectorworks worked out for it (as the file keeps them: no
+/// formula is worked out again).
+fn schedule(sheet: &vwx_read::model::Worksheet) -> Schedule {
+    let columns = sheet.columns.max(sheet.cells.iter().map(|c| c.column + 1).max().unwrap_or(0));
+    let letter = |k: u32| {
+        let (mut k, mut name) = (k + 1, String::new());
+        while k > 0 {
+            name.insert(0, char::from(b'A' + ((k - 1) % 26) as u8));
+            k = (k - 1) / 26;
+        }
+        name
+    };
+    let row_of = |cells: &mut dyn Iterator<Item = &vwx_read::model::Cell>| {
+        let mut row = vec![None; columns as usize];
+        for c in cells {
+            if let Some(slot) = row.get_mut(c.column as usize).filter(|_| !c.text.is_empty()) {
+                *slot = Some(c.text.clone());
+            }
+        }
+        ScheduleRow { cells: row, images: Vec::new(), elements: Vec::new(), total: false }
+    };
+    let last = sheet.rows.max(sheet.cells.iter().map(|c| c.row + 1).max().unwrap_or(0));
+    let mut rows = Vec::new();
+    for r in 0..last {
+        if let Some(db) = sheet.database_rows.iter().find(|d| d.row == r) {
+            rows.extend(db.subrows.iter().map(|sub| row_of(&mut sub.iter())));
+            continue;
+        }
+        rows.push(row_of(&mut sheet.cells.iter().filter(|c| c.row == r)));
+    }
+    // the empty rows at its end are no part of it
+    while rows.last().is_some_and(|r| r.cells.iter().all(Option::is_none)) {
+        rows.pop();
+    }
+    Schedule { name: sheet.name.clone(), title: sheet.name.clone(), columns: (0..columns).map(letter).collect(), rows, computed: true }
+}
+
 /// The ids of the 2D drawings of design layers: above those of the objects of a file.
 const PLAN_IDS: u64 = 1 << 40;
 /// The scale the plan of a design layer is drawn at.
@@ -335,6 +384,30 @@ mod tests {
         assert_eq!((plans[0].name.as_str(), plans[0].lines.len()), ("GF", 2));
         assert_eq!(plans[0].lines[0], crate::model::DraftLine { element: 7, a: [0.0, 0.0], b: [0.0, 10.0] });
         assert_eq!((plans[0].texts[0].text.as_str(), plans[0].texts[0].at), ("Kitchen", [1.0, 1.4]));
+    }
+
+    #[test]
+    fn worksheets_become_schedules_with_their_database_rows() {
+        let cell = |row: u32, column: u32, text: &str| vwx_read::model::Cell { row, column, text: text.into(), ..Default::default() };
+        let sheet = vwx_read::model::Worksheet {
+            name: "Doors".into(),
+            rows: 3,
+            columns: 2,
+            cells: vec![cell(0, 0, "Name"), cell(0, 1, "Width"), cell(2, 0, "Total")],
+            database_rows: vec![vwx_read::model::DatabaseRow { row: 1, criteria: None, subrows: vec![vec![cell(1, 0, "D1"), cell(1, 1, "900")], vec![cell(1, 0, "D2"), cell(1, 1, "800")]] }],
+            ..Default::default()
+        };
+        let s = super::schedule(&sheet);
+        assert_eq!(s.columns, ["A", "B"]);
+        let rows: Vec<Vec<Option<String>>> = s.rows.iter().map(|r| r.cells.clone()).collect();
+        let text = |t: &str| Some(t.to_string());
+        assert_eq!(rows, [vec![text("Name"), text("Width")], vec![text("D1"), text("900")], vec![text("D2"), text("800")], vec![text("Total"), None]]);
+    }
+
+    #[test]
+    fn stories_become_levels_from_the_lowest_up() {
+        let story = |name: &str, elevation: f64| vwx_read::model::Story { name: name.into(), elevation, ..Default::default() };
+        assert_eq!(super::levels(&[story("1F", 3.0), story("GF", 0.0)]), [("GF".to_string(), 0.0), ("1F".to_string(), 3.0)]);
     }
 
     #[test]

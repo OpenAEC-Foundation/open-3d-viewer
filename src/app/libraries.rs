@@ -1,18 +1,30 @@
-//! Library, the product: the libraries a project draws on, side by side.
+//! Library, the product: the libraries a project draws on, by what they hold.
 //!
-//! Four sources, chosen in the left pane or on the ribbon: the general library every project
-//! starts with, the content of a country (its drawing standard and its types), the house style of
-//! a company, and the library of the project that is open. The page lists what the source holds
-//! in 2D and in 3D as cards: how many there are and a first look at them. What the suite does not
-//! hold yet is named and marked "to come", so the page shows where each thing will live.
+//! The left pane has a search field, the source (the general library every project starts with,
+//! the content of a country, the house style of a company, the library of the open project) and
+//! a tree of what that source holds, by the kind of thing: materials; planar elements (walls,
+//! floors, roofs, ceilings); linear elements by their role, with the steel table; systems by
+//! their group; the drawing standard (kinds of drawing, scales, line styles, line weights, text
+//! styles, hatches); a company's house style.
 //!
-//! A first setup (see `docs/superpowers/specs/2026-11-18-library-design.md`): the cards show,
-//! they do not open yet.
+//! The page shows the things of the category picked as tiles, each with a look at it: a
+//! material's hatch and colour, a build-up's section, a profile's outline, a system's face, a
+//! line as a pen and a line style draw it. A click on a tile of the project opens it in its
+//! editor in the right pane. A click on a tile of another library shows it there, with a button
+//! that makes a copy of it in the project to edit. The last tile makes a new one.
+//!
+//! A search looks in every library at once and shows what it finds as the same tiles; a click
+//! on one shows it where it lives.
 
-use super::{App, Message, FONT_BOLD};
+use super::buildups::BuildUpMessage;
+use super::materials::MaterialMessage;
+use super::profiles::ProfileMessage;
+use super::standards::{Setting, StandardMessage};
+use super::systems::SystemMessage;
+use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::profile::steel_profiles;
-use bim_library::{DrawingStandard, HatchKind, HatchPattern, Library, LinearRole, Role, Series, SystemGroup};
+use bim_library::{DrawingStandard, HatchKind, HatchPattern, Library, LinearRole, Role, SystemGroup};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::text::Wrapping;
@@ -47,7 +59,7 @@ impl Source {
         }
     }
 
-    /// What it holds, in a line.
+    /// What it holds, in a line: what its button on the ribbon says.
     pub fn purpose(self, l: Language) -> &'static str {
         match self {
             Source::General => l.text(
@@ -137,13 +149,113 @@ impl Country {
     }
 }
 
-/// The Library product's state: the source and the country shown, and what is searched for.
+/// A kind of thing a library holds: what the tree lists and the page shows the tiles of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    Materials,
+    /// Planar elements, by what they are for: walls, floors, roofs, ceilings.
+    Planar(Role),
+    /// Linear elements, by their role: columns, beams and the others.
+    Linear(LinearRole),
+    /// The steel table linear elements take their profile from.
+    Steel,
+    /// Systems, by their group.
+    Systems(SystemGroup),
+    /// The drawing standard: its kinds of drawing and the settings they pick from.
+    Kinds,
+    Scales,
+    LineStyles,
+    Pens,
+    TextStyles,
+    /// The hatches of the drawing standard a source follows.
+    Hatches,
+    /// A company's house style.
+    Colours,
+    Fonts,
+}
+
+/// What a category stands under in the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Heading {
+    Materials,
+    Planar,
+    Linear,
+    Systems,
+    Standard,
+    House,
+}
+
+impl Heading {
+    pub fn label(self, l: Language) -> &'static str {
+        match self {
+            Heading::Materials => l.text("Materialen", "Materials"),
+            Heading::Planar => l.text("Vlakvormige elementen", "Planar elements"),
+            Heading::Linear => l.text("Staafvormige elementen", "Linear elements"),
+            Heading::Systems => l.text("Systemen", "Systems"),
+            Heading::Standard => l.text("Tekenstandaard", "Drawing standard"),
+            Heading::House => l.text("Huisstijl", "House style"),
+        }
+    }
+}
+
+impl Category {
+    pub fn label(self, l: Language) -> &'static str {
+        match self {
+            Category::Materials => l.text("Materialen", "Materials"),
+            Category::Planar(role) => super::buildups::role_title(role, l),
+            Category::Linear(role) => match role {
+                LinearRole::Column => l.text("Kolommen", "Columns"),
+                LinearRole::Beam => l.text("Balken", "Beams"),
+                LinearRole::Member => l.text("Staven", "Members"),
+                LinearRole::Mullion => l.text("Stijlen", "Mullions"),
+                LinearRole::Skirting => l.text("Plinten", "Skirtings"),
+                LinearRole::Pipe => l.text("Leidingen", "Pipes"),
+                LinearRole::Duct => l.text("Kanalen", "Ducts"),
+                LinearRole::CableTray => l.text("Kabelgoten", "Cable trays"),
+                LinearRole::Pile => l.text("Palen", "Piles"),
+            },
+            Category::Steel => l.text("Staalprofielen", "Steel profiles"),
+            Category::Systems(group) => super::library::system_group_label(group, l),
+            Category::Kinds => l.text("Tekeningsoorten", "Kinds of drawing"),
+            Category::Scales => l.text("Schalen", "Scales"),
+            Category::LineStyles => l.text("Lijnstijlen", "Line styles"),
+            Category::Pens => l.text("Lijndiktes", "Line weights"),
+            Category::TextStyles => l.text("Tekststijlen", "Text styles"),
+            Category::Hatches => l.text("Arceringen", "Hatches"),
+            Category::Colours => l.text("Kleuren", "Colours"),
+            Category::Fonts => l.text("Lettertypen", "Fonts"),
+        }
+    }
+
+    /// Whether it is a part of the drawing standard that is set in the right pane.
+    pub fn of_standard(self) -> bool {
+        matches!(self, Category::Kinds | Category::Scales | Category::LineStyles | Category::Pens | Category::TextStyles)
+    }
+
+    /// The category a setting of the drawing standard is shown in.
+    pub fn of_setting(setting: &Setting) -> Category {
+        match setting {
+            Setting::Kind(_) => Category::Kinds,
+            Setting::LineStyle(_) => Category::LineStyles,
+            Setting::Pen(_) => Category::Pens,
+            Setting::TextStyle(_) => Category::TextStyles,
+            Setting::Scale(_) => Category::Scales,
+        }
+    }
+}
+
+/// The Library product's state: the source and the country shown, what is searched for, the
+/// category whose tiles show, and what is looked at of a library that is not the project's.
 #[derive(Debug, Clone, Default)]
 pub struct LibrariesView {
     pub source: Source,
     pub country: Country,
     /// What is typed in the search field; from two letters on the page shows what is found.
     pub query: String,
+    /// The category picked in the tree; `None`: the first the source has.
+    pub category: Option<Category>,
+    /// The tile picked of a library that is not the project's: the right pane shows it.
+    pub looked: Option<Item>,
 }
 
 #[derive(Debug, Clone)]
@@ -154,7 +266,12 @@ pub enum LibrariesMessage {
     /// Typed in the search field.
     Search(String),
     /// A found kind of drawing or setting: show it in its standard, with its fields.
-    Open(super::standards::Setting),
+    Open(Setting),
+    /// Show the tiles of this category of the source.
+    Category(Category),
+    /// Look at something of a library that is not the project's, where it lives: from its page
+    /// or from a search.
+    Look(Item),
 }
 
 /// What the right pane of the Project page edits.
@@ -174,7 +291,7 @@ pub enum Shelf {
     Project,
 }
 
-/// What a search finds.
+/// What a search finds, and what a tile of the page is of.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Material(Shelf, String),
@@ -184,7 +301,7 @@ pub enum Item {
     /// A profile of the steel table, by its designation.
     Steel(String),
     /// A kind of drawing or a setting of the drawing standard.
-    Setting(super::standards::Setting),
+    Setting(Setting),
 }
 
 /// Something found: its name, what kind of thing it is, where it is from, and the thing itself.
@@ -194,42 +311,6 @@ pub struct Found {
     pub kind: &'static str,
     pub place: &'static str,
     pub item: Item,
-}
-
-/// What a card shows of its content.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Sample {
-    /// Hatches, drawn as a drawing shows them.
-    Hatches(Vec<HatchPattern>),
-    /// Colours: of materials or a house style.
-    Swatches(Vec<[u8; 3]>),
-    /// The first names.
-    Names(Vec<String>),
-}
-
-/// A kind of content of a library: how many of it there are and a first look, or nothing yet.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Card {
-    pub title: &'static str,
-    /// A word beside the title: the standard hatches follow, for one.
-    pub note: &'static str,
-    /// What the suite holds of it; `None` while it is to come.
-    pub content: Option<(usize, Sample)>,
-}
-
-impl Card {
-    fn of(title: &'static str, count: usize, sample: Sample) -> Self {
-        Card { title, note: "", content: Some((count, sample)) }
-    }
-
-    fn to_come(title: &'static str) -> Self {
-        Card { title, note: "", content: None }
-    }
-
-    fn noted(mut self, note: &'static str) -> Self {
-        self.note = note;
-        self
-    }
 }
 
 /// The library every project starts with.
@@ -244,54 +325,81 @@ fn inb() -> &'static Library {
     INB.get_or_init(bim_library::inb::library)
 }
 
-/// The hatches of a drawing standard: one per kind of material.
-fn hatches(l: Language, standard: DrawingStandard) -> Card {
-    let patterns = HatchKind::ALL.iter().map(|kind| kind.pattern(standard)).collect();
-    Card::of(l.text("Arceringen", "Hatches"), HatchKind::ALL.len(), Sample::Hatches(patterns))
+/// How wide a tile of the page is, and how high the look at its thing.
+pub(super) const TILE: f32 = 184.0;
+const LOOK: f32 = 72.0;
+/// How high a tile is: its look, up to three lines of its name and a line about it.
+const TILE_HEIGHT: f32 = LOOK + 84.0;
+
+/// The frame of a tile: the picked one in the accent colour.
+fn tile_frame(p: Palette, on: bool) -> container::Style {
+    container::Style { background: Some(p.surface.into()), border: iced::Border { color: if on { p.accent } else { p.border }, width: if on { 2.0 } else { 1.0 }, radius: 6.0.into() }, ..Default::default() }
 }
 
-/// The steel table: its profiles, by the names of its series.
-fn steel(l: Language) -> Card {
-    let series = Series::ALL.iter().map(|s| s.name().to_string()).collect();
-    Card::of(l.text("Staalprofielen", "Steel profiles"), steel_profiles().len(), Sample::Names(series))
-}
-
-/// The types of a library in 3D: its materials, its build-ups by what they are for, its linear
-/// types and its system types.
-fn types(library: &Library, l: Language) -> Vec<Card> {
-    let lang = super::library::lang(l);
-    let names = |list: Vec<(&str, String)>| -> Vec<String> { list.into_iter().map(|(_, name)| name).collect() };
-    let mut cards = vec![Card::of(l.text("Materialen", "Materials"), library.materials.len(), Sample::Swatches(library.materials.iter().map(|m| m.colour).collect()))];
-    for (role, title) in [(Role::Wall, l.text("Wanden", "Walls")), (Role::Floor, l.text("Vloeren", "Floors")), (Role::Roof, l.text("Daken", "Roofs")), (Role::Ceiling, l.text("Plafonds", "Ceilings"))] {
-        let of_role = names(library.names(role, lang));
-        cards.push(Card::of(title, of_role.len(), Sample::Names(of_role)));
-    }
-    let linear: Vec<String> = LinearRole::ALL.iter().flat_map(|&role| names(library.linear_names(role, lang))).collect();
-    // columns, beams and other members: "linear" is not about the lines of a drawing
-    cards.push(Card::of(l.text("Staaftypen", "Linear types"), linear.len(), Sample::Names(linear)));
-    let systems: Vec<String> = SystemGroup::ALL.iter().flat_map(|&group| names(library.system_names(group, lang))).collect();
-    cards.push(Card::of(l.text("Systemen", "Systems"), systems.len(), Sample::Names(systems)));
-    cards
-}
-
-/// The content of 2D drawings that no library holds yet.
-fn drawing_styles(l: Language) -> Vec<Card> {
-    vec![
-        Card::to_come(l.text("Lijnstijlen", "Line styles")),
-        Card::to_come(l.text("Tekst- en maatstijlen", "Text and dimension styles")),
-        Card::to_come(l.text("Symbolen", "Symbols")),
+/// A tile of the page: a look at one thing, its name and a line about it; `on` when it is the
+/// one picked. A click sends `press`; a tile without one only shows.
+pub(super) fn tile<'a>(p: Palette, look: Element<'a, Message>, name: String, about: String, on: bool, press: Option<Message>) -> Element<'a, Message> {
+    let body = column![
+        container(look).width(Fill).height(LOOK).align_y(Center).clip(true),
+        text(name).size(12).font(FONT_BOLD).color(p.text).wrapping(Wrapping::WordOrGlyph),
+        text(about).size(10).color(p.text_muted).wrapping(Wrapping::WordOrGlyph),
     ]
+    .spacing(4);
+    let framed = container(body).width(TILE).height(TILE_HEIGHT).padding(8).clip(true).style(move |_| tile_frame(p, on));
+    match press {
+        Some(message) => button(framed).padding(0).style(move |_, s| p.row_button(s)).on_press(message).into(),
+        None => framed.into(),
+    }
+}
+
+/// The last tile of a category of the project: it makes one more.
+pub(super) fn tile_more<'a>(p: Palette, label: &'static str, message: Message) -> Element<'a, Message> {
+    let body = container(text(label).size(13).color(p.accent)).width(TILE).height(TILE_HEIGHT).align_x(Center).align_y(Center).style(move |_| container::Style { border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
+    button(body).padding(0).style(move |_, s| p.row_button(s)).on_press(message).into()
 }
 
 impl App {
     pub(super) fn libraries_update(&mut self, message: LibrariesMessage) -> Task<Message> {
         match message {
-            LibrariesMessage::Source(source) => self.libraries = LibrariesView { source, country: self.libraries.country, query: String::new() },
-            LibrariesMessage::Country(country) => self.libraries = LibrariesView { source: Source::Country, country, query: String::new() },
+            LibrariesMessage::Source(source) => {
+                self.edit_none();
+                self.libraries = LibrariesView { source, country: self.libraries.country, ..LibrariesView::default() };
+            }
+            LibrariesMessage::Country(country) => {
+                self.edit_none();
+                self.libraries = LibrariesView { source: Source::Country, country, ..LibrariesView::default() };
+            }
             LibrariesMessage::Search(query) => self.libraries.query = query,
             LibrariesMessage::Open(setting) => {
-                self.libraries = LibrariesView { source: Source::Country, country: Country::Netherlands, query: String::new() };
-                return self.standard_update(super::standards::StandardMessage::Pick(setting));
+                self.edit_none();
+                self.libraries = LibrariesView { source: Source::Country, country: Country::Netherlands, category: Some(Category::of_setting(&setting)), ..LibrariesView::default() };
+                return self.standard_update(StandardMessage::Pick(setting));
+            }
+            LibrariesMessage::Category(category) => {
+                self.edit_none();
+                self.libraries.query.clear();
+                self.set_category(category);
+            }
+            LibrariesMessage::Look(item) => {
+                let place = |shelf: Shelf| match shelf {
+                    Shelf::General => (Source::General, self.libraries.country),
+                    Shelf::Netherlands => (Source::Country, Country::Netherlands),
+                    Shelf::Project => (Source::Project, self.libraries.country),
+                };
+                let found = match &item {
+                    Item::Material(shelf, _) => Some((place(*shelf), Category::Materials)),
+                    Item::BuildUp(shelf, id) => self.shelf(*shelf).buildup(id).map(|b| (place(*shelf), Category::Planar(b.role))),
+                    Item::Linear(shelf, id) => self.shelf(*shelf).linear_type(id).map(|t| (place(*shelf), Category::Linear(t.role))),
+                    Item::System(shelf, id) => self.shelf(*shelf).system_type(id).map(|t| (place(*shelf), Category::Systems(t.group))),
+                    Item::Steel(_) => Some(((Source::General, self.libraries.country), Category::Steel)),
+                    Item::Setting(_) => None,
+                };
+                if let Some(((source, country), category)) = found {
+                    self.edit_none();
+                    self.libraries = LibrariesView { source, country, query: String::new(), category: None, looked: None };
+                    self.set_category(category);
+                    self.libraries.looked = Some(item);
+                }
             }
         }
         Task::none()
@@ -311,6 +419,36 @@ impl App {
         if editor != Editor::System {
             self.system_view.picked = None;
         }
+    }
+
+    /// Nothing is picked to edit or to set: another source or another category shows.
+    fn edit_none(&mut self) {
+        self.material_view.picked = None;
+        self.buildup_view.picked = None;
+        self.profile_view.picked = None;
+        self.system_view.picked = None;
+        self.standard_view.picked = None;
+        self.follow_refused.clear();
+    }
+
+    /// The tiles of `category` show; the editor of its kind of type makes its next one of that
+    /// role or group.
+    pub(super) fn set_category(&mut self, category: Category) {
+        self.libraries.category = Some(category);
+        self.libraries.looked = None;
+        match category {
+            Category::Planar(role) => self.buildup_view.role = Some(role),
+            Category::Linear(role) => self.profile_view.role = Some(role),
+            Category::Systems(group) => self.system_view.group = Some(group),
+            _ => {}
+        }
+    }
+
+    /// The project's library shows, at `category`, with nothing searched for: where what is
+    /// picked to edit lives.
+    pub(super) fn show_in_project(&mut self, category: Category) {
+        self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, ..LibrariesView::default() };
+        self.set_category(category);
     }
 
     /// After a step of the history put the library or the drawing standard back as it was: what
@@ -349,10 +487,115 @@ impl App {
         }
     }
 
+    /// The shelf of types the source shown has, if it has one: the general library, the Dutch
+    /// template's, or the project's.
+    fn shown_shelf(&self) -> Option<Shelf> {
+        match (self.libraries.source, self.libraries.country) {
+            (Source::General, _) => Some(Shelf::General),
+            (Source::Country, Country::Netherlands) => Some(Shelf::Netherlands),
+            (Source::Project, _) => Some(Shelf::Project),
+            _ => None,
+        }
+    }
+
+    /// The drawing standard the hatches of the source shown follow, and its name.
+    fn shown_hatches(&self) -> (DrawingStandard, &'static str) {
+        match self.libraries.source {
+            Source::Country => (self.libraries.country.standard(), self.libraries.country.standard_name()),
+            // a project's hatches follow the Dutch standard, until a project can choose
+            Source::Project => (DrawingStandard::Nen47, Country::Netherlands.standard_name()),
+            _ => (DrawingStandard::Iso128, "ISO 128"),
+        }
+    }
+
+    /// How many things the source shown has of `category`.
+    pub fn category_count(&self, category: Category) -> usize {
+        let library = self.shown_shelf().map(|shelf| self.shelf(shelf));
+        let of = |count: &dyn Fn(&Library) -> usize| library.map_or(0, count);
+        match category {
+            Category::Materials => of(&|lib| lib.materials.len()),
+            Category::Planar(role) => of(&|lib| lib.buildups_of(role).count()),
+            Category::Linear(role) => of(&|lib| lib.linear_types_of(role).count()),
+            Category::Steel => steel_profiles().len(),
+            Category::Systems(group) => of(&|lib| lib.system_types_of(group).count()),
+            Category::Kinds => self.standard.kinds.len(),
+            Category::Scales => self.standard.scales.len(),
+            Category::LineStyles => self.standard.line_styles.len(),
+            Category::Pens => self.standard.pens.len(),
+            Category::TextStyles => self.standard.text_styles.len(),
+            Category::Hatches => HatchKind::ALL.len(),
+            Category::Colours => HOUSE_COLOURS,
+            Category::Fonts => 1,
+        }
+    }
+
+    /// What the source shown holds, as the tree lists it: its headings, each with its categories
+    /// and how many things each has. A source's own library gives the planar roles and the
+    /// system groups in full (a new one can be made in each); of the linear roles the columns
+    /// and beams, and the others that have a type.
+    pub fn library_tree(&self) -> Vec<(Heading, Vec<(Category, usize)>)> {
+        let view = &self.libraries;
+        let counted = |categories: Vec<Category>| -> Vec<(Category, usize)> { categories.into_iter().map(|category| (category, self.category_count(category))).collect() };
+        let standard = || vec![Category::Kinds, Category::Scales, Category::LineStyles, Category::Pens, Category::TextStyles, Category::Hatches];
+        // the types of a library: all of the project's and the general library's kinds, of
+        // another's only those it has
+        let types = |whole: bool| -> Vec<(Heading, Vec<(Category, usize)>)> {
+            let has = |list: Vec<(Category, usize)>| -> Vec<(Category, usize)> { list.into_iter().filter(|(category, count)| whole && !matches!(category, Category::Linear(role) if !matches!(role, LinearRole::Column | LinearRole::Beam)) || *count > 0).collect() };
+            vec![
+                (Heading::Materials, has(counted(vec![Category::Materials]))),
+                (Heading::Planar, has(counted(Role::ALL.map(Category::Planar).to_vec()))),
+                (Heading::Linear, has(counted(LinearRole::ALL.map(Category::Linear).to_vec()))),
+                (Heading::Systems, has(counted(SystemGroup::ALL.map(Category::Systems).to_vec()))),
+            ]
+        };
+        let steel = |tree: &mut Vec<(Heading, Vec<(Category, usize)>)>| {
+            if let Some((_, linear)) = tree.iter_mut().find(|(heading, _)| *heading == Heading::Linear) {
+                linear.extend(counted(vec![Category::Steel]));
+            }
+        };
+        let mut tree = match view.source {
+            Source::General => {
+                let mut tree = types(true);
+                steel(&mut tree);
+                tree.push((Heading::Standard, counted(vec![Category::Hatches])));
+                tree
+            }
+            Source::Country if view.country == Country::Netherlands => {
+                let mut tree = vec![(Heading::Standard, counted(standard()))];
+                tree.extend(types(false));
+                steel(&mut tree);
+                tree
+            }
+            Source::Country => {
+                let mut tree = vec![(Heading::Standard, counted(vec![Category::Hatches]))];
+                if view.country.european_steel() {
+                    tree.push((Heading::Linear, counted(vec![Category::Steel])));
+                }
+                tree
+            }
+            Source::Company => vec![(Heading::House, counted(vec![Category::Colours, Category::Fonts]))],
+            Source::Project => {
+                let mut tree = types(true);
+                steel(&mut tree);
+                tree.push((Heading::Standard, counted(standard())));
+                tree
+            }
+        };
+        tree.retain(|(_, categories)| !categories.is_empty());
+        tree
+    }
+
+    /// The category whose tiles show: the one picked in the tree while the source has it, else
+    /// the first the source has.
+    pub fn category(&self) -> Category {
+        let tree = self.library_tree();
+        let has = |category: &Category| tree.iter().any(|(_, categories)| categories.iter().any(|(c, _)| c == category));
+        self.libraries.category.filter(has).or_else(|| tree.first().and_then(|(_, categories)| categories.first()).map(|(category, _)| *category)).unwrap_or(Category::Materials)
+    }
+
     /// What `query` finds in every library and in the drawing standard, by name, code or key:
     /// the project's own first, and nothing twice. From two letters on, at most 60.
     pub fn library_search(&self, query: &str, l: Language) -> Vec<Found> {
-        use super::standards::Setting;
         let needle = query.trim().to_lowercase();
         if needle.chars().count() < 2 {
             return Vec::new();
@@ -372,10 +615,10 @@ impl App {
                     add(&mut found, material.name(lang).to_string(), l.text("Materialen", "Materials"), place, Item::Material(shelf, material.key.clone()));
                 }
             }
-            for (role, kind) in [(Role::Wall, l.text("Wanden", "Walls")), (Role::Floor, l.text("Vloeren", "Floors")), (Role::Roof, l.text("Daken", "Roofs")), (Role::Ceiling, l.text("Plafonds", "Ceilings"))] {
+            for role in Role::ALL {
                 for (id, name) in library.names(role, lang) {
                     if hit(&[&name, id]) {
-                        add(&mut found, name, kind, place, Item::BuildUp(shelf, id.to_string()));
+                        add(&mut found, name, Category::Planar(role).label(l), place, Item::BuildUp(shelf, id.to_string()));
                     }
                 }
             }
@@ -420,187 +663,287 @@ impl App {
         found
     }
 
-    /// What the source shown holds: its sections, each with its cards. `house` are the colours
-    /// of the house style shown for a company.
-    pub fn library_sections(&self, l: Language, house: &[[u8; 3]]) -> Vec<(&'static str, Vec<Card>)> {
-        let view = &self.libraries;
-        match view.source {
-            Source::General => {
-                let mut flat = vec![hatches(l, DrawingStandard::Iso128).noted("ISO 128")];
-                flat.extend(drawing_styles(l));
-                let mut solid = types(general(), l);
-                solid.push(steel(l));
-                solid.push(Card::to_come(l.text("Objecten", "Objects")));
-                vec![("2D", flat), ("3D", solid)]
-            }
-            Source::Country => {
-                let country = view.country;
-                let mut flat = vec![hatches(l, country.standard()).noted(country.standard_name()), Card::to_come(l.text("Titelblokken", "Title blocks"))];
-                if country == Country::Netherlands {
-                    // its line styles, line weights and text styles are in its standard, above
-                    flat.push(Card::to_come(l.text("Symbolen", "Symbols")));
-                } else {
-                    flat.extend(drawing_styles(l));
-                }
-                let mut solid = Vec::new();
-                if country == Country::Netherlands {
-                    // the Dutch template's types: its walls, floors, roofs, columns and beams
-                    solid.extend(types(inb(), l).into_iter().filter(|card| card.content.as_ref().is_some_and(|(count, _)| *count > 0)));
-                }
-                solid.push(if country.european_steel() { steel(l) } else { Card::to_come(l.text("Staalprofielen", "Steel profiles")) });
-                solid.push(Card::to_come(l.text("Producten van fabrikanten", "Products of manufacturers")));
-                vec![("2D", flat), ("3D", solid)]
-            }
-            Source::Company => vec![
-                (
-                    l.text("Huisstijl", "House style"),
-                    vec![
-                        Card::to_come("Logo"),
-                        Card::of(l.text("Kleuren", "Colours"), house.len(), Sample::Swatches(house.to_vec())),
-                        Card::of(l.text("Lettertypen", "Fonts"), 1, Sample::Names(vec!["Inter".to_string()])),
-                    ],
-                ),
-                ("2D", vec![Card::to_come(l.text("Titelblok", "Title block")), Card::to_come(l.text("Bladsjablonen", "Sheet templates")), Card::to_come(l.text("Lijndiktes", "Line weights"))]),
-                ("3D", vec![Card::to_come(l.text("Eigen types", "Own types"))]),
-            ],
-            Source::Project => {
-                // a project's hatches follow the Dutch standard, until a project can choose
-                let mut flat = vec![hatches(l, DrawingStandard::Nen47).noted(Country::Netherlands.standard_name())];
-                flat.extend(drawing_styles(l));
-                vec![("2D", flat), ("3D", types(&self.library, l))]
-            }
-        }
-    }
-
-    /// The left pane of the Library product: the sources, and under Country its countries.
+    /// The left pane of the Library product: the search field, the sources (and under Country
+    /// its countries), and the tree of what the source shown holds.
     pub fn libraries_pane(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let view = &self.libraries;
-        let line = |label: &'static str, on: bool, indent: f32, message: LibrariesMessage| -> Element<'_, LibrariesMessage> {
-            let mark = text(if on { "●" } else { "" }).size(8).color(p.accent).width(12);
-            let name = text(label).size(12).font(if on { FONT_BOLD } else { super::FONT }).color(if on { p.text } else { p.text_secondary });
-            button(row![Space::new().width(indent), mark, name].spacing(4).align_y(Center)).width(Fill).padding([4, 6]).style(move |_, s| p.row_button(s)).on_press(message).into()
+        let chip = |label: &'static str, on: bool, message: LibrariesMessage| -> Element<'_, LibrariesMessage> {
+            button(text(label).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary })).padding([3, 8]).style(move |_, s| p.ribbon_button(on, s)).on_press(message).into()
         };
-        let mut list = Column::new().spacing(1);
-        for source in Source::ALL {
-            list = list.push(line(source.label(l), view.source == source, 0.0, LibrariesMessage::Source(source)));
-            if source == Source::Country && view.source == Source::Country {
-                for country in Country::ALL {
-                    list = list.push(line(country.label(l), view.country == country, 14.0, LibrariesMessage::Country(country)));
-                }
-            }
-        }
         // the search field is the pane's own: it looks in every library at once
         let name = l.text("Zoeken in de bibliotheken…", "Search the libraries…");
         let search = openaec_ui::design::a11y::named(text_input(name, &view.query).on_input(LibrariesMessage::Search).size(12).padding([4, 8]), openaec_ui::design::a11y::Role::TextField, name);
-        Element::from(column![container(search).padding([2, 4]), scrollable(list).height(Fill)].spacing(6)).map(Message::Libraries)
+        let sources = row(Source::ALL.map(|source| chip(source.label(l), view.source == source, LibrariesMessage::Source(source)))).spacing(2).wrap();
+        let mut head = Column::new().spacing(6).push(search).push(sources);
+        if view.source == Source::Country {
+            head = head.push(row(Country::ALL.map(|country| chip(country.label(l), view.country == country, LibrariesMessage::Country(country)))).spacing(2).wrap());
+        }
+        // the tree: a heading and under it its categories, each with how many things it has
+        let shown = self.category();
+        let searching = view.query.trim().chars().count() >= 2;
+        let mut tree = Column::new().spacing(1);
+        for (heading, categories) in self.library_tree() {
+            // (a heading over one category of the same name says nothing more)
+            let alone = categories.len() == 1 && categories[0].0.label(l) == heading.label(l);
+            if !alone {
+                tree = tree.push(container(text(heading.label(l)).size(10).font(FONT_BOLD).color(p.text_muted)).padding(iced::Padding { top: 8.0, right: 6.0, bottom: 2.0, left: 6.0 }));
+            }
+            for (category, count) in categories {
+                let on = category == shown && !searching;
+                let line = row![
+                    text(if on { "●" } else { "" }).size(8).color(p.accent).width(10),
+                    text(category.label(l)).size(12).font(if on || alone { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).width(Fill).wrapping(Wrapping::None),
+                    text(count.to_string()).size(11).color(p.text_muted),
+                ]
+                .spacing(4)
+                .align_y(Center);
+                let top = if alone { 8.0 } else { 0.0 };
+                let leaf = button(line).width(Fill).padding([4, 6]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(LibrariesMessage::Category(category));
+                tree = tree.push(container(leaf).padding(iced::Padding { top, right: 0.0, bottom: 0.0, left: if alone { 0.0 } else { 8.0 } }));
+            }
+        }
+        let later = text(l.text("Volgt nog: titelblokken, symbolen, objecten en producten van fabrikanten.", "Still to come: title blocks, symbols, objects and products of manufacturers.")).size(10).color(p.text_muted).wrapping(Wrapping::Word);
+        let tree = tree.push(container(later).padding(iced::Padding { top: 12.0, right: 6.0, bottom: 6.0, left: 6.0 }));
+        let tree = container(tree).padding(iced::Padding { top: 0.0, right: 14.0, bottom: 0.0, left: 0.0 });
+        Element::from(column![container(head).padding([2, 4]), scrollable(tree).height(Fill)].spacing(6)).map(Message::Libraries)
     }
 
-    /// The right pane of the Library product: on the Project page the editor of what was picked
-    /// there, a material, a build-up, a linear type or a system type; elsewhere the fields of what
-    /// is picked of the drawing standard.
+    /// The right pane of the Library product: the editor of the tile picked of the project, the
+    /// fields of the picked setting of the drawing standard, or a look at the tile picked of
+    /// another library, with the way to edit a copy of it.
     pub fn library_side(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        match self.libraries.source {
-            Source::Project if self.material_view.picked.is_some() => self.material_pane(p, l),
-            Source::Project if self.profile_view.picked.is_some() => self.profile_pane(p, l),
-            Source::Project if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
-            Source::Project if self.system_view.picked.is_some() => self.system_pane(p, l),
-            // nothing picked: what each editor is for
-            Source::Project => column![self.material_pane(p, l), self.buildup_pane(p, l), self.profile_pane(p, l), self.system_pane(p, l)].into(),
-            _ => self.standard_pane(p, l),
+        let view = &self.libraries;
+        let hint = |hint: &'static str| -> Element<'_, Message> { container(text(hint).size(12).color(p.text_muted).wrapping(Wrapping::Word)).padding(8).into() };
+        if self.category().of_standard() && view.query.trim().chars().count() < 2 {
+            return self.standard_pane(p, l);
+        }
+        if view.source == Source::Project {
+            return match () {
+                _ if self.material_view.picked.is_some() => self.material_pane(p, l),
+                _ if self.profile_view.picked.is_some() => self.profile_pane(p, l),
+                _ if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
+                _ if self.system_view.picked.is_some() => self.system_pane(p, l),
+                _ => hint(l.text("Klik een tegel om hem te bewerken. De laatste tegel maakt een nieuwe.", "Click a tile to edit it. The last tile makes a new one.")),
+            };
+        }
+        match &view.looked {
+            Some(item) => self.look_pane(p, l, item),
+            None => hint(l.text("Klik een tegel om hem te bekijken. Bewerken doe je met een kopie in het project.", "Click a tile to look at it. To edit it, make a copy in the project.")),
         }
     }
 
-    /// What was found, as cards with a look at each: a material's hatch, a build-up's section,
-    /// a profile's outline, a system's face.
-    fn found_cards(&self, p: Palette, l: Language) -> Element<'_, Message> {
+    /// The right pane for a tile of a library that is not the project's: what it is, drawn and
+    /// listed, and a button that makes a copy of it in the project to edit.
+    fn look_pane(&self, p: Palette, l: Language, item: &Item) -> Element<'_, Message> {
         use super::library::{buildup_detail, material_detail, profile_detail, system_detail};
-        use super::materials::MaterialMessage;
-        use super::profiles::ProfileMessage;
-        use super::standards::Setting;
-        use super::systems::SystemMessage;
+        let lang = super::library::lang(l);
+        let copy_label = l.text("Bewerk een kopie in het project", "Edit a copy in the project");
+        let found: Option<(String, Element<'_, Message>, &'static str, Message)> = match item {
+            Item::Material(shelf, key) => self.shelf(*shelf).material(key).map(|m| (m.name(lang).to_string(), material_detail(p, m), copy_label, Message::Material(MaterialMessage::Copy(*shelf, key.clone())))),
+            Item::BuildUp(shelf, id) => {
+                let library = self.shelf(*shelf);
+                library.buildup(id).map(|b| (library.name(id, lang).unwrap_or_default(), buildup_detail(p, l, library, b), copy_label, Message::BuildUp(BuildUpMessage::Copy(*shelf, id.clone()))))
+            }
+            Item::Linear(shelf, id) => {
+                let library = self.shelf(*shelf);
+                library.linear_type(id).map(|t| (library.linear_name(id, lang).unwrap_or_default(), profile_detail(p, &t.profile, library.material(&t.material), Some(t.profile.ifc().0)), copy_label, Message::Profile(ProfileMessage::Copy(*shelf, id.clone()))))
+            }
+            Item::System(shelf, id) => {
+                let library = self.shelf(*shelf);
+                library.system_type(id).map(|t| (library.system_name(id, lang).unwrap_or_default(), system_detail(p, l, library, t), copy_label, Message::SystemType(SystemMessage::Copy(*shelf, id.clone()))))
+            }
+            Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| {
+                let make = l.text("Maak er een balktype van in het project", "Make a beam type of it in the project");
+                (s.designation.clone(), profile_detail(p, &s.shape, general().material("steel"), Some(s.series.standard())), make, Message::Profile(ProfileMessage::FromSteel(designation.clone())))
+            }),
+            Item::Setting(_) => None,
+        };
+        let Some((name, detail, label, message)) = found else {
+            return container(text(l.text("Dit staat niet meer in de bibliotheek.", "This is no longer in the library.")).size(12).color(p.text_muted)).padding(8).into();
+        };
+        let copy = button(text(label).size(12)).padding([5, 10]).style(move |_, s| p.primary_button(s)).on_press(message);
+        let pane = column![text(name).size(14).font(FONT_BOLD).color(p.text).wrapping(Wrapping::Word), detail, copy].spacing(10);
+        scrollable(container(pane).padding(iced::Padding { top: 8.0, right: 14.0, bottom: 8.0, left: 8.0 }).width(Fill)).height(Fill).into()
+    }
+
+    /// The tiles of `category` of the source shown. A tile of the project opens in its editor;
+    /// one of another library is looked at; the last tile of the project makes one more.
+    fn category_tiles(&self, p: Palette, l: Language, category: Category) -> Vec<Element<'_, Message>> {
+        use super::library::{buildup_look, material_look, profile_outline, system_look};
+        let lang = super::library::lang(l);
+        let view = &self.libraries;
+        let project = view.source == Source::Project;
+        let looked = |item: &Item| view.looked.as_ref() == Some(item);
+        let look = |item: Item| Some(Message::Libraries(LibrariesMessage::Look(item)));
+        let shelf = self.shown_shelf();
+        let library = shelf.map(|shelf| self.shelf(shelf));
+        match (category, shelf, library) {
+            (Category::Materials, Some(shelf), Some(library)) => {
+                let mut tiles: Vec<Element<'_, Message>> = library
+                    .materials
+                    .iter()
+                    .map(|m| {
+                        let item = Item::Material(shelf, m.key.clone());
+                        let (on, press) = if project { (self.material_view.picked.as_deref() == Some(m.key.as_str()), Some(Message::Material(MaterialMessage::Pick(m.key.clone())))) } else { (looked(&item), look(item)) };
+                        tile(p, material_look(p, m), m.name(lang).to_string(), m.key.clone(), on, press)
+                    })
+                    .collect();
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Materiaal", "+ Material"), Message::Material(MaterialMessage::Add)));
+                }
+                tiles
+            }
+            (Category::Planar(role), Some(shelf), Some(library)) => {
+                let mut tiles: Vec<Element<'_, Message>> = library
+                    .names(role, lang)
+                    .into_iter()
+                    .filter_map(|(id, name)| {
+                        let b = library.buildup(id)?;
+                        let item = Item::BuildUp(shelf, id.to_string());
+                        let (on, press) = if project { (self.buildup_view.picked.as_deref() == Some(id), Some(Message::BuildUp(BuildUpMessage::Pick(id.to_string())))) } else { (looked(&item), look(item)) };
+                        let about = format!("{} mm · {}: {}", bim_library::millimetres(b.thickness(), lang), l.text("lagen", "layers"), b.layers.len());
+                        Some(tile(p, buildup_look(p, library, b, LOOK), name, about, on, press))
+                    })
+                    .collect();
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Opbouw", "+ Build-up"), Message::BuildUp(BuildUpMessage::Add)));
+                }
+                tiles
+            }
+            (Category::Linear(role), Some(shelf), Some(library)) => {
+                let mut tiles: Vec<Element<'_, Message>> = library
+                    .linear_names(role, lang)
+                    .into_iter()
+                    .filter_map(|(id, name)| {
+                        let t = library.linear_type(id)?;
+                        let item = Item::Linear(shelf, id.to_string());
+                        let (on, press) = if project { (self.profile_view.picked.as_deref() == Some(id), Some(Message::Profile(ProfileMessage::Pick(id.to_string())))) } else { (looked(&item), look(item)) };
+                        Some(tile(p, profile_outline(p, &t.profile, library.material(&t.material), LOOK - 8.0), name, t.profile.ifc().0.to_string(), on, press))
+                    })
+                    .collect();
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Staaftype", "+ Linear type"), Message::Profile(ProfileMessage::Add)));
+                }
+                tiles
+            }
+            (Category::Systems(group), Some(shelf), Some(library)) => {
+                let mut tiles: Vec<Element<'_, Message>> = library
+                    .system_names(group, lang)
+                    .into_iter()
+                    .filter_map(|(id, name)| {
+                        let t = library.system_type(id)?;
+                        let item = Item::System(shelf, id.to_string());
+                        let (on, press) = if project { (self.system_view.picked.as_deref() == Some(id), Some(Message::SystemType(SystemMessage::Pick(id.to_string())))) } else { (looked(&item), look(item)) };
+                        let (interior, exterior) = t.extent();
+                        let about = format!("{} mm · {}", bim_library::millimetres(exterior - interior, lang), t.group.ifc_type().0);
+                        Some(tile(p, system_look(p, library, t, LOOK), name, about, on, press))
+                    })
+                    .collect();
+                if project {
+                    tiles.push(tile_more(p, l.text("+ Systeem", "+ System"), Message::SystemType(SystemMessage::Add)));
+                }
+                tiles
+            }
+            (Category::Hatches, _, _) => {
+                let (standard, standard_name) = self.shown_hatches();
+                HatchKind::ALL
+                    .into_iter()
+                    .map(|kind| {
+                        let name = general().material(super::materials::hatch_material(kind)).map_or(String::new(), |m| m.name(lang).to_string());
+                        let look = container(hatch_look(kind.pattern(standard), p, 64.0)).width(Fill).align_x(Center);
+                        tile(p, look.into(), name, standard_name.to_string(), false, None)
+                    })
+                    .collect()
+            }
+            (Category::Colours, _, _) => {
+                let rgb = |c: Color| [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8];
+                let house: [(Color, &'static str); HOUSE_COLOURS] = [
+                    (p.accent, l.text("accent", "accent")),
+                    (p.text, l.text("tekst", "text")),
+                    (p.text_secondary, l.text("tweede tekst", "secondary text")),
+                    (p.border, l.text("rand", "border")),
+                    (p.surface, l.text("vlak", "surface")),
+                    (p.bg, l.text("achtergrond", "background")),
+                ];
+                house
+                    .into_iter()
+                    .map(|(colour, role)| {
+                        let swatch = container(Space::new().width(Fill).height(LOOK - 8.0)).style(move |_| container::Style { background: Some(colour.into()), border: iced::Border { color: p.border, width: 1.0, radius: 3.0.into() }, ..Default::default() });
+                        tile(p, swatch.into(), super::materials::hex(rgb(colour)), role.to_string(), false, None)
+                    })
+                    .collect()
+            }
+            (Category::Fonts, _, _) => vec![tile(p, container(text("Aa Bb 123").size(26).color(p.text)).width(Fill).align_x(Center).into(), "Inter".to_string(), l.text("het lettertype van de suite", "the suite's font").to_string(), false, None)],
+            (category, _, _) if category.of_standard() => self.standard_tiles(p, l, category),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What was found, as tiles with a look at each: a material's hatch, a build-up's section,
+    /// a profile's outline, a system's face. A click shows the thing where it lives: one of the
+    /// project in its editor, one of another library on its page, a kind of drawing or a setting
+    /// in its standard.
+    fn found_tiles(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        use super::library::{buildup_look, material_look, profile_outline, system_look};
         let found = self.library_search(&self.libraries.query, l);
         let title = text(format!("{} · {}", l.text("Zoekresultaten", "Search results"), found.len())).size(20).font(FONT_BOLD).color(p.text);
         if found.is_empty() {
             return column![title, text(l.text("Niets gevonden.", "Nothing found.")).size(12).color(p.text_secondary)].spacing(8).into();
         }
         let lang = super::library::lang(l);
-        let hint = |hint: &'static str| text(hint).size(10).color(p.text_muted);
-        let as_copy = l.text("Klik om een kopie in het project te bewerken.", "Click to edit a copy in the project.");
-        let cards = found.into_iter().map(|f| {
-            let head = column![
-                text(f.name.clone()).size(13).font(FONT_BOLD).color(p.text).wrapping(Wrapping::Word),
-                text(format!("{} · {}", f.kind, f.place)).size(10).color(p.text_muted),
-            ]
-            .spacing(2);
-            let look: Option<Element<'_, Message>> = match &f.item {
-                Item::Material(shelf, key) => {
-                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
-                    self.shelf(*shelf).material(key).map(|m| column![material_detail(p, m)].push(copied).spacing(6).into())
-                }
+        let words = |words: String| -> Element<'_, Message> { container(text(words).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph)).width(Fill).into() };
+        let tiles = found.into_iter().filter_map(|f| {
+            let about = format!("{} · {}", f.kind, f.place);
+            let look: Element<'_, Message> = match &f.item {
+                Item::Material(shelf, key) => material_look(p, self.shelf(*shelf).material(key)?),
                 Item::BuildUp(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
-                    library.buildup(id).map(|b| column![buildup_detail(p, l, library, b)].push(copied).spacing(6).into())
+                    buildup_look(p, library, library.buildup(id)?, LOOK)
                 }
                 Item::Linear(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
-                    library.linear_type(id).map(|t| column![profile_detail(p, &t.profile, library.material(&t.material), Some(t.profile.ifc().0))].push(copied).spacing(6).into())
+                    let t = library.linear_type(id)?;
+                    profile_outline(p, &t.profile, library.material(&t.material), LOOK - 8.0)
                 }
                 Item::System(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
-                    library.system_type(id).map(|t| column![system_detail(p, l, library, t)].push(copied).spacing(6).into())
+                    system_look(p, library, library.system_type(id)?, LOOK)
                 }
-                Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| {
-                    let make = hint(l.text("Klik om er een balktype van te maken in het project.", "Click to make a beam type of it in the project."));
-                    column![profile_detail(p, &s.shape, general().material("steel"), Some(s.series.standard())), make].spacing(6).into()
-                }),
-                Item::Setting(setting) => {
-                    let about = match setting {
-                        Setting::Kind(key) => self.standard.kind(key).map(|k| format!("{} · {} · {}", k.code, k.discipline.code(), k.scales.iter().map(|s| bim_library::drawing::scale_text(*s)).collect::<Vec<_>>().join(", "))),
-                        Setting::LineStyle(key) => self.standard.line_style(key).map(|s| s.names.get(lang).to_string()),
-                        Setting::Pen(key) => self.standard.pen(key).map(|pen| format!("{} mm", pen.width)),
-                        Setting::TextStyle(key) => self.standard.text_style(key).map(|t| format!("{} mm", t.height)),
-                        Setting::Scale(scale) => Some(bim_library::drawing::scale_text(*scale)),
-                    };
-                    about.map(|about| text(about).size(12).color(p.text_secondary).into())
-                }
+                Item::Steel(designation) => profile_outline(p, &bim_library::profile::steel(designation)?.shape, general().material("steel"), LOOK - 8.0),
+                Item::Setting(setting) => words(match setting {
+                    Setting::Kind(key) => self.standard.kind(key).map(|k| format!("{} · {} · {}", k.code, k.discipline.code(), k.scales.iter().map(|s| bim_library::drawing::scale_text(*s)).collect::<Vec<_>>().join(", "))),
+                    Setting::LineStyle(key) => self.standard.line_style(key).map(|s| s.names.get(lang).to_string()),
+                    Setting::Pen(key) => self.standard.pen(key).map(|pen| format!("{} mm", pen.width)),
+                    Setting::TextStyle(key) => self.standard.text_style(key).map(|t| format!("{} mm", t.height)),
+                    Setting::Scale(scale) => Some(bim_library::drawing::scale_text(*scale)),
+                }?),
             };
-            let card = container(column![head].push(look).spacing(8))
-                .width(270)
-                .padding(12)
-                .clip(true)
-                .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
-            // a kind of drawing or a setting opens in its standard, where it is set; a material,
-            // a build-up, a linear type or a system type opens in its editor, one of another
-            // library as a copy in the project; a profile of the steel table becomes a beam type
-            // of the project
-            match f.item {
-                Item::Material(Shelf::Project, key) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Material(MaterialMessage::Pick(key))).into(),
-                Item::Material(shelf, key) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Material(MaterialMessage::Copy(shelf, key))).into(),
-                Item::Setting(setting) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Libraries(LibrariesMessage::Open(setting))).into(),
-                Item::BuildUp(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Pick(id))).into(),
-                Item::BuildUp(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Copy(shelf, id))).into(),
-                Item::Linear(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::Pick(id))).into(),
-                Item::Linear(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::Copy(shelf, id))).into(),
-                Item::Steel(designation) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::FromSteel(designation))).into(),
-                Item::System(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::SystemType(SystemMessage::Pick(id))).into(),
-                Item::System(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::SystemType(SystemMessage::Copy(shelf, id))).into(),
-            }
+            let press = match f.item {
+                Item::Material(Shelf::Project, key) => Message::Material(MaterialMessage::Pick(key)),
+                Item::BuildUp(Shelf::Project, id) => Message::BuildUp(BuildUpMessage::Pick(id)),
+                Item::Linear(Shelf::Project, id) => Message::Profile(ProfileMessage::Pick(id)),
+                Item::System(Shelf::Project, id) => Message::SystemType(SystemMessage::Pick(id)),
+                Item::Setting(setting) => Message::Libraries(LibrariesMessage::Open(setting)),
+                item => Message::Libraries(LibrariesMessage::Look(item)),
+            };
+            Some(tile(p, look, f.name, about, false, Some(press)))
         });
-        column![title, row(cards).spacing(10).wrap()].spacing(14).into()
+        column![title, row(tiles).spacing(10).wrap()].spacing(14).into()
     }
 
-    /// The Library page: what the source shown holds, in 2D and in 3D. Nothing stands over it
-    /// but its own heading.
+    /// The Library page: the tiles of the category shown of the source shown, or what a search
+    /// found. Nothing stands over it but its own heading.
     pub fn libraries_page(&self, p: Palette, l: Language) -> Element<'_, Message> {
         let view = &self.libraries;
-        // searching: the page shows what was found, in place of the source
-        if view.query.trim().chars().count() >= 2 {
-            return container(scrollable(container(self.found_cards(p, l)).padding(20).width(Fill)).height(Fill)).width(Fill).height(Fill).style(move |_| p.panel()).into();
+        fn framed<'a>(p: Palette, page: Element<'a, Message>) -> Element<'a, Message> {
+            container(scrollable(container(page).padding(20).width(Fill)).height(Fill)).width(Fill).height(Fill).style(move |_| p.panel()).into()
         }
-        let title = match view.source {
+        // searching: the page shows what was found, in place of the category
+        if view.query.trim().chars().count() >= 2 {
+            return framed(p, self.found_tiles(p, l));
+        }
+        let category = self.category();
+        let place = match view.source {
             Source::Country => format!("{} · {}", view.source.label(l), view.country.label(l)),
             Source::Project => match self.model.as_ref().and_then(|m| m.path.file_name()).and_then(|n| n.to_str()) {
                 Some(file) => format!("{} · {file}", view.source.label(l)),
@@ -608,100 +951,51 @@ impl App {
             },
             source => source.label(l).to_string(),
         };
-        let heading = column![
-            text(title).size(20).font(FONT_BOLD).color(p.text),
-            text(view.source.purpose(l)).size(12).color(p.text_secondary).width(Fill).wrapping(Wrapping::Word),
-        ]
-        .spacing(4);
-        let rgb = |c: Color| [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8];
-        let house = [p.accent, p.text, p.text_secondary, p.border, p.surface, p.bg].map(rgb);
-        let mut page = Column::new().spacing(18).push(heading);
-        // the Netherlands: its drawing standard first, to be set up
-        if view.source == Source::Country && view.country == Country::Netherlands {
-            page = page.push(self.standard_sections(p, l));
+        let mut about = format!("{place} · {}", self.category_count(category));
+        if category == Category::Hatches {
+            about = format!("{about} · {}", self.shown_hatches().1);
         }
-        // the project: its materials first, then what is made of them, to be edited: its
-        // build-ups and its linear types side by side, under the build-ups its system types and
-        // under the linear types the steel table one takes its profile from
-        if view.source == Source::Project {
-            let half = iced::Length::FillPortion(1);
-            let linear = column![self.profile_lists(p, l), self.steel_table(p, l)].spacing(18);
-            let layered = column![self.buildup_lists(p, l), self.system_lists(p, l)].spacing(18);
-            page = page.push(self.material_chips(p, l)).push(row![container(layered).width(half), container(linear).width(half)].spacing(12));
-        }
-        for (section, cards) in self.library_sections(l, &house) {
-            let cards = row(cards.into_iter().map(|card| card_view(card, p, l))).spacing(10).wrap();
-            page = page.push(column![text(section).size(12).font(FONT_BOLD).color(p.text_muted), cards].spacing(8));
-        }
-        container(scrollable(container(page).padding(20).width(Fill)).height(Fill)).width(Fill).height(Fill).style(move |_| p.panel()).into()
-    }
-}
-
-/// A card: its title and count, and the colours or the first names of what it holds.
-fn card_view<'a>(card: Card, p: Palette, l: Language) -> Element<'a, Message> {
-    const SHOWN: usize = 5;
-    let ready = card.content.is_some();
-    let ink = if ready { p.text } else { p.text_muted };
-    let mut head = row![text(card.title).size(13).font(FONT_BOLD).color(ink)].spacing(6).align_y(Center);
-    if !card.note.is_empty() {
-        head = head.push(text(card.note).size(10).color(p.text_muted));
-    }
-    head = head.push(Space::new().width(Fill));
-    let body: Element<'a, Message> = match card.content {
-        None => {
-            head = head.push(text(l.text("volgt", "to come")).size(11).color(p.text_muted));
-            Space::new().height(18).into()
-        }
-        Some((count, sample)) => {
-            head = head.push(text(count.to_string()).size(12).color(p.text_secondary));
-            match sample {
-                Sample::Hatches(patterns) => {
-                    let width = patterns.len() as f32 * (HatchTiles::SIDE + HatchTiles::GAP);
-                    canvas_widget(HatchTiles { patterns, edge: p.border }).width(width).height(HatchTiles::SIDE).into()
-                }
-                Sample::Swatches(colours) => row(colours.into_iter().take(12).map(|[r, g, b]| {
-                    container(Space::new().width(14).height(18))
-                        .style(move |_| container::Style { background: Some(Color::from_rgb8(r, g, b).into()), border: iced::Border { color: p.border, width: 1.0, radius: 2.0.into() }, ..Default::default() })
-                        .into()
-                }))
-                .spacing(3)
-                .into(),
-                Sample::Names(names) => {
-                    let more = names.len().saturating_sub(SHOWN);
-                    let mut lines = Column::new().spacing(2);
-                    for name in names.into_iter().take(SHOWN) {
-                        lines = lines.push(text(name).size(11).color(p.text_secondary).wrapping(Wrapping::None));
-                    }
-                    if more > 0 {
-                        lines = lines.push(text(format!("+{more}")).size(11).color(p.text_muted));
-                    }
-                    lines.into()
-                }
+        let heading = column![text(category.label(l)).size(20).font(FONT_BOLD).color(p.text), text(about).size(12).color(p.text_secondary)].spacing(4);
+        let body: Element<'_, Message> = if category == Category::Steel {
+            self.steel_table(p, l)
+        } else {
+            let tiles = self.category_tiles(p, l, category);
+            if tiles.is_empty() {
+                text(l.text("Niets in deze categorie.", "Nothing in this category.")).size(12).color(p.text_secondary).into()
+            } else {
+                row(tiles).spacing(10).wrap().into()
             }
+        };
+        let mut page = Column::new().spacing(14).push(heading).push(body);
+        if category == Category::Kinds {
+            page = page.push(text(format!("{}: {}", l.text("Eerste blad", "First sheet"), self.standard.first_sheet)).size(12).color(p.text_secondary));
         }
-    };
-    container(column![head, body].spacing(8))
-        .width(250)
-        .padding(12)
-        .clip(true)
-        .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() })
-        .into()
+        framed(p, page.into())
+    }
 }
 
-/// One hatch on a tile, drawn as a section shows it: a look at a material.
+/// How many colours a house style shows.
+const HOUSE_COLOURS: usize = 6;
+
+/// One hatch on a small tile, drawn as a section shows it: a look at a material.
 pub(super) fn hatch_tile<'a, M: 'a>(pattern: HatchPattern, p: Palette) -> Element<'a, M> {
-    canvas_widget(HatchTiles { patterns: vec![pattern], edge: p.border }).width(HatchTiles::SIDE).height(HatchTiles::SIDE).into()
+    hatch_look(pattern, p, HatchTiles::SIDE)
 }
 
-/// The hatches of a card, each in a tile of its own, drawn as a section shows them.
+/// One hatch on a square `side` wide, drawn as a section shows it.
+pub(super) fn hatch_look<'a, M: 'a>(pattern: HatchPattern, p: Palette, side: f32) -> Element<'a, M> {
+    canvas_widget(HatchTiles { pattern, edge: p.border }).width(side).height(side).into()
+}
+
+/// A hatch on a square, drawn as a section shows it.
 struct HatchTiles {
-    patterns: Vec<HatchPattern>,
+    pattern: HatchPattern,
     edge: Color,
 }
 
 impl HatchTiles {
+    /// The side of a small tile.
     const SIDE: f32 = 22.0;
-    const GAP: f32 = 3.0;
     /// Pixels per metre of the model: a hatch spaced 40 mm shows a line every 8 px.
     const SCALE: f32 = 200.0;
 }
@@ -711,12 +1005,10 @@ impl<M> canvas::Program<M> for HatchTiles {
 
     fn draw(&self, _state: &(), renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        for (k, pattern) in self.patterns.iter().enumerate() {
-            let tile = Rectangle::new(Point::new(k as f32 * (Self::SIDE + Self::GAP), 0.0), Size::new(Self::SIDE, Self::SIDE));
-            // (a hatch keeps its lines inside the band it is given)
-            super::library::draw_hatch(&mut frame, tile, *pattern, Self::SCALE);
-            frame.stroke(&Path::rectangle(tile.position(), tile.size()), Stroke::default().with_color(self.edge).with_width(1.0));
-        }
+        let tile = Rectangle::new(Point::ORIGIN, Size::new(bounds.width, bounds.height));
+        // (a hatch keeps its lines inside the band it is given)
+        super::library::draw_hatch(&mut frame, tile, self.pattern, Self::SCALE);
+        frame.stroke(&Path::rectangle(tile.position(), tile.size()), Stroke::default().with_color(self.edge).with_width(1.0));
         vec![frame.into_geometry()]
     }
 }
@@ -725,44 +1017,112 @@ impl<M> canvas::Program<M> for HatchTiles {
 mod tests {
     use super::*;
 
-    fn titles(cards: &[Card]) -> Vec<&str> {
-        cards.iter().map(|card| card.title).collect()
+    fn categories(tree: &[(Heading, Vec<(Category, usize)>)], heading: Heading) -> Vec<Category> {
+        tree.iter().find(|(h, _)| *h == heading).map_or(Vec::new(), |(_, list)| list.iter().map(|(category, _)| *category).collect())
     }
 
     #[test]
-    fn each_source_lists_what_it_holds_in_2d_and_in_3d() {
+    fn each_source_lists_what_it_holds_by_the_kind_of_thing() {
         let mut app = App::default();
-        let l = Language::English;
-        // the general library: the hatches and the starter types; what is not there yet is named
-        let general = app.library_sections(l, &[]);
-        assert_eq!(general.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["2D", "3D"]);
-        assert_eq!(titles(&general[0].1), ["Hatches", "Line styles", "Text and dimension styles", "Symbols"]);
-        let materials = &general[1].1[0];
-        assert_eq!((materials.title, materials.content.as_ref().map(|(count, _)| *count)), ("Materials", Some(general_library_materials())));
-        assert!(general[1].1.iter().any(|card| card.title == "Steel profiles" && card.content.is_some()));
-        assert!(general[1].1.iter().any(|card| card.title == "Objects" && card.content.is_none()));
-        // a country: its own standard's hatches, and for the Netherlands the types of its template
+        // the general library: materials, the planar elements together, the linear ones with the
+        // steel table, the systems, and the hatches of its standard
+        let general = app.library_tree();
+        assert_eq!(general.iter().map(|(heading, _)| *heading).collect::<Vec<_>>(), [Heading::Materials, Heading::Planar, Heading::Linear, Heading::Systems, Heading::Standard]);
+        assert_eq!(categories(&general, Heading::Planar), Role::ALL.map(Category::Planar));
+        assert_eq!(general[0].1, [(Category::Materials, Library::starter().materials.len())]);
+        assert!(categories(&general, Heading::Linear).starts_with(&[Category::Linear(LinearRole::Column), Category::Linear(LinearRole::Beam)]));
+        assert_eq!(categories(&general, Heading::Linear).last(), Some(&Category::Steel));
+        assert_eq!(categories(&general, Heading::Systems).len(), SystemGroup::ALL.len());
+        assert_eq!(categories(&general, Heading::Standard), [Category::Hatches]);
+        // the first category shows until another is picked
+        assert_eq!(app.category(), Category::Materials);
+        // a country: its hatches; the Netherlands its drawing standard first, and the types of
+        // its template that it has
         let _ = app.libraries_update(LibrariesMessage::Country(Country::Germany));
         assert_eq!((app.libraries.source, app.libraries.country), (Source::Country, Country::Germany));
-        let germany = app.library_sections(l, &[]);
-        assert_eq!(germany[0].1[0].note, "DIN 1356");
+        let germany = app.library_tree();
+        assert_eq!((categories(&germany, Heading::Standard), categories(&germany, Heading::Linear)), (vec![Category::Hatches], vec![Category::Steel]));
+        assert_eq!((app.category(), app.shown_hatches().1), (Category::Hatches, "DIN 1356"));
         let _ = app.libraries_update(LibrariesMessage::Country(Country::Netherlands));
-        let netherlands = app.library_sections(l, &[]);
-        assert_eq!(netherlands[0].1[0].note, "NEN 47");
-        assert_ne!(netherlands[0].1[0].content, germany[0].1[0].content, "the hatches differ by standard");
-        assert!(netherlands[1].1.len() > germany[1].1.len(), "the Dutch template's types");
-        // a company: its house style first; the project: its own library
+        let netherlands = app.library_tree();
+        assert_eq!(categories(&netherlands, Heading::Standard), [Category::Kinds, Category::Scales, Category::LineStyles, Category::Pens, Category::TextStyles, Category::Hatches]);
+        assert!(netherlands.iter().all(|(_, list)| list.iter().all(|(category, count)| *count > 0 || category.of_standard())), "only what the template has: {netherlands:?}");
+        assert!(categories(&netherlands, Heading::Planar).contains(&Category::Planar(Role::Wall)) && categories(&netherlands, Heading::Systems).is_empty());
+        assert_eq!((app.category(), app.shown_hatches().1), (Category::Kinds, "NEN 47"));
+        // a company: its house style; the project: its own library and its standard
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Company));
-        let company = app.library_sections(l, &[[217, 119, 6]]);
-        assert_eq!(company[0].0, "House style");
-        assert_eq!(company[0].1[1].content, Some((1, Sample::Swatches(vec![[217, 119, 6]]))));
+        assert_eq!(app.library_tree(), [(Heading::House, vec![(Category::Colours, 6), (Category::Fonts, 1)])]);
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
         app.library.materials.truncate(2);
-        assert_eq!(app.library_sections(l, &[])[1].1[0].content.as_ref().map(|(count, _)| *count), Some(2));
+        let project = app.library_tree();
+        assert_eq!(project[0].1, [(Category::Materials, 2)]);
+        assert_eq!(categories(&project, Heading::Standard).first(), Some(&Category::Kinds));
     }
 
     #[test]
-    fn a_search_finds_types_profiles_and_kinds_of_drawing_and_opens_a_setting() {
+    fn a_category_shows_its_tiles_and_a_click_edits_or_looks() {
+        let mut app = App::default();
+        let l = Language::English;
+        let click = |app: &mut App, pane: bool, label: &str| {
+            let messages: Vec<Message> = {
+                let palette = app.theme.palette();
+                let part = if pane { app.libraries_pane(palette, l) } else { app.libraries_page(palette, l) };
+                let mut ui = crate::app::test_ui_of(iced::Size::new(if pane { 260.0 } else { 1200.0 }, 1400.0), part);
+                ui.click(label).unwrap_or_else(|_| panic!("no {label}"));
+                ui.into_messages().collect()
+            };
+            for message in messages {
+                let _ = app.update(message);
+            }
+        };
+        // the project: the tree's walls, their tiles, and a click on one opens its editor
+        click(&mut app, true, "Project");
+        click(&mut app, true, "Walls");
+        assert_eq!((app.libraries.source, app.category(), app.buildup_view.shown()), (Source::Project, Category::Planar(Role::Wall), Role::Wall));
+        {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 1400.0), app.libraries_page(app.theme.palette(), l));
+            assert!(page.find("Walls").is_ok() && page.find("+ Build-up").is_ok() && page.find("Concrete 200").is_ok() && page.find("200 mm · layers: 1").is_ok());
+        }
+        click(&mut app, false, "Concrete 200");
+        let wall = app.buildup_view.picked.clone().expect("the wall is picked to edit");
+        assert_eq!(app.library.name(&wall, bim_library::Lang::En).as_deref(), Some("Concrete 200"));
+        // another category lets go of it; the last tile makes one more of that category
+        click(&mut app, true, "Floors");
+        assert_eq!((app.buildup_view.picked.clone(), app.category()), (None, Category::Planar(Role::Floor)));
+        let floors = app.library.buildups_of(Role::Floor).count();
+        click(&mut app, false, "+ Build-up");
+        assert_eq!(app.library.buildups_of(Role::Floor).count(), floors + 1);
+        // the general library: a click looks at a tile, and the pane makes a copy to edit
+        click(&mut app, true, "General");
+        click(&mut app, true, "Timber frames");
+        click(&mut app, false, "Timber frame 38×140 c/c 600");
+        assert_eq!(app.libraries.looked, Some(Item::System(Shelf::General, "system.timber-frame-140".into())));
+        {
+            let mut side = crate::app::test_ui_of(iced::Size::new(340.0, 1200.0), app.library_side(app.theme.palette(), l));
+            assert!(side.find("Edit a copy in the project").is_ok() && side.find("IfcWallType STANDARD").is_ok());
+            side.click("Edit a copy in the project").unwrap();
+            let messages: Vec<Message> = side.into_messages().collect();
+            for message in messages {
+                let _ = app.update(message);
+            }
+        }
+        assert_eq!((app.libraries.source, app.category(), app.system_view.picked.as_deref()), (Source::Project, Category::Systems(SystemGroup::TimberFrame), Some("own.timber-frame.1")));
+        // the drawing standard: a tile is picked to set, and the last one makes a kind
+        click(&mut app, true, "Kinds of drawing");
+        click(&mut app, false, "pile plan");
+        assert_eq!((app.standard_view.picked.clone(), app.system_view.picked.clone()), (Some(Setting::Kind("pile-plan".into())), None));
+        let kinds = app.standard.kinds.len();
+        click(&mut app, false, "+ Kind of drawing");
+        assert_eq!(app.standard.kinds.len(), kinds + 1);
+        click(&mut app, true, "Line weights");
+        {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 900.0), app.libraries_page(app.theme.palette(), l));
+            assert!(page.find("0.35 mm").is_ok() && page.find("+ Line weight").is_ok());
+        }
+    }
+
+    #[test]
+    fn a_search_finds_types_profiles_and_kinds_of_drawing_and_shows_them_where_they_live() {
         let mut app = App::default();
         let l = Language::English;
         assert!(app.library_search("b", l).is_empty(), "from two letters on");
@@ -773,22 +1133,25 @@ mod tests {
         let steel = app.library_search("HEA 200", l);
         assert_eq!(steel.first().map(|f| (f.kind, f.item.clone())), Some(("Steel profiles", Item::Steel("HEA 200".into()))));
         // the Dutch template's types by the names the template gives them
-        assert!(app.library_search("BK 300", l).iter().any(|f| f.kind == "Linear types" && matches!(f.item, Item::Linear(Shelf::Netherlands, _))));
+        let beam = app.library_search("BK 300", l).into_iter().find(|f| f.kind == "Linear types").expect("a beam of the template");
+        assert!(matches!(beam.item, Item::Linear(Shelf::Netherlands, _)));
+        // looking at it shows it on the page of its country, in its category, with it picked
+        let _ = app.libraries_update(LibrariesMessage::Search("BK 300".into()));
+        let _ = app.libraries_update(LibrariesMessage::Look(beam.item.clone()));
+        assert_eq!((app.libraries.source, app.libraries.country, app.libraries.query.as_str(), app.libraries.looked.clone()), (Source::Country, Country::Netherlands, "", Some(beam.item)));
+        assert!(matches!(app.category(), Category::Linear(_)));
         // a kind of drawing by its name or its code; opening it shows it in its standard
         let plans = app.library_search("pile", l);
         let Some(Item::Setting(setting)) = plans.iter().find(|f| f.kind == "Kinds of drawing").map(|f| f.item.clone()) else { panic!("{plans:?}") };
         let _ = app.libraries_update(LibrariesMessage::Search("pile".into()));
         let _ = app.libraries_update(LibrariesMessage::Open(setting.clone()));
-        assert_eq!((app.libraries.source, app.libraries.country, app.libraries.query.as_str()), (Source::Country, Country::Netherlands, ""));
+        assert_eq!((app.libraries.source, app.libraries.country, app.libraries.query.as_str(), app.category()), (Source::Country, Country::Netherlands, "", Category::Kinds));
         assert_eq!(app.standard_view.picked, Some(setting));
         // the page shows what was found, with a look at each
         let _ = app.libraries_update(LibrariesMessage::Search("HEA 2".into()));
         let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 800.0), app.libraries_page(app.theme.palette(), l));
-        assert!(page.find("HEA 200").is_ok() && page.find("HEA 240").is_ok());
-    }
-
-    fn general_library_materials() -> usize {
-        Library::starter().materials.len()
+        let found = app.library_search("HEA 2", l).len();
+        assert!(page.find("HEA 200").is_ok() && page.find("HEA 240").is_ok() && page.find(format!("Search results · {found}").as_str()).is_ok());
     }
 
     #[test]
@@ -797,11 +1160,12 @@ mod tests {
         let _ = app.libraries_update(LibrariesMessage::Country(Country::Germany));
         {
             let mut pane = crate::app::test_ui_of(iced::Size::new(260.0, 600.0), app.libraries_pane(app.theme.palette(), Language::English));
-            // the countries stand under Country while it shows
-            assert!(pane.find("Germany").is_ok() && pane.find("Company").is_ok());
+            // the countries stand under the sources while Country shows, and the tree under them
+            assert!(pane.find("Germany").is_ok() && pane.find("Company").is_ok() && pane.find("Drawing standard").is_ok() && pane.find("Steel profiles").is_ok());
         }
         let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 800.0), app.libraries_page(app.theme.palette(), Language::English));
-        assert!(page.find("Country · Germany").is_ok());
-        assert!(page.find("DIN 1356").is_ok() && page.find("Title blocks").is_ok());
+        assert!(page.find("Hatches").is_ok() && page.find("Country · Germany · 9 · DIN 1356").is_ok());
+        // a hatch is named after the general library's material of its kind
+        assert!(page.find("brickwork").is_ok() && page.find("air cavity").is_ok());
     }
 }

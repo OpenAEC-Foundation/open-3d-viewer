@@ -5,7 +5,8 @@
 //! goes into the project's IFCX file, one node per setting (`bim_library::drawing`). A change is
 //! kept only when the standard still holds together; otherwise the pane says why not.
 
-use super::{App, Message, FONT, FONT_BOLD};
+use super::libraries::{tile, tile_more, Category, TILE};
+use super::{App, Message, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::drawing::{self, scale_text, Discipline, DrawingKind, LineStyle, Origin, Pen, Standard, TextStyle, View};
 use bim_library::{Lang, LibraryError, Names};
@@ -397,86 +398,96 @@ impl App {
         }
     }
 
-    /// The standard on the Library page: its kinds of drawing as a list, and the settings they
-    /// pick from. A click picks one; its fields are in the right pane.
-    pub(super) fn standard_sections(&self, p: Palette, l: Language) -> Element<'_, Message> {
+    /// The tiles of a category of the standard on the Library page: its kinds of drawing, its
+    /// scales, its line styles, its line weights or its text styles, each with a look at it. A
+    /// click picks one (its fields are in the right pane); the last tile makes one more.
+    pub(super) fn standard_tiles(&self, p: Palette, l: Language, category: Category) -> Vec<Element<'_, Message>> {
         let lang = super::library::lang(l);
         let standard = &self.standard;
         let picked = &self.standard_view.picked;
-        let cell = |content: String, width: Length, on: bool| text(content).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).width(width).wrapping(Wrapping::None);
-        let head = |label: &'static str, width: Length| text(label).size(10).color(p.text_muted).width(width);
-        let widths = [Length::Fixed(34.0), Length::Fixed(110.0), Length::Fill, Length::Fixed(110.0), Length::Fixed(110.0), Length::Fixed(110.0), Length::Fixed(110.0)];
-        let mut kinds = Column::new().spacing(1).push(
-            container(
-                row![
-                    head(l.text("Nr.", "No."), widths[0]),
-                    head("Code", widths[1]),
-                    head(l.text("Naam", "Name"), widths[2]),
-                    head("Discipline", widths[3]),
-                    head(l.text("Aanzicht", "View"), widths[4]),
-                    head(l.text("Schaal", "Scale"), widths[5]),
-                    head(l.text("Herkomst", "Origin"), widths[6]),
-                ]
-                .spacing(8),
-            )
-            .padding([2, 8]),
-        );
-        for kind in &standard.kinds {
-            let on = *picked == Some(Setting::Kind(kind.key.clone()));
-            let scales = kind.scales.iter().map(|s| scale_text(*s)).collect::<Vec<_>>().join(", ");
-            let line = row![
-                cell(kind.number.clone(), widths[0], on),
-                cell(kind.code.clone(), widths[1], on),
-                cell(kind.names.get(lang).to_string(), widths[2], on),
-                cell(format!("{} · {}", kind.discipline.code(), discipline_name(kind.discipline, l)), widths[3], on),
-                cell(view_name(kind.view, l).to_string(), widths[4], on),
-                cell(scales, widths[5], on),
-                cell(origin_name(kind.origin, l).to_string(), widths[6], on),
-            ]
-            .spacing(8)
-            .align_y(Center);
-            kinds = kinds.push(button(line).width(Fill).padding([4, 8]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(StandardMessage::Pick(Setting::Kind(kind.key.clone()))));
+        let pick = |setting: Setting| Some(Message::Standard(StandardMessage::Pick(setting)));
+        // a line as a pen and a line style draw it
+        let sample = |dashes: &[f64], width: f64| -> Element<'_, Message> { canvas_widget(LineSample::new(dashes, width, p.text)).width(Fill).height(14).into() };
+        // how many kinds of drawing use a setting
+        let used = |uses: &dyn Fn(&DrawingKind) -> bool| format!("{}: {}", l.text("Tekeningsoorten", "Kinds of drawing"), standard.kinds.iter().filter(|kind| uses(kind)).count());
+        let width_of = |pen: &str| standard.pen(pen).map_or(0.25, |pen| pen.width);
+        let more = |label: &'static str, message: StandardMessage| tile_more(p, label, Message::Standard(message));
+        match category {
+            Category::Kinds => {
+                let mut tiles: Vec<Element<'_, Message>> = standard
+                    .kinds
+                    .iter()
+                    .map(|kind| {
+                        let setting = Setting::Kind(kind.key.clone());
+                        let hidden = standard.line_style(&kind.hidden).map_or(&[][..], |style| style.dashes.as_slice());
+                        // what is cut, what is seen beyond it and what is hidden, as the kind
+                        // draws them
+                        let look = column![sample(&[], width_of(&kind.cut)), sample(&[], width_of(&kind.beyond)), sample(hidden, width_of(&kind.beyond))].spacing(8);
+                        let scales = kind.scales.iter().map(|scale| scale_text(*scale)).collect::<Vec<_>>().join(", ");
+                        let about = format!("{} · {} · {scales}", kind.code, kind.discipline.code());
+                        tile(p, look.into(), kind.names.get(lang).to_string(), about, *picked == Some(setting.clone()), pick(setting))
+                    })
+                    .collect();
+                tiles.push(more(l.text("+ Tekeningsoort", "+ Kind of drawing"), StandardMessage::AddKind));
+                tiles
+            }
+            Category::Scales => {
+                let mut tiles: Vec<Element<'_, Message>> = standard
+                    .scales
+                    .iter()
+                    .map(|&scale| {
+                        let setting = Setting::Scale(scale);
+                        let look = container(text(scale_text(scale)).size(26).color(p.text)).width(Fill).align_x(Center);
+                        let name = format!("{} {}", l.text("Schaal", "Scale"), scale_text(scale));
+                        tile(p, look.into(), name, used(&|kind| kind.scales.contains(&scale)), *picked == Some(setting.clone()), pick(setting))
+                    })
+                    .collect();
+                // a scale more is typed
+                let name = l.text("Schaal erbij: 1:25", "A scale more: 1:25");
+                let typed = text_input(name, &self.standard_view.scale).on_input(|typed| Message::Standard(StandardMessage::ScaleTyped(typed))).on_submit(Message::Standard(StandardMessage::AddScale)).size(12).padding([6, 8]).width(TILE);
+                tiles.push(openaec_ui::design::a11y::named(typed, openaec_ui::design::a11y::Role::TextField, name));
+                tiles
+            }
+            Category::LineStyles => {
+                let mut tiles: Vec<Element<'_, Message>> = standard
+                    .line_styles
+                    .iter()
+                    .map(|style| {
+                        let setting = Setting::LineStyle(style.key.clone());
+                        tile(p, sample(&style.dashes, 0.35), style.names.get(lang).to_string(), used(&|kind| kind.hidden == style.key), *picked == Some(setting.clone()), pick(setting))
+                    })
+                    .collect();
+                tiles.push(more(l.text("+ Lijnstijl", "+ Line style"), StandardMessage::Add(Part::LineStyle)));
+                tiles
+            }
+            Category::Pens => {
+                let mut tiles: Vec<Element<'_, Message>> = standard
+                    .pens
+                    .iter()
+                    .map(|pen| {
+                        let setting = Setting::Pen(pen.key.clone());
+                        tile(p, sample(&[], pen.width), pen.names.get(lang).to_string(), used(&|kind| kind.cut == pen.key || kind.beyond == pen.key), *picked == Some(setting.clone()), pick(setting))
+                    })
+                    .collect();
+                tiles.push(more(l.text("+ Lijndikte", "+ Line weight"), StandardMessage::Add(Part::Pen)));
+                tiles
+            }
+            Category::TextStyles => {
+                let mut tiles: Vec<Element<'_, Message>> = standard
+                    .text_styles
+                    .iter()
+                    .map(|style| {
+                        let setting = Setting::TextStyle(style.key.clone());
+                        // its capitals as high on screen as a line of that many millimetres is wide
+                        let look = container(text("Abc 123").size((style.height as f32 * LineSample::SCALE).clamp(8.0, 40.0)).color(p.text)).width(Fill).align_x(Center);
+                        tile(p, look.into(), style.names.get(lang).to_string(), used(&|kind| kind.text == style.key), *picked == Some(setting.clone()), pick(setting))
+                    })
+                    .collect();
+                tiles.push(more(l.text("+ Tekststijl", "+ Text style"), StandardMessage::Add(Part::TextStyle)));
+                tiles
+            }
+            _ => Vec::new(),
         }
-        let add = button(text(l.text("+ Tekeningsoort", "+ Kind of drawing")).size(12).color(p.accent)).padding([4, 8]).style(move |_, s| p.row_button(s)).on_press(StandardMessage::AddKind);
-        let kinds = column![text(format!("{} · {}", l.text("Tekeningsoorten", "Kinds of drawing"), standard.kinds.len())).size(12).font(FONT_BOLD).color(p.text_muted), framed(kinds.push(add).into(), p, Fill)].spacing(8);
-
-        // the settings the kinds pick from, each a list of its own
-        let sample = |dashes: &[f64], width: f64| -> Element<'_, StandardMessage> { canvas_widget(LineSample::new(dashes, width, p.text)).width(96).height(12).into() };
-        let scales = row(standard.scales.iter().map(|&scale| {
-            let on = *picked == Some(Setting::Scale(scale));
-            button(text(scale_text(scale)).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }))
-                .padding([2, 6])
-                .style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) })
-                .on_press(StandardMessage::Pick(Setting::Scale(scale)))
-                .into()
-        }))
-        .spacing(2)
-        .wrap();
-        let name = l.text("Schaal erbij: 1:25", "A scale more: 1:25");
-        let scale_more = openaec_ui::design::a11y::named(text_input(name, &self.standard_view.scale).on_input(StandardMessage::ScaleTyped).on_submit(StandardMessage::AddScale).size(12).padding([2, 6]), openaec_ui::design::a11y::Role::TextField, name);
-        let scales_card = framed(
-            column![
-                row![text(l.text("Schalen", "Scales")).size(13).font(FONT_BOLD).color(p.text), Space::new().width(Fill), text(standard.scales.len().to_string()).size(12).color(p.text_secondary)].align_y(Center),
-                scales,
-                scale_more,
-                text(format!("{}: {}", l.text("Eerste blad", "First sheet"), standard.first_sheet)).size(12).color(p.text_secondary),
-            ]
-            .spacing(6)
-            .into(),
-            p,
-            Length::Fixed(250.0),
-        );
-        let more = |label: &'static str, part: Part| -> Element<'_, StandardMessage> { button(text(label).size(12).color(p.accent)).padding([3, 6]).style(move |_, s| p.row_button(s)).on_press(StandardMessage::Add(part)).into() };
-        let settings = row![
-            scales_card,
-            list(p, l.text("Lijnstijlen", "Line styles"), standard.line_styles.iter().map(|s| item(p, picked, s.names.get(lang).to_string(), Some(sample(&s.dashes, 0.35)), Setting::LineStyle(s.key.clone()))).collect(), more(l.text("+ Lijnstijl", "+ Line style"), Part::LineStyle)),
-            list(p, l.text("Lijndiktes", "Line weights"), standard.pens.iter().map(|pen| item(p, picked, pen.names.get(lang).to_string(), Some(sample(&[], pen.width)), Setting::Pen(pen.key.clone()))).collect(), more(l.text("+ Lijndikte", "+ Line weight"), Part::Pen)),
-            list(p, l.text("Tekststijlen", "Text styles"), standard.text_styles.iter().map(|t| item(p, picked, t.names.get(lang).to_string(), None, Setting::TextStyle(t.key.clone()))).collect(), more(l.text("+ Tekststijl", "+ Text style"), Part::TextStyle)),
-        ]
-        .spacing(10)
-        .wrap();
-        let settings = column![text(l.text("Instellingen", "Settings")).size(12).font(FONT_BOLD).color(p.text_muted), settings].spacing(8);
-        Element::from(column![kinds, settings].spacing(18)).map(Message::Standard)
     }
 
     /// The right pane of the Library product: the fields of what is picked of the standard.
@@ -570,35 +581,11 @@ impl App {
     }
 }
 
-/// A setting in its list: its name and how it draws; a click picks it.
-fn item<'a>(p: Palette, picked: &Option<Setting>, label: String, sample: Option<Element<'a, StandardMessage>>, setting: Setting) -> Element<'a, StandardMessage> {
-    let on = *picked == Some(setting.clone());
-    let name = text(label).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).width(Fill).wrapping(Wrapping::None);
-    let line = row![name].push(sample).spacing(8).align_y(Center);
-    button(line).width(Fill).padding([3, 6]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(StandardMessage::Pick(setting)).into()
-}
-
-/// A list of settings in its frame, with its title and how many there are.
-fn list<'a>(p: Palette, title: &'static str, rows: Vec<Element<'a, StandardMessage>>, more: Element<'a, StandardMessage>) -> Element<'a, StandardMessage> {
-    let count = rows.len();
-    let head = row![text(title).size(13).font(FONT_BOLD).color(p.text), Space::new().width(Fill), text(count.to_string()).size(12).color(p.text_secondary)].align_y(Center);
-    framed(column![head, Column::with_children(rows).push(more).spacing(1)].spacing(6).into(), p, Length::Fixed(250.0))
-}
-
 /// A field of the right pane: its label, and what sets it.
 fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, StandardMessage>) -> Element<'a, StandardMessage> {
     let field = row![text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)), container(control).width(Length::FillPortion(3))].spacing(8).align_y(Center);
     // the label names the field beside it
     openaec_ui::design::a11y::named(field, openaec_ui::design::a11y::Role::Label, label)
-}
-
-/// A part of the page in a frame of its own.
-fn framed<'a>(content: Element<'a, StandardMessage>, p: Palette, width: Length) -> Element<'a, StandardMessage> {
-    container(content)
-        .width(width)
-        .padding(10)
-        .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() })
-        .into()
 }
 
 /// A line as a pen and a line style draw it: its width in millimetres on paper as pixels, its
@@ -619,7 +606,7 @@ impl LineSample {
     }
 }
 
-impl canvas::Program<StandardMessage> for LineSample {
+impl<M> canvas::Program<M> for LineSample {
     type State = ();
 
     fn draw(&self, _state: &(), renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
@@ -765,10 +752,23 @@ mod tests {
     #[test]
     fn the_page_lists_the_kinds_and_the_pane_shows_the_fields_of_the_picked_one() {
         let mut app = App::default();
+        use super::super::libraries::{Country, LibrariesMessage};
+        let _ = app.libraries_update(LibrariesMessage::Country(Country::Netherlands));
         {
-            let mut page = crate::app::test_ui_of(iced::Size::new(1300.0, 900.0), app.standard_sections(app.theme.palette(), Language::English));
-            assert!(page.find("Kinds of drawing · 20").is_ok() && page.find("pile plan").is_ok());
-            assert!(page.find("Line weights").is_ok() && page.find("long-dashed dotted").is_ok());
+            // the Netherlands shows its kinds of drawing first, a tile each, and one to make another
+            let mut page = crate::app::test_ui_of(iced::Size::new(1300.0, 1800.0), app.libraries_page(app.theme.palette(), Language::English));
+            assert!(page.find("Kinds of drawing").is_ok() && page.find("Country · Netherlands · 20").is_ok() && page.find("pile plan").is_ok());
+            assert!(page.find("PLG · CON · 1:100").is_ok() && page.find("+ Kind of drawing").is_ok() && page.find("First sheet: 300").is_ok());
+        }
+        let _ = app.libraries_update(LibrariesMessage::Category(Category::LineStyles));
+        {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1300.0, 900.0), app.libraries_page(app.theme.palette(), Language::English));
+            assert!(page.find("Line styles").is_ok() && page.find("long-dashed dotted").is_ok() && page.find("+ Line style").is_ok());
+        }
+        let _ = app.libraries_update(LibrariesMessage::Category(Category::Scales));
+        {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1300.0, 900.0), app.libraries_page(app.theme.palette(), Language::English));
+            assert!(page.find("Scale 1:50").is_ok() && page.find("A scale more: 1:25").is_ok());
         }
         {
             let mut pane = crate::app::test_ui_of(iced::Size::new(320.0, 700.0), app.standard_pane(app.theme.palette(), Language::English));

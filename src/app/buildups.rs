@@ -10,9 +10,9 @@
 //! The walls and slabs of the model that are made of a build-up follow a change of it (see
 //! `type_follow`): the pane says how many there are.
 
-use super::libraries::{Editor, LibrariesView, Shelf, Source};
+use super::libraries::{Category, Editor, Shelf};
 use super::type_follow::{use_note, TypeRef};
-use super::{App, Message, FONT, FONT_BOLD};
+use super::{App, Message, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::{BuildUp, Layer, Library, LibraryError, Role};
 use iced::widget::text::Wrapping;
@@ -155,13 +155,14 @@ impl App {
         let outcome: Option<Result<(), LibraryError>> = match message {
             BuildUpMessage::Open(role) => {
                 self.buildup_view = BuildUpView { role: Some(role), ..BuildUpView::default() };
+                self.set_category(Category::Planar(role));
                 return Task::none();
             }
             BuildUpMessage::Pick(id) => {
                 let role = self.library.buildup(&id).map(|b| b.role).or(self.buildup_view.role);
                 self.buildup_view = BuildUpView { role, picked: Some(id), ..BuildUpView::default() };
-                // (from a search: its place is the project's page)
-                self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, query: String::new() };
+                // (from a search: its place is the project's page, among the build-ups of its role)
+                self.show_in_project(Category::Planar(self.buildup_view.shown()));
                 return Task::none();
             }
             BuildUpMessage::Add => Some(add(&mut self.library, self.buildup_view.shown()).map(|id| self.buildup_view.picked = Some(id))),
@@ -225,7 +226,7 @@ impl App {
                 Some(copy(&mut self.library, &from, &id).map(|new| {
                     let role = self.library.buildup(&new).map(|b| b.role);
                     self.buildup_view = BuildUpView { role, picked: Some(new), ..BuildUpView::default() };
-                    self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, query: String::new() };
+                    self.show_in_project(Category::Planar(self.buildup_view.shown()));
                 }))
             }
         };
@@ -246,45 +247,6 @@ impl App {
             None => {}
         }
         Task::none()
-    }
-
-    /// The build-ups of the project on its page: a role at a time, each with its thickness. A
-    /// click picks one to edit in the right pane.
-    pub(super) fn buildup_lists(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        let lang = super::library::lang(l);
-        let view = &self.buildup_view;
-        let shown = view.shown();
-        let roles = row(Role::ALL.map(|role| {
-            let on = role == shown;
-            let count = self.library.buildups_of(role).count();
-            button(text(format!("{} · {count}", role_title(role, l))).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }))
-                .padding([3, 8])
-                .style(move |_, s| p.ribbon_button(on, s))
-                .on_press(BuildUpMessage::Open(role))
-                .into()
-        }))
-        .spacing(4);
-        let mut list = Column::new().spacing(1);
-        for (id, name) in self.library.names(shown, lang) {
-            let on = view.picked.as_deref() == Some(id);
-            let thickness = self.library.buildup(id).map_or(0.0, BuildUp::thickness);
-            let line = row![
-                // (a long name stays in its own part of the line)
-                container(text(name).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).wrapping(Wrapping::None)).width(Fill).clip(true),
-                text(format!("{} mm", bim_library::millimetres(thickness, lang))).size(12).color(p.text_secondary),
-            ]
-            .spacing(8)
-            .align_y(Center);
-            list = list.push(button(line).width(Fill).padding([4, 8]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(BuildUpMessage::Pick(id.to_string())));
-        }
-        let add = button(text(l.text("+ Opbouw", "+ Build-up")).size(12).color(p.accent)).padding([4, 8]).style(move |_, s| p.row_button(s)).on_press(BuildUpMessage::Add);
-        let framed = container(column![roles, list.push(add)].spacing(8))
-            .width(Fill)
-            .padding(10)
-            .clip(true)
-            .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
-        let section = column![text(l.text("Opbouwen", "Build-ups")).size(12).font(FONT_BOLD).color(p.text_muted), framed].spacing(8);
-        Element::from(section).map(Message::BuildUp)
     }
 
     /// The right pane of the Project page: the editor of the picked build-up.
@@ -371,6 +333,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::libraries::Source;
     use super::*;
     use bim_library::Lang;
 
@@ -449,8 +412,8 @@ mod tests {
         let _ = app.libraries_update(super::super::libraries::LibrariesMessage::Source(Source::Project));
         let _ = app.buildup_update(BuildUpMessage::Open(Role::Floor));
         {
-            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 900.0), app.buildup_lists(app.theme.palette(), Language::English));
-            assert!(page.find("Build-ups").is_ok() && page.find("+ Build-up").is_ok() && page.find("Concrete 200").is_ok());
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 1400.0), app.libraries_page(app.theme.palette(), Language::English));
+            assert!(page.find("Floors").is_ok() && page.find("+ Build-up").is_ok() && page.find("Concrete 200").is_ok());
         }
         {
             let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 700.0), app.buildup_pane(app.theme.palette(), Language::English));

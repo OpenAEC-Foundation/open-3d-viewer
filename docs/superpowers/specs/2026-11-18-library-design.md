@@ -187,6 +187,32 @@ and a country's types are not edited in place. An arbitrary profile
 (`IfcArbitraryClosedProfileDef`) cannot be made. An element made of a type keeps its own copy
 of the profile in the kernel's form, not as IFC has it.
 
+## The page as a browser (fourth step)
+
+The first setup showed a source as a page of cards under 2D and 3D, and the editors added lists
+to the Project page until it was one long page. The user found that illogical ("a vague site"):
+walls, floors, roofs and ceilings belong together as planar elements, there must be a search,
+and every object must be a tile that is clicked to edit it. So the page is a browser now.
+
+- **Left**: the search field, the sources as chips (the countries under Country), and a tree of
+  what the source holds (`App::library_tree`): headings with their categories
+  (`libraries::Category`) and how many things each has. Materials; planar elements by role;
+  linear elements by role, with the steel table; systems by group; the drawing standard
+  (kinds, scales, line styles, pens, text styles, hatches); a company's colours and fonts. The
+  project and the general library list every planar role and system group, and of the linear
+  roles the columns, the beams and those that have a type; another library only what it has.
+- **Middle**: the tiles of the category shown (`libraries::tile`): a look, a name and a line
+  about it, all tiles as high as one another; the picked one has the accent's frame. The
+  last tile of a category of the project, or of the standard, makes one more.
+- **Right**: the editor of the tile picked of the project; the fields of the picked setting of
+  the standard; for a tile of another library what it is, drawn and listed, with a button
+  that makes a copy of it in the project to edit (`LibrariesMessage::Look`). A click never
+  copies by itself.
+- **Search** shows what it finds as the same tiles; a click shows the thing where it lives.
+- A pick in an editor (from a tile or a search) shows its category; a type whose role or group
+  is changed takes the page with it.
+- The cards of content to come are gone; one line under the tree names what is to come.
+
 ## Open questions
 
 - Where a house style is kept: with the company (a file or folder its people share, as Docs uses

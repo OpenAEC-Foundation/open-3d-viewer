@@ -12,8 +12,8 @@
 //! The model takes a material's colour as it is. A material hatched as air is a cavity in the
 //! walls and slabs made of it: they follow when its hatch changes (see `type_follow`).
 
-use super::libraries::{Editor, LibrariesView, Shelf, Source};
-use super::{App, Message, FONT, FONT_BOLD};
+use super::libraries::{Category, Editor, Shelf};
+use super::{App, Message, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::{DrawingStandard, HatchKind, Lang, Library, LibraryError, Material, Names};
 use iced::widget::text::Wrapping;
@@ -90,7 +90,7 @@ fn name_mut(names: &mut Names, lang: Lang) -> &mut String {
 }
 
 /// The material of the general library a hatch kind is named after: brickwork, concrete, ...
-fn hatch_material(kind: HatchKind) -> &'static str {
+pub(super) fn hatch_material(kind: HatchKind) -> &'static str {
     match kind {
         HatchKind::Brick => "brick",
         HatchKind::SandLime => "sand-lime",
@@ -259,30 +259,7 @@ impl App {
     /// A material of the project in its editor, on the project's page (from the page or a search).
     fn material_show(&mut self, key: String) {
         self.material_view = MaterialView { picked: Some(key), ..MaterialView::default() };
-        self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, query: String::new() };
-    }
-
-    /// The materials of the project on its page: a chip each, with its hatch, its colour and its
-    /// name. A click picks one to edit in the right pane.
-    pub(super) fn material_chips(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        let lang = super::library::lang(l);
-        let view = &self.material_view;
-        let chips = self.library.materials.iter().map(|m| {
-            let on = view.picked.as_deref() == Some(m.key.as_str());
-            let [r, g, b] = m.colour;
-            let colour = container(Space::new().width(10).height(22)).style(move |_| Palette::swatch(Color::from_rgb8(r, g, b)));
-            let name = text(m.name(lang)).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary });
-            let look = row![super::libraries::hatch_tile(m.hatch.pattern(DrawingStandard::Nen47), p), colour, name].spacing(4).align_y(Center);
-            button(look).padding([3, 6]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(MaterialMessage::Pick(m.key.clone())).into()
-        });
-        let add: Element<'_, MaterialMessage> = button(text(l.text("+ Materiaal", "+ Material")).size(12).color(p.accent)).padding([6, 8]).style(move |_, s| p.row_button(s)).on_press(MaterialMessage::Add).into();
-        let framed = container(row(chips.chain(std::iter::once(add))).spacing(4).wrap())
-            .width(Fill)
-            .padding(10)
-            .clip(true)
-            .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
-        let title = format!("{} · {}", l.text("Materialen", "Materials"), self.library.materials.len());
-        Element::from(column![text(title).size(12).font(FONT_BOLD).color(p.text_muted), framed].spacing(8)).map(Message::Material)
+        self.show_in_project(Category::Materials);
     }
 
     /// The right pane of the Project page while a material is picked: its editor.
@@ -363,7 +340,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::libraries::LibrariesMessage;
+    use super::super::libraries::{LibrariesMessage, Source};
     use super::*;
 
     #[test]
@@ -462,9 +439,11 @@ mod tests {
     fn the_project_page_shows_the_materials_and_the_pane_edits_the_picked_one() {
         let mut app = App::default();
         let l = Language::English;
+        let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
         {
-            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 600.0), app.material_chips(app.theme.palette(), l));
-            assert!(page.find("+ Material").is_ok() && page.find("brickwork").is_ok() && page.find("PIR insulation").is_ok());
+            // the project's first category: its materials, a tile each, and one to make another
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 1400.0), app.libraries_page(app.theme.palette(), l));
+            assert!(page.find("Materials").is_ok() && page.find("+ Material").is_ok() && page.find("brickwork").is_ok() && page.find("PIR insulation").is_ok());
         }
         {
             let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 800.0), app.material_pane(app.theme.palette(), l));

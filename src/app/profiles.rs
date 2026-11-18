@@ -14,7 +14,7 @@
 //! The columns and beams of the model that are of a type follow a change of it, by the type's
 //! name (see `type_follow`): the pane says how many there are.
 
-use super::libraries::{Editor, LibrariesView, Shelf, Source};
+use super::libraries::{Category, Editor, Item, LibrariesMessage, Shelf, Source};
 use super::type_follow::{linear_links, use_note, TypeRef};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
@@ -248,16 +248,6 @@ fn chip<'a>(p: Palette, label: String, on: bool, message: ProfileMessage) -> Ele
         .into()
 }
 
-/// A part of the page in a frame of its own.
-fn framed<'a>(p: Palette, content: impl Into<Element<'a, ProfileMessage>>) -> Element<'a, ProfileMessage> {
-    container(content)
-        .width(Fill)
-        .padding(10)
-        .clip(true)
-        .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() })
-        .into()
-}
-
 /// A field of the right pane that needs the pane's width (an IFC name is long): its label, and
 /// under it what sets it.
 fn stacked<'a>(p: Palette, label: &'static str, control: Element<'a, ProfileMessage>) -> Element<'a, ProfileMessage> {
@@ -301,6 +291,7 @@ impl App {
             ProfileMessage::Open(role) => {
                 let view = &mut self.profile_view;
                 *view = ProfileView { role: Some(role), find: std::mem::take(&mut view.find), series: view.series, ..ProfileView::default() };
+                self.set_category(Category::Linear(role));
                 None
             }
             ProfileMessage::Pick(id) => {
@@ -329,7 +320,13 @@ impl App {
                 Some(Ok(()))
             }
             ProfileMessage::Named(name) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.name = (!name.trim().is_empty()).then_some(name))),
-            ProfileMessage::Role(role) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.role = role).map(|()| self.profile_view.role = Some(role))),
+            ProfileMessage::Role(role) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.role = role).map(|()| {
+                // the page follows the type to its role, unless it shows the steel table
+                if matches!(self.libraries.category, Some(Category::Linear(_))) {
+                    self.set_category(Category::Linear(role));
+                }
+                self.profile_view.role = Some(role);
+            })),
             ProfileMessage::Material(key) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.material = key)),
             ProfileMessage::Definition(definition) => picked.as_deref().map(|id| {
                 let next = self.library.linear_type(id).filter(|t| t.profile.ifc().0 != definition).and_then(|t| like(&t.profile, definition));
@@ -367,7 +364,7 @@ impl App {
         let role = self.library.linear_type(&id).map(|t| t.role).or(self.profile_view.role);
         let view = &mut self.profile_view;
         *view = ProfileView { role, picked: Some(id), find: std::mem::take(&mut view.find), series: view.series, ..ProfileView::default() };
-        self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, query: String::new() };
+        self.show_in_project(Category::Linear(self.profile_view.shown()));
     }
 
     /// The project has the steel a profile of the steel table is made of: the general library's,
@@ -381,37 +378,9 @@ impl App {
         Ok(())
     }
 
-    /// The linear types of the project on its page, a role at a time, each with a look at its
-    /// profile and its IFC definition. A click picks one to edit in the right pane.
-    pub(super) fn profile_lists(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        use super::library::{linear_role_label, profile_outline};
-        let lang = super::library::lang(l);
-        let view = &self.profile_view;
-        let library = &self.library;
-        let shown = view.shown();
-        let roles = row(LinearRole::ALL.map(|role| chip(p, format!("{} · {}", linear_role_label(role, l), library.linear_types_of(role).count()), role == shown, ProfileMessage::Open(role)))).spacing(4).wrap();
-        let mut list = Column::new().spacing(1);
-        for (id, name) in library.linear_names(shown, lang) {
-            let Some(t) = library.linear_type(id) else { continue };
-            let on = view.picked.as_deref() == Some(id);
-            let line = row![
-                container(profile_outline(p, &t.profile, library.material(&t.material), 22.0)).width(30),
-                // (a long name stays in its own part of the line)
-                container(text(name).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).wrapping(Wrapping::None)).width(Fill).clip(true),
-                text(t.profile.ifc().0).size(11).color(p.text_muted),
-            ]
-            .spacing(8)
-            .align_y(Center);
-            list = list.push(button(line).width(Fill).padding([3, 8]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(ProfileMessage::Pick(id.to_string())));
-        }
-        let add = button(text(l.text("+ Staaftype", "+ Linear type")).size(12).color(p.accent)).padding([4, 8]).style(move |_, s| p.row_button(s)).on_press(ProfileMessage::Add);
-        let types = column![text(l.text("Staaftypen", "Linear types")).size(12).font(FONT_BOLD).color(p.text_muted), framed(p, column![roles, list.push(add)].spacing(8))].spacing(8);
-        Element::from(types).map(Message::Profile)
-    }
-
-    /// The steel table on the project's page: a field to find by, its series, and every profile
-    /// found as a tile with its outline. A click on a tile gives that profile to the picked type,
-    /// or makes a type of it of the role shown.
+    /// The steel table on the page: a field to find by, its series, and every profile found as
+    /// a tile with its outline. In the project a click on a tile gives that profile to the
+    /// picked type, or makes a type of it of the role shown; in another library it looks at it.
     pub(super) fn steel_table(&self, p: Palette, l: Language) -> Element<'_, Message> {
         use super::library::profile_outline;
         /// How many profiles show at once.
@@ -419,7 +388,8 @@ impl App {
         let lang = super::library::lang(l);
         let view = &self.profile_view;
         let library = &self.library;
-        let picked = view.picked.as_deref().and_then(|id| library.linear_type(id));
+        let project = self.libraries.source == Source::Project;
+        let picked = view.picked.as_deref().and_then(|id| library.linear_type(id)).filter(|_| project);
         let find_name = l.text("Zoek een staalprofiel: HEA 200", "Find a steel profile: HEA 200");
         let find = a11y::named(text_input(find_name, &view.find).on_input(ProfileMessage::Find).size(12).padding([4, 8]).width(280), Aria::TextField, find_name);
         let mut names: Vec<&'static str> = Vec::new();
@@ -432,8 +402,10 @@ impl App {
         let series = row(std::iter::once(all).chain(names.into_iter().map(|name| chip(p, name.to_string(), view.series == Some(name), ProfileMessage::Series(Some(name)))))).spacing(4).wrap();
         let found = found_steel(&view.find, view.series);
         let steel_material = library.material("steel").or_else(|| self.shelf(Shelf::General).material("steel"));
+        let looked = self.libraries.looked.as_ref();
         let tiles = row(found.iter().take(SHOWN).map(|table| {
-            let on = picked.is_some_and(|t| t.designation.as_deref() == Some(table.designation.as_str()));
+            let item = Item::Steel(table.designation.clone());
+            let on = if project { picked.is_some_and(|t| t.designation.as_deref() == Some(table.designation.as_str())) } else { looked == Some(&item) };
             let size = table.shape.size();
             let tile = column![
                 profile_outline(p, &table.shape, steel_material, 56.0),
@@ -443,23 +415,23 @@ impl App {
             .spacing(2)
             .align_x(Center)
             .width(108);
-            button(tile).padding(6).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(ProfileMessage::Steel(table.designation.clone())).into()
+            let press = if project { Message::Profile(ProfileMessage::Steel(table.designation.clone())) } else { Message::Libraries(LibrariesMessage::Look(item)) };
+            button(tile).padding(6).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(press).into()
         }))
         .spacing(6)
         .wrap();
-        let what = if picked.is_some() {
-            l.text("Klik een profiel: het gekozen staaftype neemt het over.", "Click a profile: the picked linear type takes it.")
-        } else {
-            l.text("Klik een profiel om er een staaftype van te maken.", "Click a profile to make a linear type of it.")
+        let what = match (project, picked.is_some()) {
+            (true, true) => l.text("Klik een profiel: het gekozen staaftype neemt het over.", "Click a profile: the picked linear type takes it."),
+            (true, false) => l.text("Klik een profiel om er een staaftype van te maken.", "Click a profile to make a linear type of it."),
+            (false, _) => l.text("Klik een profiel om het te bekijken.", "Click a profile to look at it."),
         };
         let rest = match found.len() {
             0 => Some(text(l.text("Niets gevonden.", "Nothing found.")).size(12).color(p.text_secondary)),
             n if n > SHOWN => Some(text(format!("+{}", n - SHOWN)).size(11).color(p.text_muted)),
             _ => None,
         };
-        let table = column![find, series, text(what).size(11).color(p.text_muted), tiles].push(rest).spacing(8);
-        let steel = column![text(format!("{} · {}", l.text("Staalprofielen", "Steel profiles"), found.len())).size(12).font(FONT_BOLD).color(p.text_muted), framed(p, table)].spacing(8);
-        Element::from(steel).map(Message::Profile)
+        let head = Element::from(column![find, series].spacing(8)).map(Message::Profile);
+        column![head, text(what).size(11).color(p.text_muted), tiles].push(rest).spacing(8).into()
     }
 
     /// The right pane of the Project page while a linear type is picked: its profile editor.
@@ -528,7 +500,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::libraries::LibrariesMessage;
+    use super::super::libraries::{Country, LibrariesMessage};
     use super::*;
 
     #[test]
@@ -671,10 +643,20 @@ mod tests {
         let mut app = App::default();
         let l = Language::English;
         let page = iced::Size::new(1200.0, 1600.0);
+        // the project's columns, a tile each with its profile and its IFC definition
+        let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
+        let _ = app.profile_update(ProfileMessage::Open(LinearRole::Column));
         {
-            let mut types = crate::app::test_ui_of(page, app.profile_lists(app.theme.palette(), l));
-            assert!(types.find("+ Linear type").is_ok() && types.find("Concrete 300x300").is_ok() && types.find("IfcCircleProfileDef").is_ok());
+            let mut types = crate::app::test_ui_of(page, app.libraries_page(app.theme.palette(), l));
+            assert!(types.find("Columns").is_ok() && types.find("+ Linear type").is_ok() && types.find("Concrete 300x300").is_ok() && types.find("IfcCircleProfileDef").is_ok());
         }
+        // the steel table of another library is looked at; the project's makes types
+        let _ = app.libraries_update(LibrariesMessage::Country(Country::Germany));
+        {
+            let mut table = crate::app::test_ui_of(page, app.steel_table(app.theme.palette(), l));
+            assert!(table.find("IPE 80").is_ok() && table.find("Click a profile to look at it.").is_ok());
+        }
+        let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
         {
             let mut table = crate::app::test_ui_of(page, app.steel_table(app.theme.palette(), l));
             assert!(table.find("IPE 80").is_ok() && table.find("HEB").is_ok() && table.find("Click a profile to make a linear type of it.").is_ok());

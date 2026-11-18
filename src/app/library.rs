@@ -528,6 +528,28 @@ pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &Syst
     drawn.push(list).into()
 }
 
+/// A look at a material on a tile: the hatch of a cut through it over a strip of its colour in the
+/// 3D model.
+pub(super) fn material_look<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
+    let c = rgb(m.colour);
+    let colour = container(text("")).width(Fill).height(10).style(move |_| Palette::swatch(c));
+    column![canvas_widget(Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text }).width(Fill).height(56), colour].spacing(4).into()
+}
+
+/// A look at a build-up on a tile: its section, `height` high whatever its thickness.
+pub(super) fn buildup_look<'a>(p: Palette, lib: &Library, b: &BuildUp, height: f32) -> Element<'a, Message> {
+    let bands = b.layers.iter().map(|layer| (layer.thickness, lib.material(&layer.material).map_or(HatchKind::Generic, |m| m.hatch), lib.material(&layer.material).map_or([175, 182, 195], |m| m.colour))).collect();
+    canvas_widget(Section { bands, depth: b.thickness(), line: p.text }).width(Fill).height(height).into()
+}
+
+/// A look at a system type on a tile: its face, `height` high.
+pub(super) fn system_look<'a>(p: Palette, lib: &Library, t: &SystemType, height: f32) -> Element<'a, Message> {
+    let face = elevation(t, lib, p.text);
+    // as wide as the face is at that height, so it stands in the middle of its tile
+    let width = ((height - 8.0) * (face.size[0] / face.size[1].max(1e-6)) as f32 + 8.0).clamp(24.0, 168.0);
+    container(canvas_widget(face).width(width).height(height)).width(Fill).align_x(Center).into()
+}
+
 /// What the members of a system of `group` are: a frame's mullions and transoms, a ceiling's
 /// profiles, or joints.
 pub(super) fn member_word(group: SystemGroup, l: Language) -> &'static str {

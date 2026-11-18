@@ -21,7 +21,7 @@
 //! pane says how many there are. A system keeps the way it was laid out: one that stands does
 //! not follow its type when the type is made to lie.
 
-use super::libraries::{Editor, LibrariesView, Shelf, Source};
+use super::libraries::{Category, Editor, Shelf};
 use super::type_follow::{use_note, TypeRef};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
@@ -462,6 +462,7 @@ impl App {
         match message {
             SystemMessage::Open(group) => {
                 self.system_view = SystemView { group: Some(group), ..SystemView::default() };
+                self.set_category(Category::Systems(group));
                 None
             }
             SystemMessage::Pick(id) => {
@@ -492,7 +493,7 @@ impl App {
             }
             SystemMessage::Group(group) => picked.as_deref().map(|id| {
                 let general = self.shelf(Shelf::General).clone();
-                regroup(&mut self.library, &general, id, group).map(|()| self.system_view.group = Some(group))
+                regroup(&mut self.library, &general, id, group).map(|()| self.set_category(Category::Systems(group)))
             }),
             SystemMessage::Corners(corners) => picked.as_deref().map(|id| change(&mut self.library, id, |t| t.corners = corners)),
             SystemMessage::Done => match (picked.as_deref(), self.system_view.draft.clone()) {
@@ -566,52 +567,7 @@ impl App {
     fn system_show(&mut self, id: String) {
         let group = self.library.system_type(&id).map(|t| t.group).or(self.system_view.group);
         self.system_view = SystemView { group, picked: Some(id), ..SystemView::default() };
-        self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, query: String::new() };
-    }
-
-    /// The system types of the project on its page: a group at a time, each with how deep it is
-    /// across its face. A click picks one to edit in the right pane.
-    pub(super) fn system_lists(&self, p: Palette, l: Language) -> Element<'_, Message> {
-        use super::library::system_group_label;
-        let lang = super::library::lang(l);
-        let view = &self.system_view;
-        let library = &self.library;
-        let shown = view.shown();
-        let groups = row(SystemGroup::ALL.map(|group| {
-            let on = group == shown;
-            let count = library.system_types_of(group).count();
-            button(text(format!("{} · {count}", system_group_label(group, l))).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }))
-                .padding([3, 8])
-                .style(move |_, s| p.ribbon_button(on, s))
-                .on_press(SystemMessage::Open(group))
-                .into()
-        }))
-        .spacing(4)
-        .wrap();
-        let mut list = Column::new().spacing(1);
-        for (id, name) in library.system_names(shown, lang) {
-            let on = view.picked.as_deref() == Some(id);
-            let depth = library.system_type(id).map_or(0.0, |t| {
-                let (interior, exterior) = t.extent();
-                exterior - interior
-            });
-            let line = row![
-                // (a long name stays in its own part of the line)
-                container(text(name).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).wrapping(Wrapping::None)).width(Fill).clip(true),
-                text(format!("{} mm", bim_library::millimetres(depth, lang))).size(12).color(p.text_secondary),
-            ]
-            .spacing(8)
-            .align_y(Center);
-            list = list.push(button(line).width(Fill).padding([4, 8]).style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) }).on_press(SystemMessage::Pick(id.to_string())));
-        }
-        let add = button(text(l.text("+ Systeem", "+ System")).size(12).color(p.accent)).padding([4, 8]).style(move |_, s| p.row_button(s)).on_press(SystemMessage::Add);
-        let framed = container(column![groups, list.push(add)].spacing(8))
-            .width(Fill)
-            .padding(10)
-            .clip(true)
-            .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
-        let section = column![text(l.text("Systemen", "Systems")).size(12).font(FONT_BOLD).color(p.text_muted), framed].spacing(8);
-        Element::from(section).map(Message::SystemType)
+        self.show_in_project(Category::Systems(self.system_view.shown()));
     }
 
     /// The right pane of the Project page while a system type is picked: its editor.
@@ -744,7 +700,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::libraries::LibrariesMessage;
+    use super::super::libraries::{LibrariesMessage, Source};
     use super::*;
     use bim_library::Lang;
 
@@ -953,8 +909,8 @@ mod tests {
         let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
         let _ = app.system_update(SystemMessage::Open(SystemGroup::TimberFrame));
         {
-            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 900.0), app.system_lists(app.theme.palette(), l));
-            assert!(page.find("Systems").is_ok() && page.find("+ System").is_ok() && page.find("Timber frame 38×140 c/c 600").is_ok() && page.find("Masonry · 4").is_ok());
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 1400.0), app.libraries_page(app.theme.palette(), l));
+            assert!(page.find("Timber frames").is_ok() && page.find("+ System").is_ok() && page.find("Timber frame 38×140 c/c 600").is_ok() && page.find("216.2 mm · IfcWallType").is_ok());
         }
         {
             let mut pane = crate::app::test_ui_of(iced::Size::new(340.0, 700.0), app.system_pane(app.theme.palette(), l));
@@ -982,7 +938,7 @@ mod tests {
         let click = |app: &mut App, in_pane: bool, label: &str| {
             let messages: Vec<Message> = {
                 let palette = app.theme.palette();
-                let part = if in_pane { app.system_pane(palette, l) } else { app.system_lists(palette, l) };
+                let part = if in_pane { app.system_pane(palette, l) } else { app.libraries_page(palette, l) };
                 let mut ui = crate::app::test_ui_of(iced::Size::new(if in_pane { 340.0 } else { 1200.0 }, 1400.0), part);
                 ui.click(label).unwrap_or_else(|_| panic!("no {label}"));
                 ui.into_messages().collect()
@@ -999,7 +955,10 @@ mod tests {
         assert_eq!(app.system_view.part, Part::Face);
         click(&mut app, false, "Timber frame 38×184 c/c 600");
         assert_eq!(app.system_view.picked.as_deref(), Some("system.timber-frame-184"));
-        click(&mut app, false, "Masonry · 4");
+        // another group shows its own tiles, with nothing picked
+        let _ = app.update(Message::Libraries(LibrariesMessage::Category(Category::Systems(SystemGroup::Masonry))));
         assert_eq!((app.system_view.shown(), app.system_view.picked.clone()), (SystemGroup::Masonry, None));
+        click(&mut app, false, "Brickwork 100 220×62.5 stretcher bond");
+        assert_eq!(app.system_view.picked.as_deref(), Some("system.masonry-waal-stretcher"));
     }
 }

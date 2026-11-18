@@ -3484,6 +3484,7 @@ mod tests {
             // the series it is of shown under the types
             if name == "profile" {
                 use crate::app::profiles::ProfileMessage;
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(crate::app::libraries::Category::Steel))));
                 for message in [ProfileMessage::Add, ProfileMessage::Steel("HEB 300".into()), ProfileMessage::Series(Some("HEB"))] {
                     let _ = studio.update(Msg::App(Message::Profile(message)));
                 }
@@ -3492,12 +3493,9 @@ mod tests {
             if name == "material" {
                 let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
             }
-            // the project with a timber frame picked, in its editor: the face open, or a layer;
-            // the ceilings shown of the build-ups (there are two), so the systems under them
-            // are on the page's first screen
+            // the project with a timber frame picked, in its editor: the face open, or a layer
             if name.starts_with("system") {
                 use crate::app::systems::{Part, SystemMessage};
-                let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Open(bim_library::Role::Ceiling))));
                 let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Pick("system.timber-frame-140".into()))));
                 if name == "system-layer" {
                     let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Part(Part::Layer(3)))));

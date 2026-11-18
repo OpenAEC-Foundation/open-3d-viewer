@@ -1401,6 +1401,9 @@
     "Steel is missing around the frame:": "Manca acciaio attorno al telaio:",
     "all; e.g. *sandwich*": "tutti; es. *sandwich*",
     "no": "senza",
-    "without steel in": "senza acciaio in"
+    "without steel in": "senza acciaio in",
+    "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Scegli in Riquadri una stratigrafia, un tipo di asta, un profilo in acciaio o un sistema: viene mostrato qui in 3D.",
+    "Drag to turn it.": "Trascina per ruotarlo.",
+    "Pulled apart": "Esploso"
   }
 }

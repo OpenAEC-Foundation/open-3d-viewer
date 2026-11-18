@@ -1401,6 +1401,9 @@
     "Steel is missing around the frame:": "Um den Rahmen fehlt Stahl:",
     "all; e.g. *sandwich*": "alle; z. B. *sandwich*",
     "no": "kein",
-    "without steel in": "ohne Stahl in"
+    "without steel in": "ohne Stahl in",
+    "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Wählen Sie unter Kacheln einen Aufbau, einen Stabtyp, ein Stahlprofil oder ein System: Es steht dann hier in 3D.",
+    "Drag to turn it.": "Ziehen, um es zu drehen.",
+    "Pulled apart": "Auseinandergezogen"
   }
 }

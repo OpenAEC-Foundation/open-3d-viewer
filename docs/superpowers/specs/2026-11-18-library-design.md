@@ -276,6 +276,29 @@ INB template has them; and the IFCX code of everything the page shows.
   draws a tile hatch. The hatches for kinds of soil (NEN 5104) are not in the template; they
   need a source before they can be here.
 
+## A view in 3D (sixth step)
+
+Wanted: a 3D view in Library, and for a system a view that shows how the system works while
+it is defined.
+
+- **The tab 3D** (`libraries::Page::Solid`, `src/app/solid_view.rs`) shows what is picked: the
+  build-up, linear type or system picked of the project, or the thing looked at of another
+  library, a profile of the steel table too (`App::library_scene`).
+- **A scene** is the kernel's solids with a colour each: a slab per layer of a build-up (a wall
+  standing, the others lying; a cavity left open), a profile extruded four times its size, a
+  system's parts from `bim_core::system::parts` for about 2.4 m of it, a framed one with a
+  window. Nothing is modelled for the view that a model would not have.
+- **Pulled apart**: solids whose middles lie at the same place across the thing are one layer;
+  each layer is moved a gap further (`Scene::apart`).
+- **Drawn by the suite itself** (`solid_view::picture`): every triangle into a picture with a
+  depth per pixel, lit from the upper left, then the edges of the faces that look at the eye.
+  So layers cover one another rightly at any turn, and the page needs no second GPU scene.
+  The picture is kept until the scene, the turn or the size changes. A drag turns it; the
+  turn is the widget's own.
+- **The editor stays in the right pane**, so a change of the type shows in the view.
+- **Not yet**: zoom, a section, hatches on what is cut, the corner of a system and where two
+  systems meet, picking a part in the view.
+
 ## Open questions
 
 - Where a house style is kept: with the company (a file or folder its people share, as Docs uses
@@ -305,7 +328,7 @@ INB template has them; and the IFCX code of everything the page shows.
 11. A library as a file of its own that File, Open opens: a standard library, and one file that
     holds a whole country, its materials and its standards, with the standards linked.
 12. Materials named by the NAA.K.T. naming of materials.
-13. A view in 3D of what is picked, and for a system a view that shows how it is made while it
-    is defined.
+13. The 3D view: zoom and a section through it, a system's corner and where two systems meet,
+    a part picked in the view and named.
 14. A type by level of development: what a type is at each LOD, kept as layers of one type.
 15. A pile's length and tip level, and more piles than the template's two.

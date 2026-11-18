@@ -1401,6 +1401,9 @@
     "Steel is missing around the frame:": "Stål saknas runt karmen:",
     "all; e.g. *sandwich*": "alla; t.ex. *sandwich*",
     "no": "ingen",
-    "without steel in": "utan stål i"
+    "without steel in": "utan stål i",
+    "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Välj under Rutor en uppbyggnad, en stångtyp, en stålprofil eller ett system: det visas här i 3D.",
+    "Drag to turn it.": "Dra för att vrida.",
+    "Pulled apart": "Isärdragen"
   }
 }

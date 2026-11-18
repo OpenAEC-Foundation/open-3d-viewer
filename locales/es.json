@@ -1401,6 +1401,9 @@
     "Steel is missing around the frame:": "Falta acero alrededor del marco:",
     "all; e.g. *sandwich*": "todos; p. ej. *sandwich*",
     "no": "sin",
-    "without steel in": "sin acero en"
+    "without steel in": "sin acero en",
+    "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Elija en Fichas una composición, un tipo de barra, un perfil de acero o un sistema: se muestra aquí en 3D.",
+    "Drag to turn it.": "Arrastre para girarlo.",
+    "Pulled apart": "Despiezado"
   }
 }

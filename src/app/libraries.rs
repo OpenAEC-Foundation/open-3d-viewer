@@ -17,7 +17,10 @@
 //! A search looks in every library at once and shows what it finds as the same tiles; a click
 //! on one shows it where it lives.
 //!
-//! The page has a second tab, IFCX: the things of the category as the file keeps them, each the
+//! The page has a tab 3D: the build-up, the linear type, the steel profile or the system picked,
+//! as solids that a drag turns and that can be pulled apart layer by layer (`solid_view`).
+//!
+//! The page has a tab IFCX too: the things of the category as the file keeps them, each the
 //! node the library, the drawing standard or the hatch catalogue writes for it, to read and to
 //! copy. A click on a node's name picks the thing, as a click on its tile does; the one picked
 //! stands first.
@@ -256,6 +259,18 @@ impl Category {
     }
 }
 
+/// What the page shows of a category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Page {
+    /// Its things as tiles.
+    #[default]
+    Tiles,
+    /// The picked thing in 3D.
+    Solid,
+    /// Its things as an IFCX file keeps them.
+    Code,
+}
+
 /// The Library product's state: the source and the country shown, what is searched for, the
 /// category whose tiles show, and what is looked at of a library that is not the project's.
 #[derive(Debug, Clone, Default)]
@@ -268,8 +283,10 @@ pub struct LibrariesView {
     pub category: Option<Category>,
     /// The tile picked of a library that is not the project's: the right pane shows it.
     pub looked: Option<Item>,
-    /// The page shows the IFCX code of the category's things, not their tiles.
-    pub code: bool,
+    /// What the page shows of the category: its tiles, the picked thing in 3D, or the IFCX code.
+    pub page: Page,
+    /// The 3D view shows its thing with its layers pulled apart.
+    pub apart: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -286,8 +303,10 @@ pub enum LibrariesMessage {
     /// Look at something of a library that is not the project's, where it lives: from its page
     /// or from a search.
     Look(Item),
-    /// Show the IFCX code of the category's things (`true`), or their tiles.
-    Code(bool),
+    /// Show the category's things as tiles, the picked one in 3D, or their IFCX code.
+    Page(Page),
+    /// Pull the layers of the thing in the 3D view apart (`true`), or leave them as they lie.
+    Apart(bool),
     /// Put this text on the clipboard: the IFCX code of a thing.
     Copy(String),
 }
@@ -383,16 +402,16 @@ impl App {
         match message {
             LibrariesMessage::Source(source) => {
                 self.edit_none();
-                self.libraries = LibrariesView { source, country: self.libraries.country, code: self.libraries.code, ..LibrariesView::default() };
+                self.libraries = LibrariesView { source, country: self.libraries.country, page: self.libraries.page, apart: self.libraries.apart, ..LibrariesView::default() };
             }
             LibrariesMessage::Country(country) => {
                 self.edit_none();
-                self.libraries = LibrariesView { source: Source::Country, country, code: self.libraries.code, ..LibrariesView::default() };
+                self.libraries = LibrariesView { source: Source::Country, country, page: self.libraries.page, apart: self.libraries.apart, ..LibrariesView::default() };
             }
             LibrariesMessage::Search(query) => self.libraries.query = query,
             LibrariesMessage::Open(setting) => {
                 self.edit_none();
-                self.libraries = LibrariesView { source: Source::Country, country: Country::Netherlands, category: Some(Category::of_setting(&setting)), code: self.libraries.code, ..LibrariesView::default() };
+                self.libraries = LibrariesView { source: Source::Country, country: Country::Netherlands, category: Some(Category::of_setting(&setting)), page: self.libraries.page, apart: self.libraries.apart, ..LibrariesView::default() };
                 return self.standard_update(StandardMessage::Pick(setting));
             }
             LibrariesMessage::Category(category) => {
@@ -400,7 +419,8 @@ impl App {
                 self.libraries.query.clear();
                 self.set_category(category);
             }
-            LibrariesMessage::Code(code) => self.libraries.code = code,
+            LibrariesMessage::Page(page) => self.libraries.page = page,
+            LibrariesMessage::Apart(apart) => self.libraries.apart = apart,
             LibrariesMessage::Copy(text) => return iced::clipboard::write(text),
             LibrariesMessage::Look(item) => {
                 let place = |shelf: Shelf| match shelf {
@@ -424,7 +444,7 @@ impl App {
                 };
                 if let Some(((source, country), category)) = found {
                     self.edit_none();
-                    self.libraries = LibrariesView { source, country, query: String::new(), category: None, looked: None, code: self.libraries.code };
+                    self.libraries = LibrariesView { source, country, query: String::new(), category: None, looked: None, page: self.libraries.page, apart: self.libraries.apart };
                     self.set_category(category);
                     self.libraries.looked = Some(item);
                 }
@@ -475,7 +495,7 @@ impl App {
     /// The project's library shows, at `category`, with nothing searched for: where what is
     /// picked to edit lives.
     pub(super) fn show_in_project(&mut self, category: Category) {
-        self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, code: self.libraries.code, ..LibrariesView::default() };
+        self.libraries = LibrariesView { source: Source::Project, country: self.libraries.country, page: self.libraries.page, apart: self.libraries.apart, ..LibrariesView::default() };
         self.set_category(category);
     }
 
@@ -1113,14 +1133,16 @@ impl App {
         if category == Category::Hatches {
             about = format!("{about} · {}", self.shown_hatches().1);
         }
-        let tab = |label: &'static str, code: bool| -> Element<'_, Message> {
-            let on = view.code == code;
-            button(text(label).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary })).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(Message::Libraries(LibrariesMessage::Code(code))).into()
+        let tab = |label: &'static str, page: Page| -> Element<'_, Message> {
+            let on = view.page == page;
+            button(text(label).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary })).padding([3, 10]).style(move |_, s| p.ribbon_button(on, s)).on_press(Message::Libraries(LibrariesMessage::Page(page))).into()
         };
-        let tabs = row![tab(l.text("Tegels", "Tiles"), false), tab("IFCX", true)].spacing(2);
+        let tabs = row![tab(l.text("Tegels", "Tiles"), Page::Tiles), tab("3D", Page::Solid), tab("IFCX", Page::Code)].spacing(2);
         let heading = row![column![text(category.label(l)).size(20).font(FONT_BOLD).color(p.text), text(about).size(12).color(p.text_secondary)].spacing(4).width(Fill), tabs].spacing(12).align_y(Center);
-        let body: Element<'_, Message> = if view.code {
+        let body: Element<'_, Message> = if view.page == Page::Code {
             self.code_blocks(p, l, category)
+        } else if view.page == Page::Solid {
+            self.solid_page(p, l)
         } else if category == Category::Steel {
             self.steel_table(p, l)
         } else {
@@ -1435,9 +1457,9 @@ mod tests {
         assert_eq!((node["path"].as_str(), node["attributes"]["openaec::material"]["key"].as_str()), (Some(bim_library::ifcx::material_path("brick").as_str()), Some("brick")));
         // the tab is picked on the page and stays while the category changes; a click on a
         // node's name picks the thing, as its tile does
-        let _ = app.libraries_update(LibrariesMessage::Code(true));
+        let _ = app.libraries_update(LibrariesMessage::Page(Page::Code));
         let _ = app.libraries_update(LibrariesMessage::Category(Category::Systems(SystemGroup::TimberFrame)));
-        assert!(app.libraries.code);
+        assert_eq!(app.libraries.page, Page::Code);
         let messages: Vec<Message> = {
             let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 6000.0), app.libraries_page(app.theme.palette(), l));
             assert!(page.find("IFCX").is_ok() && page.find("Tiles").is_ok() && page.find("Copy").is_ok() && page.find("+ System").is_err());
@@ -1447,7 +1469,7 @@ mod tests {
         for message in messages {
             let _ = app.update(message);
         }
-        assert_eq!((app.system_view.picked.as_deref(), app.libraries.code), (Some("system.timber-frame-140"), true));
+        assert_eq!((app.system_view.picked.as_deref(), app.libraries.page), (Some("system.timber-frame-140"), Page::Code));
         let frames = app.category_code(l, Category::Systems(SystemGroup::TimberFrame));
         assert_eq!(frames.iter().filter(|(_, _, on, _)| *on).count(), 1);
         assert!(frames[0].3["attributes"].get("openaec::systemtype").is_some(), "{}", frames[0].3);
@@ -1504,7 +1526,7 @@ mod tests {
             assert!(side.find("spruce").is_ok() && side.find("12 · softwood").is_ok() && side.find(super::super::materials::hex(fill).as_str()).is_ok());
         }
         // as code: a node per hatch, the one looked at marked, and first on the page
-        let _ = app.libraries_update(LibrariesMessage::Code(true));
+        let _ = app.libraries_update(LibrariesMessage::Page(Page::Code));
         let code = app.category_code(l, Category::HatchSet(HatchSet::OpenAec));
         assert_eq!((code.len(), code.iter().filter(|(_, _, on, _)| *on).count()), (72, 1));
         let (name, press, _, node) = code.iter().find(|(_, _, on, _)| *on).expect("the one looked at");
@@ -1531,6 +1553,57 @@ mod tests {
         // another country has only what its standard draws each kind of material with
         let _ = app.libraries_update(LibrariesMessage::Country(Country::Germany));
         assert_eq!(app.library_tree().into_iter().find(|(heading, _)| *heading == Heading::Hatches).map(|(_, list)| list), Some(vec![(Category::Hatches, 9)]));
+    }
+
+    #[test]
+    fn the_3d_tab_shows_the_picked_thing_and_pulls_its_layers_apart() {
+        let mut app = App::default();
+        let l = Language::English;
+        let palette = app.theme.palette();
+        let _ = app.libraries_update(LibrariesMessage::Source(Source::Project));
+        let _ = app.libraries_update(LibrariesMessage::Page(Page::Solid));
+        // nothing picked: the tab says what to pick
+        assert!(app.library_scene(l).is_none());
+        {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 900.0), app.libraries_page(palette, l));
+            assert!(page.find("3D").is_ok() && page.find("Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.").is_ok());
+        }
+        // a timber frame picked: its parts stand there, in layers, and the tab stays
+        let _ = app.update(Message::SystemType(SystemMessage::Pick("system.timber-frame-140".into())));
+        assert_eq!((app.libraries.page, app.libraries.apart), (Page::Solid, false));
+        let (name, scene) = app.library_scene(l).expect("the frame in 3D");
+        assert!(name == "Timber frame 38×140 c/c 600" && scene.bodies.len() > 8 && scene.layers() > 1, "{name}: {} solids in {} layers", scene.bodies.len(), scene.layers());
+        let messages: Vec<Message> = {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 900.0), app.libraries_page(palette, l));
+            assert!(page.find("Timber frame 38×140 c/c 600").is_ok() && page.find("Drag to turn it.").is_ok() && page.find("+ System").is_err());
+            page.click("Pulled apart").expect("the way to pull it apart");
+            page.into_messages().collect()
+        };
+        for message in messages {
+            let _ = app.update(message);
+        }
+        assert!(app.libraries.apart);
+        // what is changed in the editor shows: studs closer to one another are more solids
+        let frame = app.library.system_types.iter_mut().find(|t| t.id == "system.timber-frame-140").expect("the frame");
+        frame.grid.bay = 0.3;
+        assert!(app.library_scene(l).expect("the frame").1.bodies.len() > scene.bodies.len());
+        // a wall of the project: a slab per layer
+        let wall = app.library.buildups_of(Role::Wall).find(|b| b.layers.len() >= 3).map(|b| (b.id.clone(), b.layers.len())).expect("a layered wall");
+        let _ = app.update(Message::BuildUp(BuildUpMessage::Pick(wall.0)));
+        let layers = app.library_scene(l).expect("the wall").1.layers();
+        assert!(layers >= 2 && layers <= wall.1, "{layers} of {}", wall.1);
+        // another library: what is looked at; a profile is one solid, with nothing to pull apart
+        let _ = app.libraries_update(LibrariesMessage::Source(Source::General));
+        assert!(app.library_scene(l).is_none());
+        let _ = app.libraries_update(LibrariesMessage::Look(Item::Steel("HEA 200".into())));
+        assert_eq!(app.library_scene(l).map(|(name, scene)| (name, scene.bodies.len(), scene.layers())), Some(("HEA 200".to_string(), 1, 1)));
+        {
+            let mut page = crate::app::test_ui_of(iced::Size::new(1200.0, 900.0), app.libraries_page(palette, l));
+            assert!(page.find("HEA 200").is_ok() && page.find("Pulled apart").is_err());
+        }
+        // a hatch has no view in 3D
+        let _ = app.libraries_update(LibrariesMessage::Look(Item::Hatch("openaec-1".into())));
+        assert!(app.library_scene(l).is_none());
     }
 
     #[test]

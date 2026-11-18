@@ -30,6 +30,7 @@ mod layers;
 pub mod collab;
 mod docs;
 mod drawing_kinds;
+mod solid_view;
 mod drafts;
 pub mod drawn_props;
 mod edit;

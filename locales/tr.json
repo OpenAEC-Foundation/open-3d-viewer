@@ -1401,6 +1401,9 @@
     "Steel is missing around the frame:": "Kasanın çevresinde çelik eksik:",
     "all; e.g. *sandwich*": "tümü; örn. *sandwich*",
     "no": "yok",
-    "without steel in": "çeliksiz, içinde"
+    "without steel in": "çeliksiz, içinde",
+    "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Kutucuklar altında bir katman yapısı, bir çubuk tipi, bir çelik profil veya bir sistem seçin: burada 3B olarak görünür.",
+    "Drag to turn it.": "Döndürmek için sürükleyin.",
+    "Pulled apart": "Ayrık"
   }
 }

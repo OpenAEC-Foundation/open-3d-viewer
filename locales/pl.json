@@ -1401,6 +1401,9 @@
     "Steel is missing around the frame:": "Wokół ościeżnicy brakuje stali:",
     "all; e.g. *sandwich*": "wszystkie; np. *sandwich*",
     "no": "brak",
-    "without steel in": "bez stali w"
+    "without steel in": "bez stali w",
+    "Pick a build-up, a linear type, a steel profile or a system under Tiles: it stands here in 3D.": "Wybierz w Kafelkach układ warstw, typ pręta, profil stalowy lub system: pojawi się tutaj w 3D.",
+    "Drag to turn it.": "Przeciągnij, aby obrócić.",
+    "Pulled apart": "Rozsunięte"
   }
 }

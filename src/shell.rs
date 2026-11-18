@@ -3492,6 +3492,10 @@ mod tests {
             ("ifcx", LibrariesMessage::Source(Source::Project)),
             ("ifcx-hatch", LibrariesMessage::Source(Source::General)),
             ("search-hatch", LibrariesMessage::Search("isolatie".into())),
+            ("3d-system", LibrariesMessage::Source(Source::Project)),
+            ("3d-system-apart", LibrariesMessage::Source(Source::Project)),
+            ("3d-wall", LibrariesMessage::Source(Source::Project)),
+            ("3d-steel", LibrariesMessage::Source(Source::General)),
         ];
         for (name, show) in shots {
             let mut studio = Studio::new(App::default());
@@ -3550,13 +3554,34 @@ mod tests {
             // hatches with one looked at
             if name == "ifcx" {
                 let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
-                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Code(true))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(crate::app::libraries::Page::Code))));
             }
             if name == "ifcx-hatch" {
                 use crate::app::libraries::{Category, Item};
                 let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(bim_library::HatchSet::OpenAec)))));
                 let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch("openaec-17-pir".into())))));
-                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Code(true))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(crate::app::libraries::Page::Code))));
+            }
+            // the 3D tab: a timber frame of the project as it lies and pulled apart, a wall of the
+            // project pulled apart, and a profile of the steel table
+            if name.starts_with("3d") {
+                use crate::app::libraries::{Item, Page};
+                match name {
+                    "3d-wall" => {
+                        let id = studio.app.library.buildups.iter().find(|b| b.layers.len() >= 4).map(|b| b.id.clone()).expect("a layered wall");
+                        let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+                    }
+                    "3d-steel" => {
+                        let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Steel("HEB 300".into())))));
+                    }
+                    _ => {
+                        let _ = studio.update(Msg::App(Message::SystemType(crate::app::systems::SystemMessage::Pick("system.timber-frame-140".into()))));
+                    }
+                }
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Page(Page::Solid))));
+                if name != "3d-system" {
+                    let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Apart(true))));
+                }
             }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));

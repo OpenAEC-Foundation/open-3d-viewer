@@ -259,6 +259,15 @@ fn draw(sheet: &mut Sheet, s: &Snapshot) {
                     line(at(k), at(k + 1));
                 }
             }
+            // an open polyline (a hand-drawn one): its edges, straight or bulged
+            Shape::Polyline { edges } => {
+                for &(from, to, bulge) in edges {
+                    let points = arc(from, to, bulge);
+                    for w in points.windows(2) {
+                        line(p(w[0]), p(w[1]));
+                    }
+                }
+            }
             Shape::Polygon { edges, fill } => {
                 let mut outline: Vec<[f32; 2]> = Vec::new();
                 for &(from, to, bulge) in edges {
@@ -481,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_drawing_is_a_sheet_with_what_its_snapshot_draws() {
-        let item = |object: u32, colour: Option<[u8; 3]>, shape: Shape| Item { object, colour, shape };
+        let item = |object: u32, colour: Option<[u8; 3]>, shape: Shape| Item { object, kind: 0, colour, shape };
         let snapshot = Snapshot {
             paper_mm: [297.0, 210.0],
             title: "KOLOM A [K1]".into(),

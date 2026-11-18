@@ -4,7 +4,224 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Formaten dashboard</title>
-<link rel="stylesheet" href="style.css">
+<style>
+:root {
+  --bg: #f6f5f2;
+  --panel: #ffffff;
+  --ink: #1d1d1b;
+  --muted: #6b6a66;
+  --line: #e3e1db;
+  --track: #ecebe6;
+  --bar: #d97706;
+  --bar-done: #15803d;
+  --note-bg: #fbfaf8;
+  --focus: #d97706;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --panel: #1f1f1d;
+    --ink: #ecebe6;
+    --muted: #9b9a95;
+    --line: #2f2f2c;
+    --track: #2b2b28;
+    --bar: #f59e0b;
+    --bar-done: #22c55e;
+    --note-bg: #1a1a18;
+    --focus: #f59e0b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+header {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 32px 24px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+header p { margin: 4px 0 0; color: var(--muted); }
+
+.total {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.total strong { display: block; font-size: 30px; line-height: 1; }
+.total span { color: var(--muted); font-size: 13px; }
+
+main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 8px 24px 64px;
+}
+
+section { margin-top: 28px; }
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.format {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(180px, 300px) 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.name { font-weight: 600; }
+.name small {
+  display: block;
+  font-weight: 400;
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12.5px;
+}
+.name em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.track {
+  flex: 1;
+  height: 14px;
+  background: var(--track);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0;
+  background: var(--bar);
+  border-radius: 7px;
+  transition: width 0.25s ease;
+}
+.fill.done { background: var(--bar-done); }
+
+.pct {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.pct input {
+  width: 3.4em;
+  padding: 2px 4px;
+  text-align: right;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.pct input:hover { border-color: var(--line); }
+.pct input:focus { outline: none; border-color: var(--focus); }
+.pct input::-webkit-inner-spin-button { opacity: 0.4; }
+
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--note-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+}
+textarea::placeholder { color: var(--muted); }
+textarea:focus { outline: none; border-color: var(--focus); }
+
+footer {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px 40px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.saving {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  text-align: right;
+}
+#status { font-size: 12.5px; color: var(--muted); max-width: 320px; }
+
+.saving button {
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--bar);
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.saving button:hover { filter: brightness(1.08); }
+.saving button[hidden] { display: none; }
+
+footer code { font-size: 12.5px; }
+
+@media (max-width: 640px) {
+  header, main, footer { padding-left: 16px; padding-right: 16px; }
+  .row { grid-template-columns: 1fr; gap: 8px; }
+}
+</style>
 </head>
 <body>
 <header>
@@ -12,18 +229,20 @@
     <h1>Open BIM Suite: wat opent er al?</h1>
     <p>Per bestandstype hoeveel procent van de bestanden goed opent, en wat er nog fout gaat.</p>
   </div>
-  <div class="total"><strong id="total">0%</strong><span>gemiddeld over <span id="count">0</span> bestandstypes</span></div>
+  <div class="side">
+    <div class="saving">
+      <button id="save" type="button">Opslaan</button>
+      <span id="status">Nog niet in het bestand opgeslagen.</span>
+    </div>
+    <div class="total"><strong id="total">0%</strong><span>gemiddeld over <span id="count">0</span> bestandstypes</span></div>
+  </div>
 </header>
 
 <main id="list"></main>
 
 <footer>
-  <div class="saving">
-    <button id="save" type="button">Opslaan in bestand</button>
-    <span id="status">Nog niet in het bestand opgeslagen.</span>
-  </div>
   <p>Klik op het percentage om het in te vullen. Alles wordt in dit HTML-bestand zelf bewaard: de eerste keer
-  vraagt Chrome welk bestand (kies deze <code>index.html</code>), daarna slaat elke wijziging zich vanzelf op.</p>
+  vraagt Chrome welk bestand (kies deze <code>index.html</code>), daarna slaat elke wijziging zich vanzelf op en kan Opslaan ook altijd.</p>
 </footer>
 
 <!-- The saved percentages and notes; the page writes this block back into its own file. -->
@@ -74,11 +293,9 @@ async function writeFile() {
     await out.write(pageWithData());
     await out.close();
     statusEl.textContent = "Opgeslagen in " + handle.name + " om " + new Date().toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + ".";
-    saveButton.hidden = true;
     return true;
   } catch (e) {
-    statusEl.textContent = "Opslaan in het bestand lukte niet (" + e.message + "). Klik op Opslaan in bestand.";
-    saveButton.hidden = false;
+    statusEl.textContent = "Opslaan in het bestand lukte niet (" + e.message + "). Klik op Opslaan.";
     return false;
   }
 }
@@ -89,8 +306,7 @@ function save() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
     if (!(await writeFile())) {
-      statusEl.textContent = "Nog niet in het bestand opgeslagen (wel in deze browser). Klik op Opslaan in bestand.";
-      saveButton.hidden = false;
+      statusEl.textContent = "Nog niet in het bestand opgeslagen (wel in deze browser). Klik op Opslaan.";
     }
   }, 600);
 }
@@ -150,8 +366,7 @@ recallHandle().then(async h => {
   const ok = (await h.queryPermission({ mode: "readwrite" })) === "granted";
   statusEl.textContent = ok
     ? "Wijzigingen worden in " + h.name + " opgeslagen."
-    : "Klik op Opslaan in bestand om weer in " + h.name + " op te slaan.";
-  saveButton.hidden = ok;
+    : "Klik op Opslaan om weer in " + h.name + " op te slaan.";
 });
 
 const list = document.getElementById("list");

@@ -236,6 +236,11 @@ pub trait Loader: Send + Sync {
     fn folder_extensions(&self) -> &'static [&'static str] {
         &[]
     }
+    /// True when this loader opens `folder` as a model whatever its name (a Tekla model folder,
+    /// which holds the model's DB1).
+    fn opens_folder(&self, _folder: &Path) -> bool {
+        false
+    }
     /// True when files of this format layer over each other into one model (IFCX): a file added
     /// to an open model of this format composes with it, see [`Loader::load_stack`].
     fn composes(&self) -> bool {
@@ -380,17 +385,29 @@ pub fn load_with(source: &Source, progress: &Progress) -> Result<Model, String> 
 /// The loader for a file (or a project folder).
 fn loader_for(source: &Source) -> Result<&'static dyn Loader, String> {
     let ext = source.extension();
-    // A folder goes to the loader that opens folders with its extension.
-    let folder = source.path().is_some_and(Path::is_dir);
+    // A folder goes to the loader that opens folders with its extension, or that knows the
+    // folder as a model of its own.
+    let dir = source.path().filter(|p| p.is_dir());
+    let folder = dir.is_some();
     let loaders = registry();
     loaders
         .iter()
         .copied()
-        .find(|l| if folder { l.folder_extensions() } else { l.extensions() }.contains(&ext.as_str()))
+        .find(|l| match dir {
+            Some(dir) => l.folder_extensions().contains(&ext.as_str()) || l.opens_folder(dir),
+            None => l.extensions().contains(&ext.as_str()),
+        })
         .ok_or_else(|| match folder {
             true => format!("{}: folders open only as a project folder of a supported format", source.name()),
             false => unsupported(&ext, &loaders),
         })
+}
+
+/// True when a loader opens `folder` as one model (an Allplan `.prj` folder, a Tekla model
+/// folder), rather than it being a folder of files to open one by one.
+pub fn opens_folder(folder: &Path) -> bool {
+    let ext = folder.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    registry().iter().any(|l| l.folder_extensions().contains(&ext.as_str()) || l.opens_folder(folder))
 }
 
 /// True when `source` is of a format whose files layer over each other (IFCX).
@@ -518,6 +535,19 @@ mod tests {
         assert_eq!(layer.normals, [0.0, 0.0, 1.0].repeat(4));
         assert_eq!(layer.colors.as_ref().unwrap()[0], [255, 0, 0, 255]);
         assert_eq!(layer.colors.as_ref().unwrap()[2], [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn a_tekla_model_folder_opens_as_its_model() {
+        let root = std::env::temp_dir().join(format!("o3v-tekla-folder-{}", std::process::id()));
+        let folder = root.join("Huis");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(!opens_folder(&folder), "an empty folder is no model");
+        assert!(loader_for(&Source::from(folder.as_path())).is_err());
+        std::fs::write(folder.join("Huis.db1"), b"").unwrap();
+        assert!(opens_folder(&folder));
+        assert_eq!(loader_for(&Source::from(folder.as_path())).unwrap().name(), "Tekla Structures");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

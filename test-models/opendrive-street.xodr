@@ -1,0 +1,79 @@
+<?xml version="1.0" standalone="yes"?>
+<OpenDRIVE>
+  <header revMajor="1" revMinor="7" name="Street" version="1.00" date="2026-11-18" north="0" south="0" east="0" west="0" vendor="Open BIM Suite">
+    <geoReference><![CDATA[+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel +units=m +no_defs]]></geoReference>
+    <offset x="155000" y="463000" z="0" hdg="0"/>
+  </header>
+  <road name="Hoofdstraat" length="215.70796326794897" id="1" junction="-1">
+    <link/>
+    <planView>
+      <geometry s="0" x="0" y="0" hdg="0" length="100"><line/></geometry>
+      <geometry s="100" x="100" y="0" hdg="0" length="15.707963267948966"><arc curvature="0.025"/></geometry>
+      <geometry s="115.70796326794897" x="115.307" y="3.045" hdg="0.39269908169872414" length="100"><spiral curvStart="0.025" curvEnd="0"/></geometry>
+    </planView>
+    <elevationProfile>
+      <elevation s="0" a="0" b="0" c="0.0002" d="0"/>
+      <elevation s="100" a="2" b="0.04" c="0" d="0"/>
+    </elevationProfile>
+    <lateralProfile/>
+    <lanes>
+      <laneSection s="0">
+        <left>
+          <lane id="5" type="sidewalk" level="false"><link/><width sOffset="0" a="2.5" b="0" c="0" d="0"/><height sOffset="0" inner="0.12" outer="0.12"/></lane>
+          <lane id="4" type="shoulder" level="false"><link/><width sOffset="0" a="1.0" b="0" c="0" d="0"/></lane>
+          <lane id="3" type="biking" level="false"><link/><width sOffset="0" a="2.0" b="0" c="0" d="0"/></lane>
+          <lane id="2" type="border" level="false"><link/><width sOffset="0" a="0.5" b="0" c="0" d="0"/></lane>
+          <lane id="1" type="driving" level="false"><link/><width sOffset="0" a="3.25" b="0" c="0" d="0"/></lane>
+        </left>
+        <center>
+          <lane id="0" type="none" level="false"><link/></lane>
+        </center>
+        <right>
+          <lane id="-1" type="driving" level="false">
+          <link/>
+          <width sOffset="0" a="3.25" b="0" c="0" d="0"/>
+          </lane>
+          <lane id="-2" type="border" level="false">
+          <link/>
+          <width sOffset="0" a="0.5" b="0" c="0" d="0"/>
+          </lane>
+          <lane id="-3" type="biking" level="false">
+          <link/>
+          <width sOffset="0" a="2.0" b="0" c="0" d="0"/>
+          </lane>
+          <lane id="-4" type="shoulder" level="false">
+          <link/>
+          <width sOffset="0" a="1.0" b="0" c="0" d="0"/>
+          </lane>
+          <lane id="-5" type="sidewalk" level="false">
+          <link/>
+          <width sOffset="0" a="2.5" b="0" c="0" d="0"/>
+          <height sOffset="0" inner="0.12" outer="0.12"/>
+          </lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+  <road name="Zijweg" length="80" id="2" junction="-1">
+    <link/>
+    <planView>
+      <geometry s="0" x="50" y="-30" hdg="-1.5707963267948966" length="80"><paramPoly3 aU="0" bU="80" cU="0" dU="0" aV="0" bV="0" cV="-20" dV="0" pRange="normalized"/></geometry>
+    </planView>
+    <elevationProfile>
+      <elevation s="0" a="0" b="-0.03" c="0" d="0"/>
+    </elevationProfile>
+    <lanes>
+      <laneSection s="0">
+        <left>
+          <lane id="1" type="driving" level="false"><link/><width sOffset="0" a="3.0" b="0" c="0" d="0"/></lane>
+          <lane id="2" type="parking" level="false"><link/><width sOffset="0" a="2.5" b="0" c="0" d="0"/></lane>
+        </left>
+        <center><lane id="0" type="none" level="false"><link/></lane></center>
+        <right>
+          <lane id="-1" type="driving" level="false"><link/><width sOffset="0" a="3.0" b="0" c="0" d="0"/></lane>
+          <lane id="-2" type="sidewalk" level="false"><link/><width sOffset="0" a="2.0" b="0" c="0" d="0"/><height sOffset="0" inner="0.12" outer="0.12"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>

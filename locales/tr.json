@@ -1151,6 +1151,7 @@
     "Surface from points": "Noktalardan yüzey",
     "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Projenin nerede olduğu ve çevresinde ne bulunduğu: yer, parseller ve binalar, arazi",
     "Extensions": "Uzantılar",
-    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Paketin her parçası bir uzantıdır. Kullanmadıklarınızı kapatın: pencerenin üstündeki geçiş çubuğundan kalkar ve yeniden açtığınızda geri gelir."
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Paketin her parçası bir uzantıdır. Kullanmadıklarınızı kapatın: pencerenin üstündeki geçiş çubuğundan kalkar ve yeniden açtığınızda geri gelir.",
+    "Under each extension are the tools that run on it. A tool that is switched off leaves the ribbon.": "Her uzantının altında, onun üzerinde çalışan araçlar bulunur. Kapatılan bir araç şeritten kalkar."
   }
 }

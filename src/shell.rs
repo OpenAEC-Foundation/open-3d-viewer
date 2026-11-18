@@ -2320,6 +2320,11 @@ impl Studio {
     /// The groups of the ribbon tab shown, each its label and its parts, before the user's
     /// choice of which to show.
     fn ribbon_groups(&self) -> Vec<(&'static str, Vec<RibbonPart>)> {
+        self.ribbon_groups_of(self.ribbon_page())
+    }
+
+    /// The groups of a ribbon tab: the tools of the extension it belongs to.
+    fn ribbon_groups_of(&self, page: RibbonPage) -> Vec<(&'static str, Vec<RibbonPart>)> {
         let l = self.l();
         // a group is its label and its parts: a large button, or a column of small ones
         let large = |id: &'static str| RibbonPart::Large(id);
@@ -2345,7 +2350,7 @@ impl Studio {
                 (l.text("Extra", "More"), vec![large("view.explode"), smalls(&["view.left", "view.right"])]),
             ]
         };
-        let groups: Vec<(&'static str, Vec<RibbonPart>)> = match self.ribbon_page() {
+        let groups: Vec<(&'static str, Vec<RibbonPart>)> = match page {
             RibbonPage::Home => {
                 let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
                 groups.extend(view_groups());
@@ -2766,9 +2771,21 @@ impl Studio {
                         for product in self.extensions() {
                             // the Viewer is the suite itself
                             let toggle = (product != Product::Viewer && !matches!(self.edition, Edition::Only(_))).then_some(move |on| Msg::Extension(product, on));
-                            list = list.push(column![w::checkbox(look, product.full_name(), self.extension_on(product), toggle), w::secondary(look, product.purpose(l))].spacing(2));
+                            let mut entry = column![w::checkbox(look, product.full_name(), self.extension_on(product), toggle), w::secondary(look, product.purpose(l))].spacing(2);
+                            // nested under it: the tools that run on it, the groups of its own ribbon tabs
+                            // (the View tab is the Viewer's and is listed there)
+                            let mut tools = column![].spacing(2);
+                            for page in product.pages().iter().filter(|page| **page != RibbonPage::View || product == Product::Viewer) {
+                                for group in self.ribbon_groups_of(*page) {
+                                    let key = group_key(&group);
+                                    let shown = !self.prefs.ribbon_hidden.iter().any(|k| k == key);
+                                    tools = tools.push(w::checkbox(look, group.0, shown, self.extension_on(product).then_some(move |on| Msg::RibbonGroup(key, on))));
+                                }
+                            }
+                            entry = entry.push(container(tools).padding(iced::Padding { top: 2.0, right: 0.0, bottom: 4.0, left: 28.0 }));
+                            list = list.push(entry);
                         }
-                        list.into()
+                        iced::widget::scrollable(container(list.push(w::secondary(look, l.text("Onder elke extensie staan de tools die erop draaien. Een tool die uit staat, verdwijnt van het lint.", "Under each extension are the tools that run on it. A tool that is switched off leaves the ribbon."))).padding(iced::Padding { top: 0.0, right: 22.0, bottom: 0.0, left: 0.0 }))).height(iced::Length::Fixed(460.0)).into()
                     }
                     // in the Modeller its own keys follow the commands' shortcuts
                     SettingsPage::Shortcuts => column![sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts)]
@@ -3457,6 +3474,27 @@ mod tests {
         for product in Product::ALL {
             assert!(ui.find(product.full_name()).is_ok(), "{product:?}");
         }
+    }
+
+    #[test]
+    fn the_tools_of_an_extension_are_listed_under_it_and_switch_off() {
+        let mut studio = Studio::new(App::default());
+        let _ = studio.update(Msg::Product(Product::Gis));
+        let groups = studio.ribbon_groups_of(RibbonPage::Gis);
+        assert!(groups.len() >= 3, "the GIS tab has its file, surroundings and terrain");
+        let (name, key) = (groups[2].0, group_key(&groups[2]));
+        // the page lists the tools of every extension under it
+        studio.dialog = Some(Dialog::Settings);
+        studio.settings_page = SettingsPage::Extensions;
+        assert!(iced_test::simulator(studio.view()).find(name).is_ok(), "{name}");
+        // a tool switched off there leaves the ribbon, and comes back
+        studio.dialog = None;
+        let shown = |studio: &Studio| !studio.prefs.ribbon_hidden.iter().any(|hidden| hidden == key);
+        assert!(shown(&studio));
+        let _ = studio.update(Msg::RibbonGroup(key, false));
+        assert!(!shown(&studio));
+        let _ = studio.update(Msg::RibbonGroup(key, true));
+        assert!(shown(&studio));
     }
 
     #[test]

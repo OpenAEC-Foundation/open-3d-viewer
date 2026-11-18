@@ -1298,6 +1298,12 @@
     "From the steel table": "Çelik tablosundan",
     "by material and size": "malzeme ve ölçüye göre",
     "Not taken: the profile would no longer hold together.": "Kabul edilmedi: profil artık tutarlı olmazdı.",
-    "Elements that were given this type keep what they were given.": "Bu tipi daha önce almış elemanlar, aldıklarını korur."
+    "Elements that were given this type keep what they were given.": "Bu tipi daha önce almış elemanlar, aldıklarını korur.",
+    "+ Material": "+ Malzeme",
+    "Pick a material on the page to edit it.": "Düzenlemek için sayfada bir malzeme seçin.",
+    "3D model": "3B model",
+    "Hatch": "Tarama",
+    "no type": "hiçbir tip",
+    "Not removed: the material is still in use. Number of types:": "Kaldırılmadı: malzeme hâlâ kullanılıyor. Tip sayısı:"
   }
 }

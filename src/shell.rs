@@ -3442,6 +3442,7 @@ mod tests {
             ("search", LibrariesMessage::Search("beton 2".into())),
             ("buildup", LibrariesMessage::Source(Source::Project)),
             ("profile", LibrariesMessage::Source(Source::Project)),
+            ("material", LibrariesMessage::Source(Source::Project)),
             ("search-steel", LibrariesMessage::Search("hea 2".into())),
         ];
         for (name, show) in shots {
@@ -3462,6 +3463,10 @@ mod tests {
                 for message in [ProfileMessage::Add, ProfileMessage::Steel("HEB 300".into()), ProfileMessage::Series(Some("HEB"))] {
                     let _ = studio.update(Msg::App(Message::Profile(message)));
                 }
+            }
+            // the project with a material picked, in its editor
+            if name == "material" {
+                let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
             }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));

@@ -103,6 +103,14 @@ file of its own; other countries have no standard; a kind has one pen pair for a
 Library is also where the types themselves are made. Each kind of type gets an editor of its own
 in the right pane, with a drawing of what it makes above its fields.
 
+- **Materials**, `src/app/materials.rs`: the Project page starts with them, a chip each with
+  its hatch and its colour. The editor has the hatch of a section and the colour of the 3D model
+  side by side, the name in the library's four languages, the colour (typed as six hexadecimal
+  digits, or a slider per channel; the model follows when a slider is let go) and the hatch,
+  picked from the hatch kinds drawn and named after the general library's materials. It says
+  what is made of the material; one a type is made of is not removed. The key is not edited:
+  layers, types and files refer to it. A material of another library comes into the project
+  under the key it had, so the types of that library that are copied later find it.
 - **Build-ups** (walls, floors, roofs, ceilings), `src/app/buildups.rs`: the Project page lists
   them a role at a time; the editor has the section and the layers, each a material and a
   thickness, to change, move, add and remove; a name of its own or the rule's; add, duplicate,
@@ -130,8 +138,10 @@ in the right pane, with a drawing of what it makes above its fields.
 - **Settings** of the drawing standard can be added and removed (scales, line styles, pens, text
   styles), a removal refused while a kind of drawing uses the setting.
 
-Not yet: an editor for materials (name, colour, hatch) and for system types; elements that
-were given a build-up or a linear type do not follow a change of the type; the general library
+Not yet: an editor for system types; a hatch of one's own (a material picks one of the nine
+kinds; their patterns follow the drawing standard); a material's category, description and
+properties as IFC has them; elements that were given a build-up or a linear type do not follow
+a change of the type (they do take a material's new colour); the general library
 and a country's types are not edited in place. An arbitrary profile
 (`IfcArbitraryClosedProfileDef`) cannot be made. An element made of a type keeps its own copy
 of the profile in the kernel's form, not as IFC has it.
@@ -152,7 +162,7 @@ of the profile in the kernel's form, not as IFC has it.
 2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
-4. Editors for materials and systems. Profiles drawn freely.
+4. An editor for systems. Profiles drawn freely. Hatches of one's own.
 5. Elements follow a change of their type, when asked.
 6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
 7. Library files and components opened into the page.

@@ -44,6 +44,7 @@ mod levels;
 pub mod buildups;
 pub mod libraries;
 pub mod library;
+pub mod materials;
 pub mod profiles;
 pub mod standards;
 mod marks;
@@ -377,6 +378,8 @@ pub struct App {
     pub standard_view: standards::StandardView,
     /// The build-up edited on the Library page, and the role whose build-ups show.
     pub buildup_view: buildups::BuildUpView,
+    /// The material edited on the Library page, and what is being typed of it.
+    pub material_view: materials::MaterialView,
     /// The linear type edited on the Library page, the role whose types show and what of the
     /// steel table shows.
     pub profile_view: profiles::ProfileView,
@@ -540,6 +543,8 @@ pub enum Message {
     Standard(standards::StandardMessage),
     /// The build-ups of the project on the Library page: picking and editing one.
     BuildUp(buildups::BuildUpMessage),
+    /// The materials of the project on the Library page: picking and editing one.
+    Material(materials::MaterialMessage),
     /// The linear types of the project on the Library page: picking one and editing its profile.
     Profile(profiles::ProfileMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
@@ -1035,6 +1040,7 @@ impl Default for App {
             standard: bim_library::drawing::Standard::netherlands(),
             standard_view: standards::StandardView::default(),
             buildup_view: buildups::BuildUpView::default(),
+            material_view: materials::MaterialView::default(),
             profile_view: profiles::ProfileView::default(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
@@ -2216,6 +2222,7 @@ impl App {
             Message::Libraries(message) => return self.libraries_update(message),
             Message::Standard(message) => return self.standard_update(message),
             Message::BuildUp(message) => return self.buildup_update(message),
+            Message::Material(message) => return self.material_update(message),
             Message::Profile(message) => return self.profile_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),

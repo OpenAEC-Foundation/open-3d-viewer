@@ -1298,6 +1298,12 @@
     "From the steel table": "Från ståltabellen",
     "by material and size": "enligt material och mått",
     "Not taken: the profile would no longer hold together.": "Inte infört: profilen skulle inte längre hänga ihop.",
-    "Elements that were given this type keep what they were given.": "Element som redan fått den här typen behåller det de fick."
+    "Elements that were given this type keep what they were given.": "Element som redan fått den här typen behåller det de fick.",
+    "+ Material": "+ Material",
+    "Pick a material on the page to edit it.": "Välj ett material på sidan för att redigera det.",
+    "3D model": "3D-modell",
+    "Hatch": "Skraffering",
+    "no type": "ingen typ",
+    "Not removed: the material is still in use. Number of types:": "Inte borttaget: materialet används fortfarande. Antal typer:"
   }
 }

@@ -14,7 +14,7 @@
 //! An element that was given a type holds what it was given: changing the type here does not
 //! change the elements made of it.
 
-use super::libraries::{LibrariesView, Shelf, Source};
+use super::libraries::{Editor, LibrariesView, Shelf, Source};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::profile::{steel, steel_profiles};
@@ -280,9 +280,8 @@ impl App {
             Some(Err(why)) => self.profile_view.refused = Some(why.to_string()),
             None => {}
         }
-        // one editor at a time in the right pane
         if self.profile_view.picked.is_some() {
-            self.buildup_view.picked = None;
+            self.edit_only(Editor::Profile);
         }
         Task::none()
     }

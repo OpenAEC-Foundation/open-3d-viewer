@@ -157,6 +157,14 @@ pub enum LibrariesMessage {
     Open(super::standards::Setting),
 }
 
+/// What the right pane of the Project page edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Editor {
+    Material,
+    BuildUp,
+    Profile,
+}
+
 /// A library something was found in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shelf {
@@ -286,6 +294,19 @@ impl App {
             }
         }
         Task::none()
+    }
+
+    /// One editor at a time in the right pane: the others let go of what they had picked.
+    pub(super) fn edit_only(&mut self, editor: Editor) {
+        if editor != Editor::Material {
+            self.material_view.picked = None;
+        }
+        if editor != Editor::BuildUp {
+            self.buildup_view.picked = None;
+        }
+        if editor != Editor::Profile {
+            self.profile_view.picked = None;
+        }
     }
 
     /// The library of a shelf.
@@ -444,14 +465,15 @@ impl App {
     }
 
     /// The right pane of the Library product: on the Project page the editor of what was picked
-    /// there, a build-up or a linear type; elsewhere the fields of what is picked of the drawing
-    /// standard.
+    /// there, a material, a build-up or a linear type; elsewhere the fields of what is picked of
+    /// the drawing standard.
     pub fn library_side(&self, p: Palette, l: Language) -> Element<'_, Message> {
         match self.libraries.source {
+            Source::Project if self.material_view.picked.is_some() => self.material_pane(p, l),
             Source::Project if self.profile_view.picked.is_some() => self.profile_pane(p, l),
             Source::Project if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
             // nothing picked: what each editor is for
-            Source::Project => column![self.buildup_pane(p, l), self.profile_pane(p, l)].into(),
+            Source::Project => column![self.material_pane(p, l), self.buildup_pane(p, l), self.profile_pane(p, l)].into(),
             _ => self.standard_pane(p, l),
         }
     }
@@ -460,6 +482,7 @@ impl App {
     /// a profile's outline, a system's face.
     fn found_cards(&self, p: Palette, l: Language) -> Element<'_, Message> {
         use super::library::{buildup_detail, material_detail, profile_detail, system_detail};
+        use super::materials::MaterialMessage;
         use super::profiles::ProfileMessage;
         use super::standards::Setting;
         let found = self.library_search(&self.libraries.query, l);
@@ -477,7 +500,10 @@ impl App {
             ]
             .spacing(2);
             let look: Option<Element<'_, Message>> = match &f.item {
-                Item::Material(shelf, key) => self.shelf(*shelf).material(key).map(|m| material_detail(p, m)),
+                Item::Material(shelf, key) => {
+                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
+                    self.shelf(*shelf).material(key).map(|m| column![material_detail(p, m)].push(copied).spacing(6).into())
+                }
                 Item::BuildUp(shelf, id) => {
                     let library = self.shelf(*shelf);
                     let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
@@ -512,10 +538,12 @@ impl App {
                 .padding(12)
                 .clip(true)
                 .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
-            // a kind of drawing or a setting opens in its standard, where it is set; a build-up
-            // or a linear type opens in its editor, one of another library as a copy in the
-            // project; a profile of the steel table becomes a beam type of the project
+            // a kind of drawing or a setting opens in its standard, where it is set; a material,
+            // a build-up or a linear type opens in its editor, one of another library as a copy
+            // in the project; a profile of the steel table becomes a beam type of the project
             match f.item {
+                Item::Material(Shelf::Project, key) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Material(MaterialMessage::Pick(key))).into(),
+                Item::Material(shelf, key) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Material(MaterialMessage::Copy(shelf, key))).into(),
                 Item::Setting(setting) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Libraries(LibrariesMessage::Open(setting))).into(),
                 Item::BuildUp(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Pick(id))).into(),
                 Item::BuildUp(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Copy(shelf, id))).into(),
@@ -556,12 +584,13 @@ impl App {
         if view.source == Source::Country && view.country == Country::Netherlands {
             page = page.push(self.standard_sections(p, l));
         }
-        // the project: its build-ups and its linear types first, side by side, to be edited;
-        // under the linear types the steel table one takes its profile from
+        // the project: its materials first, then what is made of them, to be edited: its
+        // build-ups and its linear types side by side, and under the linear types the steel table
+        // one takes its profile from
         if view.source == Source::Project {
             let half = iced::Length::FillPortion(1);
             let linear = column![self.profile_lists(p, l), self.steel_table(p, l)].spacing(18);
-            page = page.push(row![container(self.buildup_lists(p, l)).width(half), container(linear).width(half)].spacing(12));
+            page = page.push(self.material_chips(p, l)).push(row![container(self.buildup_lists(p, l)).width(half), container(linear).width(half)].spacing(12));
         }
         for (section, cards) in self.library_sections(l, &house) {
             let cards = row(cards.into_iter().map(|card| card_view(card, p, l))).spacing(10).wrap();
@@ -622,6 +651,11 @@ fn card_view<'a>(card: Card, p: Palette, l: Language) -> Element<'a, Message> {
         .into()
 }
 
+/// One hatch on a tile, drawn as a section shows it: a look at a material.
+pub(super) fn hatch_tile<'a, M: 'a>(pattern: HatchPattern, p: Palette) -> Element<'a, M> {
+    canvas_widget(HatchTiles { patterns: vec![pattern], edge: p.border }).width(HatchTiles::SIDE).height(HatchTiles::SIDE).into()
+}
+
 /// The hatches of a card, each in a tile of its own, drawn as a section shows them.
 struct HatchTiles {
     patterns: Vec<HatchPattern>,
@@ -635,7 +669,7 @@ impl HatchTiles {
     const SCALE: f32 = 200.0;
 }
 
-impl canvas::Program<Message> for HatchTiles {
+impl<M> canvas::Program<M> for HatchTiles {
     type State = ();
 
     fn draw(&self, _state: &(), renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {

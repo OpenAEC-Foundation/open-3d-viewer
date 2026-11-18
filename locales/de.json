@@ -1298,6 +1298,12 @@
     "From the steel table": "Aus der Stahltabelle",
     "by material and size": "nach Material und Maß",
     "Not taken: the profile would no longer hold together.": "Nicht übernommen: Das Profil wäre dann nicht mehr stimmig.",
-    "Elements that were given this type keep what they were given.": "Elemente, die diesen Typ bereits erhalten haben, behalten, was sie erhalten haben."
+    "Elements that were given this type keep what they were given.": "Elemente, die diesen Typ bereits erhalten haben, behalten, was sie erhalten haben.",
+    "+ Material": "+ Material",
+    "Pick a material on the page to edit it.": "Wählen Sie auf der Seite ein Material, um es zu bearbeiten.",
+    "3D model": "3D-Modell",
+    "Hatch": "Schraffur",
+    "no type": "kein Typ",
+    "Not removed: the material is still in use. Number of types:": "Nicht entfernt: Das Material wird noch verwendet. Anzahl Typen:"
   }
 }

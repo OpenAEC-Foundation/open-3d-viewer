@@ -421,8 +421,12 @@ fn small<'a>(s: String, p: Palette) -> Element<'a, Message> {
 
 /// A material's hatch (NEN 47) on a square, and its key.
 pub(super) fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
-    let sample = Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text };
-    column![canvas_widget(sample).width(Fill).height(60), small(m.key.clone(), p)].spacing(4).into()
+    column![material_hatch(p, m), small(m.key.clone(), p)].spacing(4).into()
+}
+
+/// A material's hatch (NEN 47) on a band, as a section through it shows it.
+pub(super) fn material_hatch<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
+    canvas_widget(Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text }).width(Fill).height(60).into()
 }
 
 /// A build-up drawn as a section through its layers, the exterior (or the top) at the top, and

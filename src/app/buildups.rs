@@ -10,7 +10,7 @@
 //! An element that was given a build-up holds what it was given: changing the type here does not
 //! change the elements made of it.
 
-use super::libraries::{LibrariesView, Shelf, Source};
+use super::libraries::{Editor, LibrariesView, Shelf, Source};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::{BuildUp, Layer, Library, LibraryError, Role};
@@ -140,9 +140,8 @@ impl std::fmt::Display for Choice {
 impl App {
     pub(super) fn buildup_update(&mut self, message: BuildUpMessage) -> Task<Message> {
         let task = self.buildup_apply(message);
-        // one editor at a time in the right pane
         if self.buildup_view.picked.is_some() {
-            self.profile_view.picked = None;
+            self.edit_only(Editor::BuildUp);
         }
         task
     }

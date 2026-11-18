@@ -32,6 +32,7 @@ mod vwx;
 #[cfg(not(target_arch = "wasm32"))]
 mod smc;
 mod tekla;
+mod tekla_analysis;
 mod tbp;
 mod ply;
 mod cityjson;
@@ -69,6 +70,7 @@ mod sam;
 mod rhino;
 mod blend;
 mod fcstd;
+mod dicom;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -235,6 +237,11 @@ pub trait Loader: Send + Sync {
     fn folder_extensions(&self) -> &'static [&'static str] {
         &[]
     }
+    /// True when this loader opens `folder` as a model whatever its name (a Tekla model folder,
+    /// which holds the model's DB1).
+    fn opens_folder(&self, _folder: &Path) -> bool {
+        false
+    }
     /// True when files of this format layer over each other into one model (IFCX): a file added
     /// to an open model of this format composes with it, see [`Loader::load_stack`].
     fn composes(&self) -> bool {
@@ -282,7 +289,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &dicom::DicomLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -379,17 +386,29 @@ pub fn load_with(source: &Source, progress: &Progress) -> Result<Model, String> 
 /// The loader for a file (or a project folder).
 fn loader_for(source: &Source) -> Result<&'static dyn Loader, String> {
     let ext = source.extension();
-    // A folder goes to the loader that opens folders with its extension.
-    let folder = source.path().is_some_and(Path::is_dir);
+    // A folder goes to the loader that opens folders with its extension, or that knows the
+    // folder as a model of its own.
+    let dir = source.path().filter(|p| p.is_dir());
+    let folder = dir.is_some();
     let loaders = registry();
     loaders
         .iter()
         .copied()
-        .find(|l| if folder { l.folder_extensions() } else { l.extensions() }.contains(&ext.as_str()))
+        .find(|l| match dir {
+            Some(dir) => l.folder_extensions().contains(&ext.as_str()) || l.opens_folder(dir),
+            None => l.extensions().contains(&ext.as_str()),
+        })
         .ok_or_else(|| match folder {
             true => format!("{}: folders open only as a project folder of a supported format", source.name()),
             false => unsupported(&ext, &loaders),
         })
+}
+
+/// True when a loader opens `folder` as one model (an Allplan `.prj` folder, a Tekla model
+/// folder), rather than it being a folder of files to open one by one.
+pub fn opens_folder(folder: &Path) -> bool {
+    let ext = folder.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    registry().iter().any(|l| l.folder_extensions().contains(&ext.as_str()) || l.opens_folder(folder))
 }
 
 /// True when `source` is of a format whose files layer over each other (IFCX).
@@ -520,6 +539,19 @@ mod tests {
     }
 
     #[test]
+    fn a_tekla_model_folder_opens_as_its_model() {
+        let root = std::env::temp_dir().join(format!("o3v-tekla-folder-{}", std::process::id()));
+        let folder = root.join("Huis");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(!opens_folder(&folder), "an empty folder is no model");
+        assert!(loader_for(&Source::from(folder.as_path())).is_err());
+        std::fs::write(folder.join("Huis.db1"), b"").unwrap();
+        assert!(opens_folder(&folder));
+        assert_eq!(loader_for(&Source::from(folder.as_path())).unwrap().name(), "Tekla Structures");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn extracted_skp_reader_loads_files_and_browser_bytes() {
         let path = repo_file("test-models/TestModel.skp");
         let file = load(&path).expect("SketchUp file");
@@ -541,6 +573,24 @@ mod tests {
         let source = Source::Bytes { name: "test.RVT".into(), data: Arc::new(Vec::new()) };
         let error = load_with(&source, &Progress::default()).unwrap_err();
         assert!(error.contains("Revit files open in the desktop app only"), "{error}");
+    }
+
+    #[test]
+    fn loads_the_model_a_dicom_file_carries() {
+        // an Encapsulated STL of a 40 x 20 x 10 mm block: millimetres become metres
+        let stl = load(&repo_file("test-models/dicom-implant-stl.dcm")).expect("DICOM STL");
+        assert_eq!(stl.format, "DICOM");
+        assert_eq!(stl.triangle_count(), 12);
+        let size = stl.bounds.size();
+        assert!((size[0] - 0.04).abs() < 1e-6 && (size[1] - 0.02).abs() < 1e-6 && (size[2] - 0.01).abs() < 1e-6, "{size:?}");
+        // an Encapsulated OBJ, coloured by the material library beside it, kept in its own frame
+        let obj = load(&repo_file("test-models/dicom-obj/model.dcm")).expect("DICOM OBJ");
+        assert_eq!(obj.triangle_count(), 4);
+        assert_eq!(obj.layers[0].color, [0.89, 0.85, 0.72]);
+        assert!((obj.bounds.max[2] - 0.03).abs() < 1e-6 && obj.bounds.min[1] >= 0.0, "{:?}", obj.bounds);
+        // the library alone says what it is
+        let error = load(&repo_file("test-models/dicom-obj/material.dcm")).unwrap_err();
+        assert!(error.contains("material library"), "{error}");
     }
 
     #[test]

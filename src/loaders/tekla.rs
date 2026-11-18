@@ -18,6 +18,8 @@ const CAPITALS: f32 = 0.72;
 impl Loader for TeklaLoader {
     fn name(&self) -> &'static str { "Tekla Structures" }
     fn extensions(&self) -> &'static [&'static str] { &["db1"] }
+    /// A Tekla model is a folder holding its DB1 with its catalogues and drawings.
+    fn opens_folder(&self, folder: &std::path::Path) -> bool { tekla_read::model_db1(folder).is_some() }
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)
     }
@@ -25,7 +27,8 @@ impl Loader for TeklaLoader {
         progress.set(Phase::Read);
         // Native projects keep the profile and bolt catalogues beside their DB1, and their
         // drawings in its folder.
-        let folder = source.path().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
+        // (opened as its folder: that folder)
+        let folder = source.path().and_then(|p| if p.is_dir() { Some(p) } else { p.parent() }).map(std::path::Path::to_path_buf);
         let mut document = if let Some(path) = source.path() {
             tekla_read::read_path(path)?
         } else {
@@ -39,7 +42,15 @@ impl Loader for TeklaLoader {
         let (levels, grids) = levels_and_grids(&document.grids);
         project.levels = levels;
         project.grids = grids;
-        let views: Vec<SavedView> = document.views.iter().filter_map(|v| saved_view(v, &project.levels)).collect();
+        let mut views: Vec<SavedView> = Vec::new();
+        for v in &document.views {
+            let Some(view) = saved_view(v, &project.levels) else { continue };
+            // what its filter leaves out, as the file's own 3D views do
+            if !v.hidden.is_empty() {
+                project.switched_off.insert(crate::model::view3d_key(views.len()), v.hidden.iter().copied().collect());
+            }
+            views.push(view);
+        }
         if !views.is_empty() {
             project.info.push(("Tekla model views".into(), views.len().to_string()));
         }
@@ -57,11 +68,26 @@ impl Loader for TeklaLoader {
                 None => project.info.push(("Tekla drawings".into(), format!("{} (they are read from the model folder, on the desktop)", document.drawings.len()))),
             }
         }
-        let layers = document.meshes.into_iter().map(|mesh| Layer {
-            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new(), line_elements: Vec::new()
-        }).collect();
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
+        // the analysis models, with their summary and notes
+        let mut structural = super::tekla_analysis::models(&document.structural, &document.catalogues.materials, &source.name());
+        if !structural.is_empty() {
+            let doc = bim_structural::SamDocument { origin: glam::DVec3::ZERO, source: Default::default(), models: structural };
+            let info = super::sam::info(&doc, glam::DVec3::ZERO);
+            project.info.extend(info.into_iter().skip_while(|(k, _)| k != "Analysis models"));
+            structural = doc.models;
+        }
+        Ok(Loaded { structural, origin: None, layers: layers(document.meshes), views, project })
     }
+}
+
+/// The parts (and what else the reader draws) as layers.
+fn layers(meshes: Vec<tekla_read::Mesh>) -> Vec<Layer> {
+    meshes
+        .into_iter()
+        .map(|mesh| Layer {
+            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new(), line_elements: Vec::new()
+        })
+        .collect()
 }
 
 /// The levels of the grids (their Z lines, by label, low to high) and their X and Y lines, drawn
@@ -233,6 +259,15 @@ fn draw(sheet: &mut Sheet, s: &Snapshot) {
                     line(at(k), at(k + 1));
                 }
             }
+            // an open polyline (a hand-drawn one): its edges, straight or bulged
+            Shape::Polyline { edges } => {
+                for &(from, to, bulge) in edges {
+                    let points = arc(from, to, bulge);
+                    for w in points.windows(2) {
+                        line(p(w[0]), p(w[1]));
+                    }
+                }
+            }
             Shape::Polygon { edges, fill } => {
                 let mut outline: Vec<[f32; 2]> = Vec::new();
                 for &(from, to, bulge) in edges {
@@ -368,7 +403,7 @@ mod tests {
     }
 
     fn view(name: &str, frame: [[f64; 3]; 4], display: [[f64; 3]; 3], depth: [f64; 2], work: [[f64; 3]; 2]) -> ModelView {
-        ModelView { id: 1, name: name.into(), frame, display, depth_up_mm: depth[0], depth_down_mm: depth[1], work_area_mm: work, angles_deg: [0.0, 0.0], properties: "standard".into() }
+        ModelView { id: 1, name: name.into(), frame, display, depth_up_mm: depth[0], depth_down_mm: depth[1], work_area_mm: work, angles_deg: [0.0, 0.0], properties: "standard".into(), filter: String::new(), hidden: Vec::new() }
     }
 
     const AXES: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -455,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_drawing_is_a_sheet_with_what_its_snapshot_draws() {
-        let item = |object: u32, colour: Option<[u8; 3]>, shape: Shape| Item { object, colour, shape };
+        let item = |object: u32, colour: Option<[u8; 3]>, shape: Shape| Item { object, kind: 0, colour, shape };
         let snapshot = Snapshot {
             paper_mm: [297.0, 210.0],
             title: "KOLOM A [K1]".into(),

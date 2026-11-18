@@ -1154,6 +1154,8 @@ impl Studio {
             // an empty project to model in, with a first level; beside a model it opens in a tab of its own
             Command::new("file.new", l.text("Nieuw", "New"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("file.new"), large("file.new")).shortcut(Shortcut::ctrl('n')),
             Command::new("file.open", l.text("Openen…", "Open…"), go(Message::OpenDialog)).icon(small("file.open"), large("file.open")).shortcut(Shortcut::ctrl('o')).dialog(),
+            // a model kept as a folder: a Tekla model folder, an Allplan project
+            Command::new("file.open-folder", l.text("Map openen…", "Open folder…"), go(Message::OpenFolderDialog)).icon(small("file.open"), large("file.open")).dialog(),
             Command::new("file.add", l.text("Toevoegen…", "Add…"), go(Message::AddDialog))
                 .icon(small("file.import"), large("file.import"))
                 .shortcut(Shortcut::ctrl_shift('o'))
@@ -1329,6 +1331,15 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // in an environment with Blender (the web app): a render of the file opened from Docs
+        #[cfg(target_arch = "wasm32")]
+        if crate::host::renders() {
+            list.push(
+                Command::new("file.render-blender", l.text("Renderen met Blender", "Render with Blender"), go(Message::BlenderRender))
+                    .icon(small("mesh.surface"), large("mesh.surface"))
+                    .enabled(crate::host::can_render()),
+            );
+        }
         // through the clashes with the keys: the next and the one before, accept, reject, issue
         // (the Validator's, which the web build leaves out)
         #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
@@ -1664,7 +1675,7 @@ impl Studio {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
                 };
-                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveIfcDialog(_)) {
+                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveIfcDialog(_) | Message::BlenderRender) {
                     self.backstage = false;
                 }
                 if let Some(path) = opened {
@@ -2363,7 +2374,11 @@ impl Studio {
         };
         let groups: Vec<(&'static str, Vec<RibbonPart>)> = match page {
             RibbonPage::Home => {
-                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])])];
+                #[cfg(target_arch = "wasm32")]
+                if crate::host::renders() {
+                    groups[0].1.push(large("file.render-blender"));
+                }
                 groups.extend(view_groups());
                 groups
             }
@@ -2406,7 +2421,7 @@ impl Studio {
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![
-                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])]),
                 (l.text("Snedekrachten", "Internal forces"), vec![smalls(&["analysis.n", "analysis.vy", "analysis.vz"]), smalls(&["analysis.mx", "analysis.my", "analysis.mz"])]),
                 (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
@@ -2437,7 +2452,7 @@ impl Studio {
                 (l.text("Ondergrond", "Ground"), vec![large("geo.model")]),
             ],
             RibbonPage::Cloud => vec![
-                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
+                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"]), large("cloud.details")]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
                 (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("cloud.drawing")]),
@@ -2446,7 +2461,7 @@ impl Studio {
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
-                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])]),
                 (l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
                 (l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
                 (l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
@@ -2531,15 +2546,21 @@ impl Studio {
         let l = self.l();
         let c = look.color;
         let loaded = self.app.model.is_some();
-        let nav = column![
+        #[allow(unused_mut)]
+        let mut nav = column![
             t::file_nav_row(look, small("file.new"), l.text("Nieuw", "New"), false, Some(Msg::App(Message::NewModel(l.text("Niveau 0", "Level 0"))))),
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
+            t::file_nav_row(look, small("file.open"), l.text("Map openen", "Open folder"), false, Some(Msg::App(Message::OpenFolderDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Exporteren als IFC 4x3", "Export IFC 4x3"), false, loaded.then_some(Msg::App(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))),
             t::file_nav_row(look, small("ui.settings"), l.text("Instellingen", "Settings"), false, Some(Msg::Dialog(Some(Dialog::Settings)))),
         ]
         .width(260);
+        #[cfg(target_arch = "wasm32")]
+        if crate::host::renders() {
+            nav = nav.push(t::file_nav_row(look, small("mesh.surface"), l.text("Renderen met Blender", "Render with Blender"), false, crate::host::can_render().then_some(Msg::App(Message::BlenderRender))));
+        }
         let files: Vec<t::RecentFile<'_, Msg>> = self
             .prefs
             .recent

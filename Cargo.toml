@@ -118,6 +118,8 @@ ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028
 vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
 # SolidWorks parts and assemblies (.sldprt, .sldasm) through the private solidworks-dll library; pure Rust on bytes
 sldw-read = { git = "https://github.com/OpenAEC-Foundation/solidworks-dll", rev = "a001b0141fcf54f63de1107e2d75e7fdc9e177f1" }
+# Solid Edge (.par, .psm, .asm) through the private solidedge-dll library; pure Rust on bytes, so also in the browser
+sedge-read = { git = "https://github.com/OpenAEC-Foundation/solidedge-dll", rev = "04a068e6a06409b8396d0e05a2613d86c3af50c4" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
 threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)

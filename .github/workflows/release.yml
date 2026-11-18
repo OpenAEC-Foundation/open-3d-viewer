@@ -71,6 +71,7 @@ jobs:
             ${{ secrets.SSH_KEY_SKETCHUP_DLL }}
             ${{ secrets.SSH_KEY_SKP_READER }}
             ${{ secrets.SSH_KEY_SOLIDWORKS_DLL }}
+            ${{ secrets.SSH_KEY_SOLIDEDGE_DLL }}
             ${{ secrets.SSH_KEY_TEKLA_DLL }}
             ${{ secrets.SSH_KEY_TEKLA_READER }}
             ${{ secrets.SSH_KEY_VWX_DLL }}

@@ -83,6 +83,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
+| COPC (`.copc.laz`) | in `las.rs` | the `las` crate's COPC reader (MIT) | Adapter: the app picks which octree levels to read for its point limit, the crate reads them. Added 2026-11-18. |
 
 ## Moved so far
 

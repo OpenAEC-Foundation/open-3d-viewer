@@ -82,10 +82,11 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str], rea
 
 /// The tools, under their names without a prefix (the viewer's command names).
 pub fn tools() -> Vec<Value> {
-    let mut save = tool("save_file", "Save the open model as IFCX (IFC5, the viewer's project file with the model, its levels and drawings) or, with a .ifc path, as IFC 4, as File > Save as does, and wait until it is written. Without a path it goes next to the open file, with the same name and .ifcx; an open .ifcx is not replaced but saved beside it as <name>-viewer.ifcx, as the viewer's file is a re-export (triangles and the properties it shows). A file that exists is only replaced with overwrite: true. Returns the path written.",
+    let mut save = tool("save_file", "Save the open model as IFCX (IFC5, the viewer's project file with the model, its levels and drawings) or, with a .ifc path, as IFC 4 (IFC 4x3 with schema IFC4X3, as File > Export IFC 4x3 does), as File > Save as does, and wait until it is written. Without a path it goes next to the open file, with the same name and .ifcx; an open .ifcx is not replaced but saved beside it as <name>-viewer.ifcx, as the viewer's file is a re-export (triangles and the properties it shows). A file that exists is only replaced with overwrite: true. Returns the path written.",
         json!({
             "path": { "type": "string", "description": "Where to save: absolute, or relative to the work folder (OPENAEC_MAP) when there is one; the extension picks the format (.ifcx or .ifc). Default: next to the open file, as .ifcx (<name>-viewer.ifcx when the open file is an IFCX)" },
-            "overwrite": { "type": "boolean", "description": "Replace the file when it exists (default false)" }
+            "overwrite": { "type": "boolean", "description": "Replace the file when it exists (default false)" },
+            "schema": { "type": "string", "enum": ["IFC4", "IFC4X3"], "description": "The IFC schema of a .ifc: IFC4 (default) or IFC4X3 (IFC 4x3 ADD2)" }
         }), &[], false);
     save["annotations"]["destructiveHint"] = json!(true);
     // writes a file with save_to, and replaces one with overwrite

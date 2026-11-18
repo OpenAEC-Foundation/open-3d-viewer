@@ -72,7 +72,7 @@ What works and what does not on Android:
 - **Free and open.** LGPL-3.0. No licence fees, no account, no upload.
 - **Opens what you get sent.** Revit, Vertex BD (`.vxz`) and BTL timber machine files on the desktop; IFC (also zipped), SketchUp (version 3 and later), Tekla Structures (19.0, 20.0, 2020, 2021 and 2026, with its bolts, nuts and washers, its items (anchors, inserts) in their own shape, its grids as levels and grid lines, its saved model views, and its drawings as sheets), Allplan, Archicad (walls with their windows and doors, slabs, columns, beams, roofs, library objects as boxes, terrain meshes, zones, morphs, stairs and railings), DWG/DXF, MicroStation DGN (V7 and V8), STEP (AP203, AP214, AP242), IFC5 (IFCX, alpha), CityJSON, CityGML, GeoJSON, Shapefile, LandXML, glTF, USD, Rhino (version 2 to 9), COLLADA, 3MF, AMF, FBX, 3DS, VRML/X3D, OBJ, OFF, STL and PLY, structural analysis models in sam-json (`.samjson`) in a text format (`.e2k`) and with their results in IFC (`.ifcfemresults`), and LAS, LAZ, E57, PTS, PTX, PCD and ASCII XYZ point clouds, on the desktop and in the browser.
 - **Several models at once.** **Open** puts a file in a tab of its own beside the open model (several files dropped at once load side by side, each in its tab), **Add** puts another file in the same view (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
-- **Saves as IFCX and IFC.** **Save as** writes IFCX (IFC5) unless you pick another type: the viewer's own project file, with the model by element, its levels, and its floor plans, sections, elevations, sheets and dimensions, which come back when the file is opened again. Any model the viewer opens can also be saved as IFC 4, with storeys, classes, properties and materials.
+- **Saves as IFCX and IFC.** **Save as** writes IFCX (IFC5) unless you pick another type: the viewer's own project file, with the model by element, its levels, and its floor plans, sections, elevations, sheets and dimensions, which come back when the file is opened again. Any model the viewer opens can also be saved as IFC 4, with storeys, classes, properties and materials, or with **Export IFC 4x3** on the File page as IFC 4x3 (IFC4X3_ADD2, the current ISO 16739-1). The viewer writes IFC itself, without an IFC library.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
 - **Measure and cut.** Distances, angles, areas and polygons, a section box and a section plane with filled cuts, and an exploded view.
 - **AI agents can drive it.** An MCP server lets Claude and other agents open files, look around, select and measure, in the window you see.
@@ -204,7 +204,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 | Folder | What is in it |
 |--------|---------------|
 | [`src/`](src/) | The viewer: the window ([`shell.rs`](src/shell.rs)), the app state ([`app.rs`](src/app.rs)), the 3D view ([`viewport/`](src/viewport/)), measuring, sections, the exploded view, and the remote control for the MCP server |
-| [`src/loaders/`](src/loaders/) | One adapter per file format; [`src/export/`](src/export/) writes IFC 4 |
+| [`src/loaders/`](src/loaders/) | One adapter per file format; [`src/export/`](src/export/) writes IFC 4, IFC 4x3 and IFCX |
 | [`src/bin/open-3d-viewer-mcp.rs`](src/bin/open-3d-viewer-mcp.rs) | The MCP server for AI agents |
 | [`vendor/openaec-ui/`](vendor/openaec-ui/), [`assets/b2/`](assets/b2/) | The shared OpenAEC window shell and icons, copied from [OpenAEC Blueprint](https://github.com/OpenAEC-Foundation/OpenAEC-Blueprint) 2026.44.1 |
 | [`packaging/`](packaging/) | The Windows installer, the macOS app bundle, the Linux packages and the Android app ([`packaging/android/`](packaging/android/)) |
@@ -350,7 +350,7 @@ open-3d-viewer [FILE] [--theme light|dark|blueprint|high-contrast-dark|high-cont
                [--product viewer|modeller|validator]
 open-3d-viewer [FILE] --screenshot OUT.png [--size 1440x900] [--mode solid|wireframe|edges] [--view iso|top|front|right]
                [--ortho] [--page workspace|file|settings|shortcuts] [--schedule NAME] [--explode X,Y,Z]
-open-3d-viewer FILE --save-as OUT.ifc
+open-3d-viewer FILE --save-as OUT.ifc [--schema IFC4|IFC4X3]
 open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300] [--throughput]
 ```
 

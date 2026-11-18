@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formaten dashboard</title>
+<style>
+:root {
+  --bg: #f6f5f2;
+  --panel: #ffffff;
+  --ink: #1d1d1b;
+  --muted: #6b6a66;
+  --line: #e3e1db;
+  --track: #ecebe6;
+  --bar: #d97706;
+  --bar-done: #15803d;
+  --note-bg: #fbfaf8;
+  --focus: #d97706;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --panel: #1f1f1d;
+    --ink: #ecebe6;
+    --muted: #9b9a95;
+    --line: #2f2f2c;
+    --track: #2b2b28;
+    --bar: #f59e0b;
+    --bar-done: #22c55e;
+    --note-bg: #1a1a18;
+    --focus: #f59e0b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+header {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 32px 24px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+header p { margin: 4px 0 0; color: var(--muted); }
+
+.total {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.total strong { display: block; font-size: 30px; line-height: 1; }
+.total span { color: var(--muted); font-size: 13px; }
+
+main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 8px 24px 64px;
+}
+
+section { margin-top: 28px; }
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.format {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(180px, 300px) 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.name { font-weight: 600; }
+.name small {
+  display: block;
+  font-weight: 400;
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12.5px;
+}
+.name em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.track {
+  flex: 1;
+  height: 14px;
+  background: var(--track);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0;
+  background: var(--bar);
+  border-radius: 7px;
+  transition: width 0.25s ease;
+}
+.fill.done { background: var(--bar-done); }
+
+.pct {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.pct input {
+  width: 3.4em;
+  padding: 2px 4px;
+  text-align: right;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.pct input:hover { border-color: var(--line); }
+.pct input:focus { outline: none; border-color: var(--focus); }
+.pct input::-webkit-inner-spin-button { opacity: 0.4; }
+
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--note-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+}
+textarea::placeholder { color: var(--muted); }
+textarea:focus { outline: none; border-color: var(--focus); }
+
+footer {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px 40px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.saving {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  text-align: right;
+}
+#status { font-size: 12.5px; color: var(--muted); max-width: 320px; }
+
+.saving button {
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--bar);
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.saving button:hover { filter: brightness(1.08); }
+.saving button[hidden] { display: none; }
+
+footer code { font-size: 12.5px; }
+
+@media (max-width: 640px) {
+  header, main, footer { padding-left: 16px; padding-right: 16px; }
+  .row { grid-template-columns: 1fr; gap: 8px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Open BIM Suite: wat opent er al?</h1>
+    <p>Per bestandstype hoeveel procent van alle mogelijke entiteiten de viewer laat zien, en wat er nog fout gaat.</p>
+  </div>
+  <div class="side">
+    <div class="saving">
+      <button id="save" type="button">Opslaan</button>
+      <span id="status">Nog niet in het bestand opgeslagen.</span>
+    </div>
+    <div class="total"><strong id="total">0%</strong><span>gemiddeld over <span id="count">0</span> bestandstypes</span></div>
+  </div>
+</header>
+
+<main id="list"></main>
+
+<footer>
+  <p>Klik op het percentage om het in te vullen. Alles wordt in dit HTML-bestand zelf bewaard: de eerste keer
+  vraagt Chrome welk bestand (kies deze <code>index.html</code>), daarna slaat elke wijziging zich vanzelf op en kan Opslaan ook altijd.</p>
+</footer>
+
+<!-- The saved percentages and notes; the page writes this block back into its own file. -->
+<script type="application/json" id="data">{
+ "saved": "2026-11-18T18:00:00.000Z",
+ "formats": {
+  ".ifc": {
+   "pct": 70,
+   "note": "Geometrie is vrijwel compleet: IfcMappedItem, IfcBooleanClippingResult, IfcFacetedBrep, IfcAdvancedBrep, extrusies, tessellaties, openingen, grids en IfcAnnotation-curves komen allemaal door. Wat ontbreekt zijn de property sets (IfcPropertySet/IfcElementQuantity, behalve bij ruimtes), classificaties en IfcTextLiteral. Per element zie je alleen IfcType, naam, GlobalId, materiaal en lagen. Getest: buildingSMART Simple-Scene (2x3/4/4.3), ReferenceView wall-with-opening, Duplex, SampleCastle, SampleHouse, Revit ARC/MEP, CubeAdvancedBrep en de Archicad-, Revit- en Tekla-exports."
+  },
+  ".ifczip": {
+   "pct": 70,
+   "note": "Zelfde lezer als .ifc: het eerste .ifc-bestand in het archief wordt geopend, ook als het in een submap staat. Daardoor dezelfde gaten: geen property sets, quantities, classificaties of teksten. Getest met zelfgemaakte zips van SampleHouse en Duplex."
+  },
+  ".ifcx": {
+   "pct": 75,
+   "note": "Meshes, klassen, attributen, materialen en kleuren komen goed door, en point-clouds via points::array/base64 ook. Wat ontbreekt: usd::usdgeom::basiscurves (alignments, wandassen, leidingtracés), pcd::base64-clouds, textures en imports van het web. Getest: IFC5-development hello-wall, domestic-hot-water, PCERT Building-Architecture/Infra-Bridge, Railway simple, ACCA edificius, linear-placement-of-signal, point-cloud en TeklaHouse."
+  },
+  ".rvt": {
+   "pct": 65,
+   "note": "Modelelementen zijn per categorie compleet: wanden, vloeren, vides, families, MEP, trappen, railings, terrein. Daarbij komen views, sheets, schedules, tags en filters. Een Revit 2016-bestand (Vignette-02) opent helemaal niet. Per element zie je alleen categorie, type, familie, niveau en materiaal, niet de instance- en type-parameters. Getest: DynamoRevit-samples (2017 SampleModel, DynamoSample_2025, DuctSegmentFlow, familyInstanceTests, spaceTest, Vignette-02) en Twindo Global_Backcountry."
+  },
+  ".rfa": {
+   "pct": 2,
+   "note": "Familiebestanden openen niet ('no geometry found'). De mesher leest alleen de projectketen, niet de geometrie in de family editor: extrusies, blends, sweeps, FreeFormElements, modeltekst en imports. Getest: DynamoRevit MoreSolids, Solids, withModelText, deflectionPanel en Diagnostic Tripod, plus pyRevit R2D2, AT-AT, B en North Symbol 2020."
+  },
+  ".pln": {
+   "pct": 35,
+   "note": "Wanden met sparingen, vloeren, kolommen, liggers, dakvlakken, morphs en zones worden gelezen. Bibliotheekobjecten (bijna de helft van de elementen: meubels, sanitair, armaturen) zijn alleen dozen. Ramen en deuren zijn alleen gaten, zonder kozijn, glas of blad, en gebogen daken ontbreken. Er zijn geen materiaalkleuren en geen 2D-tekening (lijnen, teksten, maten, arceringen). Getest: Twindo 'Backcountry - Archicad - INT.pln' (AC28) naast zijn eigen IFC-export."
+  },
+  ".pla": {
+   "pct": 30,
+   "note": "Zelfde parser als .pln. De meegepakte bibliotheek (GDL) wordt niet uitgevoerd, dus objecten blijven dozen en ramen en deuren blijven gaten. Archieven zijn vaak honderden MB. Niet apart getest: geschat uit archicad.rs en de .pln-test."
+  },
+  ".ndw": {
+   "pct": 25,
+   "note": "Alleen 3D-lichamen (klasse 0xC6, prisma's en B-reps) en macro's (meubels, ramen, deuren) worden gelezen, met naam en hoeveelheden. Kleuren en materialen ontbreken, en ook alle 2D-elementen: lijnen, teksten, maten, arceringen, symbolen. In een Allplan-teilbild is dat vaak het grootste deel. Geen sample gevonden: geschat uit de code (allplan.rs, spec v0.3)."
+  },
+  ".prj": {
+   "pct": 25,
+   "note": "Een Allplan-projectmap opent als het geheel van zijn teilbilder, met dezelfde beperkingen als .ndw: geen 2D, geen kleuren of materialen, geen layouts (.npl). Geen sample: geschat uit de code."
+  },
+  ".db1": {
+   "pct": 80,
+   "note": "Onderdelen met profielen, platen en beton, wapening, lassen, bouten, grids, controlepunten, views en tekeningen komen allemaal door, met uitgebreide eigenschappen (UDA's, assembly, fase). xslib.db1 en .db2 worden terecht geweigerd. Kleinere gaten: niet-ondersteunde boutgroepen worden overgeslagen en er is geen tekeningdefinitie. Getest: lokale modellen Huis (met eigen IFC-export), Voorbeelden_Gebruikers_Componenten, HOPPER, O3V_Projecthal, Dak & Wand, Offshore en Ankerplan."
+  },
+  ".vwx": {
+   "pct": 70,
+   "note": "3D-objecten, klassen, lagen, records, de IFC-data, lijnwerk, teksten, sheets met viewports, saved views, grids en spaces komen door. Wat nog ontbreekt of zwak is: maatvoering, arceringen als vulling, worksheets en textures. Getest: lokale Avondhof (met eigen IFC-export), Huisje, Tuinontwerp (138 MB) en ladder-testbestanden."
+  },
+  ".sta": {
+   "pct": 65,
+   "note": "Templates gaan door dezelfde vwx-lezer. Ze bevatten vooral resources (stijlen, symbolen, klassen) en weinig geometrie, en symbooldefinities zonder plaatsing worden niet getoond. Geen echte .sta getest: geschat uit de code en lege .vwx-testbestanden."
+  },
+  ".skp": {
+   "pct": 50,
+   "note": "Vlakken, groepen, componenten, tags en materiaalkleuren komen door. Randen en losse lijnen (edges) tekenen niet: 0 lijnen in alle bestanden. Textures worden een gemiddelde kleur, en tekst, maatvoering, scènes, section planes en soft/smooth edges ontbreken. 2 van de 21 bestanden openen niet, en oude textured-bestanden geven maar 2 driehoeken. Getest: de 21 test-models (2021_lc, bathroom-3d, solar-pv, test-kavel, legacy v3-v8 en andere)."
+  },
+  ".3dm": {
+   "pct": 85,
+   "note": "Breps, extrusies, SubD, meshes, curves, teksten, maten, leaders, arceringen, blocks, lagen, materialen, lampen, layouts en clipping planes komen allemaal door, met objecteigenschappen en user text. Kleine gaten: texture-mapping, my_surfaces.3dm (V6) die niets tekent, en limieten op blocks en driehoeken. Getest: 215 bestanden (Referentiemodellen V1-V8, Eigen-testmodellen, test-models/rhino)."
+  },
+  ".vxz": {
+   "pct": 45,
+   "note": "Via vertex.dll (v0.7): meshes per laag met eigenschappen per element (member, panel, type, kwaliteit) en tekeningen met lijnen en teksten. Maten en vullingen in de tekeningen ontbreken, en of alle bewerkingen en sheathing kloppen is onbekend. Geen sample gevonden, dus niet getest: geschat uit vertex.rs."
+  },
+  ".vxm": {
+   "pct": 45,
+   "note": "Zelfde lezer als .vxz (FRAMING.vxm of MODEL.vxm). Tekeningen zitten alleen in het .vxz-project, dus een losse .vxm heeft minder. Niet getest: geen sample."
+  },
+  ".btl": {
+   "pct": 45,
+   "note": "Houtdelen (PART met lengte, hoogte, breedte en positie) worden meshes met eigenschappen. Hoeveel bewerkingen (PROCESSKEY: zaagsneden, keepen, boringen, pen-gat) echt uit het hout gesneden worden is niet geverifieerd. Geen echt BTL-sample gevonden: een zelfgemaakt minimaal bestand werd geweigerd ('not a BTL file')."
+  },
+  ".smc": {
+   "pct": 55,
+   "note": "Modellen, elementen met property sets, vormen (B-rep loops, sweeps, plane-cuts) en issues/slides komen door. Vormen die door een andere vorm gesneden worden tekenen ongesneden. Mapped vormen zonder form vallen weg, de zwaarste modellen boven de driehoekslimiet worden weggelaten en clash-resultaten worden niet getoond. Geen sample gevonden: geschat uit smc/mod.rs, mesh.rs en stream.rs."
+  },
+  ".tbp": {
+   "pct": 60,
+   "note": "Opent elk IFC-model in het pakket, op de plek waar het project het zet, met grids en niveaus. Daardoor dezelfde IFC-gaten (geen psets). BIMsight-notities, markups, links en personen worden niet getoond, en niet-IFC-modellen (DWG, DGN) evenmin. Getest met een zelfgebouwd pakket met SampleHouse en Building-Structural."
+  },
+  ".dwg": {
+   "pct": 5,
+   "note": "Alleen 3DFACE, MESH, polyface/polygon-mesh (ook via INSERT) worden getekend; LINE, LWPOLYLINE, ARC, CIRCLE, TEXT/MTEXT, HATCH, DIMENSION, SPLINE, 3DSOLID (ACIS) en attributen ontbreken, dus gewone 2D-tekeningen geven een foutmelding. Getest: libredwg example_2000/2018/r14 (alleen 3 vlakken van tientallen entiteiten) en sample_2000/2018 (fout)."
+  },
+  ".dxf": {
+   "pct": 5,
+   "note": "Zelfde lezer als DWG: alleen 3DFACE, MESH en polyface/polygon-mesh; de entiteiten die in vrijwel elke DXF staan (LINE, LWPOLYLINE, ARC, CIRCLE, TEXT, MTEXT, HATCH, DIMENSION, INSERT met lijnwerk, ATTRIB) worden overgeslagen en een puur 2D-bestand opent niet. Getest: test-floorplan, ezdxf colors/hatches_1/multi_insert/3dface, libredwg example/sample_2018."
+  },
+  ".dgn": {
+   "pct": 55,
+   "note": "V7 en V8 2D-elementen (lijnen, bogen, vormen, tekst, cellen, 2D lineaire maten) en simpele 3D (kegels, extrusies, B-spline-vlakken) worden getekend met niveau en kleur als eigenschappen; lijnen worden lintjes. Overgeslagen: V8 solids/SmartSolids, meshes, oppervlakken, multilines, tags, niet-lineaire maten, extra modellen en referenties; die zijn juist veel in 3D-infra-modellen. Getest: GDAL smalltest.dgn (V7), test_dgnv8.dgn, knot_oob.dgn."
+  },
+  ".stp": {
+   "pct": 80,
+   "note": "B-rep (vlakke, cilindrische, B-spline-vlakken), assemblages met namen/onderdeelnummers en kleuren werken goed in AP203 en AP214. Niet getoond: PMI/annotaties, draadmodel-curves en punten, gebruikersgedefinieerde eigenschappen/materialen, externe referenties. AP242-tessellatie zit in de code maar is niet met een echt bestand getest. Getest: as1-oc-214, as1_pe_203, KR600 robot, RC Buggy, Ventilator."
+  },
+  ".step": {
+   "pct": 80,
+   "note": "Zelfde lezer als .stp: B-rep, NURBS, assemblages en kleuren werken; PMI, draadmodellen, eigenschappen/materialen en externe referenties ontbreken. Getest: 11752 (groot AP214 onderdeel), splinecage (Rhino-export met splines), red_cube_blue_cylinder (kleuren)."
+  },
+  ".stpz": {
+   "pct": 80,
+   "note": "Gzip- en zip-verpakte STEP gaat door dezelfde lezer en geeft identiek resultaat; zelfde tekorten (PMI, draadmodellen, eigenschappen). Getest met zelf gegzipte as1-oc-214 en Ventilator, geen echte stpz online gevonden."
+  },
+  ".sldprt": {
+   "pct": 20,
+   "note": "Alleen het oude compound-formaat (tot ca. SolidWorks 2014) opent, via de opgeslagen display list met kleuren; bestanden uit nieuwere SolidWorks-versies (de meeste in omloop) geven 'newer SolidWorks container is not read yet'. Ook geen custom properties, materiaal, feature tree of andere configuraties. Getest: 2 Robotis-onderdelen (OK), 2 fluxpad-onderdelen (nieuw formaat, fout), poppy screen.sldprt (fout: geen DisplayLists)."
+  },
+  ".sldasm": {
+   "pct": 25,
+   "note": "Oude assemblages openen met geplaatste onderdelen, componentpad en configuratie; nieuwe container-assemblages falen helemaal, en ontbrekende tessellatie moet uit onderdeelbestanden in dezelfde map komen. Geen mates, custom properties of verborgen/onderdrukte componenten. Getest: Robotis MX-28, poppy head (OK), fluxpad 050_ASSEMBLY (fout)."
+  },
+  ".par": {
+   "pct": 50,
+   "note": "Niet met eigen bestanden getest (geen openbaar voorbeeld te vinden); geschat uit code en de README van solidedge-dll (247 van 257 testbestanden openen). Getekend wordt de display cache met stijlkleuren; exacte Parasolid-geometrie, eigenschappen (bestandseigenschappen, materiaal), feature tree, family-of-parts en andere configuraties ontbreken."
+  },
+  ".psm": {
+   "pct": 45,
+   "note": "Niet getest, geschat uit code: plaatwerkdelen tonen als gewone part via de display cache, maar de uitslag (flat pattern), bouwlichamen en eigenschappen/materiaal worden niet gelezen."
+  },
+  ".asm": {
+   "pct": 40,
+   "note": "Niet getest, geschat uit code: geplaatste onderdelen worden uit bestanden naast de assemblage gehaald of uit de grovere preview; een losse oude assemblage zonder preview en zonder onderdeelbestanden toont niets. Kleuren-overrides van de assemblage, verborgen/onderdrukte delen en eigenschappen ontbreken."
+  },
+  ".blend": {
+   "pct": 50,
+   "note": "Mesh-objecten met plaatsing, materiaalkleuren en eenheden werken (2.78 t/m 4.x). Niet uitgevoerd: modifiers (subdivision, mirror, array, boolean), geometry nodes, collection-instances, curves, tekst en andere niet-mesh-objecten, custom properties en textures. Getest: 5 glTF-Blender-IO-scènes en een lokaal TU Delft-model."
+  },
+  ".fcstd": {
+   "pct": 65,
+   "note": "Zichtbare vaste lichamen (PartDesign, Part, Arch-structuren) worden getrianguleerd met kleur en objecttype. Ontbreken: Draft 2D-objecten (lijnen, tekst, maten), schetsen, App::Link en arrays, Arch IFC-eigenschappen en materialen, binair opgeslagen shapes en TechDraw. Getest: FreeCAD ArchDetail, PartDesignExample, Window_Type, tutorials en f3d-testbestanden."
+  },
+  ".samjson": {
+   "pct": 60,
+   "note": "Knopen, staven (als aslijnen), opleggingen, scharnieren, belastingen en resultaten (snedekrachten, vervormingen, reacties) worden getoond. Constructieve vlakken (platen/wanden/schalen) worden niet getekend en zijn niet aanklikbaar, staven hebben in rust geen profielvolume, en resultaten in sidecar-bestanden (.samr) worden niet geladen. Getest: portal_frame.samjson en nodes_only.samjson."
+  },
+  ".e2k": {
+   "pct": 50,
+   "note": "Frames (balken, kolommen, schoren) met doorsneden, releases, opleggingen en lasten komen goed door. Vloeren en wanden (AREA) worden ingelezen maar niet getekend, en dat is in ETABS-modellen een groot deel. Grids, diafragma's, mass source, design-instellingen en piers/spandrels vallen weg. Getest: 3 echte ETABS-exports (keepTABS: Demo Midrise before.e2k, Hack_v01, Hack_v04)."
+  },
+  ".ifcfemresults": {
+   "pct": 70,
+   "note": "Knopen, staven, opleggingen, releases, belastinggevallen en combinaties, verplaatsingen, reacties, snedekrachtlijnen en (via de OpenFEM-projectpset) profielvolumes en grid worden gelezen. Missen: IfcStructuralSurfaceMember, curve- en vlakverbindingen, vlak-, temperatuur- en niet-constante lijnlasten en de toetsingen. Er zijn geen openbare voorbeelden; getest op de repo-fixture ligger.ifcfemresults."
+  },
+  ".ifcfem": {
+   "pct": 50,
+   "note": "Dezelfde lezer als .ifcfemresults. Een staafmodel zonder resultaten opent wel, maar een algemeen IFC-analysemodel met alleen vlakken (IfcStructuralSurfaceMember) wordt geweigerd ('no structural analysis model'). Zonder de OpenFEM-projectpset zijn er geen profielvolumes en geen grid. Er zijn geen openbare voorbeelden; getest met een staaf-fixture en een plaat-only testbestand."
+  },
+  ".json": {
+   "pct": 50,
+   "note": "Een .json wordt alleen als CityJSON gelezen (zie .cityjson). GeoJSON met de extensie .json, wat veel voorkomt, faalt met 'expected type CityJSON'. Getest: LoD3_Railway.json (ok) en countries.json (GeoJSON, fout)."
+  },
+  ".cityjson": {
+   "pct": 65,
+   "note": "Polygoongeometrie (MultiSurface/Solid/Composite) van de hoogste LoD, attributen, ouder/kind-relaties, materiaalkleuren en CRS-naam komen door. Missen: semantische vlakken (RoofSurface/WallSurface, alleen een laag per objecttype), textures, GeometryInstance (bomen/straatmeubilair via templates; geomtemplate.city.json faalt helemaal) en MultiLineString/MultiPoint. Vienna tekent twee LoD2-geometrieën dubbel. Getest: 3DBAG-tegel, DenHaag_01, Vienna, Ingolstadt, LoD3_Railway en geomtemplate."
+  },
+  ".jsonl": {
+   "pct": 60,
+   "note": "Een CityJSONSeq (header plus features) wordt goed gelezen, met dezelfde beperkingen als .cityjson (geen semantiek, textures of templates). Andere JSON Lines-bestanden (bijvoorbeeld GeoJSONSeq) worden niet herkend. Getest: 3DBAG API-features en Vienna, omgezet naar seq."
+  },
+  ".cityjsonl": {
+   "pct": 65,
+   "note": "CityJSONSeq werkt, ook als de transform uit de header wordt overgenomen. Beperkingen zoals bij .cityjson: geen semantische vlakken, textures, GeometryInstance of lijnen/punten. Getest: 3DBAG API-features (bag.city.jsonl) en DenHaag als seq."
+  },
+  ".gml": {
+   "pct": 60,
+   "note": "Een .gml wordt als CityGML gelezen (zie .citygml). Gebouwen in LoD1-4 komen goed door. Textures/X3DMaterial, ImplicitGeometry (vegetatie, meubilair), curves en xlink-geometrie uit andere objecten vallen weg, en GML-bestanden die geen CityGML zijn (bijvoorbeeld BGT/INSPIRE) worden alleen gedeeltelijk gelezen. Getest: Potsdam_LoD1 en de citygml4j-sets."
+  },
+  ".citygml": {
+   "pct": 65,
+   "note": "CityGML 1/2/3 polygonen en driehoeken per boundary surface als laag (Wall/Roof/Ground, ramen, deuren), hoogste LoD, attributen en generieke attributen komen door. Missen: textures en kleuren (ParameterizedTexture/X3DMaterial, bij Gasometer 1440 textures), ImplicitGeometry (15 bomen in Railway Scene), curves en xlink-hergebruik van geometrie, en er wordt niet herprojecteerd. Getest: lod2_buildings_v3, lod3/lod4_building_v2, lod3_railway_v3, Railway_Scene_LoD3, Gasometer, Potsdam_LoD1."
+  },
+  ".geojson": {
+   "pct": 65,
+   "note": "(Multi)Polygonen als vlakken met gaten, extrusie op hoogte/verdiepingen, lijnen als linten van 0,3 m, properties en simplestyle-kleuren komen door. Punten worden helemaal overgeslagen: een bestand met alleen punten (ne_110m_populated_places) faalt. Lon/lat wordt equirectangulair geprojecteerd, wat over landen of de wereld vervormt. Getest: Natural Earth landen, plaatsen en rivieren, en datasets/geo-countries."
+  },
+  ".shp": {
+   "pct": 80,
+   "note": "Polygonen (2D/Z/M) met gaten en extrusie, polylines als linten, MultiPatch, punten als stippen, .dbf-attributen, codepage en .prj-naam komen door. Punten krijgen geen attributen en zijn niet aanklikbaar, en in de browser wordt alleen de .shp gelezen (zonder .dbf/.prj). Getest: Natural Earth landen, plaatsen en wegen (49k records), en de GDAL multipatch."
+  },
+  ".xml": {
+   "pct": 30,
+   "note": "Een .xml wordt alleen als LandXML gelezen, en dan alleen de TIN-oppervlakken (zie .landxml). Bestanden met alleen alignments of meetpunten (Bentley jan96down.xml, totalopenstation) falen. Andere XML-formaten worden niet herkend."
+  },
+  ".landxml": {
+   "pct": 35,
+   "note": "Alleen TIN-oppervlakken (Surface/Pnts/Faces, met de i=1 verborgen driehoeken) worden getekend. Alignments, profielen, dwarsprofielen/corridors, CgPoints, percelen, leidingnetten (Pipe/Struct), breaklines en PlanFeatures vallen allemaal weg. Getest: 7 landxml.org-voorbeelden (Civil 3D, Carlson, TopoCAD, Bentley) en de totalopenstation-sample."
+  },
+  ".asc": {
+   "pct": 85,
+   "note": "Een ESRI ASCII grid wordt een terreinmesh: xll-corner/center, dx/dy en NODATA worden ondersteund, en boven 6M cellen wordt gesampled. Een .asc met puntentekst wordt als puntenwolk gelezen. Missen: de .prj (CRS), komma als decimaalteken (pixel_per_line_comma.asc faalt), en geïsoleerde losse cellen geven geen driehoeken. Getest: GDAL aaigrid-testbestanden en zelfgemaakte center/punt-bestanden."
+  },
+  ".gltf": {
+   "pct": 65,
+   "note": "Gewone glTF werkt (meshes, nodes met namen, materiaalkleur, puntprimitieven), maar bestanden met KHR_draco_mesh_compression, KHR_meshopt_compression of KHR_mesh_quantization openen helemaal niet (Avocado/Box-Draco, Duck-Quantized, BrainStem-Meshopt). Textures worden alleen een gemiddelde kleur, lijnen en extras (eigenschappen) worden niet gelezen. Getest: Box, Duck, BoxTextured, CesiumMilkTruck plus de Draco-, Quantized- en Meshopt-varianten."
+  },
+  ".glb": {
+   "pct": 60,
+   "note": "Werkt voor DamagedHelmet, Fox, CesiumMan, MorphStressTest, BrainStem en MaterialsVariantsShoe (skins in bindpose). Gecomprimeerde GLB's (Draco/meshopt/quantization, gangbaar bij web- en gltfpack-export) openen niet. EXT_mesh_gpu_instancing wordt genegeerd: SimpleInstancing toont maar 12 driehoeken. Textures worden alleen een gemiddelde tint."
+  },
+  ".usd": {
+   "pct": 70,
+   "note": "Compositie werkt goed: OpenChessSet (references/payloads, 21 meshes, 800k driehoeken) en Teapot/DrawModes, met materiaalnamen. Textures, impliciete vormen (Cube/Sphere/Cylinder), PointInstancer, BasisCurves/Points en customData als eigenschappen ontbreken."
+  },
+  ".usda": {
+   "pct": 70,
+   "note": "McUsd.usda, primvar_interpolation.usda (displayColor per vertex/face) en chess_set.usda werken, met paden en materialen als eigenschappen. Het shaderball-bestand triangulated.usda geeft 'no Mesh prims found' (mesh onder een 'over', dus terecht). Textures, impliciete vormen, PointInstancer en curves worden niet gelezen."
+  },
+  ".usdc": {
+   "pct": 70,
+   "note": "Crate-bestanden lezen goed: SoC-ElephantWithMonochord.usdc en de binaire *_geom.usd van OpenChessSet, met namen, paden en materialen. Ook hier geen textures (meeste usdc-assets zijn getextureerd), geen Cube/Sphere-prims, geen PointInstancer en geen skinning of curves."
+  },
+  ".usdz": {
+   "pct": 60,
+   "note": "CarbonFrameBike (331 onderdelen), McUsd en UsdCookie (238k driehoeken) openen. usdz-bestanden (Apple AR, Reality Composer, fotogrammetrie) leunen sterk op textures, en die worden niet getoond: UsdCookie en McUsd worden effen. Impliciete vormen en PointInstancer ontbreken. De Apple Quick Look-voorbeelden waren niet te downloaden."
+  },
+  ".dae": {
+   "pct": 72,
+   "note": "Driehoeken, polylists en polygons met hiërarchie, namen, SketchUp-tags en diffuse kleuren werken (duck, Cinema4D, earthCylindrical, teapot_instancenodes, regr01). \u003ctristrips>/\u003ctrifans> geven niets (cube_tristrips: 'no geometry found'), lijnen worden niet getekend, en getextureerde materialen worden standaard grijs, wat bij SketchUp-exports veel voorkomt."
+  },
+  ".wrl": {
+   "pct": 55,
+   "note": "IndexedFaceSet en Box/Sphere/Cylinder/Cone met Material, DEF/USE en Transform werken (Wuson, HelloWorld). Extrusion, IndexedLineSet, Text, Inline en PROTO worden niet gelezen, en textures evenmin. test-cube.wrl (alleen IndexedLineSet) geeft daardoor 'no geometry found'."
+  },
+  ".wrz": {
+   "pct": 55,
+   "note": "Gzip wordt goed uitgepakt (Wuson.wrz zelf gegzipt, 3732 driehoeken). Verder dezelfde gaten als .wrl: geen Extrusion, IndexedLineSet, Text, Inline, PROTO of textures."
+  },
+  ".x3d": {
+   "pct": 50,
+   "note": "IndexedFaceSet, QuadSet, ElevationGrid, Box en Material werken (X_ITE Material.x3d: 164 elementen). Veel echte X3D-scènes gebruiken Inline, ProtoInstance, Text, Extrusion, Rectangle2D/Disk2D, ImageTexture, NURBS of HAnim en tonen dan niets: X_ITE IndexedTriangleSet, Transform, Extrusion, ImageTexture en de assimp ComputerKeyboard (Extrusion) geven allemaal 'no geometry found'."
+  },
+  ".x3dv": {
+   "pct": 45,
+   "note": "Zelfde dekking als .x3d (Box, IndexedFaceSet, ElevationGrid en Material werken). Daarbij wordt de inhoud van LayerSet/Layer niet doorlopen: QuadSet.x3dv geeft niets, terwijl de XML-versie wel werkt. Inline, PROTO, Text, Extrusion en textures ontbreken."
+  },
+  ".x3dz": {
+   "pct": 50,
+   "note": "Gegzipte X3D wordt uitgepakt (HelloWorld.x3dz werkt). ComputerKeyboard.x3dz blijft leeg door Extrusion. Verder dezelfde gaten als .x3d (Inline, PROTO, Text, textures)."
+  },
+  ".x3dvz": {
+   "pct": 45,
+   "note": "Gegzipte classic X3D werkt (HelloWorld.x3dvz). Verder dezelfde beperkingen als .x3dv: LayerSet, Inline, PROTO, Text, Extrusion en textures."
+  },
+  ".fbx": {
+   "pct": 72,
+   "note": "Binaire en ASCII-FBX werken met hiërarchie, volledige transformaties, namen, gebruikerseigenschappen en diffuse kleuren (spider, huesitos, phong_cube, cubes_with_mirroring_and_pivot, maxPbr, ASCII box). Textures, NURBS, lijnen, blend shapes en skinning worden niet gelezen (meshes staan in bindpose). transparentTest.fbx faalt met 'broken node record at byte 27'."
+  },
+  ".3ds": {
+   "pct": 75,
+   "note": "Mesh-objecten met namen en diffuse materiaalkleuren werken (fels, test1, cubes_with_alpha, cube_with_diffuse_texture, CameraRollAnim). Textures, smoothing groups en de keyframer worden niet gelezen, dus geen hiërarchie en geen instanties. Eenheden blijven die van het bestand."
+  },
+  ".obj": {
+   "pct": 78,
+   "note": "Geometrie, groepen/objecten als lagen, MTL Kd-kleuren en vertexkleuren werken (WusonOBJ, spider met 19 groepen, cube_usemtl, cube_with_vertexcolors). Groepen zijn echter geen selecteerbare elementen met naam-eigenschap (elements=0), map_Kd-textures worden niet getoond en lijnen (l) worden genegeerd (testline)."
+  },
+  ".stl": {
+   "pct": 95,
+   "note": "ASCII en binair werken (Spider_ascii/binary, 3DSMaxExport, triangle_with_two_solids). Alleen de zeldzame kleurvarianten (VisCAM/Materialise-kleur per facet) en de solid-namen als aparte elementen ontbreken."
+  },
+  ".ply": {
+   "pct": 85,
+   "note": "Meshes (ASCII en binair) met vertexkleuren en puntenwolken met kleur, intensiteit en classificatie werken (Wuson, cube_binary, cube_uv, float-color, pond.0 met 70k punten). Textures (TextureFile/texcoords), edge-elementen en extra vertex-eigenschappen worden niet getoond."
+  },
+  ".3mf": {
+   "pct": 78,
+   "note": "Kern, componenten, basismaterialen, kleurgroepen en productie-componenten werken (box, heartgears, dodeca_chain_loop_color, sphere_logo, box_prod). cube_gears_prod_req (build items met p:path naar andere delen) en beam-lattice pyramid geven 'no geometry found'. Textures, vertexkleuren (alleen de eerste hoek) en Bambu/Prusa-verfkleuren ontbreken."
+  },
+  ".amf": {
+   "pct": 88,
+   "note": "Objecten, volumes, constellaties, materialen en kleuren werken (assimp test1/5/6/9/test_with_mat). Gekromde driehoeksranden, textures, composietmaterialen en kleurformules worden niet gelezen."
+  },
+  ".off": {
+   "pct": 93,
+   "note": "ASCII OFF/COFF/NOFF met polygonen en kleuren werkt (Cube, Wuson). Alleen binaire OFF en 4D-varianten ontbreken, en die zijn zeldzaam. Er is geen naam of hiërarchie, maar het formaat heeft die ook niet."
+  },
+  ".las": {
+   "pct": 86,
+   "note": "Alle geteste LAS 1.2/1.4-bestanden openen: PDRF 1, 3, 6 en 7, met extra bytes en EPSG/WKT (PDAL: autzen_trim, 4_1, 4_6, autzen_trim_7, test1_4, extrabytes en nog 5). XYZ, RGB (8 of 16 bit), intensiteit en classificatie (laag per ASPRS-klasse) worden gebruikt, en CRS/versie/software staan in de info. Niet gebruikt: extra bytes, returninfo, NIR, golfvormen (PDRF 4/5/9/10), GPS-tijd en scanhoek. Punten met de vlag withheld/overlap worden niet weggefilterd."
+  },
+  ".laz": {
+   "pct": 82,
+   "note": "13 van de 15 LAZ-bestanden openen correct, ook LAZ 1.4 PDRF 8 met gelaagde chunks (697k punten, 7 klassen) en COPC (autzen.copc.laz). Het oude LASzip-pointwise-bestand simple-laszip-compressor-version-1.2r0.laz laat de laz-crate in paniek crashen ('Variable-size chunks, but no chunk table'). no-points-1.3.laz (0 punten) geeft 'no geometry'. Verder gelden dezelfde ontbrekende attributen als bij LAS."
+  },
+  ".e57": {
+   "pct": 78,
+   "note": "Cartesisch en sferisch, int19/21/32, float/double, scaled-integer intensiteit, gestructureerde grids en kleur werken (bunnyInt19/32, ColouredCubeFloat, tiny_spherical, structured_grouping, ColourRepresentation). Elke scan wordt een laag op zijn pose. 2D-afbeeldingen (pinhole/sferisch) worden niet gelezen: een bestand met alleen een afbeelding (PinholeImageWithDistortionParameters.e57) geeft 'no geometry found'. Normalen, extensies en ruwe rij/kolom-scangrids worden niet gebruikt."
+  },
+  ".pts": {
+   "pct": 85,
+   "note": "Getest met uit autzen afgeleide PTS-varianten: XYZ, XYZ+I (Leica -2048..2047), XYZ+RGB (6 kolommen), XYZ+I+RGB met CRLF en meerdere scans (elk telregel-blok een eigen laag). Alles opent met kleur of intensiteit. Normalen en extra kolommen worden genegeerd, en PTS heeft geen registratie of transformatie die meegenomen kan worden."
+  },
+  ".ptx": {
+   "pct": 85,
+   "note": "Synthetische PTX-bestanden openen correct: 1 scan met RGB, 1 scan met alleen intensiteit (CRLF) en 2 scans met elk een eigen 4x4-registratiematrix. Punten zonder return (0 0 0) worden weggelaten. Geen echte scanner-PTX gevonden om te testen (GitHub-.ptx-bestanden zijn NVIDIA-assembly). De scannerpositie en -assen uit de header worden niet gebruikt, alleen de matrix, en intensiteit wordt altijd als 0..1 gelezen."
+  },
+  ".pcd": {
+   "pct": 86,
+   "note": "PCL-testbestanden openen: ascii v0.5 (bunny), binary (colored_cloud), binary_compressed met rgba (milk_color, kinect-frame 640x480 georganiseerd, NaN eruit) en intensiteit (lena), en normalen (chef). Normalen, curvature en label worden niet gebruikt, VIEWPOINT wordt niet toegepast en alles komt in één laag. Een PCD zonder x/y/z (brisk_descriptors_gt.pcd met feature-descriptoren) faalt, maar dat is geen puntenwolk."
+  },
+  ".xyz": {
+   "pct": 88,
+   "note": "Kale XYZ, XYZ RGB, XYZ I RGB met tabs, RGB als 0..1 met normalen en de repo-test test-pointcloud.xyz openen allemaal, met kleur uit de waarden geraden. Normalen en extra kolommen worden niet gebruikt. Zonder kleur of intensiteit kleurt de viewer op hoogte."
+  },
+  ".txt": {
+   "pct": 80,
+   "note": "Getest: header met Intensity/Classification (CRLF, laag per klasse), CloudCompare-'//X Y Z R G B Nx Ny Nz', puntkomma met decimale komma's, en de kolomvolgorde R G B X Y Z. Opmetingslijsten met een puntnaam of code-kolom (bijv. 'P2 ... GRND') worden geweigerd als 'not a point cloud'. Normalen en overige scalar fields worden genegeerd."
+  },
+  ".csv": {
+   "pct": 76,
+   "note": "CSV met header (x,y,z,red,green,blue,intensity,classification), zonder header, met puntkomma en quotes/decimale komma, en met een id-kolom plus easting/northing/elevation werken. Een opmeetlijst met puntnaam- en codekolommen (Point,X,Y,Z,Code) faalt. Een id-eerst-CSV zonder header opent met het id als X, dus met verkeerde geometrie. lon/lat worden niet als X/Y herkend en ook niet geprojecteerd."
+  }
+ }
+}</script>
+
+<script>
+// The page as it was loaded, before anything is drawn: what is written back, with new data.
+const SOURCE = "<!doctype html>\n" + document.documentElement.outerHTML;
+
+// Every file type Open BIM Suite claims to open (README, the open_file tool and the loaders on
+// main); "desktop" = only in the desktop app.
+const DESKTOP = ["rvt", "rfa", "prj", "vxz", "vxm", "btl"];
+const GROUPS = [
+  ["BIM en bouw", ["ifc", "ifczip", "ifcx", "rvt", "rfa", "pln", "pla", "ndw", "prj", "db1", "vwx", "sta", "skp", "3dm", "vxz", "vxm", "btl", "smc", "tbp"]],
+  ["CAD en werktuigbouw", ["dwg", "dxf", "dgn", "stp", "step", "stpz", "sldprt", "sldasm", "par", "psm", "asm", "blend", "fcstd"]],
+  ["Constructieve analyse", ["samjson", "e2k", "ifcfemresults", "ifcfem"]],
+  ["GIS en terrein", ["json", "cityjson", "jsonl", "cityjsonl", "gml", "citygml", "geojson", "shp", "xml", "landxml", "asc"]],
+  ["Meshes en uitwisseling", ["gltf", "glb", "usd", "usda", "usdc", "usdz", "dae", "wrl", "wrz", "x3d", "x3dv", "x3dz", "x3dvz", "fbx", "3ds", "obj", "stl", "ply", "3mf", "amf", "off"]],
+  ["Puntenwolken", ["las", "laz", "e57", "pts", "ptx", "pcd", "xyz", "txt", "csv"]],
+];
+
+// Saved data: the block in this file, or the browser's copy when that is newer (typed while the
+// file could not be written). Shape: { saved: ISO time, formats: { name: { pct, note } } }.
+const KEY = "obs-format-dashboard";
+function parse(text) { try { const d = JSON.parse(text); return d && d.formats ? d : null; } catch (e) { return null; } }
+const inFile = parse(document.getElementById("data").textContent);
+let inBrowser = null;
+try { inBrowser = parse(localStorage.getItem(KEY)); } catch (e) {}
+const data = [inFile, inBrowser].filter(Boolean).sort((a, b) => (b.saved || "").localeCompare(a.saved || ""))[0]
+  || { saved: "", formats: {} };
+const state = data.formats;
+
+const statusEl = document.getElementById("status");
+const saveButton = document.getElementById("save");
+let handle = null;      // the file this page writes itself to, once chosen
+let timer = null;
+
+function pageWithData() {
+  const json = JSON.stringify(data, null, 1).replace(/</g, "\\u003c");
+  return SOURCE.replace(/(<script type="application\/json" id="data">)[\s\S]*?(<\/script>)/, (_, open, close) => open + json + close);
+}
+
+async function writeFile() {
+  if (!handle) return false;
+  try {
+    if ((await handle.queryPermission({ mode: "readwrite" })) !== "granted") return false;
+    const out = await handle.createWritable();
+    await out.write(pageWithData());
+    await out.close();
+    statusEl.textContent = "Opgeslagen in " + handle.name + " om " + new Date().toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + ".";
+    return true;
+  } catch (e) {
+    statusEl.textContent = "Opslaan in het bestand lukte niet (" + e.message + "). Klik op Opslaan.";
+    return false;
+  }
+}
+
+function save() {
+  data.saved = new Date().toISOString();
+  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    if (!(await writeFile())) {
+      statusEl.textContent = "Nog niet in het bestand opgeslagen (wel in deze browser). Klik op Opslaan.";
+    }
+  }, 600);
+}
+
+// The chosen file is remembered (IndexedDB), so after a reload one click gives permission again.
+function db() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(KEY, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("handles");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function rememberHandle(h) {
+  try { const d = await db(); d.transaction("handles", "readwrite").objectStore("handles").put(h, "file"); } catch (e) {}
+}
+async function recallHandle() {
+  try {
+    const d = await db();
+    return await new Promise(resolve => {
+      const req = d.transaction("handles").objectStore("handles").get("file");
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (e) { return null; }
+}
+
+saveButton.addEventListener("click", async () => {
+  if (!window.showSaveFilePicker) {
+    // without the File System Access API: download the page with its data
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([pageWithData()], { type: "text/html" }));
+    a.download = "index.html";
+    a.click();
+    statusEl.textContent = "Gedownload; vervang hiermee de oude index.html.";
+    return;
+  }
+  try {
+    if (handle && (await handle.requestPermission({ mode: "readwrite" })) === "granted") {
+      await writeFile();
+      return;
+    }
+    handle = await window.showSaveFilePicker({
+      suggestedName: "index.html",
+      types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
+    });
+    await rememberHandle(handle);
+    await writeFile();
+  } catch (e) {
+    if (e.name !== "AbortError") statusEl.textContent = "Opslaan lukte niet: " + e.message;
+  }
+});
+
+recallHandle().then(async h => {
+  if (!h) return;
+  handle = h;
+  const ok = (await h.queryPermission({ mode: "readwrite" })) === "granted";
+  statusEl.textContent = ok
+    ? "Wijzigingen worden in " + h.name + " opgeslagen."
+    : "Klik op Opslaan om weer in " + h.name + " op te slaan.";
+});
+
+const list = document.getElementById("list");
+
+function showTotal() {
+  const all = GROUPS.flatMap(([, exts]) => exts.map(ext => (state["." + ext] || {}).pct || 0));
+  const avg = all.reduce((a, b) => a + b, 0) / all.length;
+  document.getElementById("total").textContent = Math.round(avg) + "%";
+  document.getElementById("count").textContent = all.length;
+}
+
+for (const [group, exts] of GROUPS) {
+  const section = document.createElement("section");
+  section.innerHTML = `<h2>${group}</h2>`;
+  for (const ext of exts) {
+    const name = "." + ext;
+    const only = DESKTOP.includes(ext) ? "alleen desktop" : "";
+    const item = state[name] || (state[name] = { pct: 0, note: "" });
+    const card = document.createElement("div");
+    card.className = "format";
+    card.innerHTML = `
+      <div class="row">
+        <div class="name">${name}${only ? ` <em>${only}</em>` : ""}</div>
+        <div class="meter">
+          <div class="track"><div class="fill"></div></div>
+          <label class="pct"><input type="number" min="0" max="100" step="1" aria-label="Percentage ${name}">%</label>
+        </div>
+      </div>
+      <textarea rows="1" placeholder="Wat gaat er nog fout bij ${name}?"></textarea>`;
+    const fill = card.querySelector(".fill");
+    const input = card.querySelector("input");
+    const note = card.querySelector("textarea");
+    const draw = () => {
+      const p = Math.max(0, Math.min(100, Number(item.pct) || 0));
+      fill.style.width = p + "%";
+      fill.classList.toggle("done", p >= 100);
+    };
+    input.value = item.pct;
+    note.value = item.note;
+    draw();
+    input.addEventListener("input", () => {
+      item.pct = Math.max(0, Math.min(100, Number(input.value) || 0));
+      draw(); showTotal(); save();
+    });
+    note.addEventListener("input", () => { item.note = note.value; save(); });
+    section.appendChild(card);
+  }
+  list.appendChild(section);
+}
+showTotal();
+</script>
+</body>
+</html>

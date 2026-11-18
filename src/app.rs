@@ -455,6 +455,8 @@ pub enum MenuItem {
 #[derive(Debug, Clone)]
 pub enum Message {
     OpenDialog,
+    /// Choose a model kept as a folder (a Tekla model folder, an Allplan project) to open.
+    OpenFolderDialog,
     AddDialog,
     Open(PathBuf),
     Picked(Option<loaders::Source>),
@@ -1141,6 +1143,26 @@ fn pick_model_task(add: bool) -> Task<Message> {
     )
 }
 
+/// "Open folder": a model kept as a folder, such as a Tekla model folder (desktop only).
+fn pick_folder_task() -> Task<Message> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Task::perform(
+            async move {
+                let dialog = rfd::AsyncFileDialog::new().set_title("Open model folder");
+                let dialog = match crate::managed::work_folder() {
+                    Some(work) => dialog.set_directory(work),
+                    None => dialog,
+                };
+                dialog.pick_folder().await.map(|f| loaders::Source::File(f.path().to_path_buf()))
+            },
+            Message::Picked,
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    Task::none()
+}
+
 /// The file name offered for "Save as": the model's name in the first writer's format.
 fn save_name(model: &Model) -> String {
     let stem = model.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "model".into());
@@ -1746,9 +1768,10 @@ impl App {
             return Task::none();
         }
         // a scan project file or a folder of scans: the scans it lists or holds, one after another
+        // (a folder that is a model of its own, such as a Tekla model folder, opens as that model)
         #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
         if let loaders::Source::File(path) = &source {
-            if path.is_dir() || path.extension().is_some_and(|e| e.eq_ignore_ascii_case(scan_project::PROJECT_EXTENSION)) {
+            if (path.is_dir() && !loaders::opens_folder(path)) || path.extension().is_some_and(|e| e.eq_ignore_ascii_case(scan_project::PROJECT_EXTENSION)) {
                 let open: Vec<PathBuf> = if add { self.models.iter().map(|entry| entry.model.path.clone()).collect() } else { Vec::new() };
                 let found = scan_project::expand(std::slice::from_ref(path), &open);
                 let mut scans = found.files.iter().cloned().map(loaders::Source::File);
@@ -1869,6 +1892,7 @@ impl App {
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::OpenDialog => return pick_model_task(false),
+            Message::OpenFolderDialog => return pick_folder_task(),
             Message::AddDialog => return pick_model_task(true),
             Message::Picked(None) => {}
             Message::AddPicked(None) => {}
@@ -3003,10 +3027,14 @@ impl App {
                 }
             }
         }
-        // the 3D view of the file shown: what it leaves out (its categories, filters, phase and
-        // discipline), and how it draws the rest (colours, halftone, transparency)
+        // the view of the file shown in the 3D view: what it leaves out (a Revit 3D view's
+        // categories, filters, phase and discipline; a Tekla view's filter, plans too), and how it
+        // draws the rest (colours, halftone, transparency)
         let mut looks = Vec::new();
-        let shown_3d = self.active_view.filter(|_| self.active_plan.is_none()).zip(self.model.as_ref()).filter(|(i, m)| m.views.get(*i).is_some_and(|v| v.kind == ViewKind::ThreeD));
+        let shown_3d = self.active_view.filter(|_| self.active_plan.is_none()).zip(self.model.as_ref()).filter(|(i, m)| {
+            let key = crate::model::view3d_key(*i);
+            m.views.get(*i).is_some_and(|v| v.kind == ViewKind::ThreeD) || m.project.switched_off.contains_key(&key) || m.project.looks.contains_key(&key)
+        });
         if let Some((i, model)) = shown_3d {
             let key = crate::model::view3d_key(i);
             let element = |u: usize| match index.owner(u) {

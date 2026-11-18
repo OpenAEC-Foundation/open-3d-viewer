@@ -121,7 +121,7 @@ sldw-read = { git = "https://github.com/OpenAEC-Foundation/solidworks-dll", rev 
 # Solid Edge (.par, .psm, .asm) through the private solidedge-dll library; pure Rust on bytes, so also in the browser
 sedge-read = { git = "https://github.com/OpenAEC-Foundation/solidedge-dll", rev = "04a068e6a06409b8396d0e05a2613d86c3af50c4" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
-threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "cc9297f31dd6fc0b8307134e8325af15981359fb", default-features = false }
+threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "104d9f9fb4cec48633e6e2e2c54893c4c2ac70aa", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -221,4 +221,4 @@ opt-level = 2
 
 [dev-dependencies]
 # The 3dm writer of the Rhino tests
-threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "cc9297f31dd6fc0b8307134e8325af15981359fb" }
+threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "104d9f9fb4cec48633e6e2e2c54893c4c2ac70aa" }

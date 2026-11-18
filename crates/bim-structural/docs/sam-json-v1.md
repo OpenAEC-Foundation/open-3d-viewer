@@ -256,6 +256,21 @@ metre; `frame` `"global"` or `{"member": id}`.
 - `inline`: optional, standard base64 of result blocks by table name (small models). Otherwise
   the blocks come from `sam_result_block` or sidecar files `<name>.<set>.samr`.
 
+A set may also hold `surface_mesh`: the mesh the surfaces were computed on, as plain JSON.
+
+```json
+"surface_mesh": { "points": [[x, y, z], …], "displacements": [[ux, uy, uz], …],
+  "elements": [[0, 1, 5, 4], [1, 2, 5], …], "surface": [id, …], "thickness": [t, …],
+  "fields": [{ "name": "mx", "unit": "N·m/m", "values": […] }] }
+```
+
+- `points` and `displacements`: one of each per mesh node, world metres and metres. A mesh node is
+  not a node of the model.
+- `elements`: three or four mesh nodes each, in order around the element; `surface` and
+  `thickness` give per element the surface member it is of and its thickness.
+- `fields`: any quantity at the mesh nodes, one value per node, in SI units, named as the source
+  names it.
+
 Internal forces use the canonical sign convention above (or are converted, with `mz_sign_was`
 saying from what); reactions are the force on the structure. The producer never computes results
 the source does not hold.

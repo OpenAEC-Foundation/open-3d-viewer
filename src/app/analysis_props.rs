@@ -10,10 +10,10 @@
 //! belongs to the model: switched off in the models list, nothing of it is drawn.
 
 use super::{App, Message, Palette};
-use crate::structural::diagrams::{Change, DeformedAs, Force, Style, Values};
+use crate::structural::diagrams::{Change, DeformedAs, Force, ReactionsAs, Style, Values};
 use bim_structural::{AnalysisModel, ResultFor};
 use iced::widget::text::Wrapping;
-use iced::widget::{checkbox, column, pick_list, row, text, text_input};
+use iced::widget::{checkbox, column, container, pick_list, row, text, text_input};
 use iced::{Center, Element, Length};
 use openaec_ui::Language;
 
@@ -114,7 +114,11 @@ impl App {
         let picked = ways.iter().find(|c| c.0 == Change::DeformedAs(shown.deformed_as)).cloned();
         results = results
             .push(pick(l.text("Vervormd als", "Deformed as"), ways, picked))
-            .push(tick(l.text("Reacties", "Reactions"), shown.reactions, |on| Message::Analysis(Change::ReactionsOn(on))))
+            .push(tick(l.text("Reacties", "Reactions"), shown.reactions, |on| Message::Analysis(Change::ReactionsOn(on))));
+        let ways = vec![Choice(Change::ReactionsAs(ReactionsAs::Resultant), l.text("Resultante", "Resultant").to_string()), Choice(Change::ReactionsAs(ReactionsAs::Components), l.text("Per richting X, Y, Z", "Along X, Y, Z").to_string())];
+        let picked = ways.iter().find(|c| c.0 == Change::ReactionsAs(shown.reactions_as)).cloned();
+        results = results
+            .push(pick(l.text("Reacties als", "Reactions as"), ways, picked))
             .push(
                 row![
                     label(l.text("Schaal", "Scale")),
@@ -129,6 +133,30 @@ impl App {
         let values = vec![Choice(Change::Values(Values::Model), l.text("Grootste van het model", "Largest of the model").to_string()), Choice(Change::Values(Values::Members), l.text("Grootste per staaf", "Largest per member").to_string())];
         let picked = values.iter().find(|c| c.0 == Change::Values(shown.values)).cloned();
         results = results.push(pick(l.text("Waarden bij", "Values at"), values, picked));
+        // the plates: in the colours of a value over their mesh, with what the colours stand for
+        if let Some(mesh) = doc.results.get(shown.set).and_then(|r| r.inline.as_ref()).and_then(|r| r.surface_mesh.as_ref()) {
+            results = results.push(tick(l.text("Platen in kleur", "Plates in colour"), shown.plates, |on| Message::Analysis(Change::PlatesOn(on))));
+            let values: Vec<Choice> = crate::structural::diagrams::plate_values(mesh)
+                .into_iter()
+                .enumerate()
+                .map(|(k, name)| Choice(Change::PlateValue(k as u8), if k == 0 { l.text("Verplaatsing u", "Displacement u").to_string() } else { name }))
+                .collect();
+            let picked = values.get(usize::from(shown.plate_value)).or(values.first()).cloned();
+            results = results.push(pick(l.text("Plaatwaarde", "Plate value"), values, picked)).push(tick(l.text("Net van de platen", "Mesh of the plates"), shown.plate_mesh, |on| Message::Analysis(Change::PlateMeshOn(on))));
+            if shown.plates {
+                let value = crate::structural::diagrams::plate_value(mesh, shown.plate_value);
+                let (low, high) = value.range();
+                const STEPS: usize = 7;
+                let mut legend = column![].spacing(0);
+                for k in (0..STEPS).rev() {
+                    let t = k as f64 / (STEPS - 1) as f64;
+                    let c = crate::structural::diagrams::scale_colour(t);
+                    let swatch = container(text("")).width(22).height(16).style(move |_| container::Style { background: Some(iced::Color::from_rgb8(c[0], c[1], c[2]).into()), ..container::Style::default() });
+                    legend = legend.push(row![swatch, text(value.written(low + (high - low) * t)).size(12).color(p.text_secondary)].spacing(8).align_y(Center));
+                }
+                results = results.push(legend);
+            }
+        }
         Some((visibility.into(), results.into()))
     }
 }
@@ -150,7 +178,7 @@ mod tests {
         let mut app = portal();
         {
             let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
-            for wording in ["VISIBILITY", "Nodes", "Members", "Supports", "Loads of", "RESULTS", "Results of", "Internal force", "Deformed as", "Scale", "Force lines", "Values at"] {
+            for wording in ["VISIBILITY", "Nodes", "Members", "Supports", "Loads of", "RESULTS", "Results of", "Internal force", "Deformed as", "Reactions as", "Scale", "Force lines", "Values at"] {
                 assert!(ui.find(wording).is_ok(), "{wording}");
             }
         }
@@ -160,6 +188,26 @@ mod tests {
         let _ = app.update(Message::Analysis(Change::CaseAt(Some(0))));
         let _ = app.update(Message::Analysis(Change::ForceIs(Some(Force::My))));
         assert_eq!((app.analysis.style, app.analysis.values, app.analysis.loads, app.analysis.force), (Style::Outline, Values::Members, Some(0), Some(Force::My)));
+    }
+
+    #[test]
+    fn a_plate_is_shown_in_colour_with_its_legend() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/bim-structural/tests/fixtures/plate_floor.samjson");
+        let mut app = App::default();
+        app.set_model(std::sync::Arc::new(crate::loaders::load(&path).expect("the floor plate")));
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            for wording in ["Plates in colour", "Plate value", "Mesh of the plates"] {
+                assert!(ui.find(wording).is_ok(), "{wording}");
+            }
+            assert!(ui.find("12.5 kNm/m").is_err(), "no legend until the plates show");
+        }
+        // the bending moment across the short span: 12.5 kNm/m at most, the top of the legend
+        let _ = app.update(Message::Analysis(Change::PlatesOn(true)));
+        let _ = app.update(Message::Analysis(Change::PlateValue(2)));
+        assert!(!app.overlay_faces.is_empty());
+        let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+        assert!(ui.find("12.5 kNm/m").is_ok());
     }
 
     #[test]

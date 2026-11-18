@@ -460,6 +460,10 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
             use crate::structural::diagrams::{Change, Force};
             let change = match word.to_ascii_lowercase().as_str() {
                 "deformed" => Some(Change::Deformed),
+                "plates" => Some(Change::Plates),
+                "plate-mesh" => Some(Change::PlateMeshOn(true)),
+                value if value.starts_with("plate-value-") => value["plate-value-".len()..].parse().ok().map(Change::PlateValue),
+                "reactions-xyz" => Some(Change::ReactionsAs(crate::structural::diagrams::ReactionsAs::Components)),
                 "reactions" => Some(Change::Reactions),
                 "supports" => Some(Change::Supports),
                 "loads" => Some(Change::Loads),

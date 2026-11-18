@@ -24,6 +24,8 @@ pub enum SideTab {
     Layers,
     /// Where the project lies and what lies around it.
     Gis,
+    /// The ground under the project as it was investigated.
+    Geo,
 }
 
 /// Whose layers the Layers tab shows and switches.
@@ -227,11 +229,12 @@ impl App {
                 .style(move |_, s| p.ribbon_button(active, s))
                 .on_press(Message::SideTab(t))
         };
-        let tabs = row![tab(l.text("Eigenschappen", "Properties"), SideTab::Properties), tab(l.text("Lagen", "Layers"), SideTab::Layers), tab("GIS", SideTab::Gis)].spacing(2);
+        let tabs = row![tab(l.text("Eigenschappen", "Properties"), SideTab::Properties), tab(l.text("Lagen", "Layers"), SideTab::Layers), tab("GIS", SideTab::Gis), tab("Geo", SideTab::Geo)].spacing(2);
         let body = match self.side_tab {
             SideTab::Properties => self.properties_tab(p, l),
             SideTab::Layers => self.layers_tab(p, l),
             SideTab::Gis => self.gis_tab(p, l),
+            SideTab::Geo => self.geo_tab(p, l),
         };
         column![tabs, rule::horizontal(1), body].spacing(6).into()
     }

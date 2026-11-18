@@ -18,6 +18,8 @@ const CAPITALS: f32 = 0.72;
 impl Loader for TeklaLoader {
     fn name(&self) -> &'static str { "Tekla Structures" }
     fn extensions(&self) -> &'static [&'static str] { &["db1"] }
+    /// A Tekla model is a folder holding its DB1 with its catalogues and drawings.
+    fn opens_folder(&self, folder: &std::path::Path) -> bool { tekla_read::model_db1(folder).is_some() }
     fn load(&self, source: &Source) -> Result<Vec<Layer>, String> {
         self.load_with(source, &Progress::default()).map(|loaded| loaded.layers)
     }
@@ -25,7 +27,8 @@ impl Loader for TeklaLoader {
         progress.set(Phase::Read);
         // Native projects keep the profile and bolt catalogues beside their DB1, and their
         // drawings in its folder.
-        let folder = source.path().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
+        // (opened as its folder: that folder)
+        let folder = source.path().and_then(|p| if p.is_dir() { Some(p) } else { p.parent() }).map(std::path::Path::to_path_buf);
         let mut document = if let Some(path) = source.path() {
             tekla_read::read_path(path)?
         } else {
@@ -39,7 +42,15 @@ impl Loader for TeklaLoader {
         let (levels, grids) = levels_and_grids(&document.grids);
         project.levels = levels;
         project.grids = grids;
-        let views: Vec<SavedView> = document.views.iter().filter_map(|v| saved_view(v, &project.levels)).collect();
+        let mut views: Vec<SavedView> = Vec::new();
+        for v in &document.views {
+            let Some(view) = saved_view(v, &project.levels) else { continue };
+            // what its filter leaves out, as the file's own 3D views do
+            if !v.hidden.is_empty() {
+                project.switched_off.insert(crate::model::view3d_key(views.len()), v.hidden.iter().copied().collect());
+            }
+            views.push(view);
+        }
         if !views.is_empty() {
             project.info.push(("Tekla model views".into(), views.len().to_string()));
         }
@@ -368,7 +379,7 @@ mod tests {
     }
 
     fn view(name: &str, frame: [[f64; 3]; 4], display: [[f64; 3]; 3], depth: [f64; 2], work: [[f64; 3]; 2]) -> ModelView {
-        ModelView { id: 1, name: name.into(), frame, display, depth_up_mm: depth[0], depth_down_mm: depth[1], work_area_mm: work, angles_deg: [0.0, 0.0], properties: "standard".into() }
+        ModelView { id: 1, name: name.into(), frame, display, depth_up_mm: depth[0], depth_down_mm: depth[1], work_area_mm: work, angles_deg: [0.0, 0.0], properties: "standard".into(), filter: String::new(), hidden: Vec::new() }
     }
 
     const AXES: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];

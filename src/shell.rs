@@ -3422,6 +3422,7 @@ mod tests {
             ("country-de", LibrariesMessage::Country(Country::Germany)),
             ("company", LibrariesMessage::Source(Source::Company)),
             ("project", LibrariesMessage::Source(Source::Project)),
+            ("search", LibrariesMessage::Search("beton 2".into())),
         ];
         for (name, show) in shots {
             let mut studio = Studio::new(App::default());

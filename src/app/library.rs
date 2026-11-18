@@ -359,7 +359,7 @@ impl App {
         }
 
         // linear types, by role
-        body = body.push(header(l.text("Lijntypen", "Linear types").into(), lib.linear_types.len(), Group::Linear));
+        body = body.push(header(l.text("Staaftypen", "Linear types").into(), lib.linear_types.len(), Group::Linear));
         if open(Group::Linear) {
             for role in LinearRole::ALL {
                 for (id, label) in lib.linear_names(role, lg) {
@@ -420,14 +420,14 @@ fn small<'a>(s: String, p: Palette) -> Element<'a, Message> {
 }
 
 /// A material's hatch (NEN 47) on a square, and its key.
-fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
+pub(super) fn material_detail<'a>(p: Palette, m: &Material) -> Element<'a, Message> {
     let sample = Section { bands: vec![(1.0, m.hatch, m.colour)], depth: 1.0, line: p.text };
     column![canvas_widget(sample).width(Fill).height(60), small(m.key.clone(), p)].spacing(4).into()
 }
 
 /// A build-up drawn as a section through its layers, the exterior (or the top) at the top, and
 /// its layers listed.
-fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &BuildUp) -> Element<'a, Message> {
+pub(super) fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &BuildUp) -> Element<'a, Message> {
     let colour = |key: &str| lib.material(key).map_or([175, 182, 195], |m| m.colour);
     let hatch = |key: &str| lib.material(key).map_or(HatchKind::Generic, |m| m.hatch);
     let bands = b.layers.iter().map(|layer| (layer.thickness, hatch(&layer.material), colour(&layer.material))).collect();
@@ -454,7 +454,7 @@ fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &BuildUp) -> El
 
 /// A system type drawn as its face, a few bays and rows of it as the kernel generates them, with a
 /// section through its layers when it has any, and its grid, members, panels and layers listed.
-fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> Element<'a, Message> {
+pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> Element<'a, Message> {
     let colour = |key: &str| lib.material(key).map_or([175, 182, 195], |m| m.colour);
     let material = |key: &str| lib.material(key).map_or(key.to_string(), |m| m.name(lang(l)).to_string());
     let line = |key: &str, what: String| -> Element<'a, Message> {
@@ -584,7 +584,7 @@ fn system_section(t: &SystemType, lib: &Library, line: Color) -> Section {
 }
 
 /// A profile drawn as its outline, with its sizes, area and second moments.
-fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&'static str>) -> Element<'a, Message> {
+pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&'static str>) -> Element<'a, Message> {
     let colour = material.map_or([95, 100, 110], |m| m.colour);
     let rings = shape.rings(1e-4).unwrap_or_default();
     let size = shape.size();

@@ -1204,6 +1204,15 @@
     "In line widths: dash, gap, dash, gap. Empty is a continuous line.": "W grubościach linii: kreska, przerwa, kreska, przerwa. Puste to linia ciągła.",
     "Width (mm)": "Szerokość (mm)",
     "Height (mm)": "Wysokość (mm)",
-    "Not taken: the standard would no longer hold together.": "Nie przyjęto: standard przestałby być spójny."
+    "Not taken: the standard would no longer hold together.": "Nie przyjęto: standard przestałby być spójny.",
+    "Search the libraries…": "Szukaj w bibliotekach…",
+    "Search results": "Wyniki wyszukiwania",
+    "Nothing found.": "Nic nie znaleziono.",
+    "A scale more: 1:25": "Kolejna skala: 1:25",
+    "+ Line style": "+ Styl linii",
+    "+ Line weight": "+ Grubość linii",
+    "+ Text style": "+ Styl tekstu",
+    "no kind of drawing": "żaden rodzaj rysunku",
+    "Used by": "Używane przez"
   }
 }

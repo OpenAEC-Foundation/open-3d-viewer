@@ -1204,6 +1204,15 @@
     "In line widths: dash, gap, dash, gap. Empty is a continuous line.": "En largeurs de trait : trait, espace, trait, espace. Vide donne un trait continu.",
     "Width (mm)": "Largeur (mm)",
     "Height (mm)": "Hauteur (mm)",
-    "Not taken: the standard would no longer hold together.": "Non retenu : la norme ne serait plus cohérente."
+    "Not taken: the standard would no longer hold together.": "Non retenu : la norme ne serait plus cohérente.",
+    "Search the libraries…": "Rechercher dans les bibliothèques…",
+    "Search results": "Résultats de la recherche",
+    "Nothing found.": "Rien trouvé.",
+    "A scale more: 1:25": "Une échelle de plus : 1:25",
+    "+ Line style": "+ Style de ligne",
+    "+ Line weight": "+ Épaisseur de trait",
+    "+ Text style": "+ Style de texte",
+    "no kind of drawing": "aucun type de dessin",
+    "Used by": "Utilisé par"
   }
 }

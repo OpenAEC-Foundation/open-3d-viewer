@@ -1204,6 +1204,15 @@
     "In line widths: dash, gap, dash, gap. Empty is a continuous line.": "En grosores de línea: trazo, hueco, trazo, hueco. Vacío es una línea continua.",
     "Width (mm)": "Anchura (mm)",
     "Height (mm)": "Altura (mm)",
-    "Not taken: the standard would no longer hold together.": "No aceptado: la norma dejaría de ser coherente."
+    "Not taken: the standard would no longer hold together.": "No aceptado: la norma dejaría de ser coherente.",
+    "Search the libraries…": "Buscar en las bibliotecas…",
+    "Search results": "Resultados de la búsqueda",
+    "Nothing found.": "No se ha encontrado nada.",
+    "A scale more: 1:25": "Otra escala: 1:25",
+    "+ Line style": "+ Estilo de línea",
+    "+ Line weight": "+ Grosor de línea",
+    "+ Text style": "+ Estilo de texto",
+    "no kind of drawing": "ningún tipo de plano",
+    "Used by": "Usado por"
   }
 }

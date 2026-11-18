@@ -1204,6 +1204,15 @@
     "In line widths: dash, gap, dash, gap. Empty is a continuous line.": "Çizgi kalınlığı cinsinden: çizgi, boşluk, çizgi, boşluk. Boş bırakılırsa sürekli çizgi olur.",
     "Width (mm)": "Genişlik (mm)",
     "Height (mm)": "Yükseklik (mm)",
-    "Not taken: the standard would no longer hold together.": "Kabul edilmedi: standart artık tutarlı olmazdı."
+    "Not taken: the standard would no longer hold together.": "Kabul edilmedi: standart artık tutarlı olmazdı.",
+    "Search the libraries…": "Kütüphanelerde ara…",
+    "Search results": "Arama sonuçları",
+    "Nothing found.": "Hiçbir şey bulunamadı.",
+    "A scale more: 1:25": "Bir ölçek daha: 1:25",
+    "+ Line style": "+ Çizgi stili",
+    "+ Line weight": "+ Çizgi kalınlığı",
+    "+ Text style": "+ Metin stili",
+    "no kind of drawing": "hiçbir çizim türü",
+    "Used by": "Kullanan"
   }
 }

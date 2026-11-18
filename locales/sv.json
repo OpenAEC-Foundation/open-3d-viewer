@@ -1204,6 +1204,15 @@
     "In line widths: dash, gap, dash, gap. Empty is a continuous line.": "I linjebredder: streck, mellanrum, streck, mellanrum. Tomt är en heldragen linje.",
     "Width (mm)": "Bredd (mm)",
     "Height (mm)": "Höjd (mm)",
-    "Not taken: the standard would no longer hold together.": "Inte infört: standarden skulle inte längre hänga ihop."
+    "Not taken: the standard would no longer hold together.": "Inte infört: standarden skulle inte längre hänga ihop.",
+    "Search the libraries…": "Sök i biblioteken…",
+    "Search results": "Sökresultat",
+    "Nothing found.": "Inget hittades.",
+    "A scale more: 1:25": "En skala till: 1:25",
+    "+ Line style": "+ Linjestil",
+    "+ Line weight": "+ Linjetjocklek",
+    "+ Text style": "+ Textstil",
+    "no kind of drawing": "ingen ritningstyp",
+    "Used by": "Används av"
   }
 }

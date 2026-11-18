@@ -7,7 +7,7 @@
 
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
-use bim_library::drawing::{self, scale_text, Discipline, DrawingKind, Origin, Standard, View};
+use bim_library::drawing::{self, scale_text, Discipline, DrawingKind, LineStyle, Origin, Pen, Standard, TextStyle, View};
 use bim_library::{Lang, LibraryError, Names};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, LineDash, Path, Stroke};
@@ -24,6 +24,16 @@ pub enum Setting {
     LineStyle(String),
     Pen(String),
     TextStyle(String),
+    /// A scale, as 1 to this.
+    Scale(u32),
+}
+
+/// A kind of setting one more can be added of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    LineStyle,
+    Pen,
+    TextStyle,
 }
 
 /// A field of a picked setting.
@@ -65,7 +75,13 @@ pub enum StandardMessage {
     Scale(u32),
     Hatched(bool),
     AddKind,
-    /// The picked kind of drawing leaves the standard.
+    /// A line style, a pen or a text style more, to be set after.
+    Add(Part),
+    /// Typed as a scale to add: "1:25".
+    ScaleTyped(String),
+    /// Enter in the field of a scale to add.
+    AddScale,
+    /// What is picked leaves the standard, unless a kind of drawing still uses it.
     Remove,
 }
 
@@ -75,6 +91,8 @@ pub struct StandardView {
     pub picked: Option<Setting>,
     pub draft: Option<(Field, String, Lang)>,
     pub refused: Option<String>,
+    /// What is typed as a scale to add.
+    pub scale: String,
 }
 
 /// A number as typed, with a decimal point or comma.
@@ -159,6 +177,8 @@ pub fn set(standard: &mut Standard, picked: &Setting, field: Field, value: &str,
             style.height = number(value).ok_or(LibraryError::NotPositive)?;
             style.names = Names::same(&format!("{} mm", style.height));
         }
+        // a scale is its number: there is nothing to set of it
+        Setting::Scale(_) => return Err(unknown()),
     }
     next.check()?;
     *standard = next;
@@ -173,6 +193,57 @@ pub fn toggle_scale(standard: &mut Standard, key: &str, scale: u32) -> Result<()
         kind.scales.retain(|s| *s != scale);
     } else {
         kind.scales.push(scale);
+    }
+    next.check()?;
+    *standard = next;
+    Ok(())
+}
+
+/// Adds a scale typed as "1:25" or "25"; the scales stay in order.
+pub fn add_scale(standard: &mut Standard, typed: &str) -> Result<u32, LibraryError> {
+    let scale: u32 = typed.trim().trim_start_matches("1:").trim().parse().map_err(|_| LibraryError::UnknownSetting(typed.trim().to_string()))?;
+    if scale == 0 {
+        return Err(LibraryError::NotPositive);
+    }
+    if standard.scales.contains(&scale) {
+        return Err(LibraryError::Duplicate(scale_text(scale)));
+    }
+    standard.scales.push(scale);
+    standard.scales.sort_unstable();
+    Ok(scale)
+}
+
+/// A line style, a pen or a text style more, with a first value to change; what it is now.
+pub fn add(standard: &mut Standard, part: Part) -> Setting {
+    let fresh = |prefix: &str, taken: &[&str]| (1..).map(|n| format!("{prefix}-{n}")).find(|key| !taken.contains(&key.as_str())).unwrap_or_default();
+    match part {
+        Part::LineStyle => {
+            let key = fresh("style", &standard.line_styles.iter().map(|s| s.key.as_str()).collect::<Vec<_>>());
+            standard.line_styles.push(LineStyle { key: key.clone(), names: Names::new("nieuwe lijnstijl", "new line style", "neuer Linienstil", "nouveau style de ligne"), dashes: vec![12.0, 3.0] });
+            Setting::LineStyle(key)
+        }
+        Part::Pen => {
+            let key = fresh("pen", &standard.pens.iter().map(|p| p.key.as_str()).collect::<Vec<_>>());
+            standard.pens.push(Pen { key: key.clone(), names: Names::same("0.5 mm"), width: 0.5 });
+            Setting::Pen(key)
+        }
+        Part::TextStyle => {
+            let key = fresh("text", &standard.text_styles.iter().map(|t| t.key.as_str()).collect::<Vec<_>>());
+            standard.text_styles.push(TextStyle { key: key.clone(), names: Names::same("2.5 mm"), height: 2.5 });
+            Setting::TextStyle(key)
+        }
+    }
+}
+
+/// Takes `setting` out of the standard; refused while a kind of drawing still uses it.
+pub fn remove(standard: &mut Standard, setting: &Setting) -> Result<(), LibraryError> {
+    let mut next = standard.clone();
+    match setting {
+        Setting::Kind(key) => next.kinds.retain(|k| &k.key != key),
+        Setting::LineStyle(key) => next.line_styles.retain(|s| &s.key != key),
+        Setting::Pen(key) => next.pens.retain(|p| &p.key != key),
+        Setting::TextStyle(key) => next.text_styles.retain(|t| &t.key != key),
+        Setting::Scale(scale) => next.scales.retain(|s| s != scale),
     }
     next.check()?;
     *standard = next;
@@ -273,10 +344,29 @@ impl App {
                 }
                 return Task::none();
             }
+            StandardMessage::Add(part) => {
+                let added = add(&mut self.standard, part);
+                self.standard_view = StandardView { picked: Some(added), ..StandardView::default() };
+                return Task::none();
+            }
+            StandardMessage::ScaleTyped(typed) => {
+                self.standard_view.scale = typed;
+                return Task::none();
+            }
+            StandardMessage::AddScale => {
+                let typed = self.standard_view.scale.clone();
+                match add_scale(&mut self.standard, &typed) {
+                    Ok(scale) => self.standard_view = StandardView { picked: Some(Setting::Scale(scale)), ..StandardView::default() },
+                    Err(why) => self.standard_view.refused = Some(why.to_string()),
+                }
+                return Task::none();
+            }
             StandardMessage::Remove => {
-                if let Some(Setting::Kind(key)) = &picked {
-                    self.standard.kinds.retain(|k| &k.key != key);
-                    self.standard_view = StandardView::default();
+                if let Some(picked) = &picked {
+                    match remove(&mut self.standard, picked) {
+                        Ok(()) => self.standard_view = StandardView::default(),
+                        Err(why) => self.standard_view.refused = Some(why.to_string()),
+                    }
                 }
                 return Task::none();
             }
@@ -352,11 +442,23 @@ impl App {
 
         // the settings the kinds pick from, each a list of its own
         let sample = |dashes: &[f64], width: f64| -> Element<'_, StandardMessage> { canvas_widget(LineSample::new(dashes, width, p.text)).width(96).height(12).into() };
-        let scales = standard.scales.iter().map(|s| scale_text(*s)).collect::<Vec<_>>().join("  ");
+        let scales = row(standard.scales.iter().map(|&scale| {
+            let on = *picked == Some(Setting::Scale(scale));
+            button(text(scale_text(scale)).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }))
+                .padding([2, 6])
+                .style(move |_, s| if on { p.ribbon_button(true, s) } else { p.row_button(s) })
+                .on_press(StandardMessage::Pick(Setting::Scale(scale)))
+                .into()
+        }))
+        .spacing(2)
+        .wrap();
+        let name = l.text("Schaal erbij: 1:25", "A scale more: 1:25");
+        let scale_more = openaec_ui::design::a11y::named(text_input(name, &self.standard_view.scale).on_input(StandardMessage::ScaleTyped).on_submit(StandardMessage::AddScale).size(12).padding([2, 6]), openaec_ui::design::a11y::Role::TextField, name);
         let scales_card = framed(
             column![
                 row![text(l.text("Schalen", "Scales")).size(13).font(FONT_BOLD).color(p.text), Space::new().width(Fill), text(standard.scales.len().to_string()).size(12).color(p.text_secondary)].align_y(Center),
-                text(scales).size(12).color(p.text_secondary).wrapping(Wrapping::Word),
+                scales,
+                scale_more,
                 text(format!("{}: {}", l.text("Eerste blad", "First sheet"), standard.first_sheet)).size(12).color(p.text_secondary),
             ]
             .spacing(6)
@@ -364,11 +466,12 @@ impl App {
             p,
             Length::Fixed(250.0),
         );
+        let more = |label: &'static str, part: Part| -> Element<'_, StandardMessage> { button(text(label).size(12).color(p.accent)).padding([3, 6]).style(move |_, s| p.row_button(s)).on_press(StandardMessage::Add(part)).into() };
         let settings = row![
             scales_card,
-            list(p, l.text("Lijnstijlen", "Line styles"), standard.line_styles.iter().map(|s| item(p, picked, s.names.get(lang).to_string(), Some(sample(&s.dashes, 0.35)), Setting::LineStyle(s.key.clone()))).collect()),
-            list(p, l.text("Lijndiktes", "Line weights"), standard.pens.iter().map(|pen| item(p, picked, pen.names.get(lang).to_string(), Some(sample(&[], pen.width)), Setting::Pen(pen.key.clone()))).collect()),
-            list(p, l.text("Tekststijlen", "Text styles"), standard.text_styles.iter().map(|t| item(p, picked, t.names.get(lang).to_string(), None, Setting::TextStyle(t.key.clone()))).collect()),
+            list(p, l.text("Lijnstijlen", "Line styles"), standard.line_styles.iter().map(|s| item(p, picked, s.names.get(lang).to_string(), Some(sample(&s.dashes, 0.35)), Setting::LineStyle(s.key.clone()))).collect(), more(l.text("+ Lijnstijl", "+ Line style"), Part::LineStyle)),
+            list(p, l.text("Lijndiktes", "Line weights"), standard.pens.iter().map(|pen| item(p, picked, pen.names.get(lang).to_string(), Some(sample(&[], pen.width)), Setting::Pen(pen.key.clone()))).collect(), more(l.text("+ Lijndikte", "+ Line weight"), Part::Pen)),
+            list(p, l.text("Tekststijlen", "Text styles"), standard.text_styles.iter().map(|t| item(p, picked, t.names.get(lang).to_string(), None, Setting::TextStyle(t.key.clone()))).collect(), more(l.text("+ Tekststijl", "+ Text style"), Part::TextStyle)),
         ]
         .spacing(10)
         .wrap();
@@ -381,9 +484,13 @@ impl App {
         let lang = super::library::lang(l);
         let standard = &self.standard;
         let view = &self.standard_view;
+        let refused = view.refused.as_ref().map(|why| {
+            let refused = l.text("Niet overgenomen: de standaard zou dan niet meer kloppen.", "Not taken: the standard would no longer hold together.");
+            text(format!("{refused} ({why})")).size(11).color(p.accent).wrapping(Wrapping::Word)
+        });
         let Some(picked) = &view.picked else {
             let hint = l.text("Kies een tekeningsoort of een instelling op de pagina om haar in te stellen.", "Pick a kind of drawing or a setting on the page to set it up.");
-            return container(text(hint).size(12).color(p.text_muted).wrapping(Wrapping::Word)).padding(8).into();
+            return container(column![text(hint).size(12).color(p.text_muted).wrapping(Wrapping::Word)].push(refused).spacing(8)).padding(8).into();
         };
         let typed = |field: Field, value: String| -> Element<'_, StandardMessage> {
             let shown = match &view.draft {
@@ -428,8 +535,7 @@ impl App {
                     .push(labelled(p, l.text("Verborgen", "Hidden"), pick(Field::Hidden, styles, &kind.hidden)))
                     .push(labelled(p, l.text("Tekst", "Text"), pick(Field::Text, texts, &kind.text)))
                     .push(checkbox(kind.hatched).label(l.text("Doorgesneden materiaal arceren", "Hatch what is cut")).on_toggle(StandardMessage::Hatched).size(14).text_size(12))
-                    .push(labelled(p, l.text("Herkomst", "Origin"), text(origin_name(kind.origin, l)).size(12).color(p.text_secondary).into()))
-                    .push(button(text(l.text("Verwijderen", "Remove")).size(12).color(p.text_secondary)).padding([3, 8]).style(move |_, s| p.row_button(s)).on_press(StandardMessage::Remove));
+                    .push(labelled(p, l.text("Herkomst", "Origin"), text(origin_name(kind.origin, l)).size(12).color(p.text_secondary).into()));
             }
             Setting::LineStyle(key) => {
                 let Some(style) = standard.line_style(key) else { return Space::new().into() };
@@ -450,11 +556,15 @@ impl App {
                 title = style.names.get(lang).to_string();
                 fields = fields.push(labelled(p, l.text("Hoogte (mm)", "Height (mm)"), typed(Field::Height, style.height.to_string())));
             }
+            Setting::Scale(scale) => {
+                title = scale_text(*scale);
+                // the kinds of drawing made at it: while there are any, it stays
+                let users: Vec<&str> = standard.kinds.iter().filter(|k| k.scales.contains(scale)).map(|k| k.names.get(lang)).collect();
+                let users = if users.is_empty() { l.text("geen tekeningsoort", "no kind of drawing").to_string() } else { users.join(", ") };
+                fields = fields.push(labelled(p, l.text("Gebruikt door", "Used by"), text(users).size(12).color(p.text_secondary).wrapping(Wrapping::Word).into()));
+            }
         }
-        if let Some(why) = &view.refused {
-            let refused = l.text("Niet overgenomen: de standaard zou dan niet meer kloppen.", "Not taken: the standard would no longer hold together.");
-            fields = fields.push(text(format!("{refused} ({why})")).size(11).color(p.accent).wrapping(Wrapping::Word));
-        }
+        fields = fields.push(button(text(l.text("Verwijderen", "Remove")).size(12).color(p.text_secondary)).padding([3, 8]).style(move |_, s| p.row_button(s)).on_press(StandardMessage::Remove)).push(refused);
         let pane = column![text(title).size(14).font(FONT_BOLD).color(p.text), fields].spacing(10);
         Element::from(container(pane).padding(8)).map(Message::Standard)
     }
@@ -469,15 +579,17 @@ fn item<'a>(p: Palette, picked: &Option<Setting>, label: String, sample: Option<
 }
 
 /// A list of settings in its frame, with its title and how many there are.
-fn list<'a>(p: Palette, title: &'static str, rows: Vec<Element<'a, StandardMessage>>) -> Element<'a, StandardMessage> {
+fn list<'a>(p: Palette, title: &'static str, rows: Vec<Element<'a, StandardMessage>>, more: Element<'a, StandardMessage>) -> Element<'a, StandardMessage> {
     let count = rows.len();
     let head = row![text(title).size(13).font(FONT_BOLD).color(p.text), Space::new().width(Fill), text(count.to_string()).size(12).color(p.text_secondary)].align_y(Center);
-    framed(column![head, Column::with_children(rows).spacing(1)].spacing(6).into(), p, Length::Fixed(250.0))
+    framed(column![head, Column::with_children(rows).push(more).spacing(1)].spacing(6).into(), p, Length::Fixed(250.0))
 }
 
 /// A field of the right pane: its label, and what sets it.
 fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, StandardMessage>) -> Element<'a, StandardMessage> {
-    row![text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)), container(control).width(Length::FillPortion(3))].spacing(8).align_y(Center).into()
+    let field = row![text(label).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)), container(control).width(Length::FillPortion(3))].spacing(8).align_y(Center);
+    // the label names the field beside it
+    openaec_ui::design::a11y::named(field, openaec_ui::design::a11y::Role::Label, label)
 }
 
 /// A part of the page in a frame of its own.
@@ -609,6 +721,45 @@ mod tests {
         assert!(drawing::held(&nodes[..1]).is_none());
         let _ = app.standard_update(StandardMessage::Remove);
         assert_eq!((app.standard.kinds.len(), app.standard_view.picked.is_none()), (kinds, true));
+    }
+
+    #[test]
+    fn settings_are_added_and_removed_unless_a_kind_uses_them() {
+        let mut app = App::default();
+        // a scale more, typed with or without "1:"; it takes its place in the order
+        let _ = app.standard_update(StandardMessage::ScaleTyped("1:25".into()));
+        let _ = app.standard_update(StandardMessage::AddScale);
+        assert_eq!(app.standard.scales, [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000]);
+        assert_eq!(app.standard_view.picked, Some(Setting::Scale(25)));
+        let _ = app.standard_update(StandardMessage::ScaleTyped("25".into()));
+        let _ = app.standard_update(StandardMessage::AddScale);
+        assert!(app.standard_view.refused.is_some(), "it is there already");
+        // no kind is drawn at it: it can go again; 1:50 cannot, floor plans are drawn at it
+        let _ = app.standard_update(StandardMessage::Pick(Setting::Scale(25)));
+        let _ = app.standard_update(StandardMessage::Remove);
+        assert!(!app.standard.scales.contains(&25) && app.standard_view.picked.is_none());
+        let _ = app.standard_update(StandardMessage::Pick(Setting::Scale(50)));
+        let _ = app.standard_update(StandardMessage::Remove);
+        assert!(app.standard.scales.contains(&50) && app.standard_view.refused.is_some());
+        // a line style, a pen and a text style more: each is picked, to be set
+        let (styles, pens, texts) = (app.standard.line_styles.len(), app.standard.pens.len(), app.standard.text_styles.len());
+        let _ = app.standard_update(StandardMessage::Add(Part::LineStyle));
+        assert_eq!(app.standard_view.picked, Some(Setting::LineStyle("style-1".into())));
+        let _ = app.standard_update(StandardMessage::Typed(Field::Name, "erfgrens".into(), Lang::Nl));
+        let _ = app.standard_update(StandardMessage::Add(Part::Pen));
+        let _ = app.standard_update(StandardMessage::Typed(Field::Width, "1.4".into(), Lang::Nl));
+        let _ = app.standard_update(StandardMessage::Done);
+        let _ = app.standard_update(StandardMessage::Add(Part::TextStyle));
+        assert_eq!((app.standard.line_styles.len(), app.standard.pens.len(), app.standard.text_styles.len()), (styles + 1, pens + 1, texts + 1));
+        assert_eq!((app.standard.line_style("style-1").unwrap().names.nl.as_str(), app.standard.pen("pen-1").unwrap().width), ("erfgrens", 1.4));
+        assert_eq!(app.standard.check(), Ok(()));
+        // the new pen goes again; the pen floor plans are cut with does not
+        let _ = app.standard_update(StandardMessage::Pick(Setting::Pen("pen-1".into())));
+        let _ = app.standard_update(StandardMessage::Remove);
+        assert_eq!(app.standard.pens.len(), pens);
+        let _ = app.standard_update(StandardMessage::Pick(Setting::Pen("0.5".into())));
+        let _ = app.standard_update(StandardMessage::Remove);
+        assert!(app.standard.pen("0.5").is_some() && app.standard_view.refused.is_some());
     }
 
     #[test]

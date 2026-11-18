@@ -1204,6 +1204,15 @@
     "In line widths: dash, gap, dash, gap. Empty is a continuous line.": "In Linienbreiten: Strich, Lücke, Strich, Lücke. Leer ist eine Volllinie.",
     "Width (mm)": "Breite (mm)",
     "Height (mm)": "Höhe (mm)",
-    "Not taken: the standard would no longer hold together.": "Nicht übernommen: Der Standard wäre dann nicht mehr stimmig."
+    "Not taken: the standard would no longer hold together.": "Nicht übernommen: Der Standard wäre dann nicht mehr stimmig.",
+    "Search the libraries…": "Bibliotheken durchsuchen…",
+    "Search results": "Suchergebnisse",
+    "Nothing found.": "Nichts gefunden.",
+    "A scale more: 1:25": "Weiterer Maßstab: 1:25",
+    "+ Line style": "+ Linienstil",
+    "+ Line weight": "+ Linienstärke",
+    "+ Text style": "+ Textstil",
+    "no kind of drawing": "keine Zeichnungsart",
+    "Used by": "Verwendet von"
   }
 }

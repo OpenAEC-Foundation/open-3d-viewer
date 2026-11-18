@@ -58,11 +58,12 @@ impl App {
                 self.models[k].model = with(&self.models[k].model);
                 let sources: Vec<Arc<Model>> = self.models.iter().map(|entry| entry.model.clone()).collect();
                 let moves: Vec<glam::DVec3> = self.models.iter().map(|entry| entry.placed.moved).collect();
+                let turns: Vec<f64> = self.models.iter().map(|entry| entry.placed.turned).collect();
                 match sources.as_slice() {
-                    [one] if moves[0] == glam::DVec3::ZERO => one.clone(),
+                    [one] if moves[0] == glam::DVec3::ZERO && turns[0] == 0.0 => one.clone(),
                     _ => {
                         // the same scene as before: it keeps its id, so nothing is uploaded again
-                        let mut scene = Model::combine_moved(&sources, &moves);
+                        let mut scene = Model::combine_placed(&sources, &moves, &turns);
                         scene.id = self.model.as_ref().map_or(scene.id, |shown| shown.id);
                         Arc::new(scene)
                     }

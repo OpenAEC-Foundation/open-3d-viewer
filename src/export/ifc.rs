@@ -609,6 +609,20 @@ pub fn write_schema(model: &Model, document: &Document, file_name: &str, schema:
     let precision = format!("1.E-{:02}", units.decimals);
     let context = f.add(format!("IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,{precision},#{world},#{north})"))?;
     let body_context = f.add(format!("IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#{context},$,.MODEL_VIEW.,$)"))?;
+    // the georeference the model's file gave: a map conversion of the scene's origin
+    if let Some(map) = map_conversion(model) {
+        let crs = f.add(format!("IFCPROJECTEDCRS({},$,$,$,$,$,$)", text(&map.crs)))?;
+        let in_units = |metres: f64| real(metres * if units.millimetres { 1000.0 } else { 1.0 });
+        let (sin, cos) = map.rotation.to_radians().sin_cos();
+        f.add(format!(
+            "IFCMAPCONVERSION(#{context},#{crs},{},{},{},{},{},$)",
+            in_units(map.east),
+            in_units(map.north),
+            in_units(map.height),
+            real(cos),
+            real(sin)
+        ))?;
+    }
     // made when the first curve or annotation is written
     let mut annotation_context: Option<u64> = None;
     let mut curve_styles: HashMap<[u8; 4], u64> = HashMap::new();
@@ -1078,6 +1092,34 @@ fn fixed(v: i64, decimals: u32) -> String {
 }
 
 /// A STEP real with up to six decimals.
+/// Where the scene's origin lies on a map, as the model's project information says (the keys
+/// the loaders write: coordinate system, eastings and northings, height, rotation), for the
+/// origin of the scene: an anchor the loader took off is put back.
+struct MapConversion {
+    crs: String,
+    east: f64,
+    north: f64,
+    height: f64,
+    /// Degrees, counter-clockwise: the model's x axis on the grid.
+    rotation: f64,
+}
+
+fn map_conversion(model: &Model) -> Option<MapConversion> {
+    let info = |k: &str| model.project.info.iter().find(|(key, _)| key == k).map(|(_, v)| v.trim());
+    let crs = info("Georeference coordinate system")?.to_string();
+    let (e, n) = info("Georeference eastings, northings (m)")?.split_once(',')?;
+    let (mut east, mut north): (f64, f64) = (e.trim().parse().ok()?, n.trim().parse().ok()?);
+    let mut height: f64 = info("Georeference height (m)").and_then(|h| h.parse().ok()).unwrap_or(0.0);
+    let rotation: f64 = info("Georeference rotation (degrees)").and_then(|r| r.parse().ok()).unwrap_or(0.0);
+    if let Some(a) = model.origins.first().and_then(|o| o.anchor) {
+        let (sin, cos) = rotation.to_radians().sin_cos();
+        east += a.x * cos - a.y * sin;
+        north += a.x * sin + a.y * cos;
+        height += a.z;
+    }
+    (east.is_finite() && north.is_finite() && height.is_finite()).then_some(MapConversion { crs, east, north, height, rotation })
+}
+
 fn real(v: f64) -> String {
     fixed((if v.is_finite() { v } else { 0.0 } * 1e6).round() as i64, 6)
 }

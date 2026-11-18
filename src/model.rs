@@ -209,6 +209,10 @@ pub struct ProjectData {
     /// The cut the file opens with, in display coordinates (Rhino: the clipping plane that clips
     /// its perspective view).
     pub section: Option<crate::section::SectionPlane>,
+    /// Labels on points of the model, a fixed size on the screen whatever the distance, as
+    /// Rhino draws its text dots: display coordinates, text, background colour and the layer
+    /// (by name) whose visibility they follow.
+    pub dots: Vec<ModelDot>,
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
@@ -431,6 +435,15 @@ pub struct Sheet {
     /// The colour of each line of its title block that has one of its own: as many as `lines`,
     /// or none.
     pub line_colors: Vec<Option<[u8; 3]>>,
+}
+
+/// A label on a point of the model (see [`ProjectData::dots`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDot {
+    pub at: [f32; 3],
+    pub text: String,
+    pub color: [u8; 3],
+    pub layer: String,
 }
 
 /// An image on a sheet (sheet metres).

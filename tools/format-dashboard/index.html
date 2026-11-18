@@ -286,24 +286,24 @@ footer code { font-size: 12.5px; }
    "note": "Een Allplan-projectmap opent als het geheel van zijn teilbilder, met dezelfde beperkingen als .ndw: geen 2D, geen kleuren of materialen, geen layouts (.npl). Geen sample: geschat uit de code."
   },
   ".db1": {
-   "pct": 80,
-   "note": "Onderdelen met profielen, platen en beton, wapening, lassen, bouten, grids, controlepunten, views en tekeningen komen allemaal door, met uitgebreide eigenschappen (UDA's, assembly, fase). xslib.db1 en .db2 worden terecht geweigerd. Kleinere gaten: niet-ondersteunde boutgroepen worden overgeslagen en er is geen tekeningdefinitie. Getest: lokale modellen Huis (met eigen IFC-export), Voorbeelden_Gebruikers_Componenten, HOPPER, O3V_Projecthal, Dak & Wand, Offshore en Ankerplan."
+   "pct": 85,
+   "note": "Getest tegen Tekla Structures 2026 zelf (Open API) op 15 modellen: Huis, Trimble-voorbeeld (2015 onderdelen, 466 componenten), Projecthal, templates, Toogschemas, HOPPER (7.89). Map of .db1 openen. Onderdelen op de juiste plek en maat: Huis 4324/4328, Projecthal 88/88, voorbeeld 1873/2015, HOPPER (7.89) 1043/1185. Bouten, lassen, wapening (staven, netten, haken, strands) 100%, componenten 466/466, UDA's, fasen, taken, verdiepingen/gebouwen, gewichten, projectinfo, grids, views met Tekla's eigen kleuren (objectweergave) en view-filters, tekeningen (snapshots + definities), belastingen en analysemodel. Nog niet: 130 geschetste profielen (xslib), BentPlate, traptredeprofiel, enkele snedes; in 7.89 nog geen bouten/assemblies/componenten; in tekeningen geen handgetekende teksten/symbolen."
   },
   ".vwx": {
-   "pct": 70,
-   "note": "3D-objecten, klassen, lagen, records, de IFC-data, lijnwerk, teksten, sheets met viewports, saved views, grids en spaces komen door. Wat nog ontbreekt of zwak is: maatvoering, arceringen als vulling, worksheets en textures. Getest: lokale Avondhof (met eigen IFC-export), Huisje, Tuinontwerp (138 MB) en ladder-testbestanden."
+   "pct": 80,
+   "note": "Alle 787 .vwx/.sta van een Vectorworks 2027-installatie openen (2,2 M objecten): 3D-model (extrudes, solids via Parasolid, meshes, NURBS, muren, deuren/ramen, symbolen, plug-ins), kleuren uit texturen, lagen/klassen met zichtbaarheid, eigenschappen + records + IFC-data, opgeslagen views, bladen met viewports, teksten en doorsneden, plattegronden per laag, arceringen en lijnstijlen, werkbladen, bouwlagen, eenheden, georeferentie, rasterlijnen, ruimtes, IFC-export. Nog niet: texturen als afbeelding (alleen hun kleur), image props/bomen als foto, lampen en renderinstellingen, afbeeldingen op bladen, complexe lijnstijlen, een deel van de gekromde vlakken benaderd (~0,4 %); alleen bestanden van VW 2023/2027 getest. Getest tegen Vectorworks zelf (STL-export, vergelijking schermbeelden)."
   },
   ".sta": {
-   "pct": 65,
-   "note": "Templates gaan door dezelfde vwx-lezer. Ze bevatten vooral resources (stijlen, symbolen, klassen) en weinig geometrie, en symbooldefinities zonder plaatsing worden niet getoond. Geen echte .sta getest: geschat uit de code en lege .vwx-testbestanden."
+   "pct": 80,
+   "note": "Alle 787 .vwx/.sta van een Vectorworks 2027-installatie openen (2,2 M objecten): 3D-model (extrudes, solids via Parasolid, meshes, NURBS, muren, deuren/ramen, symbolen, plug-ins), kleuren uit texturen, lagen/klassen met zichtbaarheid, eigenschappen + records + IFC-data, opgeslagen views, bladen met viewports, teksten en doorsneden, plattegronden per laag, arceringen en lijnstijlen, werkbladen, bouwlagen, eenheden, georeferentie, rasterlijnen, ruimtes, IFC-export. Nog niet: texturen als afbeelding (alleen hun kleur), image props/bomen als foto, lampen en renderinstellingen, afbeeldingen op bladen, complexe lijnstijlen, een deel van de gekromde vlakken benaderd (~0,4 %); alleen bestanden van VW 2023/2027 getest. Getest tegen Vectorworks zelf (STL-export, vergelijking schermbeelden)."
   },
   ".skp": {
    "pct": 50,
    "note": "Vlakken, groepen, componenten, tags en materiaalkleuren komen door. Randen en losse lijnen (edges) tekenen niet: 0 lijnen in alle bestanden. Textures worden een gemiddelde kleur, en tekst, maatvoering, scènes, section planes en soft/smooth edges ontbreken. 2 van de 21 bestanden openen niet, en oude textured-bestanden geven maar 2 driehoeken. Getest: de 21 test-models (2021_lc, bathroom-3d, solar-pv, test-kavel, legacy v3-v8 en andere)."
   },
   ".3dm": {
-   "pct": 85,
-   "note": "Breps, extrusies, SubD, meshes, curves, teksten, maten, leaders, arceringen, blocks, lagen, materialen, lampen, layouts en clipping planes komen allemaal door, met objecteigenschappen en user text. Kleine gaten: texture-mapping, my_surfaces.3dm (V6) die niets tekent, en limieten op blocks en driehoeken. Getest: 215 bestanden (Referentiemodellen V1-V8, Eigen-testmodellen, test-models/rhino)."
+   "pct": 90,
+   "note": "Getest tegen Rhino 9 zelf op 179 bestanden (alle voorbeeldbestanden van McNeel, Rhino 1 t/m 8, plus eigen testmodellen): 179/179 openen volledig, niets weggelaten of beschadigd; 122/179 (68%) zien er precies uit als in Rhino. Gelezen: meshes, polysurfaces/surfaces/extrusies (ook zonder rendermesh, zelf gemesht; oppervlak binnen 0,4% van Rhino), SubD, curves met lijntypen, teksten, maatvoering, leaders, arceringen, text dots, blokken, puntenwolken, lagen met kleur/zichtbaarheid, materialen (ook PBR), user text, groepen, printkleur/-breedte, clipping planes (als doorsnede), named views, lampen, verborgen objecten, layouts als bladen met detailvensters, Rhino 1-bestanden; IFC-export. Nog niet: text dots als label (nu punt + eigenschap, 33 bestanden; in aanbouw), texturen tekenen (wel gelezen, 15), teksten in hun eigen lettertype (nu het viewer-lettertype, 12); in aanbouw: georeferentie (earth anchor), lettertypentabel, render-instellingen/decals/mesh-modifiers, Rhino 8-lijnbreedtes en section styles, plug-in-data."
   },
   ".vxz": {
    "pct": 45,
@@ -463,7 +463,7 @@ footer code { font-size: 12.5px; }
   },
   ".dae": {
    "pct": 72,
-   "note": "Driehoeken, polylists en polygons met hiërarchie, namen, SketchUp-tags en diffuse kleuren werken (duck, Cinema4D, earthCylindrical, teapot_instancenodes, regr01). \u003ctristrips>/\u003ctrifans> geven niets (cube_tristrips: 'no geometry found'), lijnen worden niet getekend, en getextureerde materialen worden standaard grijs, wat bij SketchUp-exports veel voorkomt."
+   "note": "Driehoeken, polylists en polygons met hiërarchie, namen, SketchUp-tags en diffuse kleuren werken (duck, Cinema4D, earthCylindrical, teapot_instancenodes, regr01). <tristrips>/<trifans> geven niets (cube_tristrips: 'no geometry found'), lijnen worden niet getekend, en getextureerde materialen worden standaard grijs, wat bij SketchUp-exports veel voorkomt."
   },
   ".wrl": {
    "pct": 55,

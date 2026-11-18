@@ -4203,10 +4203,23 @@ impl App {
         let hover = self.measure.hover.as_ref().filter(|h| {
             self.measure.tool.is_some_and(|t| t != Tool::Volume) && h.screen.view_proj == view_proj && self.hover_scene_holds()
         });
+        // the model's labels (Rhino's text dots) on the layers that show
+        let dots: Vec<(Vec3, String, Color)> = self
+            .model
+            .as_ref()
+            .map(|m| {
+                m.project
+                    .dots
+                    .iter()
+                    .filter(|d| m.layers.iter().position(|l| l.name == d.layer).is_none_or(|i| self.visible.get(i).copied().unwrap_or(true)))
+                    .map(|d| (Vec3::from_array(d.at), d.text.clone(), Color::from_rgb8(d.color[0], d.color[1], d.color[2])))
+                    .collect()
+            })
+            .unwrap_or_default();
         // hidden while the model is taken apart: they belong to the model as it is
         let measures = (overlay.is_none()
             && !self.explode_on
-            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some()))
+            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some() || !dots.is_empty()))
         .then(|| {
             canvas(crate::measure::overlay::MeasureOverlay {
                 results: &self.measure.results,
@@ -4219,6 +4232,7 @@ impl App {
                 ink: p.accent,
                 label_bg: p.surface,
                 label_text: p.text,
+                dots,
             })
             .width(Fill)
             .height(Fill)

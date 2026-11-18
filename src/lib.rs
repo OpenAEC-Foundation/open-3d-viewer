@@ -18,6 +18,7 @@ mod bench;
 pub mod desktop;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
+pub mod build_film;
 pub mod document;
 #[cfg(windows)]
 mod dpi_drag;

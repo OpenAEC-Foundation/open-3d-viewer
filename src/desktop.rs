@@ -14,6 +14,7 @@
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
 //!   open-3d-viewer FILE --save-as OUT.ifc [--schema IFC4X3]   (convert without a window)
+//!   open-3d-viewer FILE --build-film OUT.mp4|OUT.usda [--film-seconds 20]   (how it is built; .mp4 needs Blender)
 //!   open-3d-viewer FILE.ifc --check OUT.html|json|csv [--ids FILE.ids] [--rules NAME] [--issues OUT.bcf]
 //!                  (the BIM Validator without a window: the report, and an issue per failed rule;
 //!                  ends with code 1 when a rule failed)
@@ -87,6 +88,10 @@ struct Args {
     /// Do not take remote control commands (the MCP server).
     no_remote: bool,
     save_as: Option<PathBuf>,
+    /// `--build-film`: the film of how the model is built (`.mp4`, or `.usda` for its stage
+    /// alone), and how many seconds it runs.
+    build_film: Option<PathBuf>,
+    film_seconds: Option<f32>,
     /// `--check`: the report to write; with the rule set to check on and the BCF file for the
     /// issues of what failed.
     check: Option<PathBuf>,
@@ -178,6 +183,8 @@ fn parse_args() -> Result<Args, String> {
             "--bench" => args.bench = Some(PathBuf::from(value()?)),
             "--frames" => args.frames = Some(value()?.parse().map_err(|_| "--frames N")?),
             "--save-as" => args.save_as = Some(PathBuf::from(value()?)),
+            "--build-film" => args.build_film = Some(PathBuf::from(value()?)),
+            "--film-seconds" => args.film_seconds = Some(value()?.parse().map_err(|_| "--film-seconds N")?),
             "--check" => args.check = Some(PathBuf::from(value()?)),
             "--rules" => args.rules = Some(value()?),
             "--issues" => args.issues = Some(PathBuf::from(value()?)),
@@ -235,6 +242,8 @@ pub fn main_as(edition: crate::product::Edition) {
         bench::run(file, args.frames.unwrap_or(300), args.throughput)
     } else if let Some(out) = &args.save_as {
         save_as(&args, out)
+    } else if let Some(out) = &args.build_film {
+        build_film(&args, out)
     } else if let Some(out) = &args.check {
         check(&args, out)
     } else if let Some(out) = &args.screenshot {
@@ -268,6 +277,17 @@ fn keep_crashes() {
         }
         before(info);
     }));
+}
+
+/// `--build-film`: loads the file and writes the film of how it is built (through Blender), or
+/// its USD stage.
+fn build_film(args: &Args, out: &std::path::Path) -> Result<(), String> {
+    let file = args.file.as_ref().ok_or("--build-film needs a FILE to film")?;
+    let model = loaders::load(file)?;
+    let start = web_time::Instant::now();
+    let said = crate::build_film::render(&model, out, args.film_seconds.unwrap_or(20.0))?;
+    println!("{} -> {} ({said}) in {:.1} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
+    Ok(())
 }
 
 /// `--save-as`: loads the file and writes it in the format of `out`'s extension.

@@ -11,10 +11,10 @@
 //! is held by its designation: when a linear type's name changes (with its profile, its
 //! material or a name typed for it) its elements take the new name with the new profile.
 //!
-//! The change of the elements is a step of the model's history. Taking it back leaves the type
-//! as it was changed: the pane then says how many elements are not as the type is now, with a
-//! button that makes them so. The same holds for a file whose elements were made before their
-//! type changed.
+//! The change of a type and of its elements is one step of the history: taken back, the type
+//! and its elements are as they were (see `undo`). Elements can still be behind their type, in
+//! a file whose elements were made before their type changed: the pane then says how many
+//! elements are not as the type is now, with a button that makes them so.
 
 use super::App;
 use crate::theme::Palette;
@@ -307,17 +307,21 @@ mod tests {
         // a layer more: the walls have it too
         let _ = app.update(Message::BuildUp(BuildUpMessage::AddLayer(0)));
         assert_eq!(thickness(&app, a), 0.55);
-        // the change of the walls is one step to take back; the type stays as it was changed,
-        // and its walls are told to be behind it
+        // the change of the type and of its walls is one step: taken back, the type has one
+        // layer again and so have its walls; made again, both have two
         assert!(app.can_undo());
         let _ = app.update(Message::Undo);
-        assert_eq!(thickness(&app, a), 0.275);
-        assert_eq!(app.library.buildup(&concrete).unwrap().layers.len(), 2);
+        assert_eq!((thickness(&app, a), app.library.buildup(&concrete).unwrap().layers.len()), (0.275, 1));
+        assert!(app.type_use(TypeRef::BuildUp(&concrete)).stale.is_empty());
+        let _ = app.update(Message::Redo);
+        assert_eq!((thickness(&app, a), app.library.buildup(&concrete).unwrap().layers.len()), (0.55, 2));
+        // a type changed without its elements (as in a file whose elements are older than
+        // their type): the walls are told to be behind it, and are made as it is when asked
+        super::super::buildups::change(&mut app.library, &concrete, |b| b.layers[0].thickness = 0.3).unwrap();
         assert_eq!(app.type_use(TypeRef::BuildUp(&concrete)).stale, vec![a, b]);
-        // and are made as it is again when asked
         let _ = app.update(Message::BuildUp(BuildUpMessage::Follow));
-        assert_eq!((thickness(&app, a), app.type_use(TypeRef::BuildUp(&concrete)).stale), (0.55, Vec::new()));
-        // a name of its own changes no element: no step
+        assert!((thickness(&app, a) - 0.575).abs() < 1e-12 && app.type_use(TypeRef::BuildUp(&concrete)).stale.is_empty());
+        // a name of its own changes no element: its step shares the elements of the one before
         let base = app.modeller.base.model.clone();
         let _ = app.update(Message::BuildUp(BuildUpMessage::Named("Kernwand".into())));
         assert!(std::sync::Arc::ptr_eq(&base, &app.modeller.base.model));
@@ -367,11 +371,18 @@ mod tests {
         assert!((t.layers[0].offset - 0.09225).abs() < 1e-12, "the membrane lies against the deeper frame");
         assert_eq!((system(&app, masonry), system(&app, untyped)), (other, plain));
         assert!(app.type_use(TypeRef::System("system.timber-frame-140")).stale.is_empty() && app.follow_refused.is_empty());
-        // a layer away: the frame loses it; taken back, it is behind its type until asked
+        // a layer away: the frame loses it; taken back, the type and the frame have it again
         let _ = app.update(Message::SystemType(SystemMessage::RemoveLayer(0)));
         assert_eq!(system(&app, frame).system_type.unwrap().layers.len(), 4);
         let _ = app.update(Message::Undo);
-        assert_eq!((system(&app, frame).system_type.unwrap().layers.len(), app.type_use(TypeRef::System("system.timber-frame-140")).stale), (5, vec![frame]));
+        assert_eq!((system(&app, frame).system_type.unwrap().layers.len(), app.library.system_type("system.timber-frame-140").unwrap().layers.len()), (5, 5));
+        assert!(app.type_use(TypeRef::System("system.timber-frame-140")).stale.is_empty());
+        // a type changed without its elements: the frame is behind it until asked
+        super::super::systems::change(&mut app.library, "system.timber-frame-140", |t| {
+            t.layers.remove(0);
+        })
+        .unwrap();
+        assert_eq!(app.type_use(TypeRef::System("system.timber-frame-140")).stale, vec![frame]);
         let _ = app.update(Message::SystemType(SystemMessage::Follow));
         assert_eq!(system(&app, frame).system_type.unwrap().layers.len(), 4);
     }
@@ -409,9 +420,10 @@ mod tests {
         let _ = app.update(Message::Profile(ProfileMessage::Named(String::new())));
         let _ = app.update(Message::Profile(ProfileMessage::Steel("HEB 300".into())));
         assert_eq!(Some(profile(&app, a)), ProfileDef::steel("HEB 300"));
-        // taken back, the column is the type's by name no more, or it is behind it
+        // taken back, the type is of concrete again and so is its column
         let _ = app.update(Message::Undo);
-        assert_ne!(Some(profile(&app, a)), ProfileDef::steel("HEB 300"));
+        assert_eq!(profile(&app, a), ProfileDef::Catalogue { designation: name.clone(), shape: t.profile.clone() });
+        assert_eq!(app.type_use(TypeRef::Linear(&first)), Use { elements: vec![a], stale: Vec::new() });
     }
 
     #[test]

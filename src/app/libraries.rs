@@ -313,6 +313,33 @@ impl App {
         }
     }
 
+    /// After a step of the history put the library or the drawing standard back as it was: what
+    /// was being typed in an editor is forgotten (its fields show what is there now), and an
+    /// editor lets go of what is no longer there.
+    pub(super) fn settle_library_editors(&mut self) {
+        let library = &self.library;
+        let material = &mut self.material_view;
+        (material.name, material.hex, material.in_use) = (None, None, None);
+        material.picked = material.picked.take().filter(|key| library.material(key).is_some());
+        let buildup = &mut self.buildup_view;
+        (buildup.draft, buildup.refused) = (None, None);
+        buildup.picked = buildup.picked.take().filter(|id| library.buildup(id).is_some());
+        let profile = &mut self.profile_view;
+        (profile.draft, profile.refused) = (None, None);
+        profile.picked = profile.picked.take().filter(|id| library.linear_type(id).is_some());
+        let system = &mut self.system_view;
+        (system.draft, system.refused) = (None, None);
+        system.picked = system.picked.take().filter(|id| library.system_type(id).is_some());
+        // (a layer that is gone shows no fields: the face does)
+        let layers = system.picked.as_deref().and_then(|id| library.system_type(id)).map_or(0, |t| t.layers.len());
+        if matches!(system.part, super::systems::Part::Layer(k) if k >= layers) {
+            system.part = super::systems::Part::Face;
+        }
+        let standard = &mut self.standard_view;
+        (standard.draft, standard.refused) = (None, None);
+        self.follow_refused.clear();
+    }
+
     /// The library of a shelf.
     pub(super) fn shelf(&self, shelf: Shelf) -> &Library {
         match shelf {

@@ -438,6 +438,11 @@ pub struct App {
     /// elements', false: the view's), and the same for the steps taken back.
     undo_trail: Vec<bool>,
     redo_trail: Vec<bool>,
+    /// The field of a Library editor the message being handled types into, if it does; and the
+    /// one the last step of the history was typed into: typing on in it is the same step (see
+    /// `undo`).
+    step_typing: Option<undo::Typing>,
+    last_typing: Option<undo::Typing>,
     /// The selection box while it is dragged: from, to (viewport pixels).
     pub box_select: Option<(Vec2, Vec2)>,
     /// The right-click menu, open at this viewport point (logical pixels).
@@ -1082,6 +1087,8 @@ impl Default for App {
             history: History::new(),
             undo_trail: Vec::new(),
             redo_trail: Vec::new(),
+            step_typing: None,
+            last_typing: None,
             box_select: None,
             context_menu: None,
             explode_bounds: None,
@@ -1835,6 +1842,9 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let before = changes_visibility(&message).then(|| self.view_state());
         let shown = before.is_some() || matches!(message, Message::Undo | Message::Redo);
+        // typing in one field of a Library editor is one step to take back
+        self.step_typing = self.typing_of(&message);
+        self.look_at_setup();
         let task = self.handle(message);
         if let Some(before) = before.filter(|b| *b != self.view_state()) {
             self.history.record(before);

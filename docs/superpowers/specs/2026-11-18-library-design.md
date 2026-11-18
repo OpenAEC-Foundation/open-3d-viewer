@@ -155,12 +155,22 @@ in the right pane, with a drawing of what it makes above its fields.
   new name with a new profile. The ties of the linear types are read before a change and
   followed after it, so a type that is renamed or renumbered keeps its elements. The pane of
   an editor says how many elements of the model are of the picked type. An element the
-  kernel refuses stays as it was, and the pane says how many and why. The change of the
-  elements is a step of the model's history; taking it back leaves the type as it was
-  changed, and the pane then says how many elements are not as the type is now, with a
-  button that makes them so. A material hatched as air is a cavity in a wall, so the walls
+  kernel refuses stays as it was, and the pane says how many and why. In a file whose
+  elements were made before their type changed, the pane says how many elements are not as
+  the type is now, with a button that makes them so. A material hatched as air is a cavity in a wall, so the walls
   and slabs made of a material follow when its hatch changes. A system keeps the way it was
   laid out: one that stands does not follow a type that is made to lie.
+- **History**, `src/app/undo.rs`: the project's library and its drawing standard are part of a
+  step of the model's history (`Step::library`, `Step::standard`). A change of a type is
+  taken back with the elements that followed it; a change of the library or the standard
+  alone is a step too, with or without a model, and a step that leaves the elements as they
+  were shares them with the step before. The history looks at the library before the first
+  message, so the first change is a step. Typing in a field that takes every keystroke (a
+  material's name, a name typed for a build-up or a linear type, a live field of the
+  standard), or setting a colour with its sliders and its field, is one step
+  (`undo::Typing`): typing on in the field the last step was typed in is that step. A step
+  taken back forgets what was being typed, and an editor lets go of what is no longer there.
+  A project with no model gets none shown by a step taken back.
 - **Search** over every library and the drawing standard, with a look at each result; a found
   setting, build-up, linear type or system type opens where it is edited, and a found steel
   profile becomes a beam type of the project.
@@ -169,8 +179,7 @@ in the right pane, with a drawing of what it makes above its fields.
 
 Not yet: a hatch of one's own (a material picks one of the nine
 kinds; their patterns follow the drawing standard); a material's category, description and
-properties as IFC has them; a change of a type and the change of its elements are not taken
-back together (the library has no history of its own); a column or a beam is tied to its type
+properties as IFC has them; a column or a beam is tied to its type
 by the type's name, not its id; a system type has no
 name of its own, and its members have a rectangle's size, not a profile of the profile editor;
 a layer's members cannot be given a spacing other than its boards' grid; the general library
@@ -195,7 +204,6 @@ of the profile in the kernel's form, not as IFC has it.
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
 4. Profiles drawn freely. Hatches of one's own. A system's members by a profile of the library.
-5. A history of the library, so a change of a type is taken back with its elements. A linear
-   element tied to its type by the type's id.
+5. A linear element tied to its type by the type's id.
 6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
 7. Library files and components opened into the page.

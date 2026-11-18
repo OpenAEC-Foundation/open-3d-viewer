@@ -3504,24 +3504,17 @@ mod tests {
                 }
             }
             // the project with a model: a wall of the demo building given the first build-up,
-            // the build-up made thicker (the wall follows) and that step taken back, so the
-            // pane says the wall is not as its type is now
+            // and the build-up then made thicker without its wall (as in a file whose elements
+            // are older than their type), so the pane says the wall is not as its type is now
             if name == "follow" {
                 use crate::app::buildups::BuildUpMessage;
                 studio.app.add_demo_building();
                 let wall = studio.app.modeller.model.iter().find(|e| e.class() == "IfcWall").map(|e| e.id).expect("a wall of the demo");
                 let id = studio.app.library.buildups[0].id.clone();
                 studio.app.select_modelled(wall);
-                let steps = [
-                    Message::Library(crate::app::library::LibraryMessage::Assign(id.clone())),
-                    Message::BuildUp(BuildUpMessage::Pick(id)),
-                    Message::BuildUp(BuildUpMessage::Typed(0, "120".into())),
-                    Message::BuildUp(BuildUpMessage::Done),
-                    Message::Undo,
-                ];
-                for message in steps {
-                    let _ = studio.update(Msg::App(message));
-                }
+                let _ = studio.update(Msg::App(Message::Library(crate::app::library::LibraryMessage::Assign(id.clone()))));
+                crate::app::buildups::change(&mut studio.app.library, &id, |b| b.layers[0].thickness = 0.12).expect("a thicker layer");
+                let _ = studio.update(Msg::App(Message::BuildUp(BuildUpMessage::Pick(id))));
             }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));

@@ -262,6 +262,11 @@ pub struct Step {
     pub project_file: Option<PathBuf>,
     /// The levels of the document: a level moves with what stands on it and reaches up to it.
     pub levels: Arc<Vec<crate::document::Level>>,
+    /// The project's library: a type is taken back with the elements that followed it, and a
+    /// change of the library alone is a step too. `None` until the history has looked at it.
+    pub library: Option<Arc<bim_library::Library>>,
+    /// The project's drawing standard, kept as the library is.
+    pub standard: Option<Arc<bim_library::drawing::Standard>>,
 }
 
 impl App {

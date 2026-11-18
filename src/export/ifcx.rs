@@ -58,6 +58,10 @@ pub const GRID: &str = "openaec::grid";
 /// `openaec::systemtype` nodes (see `bim_library::ifcx`).
 pub const LIBRARY: &str = "openaec::library";
 
+/// The key the reader gives a file's drawing standard back under, among the project's
+/// definitions: the nodes of its kinds of drawing and their settings (see `bim_library::drawing`).
+pub const STANDARDS: &str = "openaec::drawing::standards";
+
 /// The path of the node of a layer's element (`u64::MAX`: the layer without elements) in the
 /// file named `file_name`.
 pub fn element_path(file_name: &str, layer: usize, id: u64) -> String {

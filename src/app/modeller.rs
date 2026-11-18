@@ -278,6 +278,8 @@ impl App {
                 if let Ok(library) = serde_json::from_value::<bim_library::Library>(library.clone()) {
                     self.library.merge(&library);
                 }
+            } else if let Some(standards) = definition.get(crate::export::ifcx::STANDARDS) {
+                self.adopt_standard(standards);
             } else if let Some(rooms) = definition.get(crate::export::ifcx::ROOMS) {
                 self.modeller.rooms = serde_json::from_value(rooms.clone()).unwrap_or_default();
             } else if let Some(grid) = definition.get(crate::export::ifcx::GRID) {
@@ -711,6 +713,8 @@ impl App {
         built.project.grids = self.modelled_grid_lines();
         // the project's library goes into its file: materials and types, those taken from a file too
         built.project.types = bim_library::ifcx::nodes(&self.library);
+        // and its drawing standard: the kinds of drawing and their settings, a node each
+        built.project.types.extend(bim_library::drawing::nodes(&self.standard));
         // and the names given to its spaces
         if !self.modeller.rooms.is_empty() {
             built.project.types.push(serde_json::json!({ "path": "openaec-rooms", "attributes": { crate::export::ifcx::ROOMS: self.modeller.rooms } }));

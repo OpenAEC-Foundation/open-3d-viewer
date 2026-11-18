@@ -262,7 +262,12 @@ impl App {
             Source::Country => {
                 let country = view.country;
                 let mut flat = vec![hatches(l, country.standard()).noted(country.standard_name()), Card::to_come(l.text("Titelblokken", "Title blocks"))];
-                flat.extend(drawing_styles(l));
+                if country == Country::Netherlands {
+                    // its line styles, line weights and text styles are in its standard, above
+                    flat.push(Card::to_come(l.text("Symbolen", "Symbols")));
+                } else {
+                    flat.extend(drawing_styles(l));
+                }
                 let mut solid = Vec::new();
                 if country == Country::Netherlands {
                     // the Dutch template's types: its walls, floors, roofs, columns and beams
@@ -333,6 +338,10 @@ impl App {
         let rgb = |c: Color| [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8];
         let house = [p.accent, p.text, p.text_secondary, p.border, p.surface, p.bg].map(rgb);
         let mut page = Column::new().spacing(18).push(heading);
+        // the Netherlands: its drawing standard first, to be set up
+        if view.source == Source::Country && view.country == Country::Netherlands {
+            page = page.push(self.standard_sections(p, l));
+        }
         for (section, cards) in self.library_sections(l, &house) {
             let cards = row(cards.into_iter().map(|card| card_view(card, p, l))).spacing(10).wrap();
             page = page.push(column![text(section).size(12).font(FONT_BOLD).color(p.text_muted), cards].spacing(8));

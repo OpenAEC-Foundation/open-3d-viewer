@@ -43,6 +43,7 @@ mod precut;
 mod levels;
 pub mod libraries;
 pub mod library;
+pub mod standards;
 mod marks;
 mod gis;
 mod terrain;
@@ -363,6 +364,11 @@ pub struct App {
     pub docs: DocsTab,
     /// Library, the product: the source and the country its page shows.
     pub libraries: libraries::LibrariesView,
+    /// The project's drawing standard: its kinds of drawing and their settings. The Dutch one
+    /// until it is changed or a project's file brings its own.
+    pub standard: bim_library::drawing::Standard,
+    /// What is picked of the standard on the Library page.
+    pub standard_view: standards::StandardView,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -519,6 +525,8 @@ pub enum Message {
     Docs(docs::DocsMessage),
     /// Library, the product: the source or the country to show.
     Libraries(libraries::LibrariesMessage),
+    /// The drawing standard on the Library page: picking and setting its kinds and settings.
+    Standard(standards::StandardMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1009,6 +1017,8 @@ impl Default for App {
             ifc: IfcTab::default(),
             docs: DocsTab::default(),
             libraries: libraries::LibrariesView::default(),
+            standard: bim_library::drawing::Standard::netherlands(),
+            standard_view: standards::StandardView::default(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -2187,6 +2197,7 @@ impl App {
             Message::Library(message) => return self.library_update(message),
             Message::Docs(message) => return self.docs_update(message),
             Message::Libraries(message) => return self.libraries_update(message),
+            Message::Standard(message) => return self.standard_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]

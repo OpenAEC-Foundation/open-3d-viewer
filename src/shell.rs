@@ -2674,8 +2674,7 @@ impl Studio {
                 .push(ch::splitter(look, dragging(Side::Left), Msg::SplitterPress(Side::Left)));
         }
         body = body.push(middle);
-        // (nothing can be picked on the Library page yet: no properties beside it)
-        if self.prefs.right && !library {
+        if self.prefs.right {
             let hide = l.text("Eigenschappen verbergen", "Hide properties");
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight)), hide, Some(self.command("view.right").shortcut_label().unwrap_or("")))];
             body = body
@@ -2714,6 +2713,10 @@ impl Studio {
     fn right_body(&self, look: Look) -> Element<'_, Msg> {
         let (app, l) = (&self.app, self.l());
         let p = palette(look);
+        // Library: the fields of what is picked of the drawing standard
+        if self.product() == Product::Library {
+            return Self::pane(app.standard_pane(p, l));
+        }
         if self.product() != Product::Modeller {
             return Self::pane(app.properties_body(p, l));
         }
@@ -3425,6 +3428,10 @@ mod tests {
             studio.prefs.language = Language::Dutch;
             studio.set_product(Product::Library);
             let _ = studio.update(Msg::App(Message::Libraries(show)));
+            // the Netherlands with a kind of drawing picked, so the right pane shows its fields
+            if name == "country-nl" {
+                let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));
+            }
             studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-product-{name}.png"))).expect("snapshot");
         }
     }

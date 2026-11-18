@@ -71,6 +71,33 @@ style can be chosen.
 3. **A dialog (a library manager).** Familiar, but a dialog cannot stay open beside the work and
    has no room for content in 2D and 3D side by side.
 
+## The drawing standard (second step, the Netherlands)
+
+The direction after the first setup: Library is where a library is set up in full, and the first
+thing to set up is how drawings are made. For now the Netherlands only.
+
+- **A standard is data**: `bim_library::drawing::Standard`. It holds the kinds of drawing and,
+  under them, the settings they pick from: scales, line styles, pens (line widths) and text
+  styles. Its hatches are those of the country's hatch standard.
+- **A kind of drawing** has a name, the code it has in a drawing's name, a number series, a
+  discipline, a view, its scales (the usual one first), the pen of what is cut and of what is
+  seen beyond, the line style of what is hidden, a text style and whether what is cut is hatched.
+- **Where the Dutch content comes from**: the kinds, views, scales and sheet numbers of the
+  drawings of the INB template; kinds the template has no drawing of are marked as from practice
+  and their scales are a proposal; line styles from ISO 128-2; line widths and text heights from
+  the ISO series. The template's style sheets are not taken over: they are under another licence.
+- **Kept in IFCX**, a node per setting (`openaec::drawing::standard`, `::kind`, `::linestyle`,
+  `::pen`, `::textstyle`), so a later layer (a company, a project) can change one setting. The
+  project's file holds the standard next to its library.
+- **Checked**: a change is taken only when every kind's scales, pens and styles exist and every
+  width, height and dash is positive.
+- **In the app**: the page of Country, the Netherlands lists the kinds and the settings; a click
+  picks one and the right pane has its fields (`src/app/standards.rs`).
+
+Not yet: the standard does not steer the drawings the suite makes; settings (a scale, a pen, a
+line style) cannot be added or removed, only changed; a standard cannot be saved or opened as a
+file of its own; other countries have no standard; a kind has one pen pair for all its scales.
+
 ## Open questions
 
 - Where a house style is kept: with the company (a file or folder its people share, as Docs uses
@@ -82,8 +109,12 @@ style can be chosen.
 
 ## Next steps
 
-1. Open a card: its items as a list with a drawing of the picked one (the drawings exist in
-   `src/app/library.rs`), and its properties in the right pane.
-2. The project's drawing standard as a choice, so hatches follow the country.
-3. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
-4. Library files and components opened into the page.
+1. The standard steers the drawings: a floor plan, section or sheet takes its scales, pens,
+   line styles and text style from its kind.
+2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
+   settings; the hatches as settings that can be changed.
+3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
+4. Open a card of types: its items as a list with a drawing of the picked one (the drawings
+   exist in `src/app/library.rs`).
+5. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
+6. Library files and components opened into the page.

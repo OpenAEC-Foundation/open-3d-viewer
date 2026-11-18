@@ -425,6 +425,15 @@ pub fn read(file: &Value) -> Result<Vec<Standard>, LibraryError> {
     Ok(standards)
 }
 
+/// The nodes of drawing standards among `nodes`, when they read as standards ([`read`]); none
+/// when there are none or they do not hold together.
+pub fn held(nodes: &[Value]) -> Option<Vec<Value>> {
+    let own = [STANDARD, KIND, LINE_STYLE, PEN, TEXT_STYLE];
+    let ours: Vec<Value> = nodes.iter().filter(|node| node.get("attributes").and_then(Value::as_object).is_some_and(|a| own.iter().any(|key| a.contains_key(*key)))).cloned().collect();
+    let standards = read(&json!({ "data": ours })).ok()?;
+    (!standards.is_empty()).then_some(ours)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

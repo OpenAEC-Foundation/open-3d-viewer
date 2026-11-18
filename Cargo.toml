@@ -115,10 +115,10 @@ skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev =
 tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "90e0572638b5853c4a4b7c308cae75921bc4c68b" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Compressed glTF (Draco, meshopt, quantization, KTX2) made plain, through the 3d-tiles-dll library; pure Rust
-tiles-gltf = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev = "1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082" }
+tiles-gltf = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev = "7a4642f2aeb5f06caf0058a1588622a66a96212a" }
 # 3D Tiles (tileset.json, b3dm, i3dm, pnts, cmpt, implicit tiling) and quantized-mesh terrain, through the 3d-tiles-dll library; pure Rust
-tiles-read = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev = "1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082" }
-tiles-model = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev = "1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082" }
+tiles-read = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev = "7a4642f2aeb5f06caf0058a1588622a66a96212a" }
+tiles-model = { git = "https://github.com/OpenAEC-Foundation/3d-tiles-dll", rev = "7a4642f2aeb5f06caf0058a1588622a66a96212a" }
 # Smithsonian Voyager scenes (.svx.json) through the svx-dll library; pure Rust
 svx-read = { git = "https://github.com/OpenAEC-Foundation/svx-dll", rev = "abaee1cd04290029e158ca4e9bd6ced6f1df2a5c" }
 svx-model = { git = "https://github.com/OpenAEC-Foundation/svx-dll", rev = "abaee1cd04290029e158ca4e9bd6ced6f1df2a5c" }

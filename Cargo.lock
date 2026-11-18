@@ -5676,7 +5676,7 @@ dependencies = [
 [[package]]
 name = "tiles-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=7a4642f2aeb5f06caf0058a1588622a66a96212a#7a4642f2aeb5f06caf0058a1588622a66a96212a"
 dependencies = [
  "flate2",
  "serde_json",
@@ -5685,7 +5685,7 @@ dependencies = [
 [[package]]
 name = "tiles-gltf"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=7a4642f2aeb5f06caf0058a1588622a66a96212a#7a4642f2aeb5f06caf0058a1588622a66a96212a"
 dependencies = [
  "basisu",
  "draco-core",
@@ -5696,12 +5696,12 @@ dependencies = [
 [[package]]
 name = "tiles-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=7a4642f2aeb5f06caf0058a1588622a66a96212a#7a4642f2aeb5f06caf0058a1588622a66a96212a"
 
 [[package]]
 name = "tiles-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=7a4642f2aeb5f06caf0058a1588622a66a96212a#7a4642f2aeb5f06caf0058a1588622a66a96212a"
 dependencies = [
  "draco-core",
  "serde_json",

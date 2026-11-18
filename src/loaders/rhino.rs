@@ -15,7 +15,8 @@
 //! Units are converted to metres; Rhino is Z up; a model far from zero (survey coordinates)
 //! moves to a local origin, kept in the project information. Point clouds are thinned out while
 //! drawing; blocks, meshes and points are drawn up to limits, so that a damaged or hostile file
-//! cannot exhaust memory or run for ever. What is left out (lights, objects on layouts) is
+//! cannot exhaust memory or run for ever. Lights are drawn as a small cross and the line they shine
+//! along. What is left out (objects on layouts) is
 //! counted in the project information; hidden objects go to hidden layers of their own. Clipping planes are drawn; the one that clips the
 //! perspective view is the section the model opens with.
 
@@ -132,9 +133,14 @@ struct Paint<'f> {
 
 impl Paint<'_> {
     /// The colour drawn: the material's diffuse colour and transparency when there is a
-    /// material, else the display colour.
+    /// material (a physically based one's base colour and opacity, as Rhino shows it), else the
+    /// display colour.
     fn rgba(&self) -> Rgba {
         match self.material {
+            Some(Material { pbr: Some(p), .. }) => {
+                let c = |v: f32| (255.0 * v.clamp(0.0, 1.0)).round() as u8;
+                [c(p.base_color[0]), c(p.base_color[1]), c(p.base_color[2]), (255.0 * p.opacity.clamp(0.0, 1.0)).round() as u8]
+            }
             Some(m) => {
                 let alpha = (255.0 * (1.0 - m.transparency.clamp(0.0, 1.0))).round() as u8;
                 [m.diffuse[0], m.diffuse[1], m.diffuse[2], alpha]
@@ -340,6 +346,20 @@ impl<'f> Scene<'f> {
         if !a.id.is_nil() {
             p.insert("Id".into(), a.id.to_string().into());
         }
+        let groups: Vec<&str> = a.groups.iter().filter_map(|g| self.file.groups.iter().find(|(i, _)| i == g)).map(|(_, n)| n.as_str()).collect();
+        if !groups.is_empty() {
+            p.insert("Groups".into(), groups.join(", ").into());
+        }
+        if !a.url.is_empty() {
+            p.insert("URL".into(), a.url.clone().into());
+        }
+        if a.plot_weight_source == 1 {
+            p.insert("Print width (mm)".into(), if a.plot_weight < 0.0 { "no print".to_string() } else { a.plot_weight.to_string() }.into());
+        }
+        if a.plot_color_source == 1 {
+            let c = a.plot_color;
+            p.insert("Print colour".into(), format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]).into());
+        }
         for (key, value) in user {
             let key = if p.contains_key(key) { format!("{key} (user text)") } else { key.clone() };
             p.insert(key, value.clone().into());
@@ -350,9 +370,6 @@ impl<'f> Scene<'f> {
     fn run(&mut self) {
         let root = DMat4::from_scale(DVec3::splat(self.file.meters));
         let file = self.file;
-        if !file.lights.is_empty() {
-            self.skipped.insert("lights", file.lights.len());
-        }
         // Hidden objects use the remaining drawing budget and do not choose the origin before
         // visible geometry, even when they occur first in the file.
         let objects = file.objects.iter().filter(|o| o.attributes.visible && o.attributes.mode != 1)
@@ -409,6 +426,67 @@ impl<'f> Scene<'f> {
                 }
             }
         }
+        for light in &file.lights {
+            self.light(light, root);
+        }
+    }
+
+    /// A light as an element: a small cross where it is, and where it shines a line (a spot's cone
+    /// axis, a directional light's direction) or its shape (the line or rectangle of a linear or
+    /// rectangular light), in its colour, with its values as properties. Lights that move with
+    /// the camera and ambient light have no place in the model and are counted.
+    fn light(&mut self, light: &threedm_read::Light, root: DMat4) {
+        use threedm_read::LightKind;
+        if light.camera {
+            *self.skipped.entry("lights that move with the camera").or_default() += 1;
+            return;
+        }
+        let p = light.location;
+        let mut lines: Vec<Vec<DVec3>> = match light.kind {
+            LightKind::Ambient | LightKind::Unknown => {
+                *self.skipped.entry("ambient lights (no place)").or_default() += 1;
+                return;
+            }
+            LightKind::Point => Vec::new(),
+            LightKind::Spot | LightKind::Directional => vec![vec![p, p + light.direction]],
+            LightKind::Linear => vec![vec![p, p + light.length]],
+            LightKind::Rectangular => vec![vec![p, p + light.length, p + light.length + light.width, p + light.width, p]],
+        };
+        if !p.is_finite() {
+            *self.skipped.entry("lights that could not be read").or_default() += 1;
+            return;
+        }
+        let a = Attributes { id: light.id, name: light.name.clone(), layer: light.layer, visible: light.visible, ..Attributes::default() };
+        let c = light.diffuse;
+        let mut values = vec![
+            ("Light".to_string(), format!("{:?}", light.kind)),
+            ("On".to_string(), if light.on { "yes" } else { "no" }.to_string()),
+            ("Intensity".to_string(), format!("{}", light.intensity)),
+            ("Colour".to_string(), format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])),
+        ];
+        if light.kind == LightKind::Spot {
+            values.push(("Spot angle (degrees)".into(), format!("{}", light.spot_angle)));
+            values.push(("Hot spot".into(), format!("{}", light.hotspot)));
+        }
+        if light.watts > 0.0 {
+            values.push(("Watts".into(), format!("{}", light.watts)));
+        }
+        let props = self.props(&a, "Light", None, &values);
+        let id = self.next_id;
+        self.next_id += 1;
+        self.hiding = !light.visible;
+        let color: Rgba = [c[0], c[1], c[2], 255];
+        // a cross of 20 cm where it is
+        let r = 0.1 / self.file.meters;
+        for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
+            lines.push(vec![p - axis * r, p + axis * r]);
+        }
+        let mut first = Some(props);
+        if self.draw(&Geometry::Lines(lines, "Light"), light.layer, root, color, id, &mut first) {
+            *self.drawn.entry("lights").or_default() += 1;
+            self.hidden_objects += usize::from(self.hiding);
+        }
+        self.hiding = false;
     }
 
     /// Draws the objects of a block definition, placed by `at`, as part of element `id`.
@@ -703,6 +781,7 @@ fn plural(kind: &str) -> &'static str {
         "Center mark" => "center marks",
         "Text dot" => "text dots",
         "Clipping plane" => "clipping planes",
+        "Light" => "lights",
         _ => "objects",
     }
 }
@@ -1226,6 +1305,36 @@ mod tests {
         // each a closed rectangle of four lines (two indices each)
         let indices: usize = model.layers.iter().map(|l| l.line_elements.iter().map(|e| e.2 as usize).sum::<usize>()).sum();
         assert_eq!(indices, 3 * 4 * 2);
+    }
+
+    /// Object attributes (`attributes.3dm`, from make_attributes.py) as properties: the groups
+    /// by name, the url, print colour and width set by object.
+    #[test]
+    fn groups_url_and_print_settings_are_properties() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, _) = load("attributes.3dm", std::fs::read(dir.join("attributes.3dm")).unwrap());
+        let grouped: serde_json::Value = model.props.values().map(|p| serde_json::from_str(p).unwrap()).find(|p: &serde_json::Value| p["Name"] == "Grouped").expect("grouped");
+        assert_eq!(grouped["Groups"], "Fence, North side");
+        assert_eq!(grouped["URL"], "https://example.org/fence");
+        assert_eq!(grouped["Print colour"], "#0A141E");
+        assert_eq!(grouped["Print width (mm)"], "0.35");
+    }
+
+    /// Lights (`lights.3dm`, from make_lights.py): the point, spot, directional, linear and
+    /// rectangular light are drawn as elements with their values (the hidden directional light on
+    /// a hidden layer); the ambient light and the headlight have no place and are counted.
+    #[test]
+    fn lights_are_drawn_where_they_are() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, info) = load("lights.3dm", std::fs::read(dir.join("lights.3dm")).unwrap());
+        assert!(entry(&info, "Rhino objects drawn").contains("5 lights"), "{info:?}");
+        assert_eq!(entry(&info, "Rhino objects left out"), "1 ambient lights (no place), 1 lights that move with the camera");
+        let lights: Vec<serde_json::Value> = model.props.values().map(|p| serde_json::from_str(p).unwrap()).filter(|p: &serde_json::Value| p["Type"] == "Light").collect();
+        assert_eq!(lights.len(), 5);
+        let spot = lights.iter().find(|p| p["Name"] == "Spot").expect("spot");
+        assert_eq!(spot["Light"], "Spot");
+        assert!(spot.get("Spot angle (degrees)").is_some() && spot.get("Intensity").is_some());
+        assert!(model.layers.iter().any(|l| l.hidden && l.name.ends_with("(hidden objects)")));
     }
 
     /// Models made in Rhino 9 and saved without render meshes (`test-models/rhino`, from a script

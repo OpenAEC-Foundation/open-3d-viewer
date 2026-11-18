@@ -210,6 +210,14 @@ mod tests {
             let geometry = text.contains("IFCTRIANGULATEDFACESET(") || text.contains("=IFCINDEXEDPOLYCURVE(");
             assert!(geometry, "{}: no geometry", path.display());
             assert!(text.contains("IFCPROPERTYSET(") && text.contains("'Rhino'"), "{}: no Rhino properties", path.display());
+            if path.file_stem().is_some_and(|s| s == "lights") {
+                // five lights with a place, as annotations; the box a proxy
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 5, "{}", path.display());
+                assert_eq!(text.matches("=IFCBUILDINGELEMENTPROXY(").count(), 1, "{}", path.display());
+            }
+            if path.file_stem().is_some_and(|s| s == "clipping") {
+                assert_eq!(text.matches("=IFCANNOTATION(").count(), 3, "{}", path.display());
+            }
             if path.file_stem().is_some_and(|s| s == "drafting") {
                 // 7 curves, 6 texts and 5 hatches
                 assert_eq!(text.matches("=IFCANNOTATION(").count(), 18);

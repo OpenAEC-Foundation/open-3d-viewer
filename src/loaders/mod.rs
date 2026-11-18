@@ -22,21 +22,11 @@ mod rvt_schedules;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_browser;
 #[cfg(not(target_arch = "wasm32"))]
-mod rvt_images;
-#[cfg(not(target_arch = "wasm32"))]
 mod rvt_props;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_fonts;
 #[cfg(not(target_arch = "wasm32"))]
-mod rvt_materials;
-#[cfg(not(target_arch = "wasm32"))]
-mod rvt_phases;
-#[cfg(not(target_arch = "wasm32"))]
-mod rvt_joins;
-#[cfg(not(target_arch = "wasm32"))]
 mod rvt_filters;
-#[cfg(not(target_arch = "wasm32"))]
-mod rvt_structure;
 mod ifc;
 
 mod skp;

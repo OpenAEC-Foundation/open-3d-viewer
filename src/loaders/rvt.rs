@@ -73,9 +73,9 @@ impl Loader for RvtLoader {
         project.walls = walls;
         (project.view_orders, project.view_order) = (orders, shown);
         // how a cut through each material is hatched
-        project.cut_patterns = super::rvt_materials::cut_patterns(&doc);
+        project.cut_patterns = rvt_read::materials::cut_patterns(&doc).into_iter().map(|(name, p)| (name, pattern(p))).collect();
         // down to where a section fills the earth under the terrain, and as what material
-        project.earth = doc.site_poche_base().map(|(base, material)| ((base * FT) as f32, material.and_then(|m| super::rvt_materials::name(&doc, m))));
+        project.earth = doc.site_poche_base().map(|(base, material)| ((base * FT) as f32, material.and_then(|m| rvt_read::materials::name(&doc, m))));
         let layers = scene
             .batches
             .into_iter()
@@ -99,8 +99,8 @@ impl Loader for RvtLoader {
                     elements: b.elements,
                     // a wall or a floor also says whether it carries load: a structural plan
                     // leaves out the ones that do not
-                    props: b.props.into_iter().map(|(id, props)| match Some(id).filter(|_| hosts).and_then(|id| super::rvt_structure::bearing(&doc, id)) {
-                        Some(bearing) => (id, super::rvt_structure::with_bearing(props, bearing)),
+                    props: b.props.into_iter().map(|(id, props)| match Some(id).filter(|_| hosts).and_then(|id| rvt_read::structure::bearing(&doc, id)) {
+                        Some(bearing) => (id, with_bearing(props, bearing)),
                         None => (id, props),
                     }).collect(),
                     hidden: false,
@@ -214,7 +214,13 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
     // the phase and phase filter of every view, and the phases of the elements
     let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
     let path = |view: u64| crate::document::uuid(&format!("rvt/{file}/view/{view}"));
-    project.phasing = super::rvt_phases::phasing(doc, &ids, &path);
+    // the reader keys a view's phase by its element; the document names a view by its path
+    let phasing = rvt_read::phases::phasing(doc, &ids);
+    project.phasing = crate::phasing::Phasing {
+        elements: phasing.elements,
+        halftone: phasing.halftone,
+        views: phasing.views.into_iter().map(|(view, v)| (path(view), crate::phasing::ViewPhase { phase: v.phase, show: v.show })).collect(),
+    };
     for (i, &view) in view_ids.iter().enumerate() {
         if views.get(i).is_some_and(|v| v.kind == ViewKind::ThreeD) {
             let mut hidden = hidden_in_view(doc, view, &by_category, &mut filters);
@@ -298,7 +304,7 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
     }
     project.drawings = super::rvt_drawings::drawings(doc, infos, file, &tags, &details);
     // which of the drawn elements are joined with which
-    project.joins = super::rvt_joins::joins(doc, elements.iter().copied());
+    project.joins = rvt_read::joins::joins(doc, elements.iter().copied());
     // the legends and drafting views: drawings without a model
     project.drafts = super::rvt_drafts::drafts(doc, &tags, &details);
     project.drawn = super::rvt_props::drawn(doc, &project.drafts);
@@ -340,7 +346,7 @@ fn source_walls(doc: &rvt_read::Document) -> HashMap<u64, SourceWall> {
                 let o = doc.object(id as u64);
                 let m = o.as_ref().and_then(|o| o.deref(o.get("m_pMaterial")?));
                 let name = m.and_then(|m| m.get("m_name")?.as_str()).unwrap_or_default().to_string();
-                (name, m.and_then(|m| m.get("m_color")?.as_i64()).map(super::rvt_materials::rgb))
+                (name, m.and_then(|m| m.get("m_color")?.as_i64()).map(rvt_read::materials::rgb))
             })
             .clone()
     };
@@ -529,7 +535,7 @@ fn schedules(doc: &rvt_read::Document) -> Vec<Schedule> {
             // the image a cell shows: what the column's parameter names for the row's first element
             let parameters: Vec<i64> = shown.iter().map(|&i| s.columns[i].parameter).collect();
             let image = |element: u64, parameter: i64| {
-                let file = super::rvt_images::of_parameter(doc, element, parameter)?;
+                let file = rvt_read::images::of_parameter(doc, element, parameter)?;
                 let pixels = image::load_from_memory(&file).ok()?.to_rgba8();
                 Some(iced::widget::image::Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw()))
             };
@@ -993,7 +999,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
             // the images of its title block
             if let Some((t, kind)) = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))) {
                 // decoded here: an image that cannot be read is left out, the others show at once
-                let images = super::rvt_images::images(doc, kind).into_iter().filter_map(|i| {
+                let images = rvt_read::images::images(doc, kind).into_iter().filter_map(|i| {
                     let pixels = image::load_from_memory(&i.file).ok()?.to_rgba8();
                     Some(crate::model::SheetImage {
                         center: [(t.origin[0] * 0.3048 + i.center[0]) as f32, (t.origin[1] * 0.3048 + i.center[1]) as f32],
@@ -1009,8 +1015,41 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
         .collect()
 }
 
+/// The reader's rows of a hatch as the app's.
+pub(super) fn grid(g: rvt_read::materials::Grid) -> crate::hatching::Grid {
+    crate::hatching::Grid { angle: g.angle, origin: g.origin, shift: g.shift, offset: g.offset, dashes: g.dashes }
+}
+
+/// The reader's cut pattern of a material as the app's.
+fn pattern(p: rvt_read::materials::CutPattern) -> crate::hatching::Pattern {
+    crate::hatching::Pattern { fill: p.fill, line: p.line, solid: p.solid, grids: p.grids.into_iter().map(grid).collect(), on_paper: p.on_paper }
+}
+
+/// The properties of an element (a JSON object) with `LoadBearing` added: what a structural plan
+/// goes by (the reader says whether a wall or floor carries load).
+fn with_bearing(props: String, bearing: bool) -> String {
+    match props.trim_end().strip_suffix('}') {
+        Some(body) if body.trim_end().ends_with('{') => format!("{body}\"LoadBearing\":\"{bearing}\"}}"),
+        Some(body) => format!("{body},\"LoadBearing\":\"{bearing}\"}}"),
+        None => props,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn load_bearing_is_added_to_an_elements_properties() {
+        use super::with_bearing;
+        let with = with_bearing(r#"{"id":"12","category":"Walls"}"#.into(), false);
+        assert_eq!(with, r#"{"id":"12","category":"Walls","LoadBearing":"false"}"#);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&with).unwrap()["LoadBearing"], "false");
+        assert_eq!(with_bearing("{}".into(), true), r#"{"LoadBearing":"true"}"#);
+        assert_eq!(with_bearing("nothing".into(), true), "nothing");
+        // and that is what a structural plan goes by
+        let props = vec![("category".to_string(), "Walls".to_string()), ("LoadBearing".to_string(), "false".to_string())];
+        assert_eq!(crate::element_class::load_bearing("Revit", "Walls", &props), Some(false));
+    }
+
     /// A project with drawings (`RVT_DRAWINGS`, read-only; skipped when absent): its plans and
     /// sections become views of the document, with the texts and dimensions drawn in them.
     #[test]

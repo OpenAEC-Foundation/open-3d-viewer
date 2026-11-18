@@ -13,7 +13,7 @@
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
 //!   open-3d-viewer --bench FILE|synthetic:N|structural:N[+...] [--frames 300]
-//!   open-3d-viewer FILE --save-as OUT.ifc   (convert without a window)
+//!   open-3d-viewer FILE --save-as OUT.ifc [--schema IFC4X3]   (convert without a window)
 //!   open-3d-viewer FILE.ifc --check OUT.html|json|csv [--ids FILE.ids] [--rules NAME] [--issues OUT.bcf]
 //!                  (the BIM Validator without a window: the report, and an issue per failed rule;
 //!                  ends with code 1 when a rule failed)
@@ -92,6 +92,8 @@ struct Args {
     check: Option<PathBuf>,
     rules: Option<String>,
     issues: Option<PathBuf>,
+    /// `--schema`: the IFC schema `--save-as` writes a `.ifc` in (IFC 4 when not given).
+    schema: export::IfcSchema,
     /// Exploded view for `--screenshot`: percent per axis, and the mode.
     explode: Option<[f32; 3]>,
     explode_mode: Option<explode::ExplodeMode>,
@@ -179,6 +181,10 @@ fn parse_args() -> Result<Args, String> {
             "--check" => args.check = Some(PathBuf::from(value()?)),
             "--rules" => args.rules = Some(value()?),
             "--issues" => args.issues = Some(PathBuf::from(value()?)),
+            "--schema" => {
+                let v = value()?;
+                args.schema = export::IfcSchema::parse(&v).ok_or_else(|| format!("--schema IFC4|IFC4X3, not {v}"))?;
+            }
             "--explode" => {
                 let v: Vec<f32> = value()?.split(',').map(|p| p.trim().parse().map_err(|_| "--explode X,Y,Z")).collect::<Result<_, _>>()?;
                 args.explode = Some(<[f32; 3]>::try_from(v).map_err(|_| "--explode X,Y,Z")?);
@@ -269,7 +275,7 @@ fn save_as(args: &Args, out: &std::path::Path) -> Result<(), String> {
     let file = args.file.as_ref().ok_or("--save-as needs a FILE to convert")?;
     let model = loaders::load(file)?;
     let start = web_time::Instant::now();
-    export::save(&model, &crate::document::Document::from_model(&model), out, true)?;
+    export::save_schema(&model, &crate::document::Document::from_model(&model), out, true, args.schema)?;
     println!("{} -> {} in {:.2} s", model.file_name(), out.display(), start.elapsed().as_secs_f32());
     Ok(())
 }

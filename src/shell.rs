@@ -1125,6 +1125,10 @@ impl Studio {
                 .shortcut(Shortcut::ctrl_shift('s'))
                 .enabled(loaded)
                 .dialog(),
+            Command::new("file.export-ifc4x3", l.text("Exporteren als IFC 4x3…", "Export IFC 4x3…"), go(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))
+                .icon(small("file.save-as"), large("file.save-as"))
+                .enabled(loaded)
+                .dialog(),
             Command::new("view.solid", l.text("Volledig", "Solid"), go(Message::Mode(RenderMode::Solid)))
                 .icon(small("mesh.surface"), large("mesh.surface"))
                 .shortcut(key('s'))
@@ -1608,7 +1612,7 @@ impl Studio {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
                 };
-                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog) {
+                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveIfcDialog(_)) {
                     self.backstage = false;
                 }
                 if let Some(path) = opened {
@@ -2448,6 +2452,7 @@ impl Studio {
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
+            t::file_nav_row(look, small("file.save-as"), l.text("Exporteren als IFC 4x3", "Export IFC 4x3"), false, loaded.then_some(Msg::App(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))),
             t::file_nav_row(look, small("ui.settings"), l.text("Instellingen", "Settings"), false, Some(Msg::Dialog(Some(Dialog::Settings)))),
         ]
         .width(260);

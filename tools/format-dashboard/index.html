@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formaten dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div>
+    <h1>Open BIM Suite: wat opent er al?</h1>
+    <p>Per bestandstype hoeveel procent van de bestanden goed opent, en wat er nog fout gaat.</p>
+  </div>
+  <div class="total"><strong id="total">0%</strong><span>gemiddeld over <span id="count">0</span> formaten</span></div>
+</header>
+
+<main id="list"></main>
+
+<footer>Klik op het percentage om het in te vullen. Percentages en notities worden in deze browser bewaard.</footer>
+
+<script>
+// Every format Open BIM Suite claims to open (README, the open_file tool and the loaders on main).
+const GROUPS = [
+  ["BIM en bouw", [
+    ["IFC 4", ".ifc .ifczip"],
+    ["IFC5 / IFCX", ".ifcx"],
+    ["Revit", ".rvt .rfa", "desktop"],
+    ["Archicad", ".pln .pla"],
+    ["Allplan", ".ndw .prj"],
+    ["Tekla Structures", ".db1"],
+    ["Vectorworks", ".vwx .sta"],
+    ["SketchUp", ".skp"],
+    ["Rhino", ".3dm"],
+    ["Vertex BD", ".vxz .vxm", "desktop"],
+    ["Hundegger BTL", ".btl", "desktop"],
+    ["Coördinatiebestand modelchecker", ".smc"],
+    ["IFC-projectpakket", ".tbp"],
+  ]],
+  ["CAD en werktuigbouw", [
+    ["DWG / DXF", ".dwg .dxf"],
+    ["MicroStation DGN", ".dgn"],
+    ["STEP", ".stp .step .stpz"],
+    ["SolidWorks", ".sldprt .sldasm"],
+    ["Solid Edge", ".par .psm .asm"],
+    ["Blender", ".blend"],
+    ["FreeCAD", ".fcstd"],
+  ]],
+  ["Constructieve analyse", [
+    ["sam-json", ".samjson"],
+    ["ETABS-tekst", ".e2k"],
+    ["IFC FEM-resultaten", ".ifcfemresults .ifcfem"],
+  ]],
+  ["GIS en terrein", [
+    ["CityJSON", ".json .cityjson .jsonl .cityjsonl"],
+    ["CityGML", ".gml .citygml"],
+    ["GeoJSON", ".geojson"],
+    ["Shapefile", ".shp"],
+    ["LandXML", ".xml .landxml"],
+    ["ESRI ASCII-grid", ".asc"],
+  ]],
+  ["Meshes en uitwisseling", [
+    ["glTF", ".gltf .glb"],
+    ["USD", ".usd .usda .usdc .usdz"],
+    ["COLLADA", ".dae"],
+    ["VRML / X3D", ".wrl .wrz .x3d .x3dv .x3dz .x3dvz"],
+    ["FBX", ".fbx"],
+    ["3D Studio", ".3ds"],
+    ["Wavefront OBJ", ".obj"],
+    ["STL", ".stl"],
+    ["PLY", ".ply"],
+    ["3MF", ".3mf"],
+    ["AMF", ".amf"],
+    ["OFF", ".off"],
+  ]],
+  ["Puntenwolken", [
+    ["LAS / LAZ", ".las .laz"],
+    ["E57", ".e57"],
+    ["Leica PTS / PTX", ".pts .ptx"],
+    ["PCD", ".pcd"],
+    ["ASCII XYZ", ".xyz .txt .csv .asc"],
+  ]],
+];
+
+const KEY = "obs-format-dashboard";
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { state = {}; }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+const list = document.getElementById("list");
+
+function showTotal() {
+  const all = GROUPS.flatMap(([, formats]) => formats.map(([name]) => (state[name] || {}).pct || 0));
+  const avg = all.reduce((a, b) => a + b, 0) / all.length;
+  document.getElementById("total").textContent = Math.round(avg) + "%";
+  document.getElementById("count").textContent = all.length;
+}
+
+for (const [group, formats] of GROUPS) {
+  const section = document.createElement("section");
+  section.innerHTML = `<h2>${group}</h2>`;
+  for (const [name, exts, only] of formats) {
+    const item = state[name] || (state[name] = { pct: 0, note: "" });
+    const card = document.createElement("div");
+    card.className = "format";
+    card.innerHTML = `
+      <div class="row">
+        <div class="name">${name}${only ? ` <em>${only}</em>` : ""}<small>${exts}</small></div>
+        <div class="meter">
+          <div class="track"><div class="fill"></div></div>
+          <label class="pct"><input type="number" min="0" max="100" step="1" aria-label="Percentage ${name}">%</label>
+        </div>
+      </div>
+      <textarea rows="1" placeholder="Wat gaat er nog fout bij ${name}?"></textarea>`;
+    const fill = card.querySelector(".fill");
+    const input = card.querySelector("input");
+    const note = card.querySelector("textarea");
+    const draw = () => {
+      const p = Math.max(0, Math.min(100, Number(item.pct) || 0));
+      fill.style.width = p + "%";
+      fill.classList.toggle("done", p >= 100);
+    };
+    input.value = item.pct;
+    note.value = item.note;
+    draw();
+    input.addEventListener("input", () => {
+      item.pct = Math.max(0, Math.min(100, Number(input.value) || 0));
+      draw(); showTotal(); save();
+    });
+    note.addEventListener("input", () => { item.note = note.value; save(); });
+    section.appendChild(card);
+  }
+  list.appendChild(section);
+}
+showTotal();
+</script>
+</body>
+</html>

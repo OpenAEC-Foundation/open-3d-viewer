@@ -83,7 +83,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
-| MagicaVoxel (`.vox`) | 17 | `crates/vox-read`, on the published `dot_vox` (MIT): it merges the voxels into faces and places the scene | A reader apart already, with its own plain `Mesh` and no use of the app; it moves to a repository of its own as it is. |
+| MagicaVoxel (`.vox`) | 17 | `crates/vox-read`, on the published `dot_vox` (MIT): it merges the voxels into faces and places the scene | A crate in the suite for now, by the owner's choice: it uses nothing of the app and returns its own plain `Mesh`, so it moves one to one into a repository of its own (`vox-dll`) later. |
 
 ## Moved so far
 
@@ -122,3 +122,7 @@ it; the owner sets those.
   files a slice takes.
 - The readers' tests and sample files move with them; what stays here tests the adapter with a
   small file.
+- The readers of MagicaVoxel, URDF and OpenDRIVE (2026-11-18) are crates in this repository's
+  `crates/` for now, by the owner's choice, not repositories of their own. Each uses nothing of
+  the app and has the name it will keep (`vox-read`, `urdf-read`, `xodr-read`), so it moves one
+  to one into its own `-dll` repository later.

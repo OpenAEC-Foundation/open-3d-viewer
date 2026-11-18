@@ -9,6 +9,7 @@
 //!
 //! Independent reader crates provide format support; the desktop build includes Revit.
 
+pub mod align;
 mod annotations;
 mod b2;
 pub mod app;

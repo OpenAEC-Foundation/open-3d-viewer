@@ -1581,7 +1581,9 @@ mod tests {
         let (commits, standing) = versions.result.expect("git answers");
         assert_eq!(commits.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["Windows on the first floor", "The first model"]);
         assert_eq!(standing, GitStanding::Same);
-        assert!(shows(&app, "History in Git") && shows(&app, "Windows on the first floor") && shows(&app, "As the last version in Git"));
+        for text in ["HISTORY IN GIT", "Windows on the first floor", "As the last version in Git"] {
+            assert!(shows(&app, text), "{text}");
+        }
         // the first version, as a file of its own outside the project folder
         let (checkout, inside) = app.docs_in_git().expect("in a checkout");
         assert_eq!(inside, "Kade 12/model/kade12.ifc");

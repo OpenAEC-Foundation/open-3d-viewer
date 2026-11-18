@@ -1151,6 +1151,7 @@
     "Surface from points": "Yta från punkter",
     "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Var projektet ligger och vad som finns runt det: platsen, fastigheter och byggnader, terrängen",
     "Extensions": "Tillägg",
-    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Varje del av sviten är ett tillägg. Stäng av det du inte använder: det försvinner från växlaren överst i fönstret och kommer tillbaka när du slår på det igen."
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Varje del av sviten är ett tillägg. Stäng av det du inte använder: det försvinner från växlaren överst i fönstret och kommer tillbaka när du slår på det igen.",
+    "Under each extension are the tools that run on it. A tool that is switched off leaves the ribbon.": "Under varje tillägg finns verktygen som körs på det. Ett verktyg som stängs av försvinner från menyfliksområdet."
   }
 }

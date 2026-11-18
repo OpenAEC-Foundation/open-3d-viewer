@@ -1151,6 +1151,7 @@
     "Surface from points": "Superficie da punti",
     "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Dove si trova il progetto e cosa lo circonda: il luogo, particelle ed edifici, il terreno",
     "Extensions": "Estensioni",
-    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Ogni parte della suite è un'estensione. Disattiva ciò che non usi: scompare dal selettore in alto nella finestra e torna quando lo riattivi."
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Ogni parte della suite è un'estensione. Disattiva ciò che non usi: scompare dal selettore in alto nella finestra e torna quando lo riattivi.",
+    "Under each extension are the tools that run on it. A tool that is switched off leaves the ribbon.": "Sotto ogni estensione ci sono gli strumenti che vi si appoggiano. Uno strumento disattivato scompare dalla barra multifunzione."
   }
 }

@@ -99,8 +99,8 @@ impl Loader for RvtLoader {
                     elements: b.elements,
                     // a wall or a floor also says whether it carries load: a structural plan
                     // leaves out the ones that do not
-                    props: b.props.into_iter().map(|(id, props)| match Some(id).filter(|_| hosts).and_then(|id| super::rvt_structure::bearing(&doc, id)) {
-                        Some(bearing) => (id, super::rvt_structure::with_bearing(props, bearing)),
+                    props: b.props.into_iter().map(|(id, props)| match Some(id).filter(|_| hosts).and_then(|id| rvt_read::structure::bearing(&doc, id)) {
+                        Some(bearing) => (id, with_bearing(props, bearing)),
                         None => (id, props),
                     }).collect(),
                     hidden: false,
@@ -529,7 +529,7 @@ fn schedules(doc: &rvt_read::Document) -> Vec<Schedule> {
             // the image a cell shows: what the column's parameter names for the row's first element
             let parameters: Vec<i64> = shown.iter().map(|&i| s.columns[i].parameter).collect();
             let image = |element: u64, parameter: i64| {
-                let file = super::rvt_images::of_parameter(doc, element, parameter)?;
+                let file = rvt_read::images::of_parameter(doc, element, parameter)?;
                 let pixels = image::load_from_memory(&file).ok()?.to_rgba8();
                 Some(iced::widget::image::Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw()))
             };
@@ -993,7 +993,7 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
             // the images of its title block
             if let Some((t, kind)) = s.title_block.as_ref().filter(|_| !bare).and_then(|t| Some((t, block_kind(t)?))) {
                 // decoded here: an image that cannot be read is left out, the others show at once
-                let images = super::rvt_images::images(doc, kind).into_iter().filter_map(|i| {
+                let images = rvt_read::images::images(doc, kind).into_iter().filter_map(|i| {
                     let pixels = image::load_from_memory(&i.file).ok()?.to_rgba8();
                     Some(crate::model::SheetImage {
                         center: [(t.origin[0] * 0.3048 + i.center[0]) as f32, (t.origin[1] * 0.3048 + i.center[1]) as f32],
@@ -1009,8 +1009,31 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
         .collect()
 }
 
+/// The properties of an element (a JSON object) with `LoadBearing` added: what a structural plan
+/// goes by (the reader says whether a wall or floor carries load).
+fn with_bearing(props: String, bearing: bool) -> String {
+    match props.trim_end().strip_suffix('}') {
+        Some(body) if body.trim_end().ends_with('{') => format!("{body}\"LoadBearing\":\"{bearing}\"}}"),
+        Some(body) => format!("{body},\"LoadBearing\":\"{bearing}\"}}"),
+        None => props,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn load_bearing_is_added_to_an_elements_properties() {
+        use super::with_bearing;
+        let with = with_bearing(r#"{"id":"12","category":"Walls"}"#.into(), false);
+        assert_eq!(with, r#"{"id":"12","category":"Walls","LoadBearing":"false"}"#);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&with).unwrap()["LoadBearing"], "false");
+        assert_eq!(with_bearing("{}".into(), true), r#"{"LoadBearing":"true"}"#);
+        assert_eq!(with_bearing("nothing".into(), true), "nothing");
+        // and that is what a structural plan goes by
+        let props = vec![("category".to_string(), "Walls".to_string()), ("LoadBearing".to_string(), "false".to_string())];
+        assert_eq!(crate::element_class::load_bearing("Revit", "Walls", &props), Some(false));
+    }
+
     /// A project with drawings (`RVT_DRAWINGS`, read-only; skipped when absent): its plans and
     /// sections become views of the document, with the texts and dimensions drawn in them.
     #[test]

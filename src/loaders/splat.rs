@@ -163,7 +163,7 @@ mod tests {
             seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
             (seed >> 11) as f32 / (1u64 << 53) as f32
         };
-        let mut push = |s: &mut splat_read::Splats, p: [f32; 3], scale: [f32; 3], q: [f32; 4], rgb: [f32; 3], opacity: f32, shine: f32| {
+        let push = |s: &mut splat_read::Splats, p: [f32; 3], scale: [f32; 3], q: [f32; 4], rgb: [f32; 3], opacity: f32, shine: f32| {
             s.positions.push(p);
             s.scales.push(scale);
             s.rotations.push(splat_read::normalized(q));

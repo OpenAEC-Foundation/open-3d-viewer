@@ -246,7 +246,27 @@ footer code { font-size: 12.5px; }
 </footer>
 
 <!-- The saved percentages and notes; the page writes this block back into its own file. -->
-<script type="application/json" id="data">{}</script>
+<script type="application/json" id="data">{
+ "formats": {
+  ".vwx": {
+   "pct": 80,
+   "note": "Alle 787 .vwx/.sta van een Vectorworks 2027-installatie openen (2,2 M objecten): 3D-model (extrudes, solids via Parasolid, meshes, NURBS, muren, deuren/ramen, symbolen, plug-ins), kleuren uit texturen, lagen/klassen met zichtbaarheid, eigenschappen + records + IFC-data, opgeslagen views, bladen met viewports, teksten en doorsneden, plattegronden per laag, arceringen en lijnstijlen, werkbladen, bouwlagen, eenheden, georeferentie, rasterlijnen, ruimtes, IFC-export. Nog niet: texturen als afbeelding (alleen hun kleur), image props/bomen als foto, lampen en renderinstellingen, afbeeldingen op bladen, complexe lijnstijlen, een deel van de gekromde vlakken benaderd (~0,4 %); alleen bestanden van VW 2023/2027 getest. Getest tegen Vectorworks zelf (STL-export, vergelijking schermbeelden)."
+  },
+  ".sta": {
+   "pct": 80,
+   "note": "Alle 787 .vwx/.sta van een Vectorworks 2027-installatie openen (2,2 M objecten): 3D-model (extrudes, solids via Parasolid, meshes, NURBS, muren, deuren/ramen, symbolen, plug-ins), kleuren uit texturen, lagen/klassen met zichtbaarheid, eigenschappen + records + IFC-data, opgeslagen views, bladen met viewports, teksten en doorsneden, plattegronden per laag, arceringen en lijnstijlen, werkbladen, bouwlagen, eenheden, georeferentie, rasterlijnen, ruimtes, IFC-export. Nog niet: texturen als afbeelding (alleen hun kleur), image props/bomen als foto, lampen en renderinstellingen, afbeeldingen op bladen, complexe lijnstijlen, een deel van de gekromde vlakken benaderd (~0,4 %); alleen bestanden van VW 2023/2027 getest. Getest tegen Vectorworks zelf (STL-export, vergelijking schermbeelden)."
+  },
+  ".db1": {
+   "pct": 85,
+   "note": "Getest tegen Tekla Structures 2026 zelf (Open API) op 15 modellen: Huis, Trimble-voorbeeld (2015 onderdelen, 466 componenten), Projecthal, templates, Toogschemas, HOPPER (7.89). Map of .db1 openen. Onderdelen op de juiste plek en maat: Huis 4324/4328, Projecthal 88/88, voorbeeld 1873/2015, HOPPER (7.89) 1043/1185. Bouten, lassen, wapening (staven, netten, haken, strands) 100%, componenten 466/466, UDA's, fasen, taken, verdiepingen/gebouwen, gewichten, projectinfo, grids, views met Tekla's eigen kleuren (objectweergave) en view-filters, tekeningen (snapshots + definities), belastingen en analysemodel. Nog niet: 130 geschetste profielen (xslib), BentPlate, traptredeprofiel, enkele snedes; in 7.89 nog geen bouten/assemblies/componenten; in tekeningen geen handgetekende teksten/symbolen."
+  },
+  ".3dm": {
+   "pct": 90,
+   "note": "Getest tegen Rhino 9 zelf op 179 bestanden (alle voorbeeldbestanden van McNeel, Rhino 1 t/m 8, plus eigen testmodellen): 179/179 openen volledig, niets weggelaten of beschadigd; 122/179 (68%) zien er precies uit als in Rhino. Gelezen: meshes, polysurfaces/surfaces/extrusies (ook zonder rendermesh, zelf gemesht; oppervlak binnen 0,4% van Rhino), SubD, curves met lijntypen, teksten, maatvoering, leaders, arceringen, text dots, blokken, puntenwolken, lagen met kleur/zichtbaarheid, materialen (ook PBR), user text, groepen, printkleur/-breedte, clipping planes (als doorsnede), named views, lampen, verborgen objecten, layouts als bladen met detailvensters, Rhino 1-bestanden; IFC-export. Nog niet: text dots als label (nu punt + eigenschap, 33 bestanden; in aanbouw), texturen tekenen (wel gelezen, 15), teksten in hun eigen lettertype (nu het viewer-lettertype, 12); in aanbouw: georeferentie (earth anchor), lettertypentabel, render-instellingen/decals/mesh-modifiers, Rhino 8-lijnbreedtes en section styles, plug-in-data."
+  }
+ },
+ "saved": "2026-11-18T14:07:06.582550Z"
+}</script>
 
 <script>
 // The page as it was loaded, before anything is drawn: what is written back, with new data.

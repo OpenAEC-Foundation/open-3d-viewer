@@ -21,7 +21,7 @@
 //! perspective view is the section the model opens with.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
-use crate::model::{DraftFill, Layer, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
+use crate::model::{DraftFill, Layer, ModelDot, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 use crate::section::SectionPlane;
 use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -47,13 +47,13 @@ impl Loader for RhinoLoader {
         let data = source.read()?;
         let file = threedm_read::read_with(&data, &threedm_read::Options { font: Some(crate::INTER_REGULAR) })?;
         progress.set(Phase::Convert);
-        let (layers, info, section, views, sheets) = convert(&file);
+        let (layers, info, section, views, sheets, dots) = convert(&file);
         if layers.iter().all(|l| l.indices.is_empty() && l.lines.is_empty() && !(l.points && !l.positions.is_empty())) {
             // say why, e.g. polysurfaces saved without their render meshes
             let left_out = info.iter().find(|(k, _)| k == "Rhino objects left out").map_or("no objects", |(_, v)| v.as_str());
             return Err(format!("{}: nothing to draw in this Rhino file ({left_out})", source.name()));
         }
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, sheets, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, sheets, dots, ..ProjectData::default() } })
     }
 }
 
@@ -93,6 +93,8 @@ struct Scene<'f> {
     hiding: bool,
     /// What the layouts hold, by the id of their page viewport.
     pages: HashMap<Uuid, PageContent>,
+    /// The text dots, as labels.
+    dots: Vec<ModelDot>,
     /// Hidden objects drawn (on those layers).
     hidden_objects: usize,
     next_id: u64,
@@ -207,6 +209,7 @@ impl<'f> Scene<'f> {
             meshes: BTreeMap::new(),
             hiding: false,
             pages: HashMap::new(),
+            dots: Vec::new(),
             hidden_objects: 0,
             points: BTreeMap::new(),
             next_id: 1,
@@ -553,6 +556,17 @@ impl<'f> Scene<'f> {
                     if self.draw(geometry, a.layer, root, color, id, &mut first) {
                         *self.drawn.entry(plural(kind)).or_default() += 1;
                         self.hidden_objects += usize::from(self.hiding);
+                        // a text dot: its text on a label at its point, as Rhino draws it
+                        if let (Geometry::Points { points, .. }, Some((_, text))) = (geometry, object.user.iter().find(|(k, _)| k == "Text")) {
+                            if points.len() >= 24 {
+                                let f = |k: usize| f64::from_le_bytes(points[8 * k..8 * k + 8].try_into().unwrap());
+                                let at = root.transform_point3(DVec3::new(f(0), f(1), f(2))) - self.origin(None);
+                                let layer = self.viewer_layer(a.layer, true).name.clone();
+                                if at.is_finite() && !text.is_empty() {
+                                    self.dots.push(ModelDot { at: at.as_vec3().to_array(), text: text.clone(), color: [color[0], color[1], color[2]], layer });
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -816,7 +830,7 @@ impl<'f> Scene<'f> {
             .collect()
     }
 
-    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>) {
+    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>, Vec<ModelDot>) {
         // first the layouts, which count what they hold
         let mut views = self.views();
         let sheets = self.sheets(&mut views);
@@ -869,7 +883,8 @@ impl<'f> Scene<'f> {
             };
             info.push(("Rhino clipping planes of the perspective view".into(), how));
         }
-        (layers, info, section, views, sheets)
+        let dots = std::mem::take(&mut self.dots);
+        (layers, info, section, views, sheets, dots)
     }
 }
 
@@ -990,7 +1005,7 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
     }
 }
 
-fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>) {
+fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>, Vec<ModelDot>) {
     let mut scene = Scene::new(file);
     scene.run();
     scene.finish()
@@ -1413,7 +1428,7 @@ mod tests {
         let mut scene = Scene::new(&file);
         scene.triangles = MAX_TRIANGLES - 1;
         scene.run();
-        let (layers, info, _, _, _) = scene.finish();
+        let (layers, info, _, _, _, _) = scene.finish();
         let visible = layers.iter().find(|l| !l.hidden).unwrap();
         assert_eq!(visible.triangle_count(), 1);
         assert_eq!(visible.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
@@ -1475,6 +1490,23 @@ mod tests {
         assert!(!view.camera.unwrap().perspective);
         assert!(model.views[sheets[1].viewports[0].view.unwrap()].camera.unwrap().perspective);
         assert!(!sheets[0].lines.is_empty() && !sheets[0].fills.is_empty(), "the line and the text on the plan");
+    }
+
+    /// Text dots (`dots.3dm`, from make_dots.py, millimetres): labels at their points in their
+    /// colour, following their layer: "A1" red at the box's far corner, "Hidden note" on the
+    /// layer that is off.
+    #[test]
+    fn text_dots_are_labels_at_their_points() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, _) = load("dots.3dm", std::fs::read(dir.join("dots.3dm")).unwrap());
+        let dots = &model.project.dots;
+        assert_eq!(dots.len(), 2);
+        let a1 = dots.iter().find(|d| d.text == "A1").expect("A1");
+        assert!((glam::Vec3::from_array(a1.at) - glam::Vec3::new(1.0, 0.6, 0.3)).length() < 1e-5, "{:?}", a1.at);
+        assert_eq!(a1.color, [200, 30, 30]);
+        let hidden = dots.iter().find(|d| d.text == "Hidden note").expect("hidden");
+        let layer = model.layers.iter().find(|l| l.name == hidden.layer).expect("its layer");
+        assert!(layer.hidden, "{}", layer.name);
     }
 
     /// Lights (`lights.3dm`, from make_lights.py): the point, spot, directional, linear and

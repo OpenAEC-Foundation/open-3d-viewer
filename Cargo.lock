@@ -5490,7 +5490,7 @@ dependencies = [
 [[package]]
 name = "tekla-core"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=90e0572638b5853c4a4b7c308cae75921bc4c68b#90e0572638b5853c4a4b7c308cae75921bc4c68b"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=66a439af8702684b621d4487ea801a49ddd61993#66a439af8702684b621d4487ea801a49ddd61993"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5499,7 +5499,7 @@ dependencies = [
 [[package]]
 name = "tekla-model"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=90e0572638b5853c4a4b7c308cae75921bc4c68b#90e0572638b5853c4a4b7c308cae75921bc4c68b"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=66a439af8702684b621d4487ea801a49ddd61993#66a439af8702684b621d4487ea801a49ddd61993"
 dependencies = [
  "serde",
 ]
@@ -5507,7 +5507,7 @@ dependencies = [
 [[package]]
 name = "tekla-read"
 version = "0.3.0"
-source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=90e0572638b5853c4a4b7c308cae75921bc4c68b#90e0572638b5853c4a4b7c308cae75921bc4c68b"
+source = "git+https://github.com/OpenAEC-Foundation/tekla-dll?rev=66a439af8702684b621d4487ea801a49ddd61993#66a439af8702684b621d4487ea801a49ddd61993"
 dependencies = [
  "earcutr",
  "glam 0.30.10",

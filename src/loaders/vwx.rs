@@ -50,7 +50,7 @@ impl Loader for VwxLoader {
         project.info = info(&scene);
         project.grids = grids(&scene.meshes);
         project.rooms = rooms(&scene.meshes);
-        project.drafts = plans(&scene.meshes, &scene.texts);
+        project.drafts = plans(&scene.plans, &scene.meshes, &scene.texts);
         project.levels = levels(&scene.stories);
         let worksheets = scene.worksheets.clone();
         project.schedules = Later::new(move || worksheets.iter().map(schedule).collect());
@@ -309,19 +309,30 @@ const PLAN_SCALE: f32 = 50.0;
 /// Each design layer with flat line work or texts as a 2D drawing seen from above: its line
 /// segments that lie flat (the 2D shapes, hatches and outlines of the layer) and its texts, in
 /// the metres of the model.
-fn plans(meshes: &[vwx_read::model::Mesh], texts: &[vwx_read::model::Text]) -> Vec<Draft> {
-    let mut names: Vec<&str> = meshes.iter().filter(|m| !m.lines.is_empty()).map(|m| m.layer.as_str()).chain(texts.iter().map(|t| t.layer.as_str())).filter(|n| !n.is_empty()).collect();
+fn plans(drawn: &[vwx_read::model::Plan], meshes: &[vwx_read::model::Mesh], texts: &[vwx_read::model::Text]) -> Vec<Draft> {
+    let mut names: Vec<&str> =
+        drawn.iter().map(|p| p.layer.as_str()).chain(meshes.iter().filter(|m| !m.lines.is_empty()).map(|m| m.layer.as_str())).chain(texts.iter().map(|t| t.layer.as_str())).filter(|n| !n.is_empty()).collect();
     names.sort_unstable();
     names.dedup();
     let mut out = Vec::new();
     for (k, name) in names.into_iter().enumerate() {
+        // the plan the file gives the layer: its 2D shapes and the plan views of its objects
+        // (walls, doors, windows, symbols)
         let mut lines = Vec::new();
+        let mut planned = std::collections::HashSet::new();
+        for plan in drawn.iter().filter(|p| p.layer == name) {
+            for &(element, first, count) in &plan.elements {
+                planned.insert(element);
+                lines.extend(plan.lines.iter().skip(first as usize).take(count as usize).map(|&[a, b]| DraftLine { element, a, b }));
+            }
+        }
+        // and the flat line work of the objects it does not hold (hatches, dashes)
         for mesh in meshes.iter().filter(|m| m.layer == name) {
             let point = |v: u32| {
                 let i = v as usize * 3;
                 [mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]]
             };
-            for &(element, first, count) in &mesh.line_elements {
+            for &(element, first, count) in mesh.line_elements.iter().filter(|e| !planned.contains(&e.0)) {
                 for i in (first..first + count).step_by(2) {
                     let (Some(&a), Some(&b)) = (mesh.lines.get(i as usize), mesh.lines.get(i as usize + 1)) else { continue };
                     let (a, b) = (point(a), point(b));
@@ -399,7 +410,7 @@ mod tests {
         let mut mesh = grid_and_space();
         mesh.layer = "GF".into();
         let text = vwx_read::model::Text { id: 9, layer: "GF".into(), text: "Kitchen".into(), at: [1.0, 2.0, 0.0], width: 2.0, height: 0.6, size: 10.0, lines: 1 };
-        let plans = super::plans(&[mesh], &[text]);
+        let plans = super::plans(&[], &[mesh], &[text]);
         assert_eq!(plans.len(), 1);
         assert_eq!((plans[0].name.as_str(), plans[0].lines.len()), ("GF", 2));
         assert_eq!(plans[0].lines[0], crate::model::DraftLine { element: 7, a: [0.0, 0.0], b: [0.0, 10.0] });
@@ -428,6 +439,16 @@ mod tests {
     fn stories_become_levels_from_the_lowest_up() {
         let story = |name: &str, elevation: f64| vwx_read::model::Story { name: name.into(), elevation, ..Default::default() };
         assert_eq!(super::levels(&[story("1F", 3.0), story("GF", 0.0)]), [("GF".to_string(), 0.0), ("1F".to_string(), 3.0)]);
+    }
+
+    #[test]
+    fn plans_take_the_plan_views_of_objects_from_the_reader() {
+        // a wall's plan from the reader, and the same wall's flat line work in its mesh
+        let plan = vwx_read::model::Plan { layer: "GF".into(), lines: vec![[[0.0, 0.0], [5.0, 0.0]]], elements: vec![(7, 0, 1)] };
+        let mut mesh = grid_and_space();
+        mesh.layer = "GF".into();
+        let plans = super::plans(&[plan], &[mesh], &[]);
+        assert_eq!(plans[0].lines, [crate::model::DraftLine { element: 7, a: [0.0, 0.0], b: [5.0, 0.0] }]);
     }
 
     #[test]

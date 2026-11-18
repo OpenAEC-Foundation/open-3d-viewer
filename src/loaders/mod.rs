@@ -69,6 +69,7 @@ mod sam;
 mod rhino;
 mod blend;
 mod fcstd;
+mod vox;
 
 use crate::model::{Layer, Model, Origin, ProjectData, SavedView};
 use crate::structural::StructuralPart;
@@ -287,7 +288,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader, &vox::VoxLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,
@@ -571,6 +572,18 @@ mod tests {
         let source = Source::Bytes { name: "test.RVT".into(), data: Arc::new(Vec::new()) };
         let error = load_with(&source, &Progress::default()).unwrap_err();
         assert!(error.contains("Revit files open in the desktop app only"), "{error}");
+    }
+
+    #[test]
+    fn loads_a_magicavoxel_scene() {
+        let model = load(&repo_file("test-models/voxel-house.vox")).expect("MagicaVoxel file");
+        assert_eq!(model.format, "MagicaVoxel");
+        let names: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Huis", "Boom links", "Boom rechts"]);
+        assert!(model.layers.iter().all(|l| l.colors.as_ref().is_some_and(|c| c.len() == l.vertex_count())));
+        // the two trees are one model placed twice
+        assert_eq!(model.layers[1].triangle_count(), model.layers[2].triangle_count());
+        assert!(model.props.values().any(|p| p.contains("\"Model\":\"1\"")));
     }
 
     #[test]

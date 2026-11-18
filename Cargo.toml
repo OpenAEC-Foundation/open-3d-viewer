@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-docs", "crates/bim-gis", "crates/bim-civil"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-docs", "crates/bim-gis", "crates/bim-civil", "crates/vox-read"]
 
 [lib]
 name = "open_3d_viewer"
@@ -76,6 +76,8 @@ bim-docs = { path = "crates/bim-docs" }
 bim-gis = { path = "crates/bim-gis" }
 # Civil and site design: survey points, terrain surfaces with breaklines, contours and volumes; headless, in this workspace
 bim-civil = { path = "crates/bim-civil" }
+# MagicaVoxel (.vox): the voxels merged into faces and placed by the scene; headless, in this workspace
+vox-read = { path = "crates/vox-read" }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
 serde = { version = "1", features = ["derive"] }

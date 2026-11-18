@@ -1235,6 +1235,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dot_vox"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f160bf661e495a80ec98ac88a6535f5c80c02d2271c7013af70fe9ec670ccbff"
+dependencies = [
+ "lazy_static",
+ "log",
+ "nom 8.0.0",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3827,6 +3838,7 @@ dependencies = [
  "tobj",
  "ttf-parser",
  "ureq",
+ "vox-read",
  "vwx-read",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -6022,6 +6034,13 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vox-read"
+version = "0.1.0"
+dependencies = [
+ "dot_vox",
+]
 
 [[package]]
 name = "vsimd"

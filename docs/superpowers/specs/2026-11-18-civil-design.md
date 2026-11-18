@@ -122,6 +122,10 @@ surroundings it belongs with (`src/app/terrain.rs`):
 - In the national grid a surface lies where the other map layers lie. The project's zero level
   is at the height a georeferenced model gives; without one, at the ground of the place.
 
+- Parcels and buildings fetched after a terrain lie on it: a boundary takes the height of the
+  ground every few metres, a building lies flat at the highest ground under its outline.
+- A level typed under the terrain gives the volume of the surface above and below it.
+
 Civil gets a ribbon of its own, and its place on the product switch, when alignments come: they
 are drawn, not fetched.
 

@@ -1141,6 +1141,9 @@
     "Load terrain": "Charger le terrain",
     "Surface from a points file…": "Surface à partir d'un fichier de points…",
     "Lines without a point left out": "Lignes sans point ignorées",
-    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "« Charger le terrain » récupère les altitudes du sol dans le modèle altimétrique national des Pays-Bas (AHN) via PDOK, pour le lieu et le rayon ci-dessus. Sous les bâtiments et l'eau, il n'a pas d'altitude : le terrain y est complété à partir du bord."
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "« Charger le terrain » récupère les altitudes du sol dans le modèle altimétrique national des Pays-Bas (AHN) via PDOK, pour le lieu et le rayon ci-dessus. Sous les bâtiments et l'eau, il n'a pas d'altitude : le terrain y est complété à partir du bord.",
+    "Cut and fill against level (m)": "Déblai et remblai par rapport au niveau (m)",
+    "Above": "Au-dessus de",
+    "Below": "Au-dessous de"
   }
 }

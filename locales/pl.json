@@ -1141,6 +1141,9 @@
     "Load terrain": "Wczytaj teren",
     "Surface from a points file…": "Powierzchnia z pliku punktów…",
     "Lines without a point left out": "Pominięte wiersze bez punktu",
-    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "„Wczytaj teren” pobiera wysokości terenu z krajowego modelu wysokościowego Holandii (AHN) przez PDOK, dla miejsca i promienia powyżej. Pod budynkami i wodą nie ma on wysokości: tam teren jest uzupełniany od krawędzi."
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "„Wczytaj teren” pobiera wysokości terenu z krajowego modelu wysokościowego Holandii (AHN) przez PDOK, dla miejsca i promienia powyżej. Pod budynkami i wodą nie ma on wysokości: tam teren jest uzupełniany od krawędzi.",
+    "Cut and fill against level (m)": "Wykop i nasyp względem poziomu (m)",
+    "Above": "Powyżej",
+    "Below": "Poniżej"
   }
 }

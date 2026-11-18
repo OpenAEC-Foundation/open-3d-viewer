@@ -39,11 +39,30 @@ pub struct State {
     pub interval: f64,
     working: bool,
     note: Option<Note>,
+    /// The last surface made, to lay map layers on and to measure.
+    kept: Option<Kept>,
+    /// The level typed to measure against (m, in the heights of the source).
+    level: String,
+    /// The level measured against and what lies above and below it.
+    measured: Option<(f64, bim_civil::Volume)>,
+}
+
+/// A surface kept after it was added to the project.
+#[derive(Debug, Clone)]
+pub struct Kept {
+    /// The model it was added as.
+    pub model: u64,
+    /// In the coordinates of the project, heights from the project's zero level.
+    pub tin: Arc<Tin>,
+    /// The height of the source at the project's zero level (m).
+    pub level: f64,
+    /// Whether it lies in the frame of the map layers (not a file in coordinates of its own).
+    pub mapped: bool,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { interval: INTERVALS[1], working: false, note: None }
+        State { interval: INTERVALS[1], working: false, note: None, kept: None, level: String::new(), measured: None }
     }
 }
 
@@ -71,6 +90,8 @@ pub struct Facts {
 #[derive(Debug, Clone)]
 pub struct Done {
     pub model: Arc<Model>,
+    /// The surface itself, in the coordinates of the model.
+    pub tin: Arc<Tin>,
     /// How the grid lay in the project when the surface was made; `None` for a file in
     /// coordinates of its own.
     pub frame: Option<Frame>,
@@ -96,6 +117,10 @@ pub enum Message {
     Pick(Language),
     /// The surface fetched or read; `None` when the dialog was closed.
     Done(Option<Result<Done, String>>),
+    /// The level to measure against, as typed.
+    Level(String),
+    /// Work out what of the surface lies above and below the level typed.
+    Measure,
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -177,7 +202,7 @@ pub fn of_grid(grid: &bim_gis::heights::Grid, frame: &Frame, level: Option<f64>,
     let relative: Vec<f32> = heights.iter().map(|z| (f64::from(*z) - level) as f32).collect();
     let tin = Tin::from_grid(grid.cols, grid.rows, &relative, |c, r| frame.local(grid.point(c, r)));
     let (model, facts) = surface_model(&tin, interval, level, bim_gis::heights::SOURCE, words, 0);
-    Ok(Done { model: Arc::new(model), frame: Some(*frame), level, facts })
+    Ok(Done { model: Arc::new(model), tin: Arc::new(tin), frame: Some(*frame), level, facts })
 }
 
 /// The surface of a surveyor's file of points. Points in the Dutch national grid go through
@@ -198,7 +223,7 @@ pub fn of_points(text: &str, file: &str, frame: &Frame, level: Option<f64>, inte
         .collect();
     let built = Tin::build(&Input { points: &points, ..Input::default() }).map_err(|e| format!("{file}: {e}"))?;
     let (model, facts) = surface_model(&built.tin, interval, level, file, words, parsed.skipped);
-    Ok(Done { model: Arc::new(model), frame: in_grid.then_some(*frame), level, facts })
+    Ok(Done { model: Arc::new(model), tin: Arc::new(built.tin), frame: in_grid.then_some(*frame), level, facts })
 }
 
 impl App {
@@ -223,6 +248,14 @@ impl App {
                 let words = self.terrain_words(l, Some(l.text("Oppervlak", "Surface")));
                 self.gis.terrain.working = true;
                 return pick_task(frame, self.gis_level(), self.gis.terrain.interval, words);
+            }
+            Message::Level(typed) => {
+                self.gis.terrain.level = typed;
+                self.gis.terrain.measured = None;
+            }
+            Message::Measure => {
+                let typed = self.gis.terrain.level.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite());
+                self.gis.terrain.measured = typed.zip(self.kept_surface()).map(|(level, kept)| (level, kept.tin.volume(level - kept.level)));
             }
             Message::Done(done) => {
                 self.gis.terrain.working = false;
@@ -258,10 +291,22 @@ impl App {
         Words { model, ground: l.text("Terrein", "Terrain").to_string(), contours: l.text("Hoogtelijnen", "Contours").to_string() }
     }
 
+    /// The surface made last, while its model is open.
+    fn kept_surface(&self) -> Option<&Kept> {
+        self.gis.terrain.kept.as_ref().filter(|kept| self.models.iter().any(|entry| entry.model.id == kept.model))
+    }
+
+    /// The terrain map layers are laid on: the surface made last, when it lies in their frame.
+    pub(super) fn kept_terrain(&self) -> Option<&Kept> {
+        self.kept_surface().filter(|kept| kept.mapped)
+    }
+
     /// Adds a surface to the project: in the national grid where the map layers lie, else as
     /// its file has it.
     fn take_surface(&mut self, done: Done) {
         let first_model = self.models.is_empty();
+        self.gis.terrain.kept = Some(Kept { model: done.model.id, tin: done.tin.clone(), level: done.level, mapped: done.frame.is_some() });
+        self.gis.terrain.measured = None;
         let georeferenced = self.georeferenced();
         let id = done.model.id;
         self.add_model(done.model.clone());
@@ -326,6 +371,21 @@ impl App {
             }
             Some(Note::Failed(why)) => rows = rows.push(note(why.clone())),
             None => {}
+        }
+        // what of the surface lies above and below a level
+        if self.kept_surface().is_some() {
+            rows = rows.push(
+                row![
+                    text(l.text("Grondverzet tegen niveau (m)", "Cut and fill against level (m)")).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(iced::Length::FillPortion(3)),
+                    iced::widget::text_input("0.00", &state.level).on_input(move |typed| send(Message::Level(typed))).on_submit(send(Message::Measure)).size(12).padding([3, 6]).width(iced::Length::FillPortion(2)),
+                ]
+                .spacing(6)
+                .align_y(Center),
+            );
+            if let Some((level, volume)) = &state.measured {
+                rows = rows.push(plain(format!("{} {level:.2} m: {:.0} m³", l.text("Boven", "Above"), volume.above)));
+                rows = rows.push(plain(format!("{} {level:.2} m: {:.0} m³", l.text("Onder", "Below"), volume.below)));
+            }
         }
         rows = rows.push(note(
             l.text("Terrein laden haalt de hoogtes van het maaiveld uit het Actueel Hoogtebestand Nederland (AHN) via PDOK, voor de plek en straal hierboven. Onder gebouwen en water heeft het geen hoogte: daar is het terrein aangevuld vanaf de rand.", "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.").to_string(),
@@ -453,6 +513,17 @@ mod tests {
         let scene = app.model.as_ref().unwrap();
         assert!(scene.props.values().any(|props| props.contains("\"Lowest (m)\":2.0") && props.contains("\"Highest (m)\":12.0")), "{:?}", scene.props.values().next());
         assert!(scene.props.values().any(|props| props.contains("\"Height (m)\":5.0")));
+        // the surface is kept: measured against a level of the source, 7 m above NAP
+        let _ = app.update(AppMessage::Gis(super::super::gis::Message::Terrain(Message::Level("7,0".into()))));
+        let _ = app.update(AppMessage::Gis(super::super::gis::Message::Terrain(Message::Measure)));
+        let (level, volume) = app.gis.terrain.measured.expect("measured");
+        // 100 by 100 m rising from 2 to 12 m: a wedge of 12 500 m³ each way about the middle
+        assert!(level == 7.0 && (volume.above - 12_500.0).abs() < 1.0 && (volume.below - 12_500.0).abs() < 1.0, "{volume:?}");
+        assert!(app.kept_terrain().is_some_and(|kept| kept.mapped && kept.tin.height(20.0, 0.0).is_some_and(|z| (z - 2.0).abs() < 1e-6)));
+        // words that are no number measure nothing
+        let _ = app.update(AppMessage::Gis(super::super::gis::Message::Terrain(Message::Level("hoog".into()))));
+        let _ = app.update(AppMessage::Gis(super::super::gis::Message::Terrain(Message::Measure)));
+        assert!(app.gis.terrain.measured.is_none());
         // it is a map layer: no zero point of its own, and the next fetch keeps this zero and level
         assert!(app.zero_points().is_empty());
         assert_eq!(app.gis_level(), Some(done.level));

@@ -1141,6 +1141,9 @@
     "Load terrain": "Araziyi yükle",
     "Surface from a points file…": "Nokta dosyasından yüzey…",
     "Lines without a point left out": "Nokta içermeyen satırlar atlandı",
-    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "“Araziyi yükle”, yukarıdaki yer ve yarıçap için zemin yüksekliklerini PDOK aracılığıyla Hollanda ulusal yükseklik modelinden (AHN) getirir. Binaların ve suyun altında yükseklik yoktur: orada arazi kenardan tamamlanır."
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "“Araziyi yükle”, yukarıdaki yer ve yarıçap için zemin yüksekliklerini PDOK aracılığıyla Hollanda ulusal yükseklik modelinden (AHN) getirir. Binaların ve suyun altında yükseklik yoktur: orada arazi kenardan tamamlanır.",
+    "Cut and fill against level (m)": "Seviyeye göre kazı ve dolgu (m)",
+    "Above": "Üstünde:",
+    "Below": "Altında:"
   }
 }

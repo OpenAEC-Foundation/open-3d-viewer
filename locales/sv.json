@@ -1141,6 +1141,9 @@
     "Load terrain": "Läs in terrängen",
     "Surface from a points file…": "Yta från en punktfil…",
     "Lines without a point left out": "Rader utan punkt utelämnade",
-    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "”Läs in terrängen” hämtar markhöjderna från Nederländernas nationella höjdmodell (AHN) via PDOK, för platsen och radien ovan. Under byggnader och vatten saknar den höjd: där fylls terrängen i från kanten."
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "”Läs in terrängen” hämtar markhöjderna från Nederländernas nationella höjdmodell (AHN) via PDOK, för platsen och radien ovan. Under byggnader och vatten saknar den höjd: där fylls terrängen i från kanten.",
+    "Cut and fill against level (m)": "Schakt och fyll mot nivå (m)",
+    "Above": "Över",
+    "Below": "Under"
   }
 }

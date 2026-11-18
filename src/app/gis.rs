@@ -246,7 +246,7 @@ impl App {
                 self.gis.note = None;
                 let label = self.gis.place.as_ref().map_or_else(|| format!("RD {:.0} {:.0}", center.x, center.y), |place| place.name.clone());
                 let names = layers.iter().map(|layer| (*layer, file_name(word(*layer, l), &label))).collect();
-                return fetch_task(names, pdok::Bounds::around(center, f64::from(self.gis.radius)), frame);
+                return fetch_task(names, pdok::Bounds::around(center, f64::from(self.gis.radius)), frame, self.kept_terrain().map(|kept| kept.tin.clone()));
             }
             Message::Terrain(message) => return self.update_terrain(message),
             Message::Fetched(result) => {
@@ -272,12 +272,15 @@ impl App {
             }
         };
         self.gis.query = query.to_string();
-        let (frame, _) = self.gis_frame(place.rd);
         let names = Layer::ALL.into_iter().zip(self.gis.layers).filter(|(_, on)| *on).map(|(layer, _)| (layer, file_name(word(layer, l), &place.name))).collect();
-        let fetched = fetch(names, pdok::Bounds::around(place.rd, f64::from(self.gis.radius)), frame)?;
+        let center = place.rd;
         self.gis.place = Some(place);
+        // the terrain first, so the parcels and buildings lie on it
+        self.open_terrain(l)?;
+        let (frame, _) = self.gis_frame(center);
+        let fetched = fetch(names, pdok::Bounds::around(center, f64::from(self.gis.radius)), frame, self.kept_terrain().map(|kept| kept.tin.clone()))?;
         self.take_fetched(frame, fetched);
-        self.open_terrain(l)
+        Ok(())
 
     }
 
@@ -408,9 +411,16 @@ pub(super) fn file_name(layer: &str, place: &str) -> String {
 }
 
 /// The model of a layer's features, as the GeoJSON reader makes it.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
 fn model_of(name: String, layer: Layer, items: &[serde_json::Value], frame: &Frame, more: bool) -> Result<Fetched, String> {
-    let collection = pdok::collection(layer, items, frame);
+    model_on(name, layer, items, frame, more, None)
+}
+
+/// As [`model_of`], with the features laid on the terrain where it is given.
+#[cfg(not(target_arch = "wasm32"))]
+fn model_on(name: String, layer: Layer, items: &[serde_json::Value], frame: &Frame, more: bool, terrain: Option<&bim_civil::Tin>) -> Result<Fetched, String> {
+    let ground = terrain.map(|tin| move |x: f64, y: f64| tin.height(x, y));
+    let collection = pdok::collection_on(layer, items, frame, ground.as_ref().map(|g| g as pdok::Ground));
     let (Some(first), true) = (collection.first, collection.count > 0) else {
         return Ok(Fetched { layer, model: None, first: [0.0; 2], count: 0, more });
     };
@@ -439,7 +449,7 @@ fn get(url: &str) -> Result<String, String> {
 
 /// The features of the layers in `bounds`, each as a model in the coordinates of `frame`.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch(names: Vec<(Layer, String)>, bounds: pdok::Bounds, frame: Frame) -> Result<Vec<Fetched>, String> {
+fn fetch(names: Vec<(Layer, String)>, bounds: pdok::Bounds, frame: Frame, terrain: Option<Arc<bim_civil::Tin>>) -> Result<Vec<Fetched>, String> {
     let mut out = Vec::new();
     for (layer, name) in names {
         let mut items = Vec::new();
@@ -450,7 +460,7 @@ fn fetch(names: Vec<(Layer, String)>, bounds: pdok::Bounds, frame: Frame) -> Res
             items.extend(page.features);
             next = page.next;
         }
-        out.push(model_of(name, layer, &items, &frame, next.is_some())?);
+        out.push(model_on(name, layer, &items, &frame, next.is_some(), terrain.as_deref())?);
     }
     Ok(out)
 }
@@ -472,12 +482,12 @@ fn search_task(query: String) -> Task<AppMessage> {
 
 /// Fetches the surroundings on a worker thread.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_task(names: Vec<(Layer, String)>, bounds: pdok::Bounds, frame: Frame) -> Task<AppMessage> {
+fn fetch_task(names: Vec<(Layer, String)>, bounds: pdok::Bounds, frame: Frame, terrain: Option<Arc<bim_civil::Tin>>) -> Task<AppMessage> {
     Task::perform(
         async move {
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(fetch(names, bounds, frame));
+                let _ = tx.send(fetch(names, bounds, frame, terrain));
             });
             rx.await.unwrap_or_else(|_| Err("the surroundings did not come back".into()))
         },
@@ -492,7 +502,7 @@ fn search_task(_: String) -> Task<AppMessage> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn fetch_task(_: Vec<(Layer, String)>, _: pdok::Bounds, _: Frame) -> Task<AppMessage> {
+fn fetch_task(_: Vec<(Layer, String)>, _: pdok::Bounds, _: Frame, _: Option<Arc<bim_civil::Tin>>) -> Task<AppMessage> {
     Task::done(AppMessage::Gis(Message::Fetched(Err("the browser build does not fetch surroundings yet".into()))))
 }
 
@@ -664,14 +674,29 @@ mod tests {
         let place = places.iter().find(|p| p.kind == "adres").expect("an address");
         assert!(place.rd.distance(Rd::new(154_792.0, 463_172.0)) < 50.0, "{place:?}");
         let names = vec![(Layer::Parcels, "Percelen.geojson".to_string()), (Layer::Buildings, "Panden.geojson".to_string())];
-        let fetched = fetch(names, pdok::Bounds::around(place.rd, 100.0), Frame::at(place.rd)).unwrap();
+        let fetched = fetch(names, pdok::Bounds::around(place.rd, 100.0), Frame::at(place.rd), None).unwrap();
         assert_eq!(fetched.len(), 2);
         for part in &fetched {
             assert!(part.count > 3 && part.model.is_some() && !part.more, "{:?}: {}", part.layer, part.count);
         }
         // a town centre within 500 m holds more buildings than one page: the pages are followed
-        let many = fetch(vec![(Layer::Buildings, "Panden.geojson".to_string())], pdok::Bounds::around(place.rd, 500.0), Frame::at(place.rd)).unwrap();
+        let many = fetch(vec![(Layer::Buildings, "Panden.geojson".to_string())], pdok::Bounds::around(place.rd, 500.0), Frame::at(place.rd), None).unwrap();
         assert!(many[0].count > pdok::PAGE, "{}", many[0].count);
+    }
+
+    #[test]
+    fn the_surroundings_lie_on_the_terrain_when_there_is_one() {
+        let frame = Frame::at(Rd::new(154_800.0, 463_200.0));
+        // ground 3 m over the zero level, everywhere within 50 m of the zero
+        let tin = bim_civil::Tin::from_parts(vec![[-50.0, -50.0, 3.0], [50.0, -50.0, 3.0], [50.0, 50.0, 3.0], [-50.0, 50.0, 3.0]], vec![[0, 1, 2], [0, 2, 3]]);
+        let lowest = |fetched: Fetched| fetched.model.unwrap().layers[0].positions.chunks_exact(3).map(|p| p[2]).fold(f32::INFINITY, f32::min);
+        let on = model_on("Panden.geojson".into(), Layer::Buildings, &[building([154_810.0, 463_200.0])], &frame, false, Some(&tin)).unwrap();
+        assert!((lowest(on) - 3.05).abs() < 1e-3);
+        let lines = model_on("Percelen.geojson".into(), Layer::Parcels, &[parcel([154_810.0, 463_200.0])], &frame, false, Some(&tin)).unwrap();
+        assert!((lowest(lines) - 3.06).abs() < 1e-2);
+        // without terrain they lie at the zero level
+        let flat = model_on("Panden.geojson".into(), Layer::Buildings, &[building([154_810.0, 463_200.0])], &frame, false, None).unwrap();
+        assert_eq!(lowest(flat), 0.0);
     }
 
     #[test]

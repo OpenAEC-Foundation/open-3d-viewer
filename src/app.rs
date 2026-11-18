@@ -41,6 +41,7 @@ mod join_marks;
 mod later;
 mod precut;
 mod levels;
+pub mod libraries;
 pub mod library;
 mod marks;
 mod gis;
@@ -62,6 +63,7 @@ mod underlays;
 mod views_in_3d;
 
 pub use docs::{DocsMessage, DocsTab};
+pub use libraries::LibrariesMessage;
 pub use ifc::{IfcTab, IfcView};
 pub use marks::DrawKind;
 #[cfg(test)]
@@ -353,6 +355,8 @@ pub struct App {
     pub ifc: IfcTab,
     /// Docs: the documents of the project folder.
     pub docs: DocsTab,
+    /// Library, the product: the source and the country its page shows.
+    pub libraries: libraries::LibrariesView,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -505,6 +509,8 @@ pub enum Message {
     Library(library::LibraryMessage),
     /// Docs: the documents of the project folder.
     Docs(docs::DocsMessage),
+    /// Library, the product: the source or the country to show.
+    Libraries(libraries::LibrariesMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -993,6 +999,7 @@ impl Default for App {
             schedule_scroll: (0.0, 0.0),
             ifc: IfcTab::default(),
             docs: DocsTab::default(),
+            libraries: libraries::LibrariesView::default(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -2137,6 +2144,7 @@ impl App {
             Message::ExplorerTab(tab) => self.explorer_tab = tab,
             Message::Library(message) => return self.library_update(message),
             Message::Docs(message) => return self.docs_update(message),
+            Message::Libraries(message) => return self.libraries_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -4864,10 +4872,16 @@ impl Palette {
 /// window and `--screenshot`.
 #[cfg(test)]
 pub(crate) fn test_ui(app: &App, size: iced::Size) -> iced_test::Simulator<'_, Message> {
+    test_ui_of(size, app.view())
+}
+
+/// A part of the interface at `size` in a test, drawn on the CPU as [`test_ui`] is.
+#[cfg(test)]
+pub(crate) fn test_ui_of<'a>(size: iced::Size, part: Element<'a, Message>) -> iced_test::Simulator<'a, Message> {
     static CPU: std::sync::Once = std::sync::Once::new();
     // iced_test reads the variable for each simulator; all of them are made here
     CPU.call_once(|| std::env::set_var("ICED_TEST_BACKEND", "tiny-skia"));
-    iced_test::Simulator::with_size(iced::Settings::default(), size, app.view())
+    iced_test::Simulator::with_size(iced::Settings::default(), size, part)
 }
 
 #[cfg(test)]

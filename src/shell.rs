@@ -114,7 +114,7 @@ enum RibbonPart {
 /// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1410.0;
 /// The products to come, named on the switch but not to be chosen yet.
-const SOON: [&str; 3] = ["FM", "Environment", "GIS"];
+const SOON: [&str; 3] = ["FM", "Requirements", "GIS"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -1385,6 +1385,11 @@ impl Studio {
         for &product in &self.products {
             list.push(Command::new(product.command(), product.full_name(), Msg::Product(product)).mode(product == shown).detail(product.purpose(l)));
         }
+        // Library, the product: the source whose library its page shows
+        for source in crate::app::libraries::Source::ALL {
+            let show = go(Message::Libraries(crate::app::LibrariesMessage::Source(source)));
+            list.push(Command::new(source.command(), source.label(l), show).icon(small(source.icon()), large(source.icon())).mode(app.libraries.source == source).detail(source.purpose(l)));
+        }
         // the Validator's commands: issues, checks, clashes and the rule set
         // Pointcloud: how the points show, the meshes, exports and drawing made of a cloud (on the
         // desktop) and the card with what the file holds and how the jobs are done
@@ -2342,6 +2347,8 @@ impl Studio {
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
                 (l.text("Schaal", "Scale"), vec![smalls(&["analysis.larger", "analysis.smaller"])]),
             ],
+            // the four sources of library content
+            RibbonPage::Library => vec![(l.text("Bibliotheek", "Library"), vec![large("library.general"), large("library.country"), large("library.company"), large("library.project")])],
             // the project folder, the picked document, and its link with the model
             RibbonPage::Docs => vec![
                 (l.text("Projectmap", "Project folder"), vec![large("docs.folder"), smalls(&["docs.refresh", "docs.leave"])]),
@@ -2495,11 +2502,15 @@ impl Studio {
         let l = self.l();
         let p = palette(look);
         let app = &self.app;
+        // Library: its page is the workspace, with or without a model, and has no tabs of views
+        if self.product() == Product::Library {
+            return app.libraries_page(p, l).map(Msg::App);
+        }
         let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer | Product::Docs => (
+                Product::Viewer | Product::Docs | Product::Library => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2623,6 +2634,8 @@ impl Studio {
             }
             // Docs: the folders of the project folder
             Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
+            // Library: the sources of library content, and the countries
+            Product::Library => (l.text("Bibliotheken", "Libraries"), Self::pane(self.app.libraries_pane(palette(look), l))),
             Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
@@ -3440,7 +3453,7 @@ mod tests {
         // it is on the switch once: a product there is, is no product to come; it stands where it
         // was announced, after the Modeller
         assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
-        assert_eq!(Product::ALL.last(), Some(&Product::Docs));
+        assert_eq!(Product::ALL[Product::Modeller.index() + 1], Product::Docs);
         // no project folder yet: the page asks for one
         assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
         // with one: its folders are the left pane, its files the page

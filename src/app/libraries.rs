@@ -12,10 +12,12 @@
 use super::{App, Message, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::profile::steel_profiles;
-use bim_library::{DrawingStandard, HatchKind, Library, LinearRole, Role, Series, SystemGroup};
+use bim_library::{DrawingStandard, HatchKind, HatchPattern, Library, LinearRole, Role, Series, SystemGroup};
+use iced::mouse;
+use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, row, scrollable, text, Column, Space};
-use iced::{Center, Color, Element, Fill, Task};
+use iced::widget::{button, canvas as canvas_widget, column, container, row, scrollable, text, Column, Space};
+use iced::{Center, Color, Element, Fill, Point, Rectangle, Size, Task};
 use openaec_ui::Language;
 use std::sync::OnceLock;
 
@@ -152,7 +154,9 @@ pub enum LibrariesMessage {
 /// What a card shows of its content.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sample {
-    /// Colours: of materials, hatches or a house style.
+    /// Hatches, drawn as a drawing shows them.
+    Hatches(Vec<HatchPattern>),
+    /// Colours: of materials or a house style.
     Swatches(Vec<[u8; 3]>),
     /// The first names.
     Names(Vec<String>),
@@ -197,8 +201,8 @@ fn inb() -> &'static Library {
 
 /// The hatches of a drawing standard: one per kind of material.
 fn hatches(l: Language, standard: DrawingStandard) -> Card {
-    let fills = HatchKind::ALL.iter().map(|kind| kind.pattern(standard).fill).collect();
-    Card::of(l.text("Arceringen", "Hatches"), HatchKind::ALL.len(), Sample::Swatches(fills))
+    let patterns = HatchKind::ALL.iter().map(|kind| kind.pattern(standard)).collect();
+    Card::of(l.text("Arceringen", "Hatches"), HatchKind::ALL.len(), Sample::Hatches(patterns))
 }
 
 /// The steel table: its profiles, by the names of its series.
@@ -355,6 +359,10 @@ fn card_view<'a>(card: Card, p: Palette, l: Language) -> Element<'a, Message> {
         Some((count, sample)) => {
             head = head.push(text(count.to_string()).size(12).color(p.text_secondary));
             match sample {
+                Sample::Hatches(patterns) => {
+                    let width = patterns.len() as f32 * (HatchTiles::SIDE + HatchTiles::GAP);
+                    canvas_widget(HatchTiles { patterns, edge: p.border }).width(width).height(HatchTiles::SIDE).into()
+                }
                 Sample::Swatches(colours) => row(colours.into_iter().take(12).map(|[r, g, b]| {
                     container(Space::new().width(14).height(18))
                         .style(move |_| container::Style { background: Some(Color::from_rgb8(r, g, b).into()), border: iced::Border { color: p.border, width: 1.0, radius: 2.0.into() }, ..Default::default() })
@@ -382,6 +390,34 @@ fn card_view<'a>(card: Card, p: Palette, l: Language) -> Element<'a, Message> {
         .clip(true)
         .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() })
         .into()
+}
+
+/// The hatches of a card, each in a tile of its own, drawn as a section shows them.
+struct HatchTiles {
+    patterns: Vec<HatchPattern>,
+    edge: Color,
+}
+
+impl HatchTiles {
+    const SIDE: f32 = 22.0;
+    const GAP: f32 = 3.0;
+    /// Pixels per metre of the model: a hatch spaced 40 mm shows a line every 8 px.
+    const SCALE: f32 = 200.0;
+}
+
+impl canvas::Program<Message> for HatchTiles {
+    type State = ();
+
+    fn draw(&self, _state: &(), renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        for (k, pattern) in self.patterns.iter().enumerate() {
+            let tile = Rectangle::new(Point::new(k as f32 * (Self::SIDE + Self::GAP), 0.0), Size::new(Self::SIDE, Self::SIDE));
+            // each hatch stays in its own tile
+            frame.with_clip(tile, |frame| super::library::draw_hatch(frame, Rectangle::new(Point::ORIGIN, tile.size()), *pattern, Self::SCALE));
+            frame.stroke(&Path::rectangle(tile.position(), tile.size()), Stroke::default().with_color(self.edge).with_width(1.0));
+        }
+        vec![frame.into_geometry()]
+    }
 }
 
 #[cfg(test)]

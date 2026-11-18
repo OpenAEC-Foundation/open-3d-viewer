@@ -649,7 +649,7 @@ impl canvas::Program<Message> for Section {
 
 /// A hatch in a band: its fill, then its lines (angle in degrees on paper, spacing in metres on
 /// the model at `scale` px per metre), crossed lines, or one zigzag along the band.
-fn draw_hatch(frame: &mut Frame, band: Rectangle, hatch: bim_library::HatchPattern, scale: f32) {
+pub(super) fn draw_hatch(frame: &mut Frame, band: Rectangle, hatch: bim_library::HatchPattern, scale: f32) {
     frame.fill_rectangle(band.position(), band.size(), rgb(hatch.fill));
     let ink = Stroke::default().with_color(rgb(hatch.line)).with_width(0.8);
     if hatch.zigzag {

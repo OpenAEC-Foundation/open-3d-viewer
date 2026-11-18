@@ -2502,11 +2502,11 @@ impl Studio {
         let l = self.l();
         let p = palette(look);
         let app = &self.app;
-        // Library: its page is the workspace, with or without a model, and has no tabs of views
-        if self.product() == Product::Library {
-            return app.libraries_page(p, l).map(Msg::App);
-        }
-        let workspace: Element<'_, Msg> = if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
+        let library = self.product() == Product::Library;
+        let workspace: Element<'_, Msg> = if library {
+            // Library: its page is the workspace, with or without a model
+            app.libraries_page(p, l).map(Msg::App)
+        } else if app.model.is_none() && !app.docs.shown && !matches!(app.status, Status::Loading { .. }) {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
@@ -2570,7 +2570,8 @@ impl Studio {
         }
         let doc_tabs = app.doc_tabs();
         // Docs opens without a model too; in its own product it then needs no tab
-        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 {
+        // (the Library page is no view of the model: no tabs of views over it)
+        if (app.model.is_some() || (app.docs.open && !app.docs.in_product)) && doc_tabs.len() > 1 && !library {
             let tabs: Vec<DocumentTab<'_>> = doc_tabs
                 .iter()
                 .map(|&t| if t == DocTab::Model { DocumentTab::pinned(model_name) } else { DocumentTab::new(app.tab_title(t), false) })
@@ -2607,7 +2608,8 @@ impl Studio {
                 .push(ch::splitter(look, dragging(Side::Left), Msg::SplitterPress(Side::Left)));
         }
         body = body.push(middle);
-        if self.prefs.right {
+        // (nothing can be picked on the Library page yet: no properties beside it)
+        if self.prefs.right && !library {
             let hide = l.text("Eigenschappen verbergen", "Hide properties");
             let actions = vec![w::with_tooltip(look, w::icon_button(look, small("panel.right"), 20.0, true, hide, Some(Msg::ToggleRight)), hide, Some(self.command("view.right").shortcut_label().unwrap_or("")))];
             body = body

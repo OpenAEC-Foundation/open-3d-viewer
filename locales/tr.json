@@ -1130,6 +1130,15 @@
     "Party": "Taraf",
     "Take in BCF": "BCF al",
     "Send BCF": "BCF gönder",
-    "Send open issues only": "Yalnızca açık sorunları gönder"
+    "Send open issues only": "Yalnızca açık sorunları gönder",
+    "Polyline": "Çoklu çizgi",
+    "Arc": "Yay",
+    "Ellipse": "Elips",
+    "Remove shape": "Şekli kaldır",
+    "Click the points. Enter or a click on the last point ends the polyline, a click on the first point closes it.": "Noktalara tıklayın. Enter veya son noktaya tıklamak çoklu çizgiyi bitirir, ilk noktaya tıklamak onu kapatır.",
+    "Click two opposite corners.": "Karşılıklı iki köşeye tıklayın.",
+    "Click the centre and a point on the circle.": "Merkeze ve çember üzerindeki bir noktaya tıklayın.",
+    "Click the start, a point on the arc and the end.": "Başlangıca, yay üzerindeki bir noktaya ve sona tıklayın.",
+    "Click the centre, the end of one axis and how far the other reaches.": "Merkeze, bir eksenin ucuna ve diğerinin ne kadar uzandığına tıklayın."
   }
 }

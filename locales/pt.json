@@ -1130,6 +1130,15 @@
     "Party": "Parte",
     "Take in BCF": "Incorporar BCF",
     "Send BCF": "Enviar BCF",
-    "Send open issues only": "Enviar apenas as issues abertas"
+    "Send open issues only": "Enviar apenas as issues abertas",
+    "Polyline": "Polilinha",
+    "Arc": "Arco",
+    "Ellipse": "Elipse",
+    "Remove shape": "Remover forma",
+    "Click the points. Enter or a click on the last point ends the polyline, a click on the first point closes it.": "Clique nos pontos. Enter ou um clique no último ponto termina a polilinha; um clique no primeiro ponto fecha-a.",
+    "Click two opposite corners.": "Clique em dois cantos opostos.",
+    "Click the centre and a point on the circle.": "Clique no centro e num ponto do círculo.",
+    "Click the start, a point on the arc and the end.": "Clique no início, num ponto do arco e no fim.",
+    "Click the centre, the end of one axis and how far the other reaches.": "Clique no centro, na extremidade de um eixo e até onde chega o outro."
   }
 }

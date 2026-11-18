@@ -1130,6 +1130,15 @@
     "Party": "Partei",
     "Take in BCF": "BCF einlesen",
     "Send BCF": "BCF senden",
-    "Send open issues only": "Nur offene Issues senden"
+    "Send open issues only": "Nur offene Issues senden",
+    "Polyline": "Polylinie",
+    "Arc": "Bogen",
+    "Ellipse": "Ellipse",
+    "Remove shape": "Form entfernen",
+    "Click the points. Enter or a click on the last point ends the polyline, a click on the first point closes it.": "Klicken Sie die Punkte an. Enter oder ein Klick auf den letzten Punkt beendet die Polylinie, ein Klick auf den ersten Punkt schließt sie.",
+    "Click two opposite corners.": "Klicken Sie zwei gegenüberliegende Ecken an.",
+    "Click the centre and a point on the circle.": "Klicken Sie den Mittelpunkt und einen Punkt auf dem Kreis an.",
+    "Click the start, a point on the arc and the end.": "Klicken Sie den Anfang, einen Punkt auf dem Bogen und das Ende an.",
+    "Click the centre, the end of one axis and how far the other reaches.": "Klicken Sie den Mittelpunkt, das Ende der einen Achse und die Reichweite der anderen an."
   }
 }

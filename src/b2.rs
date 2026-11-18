@@ -51,6 +51,7 @@ icons! {
     "curtain.new", "grid.end-couple", "draw.l-shape", "edit.delete", "edit.cut", "object.edit", "frame.combination",
     "frame.new-door", "frame.new-turn-tilt", "resource.level", "drawing.plan", "drawing.sheet-new",
     "construction.library", "draw.dimension", "draw.text", "drawing.section",
+    "draw.polyline", "draw.rectangle", "draw.circle", "draw.arc", "draw.ellipse",
     // the BIM Validator
     "git.issue", "bcf.import", "bcf.export", "validation.select-specification", "validation.workspace", "note.reply", "team.add",
     "ifc.compare-files", "export.ifc-report", "page.next", "page.previous", "validation.highlight-failures", "validation.clear-highlights",

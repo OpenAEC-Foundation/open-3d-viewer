@@ -1130,6 +1130,15 @@
     "Party": "Part",
     "Take in BCF": "Läs in BCF",
     "Send BCF": "Skicka BCF",
-    "Send open issues only": "Skicka bara öppna ärenden"
+    "Send open issues only": "Skicka bara öppna ärenden",
+    "Polyline": "Polylinje",
+    "Arc": "Båge",
+    "Ellipse": "Ellips",
+    "Remove shape": "Ta bort form",
+    "Click the points. Enter or a click on the last point ends the polyline, a click on the first point closes it.": "Klicka på punkterna. Enter eller ett klick på den sista punkten avslutar polylinjen, ett klick på den första punkten sluter den.",
+    "Click two opposite corners.": "Klicka på två motsatta hörn.",
+    "Click the centre and a point on the circle.": "Klicka på mittpunkten och en punkt på cirkeln.",
+    "Click the start, a point on the arc and the end.": "Klicka på början, en punkt på bågen och slutet.",
+    "Click the centre, the end of one axis and how far the other reaches.": "Klicka på mittpunkten, änden av den ena axeln och hur långt den andra når."
   }
 }

@@ -1345,7 +1345,8 @@ impl Studio {
             .icon(small("draw.dimension"), large("draw.dimension"))
             .enabled(plan_shown.is_some()),
         );
-        for (kind, icon) in [(crate::app::DrawKind::Line, "draw.line"), (crate::app::DrawKind::Rectangle, "draw.filled-area"), (crate::app::DrawKind::Circle, "draw.coordinate")] {
+        for kind in crate::app::DrawKind::ALL {
+            let icon = kind.icon();
             let on = app.draw_tool == Some(kind);
             let drawable = app.shown_drawing().is_some();
             list.push(Command::new(kind.command(), kind.label(l), go(Message::DrawTool(Some(kind)))).icon(small(icon), large(icon)).toggle(on && drawable).enabled(drawable));
@@ -2327,12 +2328,14 @@ impl Studio {
                 (l.text("Tekeningen", "Drawings"), vec![large("project.sheet")]),
                 (l.text("Bibliotheek", "Library"), vec![large("project.library")]),
             ],
-            // in the floor plan, section or sheet shown
-            RibbonPage::Annotate => vec![
-                (l.text("Maatvoering", "Dimension"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions"])]),
-                (l.text("Tekst", "Text"), vec![large("annotate.text")]),
-                // lines that are no model, drawn on the view shown
-                (l.text("Tekenen", "Draw"), vec![large("draw.line"), large("draw.rectangle"), large("draw.circle")]),
+            // drawing in the floor plan, section or sheet shown, in the order of a drawing program's
+            // first tab: selecting, the lines and shapes that are no model, what is written and
+            // measured on the drawing, and changing what is selected
+            RibbonPage::Draw => vec![
+                (l.text("Selectie", "Selection"), vec![large("model.select")]),
+                (l.text("Tekenen", "Draw"), vec![smalls(&["draw.line", "draw.polyline", "draw.rectangle"]), smalls(&["draw.circle", "draw.arc", "draw.ellipse"])]),
+                (l.text("Annoteren", "Annotate"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions", "annotate.text"])]),
+                (l.text("Wijzigen", "Modify"), vec![smalls(&["model.move", "model.copy", "model.rotate"]), smalls(&["model.mirror", "model.edit", "model.delete"])]),
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![
@@ -3206,13 +3209,13 @@ mod tests {
         let _ = studio.update(Msg::App(Message::Navigate(crate::viewport::Navigate::Hover { x, y, width: w, height: h })));
         assert!(studio.app.modeller.aim.is_some(), "the cursor is over the wall");
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-window-nl.png")).expect("snapshot");
-        // the Project tab, and the Annotate tab in a floor plan
+        // the Project tab, and the Draw tab in a floor plan
         let _ = studio.update(Msg::App(Message::ModelTool(None)));
-        studio.ribbon_tab = 1;
+        studio.ribbon_tab = 2;
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-project-nl.png")).expect("snapshot");
         let level: std::sync::Arc<str> = studio.app.document.levels()[0].path.as_str().into();
         let _ = studio.update(Msg::App(Message::NewPlan(level)));
-        studio.ribbon_tab = 2;
+        studio.ribbon_tab = 1;
         studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("modeller-annotate-nl.png")).expect("snapshot");
         // a wall of an opened Revit file: its grips in the Modeller, then taken over by a drag of
         // its end, the project now an IFCX document
@@ -3414,6 +3417,29 @@ mod tests {
         for id in ["annotate.dimension", "annotate.standard-dimensions", "annotate.text", "annotate.section"] {
             assert!(studio.command(id).enabled, "{id} in a plan");
         }
+        // the Draw tab, second after Model: selecting, the six drawing tools, what is written and
+        // measured on the drawing, and changing what is selected; each a command that is there
+        let _ = studio.update(Msg::RibbonTab(1));
+        assert_eq!(studio.ribbon_page(), RibbonPage::Draw);
+        let groups = studio.ribbon_groups();
+        assert_eq!(groups.iter().map(|g| g.0).collect::<Vec<_>>(), ["Selection", "Draw", "Annotate", "Modify"]);
+        let ids: Vec<&str> = groups
+            .iter()
+            .flat_map(|g| &g.1)
+            .flat_map(|part| match part {
+                RibbonPart::Large(id) => vec![*id],
+                RibbonPart::Smalls(ids) => ids.clone(),
+            })
+            .collect();
+        for kind in crate::app::DrawKind::ALL {
+            assert!(ids.contains(&kind.command()) && studio.command(kind.command()).enabled, "{kind:?}");
+        }
+        for id in &ids {
+            assert_eq!(studio.command(id).id, *id);
+        }
+        let _ = studio.update(studio.command("draw.arc").message);
+        assert_eq!(studio.app.draw_tool, Some(crate::app::DrawKind::Arc));
+        assert!(studio.command("draw.arc").kind == openaec_ui::design::command::CommandKind::Toggle(true));
         let _ = studio.update(studio.command("annotate.dimension").message);
         assert!(studio.app.dimension_tool && studio.command("annotate.dimension").kind == openaec_ui::design::command::CommandKind::Toggle(true));
         // the door and window tools are on the Model tab
@@ -3494,7 +3520,7 @@ mod tests {
         let _ = studio.update(Msg::Product(Product::Modeller));
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Modeller, RibbonPage::Model));
         let shown = tabs(&studio);
-        for tab in ["Tab: Model", "Tab: Project", "Tab: Annotate", "Tab: View"] {
+        for tab in ["Tab: Model", "Tab: Draw", "Tab: Project", "Tab: View"] {
             assert!(shown.contains(&tab.to_string()), "{shown:?}");
         }
         let _ = studio.update(Msg::RibbonTab(3));

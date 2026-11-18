@@ -575,6 +575,8 @@ pub enum Message {
     DrawTool(Option<marks::DrawKind>),
     /// Lines drawn on a view (its own points).
     AddLines(Arc<str>, Vec<[[f64; 2]; 2]>),
+    /// What a drawing tool drew on a view: its lines, one shape together.
+    AddShape(Arc<str>, marks::DrawKind, Vec<[[f64; 2]; 2]>),
     /// Pick a dimension or text on the view shown in its tab (`None`: nothing).
     PickMark(Option<marks::MarkPick>),
     /// Remove what is picked on the view shown in its tab.
@@ -2238,6 +2240,12 @@ impl App {
             }
             Message::AddLines(view, lines) => {
                 self.document.add_view_lines(&view, &lines);
+            }
+            Message::AddShape(view, kind, lines) => {
+                match kind.shape() {
+                    Some(shape) => self.document.add_view_shape(&view, shape, &lines),
+                    None => self.document.add_view_lines(&view, &lines),
+                };
             }
             Message::AddNote(view, at, wording) => {
                 self.document.add_note(&view, at, &wording);

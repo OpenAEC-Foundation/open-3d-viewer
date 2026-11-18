@@ -1130,6 +1130,15 @@
     "Party": "Partei",
     "Take in BCF": "BCF einlesen",
     "Send BCF": "BCF senden",
-    "Send open issues only": "Nur offene Issues senden"
+    "Send open issues only": "Nur offene Issues senden",
+    "Terrain": "Gelände",
+    "Contours": "Höhenlinien",
+    "Surface": "Oberfläche",
+    "The browser build does not fetch terrain yet.": "Die Browserversion lädt noch kein Gelände.",
+    "Fetching the terrain…": "Gelände wird geladen…",
+    "Load terrain": "Gelände laden",
+    "Surface from a points file…": "Oberfläche aus Punktdatei…",
+    "Lines without a point left out": "Zeilen ohne Punkt ausgelassen",
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "„Gelände laden“ ruft die Geländehöhen aus dem niederländischen Höhenmodell (AHN) über PDOK ab, für den Ort und Radius oben. Unter Gebäuden und Wasser hat es keine Höhe: Dort wird das Gelände vom Rand her ergänzt."
   }
 }

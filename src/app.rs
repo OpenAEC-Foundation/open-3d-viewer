@@ -44,6 +44,7 @@ mod levels;
 pub mod library;
 mod marks;
 mod gis;
+mod terrain;
 mod origin;
 mod origin_map;
 pub mod modeller;

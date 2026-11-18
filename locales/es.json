@@ -1130,6 +1130,15 @@
     "Party": "Parte",
     "Take in BCF": "Incorporar BCF",
     "Send BCF": "Enviar BCF",
-    "Send open issues only": "Enviar solo las incidencias abiertas"
+    "Send open issues only": "Enviar solo las incidencias abiertas",
+    "Terrain": "Terreno",
+    "Contours": "Curvas de nivel",
+    "Surface": "Superficie",
+    "The browser build does not fetch terrain yet.": "La versión para navegador aún no carga el terreno.",
+    "Fetching the terrain…": "Cargando el terreno…",
+    "Load terrain": "Cargar el terreno",
+    "Surface from a points file…": "Superficie a partir de un archivo de puntos…",
+    "Lines without a point left out": "Líneas sin punto omitidas",
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "«Cargar el terreno» obtiene las alturas del suelo del modelo nacional de elevaciones de los Países Bajos (AHN) a través de PDOK, para el lugar y el radio de arriba. Bajo edificios y agua no tiene altura: allí el terreno se completa desde el borde."
   }
 }

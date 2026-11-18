@@ -46,9 +46,14 @@ pub struct Gis {
     pub place: Option<Place>,
     /// The grid point at the zero of the project while no model says where it lies: the place
     /// of the first fetch, kept while a model fetched then is open.
-    zero: Option<Rd>,
+    pub(super) zero: Option<Rd>,
+    /// The height above NAP at the project's zero level while no model says it: the ground at
+    /// the zero, set by the first terrain.
+    pub(super) zero_level: Option<f64>,
     /// The models fetched (their ids).
-    fetched: Vec<u64>,
+    pub(super) fetched: Vec<u64>,
+    /// The terrain section.
+    pub(super) terrain: super::terrain::State,
     pub radius: u32,
     /// Which layers to fetch, as [`Layer::ALL`].
     pub layers: [bool; 2],
@@ -59,7 +64,7 @@ pub struct Gis {
 
 impl Default for Gis {
     fn default() -> Self {
-        Gis { query: String::new(), searching: false, found: None, place: None, zero: None, fetched: Vec::new(), radius: RADII[1], layers: [true; 2], fetching: false, note: None }
+        Gis { query: String::new(), searching: false, found: None, place: None, zero: None, zero_level: None, fetched: Vec::new(), terrain: Default::default(), radius: RADII[1], layers: [true; 2], fetching: false, note: None }
     }
 }
 
@@ -95,6 +100,8 @@ pub enum Message {
     Fetch(Language),
     /// What was fetched, with how the grid lay in the project when it was asked.
     Fetched(Result<(Frame, Vec<Fetched>), String>),
+    /// The terrain section.
+    Terrain(super::terrain::Message),
 }
 
 /// How the grid lies in a model whose file says so: its map conversion to RD New.
@@ -134,7 +141,7 @@ fn coordinates(rd: Rd) -> String {
 impl App {
     /// The first model that says where it lies on the grid: how the grid lies in it, and what
     /// takes a point of its own coordinates to where the scene draws it.
-    fn georeferenced(&self) -> Option<(Frame, DVec3)> {
+    pub(super) fn georeferenced(&self) -> Option<(Frame, DVec3)> {
         let scene = self.model.as_ref()?;
         let mut first = 0usize;
         for entry in &self.models {
@@ -160,8 +167,19 @@ impl App {
         self.gis.fetched.contains(&model.id)
     }
 
+    /// The height above NAP of the project's zero level: what a model's map conversion says,
+    /// else the ground at the zero as the first terrain found it, while a fetched model is open.
+    pub(super) fn gis_level(&self) -> Option<f64> {
+        if let Some(entry) = self.models.iter().find(|entry| georeference(&entry.model).is_some()) {
+            let height = entry.model.project.info.iter().find(|(key, _)| key == "Georeference height (m)").and_then(|(_, value)| value.trim().parse().ok());
+            return Some(height.unwrap_or(0.0));
+        }
+        let open = |id: &u64| self.models.iter().any(|entry| entry.model.id == *id);
+        self.gis.zero_level.filter(|_| self.gis.fetched.iter().any(open))
+    }
+
     /// The place the surroundings are fetched around: the one chosen, else where a model lies.
-    fn gis_center(&self) -> Option<Rd> {
+    pub(super) fn gis_center(&self) -> Option<Rd> {
         self.gis.place.as_ref().map(|place| place.rd).or_else(|| self.model_place())
     }
 
@@ -169,7 +187,7 @@ impl App {
     /// the project to where the scene draws it. Without a model that says where it lies, the
     /// zero of the project is the place of the first fetch that brought a model, while such a
     /// model is open; before that, where a model's site lies, or `center`.
-    fn gis_frame(&self, center: Rd) -> (Frame, DVec3) {
+    pub(super) fn gis_frame(&self, center: Rd) -> (Frame, DVec3) {
         if let Some(placed) = self.georeferenced() {
             return placed;
         }
@@ -230,6 +248,7 @@ impl App {
                 let names = layers.iter().map(|layer| (*layer, file_name(word(*layer, l), &label))).collect();
                 return fetch_task(names, pdok::Bounds::around(center, f64::from(self.gis.radius)), frame);
             }
+            Message::Terrain(message) => return self.update_terrain(message),
             Message::Fetched(result) => {
                 self.gis.fetching = false;
                 match result {
@@ -258,7 +277,8 @@ impl App {
         let fetched = fetch(names, pdok::Bounds::around(place.rd, f64::from(self.gis.radius)), frame)?;
         self.gis.place = Some(place);
         self.take_fetched(frame, fetched);
-        Ok(())
+        self.open_terrain(l)
+
     }
 
     /// Adds the fetched models to the project, each where the grid puts it; `frame` is how the
@@ -376,12 +396,13 @@ impl App {
             None => {}
         }
         rows = rows.push(note(l.text("Percelen en panden komen van het Kadaster via PDOK (alleen Nederland). De vraag vertelt PDOK welke plek u bekijkt; verder gaat er niets mee.", "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.").to_string()));
+        rows = rows.push(iced::widget::rule::horizontal(1)).push(self.terrain_section(p, l));
         rows.into()
     }
 }
 
 /// The name of a fetched model: the layer and the place, as a file a GeoJSON reader takes.
-fn file_name(layer: &str, place: &str) -> String {
+pub(super) fn file_name(layer: &str, place: &str) -> String {
     let place: String = place.chars().map(|c| if c.is_alphanumeric() || " ,.-".contains(c) { c } else { ' ' }).collect();
     format!("{layer} {}.geojson", place.split_whitespace().collect::<Vec<_>>().join(" "))
 }
@@ -398,16 +419,22 @@ fn model_of(name: String, layer: Layer, items: &[serde_json::Value], frame: &Fra
     Ok(Fetched { layer, model: Some(Arc::new(model)), first, count: collection.count, more })
 }
 
-/// What a service answers at an address.
+/// What a service answers at an address, as bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)).user_agent(concat!("OpenBIMSuite/", env!("CARGO_PKG_VERSION"))).build();
+    let response = agent.get(url).call().map_err(|e| format!("PDOK: {e}"))?;
+    let mut answer = Vec::new();
+    // an answer far larger than a page of features or a height grid is not read
+    response.into_reader().take(64 << 20).read_to_end(&mut answer).map_err(|e| format!("PDOK: {e}"))?;
+    Ok(answer)
+}
+
+/// What a service answers at an address, as text.
 #[cfg(not(target_arch = "wasm32"))]
 fn get(url: &str) -> Result<String, String> {
-    use std::io::Read;
-    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(20)).user_agent(concat!("OpenBIMSuite/", env!("CARGO_PKG_VERSION"))).build();
-    let response = agent.get(url).call().map_err(|e| format!("PDOK: {e}"))?;
-    let mut answer = String::new();
-    // an answer far larger than a page of features is not read
-    response.into_reader().take(64 << 20).read_to_string(&mut answer).map_err(|e| format!("PDOK: {e}"))?;
-    Ok(answer)
+    String::from_utf8(get_bytes(url)?).map_err(|_| "PDOK: the answer is no text".to_string())
 }
 
 /// The features of the layers in `bounds`, each as a model in the coordinates of `frame`.

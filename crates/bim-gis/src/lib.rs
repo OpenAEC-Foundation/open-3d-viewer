@@ -4,6 +4,7 @@
 //!   both ways; coordinates as typed; how the grid lies in a project ([`Frame`]).
 //! - [`pdok`]: the open services of PDOK, the geodata platform of the Dutch government: finding
 //!   a place by its address or name, and the parcels and buildings around a place.
+//! - [`heights`]: the ground heights of the national height model around a place.
 //!
 //! Headless and without a network: this crate says what to ask a service and reads what it
 //! answers; the caller sends the request. So it builds for the browser too and its tests need no
@@ -11,6 +12,7 @@
 //!
 //! Lengths are metres.
 
+pub mod heights;
 pub mod pdok;
 pub mod rd;
 

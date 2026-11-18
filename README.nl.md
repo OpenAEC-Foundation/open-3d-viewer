@@ -219,7 +219,7 @@ Elke pull request en elke release start de Linux-build zo op GitHub Actions, op 
 | [`test-models/`](test-models/) | De modellen die de tests openen |
 | [`docs/architecture/`](docs/architecture/) | Hoe één codebase drie producten is: de Viewer, de Modeller en de BIM Validator |
 
-De lezers voor SketchUp, Tekla, PLY en Rhino, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`sketchup-dll`](https://github.com/OpenAEC-Foundation/sketchup-dll), [`tekla-dll`](https://github.com/OpenAEC-Foundation/tekla-dll), [`ply-dll`](https://github.com/OpenAEC-Foundation/ply-dll), [`rhino-dll`](https://github.com/OpenAEC-Foundation/rhino-dll), [`revit-dll`](https://github.com/OpenAEC-Foundation/revit-dll)). Deze repository legt elk vast op een vaste commit.
+De lezers voor SketchUp, Tekla, PLY, Rhino en SolidWorks, en de Revit-bibliotheek, staan in eigen OpenAEC-repositories ([`sketchup-dll`](https://github.com/OpenAEC-Foundation/sketchup-dll), [`tekla-dll`](https://github.com/OpenAEC-Foundation/tekla-dll), [`ply-dll`](https://github.com/OpenAEC-Foundation/ply-dll), [`rhino-dll`](https://github.com/OpenAEC-Foundation/rhino-dll), [`solidworks-dll`](https://github.com/OpenAEC-Foundation/solidworks-dll), [`revit-dll`](https://github.com/OpenAEC-Foundation/revit-dll)). Deze repository legt elk vast op een vaste commit.
 
 ## Uitwisseling
 
@@ -246,6 +246,7 @@ De lezers voor SketchUp, Tekla, PLY en Rhino, en de Revit-bibliotheek, staan in 
 | **USD** (`.usd`, `.usda`, `.usdc`, `.usdz`) | Ja | Nee |
 | **Rhino** (`.3dm`, Rhino 1 t/m 9) | Ja, meshes, polysurfaces en extrusies (hun bewaarde rendermeshes, of door de viewer gemesht als het bestand die niet heeft), SubD, curves, teksten, arceringen, maatvoering, leaders, blokken, puntenwolken | Nee |
 | **Vectorworks** (`.vwx`-documenten, `.sta`-sjablonen; Vectorworks 2027, bèta) | Ja, wanden met hun deuren en ramen, vloeren, trappen en andere volumes, extrusies, sweeps, NURBS-oppervlakken, meshes, symbolen, 2D-vormen en lijnen; lagen en klassen met hun zichtbaarheid, records en IFC-gegevens, opgeslagen aanzichten, bladen | Nee |
+| **SolidWorks** (`.sldprt`-onderdelen, `.sldasm`-samenstellingen; compound-bestanden, zoals SolidWorks ze tot ten minste 2016 schreef; bèta) | Ja, de displaylijst die SolidWorks bij het model bewaart: de getesselleerde vlakken in de kleuren van vlakken en lichamen, en de geplaatste onderdelen van een samenstelling, elk met zijn componentpad, onderdeel, bestand en configuratie. Niet gelezen: de exacte geometrie, andere configuraties dan die waarin het bestand is opgeslagen, texturen, de featureboom, en bestanden in de nieuwere SolidWorks-container | Nee |
 | **Constructief rekenmodel** (`.samjson`, sam-json v1) | Ja, knopen, staven, oppervlakken, opleggingen, scharnieren, profielen, belastingen en resultaten als modelgegevens (tekenen volgt) | Nee |
 | **COLLADA** (`.dae`) | Ja | Nee |
 | **VRML / X3D** (`.wrl`, `.x3d`, `.x3dv`, ook gezipt) | Ja | Nee |

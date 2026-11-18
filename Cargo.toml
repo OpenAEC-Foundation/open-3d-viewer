@@ -1,7 +1,7 @@
 [package]
 name = "open-3d-viewer"
 # OpenAEC calendar versioning: year.ISO week.patch (as openaec-ui and Open Pointcloud Studio)
-version = "2026.47.3"
+version = "2026.47.4"
 description = "Open BIM Suite: 3D model viewer for AEC files, desktop and web (iced + wgpu)"
 authors = ["Open BIM Suite Contributors"]
 license = "LGPL-3.0-or-later"
@@ -116,6 +116,8 @@ tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "0
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
 vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
+# SolidWorks parts and assemblies (.sldprt, .sldasm) through the private solidworks-dll library; pure Rust on bytes
+sldw-read = { git = "https://github.com/OpenAEC-Foundation/solidworks-dll", rev = "a001b0141fcf54f63de1107e2d75e7fdc9e177f1" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
 threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)

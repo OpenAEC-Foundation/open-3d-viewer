@@ -29,10 +29,13 @@ pub enum Product {
     /// The documents of the project folder: their status, their revisions and the elements they
     /// are about.
     Docs,
+    /// Where the project lies and what lies around it: the place, the parcels and buildings,
+    /// the terrain.
+    Gis,
 }
 
 impl Product {
-    pub const ALL: [Product; 6] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs];
+    pub const ALL: [Product; 7] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs, Product::Gis];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
@@ -43,6 +46,7 @@ impl Product {
             Product::Pointcloud => "pointcloud",
             Product::Analysis => "analysis",
             Product::Docs => "docs",
+            Product::Gis => "gis",
         }
     }
 
@@ -56,6 +60,7 @@ impl Product {
             "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
             "analysis" | "structural-analysis" => Some(Product::Analysis),
             "docs" | "documents" => Some(Product::Docs),
+            "gis" => Some(Product::Gis),
             _ => None,
         }
     }
@@ -70,6 +75,7 @@ impl Product {
             Product::Pointcloud => "PointCloud",
             Product::Analysis => "Struct",
             Product::Docs => "Docs",
+            Product::Gis => "GIS",
         }
     }
 
@@ -82,6 +88,7 @@ impl Product {
             Product::Pointcloud => "Pointcloud",
             Product::Analysis => "Structural Analysis",
             Product::Docs => "Docs",
+            Product::Gis => "GIS",
         }
     }
 
@@ -90,7 +97,7 @@ impl Product {
     pub fn stage(self) -> Option<&'static str> {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
-            Product::Pointcloud | Product::Analysis | Product::Docs => Some("(alpha)"),
+            Product::Pointcloud | Product::Analysis | Product::Docs | Product::Gis => Some("(alpha)"),
             Product::Viewer | Product::Validator => None,
         }
     }
@@ -104,6 +111,7 @@ impl Product {
             Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
             Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
             Product::Docs => l.text("De documenten van het project: status, versies en koppelingen met het model", "The documents of the project: status, revisions and links to the model"),
+            Product::Gis => l.text("Waar het project ligt en wat eromheen ligt: de plek, percelen en panden, het terrein", "Where the project lies and what lies around it: the place, parcels and buildings, the terrain"),
         }
     }
 
@@ -116,6 +124,7 @@ impl Product {
             Product::Pointcloud => "product.pointcloud",
             Product::Analysis => "product.analysis",
             Product::Docs => "product.docs",
+            Product::Gis => "product.gis",
         }
     }
 
@@ -128,6 +137,7 @@ impl Product {
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
             Product::Docs => &[RibbonPage::Docs, RibbonPage::View],
+            Product::Gis => &[RibbonPage::Gis, RibbonPage::View],
         }
     }
 
@@ -140,6 +150,7 @@ impl Product {
             Product::Pointcloud => "Open BIM Pointcloud",
             Product::Analysis => "Open BIM Structural Analysis",
             Product::Docs => "Open BIM Docs",
+            Product::Gis => "Open BIM GIS",
         }
     }
 
@@ -152,6 +163,7 @@ impl Product {
             Product::Pointcloud => "open-bim-pointcloud",
             Product::Analysis => "open-bim-analysis",
             Product::Docs => "open-bim-docs",
+            Product::Gis => "open-bim-gis",
         }
     }
 
@@ -166,6 +178,8 @@ impl Product {
             Product::Analysis => cfg!(feature = "viewer"),
             // in every desktop build: a project folder is a folder of the computer
             Product::Docs => cfg!(not(target_arch = "wasm32")),
+            // part of the viewer: map layers and terrain are models like any other
+            Product::Gis => cfg!(feature = "viewer"),
         }
     }
 
@@ -239,6 +253,8 @@ pub enum RibbonPage {
     Analysis,
     /// Docs: the project folder, and opening and linking the picked document.
     Docs,
+    /// GIS: the surroundings and the terrain of the place.
+    Gis,
 }
 
 impl RibbonPage {
@@ -254,6 +270,7 @@ impl RibbonPage {
             RibbonPage::Cloud => l.text("Puntenwolk", "Point cloud"),
             RibbonPage::Analysis => l.text("Rekenmodel", "Analysis"),
             RibbonPage::Docs => "Docs",
+            RibbonPage::Gis => "GIS",
         }
     }
 }
@@ -389,8 +406,8 @@ mod tests {
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
         // the switch: short names, and the four in alpha are the grey ones
-        assert_eq!(Product::ALL.map(Product::label), ["View", "Collab", "PointCloud", "Struct", "Modeller", "Docs"]);
-        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true]);
+        assert_eq!(Product::ALL.map(Product::label), ["View", "Collab", "PointCloud", "Struct", "Modeller", "Docs", "GIS"]);
+        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true, true]);
     }
 
     #[test]
@@ -401,7 +418,7 @@ mod tests {
         names.dedup();
         ids.sort();
         ids.dedup();
-        assert_eq!((names.len(), ids.len()), (6, 6));
+        assert_eq!((names.len(), ids.len()), (7, 7));
         // the Studio is what was released as the viewer: same name, same installer id
         assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);

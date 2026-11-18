@@ -132,7 +132,7 @@ Docs werkt in de desktop-app; een browser heeft geen gesynchroniseerde mappen. H
 
 ## GIS (een eerste stap)
 
-Het tabblad **GIS** van het rechterpaneel zegt waar het project ligt en haalt binnen wat eromheen ligt. Het werkt in elk product; GIS staat op de schakelaar bij de producten die nog komen.
+Het tabblad **GIS** van het rechterpaneel zegt waar het project ligt en haalt binnen wat eromheen ligt. **GIS** is een product op de schakelaar bovenaan het venster (alfa): het lint laadt de omgeving en het terrein, en het tabblad staat in het rechterpaneel van elk product.
 
 - **Locatie**: zoek een adres, straat, plaats of postcode, of typ coördinaten: een RD-punt (`155000 463000`) of een breedte en lengte (`52.155, 5.387`). Een model dat zegt waar het ligt (de kaartconversie van een IFC-bestand) geeft de plek zelf.
 - **Omgeving**: de percelen van de kadastrale kaart en de panden van de BAG binnen 100, 250 of 500 m, als modellen aan het project toegevoegd. Elk perceel en pand is aan te klikken en toont wat het register erover zegt: de kadastrale aanduiding en grootte, het bouwjaar, het gebruiksdoel en de status.

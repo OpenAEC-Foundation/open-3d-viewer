@@ -1144,6 +1144,11 @@
     "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "“Araziyi yükle”, yukarıdaki yer ve yarıçap için zemin yüksekliklerini PDOK aracılığıyla Hollanda ulusal yükseklik modelinden (AHN) getirir. Binaların ve suyun altında yükseklik yoktur: orada arazi kenardan tamamlanır.",
     "Cut and fill against level (m)": "Seviyeye göre kazı ve dolgu (m)",
     "Above": "Üstünde:",
-    "Below": "Altında:"
+    "Below": "Altında:",
+    "Fetches the ground around the place, with contours.": "Yerin çevresindeki araziyi eş yükselti eğrileriyle getirir.",
+    "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Sağdaki GIS sekmesinde seçilen yerin çevresindeki parselleri ve binaları getirir.",
+    "Makes a surface with contours of a surveyor's file of points.": "Bir haritacının nokta dosyasından eş yükselti eğrili bir yüzey oluşturur.",
+    "Surface from points": "Noktalardan yüzey",
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Projenin nerede olduğu ve çevresinde ne bulunduğu: yer, parseller ve binalar, arazi"
   }
 }

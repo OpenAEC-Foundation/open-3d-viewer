@@ -326,11 +326,15 @@ impl App {
             .on_press_maybe((!gis.searching && !gis.query.trim().is_empty()).then_some(AppMessage::Gis(Message::Search)));
         rows = rows.push(
             row![
-                text_input(l.text("Adres, plaats, postcode of coördinaten", "Address, place, postcode or coordinates"), &gis.query)
-                    .on_input(|typed| AppMessage::Gis(Message::Query(typed)))
-                    .on_submit(AppMessage::Gis(Message::Search))
-                    .size(12)
-                    .padding([3, 6]),
+                openaec_ui::design::a11y::named(
+                    text_input(l.text("Adres, plaats, postcode of coördinaten", "Address, place, postcode or coordinates"), &gis.query)
+                        .on_input(|typed| AppMessage::Gis(Message::Query(typed)))
+                        .on_submit(AppMessage::Gis(Message::Search))
+                        .size(12)
+                        .padding([3, 6]),
+                    openaec_ui::design::a11y::Role::Label,
+                    l.text("Locatie", "Location"),
+                ),
                 search
             ]
             .spacing(4)

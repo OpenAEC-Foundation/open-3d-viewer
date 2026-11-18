@@ -114,7 +114,7 @@ enum RibbonPart {
 /// From what width of the window the title bar names the products to come.
 const SOON_WIDTH: f32 = 1410.0;
 /// The products to come, named on the switch but not to be chosen yet.
-const SOON: [&str; 3] = ["FM", "Environment", "GIS"];
+const SOON: [&str; 2] = ["FM", "Environment"];
 
 /// The side of a small ribbon button that shows its icon only (a narrow window).
 const RIBBON_ICON: f32 = 22.0;
@@ -776,6 +776,10 @@ impl Studio {
         if product != self.product() {
             self.ribbon_tab = 0;
         }
+        // GIS works from its tab of the right pane
+        if product == Product::Gis {
+            self.app.side_tab = crate::app::SideTab::Gis;
+        }
         if product != Product::Modeller {
             for app in std::iter::once(&mut self.app).chain(self.parked.iter_mut().map(|(_, a)| a)) {
                 if app.modeller.tool.is_some() {
@@ -1220,6 +1224,9 @@ impl Studio {
                 .enabled(app.section_on || app.plane.is_some()),
             // Docs: the project folder, and opening and linking the picked document
             Command::new("docs.folder", l.text("Projectmap", "Project folder"), go(Message::Docs(crate::app::DocsMessage::Choose))).icon(small("project.folder"), large("project.folder")),
+            Command::new("gis.surroundings", l.text("Omgeving laden", "Load surroundings"), go(Message::Gis(crate::app::GisMessage::Fetch(l)))).icon(small("drawing.plan"), large("drawing.plan")).detail(l.text("Haalt de percelen en panden rond de plek op die in het tabblad GIS rechts gekozen is.", "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.")),
+            Command::new("gis.terrain", l.text("Terrein laden", "Load terrain"), go(Message::Gis(crate::app::GisMessage::Terrain(crate::app::TerrainMessage::Fetch(l))))).icon(small("mesh.surface"), large("mesh.surface")).detail(l.text("Haalt het maaiveld rond de plek op, met hoogtelijnen.", "Fetches the ground around the place, with contours.")),
+            Command::new("gis.points", l.text("Oppervlak uit punten", "Surface from points"), go(Message::Gis(crate::app::GisMessage::Terrain(crate::app::TerrainMessage::Pick(l))))).icon(small("file.import"), large("file.import")).detail(l.text("Maakt een oppervlak met hoogtelijnen van een puntenbestand van een landmeter.", "Makes a surface with contours of a surveyor's file of points.")),
             Command::new("docs.refresh", l.text("Vernieuwen", "Refresh"), go(Message::Docs(crate::app::DocsMessage::Refresh)))
                 .icon(small("view.reset-camera"), large("view.reset-camera"))
                 .enabled(app.docs.folder.is_some()),
@@ -2352,6 +2359,12 @@ impl Studio {
                 (l.text("Document", "Document"), vec![large("docs.open"), smalls(&["docs.open-outside", "docs.reveal"])]),
                 (l.text("Model", "Model"), vec![large("docs.link")]),
             ],
+            // the place is searched in the GIS tab of the right pane; what is fetched around it is here
+            RibbonPage::Gis => vec![
+                (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Omgeving", "Surroundings"), vec![large("gis.surroundings")]),
+                (l.text("Terrein", "Terrain"), vec![large("gis.terrain"), large("gis.points")]),
+            ],
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
@@ -2504,7 +2517,7 @@ impl Studio {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer | Product::Docs => (
+                Product::Viewer | Product::Docs | Product::Gis => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2628,7 +2641,7 @@ impl Studio {
             }
             // Docs: the folders of the project folder
             Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
-            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Gis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
 
@@ -3443,9 +3456,9 @@ mod tests {
         assert_eq!((studio.product(), studio.ribbon_page()), (Product::Docs, RibbonPage::Docs));
         assert!(studio.app.docs.open && studio.app.docs.shown, "its page shows");
         // it is on the switch once: a product there is, is no product to come; it stands where it
-        // was announced, after the Modeller
+        // was announced, after the Modeller (GIS came after it)
         assert!(Product::ALL.iter().all(|p| !SOON.contains(&p.label())), "{SOON:?}");
-        assert_eq!(Product::ALL.last(), Some(&Product::Docs));
+        assert_eq!(Product::ALL.last(), Some(&Product::Gis));
         // no project folder yet: the page asks for one
         assert!(iced_test::simulator(studio.view()).find("Choose project folder…").is_ok());
         // with one: its folders are the left pane, its files the page

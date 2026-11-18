@@ -109,7 +109,7 @@ Next modules, each on the ones before: `alignment`, `profile`, `grading`, `corri
 
 ### In the app
 
-Terrain lives in the GIS tab of the right pane for now, under the location and the
+GIS is a product on the switch since 2026-11-18, with a ribbon for the surroundings and the terrain. Terrain lives in its tab of the right pane, under the location and the
 surroundings it belongs with (`src/app/terrain.rs`):
 
 - **Load terrain** fetches the ground heights of the national height model around the place,

@@ -377,7 +377,7 @@ impl App {
             rows = rows.push(
                 row![
                     text(l.text("Grondverzet tegen niveau (m)", "Cut and fill against level (m)")).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(iced::Length::FillPortion(3)),
-                    iced::widget::text_input("0.00", &state.level).on_input(move |typed| send(Message::Level(typed))).on_submit(send(Message::Measure)).size(12).padding([3, 6]).width(iced::Length::FillPortion(2)),
+                    openaec_ui::design::a11y::named(iced::widget::text_input("0.00", &state.level).on_input(move |typed| send(Message::Level(typed))).on_submit(send(Message::Measure)).size(12).padding([3, 6]).width(iced::Length::FillPortion(2)), openaec_ui::design::a11y::Role::Label, l.text("Grondverzet tegen niveau (m)", "Cut and fill against level (m)")),
                 ]
                 .spacing(6)
                 .align_y(Center),

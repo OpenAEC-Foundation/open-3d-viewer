@@ -45,6 +45,8 @@ pub mod library;
 mod marks;
 mod gis;
 mod terrain;
+pub use gis::Message as GisMessage;
+pub use terrain::Message as TerrainMessage;
 mod origin;
 mod origin_map;
 pub mod modeller;

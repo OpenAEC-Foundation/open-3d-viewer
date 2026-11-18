@@ -130,7 +130,7 @@ Docs works in the desktop app; a browser has no synced folders. It never writes 
 
 ## GIS (a first step)
 
-The **GIS** tab of the right pane says where the project lies and brings in what lies around it. It works in every product; GIS is named on the switch among the products to come.
+The **GIS** tab of the right pane says where the project lies and brings in what lies around it. **GIS** is a product on the switch at the top of the window (alpha): its ribbon loads the surroundings and the terrain, and its tab is in the right pane of every product.
 
 - **Location**: search an address, street, town or postcode, or type coordinates: a point of the Dutch national grid (`155000 463000`) or a latitude and longitude (`52.155, 5.387`). A model that says where it lies (the map conversion of an IFC file) gives the place itself.
 - **Surroundings**: the parcels of the cadastral map and the buildings of the register of buildings within 100, 250 or 500 m, added to the project as models. Every parcel and building can be picked and shows what the register says about it: the cadastral designation and area, the year of construction, the use and the status.

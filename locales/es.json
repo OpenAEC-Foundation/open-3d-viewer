@@ -1144,6 +1144,11 @@
     "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "«Cargar el terreno» obtiene las alturas del suelo del modelo nacional de elevaciones de los Países Bajos (AHN) a través de PDOK, para el lugar y el radio de arriba. Bajo edificios y agua no tiene altura: allí el terreno se completa desde el borde.",
     "Cut and fill against level (m)": "Desmonte y terraplén respecto al nivel (m)",
     "Above": "Por encima de",
-    "Below": "Por debajo de"
+    "Below": "Por debajo de",
+    "Fetches the ground around the place, with contours.": "Obtiene el terreno alrededor del lugar, con curvas de nivel.",
+    "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Obtiene las parcelas y los edificios alrededor del lugar elegido en la pestaña GIS de la derecha.",
+    "Makes a surface with contours of a surveyor's file of points.": "Crea una superficie con curvas de nivel a partir del archivo de puntos de un topógrafo.",
+    "Surface from points": "Superficie a partir de puntos",
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Dónde está el proyecto y qué lo rodea: el lugar, parcelas y edificios, el terreno"
   }
 }

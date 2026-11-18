@@ -65,7 +65,7 @@ Lines of Rust in `src/loaders/` per format, tests included.
 | FreeCAD (`.FCStd`) | 1,088 in 2 files | none | | New repository. |
 | FBX (`.fbx`) | 949 | none | | New repository. |
 | Blender (`.blend`) | 749 | none | | New repository. |
-| Analysis text format (`.e2k`) | 645 | none | | New repository. |
+| Analysis text format (`.e2k`) | 645 | none | | Move into `fem-dll` beside `.s2k`, read into `fem-model`; the adapter `fem.rs` then opens it. |
 | Tekla Structures (`.db1`) | 520 | `tekla-dll` | yes | Slim the adapter. |
 | Vectorworks (`.vwx`) | 493 | `vectorworks-dll` | yes | Slim the adapter. |
 | Vertex BD and BTL (`.vxz`, `.vxm`, `.btl`) | 339 | `vertex.dll` | one crate, loaded at run time | Lay the repository out as the model and name it `vertex-dll`. |
@@ -84,6 +84,8 @@ Together this is some 30,000 lines of format knowledge in the app.
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
 | VTK (`.vtk`, `.vtu`, `.vtp`, `.vts`, `.vtr`, `.vti`, the parallel files, `.vtm`, `.pvd`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`), which parses through the published `vtkio` crate | Done: the reader turns cells into outer faces and fields; the adapter copies them into layers and the app's fields. |
+| FEM input deck (`.inp`), FEM bulk data (`.bdf`, `.nas`, `.dat`), finite element mesh (`.msh`), structural analysis text model (`.s2k`, `.$2k`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`) | Done: the reader returns a mesh and an analysis model of its own; the adapter copies the analysis model into `bim-structural`'s. |
+| SAF (`.xlsx`) | adapter `fem.rs` | `saf-dll` (`saf-read`), into `fem-model`'s analysis model | Done. `saf-read` pins the same `fem-dll` revision as the app, so both share one model crate. |
 
 ## Moved so far
 

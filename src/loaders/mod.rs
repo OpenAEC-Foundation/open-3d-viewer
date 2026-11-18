@@ -288,7 +288,7 @@ pub fn registry() -> Vec<&'static dyn Loader> {
         &fbx::FbxLoader, &off::OffLoader, &max3ds::Max3dsLoader, &geojson::GeoJsonLoader, &citygml::CityGmlLoader, &usd::UsdLoader,
         &las::LasLoader, &e57::E57Loader, &xyz::PtsLoader, &ptx::PtxLoader, &pcd::PcdLoader,
         &shapefile::ShapefileLoader, &vrml::VrmlLoader, &amf::AmfLoader,
-        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
+        &ifcx::IfcxLoader, &step::StepLoader, &sam::SamLoader, &e2k::E2kLoader, &ifcfem::IfcFemLoader, &fem::VtkLoader, &fem::INP, &fem::BDF, &fem::MSH, &fem::S2K, &fem::SAF, &rhino::RhinoLoader, &vwx::VwxLoader, &sldprt::SldprtLoader, &solidedge::SolidEdgeLoader, &blend::BlendLoader, &fcstd::FcstdLoader,
         &cad::CadLoader, &allplan::AllplanLoader, &dgn::DgnLoader, &archicad::ArchicadLoader,
         #[cfg(not(target_arch = "wasm32"))]
         &rvt::RvtLoader,

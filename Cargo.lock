@@ -250,6 +250,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "atoi_simd"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3cdb3708a128e559a30fb830e8a77a5022ee6902806925c216658652b452a44"
+dependencies = [
+ "debug_unsafe",
+ "rustversion",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -655,6 +665,23 @@ checksum = "90b85eb6babd96bee00fbf6b86a6166bc2aa806b35fc02a19bfdfcfb6b99a532"
 dependencies = [
  "cadmpeg-core",
  "cadmpeg-ir",
+]
+
+[[package]]
+name = "calamine"
+version = "0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f431b67cba6122a1f7d26b7adafc71bbdf07026095fe811f5efc025d8748e1d8"
+dependencies = [
+ "atoi_simd",
+ "byteorder",
+ "codepage",
+ "encoding_rs",
+ "fast-float2",
+ "log",
+ "quick-xml 0.42.0",
+ "serde",
+ "zip 9.3.0",
 ]
 
 [[package]]
@@ -1120,6 +1147,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "debug_unsafe"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eed2c4702fa172d1ce21078faa7c5203e69f5394d48cc436d25928394a867a2"
+
+[[package]]
 name = "delaunator"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1435,12 +1468,12 @@ dependencies = [
 [[package]]
 name = "fem-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/fem-dll?rev=cb1ab077daf71b8876f070b712fd8b7cf2dc711d#cb1ab077daf71b8876f070b712fd8b7cf2dc711d"
+source = "git+https://github.com/OpenAEC-Foundation/fem-dll?rev=a511ec287e8f0005febdb9276ba9742ad7f58218#a511ec287e8f0005febdb9276ba9742ad7f58218"
 
 [[package]]
 name = "fem-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/fem-dll?rev=cb1ab077daf71b8876f070b712fd8b7cf2dc711d#cb1ab077daf71b8876f070b712fd8b7cf2dc711d"
+source = "git+https://github.com/OpenAEC-Foundation/fem-dll?rev=a511ec287e8f0005febdb9276ba9742ad7f58218#a511ec287e8f0005febdb9276ba9742ad7f58218"
 dependencies = [
  "base64 0.22.1",
  "fem-model",
@@ -3838,6 +3871,7 @@ dependencies = [
  "rvt-export",
  "rvt-model",
  "rvt-read",
+ "saf-read",
  "sedge-read",
  "serde",
  "serde_json",
@@ -4300,6 +4334,16 @@ version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "encoding_rs",
  "memchr",
 ]
 
@@ -4864,6 +4908,15 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "saf-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/saf-dll?rev=7578aaad7346f861656a555aa7517e39d7110286#7578aaad7346f861656a555aa7517e39d7110286"
+dependencies = [
+ "calamine",
+ "fem-model",
+]
 
 [[package]]
 name = "safe_arch"
@@ -7080,6 +7133,7 @@ dependencies = [
  "nix",
  "typed-path 0.13.0",
  "windows-sys 0.61.2",
+ "zopfli",
 ]
 
 [[package]]

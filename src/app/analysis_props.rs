@@ -10,10 +10,10 @@
 //! belongs to the model: switched off in the models list, nothing of it is drawn.
 
 use super::{App, Message, Palette};
-use crate::structural::diagrams::{Change, DeformedAs, Force, ReactionsAs, Style, Values};
+use crate::structural::diagrams::{Change, DeformedAs, Force, Part, ReactionsAs, Style, Values};
 use bim_structural::{AnalysisModel, ResultFor};
 use iced::widget::text::Wrapping;
-use iced::widget::{checkbox, column, container, pick_list, row, text, text_input};
+use iced::widget::{checkbox, column, container, pick_list, row, slider, text, text_input};
 use iced::{Center, Element, Length};
 use openaec_ui::Language;
 
@@ -96,6 +96,21 @@ impl App {
             visibility = visibility.push(pick(l.text("Belastingen van", "Loads of"), cases, Some(picked)));
         }
 
+        // how large each kind of thing is drawn: a slider from a tenth to ten times, in powers
+        let slide = |k: &str, at: f32, range: std::ops::RangeInclusive<f32>, step: f32, written: String, to: Box<dyn Fn(f32) -> Message>| -> Element<'_, Message> {
+            row![label(k), slider(range, at, to).step(step).width(Length::FillPortion(2)), text(written).size(12).color(p.text_secondary).width(Length::FillPortion(1))].spacing(8).align_y(Center).into()
+        };
+        for (part, name) in [
+            (Part::Forces, l.text("Grootte krachtlijnen", "Size of force lines")),
+            (Part::Deformed, l.text("Grootte vervorming", "Size of deformation")),
+            (Part::Loads, l.text("Grootte belastingen", "Size of loads")),
+            (Part::Reactions, l.text("Grootte reacties", "Size of reactions")),
+            (Part::Symbols, l.text("Grootte symbolen", "Size of symbols")),
+        ] {
+            let size = shown.size(part) as f32;
+            visibility = visibility.push(slide(name, size.log10(), -1.0..=1.0, 0.05, format!("× {size:.2}"), Box::new(move |v| Message::Analysis(Change::Size(part, 10f32.powf(v))))));
+        }
+
         // what was computed
         let mut results = column![].spacing(5);
         if !doc.results.is_empty() {
@@ -139,18 +154,23 @@ impl App {
             let values: Vec<Choice> = crate::structural::diagrams::plate_values(mesh)
                 .into_iter()
                 .enumerate()
-                .map(|(k, name)| Choice(Change::PlateValue(k as u8), if k == 0 { l.text("Verplaatsing u", "Displacement u").to_string() } else { name }))
+                .map(|(k, name)| Choice(Change::PlateValue(k as u8), if k == 0 { l.text("Verplaatsing u", "Displacement u").to_string() } else { name.replace(" top", &format!(" {}", l.text("boven", "top"))).replace(" bottom", &format!(" {}", l.text("onder", "bottom"))) }))
                 .collect();
             let picked = values.get(usize::from(shown.plate_value)).or(values.first()).cloned();
             results = results.push(pick(l.text("Plaatwaarde", "Plate value"), values, picked)).push(tick(l.text("Net van de platen", "Mesh of the plates"), shown.plate_mesh, |on| Message::Analysis(Change::PlateMeshOn(on))));
             if shown.plates {
+                let (from, to) = shown.colours();
+                results = results
+                    .push(slide(l.text("Kleur vanaf", "Colour from"), from, 0.0..=1.0, 0.01, format!("{:.0} %", from * 100.0), Box::new(|v| Message::Analysis(Change::ColourFrom(v)))))
+                    .push(slide(l.text("Kleur tot", "Colour to"), to, 0.0..=1.0, 0.01, format!("{:.0} %", to * 100.0), Box::new(|v| Message::Analysis(Change::ColourTo(v)))))
+                    .push(slide(l.text("Kleurstappen", "Colour steps"), f32::from(shown.bands), 0.0..=12.0, 1.0, if shown.bands == 0 { l.text("vloeiend", "smooth").to_string() } else { shown.bands.to_string() }, Box::new(|v| Message::Analysis(Change::Bands(v.round() as u8)))));
                 let value = crate::structural::diagrams::plate_value(mesh, shown.plate_value);
                 let (low, high) = value.range();
                 const STEPS: usize = 7;
                 let mut legend = column![].spacing(0);
                 for k in (0..STEPS).rev() {
                     let t = k as f64 / (STEPS - 1) as f64;
-                    let c = crate::structural::diagrams::scale_colour(t);
+                    let c = crate::structural::diagrams::scale_colour(shown.on_scale(t));
                     let swatch = container(text("")).width(22).height(16).style(move |_| container::Style { background: Some(iced::Color::from_rgb8(c[0], c[1], c[2]).into()), ..container::Style::default() });
                     legend = legend.push(row![swatch, text(value.written(low + (high - low) * t)).size(12).color(p.text_secondary)].spacing(8).align_y(Center));
                 }
@@ -206,8 +226,16 @@ mod tests {
         let _ = app.update(Message::Analysis(Change::PlatesOn(true)));
         let _ = app.update(Message::Analysis(Change::PlateValue(2)));
         assert!(!app.overlay_faces.is_empty());
+        {
+            let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
+            for wording in ["12.5 kNm/m", "Colour from", "Colour to", "Colour steps", "smooth", "Size of deformation"] {
+                assert!(ui.find(wording).is_ok(), "{wording}");
+            }
+        }
+        // the stress along y at the bottom: 6 m / t² = 1.88 MPa, the top of its legend
+        let _ = app.update(Message::Analysis(Change::PlateValue(4 + 6 + 1)));
         let mut ui = crate::app::test_ui(&app, iced::Size::new(1400.0, 900.0));
-        assert!(ui.find("12.5 kNm/m").is_ok());
+        assert!(ui.find("1.88 MPa").is_ok());
     }
 
     #[test]

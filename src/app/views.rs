@@ -137,6 +137,15 @@ impl App {
             self.show_view(&view);
             self.fit_plan_section(path);
         }
+        // a 3D view that keeps what shows of the loads and results brings it back
+        if let Some(shown) = self.document.view_3d(path).and_then(|v| v.analysis) {
+            if shown != self.analysis {
+                self.analysis = shown;
+                self.analysis_scale = None;
+                self.refresh_structural_visibility();
+                self.refresh_overlay();
+            }
+        }
     }
 
     /// Makes a 3D view of what the 3D tab shows (its camera, section box, layers and hidden
@@ -166,6 +175,9 @@ impl App {
         let name = self.document.next_view_3d_name(word);
         let section = slot.section.filter(|_| slot.section_on).map(|b| view_box(&b));
         let path = self.document.add_view_3d(&name, camera_3d(&slot.camera), section, layers, hidden);
+        // with what shows of the loads and results of an analysis model
+        let shown = self.analysis.anything().then_some(self.analysis);
+        self.document.set_view_3d_analysis(&path, shown);
         self.open_plan(&path);
     }
 
@@ -181,6 +193,11 @@ impl App {
     fn keep_view_3d(&mut self, path: &str, slot: &ViewSlot) {
         let section = slot.section.filter(|_| slot.section_on).map(|b| view_box(&b));
         self.document.set_view_3d_camera(path, camera_3d(&slot.camera), section);
+        // a view that had its say in the loads and results keeps what shows now
+        if self.document.view_3d(path).is_some_and(|v| v.analysis.is_some()) {
+            let shown = self.analysis;
+            self.document.set_view_3d_analysis(path, Some(shown));
+        }
     }
 
     /// The document as it is now: with the camera and section box of the 3D view whose tab

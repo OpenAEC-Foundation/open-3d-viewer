@@ -251,6 +251,8 @@ pub struct View3d {
     pub layers: LayerSwitches,
     /// The elements hidden in it with Hide or Isolate.
     pub hidden: Arc<UnitKeySet>,
+    /// What it shows of the loads and results of a structural analysis model.
+    pub analysis: Option<crate::structural::diagrams::Shown>,
 }
 
 /// How the ends of a dimension line are marked.
@@ -664,9 +666,12 @@ impl Document {
             children.insert(format!("3d view {}", i + 1), v.path.clone().into());
             let c = &v.camera;
             let section = v.section.map_or(Value::Null, |b| json!({"min": b.min, "max": b.max, "turn": b.turn, "pivot": b.pivot}));
-            let view = json!({
+            let mut view = json!({
                 "name": v.name, "camera": {"eye": c.eye, "target": c.target, "perspective": c.perspective, "fov": c.fov}, "box": section, "layers": v.layers,
             });
+            if let Some(shown) = &v.analysis {
+                view["analysis"] = shown.to_json();
+            }
             nodes.push(json!({"path": v.path, "attributes": {"o3v::view::3d": with_hidden(view, &v.hidden)}}));
         }
         for (i, s) in self.sheets.iter().enumerate() {
@@ -785,6 +790,7 @@ impl Document {
                     section,
                     layers: layers(v.get("layers")),
                     hidden: hidden(v),
+                    analysis: v.get("analysis").and_then(crate::structural::diagrams::Shown::from_json),
                 });
             }
         }
@@ -993,7 +999,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("view3d/{}/{name}", self.added));
-        self.views_3d.push(View3d { path: path.clone(), name, camera, section, layers, hidden });
+        self.views_3d.push(View3d { path: path.clone(), name, camera, section, layers, hidden, analysis: None });
         path
     }
 
@@ -1010,6 +1016,17 @@ impl Document {
             return false;
         }
         (view.camera, view.section) = (camera, section);
+        true
+    }
+
+    /// Lets a 3D view show `analysis` of the loads and results (none: it has no say in them);
+    /// false when there is no such view or nothing changes.
+    pub fn set_view_3d_analysis(&mut self, path: &str, analysis: Option<crate::structural::diagrams::Shown>) -> bool {
+        let Some(view) = self.views_3d.iter_mut().find(|v| v.path == path) else { return false };
+        if view.analysis == analysis {
+            return false;
+        }
+        view.analysis = analysis;
         true
     }
 
@@ -1761,6 +1778,13 @@ mod tests {
         assert_eq!(again.view_3d(&view).unwrap().camera, turned);
         assert_eq!(again.view_layers(&view), Some(&furniture_off));
         assert_eq!(again.view_3d(&parallel).unwrap().section, None);
+        // what a view shows of the loads and results goes with it
+        let shown = crate::structural::diagrams::Shown { deformed: true, plates: true, plate_value: 3, scale: 2.0, bands: 6, ..Default::default() };
+        assert!(document.set_view_3d_analysis(&parallel, Some(shown)) && !document.set_view_3d_analysis(&parallel, Some(shown)));
+        let nodes: Vec<(String, Value)> = document.ifcx_drawing_nodes().into_iter().map(|n| (n["path"].as_str().unwrap().to_string(), n["attributes"].clone())).collect();
+        let mut kept = Document::from_model(&model_with(&[("00", 0.0)]));
+        kept.adopt_ifcx(&nodes);
+        assert_eq!((kept.view_3d(&parallel).unwrap().analysis, kept.view_3d(&view).unwrap().analysis), (Some(shown), None));
         // a node without its camera is no 3D view; one without a field of view gets one
         let mut broken = nodes;
         for (path, attributes) in &mut broken {

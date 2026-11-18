@@ -116,6 +116,20 @@ pub enum ReactionsAs {
     Components,
 }
 
+/// The kinds of things whose size is set apart from the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    Forces,
+    Deformed,
+    Loads,
+    Reactions,
+    Symbols,
+}
+
+impl Part {
+    pub const ALL: [Part; 5] = [Part::Forces, Part::Deformed, Part::Loads, Part::Reactions, Part::Symbols];
+}
+
 /// What of the loads and results is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Shown {
@@ -139,6 +153,13 @@ pub struct Shown {
     pub plates: bool,
     pub plate_value: u8,
     pub plate_mesh: bool,
+    /// How large each kind of thing is drawn, times the scale: 1 (or 0, unset) as it is.
+    pub sizes: [f32; 5],
+    /// The part of a value's range the colours run over, from 0 (its lowest) to 1 (its highest);
+    /// `colour_to` of 0 is unset and stands for 1. In `bands` steps, or (0) without steps.
+    pub colour_from: f32,
+    pub colour_to: f32,
+    pub bands: u8,
     /// The node glyphs, the member axes and the figures beside the lines, left out.
     pub hide_nodes: bool,
     pub hide_members: bool,
@@ -173,6 +194,11 @@ pub enum Change {
     PlatesOn(bool),
     PlateValue(u8),
     PlateMeshOn(bool),
+    /// The size of a kind of thing; the part of the range the colours run over; their steps.
+    Size(Part, f32),
+    ColourFrom(f32),
+    ColourTo(f32),
+    Bands(u8),
     /// Each given as it is to be, not switched: the internal force (none: no line), the deformed
     /// shape, the reactions, the supports, and whether nodes, members and figures show.
     ForceIs(Option<Force>),
@@ -205,6 +231,13 @@ impl Shown {
             Change::PlatesOn(on) => self.plates = on,
             Change::PlateValue(value) => self.plate_value = value,
             Change::PlateMeshOn(on) => self.plate_mesh = on,
+            Change::Size(part, size) if size.is_finite() => self.sizes[part as usize] = size.clamp(0.05, 20.0),
+            Change::Size(..) => {}
+            // the colours keep a twentieth of the range between where they start and end
+            Change::ColourFrom(at) if at.is_finite() => self.colour_from = at.clamp(0.0, self.colours().1 - 0.05),
+            Change::ColourTo(at) if at.is_finite() => self.colour_to = at.clamp(self.colour_from + 0.05, 1.0),
+            Change::ColourFrom(_) | Change::ColourTo(_) => {}
+            Change::Bands(bands) => self.bands = bands.min(24),
             Change::ForceIs(force) => self.force = force,
             Change::DeformedOn(on) => self.deformed = on,
             Change::ReactionsOn(on) => self.reactions = on,
@@ -216,6 +249,73 @@ impl Shown {
             Change::Values(values) => self.values = values,
             Change::Scale(larger) => self.scale = (if self.scale > 0.0 { self.scale } else { 1.0 } * if larger { 1.5 } else { 1.0 / 1.5 }).clamp(0.05, 20.0),
         }
+    }
+
+    /// How large `part` is drawn, beside the scale.
+    pub fn size(&self, part: Part) -> f64 {
+        let size = self.sizes[part as usize];
+        if size > 0.0 { f64::from(size) } else { 1.0 }
+    }
+
+    /// The part of a value's range the colours run over.
+    pub fn colours(&self) -> (f32, f32) {
+        (self.colour_from, if self.colour_to > 0.0 { self.colour_to } else { 1.0 })
+    }
+
+    /// Where on the colour scale a value at `t` of its range (0 lowest, 1 highest) lies.
+    pub fn on_scale(&self, t: f64) -> f64 {
+        let (from, to) = self.colours();
+        let t = ((t - f64::from(from)) / f64::from(to - from).max(1e-6)).clamp(0.0, 1.0);
+        match f64::from(self.bands) {
+            bands if bands > 0.0 => ((t * bands).floor().min(bands - 1.0) + 0.5) / bands,
+            _ => t,
+        }
+    }
+
+    /// What is shown, as a view keeps it.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "set": self.set, "force": self.force.map(|f| f.symbol()), "deformed": self.deformed, "reactions": self.reactions, "supports": self.supports,
+            "loads": self.loads, "scale": self.scale, "outline": self.style == Style::Outline, "values_per_member": self.values == Values::Members,
+            "deformed_lines": self.deformed_as == DeformedAs::Lines, "reactions_xyz": self.reactions_as == ReactionsAs::Components,
+            "plates": self.plates, "plate_value": self.plate_value, "plate_mesh": self.plate_mesh, "sizes": self.sizes,
+            "colour_from": self.colour_from, "colour_to": self.colour_to, "bands": self.bands,
+            "hide_nodes": self.hide_nodes, "hide_members": self.hide_members, "hide_values": self.hide_values,
+        })
+    }
+
+    /// What a view kept; what it does not say is as when nothing is shown.
+    pub fn from_json(v: &serde_json::Value) -> Option<Shown> {
+        let v = v.as_object()?;
+        let on = |k: &str| v.get(k).and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let number = |k: &str| v.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        let mut sizes = [0.0; 5];
+        for (size, given) in sizes.iter_mut().zip(v.get("sizes").and_then(serde_json::Value::as_array).into_iter().flatten()) {
+            *size = given.as_f64().unwrap_or(0.0) as f32;
+        }
+        Some(Shown {
+            set: number("set") as usize,
+            force: v.get("force").and_then(serde_json::Value::as_str).and_then(|s| Force::ALL.into_iter().find(|f| f.symbol() == s)),
+            deformed: on("deformed"),
+            reactions: on("reactions"),
+            supports: on("supports"),
+            loads: v.get("loads").and_then(serde_json::Value::as_u64).map(|k| k as usize),
+            scale: number("scale") as f32,
+            style: if on("outline") { Style::Outline } else { Style::Strokes },
+            values: if on("values_per_member") { Values::Members } else { Values::Model },
+            deformed_as: if on("deformed_lines") { DeformedAs::Lines } else { DeformedAs::Profiles },
+            reactions_as: if on("reactions_xyz") { ReactionsAs::Components } else { ReactionsAs::Resultant },
+            plates: on("plates"),
+            plate_value: number("plate_value") as u8,
+            plate_mesh: on("plate_mesh"),
+            sizes,
+            colour_from: number("colour_from") as f32,
+            colour_to: number("colour_to") as f32,
+            bands: number("bands") as u8,
+            hide_nodes: on("hide_nodes"),
+            hide_members: on("hide_members"),
+            hide_values: on("hide_values"),
+        })
     }
 
     pub fn anything(&self) -> bool {
@@ -255,7 +355,7 @@ pub fn draw_all(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> 
         let mut pen = Pen { lines: &mut lines, faces: &mut faces, at: &at };
         let results = doc.results.get(shown.set).and_then(|r| r.inline.as_ref());
         if let (Some(force), Some(table)) = (shown.force, results.and_then(|r| r.member_forces.as_ref())) {
-            for (value, p) in forces(doc, table, force, reach, shown, &mut pen) {
+            for (value, p) in forces(doc, table, force, reach * shown.size(Part::Forces), shown, &mut pen) {
                 labels.push((format!("{} {}", force.symbol(), figure(value / 1e3, force.unit())), at(p)));
             }
         }
@@ -264,26 +364,26 @@ pub fn draw_all(parts: &[StructuralPart], origins: &[Origin], shown: &Shown) -> 
         let most = mesh.map_or(0.0, |m| m.displacements.iter().filter(|u| u.is_finite()).fold(0.0_f64, |a, u| a.max(u.length())));
         let most = results.and_then(|r| r.node_displacements.as_ref()).map_or(most, |t| most.max(largest_displacement(t)));
         if let (true, Some(mesh)) = (shown.plates, mesh) {
-            let moved = if shown.deformed && most > 0.0 { reach / most } else { 0.0 };
+            let moved = if shown.deformed && most > 0.0 { reach * shown.size(Part::Deformed) / most } else { 0.0 };
             if let Some((text, p)) = plates(mesh, shown, moved, &mut pen) {
                 labels.push((text, at(p)));
             }
         }
         if let (true, Some(table)) = (shown.deformed, results.and_then(|r| r.node_displacements.as_ref())) {
-            if let Some((value, p)) = deformed(doc, table, reach, most, shown.deformed_as, &mut pen) {
+            if let Some((value, p)) = deformed(doc, table, reach * shown.size(Part::Deformed), most, shown.deformed_as, &mut pen) {
                 labels.push((format!("u {}", figure(value * 1e3, "mm")), at(p)));
             }
         }
         if let (true, Some(table)) = (shown.reactions, results.and_then(|r| r.reactions.as_ref())) {
-            for (text, p) in reactions(doc, table, reach, shown.reactions_as, &mut pen) {
+            for (text, p) in reactions(doc, table, reach * shown.size(Part::Reactions), shown.reactions_as, &mut pen) {
                 labels.push((text, at(p)));
             }
         }
         if let Some(case) = shown.loads.and_then(|k| doc.load_cases.get(k)) {
-            loads(doc, case.id, reach * 0.6, &mut pen);
+            loads(doc, case.id, reach * 0.6 * shown.size(Part::Loads), &mut pen);
         }
         if shown.supports {
-            supports(doc, size * SYMBOL, &mut pen);
+            supports(doc, size * SYMBOL * shown.size(Part::Symbols), &mut pen);
         }
     }
     if shown.hide_values {
@@ -506,14 +606,72 @@ impl PlateValue {
     }
 }
 
-/// The names of the values a mesh can be coloured by: the displacement, then its fields.
+/// The stresses that follow from the moments (`mx`, `my`, `mxy`, per metre, positive with tension
+/// at the bottom: the side against the element's normal) and the membrane forces (`nx`, `ny`,
+/// `nxy`, per metre, tension positive) of a mesh, at the top and at the bottom of the plate:
+/// along x and y, the shear, the two principal stresses and the equivalent (von Mises) stress.
+const STRESSES: [&str; 6] = ["σx", "σy", "τxy", "σ1", "σ2", "σvm"];
+const SIDES: [(&str, f64); 2] = [("top", -1.0), ("bottom", 1.0)];
+
+fn field<'a>(mesh: &'a results::SurfaceTable, name: &str) -> Option<&'a [f64]> {
+    mesh.fields.iter().find(|f| f.name == name).map(|f| f.values.as_slice())
+}
+
+/// Whether the mesh holds something stresses are made of; what it lacks counts as nothing.
+fn has_stresses(mesh: &results::SurfaceTable) -> bool {
+    ["mx", "my", "mxy", "nx", "ny", "nxy"].iter().any(|n| field(mesh, n).is_some())
+}
+
+/// The names of the values a mesh can be coloured by: the displacement, its fields, and the
+/// stresses at the top and the bottom that follow from them.
 pub fn plate_values(mesh: &results::SurfaceTable) -> Vec<String> {
-    std::iter::once("u".to_string()).chain(mesh.fields.iter().map(|f| f.name.clone())).collect()
+    let stresses = SIDES.iter().flat_map(|(side, _)| STRESSES.iter().map(move |s| format!("{s} {side}"))).filter(|_| has_stresses(mesh));
+    std::iter::once("u".to_string()).chain(mesh.fields.iter().map(|f| f.name.clone())).chain(stresses).collect()
+}
+
+/// Stress `which` (its place in [`STRESSES`]) at the side of sign `side`, at every mesh node.
+fn stress(mesh: &results::SurfaceTable, which: usize, side: f64) -> Vec<f64> {
+    let n = mesh.points.len();
+    let mut thick = vec![0.0_f64; n];
+    for k in 0..mesh.elements.len() {
+        for c in mesh.corners(k) {
+            if let Some(t) = thick.get_mut(*c as usize) {
+                *t = t.max(mesh.thickness.get(k).copied().unwrap_or(0.0));
+            }
+        }
+    }
+    let of = |name: &str, node: usize| field(mesh, name).and_then(|v| v.get(node)).copied().unwrap_or(0.0);
+    (0..n)
+        .map(|node| {
+            let t = thick[node];
+            if !(t > 0.0) {
+                return f64::NAN;
+            }
+            let at = |force: &str, moment: &str| of(force, node) / t + side * 6.0 * of(moment, node) / (t * t);
+            let (x, y, shear) = (at("nx", "mx"), at("ny", "my"), at("nxy", "mxy"));
+            let (mean, radius) = ((x + y) / 2.0, (((x - y) / 2.0).powi(2) + shear * shear).sqrt());
+            match which {
+                0 => x,
+                1 => y,
+                2 => shear,
+                3 => mean + radius,
+                4 => mean - radius,
+                _ => (x * x - x * y + y * y + 3.0 * shear * shear).sqrt(),
+            }
+        })
+        .collect()
 }
 
 /// The value `which` of the mesh: the size of the displacement (0), or a field (from 1; one that
 /// is not there gives the displacement).
 pub fn plate_value(mesh: &results::SurfaceTable, which: u8) -> PlateValue {
+    // after the fields: the stresses, the six at the top and then the six at the bottom
+    let derived = usize::from(which).checked_sub(1 + mesh.fields.len()).filter(|k| *k < STRESSES.len() * SIDES.len() && has_stresses(mesh));
+    if let Some(k) = derived {
+        let (side, sign) = SIDES[k / STRESSES.len()];
+        let which = k % STRESSES.len();
+        return PlateValue { name: format!("{} {side}", STRESSES[which]), unit: "MPa", factor: 1e-6, values: stress(mesh, which, sign) };
+    }
     match which.checked_sub(1).and_then(|k| mesh.fields.get(k as usize)) {
         None => PlateValue { name: "u".into(), unit: "mm", factor: 1e3, values: mesh.displacements.iter().map(|u| u.length()).collect() },
         Some(field) => {
@@ -563,7 +721,7 @@ fn plates(mesh: &results::SurfaceTable, shown: &Shown, moved: f64, pen: &mut Pen
     let up: Vec<DVec3> = normal.iter().map(|v| v.normalize_or_zero()).collect();
     let light = LIGHT.normalize();
     let tint = |node: usize, toward: DVec3| -> [u8; 4] {
-        let base = scale_colour((value.values.get(node).copied().unwrap_or(low) - low) / span);
+        let base = scale_colour(shown.on_scale((value.values.get(node).copied().unwrap_or(low) - low) / span));
         let lit = 0.6 + 0.4 * toward.normalize_or_zero().dot(light).abs();
         [(f64::from(base[0]) * lit) as u8, (f64::from(base[1]) * lit) as u8, (f64::from(base[2]) * lit) as u8, 255]
     };
@@ -1002,7 +1160,8 @@ mod tests {
         // it goes down by the reach
         let moved = all(Shown { plates: true, deformed: true, scale: 1.0, ..Shown::default() });
         assert_eq!(moved.labels[0].0, "u 10.0 mm");
-        let reach = (DVec3::new(3.0, 2.0, 0.0).length().max(1.0) * REACH) as f32;
+        // (the model has no nodes of its own, so its size counts as one metre)
+        let reach = REACH as f32;
         assert!((heights(&moved).0 + reach + 0.1).abs() < 0.02, "{:?} {reach}", heights(&moved));
         // the lines of the mesh, and of the edge
         let lines = |mesh: bool| all(Shown { plates: true, plate_mesh: mesh, scale: 1.0, ..Shown::default() }).lines.len();
@@ -1012,6 +1171,48 @@ mod tests {
             shown.apply(change, 0, 1);
         }
         assert!(shown.plates && shown.plate_mesh && shown.plate_value == 1 && shown.anything());
+    }
+
+    #[test]
+    fn stresses_follow_from_the_moments_and_the_thickness() {
+        let parts = plate();
+        let mesh = parts[0].doc.results[0].inline.as_ref().unwrap().surface_mesh.as_ref().unwrap();
+        // the displacement, the one field, and six stresses at the top and at the bottom
+        let names = plate_values(mesh);
+        assert_eq!((names.len(), names[2].as_str(), names[13].as_str()), (2 + 12, "σx top", "σvm bottom"));
+        // 5 kNm/m in a plate of 0.2 m: 6 m / t² = 0.75 MPa, pulling at the bottom, pushing at the top
+        let (top, bottom) = (plate_value(mesh, 2), plate_value(mesh, 8));
+        assert_eq!((top.name.as_str(), top.unit, bottom.name.as_str()), ("σx top", "MPa", "σx bottom"));
+        assert!((top.values[2] + 750_000.0).abs() < 1e-6 && (bottom.values[2] - 750_000.0).abs() < 1e-6, "{:?}", top.values);
+        assert_eq!(bottom.written(bottom.values[2]), "0.75 MPa");
+        // with one stress only, it is the first principal one and the equivalent one too
+        assert!((plate_value(mesh, 11).values[2] - 750_000.0).abs() < 1e-6 && (plate_value(mesh, 13).values[2] - 750_000.0).abs() < 1e-6);
+        // a value that is not there is the displacement
+        assert_eq!(plate_value(mesh, 99).name, "u");
+    }
+
+    #[test]
+    fn sizes_and_colours_are_set_apart_and_kept_by_a_view() {
+        let mut shown = Shown { scale: 1.0, ..Shown::default() };
+        assert_eq!((shown.size(Part::Loads), shown.colours(), shown.on_scale(0.25)), (1.0, (0.0, 1.0), 0.25));
+        for change in [Change::Size(Part::Reactions, 2.0), Change::Size(Part::Symbols, 1000.0), Change::ColourFrom(0.5), Change::ColourTo(0.2), Change::Bands(4)] {
+            shown.apply(change, 0, 1);
+        }
+        // a size stays within bounds; the colours keep a part of the range between their ends
+        assert_eq!((shown.size(Part::Reactions), shown.size(Part::Symbols), shown.size(Part::Forces)), (2.0, 20.0, 1.0));
+        assert_eq!(shown.colours(), (0.5, 0.55));
+        // under where the colours start it is the first band, over where they end the last
+        assert_eq!((shown.on_scale(0.1), shown.on_scale(0.9)), (0.125, 0.875));
+        // the reactions twice as long, the other arrows as they were
+        let length = |shown: Shown| drawn(Shown { reactions: true, ..shown }).0.iter().map(|(l, _)| (DVec3::from(l[1].map(f64::from)) - DVec3::from(l[0].map(f64::from))).length()).fold(0.0_f64, f64::max);
+        assert!((length(shown) / length(Shown { scale: 1.0, ..Shown::default() }) - 2.0).abs() < 1e-6);
+        // a view keeps all of it
+        shown.apply(Change::ForceIs(Some(Force::Vz)), 0, 1);
+        shown.apply(Change::ReactionsAs(ReactionsAs::Components), 0, 1);
+        shown.apply(Change::PlatesOn(true), 0, 1);
+        assert_eq!(Shown::from_json(&shown.to_json()), Some(shown));
+        assert_eq!(Shown::from_json(&serde_json::json!({})), Some(Shown::default()));
+        assert_eq!(Shown::from_json(&serde_json::json!(3)), None);
     }
 
     #[test]

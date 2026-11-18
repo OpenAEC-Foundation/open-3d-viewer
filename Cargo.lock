@@ -5581,7 +5581,7 @@ dependencies = [
 [[package]]
 name = "threedm-core"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=c03d1aa34aa562600e8c3433d29a9f809a7aad5f#c03d1aa34aa562600e8c3433d29a9f809a7aad5f"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=775fd4e68fbc47511db3d479fbae5d0a397f75a3#775fd4e68fbc47511db3d479fbae5d0a397f75a3"
 dependencies = [
  "flate2",
  "glam 0.30.10",
@@ -5590,7 +5590,7 @@ dependencies = [
 [[package]]
 name = "threedm-model"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=c03d1aa34aa562600e8c3433d29a9f809a7aad5f#c03d1aa34aa562600e8c3433d29a9f809a7aad5f"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=775fd4e68fbc47511db3d479fbae5d0a397f75a3#775fd4e68fbc47511db3d479fbae5d0a397f75a3"
 dependencies = [
  "glam 0.30.10",
  "threedm-core",
@@ -5599,7 +5599,7 @@ dependencies = [
 [[package]]
 name = "threedm-read"
 version = "0.1.0"
-source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=c03d1aa34aa562600e8c3433d29a9f809a7aad5f#c03d1aa34aa562600e8c3433d29a9f809a7aad5f"
+source = "git+https://github.com/OpenAEC-Foundation/rhino-dll?rev=775fd4e68fbc47511db3d479fbae5d0a397f75a3#775fd4e68fbc47511db3d479fbae5d0a397f75a3"
 dependencies = [
  "earcutr",
  "glam 0.30.10",

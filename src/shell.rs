@@ -3559,7 +3559,7 @@ mod tests {
         studio.set_product(Product::Viewer);
         assert_eq!(studio.product(), Product::Modeller);
         let names = accessibility(&studio).summary();
-        assert!(!names.iter().any(|n| n == "Tab: Collab" || n == "Tab: PointCloud"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "Tab: Validator" || n == "Tab: PointCloud"), "{names:?}");
         assert!(names.contains(&"Tab: Model".to_string()), "{names:?}");
         // a product binary: its own name in the title and About
         let alone = Studio::new(App::default()).with_edition(Edition::Only(Product::Validator));

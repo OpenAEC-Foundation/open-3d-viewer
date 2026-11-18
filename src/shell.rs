@@ -816,6 +816,25 @@ impl Studio {
         }
     }
 
+    /// IFCX is a product: while it is the one shown, the project's IFCX fills the workspace in
+    /// place of the views; another product gives them back. It opens once a model is there.
+    fn ifcx_follow_product(&mut self) -> Task<Msg> {
+        let on = self.product() == Product::Ifcx;
+        if on && !self.app.ifc.full && self.app.model.is_some() {
+            // the first time it opens on the graph
+            if !self.app.ifc.open {
+                self.app.ifc.view = crate::app::IfcView::Graph;
+            }
+            self.app.ifc.full = true;
+            return self.app.update(Message::OpenIfc).map(Msg::App);
+        }
+        if !on && self.app.ifc.full {
+            self.app.ifc.full = false;
+            self.app.ifc.shown = false;
+        }
+        Task::none()
+    }
+
     /// The ribbon tab shown.
     fn ribbon_page(&self) -> RibbonPage {
         let pages = self.product().pages();
@@ -1579,8 +1598,9 @@ impl Studio {
         let task = self.handle(message);
         self.app.modeller.in_modeller = self.product() == Product::Modeller;
         let docs = self.docs_follow_product();
+        let ifcx = self.ifcx_follow_product();
         self.keep_dev_session();
-        Task::batch([task, docs])
+        Task::batch([task, docs, ifcx])
     }
 
     fn handle(&mut self, message: Msg) -> Task<Msg> {
@@ -1663,19 +1683,6 @@ impl Studio {
                 self.ribbon_folded = self.compact() && !self.backstage && same && !self.ribbon_folded;
                 self.ribbon_tab = tab;
                 self.backstage = false;
-                // the IFCX page shows the project's IFCX in place of the views; another page
-                // gives them back
-                if self.ribbon_page() == RibbonPage::Ifcx {
-                    // the first time it opens on the graph
-                    if !self.app.ifc.open {
-                        self.app.ifc.view = crate::app::IfcView::Graph;
-                    }
-                    self.app.ifc.full = true;
-                    return self.update(Msg::App(Message::OpenIfc));
-                } else if self.app.ifc.full {
-                    self.app.ifc.full = false;
-                    self.app.ifc.shown = false;
-                }
             }
             Msg::Backstage(open) => self.backstage = open,
             Msg::OpenRecent(path) => return self.update(Msg::App(Message::Open(path))),
@@ -2499,7 +2506,7 @@ impl Studio {
             // each product starts its own way: open a model, make one, or open the project's
             let open = |kind| cm::button(look, &self.command("file.open"), kind, D::Regular);
             let (icon, title, explanation, action): (_, _, _, Element<'_, Msg>) = match self.product() {
-                Product::Viewer | Product::Docs => (
+                Product::Viewer | Product::Docs | Product::Ifcx => (
                     "project.folder",
                     l.text("Geen model geopend", "No model open"),
                     formats_hint(l),
@@ -2623,7 +2630,7 @@ impl Studio {
             }
             // Docs: the folders of the project folder
             Product::Docs => (l.text("Projectmap", "Project folder"), Self::pane(self.app.docs_tree_pane(palette(look), l))),
-            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
+            Product::Viewer | Product::Modeller | Product::Pointcloud | Product::Analysis | Product::Ifcx => (l.text("Verkenner", "Explorer"), Self::pane(self.app.explorer_body(palette(look), l))),
         }
     }
 
@@ -3543,6 +3550,25 @@ mod tests {
         // older preferences have no product: the Viewer
         let prefs: Prefs = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
         assert_eq!(prefs.product, Product::Viewer);
+    }
+
+    #[test]
+    fn ifcx_is_a_product_of_its_own_and_shows_the_project_as_ifcx() {
+        // not a tab of the Modeller's ribbon: on the switch, for every project
+        assert!(Product::ALL.iter().all(|p| (*p == Product::Ifcx) == p.pages().contains(&RibbonPage::Ifcx)));
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        let _ = studio.update(Msg::Product(Product::Ifcx));
+        assert_eq!((studio.product(), studio.ribbon_page()), (Product::Ifcx, RibbonPage::Ifcx));
+        assert!(studio.app.ifc.full && studio.app.ifc.shown && studio.app.ifc.structure.is_some(), "the project's IFCX fills the workspace");
+        // another product gives the views back
+        let _ = studio.update(Msg::Product(Product::Viewer));
+        assert!(!studio.app.ifc.full && !studio.app.ifc.shown);
+        // without a model there is nothing to show yet, and no error either
+        let mut empty = Studio::new(App::default());
+        let _ = empty.update(Msg::Product(Product::Ifcx));
+        assert!(!empty.app.ifc.full && !matches!(empty.app.status, Status::Error(_)));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! The products built from this code base: the Viewer, the Modeller, the BIM Validator,
+//! The products built from this code base: the Viewer, IFCX, the Modeller, the BIM Validator,
 //! Pointcloud, Structural Analysis and Docs (see `docs/architecture/products.md`).
 //!
 //! They share one `App` and one window. The switch at the top right of the window moves between
@@ -29,10 +29,13 @@ pub enum Product {
     /// The documents of the project folder: their status, their revisions and the elements they
     /// are about.
     Docs,
+    /// The project as its IFCX file has it: its nodes, entries and relations, whatever product
+    /// made or opened it.
+    Ifcx,
 }
 
 impl Product {
-    pub const ALL: [Product; 6] = [Product::Viewer, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs];
+    pub const ALL: [Product; 7] = [Product::Viewer, Product::Ifcx, Product::Validator, Product::Pointcloud, Product::Analysis, Product::Modeller, Product::Docs];
 
     /// Its key on the command line, in the preferences and in a web address (`?product=`).
     pub fn key(self) -> &'static str {
@@ -43,6 +46,7 @@ impl Product {
             Product::Pointcloud => "pointcloud",
             Product::Analysis => "analysis",
             Product::Docs => "docs",
+            Product::Ifcx => "ifcx",
         }
     }
 
@@ -56,6 +60,7 @@ impl Product {
             "pointcloud" | "point-cloud" => Some(Product::Pointcloud),
             "analysis" | "structural-analysis" => Some(Product::Analysis),
             "docs" | "documents" => Some(Product::Docs),
+            "ifcx" | "ifc" => Some(Product::Ifcx),
             _ => None,
         }
     }
@@ -70,6 +75,7 @@ impl Product {
             Product::Pointcloud => "PointCloud",
             Product::Analysis => "Struct",
             Product::Docs => "Docs",
+            Product::Ifcx => "IFCX",
         }
     }
 
@@ -82,6 +88,7 @@ impl Product {
             Product::Pointcloud => "Pointcloud",
             Product::Analysis => "Structural Analysis",
             Product::Docs => "Docs",
+            Product::Ifcx => "IFCX",
         }
     }
 
@@ -91,7 +98,7 @@ impl Product {
         match self {
             Product::Modeller => Some("(alpha, not usable)"),
             Product::Pointcloud | Product::Analysis | Product::Docs => Some("(alpha)"),
-            Product::Viewer | Product::Validator => None,
+            Product::Viewer | Product::Validator | Product::Ifcx => None,
         }
     }
 
@@ -104,6 +111,7 @@ impl Product {
             Product::Pointcloud => l.text("Puntenwolken openen en er meshes van maken", "Open point clouds and make meshes of them"),
             Product::Analysis => l.text("Rekenmodellen bekijken: belastingen en rekenresultaten", "Look at structural analysis models: loads and results"),
             Product::Docs => l.text("De documenten van het project: status, versies en koppelingen met het model", "The documents of the project: status, revisions and links to the model"),
+            Product::Ifcx => l.text("Het project zoals het in IFCX staat: nodes, tabel, relaties en tekst", "The project as it stands in IFCX: nodes, table, relations and text"),
         }
     }
 
@@ -116,6 +124,7 @@ impl Product {
             Product::Pointcloud => "product.pointcloud",
             Product::Analysis => "product.analysis",
             Product::Docs => "product.docs",
+            Product::Ifcx => "product.ifcx",
         }
     }
 
@@ -123,11 +132,12 @@ impl Product {
     pub fn pages(self) -> &'static [RibbonPage] {
         match self {
             Product::Viewer => &[RibbonPage::Home],
-            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View, RibbonPage::Ifcx],
+            Product::Modeller => &[RibbonPage::Model, RibbonPage::Project, RibbonPage::Annotate, RibbonPage::View],
             Product::Validator => &[RibbonPage::Collaborate, RibbonPage::View],
             Product::Pointcloud => &[RibbonPage::Cloud, RibbonPage::View],
             Product::Analysis => &[RibbonPage::Analysis, RibbonPage::View],
             Product::Docs => &[RibbonPage::Docs, RibbonPage::View],
+            Product::Ifcx => &[RibbonPage::Ifcx],
         }
     }
 
@@ -140,6 +150,7 @@ impl Product {
             Product::Pointcloud => "Open BIM Pointcloud",
             Product::Analysis => "Open BIM Structural Analysis",
             Product::Docs => "Open BIM Docs",
+            Product::Ifcx => "Open BIM IFCX",
         }
     }
 
@@ -152,6 +163,7 @@ impl Product {
             Product::Pointcloud => "open-bim-pointcloud",
             Product::Analysis => "open-bim-analysis",
             Product::Docs => "open-bim-docs",
+            Product::Ifcx => "open-bim-ifcx",
         }
     }
 
@@ -166,6 +178,8 @@ impl Product {
             Product::Analysis => cfg!(feature = "viewer"),
             // in every desktop build: a project folder is a folder of the computer
             Product::Docs => cfg!(not(target_arch = "wasm32")),
+            // in every build: every project can be looked at as IFCX
+            Product::Ifcx => true,
         }
     }
 
@@ -389,8 +403,8 @@ mod tests {
         assert_eq!(Product::parse("modeler"), Some(Product::Modeller));
         assert_eq!(Product::parse("editor"), None);
         // the switch: short names, and the four in alpha are the grey ones
-        assert_eq!(Product::ALL.map(Product::label), ["View", "Collab", "PointCloud", "Struct", "Modeller", "Docs"]);
-        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, true, true, true, true]);
+        assert_eq!(Product::ALL.map(Product::label), ["View", "IFCX", "Collab", "PointCloud", "Struct", "Modeller", "Docs"]);
+        assert_eq!(Product::ALL.map(|p| p.stage().is_some()), [false, false, false, true, true, true, true]);
     }
 
     #[test]
@@ -401,7 +415,7 @@ mod tests {
         names.dedup();
         ids.sort();
         ids.dedup();
-        assert_eq!((names.len(), ids.len()), (6, 6));
+        assert_eq!((names.len(), ids.len()), (7, 7));
         // the Studio is what was released as the viewer: same name, same installer id
         assert_eq!((Edition::Studio.name(), Edition::Studio.app_id()), ("Open BIM Suite", "open-3d-viewer"));
         assert_eq!(Edition::Only(Product::Modeller).products(), vec![Product::Modeller]);

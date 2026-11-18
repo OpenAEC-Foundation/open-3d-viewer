@@ -8,7 +8,7 @@
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
-//!                  [--recent PATH]... [--docs FOLDER [--doc FILE]] [--gis PLACE (an address or coordinates: its parcels and buildings are fetched) [--map background|aerial] [--soundings]]
+//!                  [--recent PATH]... [--docs FOLDER [--doc FILE]] [--gis PLACE (an address or coordinates: its parcels and buildings are fetched) [--map background|aerial] [--soundings] [--borings]]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
@@ -71,6 +71,8 @@ struct Args {
     map: Option<crate::app::MapSource>,
     /// For `--screenshot` with `--gis`: the soundings around the place are fetched too.
     soundings: bool,
+    /// For `--screenshot` with `--gis`: the borings around the place and the model of the ground.
+    borings: bool,
     screenshot: Option<PathBuf>,
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
@@ -145,6 +147,7 @@ fn parse_args() -> Result<Args, String> {
                 })
             }
             "--soundings" => args.soundings = true,
+            "--borings" => args.borings = true,
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
@@ -590,6 +593,9 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
         }
         if args.soundings {
             studio.app.open_soundings(args.language.unwrap_or(Language::English))?;
+        }
+        if args.borings {
+            studio.app.open_borings(args.language.unwrap_or(Language::English))?;
         }
     }
     #[cfg(feature = "validator")]

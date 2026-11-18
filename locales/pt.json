@@ -1189,6 +1189,26 @@
     "Opens soundings from GEF files and puts them in the model.": "Abre sondagens de ficheiros GEF e coloca-as no modelo.",
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, infraestruturas e engenharia civil: o mapa, a envolvente, o terreno e o subsolo do projeto",
     "Geotechnics": "Geotecnia",
-    "Civil": "Engenharia civil"
+    "Civil": "Engenharia civil",
+    "Borings": "Furos",
+    "Ground model": "Modelo do subsolo",
+    "Ground": "Subsolo",
+    "Load borings around the place": "Carregar furos em redor do local",
+    "Open GEF files of borings": "Abrir ficheiros GEF de furos",
+    "Borings loaded": "Furos carregados",
+    "The area holds more borings; the nearest were loaded.": "A área contém mais furos; foram carregados os mais próximos.",
+    "No borings found around this place.": "Nenhum furo encontrado em redor deste local.",
+    "Each described layer is a block of the column, to be picked. Coloured by main soil: gravel orange, sand yellow, silt and loam pale olive, clay green, peat brown, anything else grey.": "Cada camada descrita é um bloco da coluna, selecionável. Cor segundo o solo principal: cascalho laranja, areia amarelo, silte e solo franco verde-azeitona claro, argila verde, turfa castanho, o resto cinzento.",
+    "Make ground model": "Criar modelo do subsolo",
+    "Made": "Criado",
+    "layers of": "camadas de",
+    "borings": "furos",
+    "Load borings with a place first.": "Carregue primeiro furos com um local.",
+    "Every place takes the layers of the nearest boring, from that boring's ground down. Nothing is laid between borings: where two borings differ, the model steps. It shows what was bored; it is no soil profile to calculate with.": "Cada local assume as camadas do furo mais próximo, a partir do nível do terreno desse furo. Nada é interpolado entre furos: onde dois furos diferem, o modelo dá um salto. Mostra o que foi perfurado; não é um perfil do solo para efetuar cálculos.",
+    "Soundings and borings around the place come from the Dutch register of the subsurface (the Netherlands only). The request tells the register which place you are looking at; nothing else goes along.": "Os ensaios de penetração e os furos em redor do local provêm do registo neerlandês do subsolo (apenas Países Baixos). O pedido indica ao registo que local está a consultar; mais nada é enviado.",
+    "Load borings": "Carregar furos",
+    "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Obtém os furos geotécnicos em redor do local do registo neerlandês do subsolo e coloca-os no modelo.",
+    "Opens borings from GEF files and puts them in the model.": "Abre furos a partir de ficheiros GEF e coloca-os no modelo.",
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Cria um modelo 3D do subsolo a partir dos furos carregados: cada local assume as camadas do furo mais próximo."
   }
 }

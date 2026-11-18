@@ -1189,6 +1189,26 @@
     "Opens soundings from GEF files and puts them in the model.": "GEF dosyalarından sondajları açar ve modele koyar.",
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, altyapı ve inşaat: projenin haritası, çevresi, arazisi ve zemini",
     "Geotechnics": "Geoteknik",
-    "Civil": "İnşaat mühendisliği"
+    "Civil": "İnşaat mühendisliği",
+    "Borings": "Sondajlar",
+    "Ground model": "Zemin modeli",
+    "Ground": "Zemin",
+    "Load borings around the place": "Yerin çevresindeki sondajları yükle",
+    "Open GEF files of borings": "Sondajların GEF dosyalarını aç",
+    "Borings loaded": "Sondajlar yüklendi",
+    "The area holds more borings; the nearest were loaded.": "Bölgede daha fazla sondaj var; en yakın olanlar yüklendi.",
+    "No borings found around this place.": "Bu yerin çevresinde sondaj bulunamadı.",
+    "Each described layer is a block of the column, to be picked. Coloured by main soil: gravel orange, sand yellow, silt and loam pale olive, clay green, peat brown, anything else grey.": "Tanımlanan her katman, seçilebilen sütunun bir bloğudur. Ana zemin türüne göre renklendirilir: çakıl turuncu, kum sarı, silt ve balçık soluk zeytin yeşili, kil yeşil, turba kahverengi, diğerleri gri.",
+    "Make ground model": "Zemin modeli oluştur",
+    "Made": "Oluşturuldu",
+    "layers of": "katman,",
+    "borings": "sondajdan",
+    "Load borings with a place first.": "Önce bir yerle birlikte sondajları yükleyin.",
+    "Every place takes the layers of the nearest boring, from that boring's ground down. Nothing is laid between borings: where two borings differ, the model steps. It shows what was bored; it is no soil profile to calculate with.": "Her yer, en yakın sondajın katmanlarını, o sondajın zemin seviyesinden aşağıya doğru alır. Sondajlar arasında hiçbir şey enterpole edilmez: iki sondaj farklı olduğunda model basamaklanır. Sondajla elde edileni gösterir; hesap yapmak için bir zemin profili değildir.",
+    "Soundings and borings around the place come from the Dutch register of the subsurface (the Netherlands only). The request tells the register which place you are looking at; nothing else goes along.": "Yerin çevresindeki penetrasyon testleri ve sondajlar Hollanda yer altı kayıt sisteminden gelir (yalnızca Hollanda). İstek, kayıt sistemine yalnızca baktığınız yeri bildirir; başka hiçbir şey gönderilmez.",
+    "Load borings": "Sondajları yükle",
+    "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Yerin çevresindeki jeoteknik sondajları Hollanda yer altı kayıt sisteminden alır ve modele ekler.",
+    "Opens borings from GEF files and puts them in the model.": "GEF dosyalarından sondajları açar ve modele ekler.",
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Yüklenen sondajlardan zeminin 3D modelini oluşturur: her yer, en yakın sondajın katmanlarını alır."
   }
 }

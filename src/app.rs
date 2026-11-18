@@ -30,6 +30,7 @@ mod layers;
 pub mod collab;
 mod docs;
 mod drafts;
+mod drawn_edit;
 pub mod drawn_props;
 mod edit;
 mod element_props;
@@ -581,6 +582,11 @@ pub enum Message {
     PickMark(Option<marks::MarkPick>),
     /// Remove what is picked on the view shown in its tab.
     RemoveMark,
+    /// The shape picked on the floor plan shown becomes loose lines.
+    ExplodeDrawn,
+    /// Offset on or off, and the distance typed for it.
+    OffsetTool,
+    OffsetText(String),
     /// Put the picked dimension on the other side of what it measures.
     FlipDimension,
     /// The picked dimension looks otherwise: another style, or its style changed.
@@ -2255,6 +2261,15 @@ impl App {
             }
             Message::PickMark(pick) => self.pick_mark(pick),
             Message::RemoveMark => self.remove_mark(),
+            Message::ExplodeDrawn => {
+                self.explode_drawn();
+            }
+            Message::OffsetTool => self.toggle_offset(),
+            Message::OffsetText(typed) => {
+                if let Some(text) = self.modeller.offset.as_mut() {
+                    *text = typed;
+                }
+            }
             Message::FlipDimension => self.flip_dimension(),
             Message::DimensionLook(edit) => self.edit_dimension_look(edit),
             Message::StandardDimensions(view) => {
@@ -2640,6 +2655,7 @@ impl App {
             Message::Escape if self.modeller.transform.is_some() => {
                 self.escape_transform();
             }
+            Message::Escape if self.modeller.offset.is_some() => self.modeller.offset = None,
             // Esc drops a length being typed first; the tool goes on drawing
             Message::Escape if !self.modeller.length_typed.is_empty() => self.modeller.length_typed.clear(),
             Message::Escape if self.modeller.grid_tool => self.escape_grid_tool(),
@@ -2772,6 +2788,9 @@ impl App {
         }
         if self.modeller.transform.is_some() {
             return self.transform_click(x, y, width, height);
+        }
+        if self.modeller.offset.is_some() {
+            return self.offset_click(x, y, width, height);
         }
         if self.modeller.grid_tool {
             return self.grid_click(x, y, width, height);
@@ -4117,6 +4136,8 @@ impl App {
                 Some(refusal) => format!("{}: {} · {}", t.kind.label(l), l.translate(refusal.reason()), hint),
                 None => format!("{}: {}", t.kind.label(l), hint),
             })
+        } else if let Some(hint) = self.offset_hint(l) {
+            Some(hint)
         } else if let Some(hint) = self.grid_hint(l) {
             Some(hint)
         } else if let Some((tool, _)) = self.modeller.tool {

@@ -335,6 +335,7 @@ impl App {
             drawing: self.draw_tool.filter(|_| self.annotates && !self.dimension_tool && !self.section_tool && !self.note_tool),
             own_lines: self.document.view_lines(view).len(),
             shapes: self.document.view_shapes(view).to_vec(),
+            transforming: self.modeller.transform.is_some() || self.modeller.offset.is_some(),
             selected: self.sel.items().iter().filter_map(|item| if let super::Pickable::Element(id) = item { Some(*id) } else { None }).collect(),
         })
     }
@@ -415,6 +416,11 @@ impl App {
                         rows = rows.push(tool(l.text("Vorm verwijderen", "Remove shape"), false, Message::RemoveMark));
                     }
                     None => rows = rows.push(tool(l.text("Lijn verwijderen", "Remove line"), false, Message::RemoveMark)),
+                }
+                // Offset on: its distance, typed here
+                if let Some(typed) = &self.modeller.offset {
+                    rows = rows.push(hint(l.text("Afstand van de offset (mm)", "Offset distance (mm)")));
+                    rows = rows.push(text_input("100", typed).on_input(Message::OffsetText).size(12).padding([3, 6]));
                 }
             }
             None => {
@@ -654,6 +660,8 @@ pub(super) struct ViewMarks {
     own_lines: usize,
     /// The shapes among the view's own lines: a click on a line of one picks all of it.
     shapes: Vec<crate::document::Shape>,
+    /// A move, copy, turn or mirror is under way: its clicks are points, and pick nothing here.
+    transforming: bool,
 }
 
 /// The first point of a dimension being made, where the pointer snaps to now, a text being
@@ -881,6 +889,7 @@ impl canvas::Program<Message> for ViewMarks {
                     canvas::Action::request_redraw()
                 })
             }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if self.transforming => None,
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let p = pointer?;
                 if let Some(kind) = self.drawing {

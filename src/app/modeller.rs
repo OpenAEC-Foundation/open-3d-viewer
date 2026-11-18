@@ -240,6 +240,8 @@ pub struct Modeller {
     /// The model before each step that changed it, to take the step back (`super::undo`).
     /// A move, copy, turn or mirror of the selected elements under way (`super::transform`).
     pub transform: Option<super::transform::Transform>,
+    /// Offset is on (`super::drawn_edit`): the distance typed for it, in millimetres.
+    pub offset: Option<String>,
     pub history: crate::history::History<Step>,
     /// The project as its last step left it: what a change is measured against.
     pub base: Step,

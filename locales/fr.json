@@ -1139,6 +1139,9 @@
     "Click two opposite corners.": "Cliquez deux coins opposés.",
     "Click the centre and a point on the circle.": "Cliquez le centre et un point du cercle.",
     "Click the start, a point on the arc and the end.": "Cliquez le début, un point de l'arc et la fin.",
-    "Click the centre, the end of one axis and how far the other reaches.": "Cliquez le centre, l'extrémité d'un axe et la portée de l'autre."
+    "Click the centre, the end of one axis and how far the other reaches.": "Cliquez le centre, l'extrémité d'un axe et la portée de l'autre.",
+    "Offset": "Décalage",
+    "Offset distance (mm)": "Distance du décalage (mm)",
+    "Click on the side where the copy goes · Esc: stop": "Cliquez du côté où va la copie · Échap : arrêter"
   }
 }

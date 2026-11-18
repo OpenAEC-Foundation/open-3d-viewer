@@ -71,20 +71,22 @@ Done: in the Draw tab and working. Elsewhere: the Modeller has it in another pla
 | Annotate | Linear, Angular (DA), Radius (DR), Diameter (DD) | open |
 | Annotate | Spot coordinate (SC), Leader (LE), Label (LB), Table, Cloud | open |
 | Annotate | Measure (ME) | elsewhere: the View tab's Measure group |
-| Modify | Move (MV), Copy (CO), Rotate (RO), Mirror (MM) | done for model elements; open for what is drawn on a view |
+| Modify | Move (MV), Copy (CO), Rotate (RO), Mirror (MM) | done for model elements and for the line or shape picked on a floor plan (one at a time; not yet on a section or sheet) |
 | Modify | Array, Scale (RE) | open |
-| Edit | Trim (TR), Extend (EX), Offset (OF), Fillet (FL), Chamfer | open |
-| Edit | Stretch, Split, Align, Explode, Break, Join, Lengthen | open |
+| Edit | Offset | done on a floor plan: a distance typed in the right pane (mm), a click on the side; corners meet again; no key yet |
+| Edit | Explode | done: the shape picked becomes loose lines |
+| Edit | Trim (TR), Extend (EX), Fillet (FL), Chamfer | open |
+| Edit | Stretch, Split, Align, Break, Join, Lengthen | open |
 | Clipboard | Paste, Cut, Copy | open |
 | Clipboard | Delete | done: Delete, and Remove in the right pane for what is picked on a view |
 | Group | Create, Explode | open |
 
 ## Next, in this order
 
-1. Move, Copy, Rotate and Mirror on what is drawn on a view (a line or a shape picked), and
-   more than one picked at a time (a box, Shift).
+1. More than one line or shape picked at a time (a box, Shift), and the Modify tools on a
+   section and a sheet.
 2. The drawing tools take the Modeller's snaps and marks (end, middle, grid, on a line) and the
    typed length; the points being clicked move from the canvas into the app for that.
-3. Edit: Trim, Extend, Offset, Fillet, Chamfer, Explode, Join.
+3. Edit: Trim, Extend, Fillet, Chamfer, Join.
 4. Spline, filled region, the other dimensions, leader and cloud.
 5. Clipboard, array and scale.

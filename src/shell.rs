@@ -1299,8 +1299,16 @@ impl Studio {
             Command::new(kind.id(), kind.label(l), go(Message::Transform(kind)))
                 .icon(small(kind.icon()), large(kind.icon()))
                 .toggle(app.modeller.transform.as_ref().is_some_and(|t| t.kind == kind))
-                .enabled(!app.selected_modelled().is_empty() || app.modeller.transform.is_some())
+                .enabled(!app.selected_modelled().is_empty() || app.modeller.transform.is_some() || app.drawn_picked().is_some())
         }));
+        // the Edit tools of the Draw tab, on the line or shape picked on a floor plan
+        list.push(
+            Command::new("edit.offset", l.text("Offset", "Offset"), go(Message::OffsetTool))
+                .icon(small("transform.offset"), large("transform.offset"))
+                .toggle(app.modeller.offset.is_some())
+                .enabled(app.drawn_picked().is_some() || app.modeller.offset.is_some()),
+        );
+        list.push(Command::new("edit.explode", l.text("Exploderen", "Explode"), go(Message::ExplodeDrawn)).icon(small("transform.explode"), large("transform.explode")).enabled(app.shape_picked()));
         // the project's levels, views, sheets and library
         use crate::document::PlanKind;
         let plan = |id: &'static str, label: &'static str, kind: PlanKind| {
@@ -2336,6 +2344,7 @@ impl Studio {
                 (l.text("Tekenen", "Draw"), vec![smalls(&["draw.line", "draw.polyline", "draw.rectangle"]), smalls(&["draw.circle", "draw.arc", "draw.ellipse"])]),
                 (l.text("Annoteren", "Annotate"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions", "annotate.text"])]),
                 (l.text("Wijzigen", "Modify"), vec![smalls(&["model.move", "model.copy", "model.rotate"]), smalls(&["model.mirror", "model.edit", "model.delete"])]),
+                (l.text("Bewerken", "Edit"), vec![smalls(&["edit.offset", "edit.explode"])]),
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![
@@ -3422,7 +3431,7 @@ mod tests {
         let _ = studio.update(Msg::RibbonTab(1));
         assert_eq!(studio.ribbon_page(), RibbonPage::Draw);
         let groups = studio.ribbon_groups();
-        assert_eq!(groups.iter().map(|g| g.0).collect::<Vec<_>>(), ["Selection", "Draw", "Annotate", "Modify"]);
+        assert_eq!(groups.iter().map(|g| g.0).collect::<Vec<_>>(), ["Selection", "Draw", "Annotate", "Modify", "Edit"]);
         let ids: Vec<&str> = groups
             .iter()
             .flat_map(|g| &g.1)

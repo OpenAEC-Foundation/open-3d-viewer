@@ -1362,6 +1362,39 @@ impl Document {
         }
     }
 
+    /// Puts the lines `run` of a view's drawing through `map`: where they are, or (`copy`) as new
+    /// lines after the others, a shape again when they were one. The run they are in now.
+    pub fn map_view_lines(&mut self, view: &str, run: std::ops::Range<usize>, copy: bool, map: &dyn Fn([f64; 2]) -> [f64; 2]) -> Option<std::ops::Range<usize>> {
+        let kind = self.view_shapes(view).iter().find(|s| s.run() == run).map(|s| s.kind);
+        let (own, shapes) = self.drawn_mut(view)?;
+        if run.is_empty() || run.end > own.len() {
+            return None;
+        }
+        let mapped: Vec<[[f64; 2]; 2]> = own[run.clone()].iter().map(|l| [map(l[0]), map(l[1])]).collect();
+        if !mapped.iter().flatten().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
+        if !copy {
+            own[run.clone()].copy_from_slice(&mapped);
+            return Some(run);
+        }
+        let first = own.len();
+        own.extend(mapped);
+        if let Some(kind) = kind {
+            shapes.push(Shape { kind, first, count: run.len() });
+        }
+        Some(first..first + run.len())
+    }
+
+    /// Makes the shape that line `index` of a view is part of loose lines again. False when the
+    /// line is of no shape.
+    pub fn explode_view_shape(&mut self, view: &str, index: usize) -> bool {
+        let Some((_, shapes)) = self.drawn_mut(view) else { return false };
+        let before = shapes.len();
+        shapes.retain(|s| !s.run().contains(&index));
+        shapes.len() != before
+    }
+
     /// Removes a line of a view's drawing, with the shape it is part of.
     pub fn remove_view_line(&mut self, view: &str, index: usize) -> bool {
         let (run, _) = self.shape_of(view, index);

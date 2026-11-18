@@ -1139,6 +1139,9 @@
     "Click two opposite corners.": "Klicka på två motsatta hörn.",
     "Click the centre and a point on the circle.": "Klicka på mittpunkten och en punkt på cirkeln.",
     "Click the start, a point on the arc and the end.": "Klicka på början, en punkt på bågen och slutet.",
-    "Click the centre, the end of one axis and how far the other reaches.": "Klicka på mittpunkten, änden av den ena axeln och hur långt den andra når."
+    "Click the centre, the end of one axis and how far the other reaches.": "Klicka på mittpunkten, änden av den ena axeln och hur långt den andra når.",
+    "Offset": "Förskjutning",
+    "Offset distance (mm)": "Förskjutningens avstånd (mm)",
+    "Click on the side where the copy goes · Esc: stop": "Klicka på den sida där kopian ska hamna · Esc: avsluta"
   }
 }

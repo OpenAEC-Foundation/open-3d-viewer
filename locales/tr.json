@@ -1139,6 +1139,9 @@
     "Click two opposite corners.": "Karşılıklı iki köşeye tıklayın.",
     "Click the centre and a point on the circle.": "Merkeze ve çember üzerindeki bir noktaya tıklayın.",
     "Click the start, a point on the arc and the end.": "Başlangıca, yay üzerindeki bir noktaya ve sona tıklayın.",
-    "Click the centre, the end of one axis and how far the other reaches.": "Merkeze, bir eksenin ucuna ve diğerinin ne kadar uzandığına tıklayın."
+    "Click the centre, the end of one axis and how far the other reaches.": "Merkeze, bir eksenin ucuna ve diğerinin ne kadar uzandığına tıklayın.",
+    "Offset": "Öteleme",
+    "Offset distance (mm)": "Öteleme mesafesi (mm)",
+    "Click on the side where the copy goes · Esc: stop": "Kopyanın geleceği tarafa tıklayın · Esc: durdur"
   }
 }

@@ -4,18 +4,23 @@
 //!
 //! What maps:
 //!
-//! - nodes with their supports (fixed or free per degree of freedom);
+//! - nodes with their supports: fixed, free or a spring per degree of freedom, and the support
+//!   of a bar end supported on a node that has none of its own (in the bar end's axes where it
+//!   has them);
 //! - the bars of the analysis parts as members, with the part's profile as their section (the
 //!   European steel profiles by name, rectangles `h*b`, plates, round bars) and its grade as
-//!   their material (stiffness, density and expansion from the material catalogue);
+//!   their material (stiffness, density and expansion from the material catalogue), their end
+//!   releases (free, spring, partial) and the eccentricity of their ends;
 //! - the area elements of slabs and walls as plates and shells, their thickness from the profile;
 //! - one load case per load group of the analysis model, the self weight case with its weight;
 //! - the loads the analysis model holds: a point load on the node it stands on, else on the
 //!   member it lies on; a line or temperature load on the members along its line; an area load
-//!   as a load on its own outline.
+//!   as a load on its own outline;
+//! - the load combinations by name (their factors are not in what the reader decodes).
 //!
-//! What a Tekla model holds besides (bar end releases, rigid links, load combinations, results,
-//! the part's offsets from its axis) is not read; a load without a member to carry it is noted
+//! Springs are taken in Tekla's own units, N/mm and N·mm/rad. What a Tekla model holds besides
+//! (rigid links, results, `KeepAxis`, the part's offsets from its axis) is not read; a partial
+//! release, a combination without its factors and a load without a member to carry it are noted
 //! in the model notes.
 
 use bim_structural::*;
@@ -40,7 +45,13 @@ struct Bar {
 }
 
 fn model(structural: &tk::Structural, catalogue: &[tk::Material], am: &tk::AnalysisModel, id: Id, file: &str) -> AnalysisModel {
-    let source = SourceInfo { format: "Tekla Structures analysis model".into(), file: file.to_string(), application: Some("Tekla Structures".into()), ..SourceInfo::default() };
+    // the application, with the analysis method the model is set to
+    let application = match am.analysis_method_name() {
+        Some("FIRST_ORDER") => "Tekla Structures, first-order analysis",
+        Some("SECOND_ORDER") => "Tekla Structures, second-order analysis",
+        _ => "Tekla Structures",
+    };
+    let source = SourceInfo { format: "Tekla Structures analysis model".into(), file: file.to_string(), application: Some(application.into()), ..SourceInfo::default() };
     let name = if am.name.trim().is_empty() { format!("Analysis model {id}") } else { am.name.trim().to_string() };
     let mut model = AnalysisModel::new(id, name, source);
     let v = |p: [f64; 3]| DVec3::from_array(p);
@@ -50,9 +61,9 @@ fn model(structural: &tk::Structural, catalogue: &[tk::Material], am: &tk::Analy
     for (k, n) in am.nodes.iter().enumerate() {
         let id = sam_id(IdKind::Node, k as u64 + 1);
         nodes.insert(n.id, (id, v(n.position_mm)));
-        let support = support(&n.support);
-        if n.support.iter().any(|c| *c > 1) {
-            model.diagnostics.push(Diagnostic { object: Some(id), code: "support_not_read".into(), message: format!("support conditions {:?}: only free (0) and fixed (1) are read", n.support) });
+        let support = support(&n.support, &n.support_springs);
+        if n.support.iter().any(|c| *c > 2) {
+            model.diagnostics.push(Diagnostic { object: Some(id), code: "support_not_read".into(), message: format!("support conditions {:?}: only free (0), fixed (1) and spring (2) are read", n.support) });
         }
         model.nodes.push(Node { id, number: n.number.to_string(), p: v(n.position_mm) * MM, frame: None, support, origin: NodeOrigin::Analytical });
     }
@@ -106,6 +117,7 @@ fn model(structural: &tk::Structural, catalogue: &[tk::Material], am: &tk::Analy
             })
         });
         bars.push(Bar { id, part: part.map_or(0, |p| p.part), a: pa, b: pb });
+        let releases = part.map_or([None, None], |p| [p.start.as_ref(), p.end.as_ref()].map(|end| end.and_then(|e| release(e, id, &mut model.diagnostics))));
         model.members.push(Member {
             id,
             number: m.number.to_string(),
@@ -116,20 +128,31 @@ fn model(structural: &tk::Structural, catalogue: &[tk::Material], am: &tk::Analy
             orientation: Orientation::Default,
             section: section.map(|s| (s, None)),
             section_rotation: 0.0,
-            insertion: Insertion::default(),
-            releases: [None, None],
+            insertion: insertion(part),
+            releases,
             material: grade,
             links: part.map(|p| vec![u64::from(p.part)]).unwrap_or_default(),
         });
     }
 
-    // the supports of a bar's ends where its node has none of its own
+    // the supports of a bar's supported ends where their node has none of its own
     for m in &am.members {
         let Some(part) = parts.get(&m.part) else { continue };
-        for (node, held) in [(m.start_node, part.start_support), (m.end_node, part.end_support)] {
-            let (Some(held), Some(&(id, _))) = (held, nodes.get(&node)) else { continue };
-            if let Some(n) = model.nodes.iter_mut().find(|n| n.id == id && n.support.is_none()) {
-                n.support = support(&held);
+        for (node, end, held) in [(m.start_node, &part.start, part.start_support), (m.end_node, &part.end, part.end_support)] {
+            let Some(&(id, _)) = nodes.get(&node) else { continue };
+            let Some(n) = model.nodes.iter_mut().find(|n| n.id == id && n.support.is_none()) else { continue };
+            match end {
+                Some(end) if end.condition == 1 => {
+                    n.support = support(&end.support, &end.support_springs);
+                    // in the support's own axes where it has them
+                    let (x, y) = (DVec3::from_array(end.support_axis_x).normalize_or_zero(), DVec3::from_array(end.support_axis_y).normalize_or_zero());
+                    if let Some(s) = n.support.as_mut().filter(|_| x != DVec3::ZERO && y != DVec3::ZERO && (x != DVec3::X || y != DVec3::Y)) {
+                        n.frame = Some(glam::DMat3::from_cols(x, y, x.cross(y)));
+                        s.frame = DofFrame::NodeLocal;
+                    }
+                }
+                Some(_) => {}
+                None => n.support = held.and_then(|h| support(&h, &[0.0; 6])),
             }
         }
     }
@@ -203,19 +226,66 @@ fn model(structural: &tk::Structural, catalogue: &[tk::Material], am: &tk::Analy
         }
     }
 
+    // the combinations by name: what they combine is not read
+    for (k, c) in am.combinations.iter().enumerate() {
+        let id = sam_id(IdKind::Combination, k as u64 + 1);
+        model.combinations.push(Combination { id, number: (k + 1).to_string(), name: c.name.clone(), purpose: Purpose::User(format!("Tekla code {}", c.code)), terms: Vec::new() });
+        model.diagnostics.push(Diagnostic { object: Some(id), code: "combination_without_factors".into(), message: format!("load combination {}: its load groups and factors are not read", c.name) });
+    }
+
     let duplicates = model.rebuild_index();
     debug_assert!(duplicates.is_empty(), "{duplicates:?}");
     model
 }
 
-/// Six support conditions, 1 fixed; `None` when all are free.
-fn support(codes: &[u32; 6]) -> Option<Support> {
-    let dofs: Dofs = std::array::from_fn(|k| if codes[k] == 1 { Dof::Fixed } else { Dof::Free });
+/// A spring constant of degree of freedom `k` (Ux Uy Uz Rx Ry Rz) in SI units: Tekla's N/mm is
+/// 1000 N/m, its N·mm/rad 0.001 N·m/rad.
+fn spring(k: usize, value: f64) -> f64 {
+    if k < 3 { value * 1000.0 } else { value / 1000.0 }
+}
+
+/// Six support conditions (0 free, 1 fixed, 2 spring) with their springs; `None` when all are
+/// free.
+fn support(codes: &[u32; 6], springs: &[f64; 6]) -> Option<Support> {
+    let dofs: Dofs = std::array::from_fn(|k| match codes[k] {
+        1 => Dof::Fixed,
+        2 => Dof::Spring(spring(k, springs[k])),
+        _ => Dof::Free,
+    });
     if dofs.iter().all(|d| *d == Dof::Free) {
         return None;
     }
     let preset = support::classify(&dofs, Dimension::Space3d);
     Some(Support { dofs, frame: DofFrame::Global, named: None, preset })
+}
+
+/// The release of a bar end (in the member's axes): free, a spring, or a partial release (taken
+/// as free, and noted); `None` when it is connected in all six.
+fn release(end: &tk::AnalysisBarEnd, member: Id, notes: &mut Vec<Diagnostic>) -> Option<Hinge> {
+    let mut partial = Vec::new();
+    let dofs: Dofs = std::array::from_fn(|k| match end.connectivity[k] {
+        1 => Dof::Free,
+        2 => Dof::Spring(spring(k, end.connectivity_springs[k])),
+        3 => {
+            partial.push(format!("{} {}", ["ux", "uy", "uz", "rx", "ry", "rz"][k], end.connectivity_springs[k]));
+            Dof::Free
+        }
+        _ => Dof::Fixed,
+    });
+    if !partial.is_empty() {
+        notes.push(Diagnostic { object: Some(member), code: "partial_release".into(), message: format!("partial release ({}): taken as released", partial.join(", ")) });
+    }
+    (!dofs.iter().all(|d| *d == Dof::Fixed)).then(|| Hinge { dofs, named: (!partial.is_empty()).then(|| format!("partial release {}", partial.join(", "))) })
+}
+
+/// The eccentricity of a bar's ends, as rigid offsets from their nodes in the world's axes.
+fn insertion(part: Option<&tk::AnalysisPart>) -> Insertion {
+    let offset = |end: &Option<tk::AnalysisBarEnd>| end.as_ref().map_or(DVec3::ZERO, |e| DVec3::from_array(e.eccentricity_mm) / 1000.0);
+    let ends = part.map_or([DVec3::ZERO; 2], |p| [offset(&p.start), offset(&p.end)]);
+    if ends == [DVec3::ZERO; 2] {
+        return Insertion::default();
+    }
+    Insertion { end_offsets: ends, end_offset_frame: OffsetFrame::Global, ..Insertion::default() }
 }
 
 /// The numbers of a profile name after its letters, split at `*`, `X` or `x`: "400*600" is
@@ -396,7 +466,7 @@ mod tests {
     use super::*;
 
     fn node(id: u32, number: u32, p: [f64; 3], fixed: bool) -> tk::AnalysisNode {
-        tk::AnalysisNode { id, number, position_mm: p, support: [u32::from(fixed); 6] }
+        tk::AnalysisNode { id, number, position_mm: p, support: [u32::from(fixed); 6], support_springs: [0.0; 6], user_support: false }
     }
 
     fn part(id: u32, part: u32, name: &str, profile: &str, material: &str, class: u32) -> tk::AnalysisPart {
@@ -417,6 +487,9 @@ mod tests {
             minimum_area_hole_size_mm: 300.0,
             start_support: None,
             end_support: None,
+            start: None,
+            end: None,
+            keep_axis: 2,
         }
     }
 
@@ -442,6 +515,9 @@ mod tests {
             bounding_box_mm: [1000.0; 3],
             attached_to: None,
             part_filter: String::new(),
+            primary_axis_direction: [1.0, 0.0, 0.0],
+            create_fixed_supports: false,
+            part_names_include: true,
         }
     }
 
@@ -593,6 +669,79 @@ mod tests {
         let m = &models(&s, &[], "frame")[0];
         assert_eq!(m.actions.len(), 1);
         assert_eq!(m.actions[0].load, LoadRef::Case(m.load_cases[1].id));
+    }
+
+    /// A bar end as Tekla's dialog leaves it: connected in all six, no support.
+    fn bar_end() -> tk::AnalysisBarEnd {
+        tk::AnalysisBarEnd::default()
+    }
+
+    #[test]
+    fn releases_springs_eccentricity_and_combinations_are_read() {
+        let mut s = frame();
+        let am = &mut s.analysis_models[0];
+        // node 1: a support of its own with a spring about x of 777 N·mm/rad
+        am.nodes[0].support = [1, 1, 1, 2, 0, 0];
+        am.nodes[0].support_springs = [0.0, 0.0, 0.0, 777.0, 0.0, 0.0];
+        am.nodes[0].user_support = true;
+        // the beam: released at its start about x, a spring about y, partly about z
+        am.parts[2].start = Some(tk::AnalysisBarEnd { connectivity: [0, 0, 0, 1, 2, 3], connectivity_springs: [0.0, 0.0, 0.0, 0.0, 1234.5, 0.5], ..bar_end() });
+        am.parts[2].end = Some(bar_end());
+        // the precast beam: its end supported on node 10 with springs, eccentric by (10, 20, 30)
+        am.parts[4].end = Some(tk::AnalysisBarEnd { condition: 1, connectivity: [0, 0, 0, 0, 1, 1], support: [1, 1, 2, 0, 2, 0], support_springs: [0.0, 0.0, 5000.0, 0.0, 250.0, 0.0], eccentricity_mm: [10.0, 20.0, 30.0], ..bar_end() });
+        am.combinations = vec![tk::AnalysisLoadCombination { id: 1, name: "LC_ULS".into(), code: 2 }];
+        let m = &models(&s, &[], "frame")[0];
+        let node = |number: &str| m.nodes.iter().find(|n| n.number == number).unwrap();
+        let held = &node("1").support.as_ref().unwrap().dofs;
+        assert_eq!(held[..4], [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Spring(0.777)]);
+        // the supported end's support on its node: 5000 N/mm is 5 MN/m
+        let s10 = node("10").support.as_ref().unwrap();
+        assert_eq!(s10.dofs, [Dof::Fixed, Dof::Fixed, Dof::Spring(5.0e6), Dof::Free, Dof::Spring(0.25), Dof::Free]);
+        assert_eq!(s10.frame, DofFrame::Global);
+        let beam = &m.members[2];
+        let start = beam.releases[0].as_ref().unwrap();
+        assert_eq!(start.dofs, [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Spring(1.2345), Dof::Free]);
+        assert!(start.named.as_deref().is_some_and(|n| n.contains("rz 0.5")));
+        assert!(beam.releases[1].is_none());
+        assert!(m.diagnostics.iter().any(|d| d.code == "partial_release" && d.object == Some(beam.id)));
+        let precast = &m.members[3];
+        assert_eq!(precast.releases[1].as_ref().map(|h| hinge::classify(&h.dofs)), Some(hinge::HingePreset::Hinge));
+        assert_eq!(precast.insertion.end_offsets[1], DVec3::new(0.01, 0.02, 0.03));
+        assert_eq!(precast.insertion.end_offset_frame, OffsetFrame::Global);
+        assert_eq!(m.members[0].insertion, Insertion::default());
+        assert_eq!((m.combinations.len(), m.combinations[0].name.as_str(), m.combinations[0].terms.len()), (1, "LC_ULS", 0));
+        assert!(m.diagnostics.iter().any(|d| d.code == "combination_without_factors"));
+    }
+
+    /// allestest_r7 with its edited analysis model: set TEKLA_ANALYSIS_R7 to a folder holding
+    /// allestest_r7.db1/.db2 and the `ID<GUID>.db6` files of AM_AllesTest (after the edit) and
+    /// AM_Second.
+    #[test]
+    fn the_releases_and_springs_of_allestest_r7_are_read() {
+        let Some(folder) = std::env::var_os("TEKLA_ANALYSIS_R7") else {
+            eprintln!("skipped: set TEKLA_ANALYSIS_R7 to the allestest_r7 model folder");
+            return;
+        };
+        let model = crate::loaders::load(std::path::Path::new(&folder)).unwrap();
+        let m = model.structural.iter().map(|p| &p.doc).find(|m| m.name == "AM_AllesTest").expect("AM_AllesTest");
+        let node = |number: &str| m.nodes.iter().find(|n| n.number == number).unwrap();
+        let dofs = |number: &str| node(number).support.as_ref().map(|s| s.dofs.clone());
+        assert_eq!(dofs("1"), Some([Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Spring(0.777), Dof::Free, Dof::Free]));
+        assert_eq!(dofs("10"), Some([Dof::Fixed, Dof::Fixed, Dof::Spring(5.0e6), Dof::Free, Dof::Spring(0.25), Dof::Free]));
+        assert_eq!(dofs("3").map(|d| d.iter().all(|x| *x == Dof::Fixed)), Some(true));
+        let section = |x: &Member| m.section(x.section.unwrap().0).unwrap().name.clone();
+        let beam = m.members.iter().find(|x| section(x) == "IPE300").unwrap();
+        assert_eq!(beam.releases[0].as_ref().unwrap().dofs[..5], [Dof::Fixed, Dof::Fixed, Dof::Fixed, Dof::Free, Dof::Spring(1.2345)]);
+        assert_eq!(beam.releases[1].as_ref().map(|h| hinge::classify(&h.dofs)), Some(hinge::HingePreset::Hinge));
+        let precast = m.members.iter().find(|x| section(x) == "400*600").unwrap();
+        assert!((precast.insertion.end_offsets[1] - DVec3::new(0.01, 0.02, 0.03)).length() < 1e-12, "{:?}", precast.insertion);
+        let columns: Vec<&Member> = m.members.iter().filter(|x| section(x) == "HEA200").collect();
+        assert!(columns.len() == 2 && columns.iter().all(|c| c.releases == [None, None]));
+        assert_eq!(m.source.application.as_deref(), Some("Tekla Structures, first-order analysis"));
+        for d in &m.diagnostics {
+            eprintln!("note {}: {}", d.code, d.message);
+        }
+        eprintln!("combinations {:?}", m.combinations.iter().map(|c| &c.name).collect::<Vec<_>>());
     }
 
     #[test]

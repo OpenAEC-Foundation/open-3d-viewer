@@ -787,7 +787,7 @@ impl Studio {
             self.ribbon_tab = 0;
         }
         // GIS works from its tab of the right pane
-        if product == Product::Gis {
+        if product == Product::Gis && self.app.side_tab != crate::app::SideTab::Geo {
             self.app.side_tab = crate::app::SideTab::Gis;
         }
         if product != Product::Modeller {
@@ -1258,6 +1258,9 @@ impl Studio {
                 .enabled(app.section_on || app.plane.is_some()),
             // Docs: the project folder, and opening and linking the picked document
             Command::new("docs.folder", l.text("Projectmap", "Project folder"), go(Message::Docs(crate::app::DocsMessage::Choose))).icon(small("project.folder"), large("project.folder")),
+            Command::new("gis.map", l.text("Kaart laden", "Load map"), go(Message::Gis(crate::app::GisMessage::Map(crate::app::MapMessage::Fetch(l))))).icon(small("view.top"), large("view.top")).detail(l.text("Legt de kaart die in het tabblad GIS rechts gekozen is onder het project: de achtergrondkaart, de luchtfoto of een eigen WMS-dienst.", "Lays the map chosen in the GIS tab on the right under the project: the background map, the aerial photograph or a WMS service of your own.")),
+            Command::new("geo.fetch", l.text("Sonderingen laden", "Load soundings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Fetch(l))))).icon(small("draw.coordinate"), large("draw.coordinate")).detail(l.text("Haalt de sonderingen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the soundings around the place from the Dutch register of the subsurface and puts them in the model.")),
+            Command::new("geo.open", l.text("GEF openen", "Open GEF"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Pick(l))))).icon(small("file.import"), large("file.import")).detail(l.text("Opent sonderingen uit GEF-bestanden en zet ze in het model.", "Opens soundings from GEF files and puts them in the model.")).dialog(),
             Command::new("gis.surroundings", l.text("Omgeving laden", "Load surroundings"), go(Message::Gis(crate::app::GisMessage::Fetch(l)))).icon(small("drawing.plan"), large("drawing.plan")).detail(l.text("Haalt de percelen en panden rond de plek op die in het tabblad GIS rechts gekozen is.", "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.")),
             Command::new("gis.terrain", l.text("Terrein laden", "Load terrain"), go(Message::Gis(crate::app::GisMessage::Terrain(crate::app::TerrainMessage::Fetch(l))))).icon(small("mesh.surface"), large("mesh.surface")).detail(l.text("Haalt het maaiveld rond de plek op, met hoogtelijnen.", "Fetches the ground around the place, with contours.")),
             Command::new("gis.points", l.text("Oppervlak uit punten", "Surface from points"), go(Message::Gis(crate::app::GisMessage::Terrain(crate::app::TerrainMessage::Pick(l))))).icon(small("file.import"), large("file.import")).detail(l.text("Maakt een oppervlak met hoogtelijnen van een puntenbestand van een landmeter.", "Makes a surface with contours of a surveyor's file of points.")),
@@ -2417,8 +2420,16 @@ impl Studio {
             // the place is searched in the GIS tab of the right pane; what is fetched around it is here
             RibbonPage::Gis => vec![
                 (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Kaart", "Map"), vec![large("gis.map"), smalls(&["camera.top", "camera.ortho", "camera.perspective"])]),
                 (l.text("Omgeving", "Surroundings"), vec![large("gis.surroundings")]),
                 (l.text("Terrein", "Terrain"), vec![large("gis.terrain"), large("gis.points")]),
+            ],
+            // roads, structures and rail: the pages are there, their tools are still to come
+            RibbonPage::Infra | RibbonPage::Civil | RibbonPage::Rail => vec![(l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])])],
+            // the ground under the project: what was investigated
+            RibbonPage::Geo => vec![
+                (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Sonderingen", "Soundings"), vec![large("geo.fetch"), large("geo.open")]),
             ],
             RibbonPage::Cloud => vec![
                 (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
@@ -3513,7 +3524,7 @@ mod tests {
         assert!(!studio.products.contains(&Product::Gis) && !studio.extension_on(Product::Gis));
         assert_eq!(studio.product(), Product::Viewer);
         let tabs: Vec<String> = accessibility(&studio).summary().into_iter().filter(|n| n.starts_with("Tab: ")).collect();
-        assert!(!tabs.contains(&"Tab: GIS".to_string()) && tabs.contains(&"Tab: Docs".to_string()), "{tabs:?}");
+        assert!(!tabs.contains(&"Tab: GIC".to_string()) && tabs.contains(&"Tab: Docs".to_string()), "{tabs:?}");
         // the manager still lists it, and switching it on puts it back where it stood
         assert!(studio.extensions().contains(&Product::Gis));
         let _ = studio.update(Msg::Extension(Product::Gis, true));
@@ -3535,7 +3546,7 @@ mod tests {
         let mut studio = Studio::new(App::default());
         let _ = studio.update(Msg::Product(Product::Gis));
         let groups = studio.ribbon_groups_of(RibbonPage::Gis);
-        assert!(groups.len() >= 3, "the GIS tab has its file, surroundings and terrain");
+        assert!(groups.len() >= 3, "the GIS tab has its file, map, surroundings and terrain");
         let (name, key) = (groups[2].0, group_key(&groups[2]));
         // the page lists the tools of every extension under it
         studio.dialog = Some(Dialog::Settings);

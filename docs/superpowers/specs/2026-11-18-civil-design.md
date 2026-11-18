@@ -126,8 +126,30 @@ surroundings it belongs with (`src/app/terrain.rs`):
   ground every few metres, a building lies flat at the highest ground under its outline.
 - A level typed under the terrain gives the volume of the surface above and below it.
 
-Civil gets a ribbon of its own, and its place on the product switch, when alignments come: they
-are drawn, not fetched.
+- **Load map** lays a map under the project as a coloured surface: the background map, the aerial
+  photograph or a web map service of the user's own (`src/app/map.rs`, `bim-gis::map`). It takes the
+  triangles of the terrain when there is one.
+- A model is turned about its zero point as it is moved, so it is laid on the map as it stands.
+
+The product is GIC since 2026-11-18: GIS, infrastructure and civil in one. Its ribbon has a page
+**Geotechnics** and the right pane a tab for it (`src/app/geo.rs`, `bim-civil::ground`,
+`bim-gis::bro`): cone penetration tests from the register of the subsurface around the place, or
+from GEF files, each a column in the colours of the cone resistance with the resistance as a line
+beside it. Next there: borings, and a model of the ground between the investigated points.
+
+The ribbon of GIC has a page per domain: **GIS**, **Infra** (roads, pipes, cables), **Civil**
+(structures: bridges, viaducts, tunnels), **Rail** and **Geotechnics**. Infra, Civil and Rail are
+there and still empty; alignments, corridors and tracks land on them as their slices are built.
+
+### Tiles, for areas without an end
+
+Asked for on 2026-11-18 and not built yet. A map, a terrain and the surroundings are now one
+square around a place, fetched once. For a road, a railway or a dyke of many kilometres the
+project is to be cut in tiles of the national grid: each tile fetched when the view comes near,
+at a detail that fits its distance, and let go when it is far, so the size of the project is not
+bounded by memory. The tile grid of the background map (`bim-gis::map::Tiles`) is the start of
+it; the terrain, the surroundings and what is designed along an alignment are to follow the same
+grid. Coordinates far from the zero point are already kept by a shift per model.
 
 ## Slices, in order
 
@@ -148,7 +170,8 @@ are drawn, not fetched.
    lines, and the network in the profile.
 8. **Site tools**: intersections, parking, swept paths, fences.
 9. **Water**: detention, overland flow, pressure networks, river profiles.
-10. **Ground**: borehole and cone penetration logs as columns, soil profiles, slope stability,
+10. **Ground**: cone penetration logs as columns (built with the first slice of geotechnics);
+    borehole logs, soil profiles and a model of the ground between them, slope stability,
     settlement.
 11. **Rail**: transitions, cant, turnouts, clearance.
 12. **Underground and overhead**: cables and pipes from the cable register, crossings and

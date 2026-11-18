@@ -832,6 +832,14 @@ impl Model {
     /// its layers, views, levels and grids move, and its origin's shift takes the move, so world
     /// coordinates stay those of its file.
     pub fn combine_moved(models: &[std::sync::Arc<Model>], moves: &[DVec3]) -> Self {
+        Self::combine_placed(models, moves, &[])
+    }
+
+    /// As [`Model::combine_moved`], each model also turned about its zero point by its entry in
+    /// `turns` (degrees, anticlockwise seen from above; none: not turned), before it is moved:
+    /// its layers and grids turn, and where its views look from. A turned model's world
+    /// coordinates are no longer those of its file; the clip boxes of its views do not turn.
+    pub fn combine_placed(models: &[std::sync::Arc<Model>], moves: &[DVec3], turns: &[f64]) -> Self {
         let mut layers = Vec::new();
         let mut props = HashMap::new();
         let mut views = Vec::new();
@@ -873,6 +881,8 @@ impl Model {
             let current = model.origins.first().map_or(DVec3::ZERO, |o| o.shift);
             let by = moves.get(m).copied().unwrap_or(DVec3::ZERO);
             let moved = Some(shift.unwrap_or(current) + by - current).filter(|t| *t != DVec3::ZERO);
+            // the turn about the model's zero point, where the scene draws it
+            let turn = turns.get(m).copied().filter(|degrees| *degrees != 0.0).map(|degrees| (degrees.to_radians().sin_cos(), current));
             let first_origin = origins.len() as u32;
             origins.extend(model.origins.iter().map(|o| Origin { anchor: o.anchor, shift: shift.unwrap_or(o.shift) + by }));
             if model.origins.is_empty() {
@@ -888,6 +898,9 @@ impl Model {
                 let mut layer = layer.clone();
                 layer.name = format!("{source} / {}", layer.name);
                 for element in &mut layer.elements { element.0 = remap[&element.0]; }
+                if let Some(((sin, cos), pivot)) = turn {
+                    turn_about(&mut layer.positions, &mut layer.normals, sin, cos, pivot);
+                }
                 if let Some(t) = moved {
                     translate(&mut layer.positions, t);
                 }
@@ -904,6 +917,9 @@ impl Model {
             views.extend(model.views.iter().cloned().map(|mut view| {
                 view.name = format!("{source} / {}", view.name);
                 if let Some(c) = &mut view.camera {
+                    if let Some(((sin, cos), pivot)) = turn {
+                        turn_about(&mut c.eye, &mut [], sin, cos, pivot);
+                    }
                     c.eye = (glam::Vec3::from_array(c.eye) + t).to_array();
                 }
                 if let Some(c) = &mut view.clip {
@@ -918,6 +934,10 @@ impl Model {
             project.levels.extend(model.project.levels.iter().map(|(name, z)| (name.clone(), z + t.z)));
             project.phases.extend(model.project.phases.iter().cloned());
             project.grids.extend(model.project.grids.iter().cloned().map(|mut g| {
+                if let Some(((sin, cos), pivot)) = turn {
+                    turn_about(&mut g.a, &mut [], sin, cos, pivot);
+                    turn_about(&mut g.b, &mut [], sin, cos, pivot);
+                }
                 g.a = (glam::Vec3::from_array(g.a) + t).to_array();
                 g.b = (glam::Vec3::from_array(g.b) + t).to_array();
                 g
@@ -1194,6 +1214,20 @@ impl Model {
 }
 
 /// Moves xyz triples by `t`, each coordinate rounded once from f64.
+/// Turns points about the vertical through `pivot`, and their normals along.
+fn turn_about(positions: &mut [f32], normals: &mut [f32], sin: f64, cos: f64, pivot: DVec3) {
+    for p in positions.chunks_exact_mut(3) {
+        let (x, y) = (f64::from(p[0]) - pivot.x, f64::from(p[1]) - pivot.y);
+        p[0] = (pivot.x + x * cos - y * sin) as f32;
+        p[1] = (pivot.y + x * sin + y * cos) as f32;
+    }
+    for n in normals.chunks_exact_mut(3) {
+        let (x, y) = (f64::from(n[0]), f64::from(n[1]));
+        n[0] = (x * cos - y * sin) as f32;
+        n[1] = (x * sin + y * cos) as f32;
+    }
+}
+
 fn translate(positions: &mut [f32], t: DVec3) {
     for p in positions.chunks_exact_mut(3) {
         for k in 0..3 {
@@ -1419,6 +1453,20 @@ mod tests {
             ..Layer::default()
         };
         std::sync::Arc::new(Model::new(PathBuf::from(format!("{name}.rvt")), "Revit", vec![layer]))
+    }
+
+    #[test]
+    fn a_model_is_turned_about_its_zero_point_before_it_is_moved() {
+        // the second square, from x 2 to 3, a quarter turn anticlockwise and then 10 m east
+        let models = [square("a", 1, 0.0), square("b", 1, 2.0)];
+        let scene = Model::combine_placed(&models, &[DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0)], &[0.0, 90.0]);
+        let corners = |layer: &Layer| layer.positions.chunks_exact(3).map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>();
+        assert_eq!(corners(&scene.layers[0]), [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        // (2, 0) turns to (0, 2); (3, 1) to (-1, 3)
+        assert_eq!(corners(&scene.layers[1]), [[10.0, 2.0], [10.0, 3.0], [9.0, 3.0], [9.0, 2.0]]);
+        // no turn is what moving alone gives
+        let moved = Model::combine_moved(&models, &[DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0)]);
+        assert_eq!(Model::combine_placed(&models, &[DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0)], &[0.0, 0.0]).layers[1].positions, moved.layers[1].positions);
     }
 
     #[test]

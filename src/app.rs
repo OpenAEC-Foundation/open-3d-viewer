@@ -47,8 +47,12 @@ pub mod library;
 pub mod standards;
 mod marks;
 mod gis;
+mod geo;
+mod map;
 mod terrain;
+pub use geo::Message as GeoMessage;
 pub use gis::Message as GisMessage;
+pub use map::{Message as MapMessage, Source as MapSource};
 pub use terrain::Message as TerrainMessage;
 mod origin;
 mod origin_map;
@@ -3438,7 +3442,7 @@ impl App {
 
             let eye = svg(icons::handle(if shown { icons::EYE } else { icons::EYE_OFF })).width(16).height(16)
                 .style(move |_, _| svg::Style { color: Some(if shown { p.text_secondary } else { p.text_muted }) });
-            let eye = button(container(eye).center(26)).width(26).height(26).padding(0)
+            let eye = button(container(eye).center(22)).width(22).height(22).padding(0)
                 .style(move |_, status| p.row_button(status)).on_press(Message::ModelVisible(i, !shown));
             let arrow = {
                 use openaec_ui::icons::Icon;
@@ -3449,8 +3453,8 @@ impl App {
                 text(own.file_name()).size(12).font(FONT_BOLD).color(if picked { p.accent } else if shown { p.text } else { p.text_muted })
                     .wrapping(Wrapping::WordOrGlyph),
                 text(own.format.clone()).size(10).color(p.text_secondary),
-            ].spacing(2).width(Fill);
-            let name = button(row![arrow, label].spacing(6).align_y(Center)).padding([6, 4]).width(Fill)
+            ].spacing(0).width(Fill);
+            let name = button(row![arrow, label].spacing(6).align_y(Center)).padding([2, 4]).width(Fill)
                 .style(move |_, status| if picked { p.ribbon_button(true, status) } else { p.row_button(status) })
                 .on_press(Message::PickModel(i));
             body = body.push(row![eye, name].spacing(2).align_y(Center));

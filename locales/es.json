@@ -1285,7 +1285,6 @@
     "by its layers": "según sus capas",
     "Not taken: the build-up would no longer hold together.": "No aceptado: la composición dejaría de ser coherente.",
     "Duplicate": "Duplicar",
-    "Elements that were given this build-up keep what they were given.": "Los elementos que ya recibieron esta composición conservan lo que recibieron.",
     "Click to make a beam type of it in the project.": "Haga clic para crear con él un tipo de viga en el proyecto.",
     "+ Linear type": "+ Tipo lineal",
     "Find a steel profile: HEA 200": "Buscar un perfil de acero: HEA 200",
@@ -1298,7 +1297,6 @@
     "From the steel table": "De la tabla de acero",
     "by material and size": "según material y medida",
     "Not taken: the profile would no longer hold together.": "No aceptado: el perfil dejaría de ser coherente.",
-    "Elements that were given this type keep what they were given.": "Los elementos que ya recibieron este tipo conservan lo que recibieron.",
     "+ Material": "+ Material",
     "Pick a material on the page to edit it.": "Elija en la página un material para editarlo.",
     "3D model": "Modelo 3D",
@@ -1350,6 +1348,12 @@
     "Section, exterior side up": "Sección, cara exterior arriba",
     "Parts from the top down": "Composición de arriba abajo",
     "Parts from the exterior in": "Composición de fuera hacia dentro",
-    "The name follows the members or the panels. Elements that were given this type keep what they were given.": "El nombre sigue a los perfiles o a los paneles. Los elementos que ya recibieron este tipo conservan lo que recibieron."
+    "No element of the model is of this type.": "Ningún elemento del modelo es de este tipo.",
+    "Elements of this type in the model": "Elementos de este tipo en el modelo",
+    "They follow a change of the type.": "Siguen cualquier cambio del tipo.",
+    "Not as the type is now": "No como el tipo es ahora",
+    "Update": "Actualizar",
+    "Not updated": "No actualizados",
+    "The name follows the members or the panels.": "El nombre sigue a los perfiles o a los paneles."
   }
 }

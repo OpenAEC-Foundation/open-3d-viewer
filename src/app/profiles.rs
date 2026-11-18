@@ -11,10 +11,11 @@
 //! them the steel table: found by typing or by series, every profile drawn. A click on one gives
 //! it to the picked type, or makes a type of it. A change is kept only when the type still checks.
 //!
-//! An element that was given a type holds what it was given: changing the type here does not
-//! change the elements made of it.
+//! The columns and beams of the model that are of a type follow a change of it, by the type's
+//! name (see `type_follow`): the pane says how many there are.
 
 use super::libraries::{Editor, LibrariesView, Shelf, Source};
+use super::type_follow::{linear_links, use_note, TypeRef};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::profile::{steel, steel_profiles};
@@ -107,6 +108,8 @@ pub enum ProfileMessage {
     FromSteel(String),
     /// Edit a type of another library as a copy in the project.
     Copy(Shelf, String),
+    /// Make the elements of the picked type as it is now.
+    Follow,
 }
 
 /// Which role's types show, which one is edited, what is being typed, what of the steel table
@@ -268,10 +271,15 @@ fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, ProfileMes
 
 impl App {
     pub(super) fn profile_update(&mut self, message: ProfileMessage) -> Task<Message> {
+        self.follow_refused.clear();
+        // what ties the columns and beams to their types, before a type changes
+        let before = linear_links(&self.library);
         match self.profile_apply(message) {
             Some(Ok(())) => {
                 self.profile_view.draft = None;
                 self.profile_view.refused = None;
+                // the columns and beams of a type that changed take its name and its profile
+                self.follow_linear(&before);
                 // what the model shows of its types (their names) is made again
                 if self.modeller.shown.is_some() && self.modeller.model.iter().next().is_some() {
                     self.show_modelled();
@@ -347,6 +355,10 @@ impl App {
                 let from = self.shelf(shelf).clone();
                 Some(copy(&mut self.library, &from, &id).map(|new| self.profile_show(new)))
             }
+            ProfileMessage::Follow => picked.as_deref().map(|id| {
+                self.follow_type(TypeRef::Linear(id));
+                Ok(())
+            }),
         }
     }
 
@@ -508,7 +520,7 @@ impl App {
             row![act(l.text("Dupliceren", "Duplicate"), ProfileMessage::Duplicate), act(l.text("Verwijderen", "Remove"), ProfileMessage::Remove), Space::new().width(Fill)].spacing(4),
         ]
         .push(refused)
-        .push(text(l.text("Elementen die dit type al kregen, houden wat ze kregen.", "Elements that were given this type keep what they were given.")).size(11).color(p.text_muted).wrapping(Wrapping::Word))
+        .push(use_note(p, l, &self.type_use(TypeRef::Linear(&t.id)), &self.follow_refused, ProfileMessage::Follow))
         .spacing(8);
         container(Element::from(pane).map(Message::Profile)).padding(8).into()
     }

@@ -48,6 +48,7 @@ pub mod materials;
 pub mod profiles;
 pub mod standards;
 pub mod systems;
+pub mod type_follow;
 mod marks;
 mod gis;
 mod geo;
@@ -387,6 +388,9 @@ pub struct App {
     /// The system type edited on the Library page, the group whose types show and the part of it
     /// whose fields show.
     pub system_view: systems::SystemView,
+    /// The elements the kernel refused to make as their type is now, when a type was last
+    /// changed on the Library page, each with why (see `type_follow`).
+    pub follow_refused: Vec<(bim_core::ElementId, bim_core::Refusal)>,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -1049,6 +1053,7 @@ impl Default for App {
             material_view: materials::MaterialView::default(),
             profile_view: profiles::ProfileView::default(),
             system_view: systems::SystemView::default(),
+            follow_refused: Vec::new(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,

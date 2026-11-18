@@ -8,6 +8,9 @@
 //!
 //! A material that a build-up, a linear type or a system type is made of is not removed. A
 //! material of another library is edited as a copy in the project, under the key it had.
+//!
+//! The model takes a material's colour as it is. A material hatched as air is a cavity in the
+//! walls and slabs made of it: they follow when its hatch changes (see `type_follow`).
 
 use super::libraries::{Editor, LibrariesView, Shelf, Source};
 use super::{App, Message, FONT, FONT_BOLD};
@@ -168,6 +171,7 @@ fn labelled<'a>(p: Palette, label: &'static str, control: Element<'a, MaterialMe
 
 impl App {
     pub(super) fn material_update(&mut self, message: MaterialMessage) -> Task<Message> {
+        self.follow_refused.clear();
         let picked = self.material_view.picked.clone();
         // whether the library changed, and whether the model is to show it now
         let (mut changed, mut show) = (false, true);
@@ -226,6 +230,8 @@ impl App {
             MaterialMessage::Hatch(hatch) => {
                 if let Some(key) = &picked {
                     changed = change(&mut self.library, key, |m| m.hatch = hatch);
+                    // air is a cavity in a wall: the walls and slabs made of it follow
+                    self.follow_material(key);
                 }
             }
             MaterialMessage::Copy(shelf, key) => {

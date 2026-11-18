@@ -17,10 +17,12 @@
 //! only when the type still checks against the library's materials; otherwise the pane says why
 //! not. A type of another library is edited as a copy in the project.
 //!
-//! An element that was given a type holds what it was given: changing the type here does not
-//! change the elements made of it.
+//! The systems of the model that are of a type follow a change of it (see `type_follow`): the
+//! pane says how many there are. A system keeps the way it was laid out: one that stands does
+//! not follow its type when the type is made to lie.
 
 use super::libraries::{Editor, LibrariesView, Shelf, Source};
+use super::type_follow::{use_note, TypeRef};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::{Corner, Framing, Grid, Library, LibraryError, Members, Panels, Pattern, SystemGroup, SystemType};
@@ -108,6 +110,8 @@ pub enum SystemMessage {
     CloseUp,
     /// Edit a type of another library as a copy in the project.
     Copy(Shelf, String),
+    /// Make the elements of the picked type as it is now.
+    Follow,
 }
 
 /// Which group's types show, which one is edited, which of its parts shows its fields, what is
@@ -429,10 +433,15 @@ fn part_fields<'a>(p: Palette, l: Language, t: &SystemType, part: Part, view: &S
 
 impl App {
     pub(super) fn system_update(&mut self, message: SystemMessage) -> Task<Message> {
+        self.follow_refused.clear();
         match self.system_apply(message) {
             Some(Ok(())) => {
                 self.system_view.draft = None;
                 self.system_view.refused = None;
+                // the systems made of the picked type follow it
+                if let Some(id) = self.system_view.picked.clone() {
+                    self.follow_type(TypeRef::System(&id));
+                }
                 // what the model shows of its types (their names) is made again
                 if self.modeller.shown.is_some() && self.modeller.model.iter().next().is_some() {
                     self.show_modelled();
@@ -544,6 +553,8 @@ impl App {
                 })
             }),
             SystemMessage::CloseUp => picked.as_deref().map(|id| change(&mut self.library, id, SystemType::close_up)),
+            // (the elements follow whatever was taken, in `system_update`)
+            SystemMessage::Follow => Some(Ok(())),
             SystemMessage::Copy(shelf, id) => {
                 let from = self.shelf(shelf).clone();
                 Some(copy(&mut self.library, &from, &id).map(|new| self.system_show(new)))
@@ -715,7 +726,8 @@ impl App {
             .push(text(total).size(11).color(p.text_secondary))
             .push(row![act(l.text("Dupliceren", "Duplicate"), SystemMessage::Duplicate), act(l.text("Verwijderen", "Remove"), SystemMessage::Remove), Space::new().width(Fill)].spacing(4))
             .push(refused)
-            .push(text(l.text("De naam volgt de stijlen of de panelen. Elementen die dit type al kregen, houden wat ze kregen.", "The name follows the members or the panels. Elements that were given this type keep what they were given.")).size(11).color(p.text_muted).wrapping(Wrapping::Word));
+            .push(text(l.text("De naam volgt de stijlen of de panelen.", "The name follows the members or the panels.")).size(11).color(p.text_muted).wrapping(Wrapping::Word))
+            .push(use_note(p, l, &self.type_use(TypeRef::System(&t.id)), &self.follow_refused, SystemMessage::Follow));
         let pane = column![
             text(title).size(14).font(FONT_BOLD).color(p.text).wrapping(Wrapping::Word),
             text(format!("{class} · {predefined}")).size(11).color(p.text_muted),

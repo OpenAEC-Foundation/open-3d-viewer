@@ -7,10 +7,11 @@
 //! kept only when the build-up still checks against the library's materials; otherwise the pane
 //! says why not. A build-up of another library is edited as a copy in the project.
 //!
-//! An element that was given a build-up holds what it was given: changing the type here does not
-//! change the elements made of it.
+//! The walls and slabs of the model that are made of a build-up follow a change of it (see
+//! `type_follow`): the pane says how many there are.
 
 use super::libraries::{Editor, LibrariesView, Shelf, Source};
+use super::type_follow::{use_note, TypeRef};
 use super::{App, Message, FONT, FONT_BOLD};
 use crate::theme::Palette;
 use bim_library::{BuildUp, Layer, Library, LibraryError, Role};
@@ -46,6 +47,8 @@ pub enum BuildUpMessage {
     Move(usize, bool),
     /// Edit a build-up of another library as a copy in the project.
     Copy(Shelf, String),
+    /// Make the elements of the picked build-up as it is now.
+    Follow,
 }
 
 /// Which role's build-ups show, which one is edited, what is being typed as a thickness, and why
@@ -139,6 +142,7 @@ impl std::fmt::Display for Choice {
 
 impl App {
     pub(super) fn buildup_update(&mut self, message: BuildUpMessage) -> Task<Message> {
+        self.follow_refused.clear();
         let task = self.buildup_apply(message);
         if self.buildup_view.picked.is_some() {
             self.edit_only(Editor::BuildUp);
@@ -214,6 +218,8 @@ impl App {
                     }
                 })
             }),
+            // (the elements follow whatever was taken, below)
+            BuildUpMessage::Follow => Some(Ok(())),
             BuildUpMessage::Copy(shelf, id) => {
                 let from = self.shelf(shelf).clone();
                 Some(copy(&mut self.library, &from, &id).map(|new| {
@@ -227,6 +233,10 @@ impl App {
             Some(Ok(())) => {
                 self.buildup_view.draft = None;
                 self.buildup_view.refused = None;
+                // the walls and slabs made of the picked build-up follow it
+                if let Some(id) = self.buildup_view.picked.clone() {
+                    self.follow_type(TypeRef::BuildUp(&id));
+                }
                 // what the model shows of its types (their names) is made again
                 if self.modeller.shown.is_some() && self.modeller.model.iter().next().is_some() {
                     self.show_modelled();
@@ -346,7 +356,7 @@ impl App {
             row![act(l.text("Dupliceren", "Duplicate"), BuildUpMessage::Duplicate), act(l.text("Verwijderen", "Remove"), BuildUpMessage::Remove), Space::new().width(Fill)].spacing(4),
         ]
         .push(refused)
-        .push(text(l.text("Elementen die deze opbouw al kregen, houden wat ze kregen.", "Elements that were given this build-up keep what they were given.")).size(11).color(p.text_muted).wrapping(Wrapping::Word))
+        .push(use_note(p, l, &self.type_use(TypeRef::BuildUp(&b.id)), &self.follow_refused, BuildUpMessage::Follow))
         .spacing(8);
         let pane = column![
             text(title).size(14).font(FONT_BOLD).color(p.text).wrapping(Wrapping::Word),

@@ -1285,7 +1285,6 @@
     "by its layers": "według warstw",
     "Not taken: the build-up would no longer hold together.": "Nie przyjęto: układ warstw przestałby być spójny.",
     "Duplicate": "Duplikuj",
-    "Elements that were given this build-up keep what they were given.": "Elementy, które otrzymały już ten układ warstw, zachowują to, co otrzymały.",
     "Click to make a beam type of it in the project.": "Kliknij, aby utworzyć z niego typ belki w projekcie.",
     "+ Linear type": "+ Typ liniowy",
     "Find a steel profile: HEA 200": "Szukaj profilu stalowego: HEA 200",
@@ -1298,7 +1297,6 @@
     "From the steel table": "Z tablicy stali",
     "by material and size": "według materiału i wymiaru",
     "Not taken: the profile would no longer hold together.": "Nie przyjęto: profil przestałby być spójny.",
-    "Elements that were given this type keep what they were given.": "Elementy, które otrzymały już ten typ, zachowują to, co otrzymały.",
     "+ Material": "+ Materiał",
     "Pick a material on the page to edit it.": "Wybierz na stronie materiał, aby go edytować.",
     "3D model": "Model 3D",
@@ -1350,6 +1348,12 @@
     "Section, exterior side up": "Przekrój, stroną zewnętrzną do góry",
     "Parts from the top down": "Układ od góry do dołu",
     "Parts from the exterior in": "Układ od zewnątrz do wewnątrz",
-    "The name follows the members or the panels. Elements that were given this type keep what they were given.": "Nazwa wynika z profili lub paneli. Elementy, które otrzymały już ten typ, zachowują to, co otrzymały."
+    "No element of the model is of this type.": "Żaden element modelu nie jest tego typu.",
+    "Elements of this type in the model": "Elementy tego typu w modelu",
+    "They follow a change of the type.": "Podążają za zmianą typu.",
+    "Not as the type is now": "Niezgodne z obecnym typem",
+    "Update": "Aktualizuj",
+    "Not updated": "Nie zaktualizowano",
+    "The name follows the members or the panels.": "Nazwa wynika z profili lub paneli."
   }
 }

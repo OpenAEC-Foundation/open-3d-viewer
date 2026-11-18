@@ -1285,7 +1285,6 @@
     "by its layers": "secondo gli strati",
     "Not taken: the build-up would no longer hold together.": "Non accettato: la stratigrafia non sarebbe più coerente.",
     "Duplicate": "Duplica",
-    "Elements that were given this build-up keep what they were given.": "Gli elementi che hanno già ricevuto questa stratigrafia mantengono ciò che hanno ricevuto.",
     "Click to make a beam type of it in the project.": "Fai clic per farne un tipo di trave nel progetto.",
     "+ Linear type": "+ Tipo lineare",
     "Find a steel profile: HEA 200": "Cerca un profilo in acciaio: HEA 200",
@@ -1298,7 +1297,6 @@
     "From the steel table": "Dalla tabella dell’acciaio",
     "by material and size": "secondo materiale e dimensione",
     "Not taken: the profile would no longer hold together.": "Non accettato: il profilo non sarebbe più coerente.",
-    "Elements that were given this type keep what they were given.": "Gli elementi che hanno già ricevuto questo tipo mantengono ciò che hanno ricevuto.",
     "+ Material": "+ Materiale",
     "Pick a material on the page to edit it.": "Scegli nella pagina un materiale per modificarlo.",
     "3D model": "Modello 3D",
@@ -1350,6 +1348,12 @@
     "Section, exterior side up": "Sezione, lato esterno in alto",
     "Parts from the top down": "Composizione dall’alto verso il basso",
     "Parts from the exterior in": "Composizione dall’esterno verso l’interno",
-    "The name follows the members or the panels. Elements that were given this type keep what they were given.": "Il nome segue i profili o i pannelli. Gli elementi che hanno già ricevuto questo tipo mantengono ciò che hanno ricevuto."
+    "No element of the model is of this type.": "Nessun elemento del modello è di questo tipo.",
+    "Elements of this type in the model": "Elementi di questo tipo nel modello",
+    "They follow a change of the type.": "Seguono ogni modifica del tipo.",
+    "Not as the type is now": "Non come il tipo è ora",
+    "Update": "Aggiorna",
+    "Not updated": "Non aggiornati",
+    "The name follows the members or the panels.": "Il nome segue i profili o i pannelli."
   }
 }

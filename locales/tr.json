@@ -1285,7 +1285,6 @@
     "by its layers": "katmanlarına göre",
     "Not taken: the build-up would no longer hold together.": "Kabul edilmedi: katman yapısı artık tutarlı olmazdı.",
     "Duplicate": "Çoğalt",
-    "Elements that were given this build-up keep what they were given.": "Bu katman yapısını daha önce almış elemanlar, aldıklarını korur.",
     "Click to make a beam type of it in the project.": "Projede bundan bir kiriş tipi oluşturmak için tıklayın.",
     "+ Linear type": "+ Çubuk tipi",
     "Find a steel profile: HEA 200": "Çelik profil ara: HEA 200",
@@ -1298,7 +1297,6 @@
     "From the steel table": "Çelik tablosundan",
     "by material and size": "malzeme ve ölçüye göre",
     "Not taken: the profile would no longer hold together.": "Kabul edilmedi: profil artık tutarlı olmazdı.",
-    "Elements that were given this type keep what they were given.": "Bu tipi daha önce almış elemanlar, aldıklarını korur.",
     "+ Material": "+ Malzeme",
     "Pick a material on the page to edit it.": "Düzenlemek için sayfada bir malzeme seçin.",
     "3D model": "3B model",
@@ -1350,6 +1348,12 @@
     "Section, exterior side up": "Kesit, dış yüz üstte",
     "Parts from the top down": "Yukarıdan aşağıya yapı",
     "Parts from the exterior in": "Dıştan içe yapı",
-    "The name follows the members or the panels. Elements that were given this type keep what they were given.": "Ad, profilleri veya panelleri izler. Bu tipi daha önce almış elemanlar, aldıklarını korur."
+    "No element of the model is of this type.": "Modeldeki hiçbir eleman bu tipte değil.",
+    "Elements of this type in the model": "Modelde bu tipteki elemanlar",
+    "They follow a change of the type.": "Tipteki bir değişikliği izlerler.",
+    "Not as the type is now": "Tipin şimdiki haline uymayan",
+    "Update": "Güncelle",
+    "Not updated": "Güncellenmedi",
+    "The name follows the members or the panels.": "Ad, profilleri veya panelleri izler."
   }
 }

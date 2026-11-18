@@ -1285,7 +1285,6 @@
     "by its layers": "selon ses couches",
     "Not taken: the build-up would no longer hold together.": "Non retenu : la composition ne serait plus cohérente.",
     "Duplicate": "Dupliquer",
-    "Elements that were given this build-up keep what they were given.": "Les éléments qui ont déjà reçu cette composition gardent ce qu’ils ont reçu.",
     "Click to make a beam type of it in the project.": "Cliquez pour en faire un type de poutre dans le projet.",
     "+ Linear type": "+ Type linéaire",
     "Find a steel profile: HEA 200": "Rechercher un profilé acier : HEA 200",
@@ -1298,7 +1297,6 @@
     "From the steel table": "Du tableau des aciers",
     "by material and size": "selon le matériau et la dimension",
     "Not taken: the profile would no longer hold together.": "Non retenu : le profil ne serait plus cohérent.",
-    "Elements that were given this type keep what they were given.": "Les éléments qui ont déjà reçu ce type gardent ce qu’ils ont reçu.",
     "+ Material": "+ Matériau",
     "Pick a material on the page to edit it.": "Choisissez sur la page un matériau pour le modifier.",
     "3D model": "Modèle 3D",
@@ -1350,6 +1348,12 @@
     "Section, exterior side up": "Coupe, face extérieure en haut",
     "Parts from the top down": "Composition de haut en bas",
     "Parts from the exterior in": "Composition de l’extérieur vers l’intérieur",
-    "The name follows the members or the panels. Elements that were given this type keep what they were given.": "Le nom suit les montants ou les panneaux. Les éléments qui ont déjà reçu ce type gardent ce qu’ils ont reçu."
+    "No element of the model is of this type.": "Aucun élément du modèle n’est de ce type.",
+    "Elements of this type in the model": "Éléments de ce type dans le modèle",
+    "They follow a change of the type.": "Ils suivent une modification du type.",
+    "Not as the type is now": "Pas conformes au type actuel",
+    "Update": "Mettre à jour",
+    "Not updated": "Non mis à jour",
+    "The name follows the members or the panels.": "Le nom suit les montants ou les panneaux."
   }
 }

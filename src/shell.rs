@@ -3445,6 +3445,7 @@ mod tests {
             ("material", LibrariesMessage::Source(Source::Project)),
             ("system", LibrariesMessage::Source(Source::Project)),
             ("system-layer", LibrariesMessage::Source(Source::Project)),
+            ("follow", LibrariesMessage::Source(Source::Project)),
             ("search-steel", LibrariesMessage::Search("hea 2".into())),
         ];
         for (name, show) in shots {
@@ -3479,6 +3480,26 @@ mod tests {
                 let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Pick("system.timber-frame-140".into()))));
                 if name == "system-layer" {
                     let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Part(Part::Layer(3)))));
+                }
+            }
+            // the project with a model: a wall of the demo building given the first build-up,
+            // the build-up made thicker (the wall follows) and that step taken back, so the
+            // pane says the wall is not as its type is now
+            if name == "follow" {
+                use crate::app::buildups::BuildUpMessage;
+                studio.app.add_demo_building();
+                let wall = studio.app.modeller.model.iter().find(|e| e.class() == "IfcWall").map(|e| e.id).expect("a wall of the demo");
+                let id = studio.app.library.buildups[0].id.clone();
+                studio.app.select_modelled(wall);
+                let steps = [
+                    Message::Library(crate::app::library::LibraryMessage::Assign(id.clone())),
+                    Message::BuildUp(BuildUpMessage::Pick(id)),
+                    Message::BuildUp(BuildUpMessage::Typed(0, "120".into())),
+                    Message::BuildUp(BuildUpMessage::Done),
+                    Message::Undo,
+                ];
+                for message in steps {
+                    let _ = studio.update(Msg::App(message));
                 }
             }
             if name == "country-nl" {

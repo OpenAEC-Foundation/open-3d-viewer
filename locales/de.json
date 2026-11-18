@@ -1285,7 +1285,6 @@
     "by its layers": "nach den Schichten",
     "Not taken: the build-up would no longer hold together.": "Nicht übernommen: Der Aufbau wäre dann nicht mehr stimmig.",
     "Duplicate": "Duplizieren",
-    "Elements that were given this build-up keep what they were given.": "Elemente, die diesen Aufbau bereits erhalten haben, behalten, was sie erhalten haben.",
     "Click to make a beam type of it in the project.": "Klicken, um daraus einen Trägertyp im Projekt zu machen.",
     "+ Linear type": "+ Stabtyp",
     "Find a steel profile: HEA 200": "Stahlprofil suchen: HEA 200",
@@ -1298,7 +1297,6 @@
     "From the steel table": "Aus der Stahltabelle",
     "by material and size": "nach Material und Maß",
     "Not taken: the profile would no longer hold together.": "Nicht übernommen: Das Profil wäre dann nicht mehr stimmig.",
-    "Elements that were given this type keep what they were given.": "Elemente, die diesen Typ bereits erhalten haben, behalten, was sie erhalten haben.",
     "+ Material": "+ Material",
     "Pick a material on the page to edit it.": "Wählen Sie auf der Seite ein Material, um es zu bearbeiten.",
     "3D model": "3D-Modell",
@@ -1350,6 +1348,12 @@
     "Section, exterior side up": "Schnitt, Außenseite oben",
     "Parts from the top down": "Aufbau von oben nach unten",
     "Parts from the exterior in": "Aufbau von außen nach innen",
-    "The name follows the members or the panels. Elements that were given this type keep what they were given.": "Der Name folgt den Profilen oder den Paneelen. Elemente, die diesen Typ bereits erhalten haben, behalten, was sie erhalten haben."
+    "No element of the model is of this type.": "Kein Element des Modells ist von diesem Typ.",
+    "Elements of this type in the model": "Elemente dieses Typs im Modell",
+    "They follow a change of the type.": "Sie folgen einer Änderung des Typs.",
+    "Not as the type is now": "Nicht wie der Typ jetzt ist",
+    "Update": "Aktualisieren",
+    "Not updated": "Nicht aktualisiert",
+    "The name follows the members or the panels.": "Der Name folgt den Profilen oder den Paneelen."
   }
 }

@@ -1386,6 +1386,15 @@
     "Kind of drawing": "Tipo de desenho",
     "Close the kind": "Fechar o tipo",
     "Edit the kind": "Editar o tipo",
-    "What is set here holds for every drawing of this kind.": "O que se define aqui vale para todos os desenhos deste tipo."
+    "What is set here holds for every drawing of this kind.": "O que se define aqui vale para todos os desenhos deste tipo.",
+    "By kind of material": "Por tipo de material",
+    "This category is not kept as IFCX in a file.": "Esta categoria não é guardada como IFCX num ficheiro.",
+    "Tiles": "Mosaicos",
+    "none: the paper": "nenhuma: o papel",
+    "Sign": "Sinal",
+    "Tile": "Mosaico",
+    "Turned": "Rodado",
+    "Key": "Chave",
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Para desenhos a 1:50. Um material ainda não pode escolher uma trama desta lista: é desenhado com a do seu tipo."
   }
 }

@@ -730,16 +730,58 @@ pub(super) fn draw_hatch(frame: &mut Frame, band: Rectangle, hatch: bim_library:
         return;
     }
     let spacing = (hatch.spacing as f32 * scale).max(3.0);
+    // the second line of each pair, where the lines come in pairs: far enough to be seen as two
+    let pair = (hatch.pair > 0.0).then(|| (hatch.pair as f32 * scale).clamp(2.0, spacing / 2.0));
     for angle in [hatch.angle as f32].into_iter().chain(hatch.crossed.then_some(hatch.angle as f32 + 90.0)) {
-        for (a, b) in hatch_lines(band, angle, spacing) {
-            frame.stroke(&Path::line(a, b), ink);
+        for shift in [Some(0.0), pair].into_iter().flatten() {
+            for (a, b) in hatch_lines(band, angle, spacing, shift) {
+                frame.stroke(&Path::line(a, b), ink);
+            }
         }
     }
 }
 
+/// A hatch of the catalogue over `area`: its fill (the paper where it has none), then its filled
+/// areas, its lines and its dots, at `scale` px per millimetre of paper.
+pub(super) fn draw_tile_hatch(frame: &mut Frame, area: Rectangle, hatch: &bim_library::Hatch, scale: f32) {
+    let drawn = hatch.over([0.0, 0.0], [f64::from(area.width / scale), f64::from(area.height / scale)]);
+    frame.fill_rectangle(area.position(), area.size(), drawn.fill.map_or(Color::WHITE, rgb));
+    let at = |p: &[f64; 2]| Point::new(area.x + p[0] as f32 * scale, area.y + p[1] as f32 * scale);
+    for (points, colour) in &drawn.areas {
+        let outline = Path::new(|b| {
+            b.move_to(at(&points[0]));
+            for point in &points[1..] {
+                b.line_to(at(point));
+            }
+            b.close();
+        });
+        frame.fill(&outline, rgb(*colour));
+    }
+    for strokes in &drawn.lines {
+        let lines = Path::new(|b| {
+            for [from, to] in &strokes.segments {
+                b.move_to(at(from));
+                b.line_to(at(to));
+            }
+        });
+        frame.stroke(&lines, Stroke::default().with_color(rgb(strokes.colour)).with_width((strokes.width as f32 * scale).max(0.8)));
+    }
+    for dots in &drawn.dots {
+        // (a dot no wider than a pixel or two is a square of that size)
+        let side = (dots.width as f32 * scale).max(1.2);
+        let marks = Path::new(|b| {
+            for point in &dots.at {
+                let centre = at(point);
+                b.rectangle(Point::new(centre.x - side / 2.0, centre.y - side / 2.0), Size::new(side, side));
+            }
+        });
+        frame.fill(&marks, rgb(dots.colour));
+    }
+}
+
 /// The parallel lines `spacing` apart at `angle` degrees (anticlockwise on paper, so clockwise on
-/// screen, whose y runs down) clipped to `band`.
-fn hatch_lines(band: Rectangle, angle: f32, spacing: f32) -> Vec<(Point, Point)> {
+/// screen, whose y runs down) clipped to `band`, the whole of them moved `shift` across.
+fn hatch_lines(band: Rectangle, angle: f32, spacing: f32, shift: f32) -> Vec<(Point, Point)> {
     let (sin, cos) = angle.to_radians().sin_cos();
     let d = (cos, -sin); // along the lines, on screen
     let n = (sin, cos); // across them
@@ -747,7 +789,7 @@ fn hatch_lines(band: Rectangle, angle: f32, spacing: f32) -> Vec<(Point, Point)>
     let across: Vec<f32> = corners.iter().map(|c| c.0 * n.0 + c.1 * n.1).collect();
     let (lo, hi) = across.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
     let mut lines = Vec::new();
-    let mut c = (lo / spacing).ceil() * spacing;
+    let mut c = ((lo - shift) / spacing).ceil() * spacing + shift;
     while c <= hi {
         // the line n·p = c through the band: clip p = p0 + t d to the rectangle
         let p0 = (n.0 * c, n.1 * c);
@@ -1065,7 +1107,7 @@ mod tests {
     fn hatch_lines_stay_in_their_band() {
         let band = Rectangle::new(Point::new(10.0, 20.0), Size::new(100.0, 30.0));
         for angle in [0.0, 45.0, 90.0, 135.0] {
-            let lines = hatch_lines(band, angle, 8.0);
+            let lines = hatch_lines(band, angle, 8.0, 0.0);
             assert!(!lines.is_empty(), "{angle}");
             for (a, b) in lines {
                 for q in [a, b] {
@@ -1073,6 +1115,28 @@ mod tests {
                 }
             }
         }
-        assert_eq!(hatch_lines(band, 0.0, 8.0).len(), 4, "horizontal lines 8 px apart in a band 30 high");
+        assert_eq!(hatch_lines(band, 0.0, 8.0, 0.0).len(), 4, "horizontal lines 8 px apart in a band 30 high");
+        // the second lines of pairs: the same lines moved across, those that still fall in the band
+        // (at 24, 32, 40 and 48 the first; at 27, 35 and 43 the second, 51 is outside)
+        let (first, second) = (hatch_lines(band, 0.0, 8.0, 0.0), hatch_lines(band, 0.0, 8.0, 3.0));
+        assert_eq!(second.len(), 3);
+        assert!(first.iter().zip(&second).all(|(a, b)| (b.0.y - a.0.y - 3.0).abs() < 1e-3), "{first:?} {second:?}");
+    }
+
+    #[test]
+    fn brickwork_is_hatched_with_pairs_of_lines_in_a_drawing() {
+        use bim_library::{DrawingStandard, HatchKind};
+        // under NEN 47 the rows come twice, the second their gap across; elsewhere once
+        let pattern: crate::hatching::Pattern = HatchKind::Brick.pattern(DrawingStandard::Nen47).into();
+        assert_eq!(pattern.grids.len(), 2);
+        let (a, b) = (&pattern.grids[0], &pattern.grids[1]);
+        assert_eq!((a.angle, a.offset, a.origin), (b.angle, b.offset, [0.0, 0.0]));
+        let (sin, cos) = a.angle.sin_cos();
+        // (the second row's start lies its gap from the first row, measured across the rows)
+        let across = -sin * b.origin[0] + cos * b.origin[1];
+        let along = cos * b.origin[0] + sin * b.origin[1];
+        assert!((across - 0.01875).abs() < 1e-12 && along.abs() < 1e-12 && (a.offset - 0.1125).abs() < 1e-12, "{b:?}");
+        let din: crate::hatching::Pattern = HatchKind::Brick.pattern(DrawingStandard::Din1356).into();
+        assert_eq!(din.grids.len(), 1);
     }
 }

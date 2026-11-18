@@ -225,7 +225,7 @@ and every object must be a tile that is clicked to edit it. So the page is a bro
   what the source holds (`App::library_tree`): headings with their categories
   (`libraries::Category`) and how many things each has. Materials; planar elements by role;
   linear elements by role, with the steel table; systems by group; the drawing standard
-  (kinds, scales, line styles, pens, text styles, hatches); a company's colours and fonts. The
+  (kinds, scales, line styles, pens, text styles); the hatches; a company's colours and fonts. The
   project and the general library list every planar role and system group, and of the linear
   roles the columns, the beams and those that have a type; another library only what it has.
 - **Middle**: the tiles of the category shown (`libraries::tile`): a look, a name and a line
@@ -239,6 +239,42 @@ and every object must be a tile that is clicked to edit it. So the page is a bro
 - A pick in an editor (from a tile or a search) shows its category; a type whose role or group
   is changed takes the page with it.
 - The cards of content to come are gone; one line under the tree names what is to come.
+
+## The hatches as a catalogue, and the IFCX tab (fifth step)
+
+The page showed nine hatches: what a material of each kind is drawn with. Wanted: every hatch
+of NEN 47, those for kinds of soil, and the suite's own coloured ones as its standard, as the
+INB template has them; and the IFCX code of everything the page shows.
+
+- **The catalogue** (`bim_library::hatch`, `data/hatches-nl.json`): a hatch is a tile with
+  marks (lines, filled areas, dots), laid side by side, scaled and then turned, as the
+  template's patterns for drawings at 1:50 are. Two sets: `nen47`, the 23 signs the template
+  has, black on the paper; `openaec`, the suite's own: the signs on a colour and under a sign
+  one for each kind of material (72). A hatch has a key (`nen47-12`, `openaec-12-spruce`), the
+  number of its sign, and a name in four languages.
+- **Taken, not drawn anew**: the catalogue is the template's patterns converted once (paths to
+  points, arcs to short lines, a path of many short strokes to dots). The pattern for 1:5 of a
+  hatch, and one the template has twice, are left out. A product's name in the template is a
+  general name here. The template is under the MIT licence and the LGPL 3.0; the file says so.
+- **Drawn over a rectangle** (`Hatch::over`): the marks of every tile that reaches it, on paper
+  and cut to it, lines by width and colour. The page draws a look with it, kept between two
+  frames (`canvas::Cache`).
+- **In the tree** the hatches stand under a heading of their own: NEN 47 and OpenAEC where the
+  Netherlands' content or the project shows, OpenAEC in the general library, and everywhere
+  "by kind of material": the nine kinds under the source's standard, as before.
+- **The IFCX tab** (`LibrariesView::code`, `App::category_code`): for the category shown, the
+  node of each thing as `bim_library::ifcx`, `drawing` and `hatch` write it, as text whose
+  lists of numbers stay on a line (`libraries::code_text`), with a button that copies it. The
+  one picked stands first. A hatch's node has its name and the hatch under `openaec::hatch`.
+- **Brickwork in pairs of lines**: a hatch kind's pattern can have its lines in pairs
+  (`HatchPattern::pair`); brick under NEN 47 has, with the spacing and the gap of the sign in
+  the catalogue at 1:50. A drawing gets the rows twice (`hatching::Pattern`), so every export
+  and the sheet on screen draw them.
+- **Piles**: the template's two foundation piles are types of the Dutch library, and the tree
+  of the project and of the general library lists piles beside columns and beams.
+- **Not yet**: a material has a hatch kind, not a hatch of the catalogue, and no exporter
+  draws a tile hatch. The hatches for kinds of soil (NEN 5104) are not in the template; they
+  need a source before they can be here.
 
 ## Open questions
 
@@ -260,3 +296,16 @@ and every object must be a tile that is clicked to edit it. So the page is a bro
 5. A linear element tied to its type by the type's id.
 6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
 7. Library files and components opened into the page.
+8. A material picks a hatch of the catalogue (the suite's own as the default), and every
+   drawing draws it: on screen and in PDF, SVG, PNG, DXF, DWG and IFCCAD. The hatches for
+   kinds of soil (NEN 5104), from a source that has them.
+9. A search as a product library has it: filters by the kind of thing and by the source, beside
+   the words typed.
+10. A cost library: what a thing costs, by its unit, kept with the other libraries.
+11. A library as a file of its own that File, Open opens: a standard library, and one file that
+    holds a whole country, its materials and its standards, with the standards linked.
+12. Materials named by the NAA.K.T. naming of materials.
+13. A view in 3D of what is picked, and for a system a view that shows how it is made while it
+    is defined.
+14. A type by level of development: what a type is at each LOD, kept as layers of one type.
+15. A pile's length and tip level, and more piles than the template's two.

@@ -1386,6 +1386,15 @@
     "Kind of drawing": "Type de dessin",
     "Close the kind": "Fermer le type",
     "Edit the kind": "Modifier le type",
-    "What is set here holds for every drawing of this kind.": "Ce qui est réglé ici vaut pour tous les dessins de ce type."
+    "What is set here holds for every drawing of this kind.": "Ce qui est réglé ici vaut pour tous les dessins de ce type.",
+    "By kind of material": "Par type de matériau",
+    "This category is not kept as IFCX in a file.": "Cette catégorie n’est pas conservée en IFCX dans un fichier.",
+    "Tiles": "Tuiles",
+    "none: the paper": "aucune : le papier",
+    "Sign": "Signe",
+    "Tile": "Tuile",
+    "Turned": "Tourné",
+    "Key": "Clé",
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Pour les dessins au 1:50. Un matériau ne peut pas encore choisir une hachure de cette liste : il est dessiné avec celle de son type."
   }
 }

@@ -16,11 +16,14 @@
 //!   and never changes a type the project has ([`Library::merge`]).
 //! - No technical value is invented: a material has a hatch and a colour, no density or
 //!   conductivity until a source gives one.
+//! - The hatches of a drawing standard and the suite's own are a catalogue of tiles ([`hatch`]),
+//!   taken from the INB template.
 //!
 //! Lengths are metres.
 
 pub mod buildup;
 pub mod drawing;
+pub mod hatch;
 pub mod ifcx;
 pub mod inb;
 pub mod library;
@@ -29,6 +32,7 @@ pub mod profile;
 pub mod system;
 
 pub use buildup::{BuildUp, Layer, Role};
+pub use hatch::{Hatch, HatchSet};
 pub use library::Library;
 pub use material::{DrawingStandard, HatchKind, HatchPattern, Material, Names};
 pub use profile::{LinearRole, LinearType, ProfileShape, Series, SteelProfile};

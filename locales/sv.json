@@ -1386,6 +1386,15 @@
     "Kind of drawing": "Ritningstyp",
     "Close the kind": "Stäng typen",
     "Edit the kind": "Redigera typen",
-    "What is set here holds for every drawing of this kind.": "Det som ställs in här gäller för varje ritning av den här typen."
+    "What is set here holds for every drawing of this kind.": "Det som ställs in här gäller för varje ritning av den här typen.",
+    "By kind of material": "Efter materialslag",
+    "This category is not kept as IFCX in a file.": "Den här kategorin sparas inte som IFCX i en fil.",
+    "Tiles": "Rutor",
+    "none: the paper": "ingen: papperet",
+    "Sign": "Tecken",
+    "Tile": "Ruta",
+    "Turned": "Vriden",
+    "Key": "Nyckel",
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "För ritningar i skala 1:50. Ett material kan ännu inte välja en skraffering ur den här listan: det ritas med den för sitt slag."
   }
 }

@@ -3487,6 +3487,11 @@ mod tests {
             ("system-layer", LibrariesMessage::Source(Source::Project)),
             ("follow", LibrariesMessage::Source(Source::Project)),
             ("search-steel", LibrariesMessage::Search("hea 2".into())),
+            ("hatches-nen47", LibrariesMessage::Country(Country::Netherlands)),
+            ("hatches-openaec", LibrariesMessage::Source(Source::Project)),
+            ("ifcx", LibrariesMessage::Source(Source::Project)),
+            ("ifcx-hatch", LibrariesMessage::Source(Source::General)),
+            ("search-hatch", LibrariesMessage::Search("isolatie".into())),
         ];
         for (name, show) in shots {
             let mut studio = Studio::new(App::default());
@@ -3532,6 +3537,26 @@ mod tests {
                 let _ = studio.update(Msg::App(Message::Library(crate::app::library::LibraryMessage::Assign(id.clone()))));
                 crate::app::buildups::change(&mut studio.app.library, &id, |b| b.layers[0].thickness = 0.12).expect("a thicker layer");
                 let _ = studio.update(Msg::App(Message::BuildUp(BuildUpMessage::Pick(id))));
+            }
+            // the hatches: the signs of NEN 47 with one looked at, the suite's own with a species
+            // of wood looked at
+            if name.starts_with("hatches") {
+                use crate::app::libraries::{Category, Item};
+                let (set, key) = if name == "hatches-nen47" { (bim_library::HatchSet::Nen47, "nen47-25") } else { (bim_library::HatchSet::OpenAec, "openaec-12-larch") };
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(set)))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch(key.into())))));
+            }
+            // the IFCX tab: the project's materials with one picked, and the general library's
+            // hatches with one looked at
+            if name == "ifcx" {
+                let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Code(true))));
+            }
+            if name == "ifcx-hatch" {
+                use crate::app::libraries::{Category, Item};
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Category(Category::HatchSet(bim_library::HatchSet::OpenAec)))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Look(Item::Hatch("openaec-17-pir".into())))));
+                let _ = studio.update(Msg::App(Message::Libraries(LibrariesMessage::Code(true))));
             }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));

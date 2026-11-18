@@ -179,6 +179,10 @@ impl From<HatchPattern> for Pattern {
             Vec::new()
         } else if p.crossed {
             vec![grid(p.angle, p.spacing), grid(p.angle + 90.0, p.spacing)]
+        } else if p.pair > 0.0 {
+            // pairs of lines: the same rows once more, their gap across
+            let (sin, cos) = p.angle.to_radians().sin_cos();
+            vec![grid(p.angle, p.spacing), Grid { origin: [-sin * p.pair, cos * p.pair], ..grid(p.angle, p.spacing) }]
         } else {
             vec![grid(p.angle, p.spacing)]
         };
@@ -524,16 +528,17 @@ mod tests {
         hatch(&mut cut, &model, DrawingStandard::Nen47, 100.0);
         let fill = &cut.fills[0];
         assert_eq!(fill.look, Some(([212, 144, 143], [0, 0, 0])), "brick under NEN 47");
-        // 45° lines 0.08 apart across 4 × 2: the box is (4 + 2) / √2 wide across them
+        // pairs of 45° lines, a pair every 0.1125, across 4 × 2: the box is (4 + 2) / √2 wide
+        // across them
         let across = 6.0 / 2f32.sqrt();
-        assert!((fill.rows.len() as f32 - across / 0.08).abs() <= 1.0, "{} rows", fill.rows.len());
+        assert!((fill.rows.len() as f32 - 2.0 * across / 0.1125).abs() <= 2.0, "{} rows", fill.rows.len());
         for (_, [a, b]) in &fill.rows {
             for p in [a, b] {
                 assert!(p[0] > -1e-3 && p[0] < 4.001 && p[1] > -1e-3 && p[1] < 2.001, "{p:?} is in the box");
             }
             assert!(((b[1] - a[1]) - (b[0] - a[0])).abs() < 1e-3, "at 45°");
         }
-        assert!((fill.spacing() - 0.08).abs() < 1e-3, "{}", fill.spacing());
+        assert!((fill.spacing() - 0.1125).abs() < 1e-3, "{}", fill.spacing());
         assert_eq!(fill.lines(1.0, 3.0).count(), fill.rows.iter().filter(|(r, _)| r.rem_euclid(3) == 0).count(), "every third row when they stand too close");
         assert_eq!(fill.lines(5.0, 3.0).count(), fill.rows.len());
     }

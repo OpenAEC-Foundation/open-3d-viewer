@@ -1386,6 +1386,15 @@
     "Kind of drawing": "Rodzaj rysunku",
     "Close the kind": "Zamknij rodzaj",
     "Edit the kind": "Edytuj rodzaj",
-    "What is set here holds for every drawing of this kind.": "To, co tu ustawisz, dotyczy każdego rysunku tego rodzaju."
+    "What is set here holds for every drawing of this kind.": "To, co tu ustawisz, dotyczy każdego rysunku tego rodzaju.",
+    "By kind of material": "Według rodzaju materiału",
+    "This category is not kept as IFCX in a file.": "Ta kategoria nie jest zapisywana jako IFCX w pliku.",
+    "Tiles": "Kafelki",
+    "none: the paper": "brak: papier",
+    "Sign": "Znak",
+    "Tile": "Kafelek",
+    "Turned": "Obrócony",
+    "Key": "Klucz",
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Dla rysunków w skali 1:50. Materiał nie może jeszcze wybrać kreskowania z tej listy: jest rysowany kreskowaniem swojego rodzaju."
   }
 }

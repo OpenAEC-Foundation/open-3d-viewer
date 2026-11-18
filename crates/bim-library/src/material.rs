@@ -74,12 +74,15 @@ impl HatchKind {
         const WHITE: [u8; 3] = [255, 255, 255];
         const BLACK: [u8; 3] = [0, 0, 0];
         const GREY: [u8; 3] = [128, 128, 128];
-        let lines = |fill, line, angle, spacing| HatchPattern { fill, line, angle, spacing, crossed: false, zigzag: false };
+        let lines = |fill, line, angle, spacing| HatchPattern { fill, line, angle, spacing, pair: 0.0, crossed: false, zigzag: false };
+        let pairs = |fill, line, angle, spacing, pair| HatchPattern { pair, ..lines(fill, line, angle, spacing) };
         let crossed = |fill, line, angle, spacing| HatchPattern { crossed: true, ..lines(fill, line, angle, spacing) };
         let solid = |fill| lines(fill, fill, 45.0, 0.0);
         let zigzag = |fill| HatchPattern { zigzag: true, ..lines(fill, BLACK, 0.0, 0.0) };
         match (standard, self) {
-            (Nen47, Brick) => lines([212, 144, 143], BLACK, 45.0, 0.08),
+            // brickwork is hatched with pairs of lines: the sign of NEN 47 as the hatch catalogue
+            // has it, at 1:50 a pair every 2.25 mm with its lines 0.375 mm apart
+            (Nen47, Brick) => pairs([212, 144, 143], BLACK, 45.0, 0.1125, 0.01875),
             (Nen47, Insulation) => zigzag([255, 253, 224]),
             (Nen47, Concrete) => solid([192, 192, 192]),
             (Nen47, SandLime) => lines([200, 192, 176], [168, 160, 144], 45.0, 0.08),
@@ -127,12 +130,16 @@ impl DrawingStandard {
 /// A hatch: the fill behind it, its line colour, the angle of its lines (degrees on paper,
 /// anticlockwise from the x axis) and their spacing (metres on the model, so a hatch scales with
 /// the drawing; 0 for a solid fill without lines), crossed lines, or one zigzag across the layer.
+/// Where its lines come in pairs, `pair` is how far the two lines of a pair are apart (metres on
+/// the model; 0: single lines) and `spacing` how far the pairs are.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HatchPattern {
     pub fill: [u8; 3],
     pub line: [u8; 3],
     pub angle: f64,
     pub spacing: f64,
+    #[serde(default)]
+    pub pair: f64,
     pub crossed: bool,
     pub zigzag: bool,
 }
@@ -223,7 +230,16 @@ mod tests {
     #[test]
     fn hatches_follow_open_bim_studio() {
         let brick = HatchKind::Brick.pattern(DrawingStandard::Nen47);
-        assert_eq!((brick.fill, brick.angle, brick.spacing), ([212, 144, 143], 45.0, 0.08));
+        assert_eq!((brick.fill, brick.angle, brick.spacing, brick.pair), ([212, 144, 143], 45.0, 0.1125, 0.01875));
+        // brickwork's pairs of lines are those of the sign in the hatch catalogue, which is drawn
+        // for 1:50: its tile is the pairs' spacing, its two lines are a pair
+        let sign = crate::hatch::sign(crate::HatchSet::Nen47, 1).expect("the sign for brickwork");
+        let crate::hatch::Mark::Line { points: first, .. } = &sign.marks[0] else { panic!("a line") };
+        let crate::hatch::Mark::Line { points: second, .. } = &sign.marks[1] else { panic!("a line") };
+        let on_model = |millimetres: f64| millimetres * sign.scale[0] * 50.0 / 1000.0;
+        assert_eq!((on_model(sign.tile[0]), on_model(second[0][0] - first[0][0]), sign.angle), (brick.spacing, brick.pair, brick.angle));
+        // only brickwork under NEN 47 has pairs
+        assert!(DrawingStandard::ALL.into_iter().flat_map(|s| HatchKind::ALL.map(|k| (s, k))).all(|(s, k)| (k.pattern(s).pair > 0.0) == (s == DrawingStandard::Nen47 && k == HatchKind::Brick)));
         assert!(HatchKind::Insulation.pattern(DrawingStandard::Nen47).zigzag);
         assert!(HatchKind::Concrete.pattern(DrawingStandard::Din1356).crossed, "reinforced concrete is crossed in DIN 1356");
         assert_eq!(HatchKind::Timber.pattern(DrawingStandard::Iso128).angle, 135.0);

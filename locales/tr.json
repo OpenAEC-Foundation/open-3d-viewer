@@ -1386,6 +1386,15 @@
     "Kind of drawing": "Çizim türü",
     "Close the kind": "Türü kapat",
     "Edit the kind": "Türü düzenle",
-    "What is set here holds for every drawing of this kind.": "Burada ayarlanan, bu türdeki her çizim için geçerlidir."
+    "What is set here holds for every drawing of this kind.": "Burada ayarlanan, bu türdeki her çizim için geçerlidir.",
+    "By kind of material": "Malzeme türüne göre",
+    "This category is not kept as IFCX in a file.": "Bu kategori bir dosyada IFCX olarak tutulmaz.",
+    "Tiles": "Kutucuklar",
+    "none: the paper": "yok: kâğıt",
+    "Sign": "İşaret",
+    "Tile": "Kutucuk",
+    "Turned": "Döndürülmüş",
+    "Key": "Anahtar",
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "1:50 ölçekli çizimler için. Bir malzeme henüz bu listeden bir tarama seçemez: kendi türününkiyle çizilir."
   }
 }

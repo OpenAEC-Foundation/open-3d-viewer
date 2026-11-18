@@ -1386,6 +1386,15 @@
     "Kind of drawing": "Zeichnungsart",
     "Close the kind": "Art schließen",
     "Edit the kind": "Art bearbeiten",
-    "What is set here holds for every drawing of this kind.": "Was hier eingestellt wird, gilt für jede Zeichnung dieser Art."
+    "What is set here holds for every drawing of this kind.": "Was hier eingestellt wird, gilt für jede Zeichnung dieser Art.",
+    "By kind of material": "Nach Materialart",
+    "This category is not kept as IFCX in a file.": "Diese Kategorie wird nicht als IFCX in einer Datei gespeichert.",
+    "Tiles": "Kacheln",
+    "none: the paper": "keine: das Papier",
+    "Sign": "Zeichen",
+    "Tile": "Kachel",
+    "Turned": "Gedreht",
+    "Key": "Schlüssel",
+    "For drawings at 1:50. A material cannot pick a hatch of this list yet: it is drawn with that of its kind.": "Für Zeichnungen im Maßstab 1:50. Ein Material kann noch keine Schraffur aus dieser Liste wählen: Es wird mit der seiner Art gezeichnet."
   }
 }

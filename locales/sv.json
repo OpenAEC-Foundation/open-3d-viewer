@@ -1211,6 +1211,21 @@
     "Load borings": "Läs in borrhål",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Hämtar de geotekniska borrhålen runt platsen från det nederländska markregistret och lägger dem i modellen.",
     "Opens borings from GEF files and puts them in the model.": "Öppnar borrhål från GEF-filer och lägger dem i modellen.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Skapar en 3D-modell av marken från de inlästa borrhålen: varje plats får lagren från det närmaste borrhålet."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Skapar en 3D-modell av marken från de inlästa borrhålen: varje plats får lagren från det närmaste borrhålet.",
+    "Own colour": "Egen färg",
+    "Colour by": "Färga efter",
+    "Time step": "Tidssteg",
+    "at the points": "i punkterna",
+    "per cell": "per cell",
+    "Field": "Fält",
+    "Fields": "Fälten",
+    "Next field": "Nästa fält",
+    "Previous field": "Föregående fält",
+    "Next step": "Nästa steg",
+    "Previous step": "Föregående steg",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Färgar nätet efter filens nästa fält, till exempel en temperatur eller en förskjutning.",
+    "Colours the mesh by the file's previous field.": "Färgar nätet efter filens föregående fält.",
+    "Shows the values of the next time step.": "Visar värdena för nästa tidssteg.",
+    "Shows the values of the previous time step.": "Visar värdena för föregående tidssteg."
   }
 }

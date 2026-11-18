@@ -1211,6 +1211,21 @@
     "Load borings": "Bohrungen laden",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Ruft die geotechnischen Bohrungen rund um den Ort aus dem niederländischen Untergrundregister ab und legt sie im Modell ab.",
     "Opens borings from GEF files and puts them in the model.": "Öffnet Bohrungen aus GEF-Dateien und legt sie im Modell ab.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Erstellt ein 3D-Modell des Untergrunds aus den geladenen Bohrungen: Jeder Ort übernimmt die Schichten der nächstgelegenen Bohrung."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Erstellt ein 3D-Modell des Untergrunds aus den geladenen Bohrungen: Jeder Ort übernimmt die Schichten der nächstgelegenen Bohrung.",
+    "Own colour": "Eigene Farbe",
+    "Colour by": "Färben nach",
+    "Time step": "Zeitschritt",
+    "at the points": "an den Punkten",
+    "per cell": "je Zelle",
+    "Field": "Feld",
+    "Fields": "Felder",
+    "Next field": "Nächstes Feld",
+    "Previous field": "Vorheriges Feld",
+    "Next step": "Nächster Schritt",
+    "Previous step": "Vorheriger Schritt",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Färbt das Netz nach dem nächsten Feld der Datei, etwa einer Temperatur oder einer Verschiebung.",
+    "Colours the mesh by the file's previous field.": "Färbt das Netz nach dem vorherigen Feld der Datei.",
+    "Shows the values of the next time step.": "Zeigt die Werte des nächsten Zeitschritts.",
+    "Shows the values of the previous time step.": "Zeigt die Werte des vorherigen Zeitschritts."
   }
 }

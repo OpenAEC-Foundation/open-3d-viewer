@@ -83,6 +83,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
+| VTK (`.vtk`, `.vtu`, `.vtp`, `.vts`, `.vtr`, `.vti`, the parallel files, `.vtm`, `.pvd`) | adapter `fem.rs` | `fem-dll` (`fem-model`, `fem-read`), which parses through the published `vtkio` crate | Done: the reader turns cells into outer faces and fields; the adapter copies them into layers and the app's fields. |
 
 ## Moved so far
 

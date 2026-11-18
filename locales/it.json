@@ -1211,6 +1211,21 @@
     "Load borings": "Carica sondaggi",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Recupera i sondaggi geotecnici intorno al luogo dal registro olandese del sottosuolo e li inserisce nel modello.",
     "Opens borings from GEF files and puts them in the model.": "Apre sondaggi da file GEF e li inserisce nel modello.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modello 3D del sottosuolo dai sondaggi caricati: ogni luogo prende gli strati del sondaggio più vicino."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modello 3D del sottosuolo dai sondaggi caricati: ogni luogo prende gli strati del sondaggio più vicino.",
+    "Own colour": "Colore proprio",
+    "Colour by": "Colora per",
+    "Time step": "Passo temporale",
+    "at the points": "nei punti",
+    "per cell": "per cella",
+    "Field": "Campo",
+    "Fields": "Campi",
+    "Next field": "Campo successivo",
+    "Previous field": "Campo precedente",
+    "Next step": "Passo successivo",
+    "Previous step": "Passo precedente",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Colora la mesh secondo il campo successivo del file, come una temperatura o uno spostamento.",
+    "Colours the mesh by the file's previous field.": "Colora la mesh secondo il campo precedente del file.",
+    "Shows the values of the next time step.": "Mostra i valori del passo temporale successivo.",
+    "Shows the values of the previous time step.": "Mostra i valori del passo temporale precedente."
   }
 }

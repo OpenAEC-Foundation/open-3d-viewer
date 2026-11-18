@@ -1211,6 +1211,21 @@
     "Load borings": "Sondajları yükle",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Yerin çevresindeki jeoteknik sondajları Hollanda yer altı kayıt sisteminden alır ve modele ekler.",
     "Opens borings from GEF files and puts them in the model.": "GEF dosyalarından sondajları açar ve modele ekler.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Yüklenen sondajlardan zeminin 3D modelini oluşturur: her yer, en yakın sondajın katmanlarını alır."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Yüklenen sondajlardan zeminin 3D modelini oluşturur: her yer, en yakın sondajın katmanlarını alır.",
+    "Own colour": "Kendi rengi",
+    "Colour by": "Renklendirme ölçütü",
+    "Time step": "Zaman adımı",
+    "at the points": "noktalarda",
+    "per cell": "hücre başına",
+    "Field": "Alan",
+    "Fields": "Alanlar",
+    "Next field": "Sonraki alan",
+    "Previous field": "Önceki alan",
+    "Next step": "Sonraki adım",
+    "Previous step": "Önceki adım",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Ağı dosyanın sonraki alanına göre renklendirir, örneğin bir sıcaklık veya bir yer değiştirme.",
+    "Colours the mesh by the file's previous field.": "Ağı dosyanın önceki alanına göre renklendirir.",
+    "Shows the values of the next time step.": "Sonraki zaman adımının değerlerini gösterir.",
+    "Shows the values of the previous time step.": "Önceki zaman adımının değerlerini gösterir."
   }
 }

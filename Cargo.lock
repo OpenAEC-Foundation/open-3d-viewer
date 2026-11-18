@@ -1433,6 +1433,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fem-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/fem-dll?rev=cb1ab077daf71b8876f070b712fd8b7cf2dc711d#cb1ab077daf71b8876f070b712fd8b7cf2dc711d"
+
+[[package]]
+name = "fem-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/fem-dll?rev=cb1ab077daf71b8876f070b712fd8b7cf2dc711d#cb1ab077daf71b8876f070b712fd8b7cf2dc711d"
+dependencies = [
+ "base64 0.22.1",
+ "fem-model",
+ "quick-xml 0.41.0",
+ "vtkio",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3072,6 +3088,15 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
+version = "0.11.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13591d77a9b6d941f7e6fcade7f9dfd9e801308752bde50c0a9bb5852778c22c"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
+name = "lz4_flex"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
@@ -3780,6 +3805,7 @@ dependencies = [
  "console_error_panic_hook",
  "e57",
  "earcutr",
+ "fem-read",
  "flate2",
  "glam 0.30.10",
  "gltf",
@@ -3885,7 +3911,7 @@ dependencies = [
  "derive_more",
  "half",
  "logos",
- "lz4_flex",
+ "lz4_flex 0.14.0",
  "num-traits",
  "regex-lite",
  "strum",
@@ -4257,6 +4283,16 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
+
+[[package]]
+name = "quick-xml"
+version = "0.36.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
+dependencies = [
+ "memchr",
+ "serde",
+]
 
 [[package]]
 name = "quick-xml"
@@ -5796,6 +5832,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "trim-in-place"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daa60874b45b168f67f3f9ba1ee821ad77144d6fa19cef1cd1874a7450a948da"
+
+[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6028,6 +6070,26 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "vtkio"
+version = "0.7.0-rc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d7cba514932ebb50de553d2abf395d0702333ea28ba900fec629d88cd4e79a9"
+dependencies = [
+ "base64 0.22.1",
+ "bytemuck",
+ "byteorder",
+ "flate2",
+ "log",
+ "lz4_flex 0.11.7",
+ "nom 8.0.0",
+ "num-derive",
+ "num-traits",
+ "quick-xml 0.36.2",
+ "serde",
+ "trim-in-place",
+]
 
 [[package]]
 name = "vwx-core"
@@ -6280,7 +6342,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "338e30461b3a2b67d70eb30a6d89f8e0c93a833e07d2ae89085cd070c4a00ac0"
 dependencies = [
  "proc-macro2",
- "quick-xml",
+ "quick-xml 0.41.0",
  "quote",
 ]
 

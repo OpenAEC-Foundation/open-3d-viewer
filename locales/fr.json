@@ -1211,6 +1211,21 @@
     "Load borings": "Charger les forages",
     "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Récupère les forages géotechniques autour du lieu dans le registre néerlandais du sous-sol et les place dans le modèle.",
     "Opens borings from GEF files and puts them in the model.": "Ouvre des forages à partir de fichiers GEF et les place dans le modèle.",
-    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crée un modèle 3D du sous-sol à partir des forages chargés : chaque lieu reprend les couches du forage le plus proche."
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crée un modèle 3D du sous-sol à partir des forages chargés : chaque lieu reprend les couches du forage le plus proche.",
+    "Own colour": "Couleur propre",
+    "Colour by": "Colorer selon",
+    "Time step": "Pas de temps",
+    "at the points": "aux points",
+    "per cell": "par cellule",
+    "Field": "Champ",
+    "Fields": "Champs",
+    "Next field": "Champ suivant",
+    "Previous field": "Champ précédent",
+    "Next step": "Pas suivant",
+    "Previous step": "Pas précédent",
+    "Colours the mesh by the file's next field, such as a temperature or a displacement.": "Colore le maillage selon le champ suivant du fichier, comme une température ou un déplacement.",
+    "Colours the mesh by the file's previous field.": "Colore le maillage selon le champ précédent du fichier.",
+    "Shows the values of the next time step.": "Affiche les valeurs du pas de temps suivant.",
+    "Shows the values of the previous time step.": "Affiche les valeurs du pas de temps précédent."
   }
 }

@@ -41,6 +41,41 @@ pub struct Layer {
     /// The curves among the line segments that are elements: (element id, first index into
     /// `lines`, index count), as `elements` for the triangles.
     pub line_elements: Vec<(u64, u32, u32)>,
+    /// Images on the surfaces (textured materials and decals), when any vertex shows one.
+    pub texturing: Option<Box<Texturing>>,
+}
+
+/// The images on a layer's surfaces: per vertex what it shows of which image, and the images.
+#[derive(Debug, Clone, Default)]
+pub struct Texturing {
+    /// One per vertex, as `positions`; drawn without images when the lengths differ.
+    pub vertices: Vec<TexVertex>,
+    pub images: Vec<Arc<TextureImage>>,
+}
+
+/// What a vertex shows of the images of its layer: the material's image repeats across the
+/// surface; a decal's shows only within 0..1 of its coordinates.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexVertex {
+    /// u, v in the material's image, then u, v in the decal's.
+    pub uv: [f32; 4],
+    /// The material's image and the decal's, by index + 1 into [`Texturing::images`] (0 none).
+    pub image: [u16; 2],
+    /// How much the material's image replaces the surface colour, and the decal's opacity
+    /// (255 all); then whether the material's image also gives transparency (1).
+    pub amount: [u8; 4],
+}
+
+/// An image a surface shows: straight sRGB pixels, row by row from the top.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextureImage {
+    /// The image file as the model names it.
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA8, `width * height * 4` bytes.
+    pub rgba: Vec<u8>,
 }
 
 impl Layer {
@@ -209,6 +244,10 @@ pub struct ProjectData {
     /// The cut the file opens with, in display coordinates (Rhino: the clipping plane that clips
     /// its perspective view).
     pub section: Option<crate::section::SectionPlane>,
+    /// Labels on points of the model, a fixed size on the screen whatever the distance, as
+    /// Rhino draws its text dots: display coordinates, text, background colour and the layer
+    /// (by name) whose visibility they follow.
+    pub dots: Vec<ModelDot>,
     /// The cut patterns of the materials (Revit), by the material's name: how a cut through an
     /// element of that material is hatched.
     pub cut_patterns: std::collections::HashMap<String, crate::hatching::Pattern>,
@@ -431,6 +470,15 @@ pub struct Sheet {
     /// The colour of each line of its title block that has one of its own: as many as `lines`,
     /// or none.
     pub line_colors: Vec<Option<[u8; 3]>>,
+}
+
+/// A label on a point of the model (see [`ProjectData::dots`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDot {
+    pub at: [f32; 3],
+    pub text: String,
+    pub color: [u8; 3],
+    pub layer: String,
 }
 
 /// An image on a sheet (sheet metres).

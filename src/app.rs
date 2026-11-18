@@ -483,6 +483,10 @@ pub enum Message {
     SavePicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
+    /// Lets Blender in the environment render the file opened from Docs (the web app); and its
+    /// answer, the name of the picture.
+    BlenderRender,
+    BlenderRendered(Result<String, String>),
     Mode(RenderMode),
     ToggleGrid,
     ToggleFlipUp,
@@ -1228,7 +1232,8 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: 
     )
 }
 
-/// Saves the model in the browser: written in memory and handed over as a download.
+/// Saves the model in the browser: written in memory and handed over as a download, or stored
+/// in Docs when the app runs in an environment.
 #[cfg(target_arch = "wasm32")]
 pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace: bool, ifc: export::IfcSchema) -> Task<Message> {
     Task::perform(
@@ -1237,7 +1242,11 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace:
             let start = Instant::now();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let bytes = export::to_bytes_schema(&model, &document, &name, ifc)?;
-            crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
+            if crate::host::present() {
+                crate::host::save(&name, &bytes).await?;
+            } else {
+                crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
+            }
             Ok((path, start.elapsed().as_secs_f32()))
         },
         Message::Saved,
@@ -2020,6 +2029,19 @@ impl App {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         Status::Loaded(format!("Saved {file} in {secs:.2} s"))
                     }
+                    Err(e) => Status::Error(e),
+                };
+            }
+            Message::BlenderRender => {
+                #[cfg(target_arch = "wasm32")]
+                if crate::host::can_render() {
+                    self.status = Status::Loaded("Blender renders the model as it is stored in Docs…".to_string());
+                    return Task::perform(crate::host::render(), Message::BlenderRendered);
+                }
+            }
+            Message::BlenderRendered(result) => {
+                self.status = match result {
+                    Ok(name) => Status::Loaded(format!("Blender rendered {name}: it is next to the model in Docs")),
                     Err(e) => Status::Error(e),
                 };
             }
@@ -4241,10 +4263,23 @@ impl App {
         let hover = self.measure.hover.as_ref().filter(|h| {
             self.measure.tool.is_some_and(|t| t != Tool::Volume) && h.screen.view_proj == view_proj && self.hover_scene_holds()
         });
+        // the model's labels (Rhino's text dots) on the layers that show
+        let dots: Vec<(Vec3, String, Color)> = self
+            .model
+            .as_ref()
+            .map(|m| {
+                m.project
+                    .dots
+                    .iter()
+                    .filter(|d| m.layers.iter().position(|l| l.name == d.layer).is_none_or(|i| self.visible.get(i).copied().unwrap_or(true)))
+                    .map(|d| (Vec3::from_array(d.at), d.text.clone(), Color::from_rgb8(d.color[0], d.color[1], d.color[2])))
+                    .collect()
+            })
+            .unwrap_or_default();
         // hidden while the model is taken apart: they belong to the model as it is
         let measures = (overlay.is_none()
             && !self.explode_on
-            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some()))
+            && (!self.measure.results.is_empty() || !self.measure.picks.is_empty() || hover.is_some() || !dots.is_empty()))
         .then(|| {
             canvas(crate::measure::overlay::MeasureOverlay {
                 results: &self.measure.results,
@@ -4257,6 +4292,7 @@ impl App {
                 ink: p.accent,
                 label_bg: p.surface,
                 label_text: p.text,
+                dots,
             })
             .width(Fill)
             .height(Fill)

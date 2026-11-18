@@ -2,7 +2,8 @@
 //!
 //! What differs from the desktop: files come from the browser's file picker, from drag and drop
 //! onto the page or from a `?file=URL` link, as bytes; "Save as" becomes a download; the
-//! preferences are not kept; there is no remote control.
+//! preferences are not kept; there is no remote control. In an OpenAEC SuperCloud environment the
+//! file comes from Docs and "Save as" stores it there ([`crate::host`]).
 
 use crate::app::{App, Message};
 use crate::loaders::Source;
@@ -98,6 +99,17 @@ pub fn files() -> impl Stream<Item = Message> {
             let _ = tx.send(message).await;
         });
     }
+    // in an environment: the file from Docs the page was opened for
+    let mut from_docs = tx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Some(opened) = crate::host::open_start().await {
+            let message = match opened {
+                Ok(source) => Message::Picked(Some(source)),
+                Err(e) => Message::Loaded(Err(e)),
+            };
+            let _ = from_docs.send(message).await;
+        }
+    });
     listen_for_drops(tx);
     rx
 }

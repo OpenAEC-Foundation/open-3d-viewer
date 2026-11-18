@@ -346,6 +346,20 @@ impl<'f> Scene<'f> {
         if !a.id.is_nil() {
             p.insert("Id".into(), a.id.to_string().into());
         }
+        let groups: Vec<&str> = a.groups.iter().filter_map(|g| self.file.groups.iter().find(|(i, _)| i == g)).map(|(_, n)| n.as_str()).collect();
+        if !groups.is_empty() {
+            p.insert("Groups".into(), groups.join(", ").into());
+        }
+        if !a.url.is_empty() {
+            p.insert("URL".into(), a.url.clone().into());
+        }
+        if a.plot_weight_source == 1 {
+            p.insert("Print width (mm)".into(), if a.plot_weight < 0.0 { "no print".to_string() } else { a.plot_weight.to_string() }.into());
+        }
+        if a.plot_color_source == 1 {
+            let c = a.plot_color;
+            p.insert("Print colour".into(), format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]).into());
+        }
         for (key, value) in user {
             let key = if p.contains_key(key) { format!("{key} (user text)") } else { key.clone() };
             p.insert(key, value.clone().into());
@@ -1291,6 +1305,19 @@ mod tests {
         // each a closed rectangle of four lines (two indices each)
         let indices: usize = model.layers.iter().map(|l| l.line_elements.iter().map(|e| e.2 as usize).sum::<usize>()).sum();
         assert_eq!(indices, 3 * 4 * 2);
+    }
+
+    /// Object attributes (`attributes.3dm`, from make_attributes.py) as properties: the groups
+    /// by name, the url, print colour and width set by object.
+    #[test]
+    fn groups_url_and_print_settings_are_properties() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, _) = load("attributes.3dm", std::fs::read(dir.join("attributes.3dm")).unwrap());
+        let grouped: serde_json::Value = model.props.values().map(|p| serde_json::from_str(p).unwrap()).find(|p: &serde_json::Value| p["Name"] == "Grouped").expect("grouped");
+        assert_eq!(grouped["Groups"], "Fence, North side");
+        assert_eq!(grouped["URL"], "https://example.org/fence");
+        assert_eq!(grouped["Print colour"], "#0A141E");
+        assert_eq!(grouped["Print width (mm)"], "0.35");
     }
 
     /// Lights (`lights.3dm`, from make_lights.py): the point, spot, directional, linear and

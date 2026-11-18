@@ -150,11 +150,11 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "0f5c4c92c3631f587eafd1ad8d9b0f41c27bd1a6" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "0f5c4c92c3631f587eafd1ad8d9b0f41c27bd1a6", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "0f5c4c92c3631f587eafd1ad8d9b0f41c27bd1a6" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
-rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "0f5c4c92c3631f587eafd1ad8d9b0f41c27bd1a6" }
+rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29" }
 # Docs shows when a file was changed in the time of this computer (MIT OR Apache-2.0; already built for bim-bcf)
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The BIM Validator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace

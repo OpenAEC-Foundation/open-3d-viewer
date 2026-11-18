@@ -15,6 +15,13 @@ use rvt_model::{FieldValue, NestedObject, ObjectView};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// A fill pattern as the app draws it: the reader's grids as the app's, and whether they are
+/// sized on paper.
+fn fill_pattern(doc: &rvt_read::Document, id: i64) -> Option<(Vec<crate::hatching::Grid>, bool)> {
+    let (grids, on_paper) = rvt_read::materials::fill_pattern(doc, id)?;
+    Some((grids.into_iter().map(super::rvt::grid).collect(), on_paper))
+}
+
 /// The type name and the family name of an element.
 pub(super) type Names = HashMap<u64, (String, String)>;
 
@@ -265,7 +272,7 @@ impl Filters<'_> {
             // the pairs of a list: a category and what it is set to
             let pairs = |field: &str| objects(from, over, field).into_iter().filter_map(|p| Some((p.get("first")?.element()?, p.get("second")?)));
             let ids = |field: &str| over.get(field).and_then(|v| v.as_list()).unwrap_or(&[]).iter().filter_map(|v| v.element()).collect::<HashSet<i64>>();
-            let given = |c: i64| (c >= 0 && c != NO_COLOR).then(|| super::rvt_materials::rgb(c));
+            let given = |c: i64| (c >= 0 && c != NO_COLOR).then(|| rvt_read::materials::rgb(c));
             for (category, style) in pairs("m_gStylesProj") {
                 // black is what a line is anyway: an override that leaves the colour gives 0
                 let color = object(from, style).and_then(|s| s.get("m_color")?.as_i64()).filter(|c| *c != 0).and_then(given);
@@ -303,7 +310,7 @@ impl Filters<'_> {
     /// Whether a fill pattern fills solid.
     fn solid(&mut self, id: i64) -> bool {
         let doc = self.doc;
-        self.fills.entry(id).or_insert_with(|| super::rvt_materials::fill_pattern(doc, id)).as_ref().is_some_and(|(grids, _)| grids.is_empty())
+        self.fills.entry(id).or_insert_with(|| fill_pattern(doc, id)).as_ref().is_some_and(|(grids, _)| grids.is_empty())
     }
 
     /// What the discipline of a view (`from`: its record or its template's) does to its
@@ -369,13 +376,13 @@ fn look_of(doc: &rvt_read::Document, view: &ObjectView, over: &NestedObject, fil
     };
     // a part of the override: a pattern's id or a colour, where it gives one
     let inner = |part: &str, field: &str| over.get(part).and_then(|v| object(view, v)).and_then(|o| o.get(field).cloned());
-    let color = |part: &str| inner(part, "m_color").and_then(|v| v.as_i64()).filter(|c| *c != NO_COLOR && *c >= 0).map(super::rvt_materials::rgb);
+    let color = |part: &str| inner(part, "m_color").and_then(|v| v.as_i64()).filter(|c| *c != NO_COLOR && *c >= 0).map(rvt_read::materials::rgb);
     let pattern = inner("m_oCutFillPattern", "m_fillPatternId").and_then(|v| v.element()).filter(|id| *id > 0);
     // a pen: none is -1
     let pen = |part: &str| inner(part, "m_penNumber").and_then(|v| v.as_i64()).filter(|p| *p > 0);
     let ink = |part: &str| crate::drawing::Ink { color: color(part), width: None };
     // the colour of its surfaces where a solid pattern covers them
-    let solid = |id: i64| fills.entry(id).or_insert_with(|| super::rvt_materials::fill_pattern(doc, id)).as_ref().is_some_and(|(grids, _)| grids.is_empty());
+    let solid = |id: i64| fills.entry(id).or_insert_with(|| fill_pattern(doc, id)).as_ref().is_some_and(|(grids, _)| grids.is_empty());
     let surface_pattern = inner("m_oProjFillPattern", "m_fillPatternId").and_then(|v| v.element()).filter(|id| *id > 0);
     let surface = color("m_oProjFillColor").filter(|_| flag("m_bProjFillPatternVisible") != Some(false) && surface_pattern.is_some_and(solid));
     let transparency = inner("m_oSurfacesTransparency", "m_transparency").and_then(|v| v.as_i64()).map_or(0, |t| t.clamp(0, 100) as u8);
@@ -384,7 +391,7 @@ fn look_of(doc: &rvt_read::Document, view: &ObjectView, over: &NestedObject, fil
         seen_line: ink("m_oProjPenColor"),
         pens: [pen("m_oCutPenNumber"), pen("m_oProjPenNumber")],
         halftone: flag("m_bHalftone") == Some(true),
-        pattern: pattern.and_then(|id| fills.entry(id).or_insert_with(|| super::rvt_materials::fill_pattern(doc, id)).clone()),
+        pattern: pattern.and_then(|id| fills.entry(id).or_insert_with(|| fill_pattern(doc, id)).clone()),
         color: color("m_oCutFillColor"),
         behind: color("m_oCutBackgroundPatternColorOverrider"),
         no_pattern: flag("m_bCutFillPatternVisible") == Some(false),

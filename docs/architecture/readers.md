@@ -56,7 +56,7 @@ Lines of Rust in `src/loaders/` per format, tests included.
 
 | Format | In the app | Its repository | Laid out as the model | To do |
 |---|---:|---|---|---|
-| Revit (`.rvt`, `.rfa`) | 6,951 in 11 files | `revit-dll` | yes | Move what the app knows of Revit's drawings, tags, schedules, filters, phases, fonts, images and browser into the reader; the adapter only maps. |
+| Revit (`.rvt`, `.rfa`) | 6,769 in 9 files | `revit-dll` | yes | Move what the app knows of Revit's drawings, tags, schedules, filters, phases, fonts, images and browser into the reader; the adapter only maps. |
 | Archicad (`.pln`, `.pla`) | 5,995 | none | | New repository; the whole reader moves. |
 | Allplan (`.ndw`) | 4,006 | none | | New repository; the whole reader moves. |
 | Coordination model (`.smc`) | 2,674 in 3 files | none | | New repository; the whole reader moves. |
@@ -91,6 +91,10 @@ Together this is some 30,000 lines of format knowledge in the app.
 - 2026-11-18, Revit: the images of a family and the image a parameter names (`rvt_read::images`),
   and whether a wall or floor carries load (`rvt_read::structure`; 152 lines and two tests left
   the app, which keeps how it adds `LoadBearing` to its own properties).
+- 2026-11-18, Revit: the cut patterns of the materials (`rvt_read::materials`) and the phasing
+  of the project and its views (`rvt_read::phases`; 205 lines and three tests left the app). The
+  reader returns plain types of its own here, and the app copies them into its `Pattern`, `Grid`
+  and `Phasing`.
 
 ## Order
 

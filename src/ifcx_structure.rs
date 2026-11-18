@@ -213,7 +213,9 @@ impl Structure {
     /// and name; what IFC says with a relation between them is a child (`IfcRelAggregates`,
     /// `IfcRelNests`, `IfcRelContainedInSpatialStructure`, `IfcRelVoidsElement`,
     /// `IfcRelFillsElement`) or an inherit (`IfcRelDefinesByType`, `IfcRelAssociatesMaterial`).
-    /// The text is the file's own lines.
+    /// A property set or a set of quantities is a child of the elements it is given to
+    /// (`IfcRelDefinesByProperties`) and of the type that has it, with each property or quantity
+    /// as an attribute and its value. The text is the file's own lines.
     pub fn read_step(source: &str, data: &[u8]) -> Result<Structure, String> {
         use ifc_lite_core::{decode_ifc_string, EntityDecoder, EntityScanner, IfcType};
         let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
@@ -247,6 +249,8 @@ impl Structure {
         let mut holds: Vec<(u32, u32)> = Vec::new();
         let mut inherits: Vec<(u32, &'static str, u32)> = Vec::new();
         let mut materials: Vec<u32> = Vec::new();
+        // the property sets and sets of quantities: their node, and the records of what they hold
+        let mut sets: Vec<(usize, Vec<u32>)> = Vec::new();
         while let Some((id, kind, start, end)) = scanner.next_entity() {
             let upper = kind.to_ascii_uppercase();
             if upper.starts_with("IFCREL") {
@@ -256,6 +260,7 @@ impl Structure {
                     "IFCRELAGGREGATES" | "IFCRELNESTS" => holds.extend(e.get_ref(4).into_iter().flat_map(|p| many(5).into_iter().map(move |c| (p, c)))),
                     "IFCRELCONTAINEDINSPATIALSTRUCTURE" => holds.extend(e.get_ref(5).into_iter().flat_map(|p| many(4).into_iter().map(move |c| (p, c)))),
                     "IFCRELVOIDSELEMENT" | "IFCRELFILLSELEMENT" => holds.extend(e.get_ref(4).zip(e.get_ref(5))),
+                    "IFCRELDEFINESBYPROPERTIES" => holds.extend(e.get_ref(5).into_iter().flat_map(|set| many(4).into_iter().map(move |o| (o, set)))),
                     "IFCRELDEFINESBYTYPE" => inherits.extend(e.get_ref(5).into_iter().flat_map(|t| many(4).into_iter().map(move |o| (o, "type", t)))),
                     "IFCRELASSOCIATESMATERIAL" => {
                         if let Some(m) = e.get_ref(5) {
@@ -279,10 +284,31 @@ impl Structure {
                     attributes.push((format!("bsi::ifc::prop::{key}"), value));
                 }
             }
+            match upper.as_str() {
+                "IFCPROPERTYSET" => sets.push((entries.len(), e.get_refs(4).unwrap_or_default())),
+                "IFCELEMENTQUANTITY" => sets.push((entries.len(), e.get_refs(5).unwrap_or_default())),
+                // a type holds its property sets itself
+                _ if upper.ends_with("TYPE") || upper.ends_with("STYLE") => holds.extend(e.get_refs(5).unwrap_or_default().into_iter().map(|set| (id, set))),
+                _ => {}
+            }
             let line = line_of(start);
             entry_of.insert(id, entries.len());
             lines[line as usize].entry = Some(entries.len() as u32);
             entries.push(Entry { path: format!("#{id}"), attributes, class: Some(class), name, line, ..Entry::default() });
+        }
+        // what a set holds: an attribute per property or quantity, with its value as the file
+        // writes it
+        for (entry, members) in sets {
+            for member in members {
+                let Ok(e) = decoder.decode_by_id(member) else { continue };
+                let Some(name) = e.get_string(0).map(|s| decode_ifc_string(s).trim().to_string()).filter(|s| !s.is_empty()) else { continue };
+                let Some(record) = record_of(&text, member) else { continue };
+                let arguments = step_arguments(record);
+                // a single value is the third argument; a quantity's value the fourth
+                let at = if e.ifc_type.name().to_ascii_uppercase().starts_with("IFCQUANTITY") { 3 } else { 2 };
+                let value = arguments.get(at).map(|v| step_value(v)).unwrap_or_default();
+                entries[entry].attributes.push((format!("bsi::ifc::prop::{name}"), value));
+            }
         }
         // the materials named: nodes too, so an element shows what it is made of
         materials.sort_unstable();
@@ -476,6 +502,73 @@ impl Structure {
 }
 
 /// The relation a child stands for, from the classes of the two nodes.
+/// The record `#id=…;` in an IFC file's text: what stands between its brackets.
+fn record_of(text: &str, id: u32) -> Option<&str> {
+    let mark = format!("#{id}");
+    let mut from = 0;
+    while let Some(at) = text[from..].find(&mark) {
+        let start = from + at;
+        let rest = text[start + mark.len()..].trim_start();
+        // the record itself, not a reference to it: at the start of a line, followed by `=`
+        let own = text[..start].trim_end_matches([' ', '\t']).ends_with(['\n', ';']) || start == 0;
+        if own && rest.starts_with('=') {
+            let open = rest.find('(')?;
+            let body = &rest[open + 1..];
+            let mut depth = 0i32;
+            let mut quoted = false;
+            for (i, c) in body.char_indices() {
+                match c {
+                    '\'' => quoted = !quoted,
+                    '(' if !quoted => depth += 1,
+                    ')' if !quoted && depth == 0 => return Some(&body[..i]),
+                    ')' if !quoted => depth -= 1,
+                    _ => {}
+                }
+            }
+            return None;
+        }
+        from = start + mark.len();
+    }
+    None
+}
+
+/// The arguments of a record, split at its commas outside brackets and strings.
+fn step_arguments(record: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quoted, mut from) = (0i32, false, 0);
+    for (i, c) in record.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth -= 1,
+            ',' if !quoted && depth == 0 => {
+                out.push(record[from..i].trim());
+                from = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(record[from..].trim());
+    out
+}
+
+/// A value as it reads: `IFCLABEL('REI 60')` is `REI 60`, `IFCBOOLEAN(.T.)` is `true`, a number
+/// stays a number; nothing for `$`.
+fn step_value(argument: &str) -> String {
+    let inner = match (argument.find('('), argument.ends_with(')')) {
+        (Some(open), true) if argument[..open].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && open > 0 => &argument[open + 1..argument.len() - 1],
+        _ => argument,
+    };
+    match inner {
+        "$" | "*" => String::new(),
+        ".T." => "true".into(),
+        ".F." => "false".into(),
+        ".U." => "unknown".into(),
+        text if text.starts_with('\'') && text.ends_with('\'') && text.len() >= 2 => ifc_lite_core::decode_ifc_string(&text[1..text.len() - 1]).to_string(),
+        other => other.trim_matches('.').to_string(),
+    }
+}
+
 fn child_relation(parent: Option<&str>, child: Option<&str>) -> Relation {
     let spatial = |c: &str| {
         let c = c.to_ascii_lowercase();
@@ -483,7 +576,10 @@ fn child_relation(parent: Option<&str>, child: Option<&str>) -> Relation {
             .contains(&c.as_str())
     };
     let opening = |c: &str| ["ifcopeningelement", "ifcopeningstandardcase", "ifcvoidingfeature"].contains(&c.to_ascii_lowercase().as_str());
+    // a set of properties or quantities is a part of what it describes
+    let set = |c: &str| ["ifcpropertyset", "ifcelementquantity"].contains(&c.to_ascii_lowercase().as_str());
     match (parent, child) {
+        (Some(_), Some(c)) if set(c) => Relation::Part,
         (Some(p), Some(c)) if spatial(p) && spatial(c) => Relation::Aggregates,
         (Some(p), Some(_)) if spatial(p) => Relation::Contains,
         (Some(_), Some(c)) if opening(c) => Relation::Voids,
@@ -767,6 +863,13 @@ mod tests {
             #13=IFCRELDEFINESBYTYPE('0aaaaaaaaaaaaaaaaaaa13',$,$,$,(#4),#5);\n\
             #14=IFCRELASSOCIATESMATERIAL('0aaaaaaaaaaaaaaaaaaa14',$,$,$,(#4),#6);\n\
             #15=IFCRELVOIDSELEMENT('0aaaaaaaaaaaaaaaaaaa15',$,$,$,#4,#7);\n\
+            #20=IFCPROPERTYSINGLEVALUE('FireRating',$,IFCLABEL('REI 60, tested'),$);\n\
+            #21=IFCPROPERTYSINGLEVALUE('IsExternal',$,IFCBOOLEAN(.T.),$);\n\
+            #22=IFCPROPERTYSET('0aaaaaaaaaaaaaaaaaaa22',$,'Pset_WallCommon',$,(#20,#21));\n\
+            #23=IFCRELDEFINESBYPROPERTIES('0aaaaaaaaaaaaaaaaaaa23',$,$,$,(#4),#22);\n\
+            #24=IFCQUANTITYLENGTH('Length',$,$,4.25,$);\n\
+            #25=IFCELEMENTQUANTITY('0aaaaaaaaaaaaaaaaaaa25',$,'Qto_WallBaseQuantities',$,$,(#24));\n\
+            #26=IFCRELDEFINESBYPROPERTIES('0aaaaaaaaaaaaaaaaaaa26',$,$,$,(#4),#25);\n\
             ENDSEC;\nEND-ISO-10303-21;\n";
         let s = Structure::read_step("small.ifc", ifc.as_bytes()).expect("an IFC file");
         // the text is the file's own lines; a node knows the line of its record
@@ -785,6 +888,16 @@ mod tests {
         assert_eq!(kind("#4", "#7"), Some(Relation::Voids));
         assert_eq!(kind("#4", "#5"), Some(Relation::Type));
         assert_eq!(kind("#4", "#6"), Some(Relation::Material));
+        // a property set and a set of quantities hang under the wall, each property an attribute
+        // with its value
+        let pset = node("#22");
+        assert_eq!((pset.class.as_deref(), pset.name.as_deref()), (Some("IfcPropertySet"), Some("Pset_WallCommon")));
+        assert_eq!(kind("#4", "#22"), Some(Relation::Part));
+        let said = |path: &str, key: &str| s.entries[node(path).entries[0] as usize].attributes.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        assert_eq!(said("#22", "bsi::ifc::prop::FireRating").as_deref(), Some("REI 60, tested"));
+        assert_eq!(said("#22", "bsi::ifc::prop::IsExternal").as_deref(), Some("true"));
+        assert_eq!(said("#25", "bsi::ifc::prop::Length").as_deref(), Some("4.25"));
+        assert_eq!(kind("#4", "#25"), Some(Relation::Part));
         // what is no IFC file is refused
         assert!(Structure::read_step("x.ifc", b"{}").is_err());
     }

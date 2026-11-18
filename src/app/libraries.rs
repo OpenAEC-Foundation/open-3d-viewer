@@ -412,8 +412,8 @@ impl canvas::Program<Message> for HatchTiles {
         let mut frame = Frame::new(renderer, bounds.size());
         for (k, pattern) in self.patterns.iter().enumerate() {
             let tile = Rectangle::new(Point::new(k as f32 * (Self::SIDE + Self::GAP), 0.0), Size::new(Self::SIDE, Self::SIDE));
-            // each hatch stays in its own tile
-            frame.with_clip(tile, |frame| super::library::draw_hatch(frame, Rectangle::new(Point::ORIGIN, tile.size()), *pattern, Self::SCALE));
+            // (a hatch keeps its lines inside the band it is given)
+            super::library::draw_hatch(&mut frame, tile, *pattern, Self::SCALE);
             frame.stroke(&Path::rectangle(tile.position(), tile.size()), Stroke::default().with_color(self.edge).with_width(1.0));
         }
         vec![frame.into_geometry()]

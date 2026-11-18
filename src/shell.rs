@@ -3317,6 +3317,30 @@ mod tests {
         }
     }
 
+    /// The Library product with each of its sources: target/shell-renders/library-product-*.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_library_product_renders() {
+        use crate::app::libraries::{Country, Source};
+        use crate::app::LibrariesMessage;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let shots = [
+            ("general", LibrariesMessage::Source(Source::General)),
+            ("country-nl", LibrariesMessage::Country(Country::Netherlands)),
+            ("country-de", LibrariesMessage::Country(Country::Germany)),
+            ("company", LibrariesMessage::Source(Source::Company)),
+            ("project", LibrariesMessage::Source(Source::Project)),
+        ];
+        for (name, show) in shots {
+            let mut studio = Studio::new(App::default());
+            studio.prefs.language = Language::Dutch;
+            studio.set_product(Product::Library);
+            let _ = studio.update(Msg::App(Message::Libraries(show)));
+            studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join(format!("library-product-{name}.png"))).expect("snapshot");
+        }
+    }
+
     #[test]
     fn every_setting_has_a_name_in_every_language() {
         for i in 0..LANGUAGES {

@@ -83,6 +83,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
+| DICOM with an embedded model (`.dcm`) | 73 | `crates/dcm-read`, on the published `dicom-object` (MIT OR Apache-2.0): it takes the STL, OBJ or MTL document out of the file and says what other files hold | A crate in the suite for now, as the other new readers of 2026-11-18; it uses nothing of the app and moves one to one into a repository of its own (`dicom-dll`) later. The adapter reads the document with the app's STL and OBJ readers. |
 
 ## Moved so far
 
@@ -121,3 +122,7 @@ it; the owner sets those.
   files a slice takes.
 - The readers' tests and sample files move with them; what stays here tests the adapter with a
   small file.
+- The readers of MagicaVoxel, URDF, OpenDRIVE and DICOM models (2026-11-18) are crates in this
+  repository's `crates/` for now, by the owner's choice, not repositories of their own. Each uses
+  nothing of the app and has the name it will keep (`vox-read`, `urdf-read`, `xodr-read`,
+  `dcm-read`), so it moves one to one into its own `-dll` repository later.

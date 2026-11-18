@@ -289,7 +289,7 @@ impl App {
     }
 
     /// The library of a shelf.
-    fn shelf(&self, shelf: Shelf) -> &Library {
+    pub(super) fn shelf(&self, shelf: Shelf) -> &Library {
         match shelf {
             Shelf::General => general(),
             Shelf::Netherlands => inb(),
@@ -443,6 +443,15 @@ impl App {
         Element::from(column![container(search).padding([2, 4]), scrollable(list).height(Fill)].spacing(6)).map(Message::Libraries)
     }
 
+    /// The right pane of the Library product: the editor of the project's picked build-up on
+    /// the Project page, the fields of what is picked of the drawing standard elsewhere.
+    pub fn library_side(&self, p: Palette, l: Language) -> Element<'_, Message> {
+        match self.libraries.source {
+            Source::Project => self.buildup_pane(p, l),
+            _ => self.standard_pane(p, l),
+        }
+    }
+
     /// What was found, as cards with a look at each: a material's hatch, a build-up's section,
     /// a profile's outline, a system's face.
     fn found_cards(&self, p: Palette, l: Language) -> Element<'_, Message> {
@@ -464,7 +473,8 @@ impl App {
                 Item::Material(shelf, key) => self.shelf(*shelf).material(key).map(|m| material_detail(p, m)),
                 Item::BuildUp(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    library.buildup(id).map(|b| buildup_detail(p, l, library, b))
+                    let copied = (*shelf != Shelf::Project).then(|| text(l.text("Klik om een kopie in het project te bewerken.", "Click to edit a copy in the project.")).size(10).color(p.text_muted));
+                    library.buildup(id).map(|b| column![buildup_detail(p, l, library, b)].push(copied).spacing(6).into())
                 }
                 Item::Linear(shelf, id) => {
                     let library = self.shelf(*shelf);
@@ -491,9 +501,12 @@ impl App {
                 .padding(12)
                 .clip(true)
                 .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
-            // a kind of drawing or a setting opens in its standard, where it is set
+            // a kind of drawing or a setting opens in its standard, where it is set; a build-up
+            // opens in its editor, one of another library as a copy in the project
             match f.item {
                 Item::Setting(setting) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Libraries(LibrariesMessage::Open(setting))).into(),
+                Item::BuildUp(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Pick(id))).into(),
+                Item::BuildUp(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Copy(shelf, id))).into(),
                 _ => Element::from(card),
             }
         });
@@ -527,6 +540,10 @@ impl App {
         // the Netherlands: its drawing standard first, to be set up
         if view.source == Source::Country && view.country == Country::Netherlands {
             page = page.push(self.standard_sections(p, l));
+        }
+        // the project: its build-ups first, to be edited
+        if view.source == Source::Project {
+            page = page.push(self.buildup_lists(p, l));
         }
         for (section, cards) in self.library_sections(l, &house) {
             let cards = row(cards.into_iter().map(|card| card_view(card, p, l))).spacing(10).wrap();

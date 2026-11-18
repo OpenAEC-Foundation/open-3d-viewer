@@ -96,7 +96,7 @@ pub struct StandardView {
 }
 
 /// A number as typed, with a decimal point or comma.
-fn number(text: &str) -> Option<f64> {
+pub(super) fn number(text: &str) -> Option<f64> {
     text.trim().replace(',', ".").parse().ok().filter(|x: &f64| x.is_finite())
 }
 

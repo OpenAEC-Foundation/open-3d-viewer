@@ -2713,9 +2713,10 @@ impl Studio {
     fn right_body(&self, look: Look) -> Element<'_, Msg> {
         let (app, l) = (&self.app, self.l());
         let p = palette(look);
-        // Library: the fields of what is picked of the drawing standard
+        // Library: the editor of the picked build-up, or the fields of what is picked of the
+        // drawing standard
         if self.product() == Product::Library {
-            return Self::pane(app.standard_pane(p, l));
+            return Self::pane(app.library_side(p, l));
         }
         if self.product() != Product::Modeller {
             return Self::pane(app.properties_body(p, l));
@@ -3423,6 +3424,7 @@ mod tests {
             ("company", LibrariesMessage::Source(Source::Company)),
             ("project", LibrariesMessage::Source(Source::Project)),
             ("search", LibrariesMessage::Search("beton 2".into())),
+            ("buildup", LibrariesMessage::Source(Source::Project)),
         ];
         for (name, show) in shots {
             let mut studio = Studio::new(App::default());
@@ -3430,6 +3432,11 @@ mod tests {
             studio.set_product(Product::Library);
             let _ = studio.update(Msg::App(Message::Libraries(show)));
             // the Netherlands with a kind of drawing picked, so the right pane shows its fields
+            // the project with its first wall picked, so the right pane is its editor
+            if name == "buildup" {
+                let id = studio.app.library.buildups[0].id.clone();
+                let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+            }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));
             }

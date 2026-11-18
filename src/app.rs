@@ -41,6 +41,7 @@ mod join_marks;
 mod later;
 mod precut;
 mod levels;
+pub mod buildups;
 pub mod libraries;
 pub mod library;
 pub mod standards;
@@ -369,6 +370,8 @@ pub struct App {
     pub standard: bim_library::drawing::Standard,
     /// What is picked of the standard on the Library page.
     pub standard_view: standards::StandardView,
+    /// The build-up edited on the Library page, and the role whose build-ups show.
+    pub buildup_view: buildups::BuildUpView,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -527,6 +530,8 @@ pub enum Message {
     Libraries(libraries::LibrariesMessage),
     /// The drawing standard on the Library page: picking and setting its kinds and settings.
     Standard(standards::StandardMessage),
+    /// The build-ups of the project on the Library page: picking and editing one.
+    BuildUp(buildups::BuildUpMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1019,6 +1024,7 @@ impl Default for App {
             libraries: libraries::LibrariesView::default(),
             standard: bim_library::drawing::Standard::netherlands(),
             standard_view: standards::StandardView::default(),
+            buildup_view: buildups::BuildUpView::default(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -2198,6 +2204,7 @@ impl App {
             Message::Docs(message) => return self.docs_update(message),
             Message::Libraries(message) => return self.libraries_update(message),
             Message::Standard(message) => return self.standard_update(message),
+            Message::BuildUp(message) => return self.buildup_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]

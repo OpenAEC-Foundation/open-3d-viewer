@@ -1213,6 +1213,21 @@
     "+ Line weight": "+ Çizgi kalınlığı",
     "+ Text style": "+ Metin stili",
     "no kind of drawing": "hiçbir çizim türü",
-    "Used by": "Kullanan"
+    "Used by": "Kullanan",
+    "Click to edit a copy in the project.": "Projede bir kopyasını düzenlemek için tıklayın.",
+    "+ Build-up": "+ Katman yapısı",
+    "Build-ups": "Katman yapıları",
+    "Pick a wall, floor, roof or ceiling on the page to edit its build-up.": "Katman yapısını düzenlemek için sayfada bir duvar, döşeme, çatı veya tavan seçin.",
+    "Material of layer": "Katmanın malzemesi",
+    "Thickness in mm of layer": "Katmanın mm kalınlığı",
+    "Layer up": "Katmanı yukarı taşı",
+    "Layer down": "Katmanı aşağı taşı",
+    "A layer more": "Bir katman daha",
+    "Remove layer": "Katmanı kaldır",
+    "Own name": "Kendi adı",
+    "by its layers": "katmanlarına göre",
+    "Not taken: the build-up would no longer hold together.": "Kabul edilmedi: katman yapısı artık tutarlı olmazdı.",
+    "Duplicate": "Çoğalt",
+    "Elements that were given this build-up keep what they were given.": "Bu katman yapısını daha önce almış elemanlar, aldıklarını korur."
   }
 }

@@ -1213,6 +1213,21 @@
     "+ Line weight": "+ Linjetjocklek",
     "+ Text style": "+ Textstil",
     "no kind of drawing": "ingen ritningstyp",
-    "Used by": "Används av"
+    "Used by": "Används av",
+    "Click to edit a copy in the project.": "Klicka för att redigera en kopia i projektet.",
+    "+ Build-up": "+ Uppbyggnad",
+    "Build-ups": "Uppbyggnader",
+    "Pick a wall, floor, roof or ceiling on the page to edit its build-up.": "Välj en vägg, ett bjälklag, ett tak eller ett innertak på sidan för att redigera uppbyggnaden.",
+    "Material of layer": "Material i skikt",
+    "Thickness in mm of layer": "Tjocklek i mm för skikt",
+    "Layer up": "Skikt uppåt",
+    "Layer down": "Skikt nedåt",
+    "A layer more": "Ett skikt till",
+    "Remove layer": "Ta bort skikt",
+    "Own name": "Eget namn",
+    "by its layers": "enligt skikten",
+    "Not taken: the build-up would no longer hold together.": "Inte infört: uppbyggnaden skulle inte längre hänga ihop.",
+    "Duplicate": "Duplicera",
+    "Elements that were given this build-up keep what they were given.": "Element som redan fått den här uppbyggnaden behåller det de fick."
   }
 }

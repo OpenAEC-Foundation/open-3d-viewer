@@ -1213,6 +1213,21 @@
     "+ Line weight": "+ Épaisseur de trait",
     "+ Text style": "+ Style de texte",
     "no kind of drawing": "aucun type de dessin",
-    "Used by": "Utilisé par"
+    "Used by": "Utilisé par",
+    "Click to edit a copy in the project.": "Cliquez pour modifier une copie dans le projet.",
+    "+ Build-up": "+ Composition",
+    "Build-ups": "Compositions",
+    "Pick a wall, floor, roof or ceiling on the page to edit its build-up.": "Choisissez sur la page un mur, un plancher, un toit ou un plafond pour modifier sa composition.",
+    "Material of layer": "Matériau de la couche",
+    "Thickness in mm of layer": "Épaisseur en mm de la couche",
+    "Layer up": "Monter la couche",
+    "Layer down": "Descendre la couche",
+    "A layer more": "Une couche de plus",
+    "Remove layer": "Supprimer la couche",
+    "Own name": "Nom propre",
+    "by its layers": "selon ses couches",
+    "Not taken: the build-up would no longer hold together.": "Non retenu : la composition ne serait plus cohérente.",
+    "Duplicate": "Dupliquer",
+    "Elements that were given this build-up keep what they were given.": "Les éléments qui ont déjà reçu cette composition gardent ce qu’ils ont reçu."
   }
 }

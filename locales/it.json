@@ -1213,6 +1213,21 @@
     "+ Line weight": "+ Spessore di linea",
     "+ Text style": "+ Stile di testo",
     "no kind of drawing": "nessun tipo di disegno",
-    "Used by": "Usato da"
+    "Used by": "Usato da",
+    "Click to edit a copy in the project.": "Fai clic per modificare una copia nel progetto.",
+    "+ Build-up": "+ Stratigrafia",
+    "Build-ups": "Stratigrafie",
+    "Pick a wall, floor, roof or ceiling on the page to edit its build-up.": "Scegli nella pagina una parete, un solaio, un tetto o un controsoffitto per modificarne la stratigrafia.",
+    "Material of layer": "Materiale dello strato",
+    "Thickness in mm of layer": "Spessore in mm dello strato",
+    "Layer up": "Strato su",
+    "Layer down": "Strato giù",
+    "A layer more": "Un altro strato",
+    "Remove layer": "Rimuovi strato",
+    "Own name": "Nome proprio",
+    "by its layers": "secondo gli strati",
+    "Not taken: the build-up would no longer hold together.": "Non accettato: la stratigrafia non sarebbe più coerente.",
+    "Duplicate": "Duplica",
+    "Elements that were given this build-up keep what they were given.": "Gli elementi che hanno già ricevuto questa stratigrafia mantengono ciò che hanno ricevuto."
   }
 }

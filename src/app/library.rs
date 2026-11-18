@@ -452,6 +452,14 @@ pub(super) fn buildup_detail<'a>(p: Palette, l: Language, lib: &Library, b: &Bui
     column![canvas_widget(Section { bands, depth: total, line: p.text }).width(Fill).height(height), list].spacing(6).into()
 }
 
+/// A build-up's section alone: its layers as bands with their hatches, the exterior or the top up.
+pub(super) fn buildup_section<'a>(p: Palette, lib: &Library, b: &BuildUp) -> Element<'a, Message> {
+    let bands = b.layers.iter().map(|layer| (layer.thickness, lib.material(&layer.material).map_or(HatchKind::Generic, |m| m.hatch), lib.material(&layer.material).map_or([175, 182, 195], |m| m.colour))).collect();
+    let total = b.thickness();
+    let height = (total * 400.0).clamp(24.0, 150.0) as f32;
+    canvas_widget(Section { bands, depth: total, line: p.text }).width(Fill).height(height).into()
+}
+
 /// A system type drawn as its face, a few bays and rows of it as the kernel generates them, with a
 /// section through its layers when it has any, and its grid, members, panels and layers listed.
 pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &SystemType) -> Element<'a, Message> {

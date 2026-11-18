@@ -98,6 +98,25 @@ Not yet: the standard does not steer the drawings the suite makes; settings (a s
 line style) cannot be added or removed, only changed; a standard cannot be saved or opened as a
 file of its own; other countries have no standard; a kind has one pen pair for all its scales.
 
+## Editors (third step)
+
+Library is also where the types themselves are made. Each kind of type gets an editor of its own
+in the right pane, with a drawing of what it makes above its fields.
+
+- **Build-ups** (walls, floors, roofs, ceilings), `src/app/buildups.rs`: the Project page lists
+  them a role at a time; the editor has the section and the layers, each a material and a
+  thickness, to change, move, add and remove; a name of its own or the rule's; add, duplicate,
+  remove. A build-up of another library is edited as a copy in the project, with the materials
+  it needs. A change is kept only when the build-up still checks.
+- **Search** over every library and the drawing standard, with a look at each result; a found
+  setting or build-up opens where it is edited.
+- **Settings** of the drawing standard can be added and removed (scales, line styles, pens, text
+  styles), a removal refused while a kind of drawing uses the setting.
+
+Not yet: an editor for profiles and for the types of columns and beams, for materials (name,
+colour, hatch) and for system types; elements that were given a build-up do not follow a change
+of the type; the general library and a country's types are not edited in place.
+
 ## Open questions
 
 - Where a house style is kept: with the company (a file or folder its people share, as Docs uses
@@ -114,7 +133,7 @@ file of its own; other countries have no standard; a kind has one pen pair for a
 2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
-4. Open a card of types: its items as a list with a drawing of the picked one (the drawings
-   exist in `src/app/library.rs`).
-5. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
-6. Library files and components opened into the page.
+4. An editor for profiles and for the types of columns and beams; then materials and systems.
+5. Elements follow a change of their type, when asked.
+6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
+7. Library files and components opened into the page.

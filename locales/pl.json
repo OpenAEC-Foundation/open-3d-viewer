@@ -1213,6 +1213,21 @@
     "+ Line weight": "+ Grubość linii",
     "+ Text style": "+ Styl tekstu",
     "no kind of drawing": "żaden rodzaj rysunku",
-    "Used by": "Używane przez"
+    "Used by": "Używane przez",
+    "Click to edit a copy in the project.": "Kliknij, aby edytować kopię w projekcie.",
+    "+ Build-up": "+ Układ warstw",
+    "Build-ups": "Układy warstw",
+    "Pick a wall, floor, roof or ceiling on the page to edit its build-up.": "Wybierz na stronie ścianę, strop, dach lub sufit, aby edytować układ warstw.",
+    "Material of layer": "Materiał warstwy",
+    "Thickness in mm of layer": "Grubość w mm warstwy",
+    "Layer up": "Warstwa w górę",
+    "Layer down": "Warstwa w dół",
+    "A layer more": "Kolejna warstwa",
+    "Remove layer": "Usuń warstwę",
+    "Own name": "Własna nazwa",
+    "by its layers": "według warstw",
+    "Not taken: the build-up would no longer hold together.": "Nie przyjęto: układ warstw przestałby być spójny.",
+    "Duplicate": "Duplikuj",
+    "Elements that were given this build-up keep what they were given.": "Elementy, które otrzymały już ten układ warstw, zachowują to, co otrzymały."
   }
 }

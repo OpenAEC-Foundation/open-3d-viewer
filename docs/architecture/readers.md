@@ -56,7 +56,7 @@ Lines of Rust in `src/loaders/` per format, tests included.
 
 | Format | In the app | Its repository | Laid out as the model | To do |
 |---|---:|---|---|---|
-| Revit (`.rvt`, `.rfa`) | 6,769 in 9 files | `revit-dll` | yes | Move what the app knows of Revit's drawings, tags, schedules, filters, phases, fonts, images and browser into the reader; the adapter only maps. |
+| Revit (`.rvt`, `.rfa`) | 6,346 in 7 files | `revit-dll` | yes | Move what the app knows of Revit's drawings, tags, schedules, filters, phases, fonts, images and browser into the reader; the adapter only maps. |
 | Archicad (`.pln`, `.pla`) | 5,995 | none | | New repository; the whole reader moves. |
 | Allplan (`.ndw`) | 4,006 | none | | New repository; the whole reader moves. |
 | Coordination model (`.smc`) | 2,674 in 3 files | none | | New repository; the whole reader moves. |
@@ -95,6 +95,9 @@ Together this is some 30,000 lines of format knowledge in the app.
   of the project and its views (`rvt_read::phases`; 205 lines and three tests left the app). The
   reader returns plain types of its own here, and the app copies them into its `Pattern`, `Grid`
   and `Phasing`.
+- 2026-11-18, Revit: how the browser orders the views (`rvt_export::browser`) and the typefaces
+  of the texts (`rvt_read::fonts`; 429 lines and three tests left the app, which copies the
+  reader's `Organization` and `FontFace` into its `ViewOrder` and `Face`).
 
 ## Order
 

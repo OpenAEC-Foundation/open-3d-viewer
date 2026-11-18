@@ -15,7 +15,7 @@ default-run = "open-3d-viewer"
 # The desktop app includes Revit, Vertex BD and BTL support; the web target uses byte-oriented readers.
 # Headless crates live under crates/; `cargo test` in the root still tests only the app.
 [workspace]
-members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-docs", "crates/bim-gis", "crates/bim-civil"]
+members = ["crates/bim-structural", "crates/bim-core", "crates/bim-library", "crates/bim-validator-core", "crates/bim-bcf", "crates/bim-docs", "crates/bim-gis", "crates/bim-civil", "crates/dcm-read"]
 
 [lib]
 name = "open_3d_viewer"
@@ -76,6 +76,8 @@ bim-docs = { path = "crates/bim-docs" }
 bim-gis = { path = "crates/bim-gis" }
 # Civil and site design: survey points, terrain surfaces with breaklines, contours and volumes; headless, in this workspace
 bim-civil = { path = "crates/bim-civil" }
+# DICOM (.dcm) files that carry a 3D model (Encapsulated STL, OBJ, MTL); headless, in this workspace
+dcm-read = { path = "crates/dcm-read" }
 bytemuck = { version = "1", features = ["derive"] }
 # Element properties (flat JSON objects from the BIM loaders)
 serde = { version = "1", features = ["derive"] }
@@ -112,7 +114,7 @@ roxmltree = "0.20"
 opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762969f3897e67e1801a2199445b6cf83b5d", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "90e0572638b5853c4a4b7c308cae75921bc4c68b" }
+tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "904769e76df0688b6f81391cabc2cc43854fbc11" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
 vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }

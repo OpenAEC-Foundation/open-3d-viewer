@@ -481,6 +481,10 @@ pub enum Message {
     SavePicked(Option<PathBuf>),
     /// A save finished: the file written and how long it took, or the error.
     Saved(Result<(PathBuf, f32), String>),
+    /// Lets Blender in the environment render the file opened from Docs (the web app); and its
+    /// answer, the name of the picture.
+    BlenderRender,
+    BlenderRendered(Result<String, String>),
     Mode(RenderMode),
     ToggleGrid,
     ToggleFlipUp,
@@ -1225,7 +1229,8 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, replace: 
     )
 }
 
-/// Saves the model in the browser: written in memory and handed over as a download.
+/// Saves the model in the browser: written in memory and handed over as a download, or stored
+/// in Docs when the app runs in an environment.
 #[cfg(target_arch = "wasm32")]
 pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace: bool, ifc: export::IfcSchema) -> Task<Message> {
     Task::perform(
@@ -1234,7 +1239,11 @@ pub fn save_task(model: Arc<Model>, document: Document, path: PathBuf, _replace:
             let start = Instant::now();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let bytes = export::to_bytes_schema(&model, &document, &name, ifc)?;
-            crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
+            if crate::host::present() {
+                crate::host::save(&name, &bytes).await?;
+            } else {
+                crate::web::download(&name, &bytes, export::writer_for(&name)?.mime())?;
+            }
             Ok((path, start.elapsed().as_secs_f32()))
         },
         Message::Saved,
@@ -1982,6 +1991,19 @@ impl App {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         Status::Loaded(format!("Saved {file} in {secs:.2} s"))
                     }
+                    Err(e) => Status::Error(e),
+                };
+            }
+            Message::BlenderRender => {
+                #[cfg(target_arch = "wasm32")]
+                if crate::host::can_render() {
+                    self.status = Status::Loaded("Blender renders the model as it is stored in Docs…".to_string());
+                    return Task::perform(crate::host::render(), Message::BlenderRendered);
+                }
+            }
+            Message::BlenderRendered(result) => {
+                self.status = match result {
+                    Ok(name) => Status::Loaded(format!("Blender rendered {name}: it is next to the model in Docs")),
                     Err(e) => Status::Error(e),
                 };
             }

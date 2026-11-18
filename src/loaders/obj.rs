@@ -61,8 +61,26 @@ impl Loader for ObjLoader {
             }
         }
         .map_err(|e| format!("OBJ: {e}"))?;
-        let materials = materials.unwrap_or_default();
-        Ok(models
+        Ok(layers(models, materials.unwrap_or_default()))
+    }
+}
+
+/// An OBJ file's layers from its bytes and those of its material library, when there is one
+/// (an OBJ handed over inside another file, such as a DICOM document).
+pub(crate) fn from_bytes(obj: &[u8], mtl: Option<&[u8]>) -> Result<Vec<Layer>, String> {
+    let options = tobj::LoadOptions { triangulate: true, single_index: true, ..Default::default() };
+    let (models, materials) = tobj::load_obj_buf(&mut std::io::Cursor::new(obj), &options, |_| match mtl {
+        Some(mtl) => tobj::load_mtl_buf(&mut std::io::Cursor::new(mtl)),
+        None => Err(tobj::LoadError::OpenFileFailed),
+    })
+    .map_err(|e| format!("OBJ: {e}"))?;
+    Ok(layers(models, materials.unwrap_or_default()))
+}
+
+/// The layers of OBJ models in the colours of their materials, Y up turned to Z up.
+fn layers(models: Vec<tobj::Model>, materials: Vec<tobj::Material>) -> Vec<Layer> {
+    {
+        models
             .into_iter()
             .map(|m| {
                 let mesh = m.mesh;
@@ -91,7 +109,7 @@ impl Loader for ObjLoader {
                 y_up_to_z_up(&mut normals);
                 Layer { name: m.name, color, positions, normals, colors, indices, ..Layer::default() }
             })
-            .collect())
+            .collect()
     }
 }
 

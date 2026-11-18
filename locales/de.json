@@ -1382,6 +1382,10 @@
     "background": "Hintergrund",
     "the suite's font": "die Schrift der Suite",
     "Nothing in this category.": "Nichts in dieser Kategorie.",
-    "Click a profile to look at it.": "Klicken Sie auf ein Profil, um es anzusehen."
+    "Click a profile to look at it.": "Klicken Sie auf ein Profil, um es anzusehen.",
+    "Kind of drawing": "Zeichnungsart",
+    "Close the kind": "Art schließen",
+    "Edit the kind": "Art bearbeiten",
+    "What is set here holds for every drawing of this kind.": "Was hier eingestellt wird, gilt für jede Zeichnung dieser Art."
   }
 }

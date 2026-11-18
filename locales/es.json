@@ -1382,6 +1382,10 @@
     "background": "fondo",
     "the suite's font": "la fuente de la suite",
     "Nothing in this category.": "Nada en esta categoría.",
-    "Click a profile to look at it.": "Haga clic en un perfil para verlo."
+    "Click a profile to look at it.": "Haga clic en un perfil para verlo.",
+    "Kind of drawing": "Tipo de dibujo",
+    "Close the kind": "Cerrar el tipo",
+    "Edit the kind": "Editar el tipo",
+    "What is set here holds for every drawing of this kind.": "Lo que se ajusta aquí vale para todos los dibujos de este tipo."
   }
 }

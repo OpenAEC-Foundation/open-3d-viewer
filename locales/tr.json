@@ -1382,6 +1382,10 @@
     "background": "arka plan",
     "the suite's font": "paketin yazı tipi",
     "Nothing in this category.": "Bu kategoride bir şey yok.",
-    "Click a profile to look at it.": "Görmek için bir profile tıklayın."
+    "Click a profile to look at it.": "Görmek için bir profile tıklayın.",
+    "Kind of drawing": "Çizim türü",
+    "Close the kind": "Türü kapat",
+    "Edit the kind": "Türü düzenle",
+    "What is set here holds for every drawing of this kind.": "Burada ayarlanan, bu türdeki her çizim için geçerlidir."
   }
 }

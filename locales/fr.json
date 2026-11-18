@@ -1382,6 +1382,10 @@
     "background": "arrière-plan",
     "the suite's font": "la police de la suite",
     "Nothing in this category.": "Rien dans cette catégorie.",
-    "Click a profile to look at it.": "Cliquez sur un profilé pour le consulter."
+    "Click a profile to look at it.": "Cliquez sur un profilé pour le consulter.",
+    "Kind of drawing": "Type de dessin",
+    "Close the kind": "Fermer le type",
+    "Edit the kind": "Modifier le type",
+    "What is set here holds for every drawing of this kind.": "Ce qui est réglé ici vaut pour tous les dessins de ce type."
   }
 }

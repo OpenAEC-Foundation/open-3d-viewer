@@ -1382,6 +1382,10 @@
     "background": "tło",
     "the suite's font": "czcionka pakietu",
     "Nothing in this category.": "Nic w tej kategorii.",
-    "Click a profile to look at it.": "Kliknij profil, aby go obejrzeć."
+    "Click a profile to look at it.": "Kliknij profil, aby go obejrzeć.",
+    "Kind of drawing": "Rodzaj rysunku",
+    "Close the kind": "Zamknij rodzaj",
+    "Edit the kind": "Edytuj rodzaj",
+    "What is set here holds for every drawing of this kind.": "To, co tu ustawisz, dotyczy każdego rysunku tego rodzaju."
   }
 }

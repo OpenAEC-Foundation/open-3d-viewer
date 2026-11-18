@@ -29,6 +29,7 @@ mod layers;
 #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
 pub mod collab;
 mod docs;
+mod drawing_kinds;
 mod drafts;
 pub mod drawn_props;
 mod edit;
@@ -543,6 +544,13 @@ pub enum Message {
     ViewField(ViewField, String),
     /// Enter in a field of the View section: it shows the value in use again.
     ViewFieldDone,
+    /// The kind of drawing picked for the view the right pane shows: a key of the drawing
+    /// standard.
+    ViewKind(String),
+    /// The scale picked for that view in its own tab (1 : this).
+    ViewScale(u32),
+    /// Open the fields of that view's kind of drawing under its own, or close them.
+    ViewKindEdit(bool),
     Navigate(Navigate),
     Cube(CubeEvent),
     /// Show a view saved in the file.
@@ -2185,6 +2193,9 @@ impl App {
             Message::LayersQuery(q) => self.layers_query = q,
             Message::ViewField(field, typed) => self.type_view_field(field, typed),
             Message::ViewFieldDone => self.view_typing = None,
+            Message::ViewKind(key) => self.set_view_kind(&key),
+            Message::ViewScale(scale) => self.set_view_scale(scale),
+            Message::ViewKindEdit(open) => self.edit_view_kind(open),
             Message::Navigate(n) => {
                 if !matches!(n, Navigate::Hover { .. } | Navigate::HoverOff | Navigate::Resized { .. } | Navigate::Context { .. }) {
                     self.context_menu = None;

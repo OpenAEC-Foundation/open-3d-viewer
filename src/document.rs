@@ -115,6 +115,9 @@ pub struct PlanView {
     pub depth: f64,
     /// The scale its texts and dimensions are sized for (1 : this), as in its own tab.
     pub scale: f64,
+    /// The kind of drawing it is, by the key the project's drawing standard has it under: it is
+    /// drawn by that kind's rules. `None`: the kind usual for what it is.
+    pub drawing: Option<String>,
     /// Its dimensions, shown wherever it is placed.
     pub dimensions: Vec<Dimension>,
     /// Its texts, shown wherever it is placed.
@@ -190,6 +193,9 @@ pub struct SectionView {
     pub depth: f64,
     /// The scale its texts and dimensions are sized for (1 : this), as in its own tab.
     pub scale: f64,
+    /// The kind of drawing it is, by the key the project's drawing standard has it under: it is
+    /// drawn by that kind's rules. `None`: the kind usual for what it is.
+    pub drawing: Option<String>,
     /// Its dimensions, in its drawing's (u, v).
     pub dimensions: Vec<Dimension>,
     /// Its texts, in its drawing's (u, v).
@@ -496,6 +502,14 @@ pub const A3_LANDSCAPE: [f64; 2] = [0.420, 0.297];
 /// The ISO papers a sheet can have, landscape: name, width and height (metres).
 pub const PAPERS: [(&str, [f64; 2]); 5] =
     [("A4", [0.297, 0.210]), ("A3", A3_LANDSCAPE), ("A2", [0.594, 0.420]), ("A1", [0.841, 0.594]), ("A0", [1.189, 0.841])];
+/// A view's node with the kind of drawing it was given, when it was given one.
+fn with_drawing(mut view: Value, drawing: &Option<String>) -> Value {
+    if let Some(kind) = drawing {
+        view["drawing"] = kind.clone().into();
+    }
+    view
+}
+
 /// The scales a placed view can have (1 : this).
 pub const SCALES: [f64; 6] = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0];
 /// The scale a view gets when it is placed on a sheet (1 : this).
@@ -650,7 +664,7 @@ impl Document {
             let view = json!({
                 "name": p.name, "kind": p.kind.key(), "level": level, "cut": p.cut, "depth": p.depth, "scale": p.scale, "crop": rect(p.crop), "dimensions": dims(&p.dimensions), "notes": notes(&p.notes), "lines": p.lines, "fills": fills(&p.fills), "layers": p.layers,
             });
-            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(view, &p.hidden)}}));
+            nodes.push(json!({"path": p.path, "attributes": {"o3v::view::plan": with_hidden(with_drawing(view, &p.drawing), &p.hidden)}}));
         }
         for (i, s) in self.sections.iter().enumerate() {
             children.insert(format!("section {}", i + 1), s.path.clone().into());
@@ -658,7 +672,7 @@ impl Document {
             let view = json!({
                 "name": s.name, "kind": s.kind.key(), "from": s.from, "to": s.to, "depth": s.depth, "scale": s.scale, "crop": rect(s.crop), "dimensions": dims(&s.dimensions), "notes": notes(&s.notes), "lines": s.lines, "fills": fills(&s.fills), "layers": s.layers,
             });
-            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(view, &s.hidden)}}));
+            nodes.push(json!({"path": s.path, "attributes": {"o3v::view::section": with_hidden(with_drawing(view, &s.drawing), &s.hidden)}}));
         }
         for (i, v) in self.views_3d.iter().enumerate() {
             children.insert(format!("3d view {}", i + 1), v.path.clone().into());
@@ -741,6 +755,7 @@ impl Document {
                     cut: number(p, "cut", cut),
                     depth: number(p, "depth", depth),
                     scale: scale(p),
+                    drawing: p.get("drawing").and_then(Value::as_str).map(String::from),
                     tags: Vec::new(),
                     symbols: Vec::new(),
                     dimensions: dims(p.get("dimensions")),
@@ -761,6 +776,7 @@ impl Document {
                     to,
                     depth: number(s, "depth", 100.0),
                     scale: scale(s),
+                    drawing: s.get("drawing").and_then(Value::as_str).map(String::from),
                     dimensions: dims(s.get("dimensions")),
                     notes: notes(s.get("notes")),
                     lines: lines(s.get("lines")),
@@ -896,7 +912,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("plan/{}/{level}", self.added));
-        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.plans.push(PlanView { path: path.clone(), name, level: level.to_string(), kind, cut, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), tags: Vec::new(), symbols: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -949,7 +965,7 @@ impl Document {
         }
         self.added += 1;
         let path = uuid(&format!("section/{}/{name}", self.added));
-        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
+        self.sections.push(SectionView { path: path.clone(), name: name.to_string(), kind, from, to, depth, scale: SHEET_SCALE, drawing: None, dimensions: Vec::new(), notes: Vec::new(), lines: Vec::new(), fills: Vec::new(), crop: None, layers: LayerSwitches::new(), hidden: Arc::default() });
         Some(path)
     }
 
@@ -1059,6 +1075,45 @@ impl Document {
     /// The scale a view's texts and dimensions are sized for (1 : this).
     pub fn view_scale(&self, path: &str) -> Option<f64> {
         self.plan(path).map(|p| p.scale).or_else(|| self.section(path).map(|s| s.scale))
+    }
+
+    /// Sets the scale a view's texts and dimensions are sized for (1 : `scale`).
+    pub fn set_view_scale(&mut self, path: &str, scale: f64) -> bool {
+        if !(scale.is_finite() && scale >= 1.0) {
+            return false;
+        }
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            p.scale = scale;
+            return true;
+        }
+        match self.sections.iter_mut().find(|s| s.path == path) {
+            Some(s) => {
+                s.scale = scale;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The kind of drawing a view was given: a key of the project's drawing standard.
+    pub fn view_drawing(&self, path: &str) -> Option<&str> {
+        self.plan(path).map(|p| &p.drawing).or_else(|| self.section(path).map(|s| &s.drawing))?.as_deref()
+    }
+
+    /// Gives a view a kind of drawing (a key of the project's drawing standard), or none: the
+    /// kind usual for what it is.
+    pub fn set_view_drawing(&mut self, path: &str, kind: Option<String>) -> bool {
+        if let Some(p) = self.plans.iter_mut().find(|p| p.path == path) {
+            p.drawing = kind;
+            return true;
+        }
+        match self.sections.iter_mut().find(|s| s.path == path) {
+            Some(s) => {
+                s.drawing = kind;
+                true
+            }
+            None => false,
+        }
     }
 
     /// The dimensions and the crop of a view (floor plan, section or elevation).
@@ -1338,13 +1393,14 @@ impl Document {
         self.sheets.len() < before
     }
 
-    /// Places a view (a floor plan, section or elevation) in the middle of a sheet at 1:100 and
-    /// gives its index on the sheet.
+    /// Places a view (a floor plan, section or elevation) in the middle of a sheet at the view's
+    /// own scale and gives its index on the sheet.
     pub fn place_plan(&mut self, sheet: &str, plan: &str) -> Option<usize> {
         self.view_name(plan)?;
+        let scale = self.view_scale(plan).unwrap_or(SHEET_SCALE);
         let sheet = self.sheets.iter_mut().find(|s| s.path == sheet)?;
         let at = [sheet.paper[0] / 2.0, sheet.paper[1] / 2.0];
-        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale: SHEET_SCALE });
+        sheet.views.push(PlacedView { plan: plan.to_string(), at, scale });
         Some(sheet.views.len() - 1)
     }
 

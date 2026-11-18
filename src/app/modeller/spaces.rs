@@ -596,7 +596,7 @@ mod tests {
         let (a, b) = (DVec2::from_array(swing[0][0]), DVec2::from_array(swing[0][1]));
         assert!((a - DVec2::new(2.55, 0.0)).length() < 1e-9 && (b - DVec2::new(2.55, 0.9)).length() < 1e-9, "{a} {b}");
         // drawn as on a sheet, the plan's drawing holds both
-        let drawing = crate::drawing2d::view_drawing(&app.document, &plan, &crate::drawing::Cut::default()).unwrap();
+        let drawing = crate::drawing2d::view_drawing(&app.document, &plan, &crate::drawing::Cut::default(), &crate::drawing2d::Rules::default()).unwrap();
         assert!(drawing.texts.iter().any(|t| t.text == "Space 1") && drawing.lines.len() >= 9);
         // a wall gone, no space, and the plan says none
         app.select_modelled(bim_core::ElementId(2));

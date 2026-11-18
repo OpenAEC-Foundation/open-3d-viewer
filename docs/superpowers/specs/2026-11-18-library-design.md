@@ -94,9 +94,36 @@ thing to set up is how drawings are made. For now the Netherlands only.
 - **In the app**: the page of Country, the Netherlands lists the kinds and the settings; a click
   picks one and the right pane has its fields (`src/app/standards.rs`).
 
-Not yet: the standard does not steer the drawings the suite makes; settings (a scale, a pen, a
-line style) cannot be added or removed, only changed; a standard cannot be saved or opened as a
-file of its own; other countries have no standard; a kind has one pen pair for all its scales.
+Not yet: a standard cannot be saved or opened as a file of its own; other countries have no
+standard; a kind has one pen pair for all its scales.
+
+### The standard steers the drawings
+
+- **A view has a kind of drawing**: `PlanView::drawing` and `SectionView::drawing` hold the key
+  of a kind of the standard, kept in the view's IFCX node (`drawing`). Without one a view is
+  the kind usual for what it is (`floor-plan`, `structural-plan`, `ceiling-plan`, `pile-plan`,
+  `section`, `elevation`), or the first kind of the standard that is its kind of view
+  (`src/app/drawing_kinds.rs`). A view can be a kind of its own kind of view only.
+- **Rules**: `drawing2d::Rules` is what a kind gives a drawing: the width of what is cut and of
+  what is seen beyond it, the dashes of what is hidden (the line style's multiples of the line
+  width, in millimetres), the height of texts and dimensions and whether what is cut is
+  hatched. `Rules::default` draws as drawings were drawn before.
+- **Exports**: a `Line2d` has a width of its own. `view_drawing` and `sheet_drawing` take the
+  rules of each view; PDF and SVG write the lines of a pen a width at a time; DXF, DWG and
+  IFCCAD put lines of a width other than their pen's on a layer of their own (`O3V-Cut-070`).
+  The rules are read when the drawing is made, so a kind changed in Library changes the next
+  drawing.
+- **On screen**: a sheet's canvas draws a placed view in its kind's widths (0.5 mm as 1.2
+  pixels) and hatches what is cut only where the kind does.
+- **Scale**: a view made new takes the usual scale of its kind; given another kind it takes
+  that one's; placed on a sheet it starts at its own scale and is offered its kind's scales.
+- **In the View section** of the right pane a view's kind and scale are picked, and the kind's
+  own fields open under them (the standard's pane for that kind), so a kind is set where its
+  drawing is looked at.
+
+Not yet: a sheet read from a file is drawn as before; the widths on screen are relative, not
+to scale with the paper; a view's own tab (the 3D view cut at the plan's height) is not drawn
+by the kind; a kind's discipline, number and code do not name or number its drawings.
 
 ## Editors (third step)
 
@@ -224,8 +251,8 @@ and every object must be a tile that is clicked to edit it. So the page is a bro
 
 ## Next steps
 
-1. The standard steers the drawings: a floor plan, section or sheet takes its scales, pens,
-   line styles and text style from its kind.
+1. A kind names and numbers its drawings (code, discipline, number series), and a sheet takes
+   its number from the standard's first sheet.
 2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.

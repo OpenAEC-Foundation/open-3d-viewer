@@ -1382,6 +1382,10 @@
     "background": "bakgrund",
     "the suite's font": "svitens typsnitt",
     "Nothing in this category.": "Inget i den här kategorin.",
-    "Click a profile to look at it.": "Klicka på en profil för att titta på den."
+    "Click a profile to look at it.": "Klicka på en profil för att titta på den.",
+    "Kind of drawing": "Ritningstyp",
+    "Close the kind": "Stäng typen",
+    "Edit the kind": "Redigera typen",
+    "What is set here holds for every drawing of this kind.": "Det som ställs in här gäller för varje ritning av den här typen."
   }
 }

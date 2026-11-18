@@ -3446,6 +3446,25 @@ mod tests {
         }
     }
 
+    /// A floor plan of the demo building in its tab, with the fields of its kind of drawing open
+    /// in the View section of the right pane: target/shell-renders/view-kind.png.
+    #[test]
+    #[ignore = "writes PNG files"]
+    fn export_view_kind_render() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-renders");
+        std::fs::create_dir_all(&dir).expect("folder");
+        let mut app = App::default();
+        app.add_demo_building();
+        let mut studio = Studio::new(app);
+        studio.prefs.language = Language::Dutch;
+        studio.set_product(Product::Viewer);
+        let level = std::sync::Arc::<str>::from(studio.app.document.levels()[0].path.as_str());
+        for message in [Message::NewPlan(level), Message::ViewKindEdit(true)] {
+            let _ = studio.update(Msg::App(message));
+        }
+        studio.snapshot(iced::Size::new(1440.0, 900.0), &dir.join("view-kind.png")).expect("snapshot");
+    }
+
     /// The Library product with each of its sources: target/shell-renders/library-product-*.png.
     #[test]
     #[ignore = "writes PNG files"]

@@ -26,10 +26,6 @@ mod rvt_props;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_fonts;
 #[cfg(not(target_arch = "wasm32"))]
-mod rvt_materials;
-#[cfg(not(target_arch = "wasm32"))]
-mod rvt_phases;
-#[cfg(not(target_arch = "wasm32"))]
 mod rvt_filters;
 mod ifc;
 

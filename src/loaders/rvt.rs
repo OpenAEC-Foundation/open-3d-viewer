@@ -73,9 +73,9 @@ impl Loader for RvtLoader {
         project.walls = walls;
         (project.view_orders, project.view_order) = (orders, shown);
         // how a cut through each material is hatched
-        project.cut_patterns = super::rvt_materials::cut_patterns(&doc);
+        project.cut_patterns = rvt_read::materials::cut_patterns(&doc).into_iter().map(|(name, p)| (name, pattern(p))).collect();
         // down to where a section fills the earth under the terrain, and as what material
-        project.earth = doc.site_poche_base().map(|(base, material)| ((base * FT) as f32, material.and_then(|m| super::rvt_materials::name(&doc, m))));
+        project.earth = doc.site_poche_base().map(|(base, material)| ((base * FT) as f32, material.and_then(|m| rvt_read::materials::name(&doc, m))));
         let layers = scene
             .batches
             .into_iter()
@@ -214,7 +214,13 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
     // the phase and phase filter of every view, and the phases of the elements
     let ids: Vec<u64> = infos.iter().map(|v| v.id).collect();
     let path = |view: u64| crate::document::uuid(&format!("rvt/{file}/view/{view}"));
-    project.phasing = super::rvt_phases::phasing(doc, &ids, &path);
+    // the reader keys a view's phase by its element; the document names a view by its path
+    let phasing = rvt_read::phases::phasing(doc, &ids);
+    project.phasing = crate::phasing::Phasing {
+        elements: phasing.elements,
+        halftone: phasing.halftone,
+        views: phasing.views.into_iter().map(|(view, v)| (path(view), crate::phasing::ViewPhase { phase: v.phase, show: v.show })).collect(),
+    };
     for (i, &view) in view_ids.iter().enumerate() {
         if views.get(i).is_some_and(|v| v.kind == ViewKind::ThreeD) {
             let mut hidden = hidden_in_view(doc, view, &by_category, &mut filters);
@@ -340,7 +346,7 @@ fn source_walls(doc: &rvt_read::Document) -> HashMap<u64, SourceWall> {
                 let o = doc.object(id as u64);
                 let m = o.as_ref().and_then(|o| o.deref(o.get("m_pMaterial")?));
                 let name = m.and_then(|m| m.get("m_name")?.as_str()).unwrap_or_default().to_string();
-                (name, m.and_then(|m| m.get("m_color")?.as_i64()).map(super::rvt_materials::rgb))
+                (name, m.and_then(|m| m.get("m_color")?.as_i64()).map(rvt_read::materials::rgb))
             })
             .clone()
     };
@@ -1007,6 +1013,16 @@ fn sheets(doc: &rvt_read::Document, view_ids: &[u64], views: &[SavedView], size:
             sheet
         })
         .collect()
+}
+
+/// The reader's rows of a hatch as the app's.
+pub(super) fn grid(g: rvt_read::materials::Grid) -> crate::hatching::Grid {
+    crate::hatching::Grid { angle: g.angle, origin: g.origin, shift: g.shift, offset: g.offset, dashes: g.dashes }
+}
+
+/// The reader's cut pattern of a material as the app's.
+fn pattern(p: rvt_read::materials::CutPattern) -> crate::hatching::Pattern {
+    crate::hatching::Pattern { fill: p.fill, line: p.line, solid: p.solid, grids: p.grids.into_iter().map(grid).collect(), on_paper: p.on_paper }
 }
 
 /// The properties of an element (a JSON object) with `LoadBearing` added: what a structural plan

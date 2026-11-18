@@ -12,100 +12,169 @@
     <h1>Open BIM Suite: wat opent er al?</h1>
     <p>Per bestandstype hoeveel procent van de bestanden goed opent, en wat er nog fout gaat.</p>
   </div>
-  <div class="total"><strong id="total">0%</strong><span>gemiddeld over <span id="count">0</span> formaten</span></div>
+  <div class="total"><strong id="total">0%</strong><span>gemiddeld over <span id="count">0</span> bestandstypes</span></div>
 </header>
 
 <main id="list"></main>
 
-<footer>Klik op het percentage om het in te vullen. Percentages en notities worden in deze browser bewaard.</footer>
+<footer>
+  <div class="saving">
+    <button id="save" type="button">Opslaan in bestand</button>
+    <span id="status">Nog niet in het bestand opgeslagen.</span>
+  </div>
+  <p>Klik op het percentage om het in te vullen. Alles wordt in dit HTML-bestand zelf bewaard: de eerste keer
+  vraagt Chrome welk bestand (kies deze <code>index.html</code>), daarna slaat elke wijziging zich vanzelf op.</p>
+</footer>
+
+<!-- The saved percentages and notes; the page writes this block back into its own file. -->
+<script type="application/json" id="data">{}</script>
 
 <script>
-// Every format Open BIM Suite claims to open (README, the open_file tool and the loaders on main).
+// The page as it was loaded, before anything is drawn: what is written back, with new data.
+const SOURCE = "<!doctype html>\n" + document.documentElement.outerHTML;
+
+// Every file type Open BIM Suite claims to open (README, the open_file tool and the loaders on
+// main); "desktop" = only in the desktop app.
+const DESKTOP = ["rvt", "rfa", "prj", "vxz", "vxm", "btl"];
 const GROUPS = [
-  ["BIM en bouw", [
-    ["IFC 4", ".ifc .ifczip"],
-    ["IFC5 / IFCX", ".ifcx"],
-    ["Revit", ".rvt .rfa", "desktop"],
-    ["Archicad", ".pln .pla"],
-    ["Allplan", ".ndw .prj"],
-    ["Tekla Structures", ".db1"],
-    ["Vectorworks", ".vwx .sta"],
-    ["SketchUp", ".skp"],
-    ["Rhino", ".3dm"],
-    ["Vertex BD", ".vxz .vxm", "desktop"],
-    ["Hundegger BTL", ".btl", "desktop"],
-    ["Coördinatiebestand modelchecker", ".smc"],
-    ["IFC-projectpakket", ".tbp"],
-  ]],
-  ["CAD en werktuigbouw", [
-    ["DWG / DXF", ".dwg .dxf"],
-    ["MicroStation DGN", ".dgn"],
-    ["STEP", ".stp .step .stpz"],
-    ["SolidWorks", ".sldprt .sldasm"],
-    ["Solid Edge", ".par .psm .asm"],
-    ["Blender", ".blend"],
-    ["FreeCAD", ".fcstd"],
-  ]],
-  ["Constructieve analyse", [
-    ["sam-json", ".samjson"],
-    ["ETABS-tekst", ".e2k"],
-    ["IFC FEM-resultaten", ".ifcfemresults .ifcfem"],
-  ]],
-  ["GIS en terrein", [
-    ["CityJSON", ".json .cityjson .jsonl .cityjsonl"],
-    ["CityGML", ".gml .citygml"],
-    ["GeoJSON", ".geojson"],
-    ["Shapefile", ".shp"],
-    ["LandXML", ".xml .landxml"],
-    ["ESRI ASCII-grid", ".asc"],
-  ]],
-  ["Meshes en uitwisseling", [
-    ["glTF", ".gltf .glb"],
-    ["USD", ".usd .usda .usdc .usdz"],
-    ["COLLADA", ".dae"],
-    ["VRML / X3D", ".wrl .wrz .x3d .x3dv .x3dz .x3dvz"],
-    ["FBX", ".fbx"],
-    ["3D Studio", ".3ds"],
-    ["Wavefront OBJ", ".obj"],
-    ["STL", ".stl"],
-    ["PLY", ".ply"],
-    ["3MF", ".3mf"],
-    ["AMF", ".amf"],
-    ["OFF", ".off"],
-  ]],
-  ["Puntenwolken", [
-    ["LAS / LAZ", ".las .laz"],
-    ["E57", ".e57"],
-    ["Leica PTS / PTX", ".pts .ptx"],
-    ["PCD", ".pcd"],
-    ["ASCII XYZ", ".xyz .txt .csv .asc"],
-  ]],
+  ["BIM en bouw", ["ifc", "ifczip", "ifcx", "rvt", "rfa", "pln", "pla", "ndw", "prj", "db1", "vwx", "sta", "skp", "3dm", "vxz", "vxm", "btl", "smc", "tbp"]],
+  ["CAD en werktuigbouw", ["dwg", "dxf", "dgn", "stp", "step", "stpz", "sldprt", "sldasm", "par", "psm", "asm", "blend", "fcstd"]],
+  ["Constructieve analyse", ["samjson", "e2k", "ifcfemresults", "ifcfem"]],
+  ["GIS en terrein", ["json", "cityjson", "jsonl", "cityjsonl", "gml", "citygml", "geojson", "shp", "xml", "landxml", "asc"]],
+  ["Meshes en uitwisseling", ["gltf", "glb", "usd", "usda", "usdc", "usdz", "dae", "wrl", "wrz", "x3d", "x3dv", "x3dz", "x3dvz", "fbx", "3ds", "obj", "stl", "ply", "3mf", "amf", "off"]],
+  ["Puntenwolken", ["las", "laz", "e57", "pts", "ptx", "pcd", "xyz", "txt", "csv"]],
 ];
 
+// Saved data: the block in this file, or the browser's copy when that is newer (typed while the
+// file could not be written). Shape: { saved: ISO time, formats: { name: { pct, note } } }.
 const KEY = "obs-format-dashboard";
-let state = {};
-try { state = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { state = {}; }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+function parse(text) { try { const d = JSON.parse(text); return d && d.formats ? d : null; } catch (e) { return null; } }
+const inFile = parse(document.getElementById("data").textContent);
+let inBrowser = null;
+try { inBrowser = parse(localStorage.getItem(KEY)); } catch (e) {}
+const data = [inFile, inBrowser].filter(Boolean).sort((a, b) => (b.saved || "").localeCompare(a.saved || ""))[0]
+  || { saved: "", formats: {} };
+const state = data.formats;
+
+const statusEl = document.getElementById("status");
+const saveButton = document.getElementById("save");
+let handle = null;      // the file this page writes itself to, once chosen
+let timer = null;
+
+function pageWithData() {
+  const json = JSON.stringify(data, null, 1).replace(/</g, "\\u003c");
+  return SOURCE.replace(/(<script type="application\/json" id="data">)[\s\S]*?(<\/script>)/, (_, open, close) => open + json + close);
+}
+
+async function writeFile() {
+  if (!handle) return false;
+  try {
+    if ((await handle.queryPermission({ mode: "readwrite" })) !== "granted") return false;
+    const out = await handle.createWritable();
+    await out.write(pageWithData());
+    await out.close();
+    statusEl.textContent = "Opgeslagen in " + handle.name + " om " + new Date().toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + ".";
+    saveButton.hidden = true;
+    return true;
+  } catch (e) {
+    statusEl.textContent = "Opslaan in het bestand lukte niet (" + e.message + "). Klik op Opslaan in bestand.";
+    saveButton.hidden = false;
+    return false;
+  }
+}
+
+function save() {
+  data.saved = new Date().toISOString();
+  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    if (!(await writeFile())) {
+      statusEl.textContent = "Nog niet in het bestand opgeslagen (wel in deze browser). Klik op Opslaan in bestand.";
+      saveButton.hidden = false;
+    }
+  }, 600);
+}
+
+// The chosen file is remembered (IndexedDB), so after a reload one click gives permission again.
+function db() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(KEY, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("handles");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function rememberHandle(h) {
+  try { const d = await db(); d.transaction("handles", "readwrite").objectStore("handles").put(h, "file"); } catch (e) {}
+}
+async function recallHandle() {
+  try {
+    const d = await db();
+    return await new Promise(resolve => {
+      const req = d.transaction("handles").objectStore("handles").get("file");
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (e) { return null; }
+}
+
+saveButton.addEventListener("click", async () => {
+  if (!window.showSaveFilePicker) {
+    // without the File System Access API: download the page with its data
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([pageWithData()], { type: "text/html" }));
+    a.download = "index.html";
+    a.click();
+    statusEl.textContent = "Gedownload; vervang hiermee de oude index.html.";
+    return;
+  }
+  try {
+    if (handle && (await handle.requestPermission({ mode: "readwrite" })) === "granted") {
+      await writeFile();
+      return;
+    }
+    handle = await window.showSaveFilePicker({
+      suggestedName: "index.html",
+      types: [{ description: "HTML", accept: { "text/html": [".html"] } }],
+    });
+    await rememberHandle(handle);
+    await writeFile();
+  } catch (e) {
+    if (e.name !== "AbortError") statusEl.textContent = "Opslaan lukte niet: " + e.message;
+  }
+});
+
+recallHandle().then(async h => {
+  if (!h) return;
+  handle = h;
+  const ok = (await h.queryPermission({ mode: "readwrite" })) === "granted";
+  statusEl.textContent = ok
+    ? "Wijzigingen worden in " + h.name + " opgeslagen."
+    : "Klik op Opslaan in bestand om weer in " + h.name + " op te slaan.";
+  saveButton.hidden = ok;
+});
 
 const list = document.getElementById("list");
 
 function showTotal() {
-  const all = GROUPS.flatMap(([, formats]) => formats.map(([name]) => (state[name] || {}).pct || 0));
+  const all = GROUPS.flatMap(([, exts]) => exts.map(ext => (state["." + ext] || {}).pct || 0));
   const avg = all.reduce((a, b) => a + b, 0) / all.length;
   document.getElementById("total").textContent = Math.round(avg) + "%";
   document.getElementById("count").textContent = all.length;
 }
 
-for (const [group, formats] of GROUPS) {
+for (const [group, exts] of GROUPS) {
   const section = document.createElement("section");
   section.innerHTML = `<h2>${group}</h2>`;
-  for (const [name, exts, only] of formats) {
+  for (const ext of exts) {
+    const name = "." + ext;
+    const only = DESKTOP.includes(ext) ? "alleen desktop" : "";
     const item = state[name] || (state[name] = { pct: 0, note: "" });
     const card = document.createElement("div");
     card.className = "format";
     card.innerHTML = `
       <div class="row">
-        <div class="name">${name}${only ? ` <em>${only}</em>` : ""}<small>${exts}</small></div>
+        <div class="name">${name}${only ? ` <em>${only}</em>` : ""}</div>
         <div class="meter">
           <div class="track"><div class="fill"></div></div>
           <label class="pct"><input type="number" min="0" max="100" step="1" aria-label="Percentage ${name}">%</label>

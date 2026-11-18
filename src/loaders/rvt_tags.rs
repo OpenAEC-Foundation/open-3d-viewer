@@ -296,7 +296,7 @@ fn family_texts(doc: &rvt_read::Document, types: &mut Types, o: &ObjectView, val
         let flags = fixed.get("m_flags").and_then(FieldValue::as_i64).unwrap_or(0);
         let em = fixed.get("m_attrId").and_then(FieldValue::element).and_then(|k| types.text_em(k)).unwrap_or(crate::document::NOTE_HEIGHT);
         let mut face = fixed.get("m_attrId").and_then(FieldValue::element).map(|k| types.text_face(k)).unwrap_or_default();
-        let [bold, italic, underline] = super::rvt_fonts::rtf_marks(&bytes);
+        let [bold, italic, underline] = rvt_read::fonts::rtf_marks(&bytes);
         (face.bold, face.italic, face.underline) = (face.bold || bold, face.italic || italic, face.underline || underline);
         let width = fixed.get("m_lineWidth").and_then(FieldValue::as_f64).filter(|w| w.is_finite() && *w > 0.0).map_or(0.0, |w| w * FT);
         let base = vec3(fixed.get("m_baseVec")).unwrap_or([1.0, 0.0, 0.0]);

@@ -112,7 +112,7 @@ roxmltree = "0.20"
 opencaddocument = { git = "https://github.com/HakanSeven12/opencaddocument", rev = "b9e1762969f3897e67e1801a2199445b6cf83b5d", features = ["ifcx"] }
 # Independent OpenAEC libraries, pinned to immutable upstream commits.
 skp-reader = { git = "https://github.com/OpenAEC-Foundation/sketchup-dll", rev = "31f8ef5bb9a8822771fbf008aa88e0f36444e01a" }
-tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "0d5e384b552aabdfadbb8da2c4518b36daf09de4" }
+tekla-read = { git = "https://github.com/OpenAEC-Foundation/tekla-dll", rev = "90e0572638b5853c4a4b7c308cae75921bc4c68b" }
 ply-reader = { git = "https://github.com/OpenAEC-Foundation/ply-dll", rev = "028c51906cd7d8a0e72d6103afe80ad668d2543d" }
 # Vectorworks (.vwx) through the private vwx-dll library; pure Rust on bytes, so also in the browser
 vwx-read = { git = "https://github.com/OpenAEC-Foundation/vwx-dll", rev = "624610a73f169812dd7bee90aed74e0b13eddcb1" }
@@ -121,7 +121,7 @@ sldw-read = { git = "https://github.com/OpenAEC-Foundation/solidworks-dll", rev 
 # Solid Edge (.par, .psm, .asm) through the private solidedge-dll library; pure Rust on bytes, so also in the browser
 sedge-read = { git = "https://github.com/OpenAEC-Foundation/solidedge-dll", rev = "04a068e6a06409b8396d0e05a2613d86c3af50c4" }
 # Rhino .3dm files (texts are set in the viewer's own Inter, so without the crate's copy)
-threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f", default-features = false }
+threedm-read = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "775fd4e68fbc47511db3d479fbae5d0a397f75a3", default-features = false }
 # QuickLZ 1.5 decompression for Archicad projects (MIT OR Apache-2.0)
 quicklz = "0.3.1"
 # ZIP containers: 3MF packages and zipped IFC (.ifczip) (MIT); deflate through the flate2 above
@@ -156,11 +156,11 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 # Loads the Vertex BD / BTL reader (vertex.dll, shipped in vendor/vertex) at run time (ISC)
 libloading = "0.8"
 # Private standalone Revit library; compiled into the normal desktop application.
-rvt-read = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29" }
-rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29", default-features = false }
-rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29" }
+rvt-read = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "8b6b508055d733c899400c7bf679f298d6ccbac9" }
+rvt-export = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "8b6b508055d733c899400c7bf679f298d6ccbac9", default-features = false }
+rvt-model = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "8b6b508055d733c899400c7bf679f298d6ccbac9" }
 # The saved graphics of a tag type are read with the library's own graph decoder.
-rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "aa896146ce63087e097e3549e5f73e6d2b90ef29" }
+rvt-core = { git = "https://github.com/OpenAEC-Foundation/revit-dll", rev = "8b6b508055d733c899400c7bf679f298d6ccbac9" }
 # Docs shows when a file was changed in the time of this computer (MIT OR Apache-2.0; already built for bim-bcf)
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The BIM Validator: issues (BCF) and information checks (IDS, model checks, ILS), in this workspace
@@ -221,4 +221,4 @@ opt-level = 2
 
 [dev-dependencies]
 # The 3dm writer of the Rhino tests
-threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "c03d1aa34aa562600e8c3433d29a9f809a7aad5f" }
+threedm-core = { git = "https://github.com/OpenAEC-Foundation/rhino-dll", rev = "775fd4e68fbc47511db3d479fbae5d0a397f75a3" }

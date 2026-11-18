@@ -6,13 +6,32 @@
 
 use crate::rd::{LatLon, Rd};
 
-const TESTS: &str = "https://publiek.broservices.nl/sr/cpt/v1";
+/// What is asked of the register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Register {
+    /// Cone penetration tests.
+    Soundings,
+    /// Geotechnical borings with their described layers.
+    Borings,
+}
+
+impl Register {
+    fn url(self) -> &'static str {
+        match self {
+            Register::Soundings => "https://publiek.broservices.nl/sr/cpt/v1",
+            Register::Borings => "https://publiek.broservices.nl/sr/bhrgt/v2",
+        }
+    }
+}
+
+/// Where the borings come from.
+pub const BORINGS_SOURCE: &str = "Basisregistratie Ondergrond (BRO), geotechnical borings";
 /// Where the soundings come from, for the properties of what is made of them.
 pub const SOURCE: &str = "Basisregistratie Ondergrond (BRO), cone penetration tests";
 
 /// The address a search for tests is posted to.
-pub fn search_url() -> String {
-    format!("{TESTS}/characteristics/searches?requestReference=open-bim-suite")
+pub fn search_url(register: Register) -> String {
+    format!("{}/characteristics/searches?requestReference=open-bim-suite", register.url())
 }
 
 /// What is posted to search the tests within `radius` metres of a place (JSON).
@@ -21,8 +40,8 @@ pub fn search_body(center: LatLon, radius: f64) -> String {
 }
 
 /// The address of one test.
-pub fn test_url(id: &str) -> String {
-    format!("{TESTS}/objects/{id}")
+pub fn test_url(register: Register, id: &str) -> String {
+    format!("{}/objects/{id}", register.url())
 }
 
 /// A test the search found.
@@ -36,7 +55,7 @@ pub struct Found {
 /// in the national grid, or taken out of the register, is left out.
 pub fn parse_search(answer: &str) -> Result<Vec<Found>, String> {
     if !answer.contains("dispatchCharacteristicsResponse") {
-        return Err("the register answered something else than a list of tests".into());
+        return Err("the register answered something else than a list".into());
     }
     let between = |text: &str, open: &str, close: &str| {
         let start = text.find(open)? + open.len();
@@ -75,8 +94,9 @@ mod tests {
     #[test]
     fn a_search_is_posted_as_a_circle_in_kilometres() {
         assert_eq!(search_body(LatLon::new(52.1567, 5.3842), 250.0), r#"{"area":{"enclosingCircle":{"center":{"lat":52.1567000,"lon":5.3842000},"radius":0.250}}}"#);
-        assert!(search_url().starts_with("https://publiek.broservices.nl/sr/cpt/v1/characteristics/searches"));
-        assert_eq!(test_url("CPT000000000785"), "https://publiek.broservices.nl/sr/cpt/v1/objects/CPT000000000785");
+        assert!(search_url(Register::Soundings).starts_with("https://publiek.broservices.nl/sr/cpt/v1/characteristics/searches"));
+        assert_eq!(test_url(Register::Soundings, "CPT000000000785"), "https://publiek.broservices.nl/sr/cpt/v1/objects/CPT000000000785");
+        assert_eq!(test_url(Register::Borings, "BHR000000361212"), "https://publiek.broservices.nl/sr/bhrgt/v2/objects/BHR000000361212");
     }
 
     #[test]

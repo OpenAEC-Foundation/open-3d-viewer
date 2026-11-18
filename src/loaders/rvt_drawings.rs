@@ -29,6 +29,11 @@ use rvt_model::{FieldValue, ObjectView};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
+/// The reader's typeface as the app's.
+fn app_face(f: rvt_read::fonts::FontFace) -> crate::typeface::Face {
+    crate::typeface::Face { family: f.family.into(), bold: f.bold, italic: f.italic, underline: f.underline, width: f.width, tab: f.tab, color: f.color }
+}
+
 const FT: f64 = 0.3048;
 /// The category of the dimensions that show (the others of their class are constraints).
 const DIMENSIONS: i64 = -2000260;
@@ -107,7 +112,7 @@ impl<'a> Types<'a> {
     /// dimension type): the app's own for a type that names no font.
     pub(super) fn text_face(&mut self, kind: i64) -> crate::typeface::Face {
         let doc = self.doc;
-        self.faces.entry(kind).or_insert_with(|| super::rvt_fonts::face(doc, kind).unwrap_or_default()).clone()
+        self.faces.entry(kind).or_insert_with(|| rvt_read::fonts::face(doc, kind).map(app_face).unwrap_or_default()).clone()
     }
 
     /// The name of the document's style for a dimension of this type.
@@ -485,7 +490,7 @@ pub(super) fn text_of(o: &ObjectView, types: &mut Types) -> Option<Text> {
     let kind = o.get("m_attrId").and_then(FieldValue::element);
     let em = kind.and_then(|k| types.text_em(k)).or_else(|| super::rvt_drafts::rtf_points(&bytes).map(|pt| pt * 0.0254 / 72.0)).unwrap_or(crate::document::NOTE_HEIGHT);
     let mut face = kind.map(|k| types.text_face(k)).unwrap_or_default();
-    let [bold, italic, underline] = super::rvt_fonts::rtf_marks(&bytes);
+    let [bold, italic, underline] = rvt_read::fonts::rtf_marks(&bytes);
     (face.bold, face.italic, face.underline) = (face.bold || bold, face.italic || italic, face.underline || underline);
     let paper = |name: &str| o.get(name).and_then(FieldValue::as_f64).filter(|v| v.is_finite() && *v > 0.0).map(|v| v * FT);
     // a box higher than its paragraphs: its lines break at its width

@@ -16,12 +16,12 @@
 //! moves to a local origin, kept in the project information. Point clouds are thinned out while
 //! drawing; blocks, meshes and points are drawn up to limits, so that a damaged or hostile file
 //! cannot exhaust memory or run for ever. Lights are drawn as a small cross and the line they shine
-//! along. What is left out (objects on layouts) is
+//! along. Layouts become sheets, their details viewports. What is left out is
 //! counted in the project information; hidden objects go to hidden layers of their own. Clipping planes are drawn; the one that clips the
 //! perspective view is the section the model opens with.
 
 use super::{Loaded, Loader, Phase, Progress, Source, DEFAULT_COLOR};
-use crate::model::{Layer, ProjectData, SavedView, ViewCamera, ViewKind};
+use crate::model::{DraftFill, Layer, ProjectData, SavedView, Sheet, SheetRect, SheetViewport, ViewCamera, ViewKind};
 use crate::section::SectionPlane;
 use glam::{DMat3, DMat4, DVec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -47,13 +47,13 @@ impl Loader for RhinoLoader {
         let data = source.read()?;
         let file = threedm_read::read_with(&data, &threedm_read::Options { font: Some(crate::INTER_REGULAR) })?;
         progress.set(Phase::Convert);
-        let (layers, info, section, views) = convert(&file);
+        let (layers, info, section, views, sheets) = convert(&file);
         if layers.iter().all(|l| l.indices.is_empty() && l.lines.is_empty() && !(l.points && !l.positions.is_empty())) {
             // say why, e.g. polysurfaces saved without their render meshes
             let left_out = info.iter().find(|(k, _)| k == "Rhino objects left out").map_or("no objects", |(_, v)| v.as_str());
             return Err(format!("{}: nothing to draw in this Rhino file ({left_out})", source.name()));
         }
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, ..ProjectData::default() } })
+        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project: ProjectData { info, section, sheets, ..ProjectData::default() } })
     }
 }
 
@@ -91,6 +91,8 @@ struct Scene<'f> {
     points: BTreeMap<(Option<usize>, bool), Layer>,
     /// Drawing hidden objects: they go to hidden layers of their own.
     hiding: bool,
+    /// What the layouts hold, by the id of their page viewport.
+    pages: HashMap<Uuid, PageContent>,
     /// Hidden objects drawn (on those layers).
     hidden_objects: usize,
     next_id: u64,
@@ -115,6 +117,25 @@ struct Scene<'f> {
     skipped: BTreeMap<&'static str, usize>,
     /// The objects drawn with meshes the viewer made (by the address of their meshes).
     meshed: HashSet<usize>,
+}
+
+/// What a layout holds: lines and filled shapes on the paper (metres) and its details.
+#[derive(Default)]
+struct PageContent {
+    /// The objects on it.
+    objects: usize,
+    lines: Vec<[[f32; 2]; 2]>,
+    fills: Vec<DraftFill>,
+    details: Vec<PageDetail>,
+}
+
+/// A detail on a layout: its outline on the paper (metres), the model view it shows and its
+/// scale (page length per model length, in their units).
+struct PageDetail {
+    name: String,
+    boundary: Vec<[f32; 2]>,
+    view: threedm_read::View,
+    scale: Option<f64>,
 }
 
 /// The colour an object is drawn in: sRGB and alpha.
@@ -185,6 +206,7 @@ impl<'f> Scene<'f> {
             objects: file.objects.iter().enumerate().filter(|(_, o)| !o.attributes.id.is_nil()).map(|(k, o)| (o.attributes.id, k)).collect(),
             meshes: BTreeMap::new(),
             hiding: false,
+            pages: HashMap::new(),
             hidden_objects: 0,
             points: BTreeMap::new(),
             next_id: 1,
@@ -325,6 +347,115 @@ impl<'f> Scene<'f> {
         (section, planes.len())
     }
 
+    /// An object on a layout, kept for its sheet: its lines and filled shapes (texts, hatches,
+    /// arrowheads) flat on the paper, or a detail: the model view it shows, where.
+    fn page_object(&mut self, object: &threedm_read::RhinoObject<'_>) {
+        let a = &object.attributes;
+        let unit = self.file.page_meters as f32;
+        let flat = |p: &DVec3| [p.x as f32 * unit, p.y as f32 * unit];
+        let color = self.paint(a, None).rgba();
+        let content = self.pages.entry(a.viewport).or_default();
+        let add_lines = |content: &mut PageContent, lines: &[Vec<DVec3>]| {
+            for line in lines {
+                content.lines.extend(line.windows(2).map(|w| [flat(&w[0]), flat(&w[1])]));
+            }
+        };
+        let add_meshes = |content: &mut PageContent, meshes: &[Mesh]| {
+            for m in meshes {
+                let loops = m.faces.iter().flat_map(|f| if f[2] == f[3] { vec![[f[0], f[1], f[2]]] } else { vec![[f[0], f[1], f[2]], [f[0], f[2], f[3]]] }).map(|t| t.iter().map(|&i| m.positions[i as usize]).map(|q| [q[0] * unit, q[1] * unit]).collect()).collect();
+                content.fills.push(DraftFill { element: 0, loops, color: [color[0], color[1], color[2]] });
+            }
+        };
+        match &object.geometry {
+            Geometry::Lines(lines, _) => add_lines(content, lines),
+            Geometry::Meshes(meshes, _) => add_meshes(content, meshes),
+            Geometry::Drawing { lines, meshes, .. } => {
+                add_lines(content, lines);
+                add_meshes(content, meshes);
+            }
+            Geometry::Detail { boundary, view, scale, .. } => {
+                content.details.push(PageDetail { name: if a.name.is_empty() { view.name.clone() } else { a.name.clone() }, boundary: boundary.iter().map(flat).collect(), view: view.clone(), scale: *scale });
+            }
+            _ => {
+                *self.skipped.entry("objects on layouts not drawn on their sheet").or_default() += 1;
+                return;
+            }
+        }
+        content.objects += 1;
+    }
+
+    /// The layouts as sheets, each with its paper, what lies on it and its details as viewports
+    /// showing the model as their view looks at it; those views are added to `views`.
+    fn sheets(&mut self, views: &mut Vec<SavedView>) -> Vec<Sheet> {
+        let origin = self.origin.unwrap_or(DVec3::ZERO);
+        let meters = self.file.meters;
+        let page_meters = self.file.page_meters;
+        let mut pages: Vec<(&threedm_read::View, &threedm_read::Page)> = self.file.views.iter().filter_map(|v| v.page.as_ref().map(|p| (v, p))).collect();
+        pages.sort_by_key(|(_, p)| p.number);
+        let mut sheets = Vec::new();
+        for (view, page) in pages {
+            let content = self.pages.remove(&view.id).unwrap_or_default();
+            if content.objects > 0 {
+                *self.drawn.entry("objects on layouts").or_default() += content.objects;
+            }
+            let mut viewports = Vec::new();
+            for d in content.details {
+                let Some(rect) = d.boundary.iter().map(|&p| SheetRect { min: p, max: p }).reduce(SheetRect::union) else { continue };
+                let v = &d.view;
+                views.push(SavedView {
+                    name: format!("{} – {}", view.name, d.name),
+                    kind: ViewKind::ThreeD,
+                    camera: Some(ViewCamera {
+                        eye: (v.location * meters - origin).as_vec3().to_array(),
+                        forward: v.direction.as_vec3().to_array(),
+                        perspective: v.perspective,
+                        fov_y: (v.perspective && v.fov_y > 0.0).then_some(v.fov_y as f32),
+                    }),
+                    clip: None,
+                    plan: None,
+                    level: None,
+                    folder: vec![view.name.clone()],
+                    style: None,
+                    drawing: None,
+                });
+                // what a metre of the model is on the paper, and where the model's origin lies
+                // on it: the camera's point in the middle of the detail
+                let ratio = d.scale.map_or(0.0, |s| s * page_meters / meters) as f32;
+                let right = v.direction.cross(v.up).normalize_or_zero();
+                let at = v.location * meters - origin;
+                let middle = [(rect.min[0] + rect.max[0]) / 2.0, (rect.min[1] + rect.max[1]) / 2.0];
+                let shift = [at.dot(right) as f32 * ratio, at.dot(v.up) as f32 * ratio];
+                viewports.push(SheetViewport {
+                    title: d.name.clone(),
+                    view: Some(views.len() - 1),
+                    rect,
+                    estimated: false,
+                    scale: if ratio > 0.0 { format!("1:{}", (1.0 / ratio).round()) } else { String::new() },
+                    detail: None,
+                    label: None,
+                    origin: [middle[0] - shift[0], middle[1] - shift[1]],
+                    ratio,
+                    drawing: None,
+                    anchor: None,
+                    turn: [1.0, 0.0],
+                    draft: None,
+                    written: None,
+                    face: crate::typeface::Face::default(),
+                    split: None,
+                });
+            }
+            let paper = Some(SheetRect { min: [0.0, 0.0], max: [(page.width * 0.001) as f32, (page.height * 0.001) as f32] });
+            let number = (page.number + 1).to_string();
+            sheets.push(Sheet { lines: content.lines, fills: content.fills, ..Sheet::new(number, view.name.clone(), paper, viewports) });
+        }
+        // objects on a layout the file does not have
+        let lost: usize = self.pages.values().map(|c| c.objects).sum();
+        if lost > 0 {
+            *self.skipped.entry("objects on layouts").or_default() += lost;
+        }
+        sheets
+    }
+
     /// Element properties: name, object type, layer, id, material, block, user text.
     fn props(&mut self, a: &Attributes, kind: &str, block: Option<&str>, user: &[(String, String)]) -> String {
         let mut p = serde_json::Map::new();
@@ -380,7 +511,7 @@ impl<'f> Scene<'f> {
                 continue; // block definition geometry, drawn by its instances
             }
             if a.space == 2 {
-                *self.skipped.entry("objects on layouts").or_default() += 1;
+                self.page_object(object);
                 continue;
             }
             // hidden objects (Hide, or hidden by mode) are read too, onto hidden layers of their
@@ -685,7 +816,10 @@ impl<'f> Scene<'f> {
             .collect()
     }
 
-    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>) {
+    fn finish(mut self) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>) {
+        // first the layouts, which count what they hold
+        let mut views = self.views();
+        let sheets = self.sheets(&mut views);
         // the layers of hidden objects last
         let (meshes, points) = (std::mem::take(&mut self.meshes), std::mem::take(&mut self.points));
         let (shown, hidden): (Vec<_>, Vec<_>) = meshes.into_iter().chain(points).partition(|((_, hiding), _)| !hiding);
@@ -725,7 +859,7 @@ impl<'f> Scene<'f> {
         if self.hidden_objects > 0 {
             info.push(("Rhino hidden objects".into(), format!("{} (on hidden layers of their own)", self.hidden_objects)));
         }
-        let views = self.views();
+
         let (section, clipping) = self.section();
         if clipping > 0 {
             let how = match (section.is_some(), clipping) {
@@ -735,7 +869,7 @@ impl<'f> Scene<'f> {
             };
             info.push(("Rhino clipping planes of the perspective view".into(), how));
         }
-        (layers, info, section, views)
+        (layers, info, section, views, sheets)
     }
 }
 
@@ -856,7 +990,7 @@ fn add_mesh(layer: &mut Layer, mesh: &Mesh, xform: DMat4, origin: DVec3, color: 
     }
 }
 
-fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>) {
+fn convert(file: &File<'_>) -> (Vec<Layer>, Vec<(String, String)>, Option<SectionPlane>, Vec<SavedView>, Vec<Sheet>) {
     let mut scene = Scene::new(file);
     scene.run();
     scene.finish()
@@ -1247,6 +1381,7 @@ mod tests {
             up: DVec3::Y,
             fov_y: 0.75,
             height: 2_000.0,
+            page: None,
         });
         let mut scene = Scene::new(&file);
         scene.origin = Some(DVec3::new(155_000.0, 463_000.0, 0.0));
@@ -1278,7 +1413,7 @@ mod tests {
         let mut scene = Scene::new(&file);
         scene.triangles = MAX_TRIANGLES - 1;
         scene.run();
-        let (layers, info, _, _) = scene.finish();
+        let (layers, info, _, _, _) = scene.finish();
         let visible = layers.iter().find(|l| !l.hidden).unwrap();
         assert_eq!(visible.triangle_count(), 1);
         assert_eq!(visible.positions[..6], [0.25, 0.5, 0.0, 1.25, 0.5, 0.0]);
@@ -1318,6 +1453,28 @@ mod tests {
         assert_eq!(grouped["URL"], "https://example.org/fence");
         assert_eq!(grouped["Print colour"], "#0A141E");
         assert_eq!(grouped["Print width (mm)"], "0.35");
+    }
+
+    /// Layouts (`layouts.3dm`, from make_layouts.py): "Plan" on A3 landscape with a Top detail at
+    /// 1:100, a text and a line, and "View" on A4 portrait with a Perspective detail, as sheets in
+    /// that order: paper, what lies on it, and each detail a viewport showing a view of its own.
+    #[test]
+    fn layouts_are_sheets_and_details_their_viewports() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-models/rhino");
+        let (model, info) = load("layouts.3dm", std::fs::read(dir.join("layouts.3dm")).unwrap());
+        assert!(!entry(&info, "Rhino objects left out").contains("layouts"), "{info:?}");
+        let sheets = &model.project.sheets;
+        assert_eq!(sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Plan", "View"]);
+        let paper = |k: usize| sheets[k].paper.map(|p| [(p.max[0] * 1000.0).round(), (p.max[1] * 1000.0).round()]);
+        assert_eq!((paper(0), paper(1)), (Some([420.0, 297.0]), Some([210.0, 297.0])));
+        assert_eq!(sheets[0].viewports.len(), 1);
+        assert_eq!(sheets[1].viewports.len(), 1);
+        let plan = &sheets[0].viewports[0];
+        assert_eq!(plan.scale, "1:100");
+        let view = &model.views[plan.view.unwrap()];
+        assert!(!view.camera.unwrap().perspective);
+        assert!(model.views[sheets[1].viewports[0].view.unwrap()].camera.unwrap().perspective);
+        assert!(!sheets[0].lines.is_empty() && !sheets[0].fills.is_empty(), "the line and the text on the plan");
     }
 
     /// Lights (`lights.3dm`, from make_lights.py): the point, spot, directional, linear and

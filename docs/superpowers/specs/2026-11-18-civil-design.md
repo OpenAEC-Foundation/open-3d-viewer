@@ -135,7 +135,11 @@ The product is GIC since 2026-11-18: GIS, infrastructure and civil in one. Its r
 **Geotechnics** and the right pane a tab for it (`src/app/geo.rs`, `bim-civil::ground`,
 `bim-gis::bro`): cone penetration tests from the register of the subsurface around the place, or
 from GEF files, each a column in the colours of the cone resistance with the resistance as a line
-beside it. Next there: borings, and a model of the ground between the investigated points.
+beside it. Borings come the same two ways: a column per boring, a block per described layer in
+the colour of its main soil. The first model of the ground gives every place the layers of the
+nearest boring, from that boring's ground down, on a grid of cells; nothing is laid between
+borings. Next there: layers correlated between borings by the user (a boundary picked in each
+boring, a surface through them), and the model cut along a line as a soil profile.
 
 The ribbon of GIC has a page per domain: **GIS**, **Infra** (roads, pipes, cables), **Civil**
 (structures: bridges, viaducts, tunnels), **Rail** and **Geotechnics**. Infra, Civil and Rail are

@@ -1265,6 +1265,19 @@
     "by its layers": "enligt skikten",
     "Not taken: the build-up would no longer hold together.": "Inte infört: uppbyggnaden skulle inte längre hänga ihop.",
     "Duplicate": "Duplicera",
-    "Elements that were given this build-up keep what they were given.": "Element som redan fått den här uppbyggnaden behåller det de fick."
+    "Elements that were given this build-up keep what they were given.": "Element som redan fått den här uppbyggnaden behåller det de fick.",
+    "Click to make a beam type of it in the project.": "Klicka för att göra en balktyp av den i projektet.",
+    "+ Linear type": "+ Linjär typ",
+    "Find a steel profile: HEA 200": "Sök en stålprofil: HEA 200",
+    "Click a profile: the picked linear type takes it.": "Klicka på en profil: den valda linjära typen tar över den.",
+    "Click a profile to make a linear type of it.": "Klicka på en profil för att göra en linjär typ av den.",
+    "Pick a linear type on the page to edit its profile.": "Välj en linjär typ på sidan för att redigera profilen.",
+    "Role": "Roll",
+    "Material": "Material",
+    "Profile": "Profil",
+    "From the steel table": "Från ståltabellen",
+    "by material and size": "enligt material och mått",
+    "Not taken: the profile would no longer hold together.": "Inte infört: profilen skulle inte längre hänga ihop.",
+    "Elements that were given this type keep what they were given.": "Element som redan fått den här typen behåller det de fick."
   }
 }

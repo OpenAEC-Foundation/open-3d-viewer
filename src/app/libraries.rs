@@ -443,11 +443,15 @@ impl App {
         Element::from(column![container(search).padding([2, 4]), scrollable(list).height(Fill)].spacing(6)).map(Message::Libraries)
     }
 
-    /// The right pane of the Library product: the editor of the project's picked build-up on
-    /// the Project page, the fields of what is picked of the drawing standard elsewhere.
+    /// The right pane of the Library product: on the Project page the editor of what was picked
+    /// there, a build-up or a linear type; elsewhere the fields of what is picked of the drawing
+    /// standard.
     pub fn library_side(&self, p: Palette, l: Language) -> Element<'_, Message> {
         match self.libraries.source {
-            Source::Project => self.buildup_pane(p, l),
+            Source::Project if self.profile_view.picked.is_some() => self.profile_pane(p, l),
+            Source::Project if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
+            // nothing picked: what each editor is for
+            Source::Project => column![self.buildup_pane(p, l), self.profile_pane(p, l)].into(),
             _ => self.standard_pane(p, l),
         }
     }
@@ -456,6 +460,7 @@ impl App {
     /// a profile's outline, a system's face.
     fn found_cards(&self, p: Palette, l: Language) -> Element<'_, Message> {
         use super::library::{buildup_detail, material_detail, profile_detail, system_detail};
+        use super::profiles::ProfileMessage;
         use super::standards::Setting;
         let found = self.library_search(&self.libraries.query, l);
         let title = text(format!("{} · {}", l.text("Zoekresultaten", "Search results"), found.len())).size(20).font(FONT_BOLD).color(p.text);
@@ -463,6 +468,8 @@ impl App {
             return column![title, text(l.text("Niets gevonden.", "Nothing found.")).size(12).color(p.text_secondary)].spacing(8).into();
         }
         let lang = super::library::lang(l);
+        let hint = |hint: &'static str| text(hint).size(10).color(p.text_muted);
+        let as_copy = l.text("Klik om een kopie in het project te bewerken.", "Click to edit a copy in the project.");
         let cards = found.into_iter().map(|f| {
             let head = column![
                 text(f.name.clone()).size(13).font(FONT_BOLD).color(p.text).wrapping(Wrapping::Word),
@@ -473,18 +480,22 @@ impl App {
                 Item::Material(shelf, key) => self.shelf(*shelf).material(key).map(|m| material_detail(p, m)),
                 Item::BuildUp(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    let copied = (*shelf != Shelf::Project).then(|| text(l.text("Klik om een kopie in het project te bewerken.", "Click to edit a copy in the project.")).size(10).color(p.text_muted));
+                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
                     library.buildup(id).map(|b| column![buildup_detail(p, l, library, b)].push(copied).spacing(6).into())
                 }
                 Item::Linear(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    library.linear_type(id).map(|t| profile_detail(p, &t.profile, library.material(&t.material), None))
+                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
+                    library.linear_type(id).map(|t| column![profile_detail(p, &t.profile, library.material(&t.material), Some(t.profile.ifc().0))].push(copied).spacing(6).into())
                 }
                 Item::System(shelf, id) => {
                     let library = self.shelf(*shelf);
                     library.system_type(id).map(|t| system_detail(p, l, library, t))
                 }
-                Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| profile_detail(p, &s.shape, general().material("steel"), Some(s.series.standard()))),
+                Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| {
+                    let make = hint(l.text("Klik om er een balktype van te maken in het project.", "Click to make a beam type of it in the project."));
+                    column![profile_detail(p, &s.shape, general().material("steel"), Some(s.series.standard())), make].spacing(6).into()
+                }),
                 Item::Setting(setting) => {
                     let about = match setting {
                         Setting::Kind(key) => self.standard.kind(key).map(|k| format!("{} · {} · {}", k.code, k.discipline.code(), k.scales.iter().map(|s| bim_library::drawing::scale_text(*s)).collect::<Vec<_>>().join(", "))),
@@ -502,11 +513,15 @@ impl App {
                 .clip(true)
                 .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
             // a kind of drawing or a setting opens in its standard, where it is set; a build-up
-            // opens in its editor, one of another library as a copy in the project
+            // or a linear type opens in its editor, one of another library as a copy in the
+            // project; a profile of the steel table becomes a beam type of the project
             match f.item {
                 Item::Setting(setting) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Libraries(LibrariesMessage::Open(setting))).into(),
                 Item::BuildUp(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Pick(id))).into(),
                 Item::BuildUp(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::BuildUp(super::buildups::BuildUpMessage::Copy(shelf, id))).into(),
+                Item::Linear(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::Pick(id))).into(),
+                Item::Linear(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::Copy(shelf, id))).into(),
+                Item::Steel(designation) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::FromSteel(designation))).into(),
                 _ => Element::from(card),
             }
         });
@@ -541,9 +556,12 @@ impl App {
         if view.source == Source::Country && view.country == Country::Netherlands {
             page = page.push(self.standard_sections(p, l));
         }
-        // the project: its build-ups first, to be edited
+        // the project: its build-ups and its linear types first, side by side, to be edited;
+        // under the linear types the steel table one takes its profile from
         if view.source == Source::Project {
-            page = page.push(self.buildup_lists(p, l));
+            let half = iced::Length::FillPortion(1);
+            let linear = column![self.profile_lists(p, l), self.steel_table(p, l)].spacing(18);
+            page = page.push(row![container(self.buildup_lists(p, l)).width(half), container(linear).width(half)].spacing(12));
         }
         for (section, cards) in self.library_sections(l, &house) {
             let cards = row(cards.into_iter().map(|card| card_view(card, p, l))).spacing(10).wrap();

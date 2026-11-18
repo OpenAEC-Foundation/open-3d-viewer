@@ -1265,6 +1265,19 @@
     "by its layers": "selon ses couches",
     "Not taken: the build-up would no longer hold together.": "Non retenu : la composition ne serait plus cohérente.",
     "Duplicate": "Dupliquer",
-    "Elements that were given this build-up keep what they were given.": "Les éléments qui ont déjà reçu cette composition gardent ce qu’ils ont reçu."
+    "Elements that were given this build-up keep what they were given.": "Les éléments qui ont déjà reçu cette composition gardent ce qu’ils ont reçu.",
+    "Click to make a beam type of it in the project.": "Cliquez pour en faire un type de poutre dans le projet.",
+    "+ Linear type": "+ Type linéaire",
+    "Find a steel profile: HEA 200": "Rechercher un profilé acier : HEA 200",
+    "Click a profile: the picked linear type takes it.": "Cliquez sur un profilé : le type linéaire choisi le reprend.",
+    "Click a profile to make a linear type of it.": "Cliquez sur un profilé pour en faire un type linéaire.",
+    "Pick a linear type on the page to edit its profile.": "Choisissez sur la page un type linéaire pour modifier son profil.",
+    "Role": "Rôle",
+    "Material": "Matériau",
+    "Profile": "Profil",
+    "From the steel table": "Du tableau des aciers",
+    "by material and size": "selon le matériau et la dimension",
+    "Not taken: the profile would no longer hold together.": "Non retenu : le profil ne serait plus cohérent.",
+    "Elements that were given this type keep what they were given.": "Les éléments qui ont déjà reçu ce type gardent ce qu’ils ont reçu."
   }
 }

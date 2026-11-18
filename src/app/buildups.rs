@@ -139,6 +139,15 @@ impl std::fmt::Display for Choice {
 
 impl App {
     pub(super) fn buildup_update(&mut self, message: BuildUpMessage) -> Task<Message> {
+        let task = self.buildup_apply(message);
+        // one editor at a time in the right pane
+        if self.buildup_view.picked.is_some() {
+            self.profile_view.picked = None;
+        }
+        task
+    }
+
+    fn buildup_apply(&mut self, message: BuildUpMessage) -> Task<Message> {
         let picked = self.buildup_view.picked.clone();
         let outcome: Option<Result<(), LibraryError>> = match message {
             BuildUpMessage::Open(role) => {
@@ -251,7 +260,8 @@ impl App {
             let on = view.picked.as_deref() == Some(id);
             let thickness = self.library.buildup(id).map_or(0.0, BuildUp::thickness);
             let line = row![
-                text(name).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).width(Fill).wrapping(Wrapping::None),
+                // (a long name stays in its own part of the line)
+                container(text(name).size(12).font(if on { FONT_BOLD } else { FONT }).color(if on { p.text } else { p.text_secondary }).wrapping(Wrapping::None)).width(Fill).clip(true),
                 text(format!("{} mm", bim_library::millimetres(thickness, lang))).size(12).color(p.text_secondary),
             ]
             .spacing(8)
@@ -262,6 +272,7 @@ impl App {
         let framed = container(column![roles, list.push(add)].spacing(8))
             .width(Fill)
             .padding(10)
+            .clip(true)
             .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
         let section = column![text(l.text("Opbouwen", "Build-ups")).size(12).font(FONT_BOLD).color(p.text_muted), framed].spacing(8);
         Element::from(section).map(Message::BuildUp)

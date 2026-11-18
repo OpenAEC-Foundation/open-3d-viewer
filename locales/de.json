@@ -1265,6 +1265,19 @@
     "by its layers": "nach den Schichten",
     "Not taken: the build-up would no longer hold together.": "Nicht übernommen: Der Aufbau wäre dann nicht mehr stimmig.",
     "Duplicate": "Duplizieren",
-    "Elements that were given this build-up keep what they were given.": "Elemente, die diesen Aufbau bereits erhalten haben, behalten, was sie erhalten haben."
+    "Elements that were given this build-up keep what they were given.": "Elemente, die diesen Aufbau bereits erhalten haben, behalten, was sie erhalten haben.",
+    "Click to make a beam type of it in the project.": "Klicken, um daraus einen Trägertyp im Projekt zu machen.",
+    "+ Linear type": "+ Stabtyp",
+    "Find a steel profile: HEA 200": "Stahlprofil suchen: HEA 200",
+    "Click a profile: the picked linear type takes it.": "Klicken Sie ein Profil an: Der gewählte Stabtyp übernimmt es.",
+    "Click a profile to make a linear type of it.": "Klicken Sie ein Profil an, um daraus einen Stabtyp zu machen.",
+    "Pick a linear type on the page to edit its profile.": "Wählen Sie auf der Seite einen Stabtyp, um das Profil zu bearbeiten.",
+    "Role": "Rolle",
+    "Material": "Material",
+    "Profile": "Profil",
+    "From the steel table": "Aus der Stahltabelle",
+    "by material and size": "nach Material und Maß",
+    "Not taken: the profile would no longer hold together.": "Nicht übernommen: Das Profil wäre dann nicht mehr stimmig.",
+    "Elements that were given this type keep what they were given.": "Elemente, die diesen Typ bereits erhalten haben, behalten, was sie erhalten haben."
   }
 }

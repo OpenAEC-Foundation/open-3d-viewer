@@ -1265,6 +1265,19 @@
     "by its layers": "pelas suas camadas",
     "Not taken: the build-up would no longer hold together.": "Não aceite: a composição deixaria de ser coerente.",
     "Duplicate": "Duplicar",
-    "Elements that were given this build-up keep what they were given.": "Os elementos que já receberam esta composição mantêm o que receberam."
+    "Elements that were given this build-up keep what they were given.": "Os elementos que já receberam esta composição mantêm o que receberam.",
+    "Click to make a beam type of it in the project.": "Clique para criar com ele um tipo de viga no projeto.",
+    "+ Linear type": "+ Tipo linear",
+    "Find a steel profile: HEA 200": "Procurar um perfil de aço: HEA 200",
+    "Click a profile: the picked linear type takes it.": "Clique num perfil: o tipo linear escolhido adota-o.",
+    "Click a profile to make a linear type of it.": "Clique num perfil para criar com ele um tipo linear.",
+    "Pick a linear type on the page to edit its profile.": "Escolha na página um tipo linear para editar o seu perfil.",
+    "Role": "Função",
+    "Material": "Material",
+    "Profile": "Perfil",
+    "From the steel table": "Da tabela de aço",
+    "by material and size": "por material e dimensão",
+    "Not taken: the profile would no longer hold together.": "Não aceite: o perfil deixaria de ser coerente.",
+    "Elements that were given this type keep what they were given.": "Os elementos que já receberam este tipo mantêm o que receberam."
   }
 }

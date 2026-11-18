@@ -104,7 +104,7 @@ fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
     }
 }
 
-fn linear_role_label(role: LinearRole, l: Language) -> &'static str {
+pub(super) fn linear_role_label(role: LinearRole, l: Language) -> &'static str {
     match role {
         LinearRole::Column => l.text("Kolom", "Column"),
         LinearRole::Beam => l.text("Balk", "Beam"),
@@ -593,9 +593,6 @@ fn system_section(t: &SystemType, lib: &Library, line: Color) -> Section {
 
 /// A profile drawn as its outline, with its sizes, area and second moments.
 pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, standard: Option<&'static str>) -> Element<'a, Message> {
-    let colour = material.map_or([95, 100, 110], |m| m.colour);
-    let rings = shape.rings(1e-4).unwrap_or_default();
-    let size = shape.size();
     let mut lines = vec![match *shape {
         ProfileShape::Rectangle { width, depth } => format!("b {} · h {} mm", mm_en(width), mm_en(depth)),
         ProfileShape::Circle { diameter } => format!("d {} mm", mm_en(diameter)),
@@ -615,8 +612,20 @@ pub(super) fn profile_detail<'a>(p: Palette, shape: &ProfileShape, material: Opt
     for line in lines {
         list = list.push(small(line, p));
     }
-    let outline = Outline { outer: rings.0, holes: rings.1, size: [size.x, size.y], fill: rgb(colour), line: p.text };
-    column![canvas_widget(outline).width(Fill).height(130), list].spacing(6).into()
+    column![profile_outline(p, shape, material, 130.0), list].spacing(6).into()
+}
+
+/// A profile's outline in its material's colour, `height` pixels high: a look at it. A small one
+/// (a line of a list, a tile to pick) stands in the middle of its width; a large one at the left,
+/// as the sections do.
+pub(super) fn profile_outline<'a, M: 'a>(p: Palette, shape: &ProfileShape, material: Option<&Material>, height: f32) -> Element<'a, M> {
+    let small = height < 80.0;
+    let colour = material.map_or([95, 100, 110], |m| m.colour);
+    // a small one needs no finer arcs than its pixels show
+    let rings = shape.rings(if small { 5e-4 } else { 1e-4 }).unwrap_or_default();
+    let size = shape.size();
+    let outline = Outline { outer: rings.0, holes: rings.1, size: [size.x, size.y], fill: rgb(colour), line: p.text, centred: small };
+    canvas_widget(outline).width(Fill).height(height).into()
 }
 
 /// Millimetres as in a designation: whole, or one decimal with a point.
@@ -727,9 +736,11 @@ struct Outline {
     size: [f64; 2],
     fill: Color,
     line: Color,
+    /// In the middle of the canvas's width, not at its left.
+    centred: bool,
 }
 
-impl canvas::Program<Message> for Outline {
+impl<M> canvas::Program<M> for Outline {
     type State = ();
 
     fn draw(&self, _state: &(), renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {
@@ -737,8 +748,9 @@ impl canvas::Program<Message> for Outline {
         if self.outer.len() < 3 {
             return vec![frame.into_geometry()];
         }
-        let scale = ((bounds.height - 8.0) / self.size[1].max(1e-6) as f32).min((bounds.width.min(220.0) - 8.0) / self.size[0].max(1e-6) as f32);
-        let centre = Point::new(4.0 + self.size[0] as f32 * scale / 2.0, bounds.height / 2.0);
+        let margin = if self.centred { 2.0 } else { 4.0 };
+        let scale = ((bounds.height - 2.0 * margin) / self.size[1].max(1e-6) as f32).min((bounds.width.min(220.0) - 2.0 * margin) / self.size[0].max(1e-6) as f32);
+        let centre = Point::new(if self.centred { bounds.width / 2.0 } else { margin + self.size[0] as f32 * scale / 2.0 }, bounds.height / 2.0);
         let at = |q: &glam::DVec2| Point::new(centre.x + q.x as f32 * scale, centre.y - q.y as f32 * scale);
         let path = Path::new(|b| {
             for ring in std::iter::once(&self.outer).chain(&self.holes) {

@@ -3436,6 +3436,8 @@ mod tests {
             ("project", LibrariesMessage::Source(Source::Project)),
             ("search", LibrariesMessage::Search("beton 2".into())),
             ("buildup", LibrariesMessage::Source(Source::Project)),
+            ("profile", LibrariesMessage::Source(Source::Project)),
+            ("search-steel", LibrariesMessage::Search("hea 2".into())),
         ];
         for (name, show) in shots {
             let mut studio = Studio::new(App::default());
@@ -3447,6 +3449,14 @@ mod tests {
             if name == "buildup" {
                 let id = studio.app.library.buildups[0].id.clone();
                 let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Pick(id))));
+            }
+            // the project with a column of the steel table picked, in its profile editor, and
+            // the series it is of shown under the types
+            if name == "profile" {
+                use crate::app::profiles::ProfileMessage;
+                for message in [ProfileMessage::Add, ProfileMessage::Steel("HEB 300".into()), ProfileMessage::Series(Some("HEB"))] {
+                    let _ = studio.update(Msg::App(Message::Profile(message)));
+                }
             }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));

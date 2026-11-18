@@ -108,14 +108,26 @@ in the right pane, with a drawing of what it makes above its fields.
   thickness, to change, move, add and remove; a name of its own or the rule's; add, duplicate,
   remove. A build-up of another library is edited as a copy in the project, with the materials
   it needs. A change is kept only when the build-up still checks.
+- **Profiles** (columns, beams and the other linear types), `src/app/profiles.rs`: the Project
+  page lists them a role at a time, each with a look at its profile. The editor is based on IFC:
+  a profile is one of IFC's parametric profile definitions, shown by its IFC name and set by its
+  attributes under their IFC names, as `bim_library::ProfileShape::ifc` gives them and
+  `from_ifc` takes them back. Lengths are typed in millimetres, a slope in degrees. The role
+  gives the type its IFC class. Under the types stands the steel table, found by typing or by
+  series, every profile a tile with its outline; a click gives it to the picked type or makes a
+  type of it. A type of another library is edited as a copy in the project.
 - **Search** over every library and the drawing standard, with a look at each result; a found
-  setting or build-up opens where it is edited.
+  setting, build-up or linear type opens where it is edited, and a found steel profile becomes
+  a beam type of the project.
 - **Settings** of the drawing standard can be added and removed (scales, line styles, pens, text
   styles), a removal refused while a kind of drawing uses the setting.
 
-Not yet: an editor for profiles and for the types of columns and beams, for materials (name,
-colour, hatch) and for system types; elements that were given a build-up do not follow a change
-of the type; the general library and a country's types are not edited in place.
+Not yet: an editor for materials (name, colour, hatch) and for system types; elements that
+were given a build-up or a linear type do not follow a change of the type; the general library
+and a country's types are not edited in place. A profile is kept in the file as before, in the
+suite's own form on its type's node (`openaec::lineartype`): its IFC definition and attributes
+are not written beside it, and an arbitrary profile (`IfcArbitraryClosedProfileDef`) cannot be
+made.
 
 ## Open questions
 
@@ -133,7 +145,8 @@ of the type; the general library and a country's types are not edited in place.
 2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
-4. An editor for profiles and for the types of columns and beams; then materials and systems.
+4. Editors for materials and systems. A profile written to the file by its IFC definition, and
+   profiles drawn freely.
 5. Elements follow a change of their type, when asked.
 6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
 7. Library files and components opened into the page.

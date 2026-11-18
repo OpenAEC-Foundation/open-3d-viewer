@@ -1,0 +1,14 @@
+{
+    "asset": {"type": "application/si-dpo-3d.document+json", "version": "2.0", "generator": "test"},
+    "scene": 0,
+    "scenes": [{"units": "m", "nodes": [0]}],
+    "nodes": [{"name": "Box", "model": 0, "translation": [0, 0.005, 0]}],
+    "models": [{
+        "units": "cm",
+        "derivatives": [{"usage": "Web3D", "quality": "High", "assets": [{"uri": "../gltf-draco/Box.gltf", "type": "Model"}]}],
+        "annotations": [
+            {"id": "top", "titles": {"EN": "Top"}, "leads": {"EN": "The top face."}, "position": [0, 0.5, 0], "direction": [0, 1, 0]},
+            {"id": "side", "titles": {"EN": "Side"}, "leads": {"EN": "A side face."}, "position": [0.5, 0, 0], "direction": [1, 0, 0]}
+        ]
+    }]
+}

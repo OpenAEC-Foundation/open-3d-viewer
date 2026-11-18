@@ -323,6 +323,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "basisu"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36056503b9996959defdfcf058811637fdf68a2e35a48ee8e39c89a787fe9cdc"
+dependencies = [
+ "portable-atomic",
+ "ruzstd 0.7.3",
+]
+
+[[package]]
 name = "bim-bcf"
 version = "0.1.0"
 dependencies = [
@@ -625,7 +635,7 @@ dependencies = [
  "flate2",
  "memchr",
  "roxmltree 0.21.2",
- "ruzstd",
+ "ruzstd 0.9.1",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1245,6 +1255,15 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "draco-core"
+version = "2.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d384c03a3090e54e7840f9f08d0bfb0860d58a527bfb78bd96cc5b921d4ba2e"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "dtor"
@@ -3134,6 +3153,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshopt-pure"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "442047e34b8a2b5bde280628982846bb867daafd034257a8bf12f83d3f64bacb"
+
+[[package]]
 name = "metal"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3807,7 +3832,7 @@ dependencies = [
  "resvg",
  "rfd",
  "roxmltree 0.20.0",
- "ruzstd",
+ "ruzstd 0.9.1",
  "rvt-core",
  "rvt-export",
  "rvt-model",
@@ -3820,10 +3845,15 @@ dependencies = [
  "skp-reader",
  "sldw-read",
  "stl_io",
+ "svx-model",
+ "svx-read",
  "tekla-read",
  "tempfile",
  "threedm-core",
  "threedm-read",
+ "tiles-gltf",
+ "tiles-model",
+ "tiles-read",
  "tobj",
  "ttf-parser",
  "ureq",
@@ -4777,6 +4807,12 @@ dependencies = [
 
 [[package]]
 name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+
+[[package]]
+name = "ruzstd"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
@@ -5435,6 +5471,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "svx-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/svx-dll?rev=abaee1cd04290029e158ca4e9bd6ced6f1df2a5c#abaee1cd04290029e158ca4e9bd6ced6f1df2a5c"
+
+[[package]]
+name = "svx-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/svx-dll?rev=abaee1cd04290029e158ca4e9bd6ced6f1df2a5c#abaee1cd04290029e158ca4e9bd6ced6f1df2a5c"
+dependencies = [
+ "serde_json",
+ "svx-model",
+]
+
+[[package]]
 name = "swash"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5621,6 +5671,44 @@ dependencies = [
  "quick-error",
  "weezl 0.1.12",
  "zune-jpeg 0.5.15",
+]
+
+[[package]]
+name = "tiles-core"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+dependencies = [
+ "flate2",
+ "serde_json",
+]
+
+[[package]]
+name = "tiles-gltf"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+dependencies = [
+ "basisu",
+ "draco-core",
+ "meshopt-pure",
+ "serde_json",
+]
+
+[[package]]
+name = "tiles-model"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+
+[[package]]
+name = "tiles-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/3d-tiles-dll?rev=1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082#1c91ab86a06d7e1cc8b2dd3718bb8bd09eea6082"
+dependencies = [
+ "draco-core",
+ "serde_json",
+ "tiles-core",
+ "tiles-gltf",
+ "tiles-model",
+ "zip 9.3.0",
 ]
 
 [[package]]

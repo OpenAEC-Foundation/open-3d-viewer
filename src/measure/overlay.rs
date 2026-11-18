@@ -32,6 +32,8 @@ pub struct MeasureOverlay<'a> {
     pub ink: Color,
     pub label_bg: Color,
     pub label_text: Color,
+    /// Labels of the model on its points (Rhino's text dots): where, text, background colour.
+    pub dots: Vec<(Vec3, String, Color)>,
 }
 
 struct Projector {
@@ -105,6 +107,28 @@ impl MeasureOverlay<'_> {
             frame.fill(&circle, self.label_bg);
             frame.stroke(&circle, self.stroke(1.5));
         }
+    }
+
+    /// A label of the model: its text in white (black on a light colour) on its colour, centred
+    /// on its point, a fixed size on the screen.
+    fn model_dot(&self, frame: &mut Frame, pr: &Projector, at: Vec3, content: &str, color: Color) {
+        let Some(c) = pr.point(at) else { return };
+        let size = 12.0;
+        let width = content.chars().count() as f32 * size * 0.58 + 10.0;
+        let height = size + 6.0;
+        let rect = Path::rounded_rectangle(Point::new(c.x - width / 2.0, c.y - height / 2.0), Size::new(width, height), 3.0.into());
+        frame.fill(&rect, color);
+        let light = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b > 0.6;
+        frame.fill_text(canvas::Text {
+            content: content.to_string(),
+            position: c,
+            align_x: alignment::Horizontal::Center.into(),
+            align_y: alignment::Vertical::Center,
+            size: iced::Pixels(size),
+            color: if light { Color::BLACK } else { Color::WHITE },
+            font: openaec_ui::fonts::MEDIUM,
+            ..canvas::Text::default()
+        });
     }
 
     /// A value on a rounded label centred on `at`.
@@ -366,6 +390,10 @@ impl<Message> canvas::Program<Message> for MeasureOverlay<'_> {
     ) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let pr = Projector { view_proj: self.view_proj, size: (bounds.width, bounds.height) };
+        // the model's own labels first, under the measurements
+        for (at, text, color) in &self.dots {
+            self.model_dot(&mut frame, &pr, *at, text, *color);
+        }
         for m in self.results {
             self.measurement(&mut frame, &pr, m);
         }

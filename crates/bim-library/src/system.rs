@@ -18,6 +18,7 @@
 use crate::material::Material;
 use crate::{millimetres, Lang, LibraryError, MIN_THICKNESS};
 use serde::{Deserialize, Serialize};
+use std::iter::once;
 
 /// What a system is: the first word of its name, and the group it is listed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,6 +62,11 @@ impl SystemGroup {
     /// frame's studs) rather than its panels (bricks, boards, slabs, tiles).
     pub fn framed(self) -> bool {
         matches!(self, SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud)
+    }
+
+    /// Whether a type of it lies level (a floor, a ceiling) rather than stands.
+    pub fn lies(self) -> bool {
+        matches!(self, SystemGroup::Floor | SystemGroup::Ceiling)
     }
 
     /// The IFC class of its type and its predefined type.
@@ -228,6 +234,13 @@ pub struct SystemLayer {
     pub panels: Panels,
 }
 
+impl SystemLayer {
+    /// How deep it is across the face: its members or its panels, whichever is deeper.
+    pub fn depth(&self) -> f64 {
+        self.members.as_ref().map_or(0.0, |m| m.depth).max(self.panels.thickness)
+    }
+}
+
 /// A system type: its group, the grid of its face with its members and panels, the layers across
 /// it, and, for a floor or a ceiling, how high above its level it lies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,6 +280,83 @@ impl SystemType {
             let half = members.map_or(0.0, |m| m.depth).max(panels.thickness) / 2.0;
             (lo.min(offset - half), hi.max(offset + half))
         })
+    }
+
+    /// Its layers by side, each from the face out, as their places in `layers`: those at its
+    /// exterior (an offset above zero), then those at its interior.
+    pub fn sides(&self) -> (Vec<usize>, Vec<usize>) {
+        let mut exterior: Vec<usize> = (0..self.layers.len()).filter(|&k| self.layers[k].offset > 0.0).collect();
+        let mut interior: Vec<usize> = (0..self.layers.len()).filter(|&k| self.layers[k].offset <= 0.0).collect();
+        exterior.sort_by(|&a, &b| self.layers[a].offset.total_cmp(&self.layers[b].offset));
+        interior.sort_by(|&a, &b| self.layers[b].offset.total_cmp(&self.layers[a].offset));
+        (exterior, interior)
+    }
+
+    /// Its face and its layers from the exterior in, as a section shows them: a layer by its place
+    /// in `layers`, the face itself `None`.
+    pub fn sequence(&self) -> Vec<Option<usize>> {
+        let (exterior, interior) = self.sides();
+        exterior.into_iter().rev().map(Some).chain(once(None)).chain(interior.into_iter().map(Some)).collect()
+    }
+
+    /// Whether its layers lie against one another: on either side the nearest against the face,
+    /// each next one against the one before it, with no room between them and no overlap.
+    pub fn closed_up(&self) -> bool {
+        let mut closed = self.clone();
+        closed.close_up();
+        self.layers.iter().zip(&closed.layers).all(|(a, b)| (a.offset - b.offset).abs() < 1e-9)
+    }
+
+    /// Lays its layers against one another, each on its side and in its order from the face.
+    pub fn close_up(&mut self) {
+        let (exterior, interior) = self.sides();
+        self.stack(&exterior, &interior);
+    }
+
+    /// Lays its layers against one another in this order: `exterior` from the face out, `interior`
+    /// from the face in (places in `layers`). A layer is as deep as its deepest part.
+    pub fn stack(&mut self, exterior: &[usize], interior: &[usize]) {
+        let half = self.members.depth.max(self.panels.thickness) / 2.0;
+        for (side, order) in [(1.0, exterior), (-1.0, interior)] {
+            let mut edge = half;
+            for &k in order {
+                let Some(layer) = self.layers.get_mut(k) else { continue };
+                let depth = layer.depth();
+                layer.offset = side * (edge + depth / 2.0);
+                edge += depth;
+            }
+        }
+    }
+
+    /// Moves layer `layer` one place towards the exterior (`out`) or the interior, past the face
+    /// to its other side when it is the nearest to it; the layers then lie against one another.
+    /// Whether it moved: the outermost goes no further out.
+    pub fn shift(&mut self, layer: usize, out: bool) -> bool {
+        let mut sequence = self.sequence();
+        let Some(at) = sequence.iter().position(|&part| part == Some(layer)) else { return false };
+        let Some(to) = (if out { at.checked_sub(1) } else { Some(at + 1) }).filter(|&to| to < sequence.len()) else { return false };
+        sequence.swap(at, to);
+        let face = sequence.iter().position(Option::is_none).unwrap_or(0);
+        let exterior: Vec<usize> = sequence[..face].iter().rev().flatten().copied().collect();
+        let interior: Vec<usize> = sequence[face + 1..].iter().flatten().copied().collect();
+        self.stack(&exterior, &interior);
+        true
+    }
+
+    /// A layer more at the exterior (`out`) or the interior, against the outermost part there and
+    /// like it: a copy of that layer, or boards like the face's panels on the face's grid. Its
+    /// place in `layers`.
+    pub fn add_layer(&mut self, out: bool) -> usize {
+        let (exterior, interior) = self.sides();
+        let side = if out { 1.0 } else { -1.0 };
+        let outermost = if out { exterior.last() } else { interior.last() }.map(|&k| self.layers[k].clone());
+        let (edge, mut layer) = match outermost {
+            Some(like) => (side * like.offset + like.depth() / 2.0, like),
+            None => (self.members.depth.max(self.panels.thickness) / 2.0, SystemLayer { offset: 0.0, grid: self.grid, members: None, panels: self.panels.clone() }),
+        };
+        layer.offset = side * (edge + layer.depth() / 2.0);
+        self.layers.push(layer);
+        self.layers.len() - 1
     }
 
     /// Checks it against `materials`: an id; bays and rows wider than their members; members and
@@ -462,6 +552,8 @@ mod tests {
         assert_eq!(types.len(), 30);
         for t in &types {
             t.check(&materials()).unwrap_or_else(|e| panic!("{}: {e}", t.id));
+            // a floor or a ceiling lies, the others stand
+            assert_eq!(t.lying.is_some(), t.group.lies(), "{}", t.id);
         }
         for lang in Lang::ALL {
             let mut names: Vec<String> = types.iter().map(|t| t.rule_name(&materials(), lang)).collect();
@@ -517,6 +609,47 @@ mod tests {
         }
         let wide = starter().into_iter().find(|t| t.id == "system.timber-frame-184-610").unwrap();
         assert_eq!((wide.grid.bay, wide.grid.row, wide.layers[1].grid.bay), (0.61, 2.44, 1.22));
+    }
+
+    #[test]
+    fn the_layers_of_a_type_are_laid_against_one_another() {
+        // every starter type's layers lie against one another already
+        for t in starter() {
+            assert!(t.closed_up(), "{}", t.id);
+        }
+        let frame = starter().into_iter().find(|t| t.id == "system.timber-frame-140").unwrap();
+        let material = |t: &SystemType, part: Option<usize>| part.map_or("the frame", |k| t.layers[k].panels.material.as_str()).to_string();
+        let across = |t: &SystemType| -> Vec<String> { t.sequence().into_iter().map(|part| material(t, part)).collect() };
+        assert_eq!(across(&frame), ["breather-membrane", "the frame", "plywood", "vapour-control-membrane", "mineral-wool", "gypsum-board"]);
+        assert_eq!(frame.sides(), (vec![0], vec![1, 2, 3, 4]));
+        // a layer pulled away leaves room; closing up lays it back, to the tenth of a micron
+        let mut t = frame.clone();
+        t.layers[4].offset -= 0.03;
+        assert!(!t.closed_up());
+        t.close_up();
+        assert!(t.closed_up() && (t.layers[4].offset - frame.layers[4].offset).abs() < 1e-12);
+        // the plywood (18) moved out past the frame (140) lies against its exterior face, under
+        // the membrane (0.5), and the layers inside move up to the frame
+        let mut t = frame.clone();
+        assert!(t.shift(1, true));
+        assert_eq!(across(&t), ["breather-membrane", "plywood", "the frame", "vapour-control-membrane", "mineral-wool", "gypsum-board"]);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(near(t.layers[1].offset, 0.07 + 0.009) && near(t.layers[0].offset, 0.07 + 0.018 + 0.00025) && near(t.layers[2].offset, -(0.07 + 0.0001)), "{:?}", t.layers.iter().map(|l| l.offset).collect::<Vec<_>>());
+        assert!(t.closed_up());
+        // and back in; the outermost goes no further out, the innermost no further in
+        assert!(t.shift(1, false));
+        assert_eq!(across(&t), across(&frame));
+        assert!(!t.shift(0, true) && !t.shift(4, false) && !t.shift(9, true));
+        // a layer more lies against the outermost of its side and is like it
+        let gypsum = t.add_layer(false);
+        assert_eq!((gypsum, &t.layers[5].panels, t.sequence().last().copied()), (5, &Panels::new("gypsum-board", 0.0125), Some(Some(5))));
+        assert!(near(t.layers[5].offset, t.layers[4].offset - 0.0125) && t.closed_up());
+        // a type without layers: boards like its panels, against its deepest part (150 / 2)
+        let mut curtain = starter().into_iter().next().unwrap();
+        let k = curtain.add_layer(true);
+        assert_eq!((curtain.layers[k].grid, curtain.layers[k].members.clone(), curtain.layers[k].panels.clone()), (curtain.grid, None, curtain.panels.clone()));
+        assert!(near(curtain.layers[k].offset, 0.075 + 0.012) && curtain.closed_up());
+        assert_eq!(curtain.check(&materials()), Ok(()));
     }
 
     #[test]

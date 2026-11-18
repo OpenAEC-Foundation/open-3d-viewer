@@ -132,16 +132,33 @@ in the right pane, with a drawing of what it makes above its fields.
   IFC leaves optional may be missing), so a later layer or another program changes a profile by
   its IFC attributes; a changed profile is a profile of the steel table only when it is named
   as one and is that one. IFCX has no schema for profiles yet, so the attribute is the suite's.
+- **Systems** (curtain walls, frames, timber frames, metal stud partitions, masonry, cladding,
+  floors, ceilings), `src/app/systems.rs`: the Project page lists them a group at a time, under
+  the build-ups, each with how deep it is. The editor has the face as the kernel generates it,
+  a section, and the type's parts from the exterior (or the top) in: the face and the layers
+  across it. One part is open at a time and shows its fields: panels (material, thickness), grid
+  (bay, row, pattern) and members (none for a layer of boards, on the grid's lines, or framed
+  with plates, a header and a longest prefab unit). Sizes are typed in millimetres and taken at
+  Enter. Layers are moved towards the exterior or the interior, past the face too, added against
+  the outermost of a side and like it, and removed. Layers that lie against one another keep
+  doing so through a change (`SystemType::closed_up`, `close_up`, `shift`, `add_layer` in
+  `bim-library`); a layer's distance from the face can also be typed, which is kept as typed
+  until the layers are closed up again. The group gives the IFC class; a floor or a ceiling
+  lies, the others stand. A type's name is the rule's and is not typed. A new type is the
+  general library's first of its group. A type of another library is edited as a copy in the
+  project, with the materials it needs. A change is kept only when the type still checks.
 - **Search** over every library and the drawing standard, with a look at each result; a found
-  setting, build-up or linear type opens where it is edited, and a found steel profile becomes
-  a beam type of the project.
+  setting, build-up, linear type or system type opens where it is edited, and a found steel
+  profile becomes a beam type of the project.
 - **Settings** of the drawing standard can be added and removed (scales, line styles, pens, text
   styles), a removal refused while a kind of drawing uses the setting.
 
-Not yet: an editor for system types; a hatch of one's own (a material picks one of the nine
+Not yet: a hatch of one's own (a material picks one of the nine
 kinds; their patterns follow the drawing standard); a material's category, description and
-properties as IFC has them; elements that were given a build-up or a linear type do not follow
-a change of the type (they do take a material's new colour); the general library
+properties as IFC has them; elements that were given a build-up, a linear type or a system type
+do not follow a change of the type (they do take a material's new colour); a system type has no
+name of its own, and its members have a rectangle's size, not a profile of the profile editor;
+a layer's members cannot be given a spacing other than its boards' grid; the general library
 and a country's types are not edited in place. An arbitrary profile
 (`IfcArbitraryClosedProfileDef`) cannot be made. An element made of a type keeps its own copy
 of the profile in the kernel's form, not as IFC has it.
@@ -162,7 +179,7 @@ of the profile in the kernel's form, not as IFC has it.
 2. Add and remove settings; pens per scale; dimension styles, symbols and title blocks as
    settings; the hatches as settings that can be changed.
 3. Save and open a standard as an IFCX file of its own, and layer a company's over a country's.
-4. An editor for systems. Profiles drawn freely. Hatches of one's own.
+4. Profiles drawn freely. Hatches of one's own. A system's members by a profile of the library.
 5. Elements follow a change of their type, when asked.
 6. A house style that can be chosen: logo, colours, fonts and title block, kept in a file.
 7. Library files and components opened into the page.

@@ -47,6 +47,7 @@ pub mod library;
 pub mod materials;
 pub mod profiles;
 pub mod standards;
+pub mod systems;
 mod marks;
 mod gis;
 mod geo;
@@ -383,6 +384,9 @@ pub struct App {
     /// The linear type edited on the Library page, the role whose types show and what of the
     /// steel table shows.
     pub profile_view: profiles::ProfileView,
+    /// The system type edited on the Library page, the group whose types show and the part of it
+    /// whose fields show.
+    pub system_view: systems::SystemView,
     /// The GIS tab: the place of the project and what was fetched around it.
     pub gis: gis::Gis,
     /// The schedules of the model, once computed (they follow the model), and whether they are
@@ -547,6 +551,8 @@ pub enum Message {
     Material(materials::MaterialMessage),
     /// The linear types of the project on the Library page: picking one and editing its profile.
     Profile(profiles::ProfileMessage),
+    /// The system types of the project on the Library page: picking one and editing its parts.
+    SystemType(systems::SystemMessage),
     #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
     Collab(collab::Event),
     #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]
@@ -1042,6 +1048,7 @@ impl Default for App {
             buildup_view: buildups::BuildUpView::default(),
             material_view: materials::MaterialView::default(),
             profile_view: profiles::ProfileView::default(),
+            system_view: systems::SystemView::default(),
             gis: gis::Gis::default(),
             schedules: Vec::new(),
             schedules_pending: false,
@@ -2224,6 +2231,7 @@ impl App {
             Message::BuildUp(message) => return self.buildup_update(message),
             Message::Material(message) => return self.material_update(message),
             Message::Profile(message) => return self.profile_update(message),
+            Message::SystemType(message) => return self.system_update(message),
             #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
             Message::Collab(event) => return self.collab_update(event),
             #[cfg(all(feature = "pointcloud", not(target_arch = "wasm32")))]

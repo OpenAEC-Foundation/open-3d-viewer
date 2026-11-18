@@ -3443,6 +3443,8 @@ mod tests {
             ("buildup", LibrariesMessage::Source(Source::Project)),
             ("profile", LibrariesMessage::Source(Source::Project)),
             ("material", LibrariesMessage::Source(Source::Project)),
+            ("system", LibrariesMessage::Source(Source::Project)),
+            ("system-layer", LibrariesMessage::Source(Source::Project)),
             ("search-steel", LibrariesMessage::Search("hea 2".into())),
         ];
         for (name, show) in shots {
@@ -3467,6 +3469,17 @@ mod tests {
             // the project with a material picked, in its editor
             if name == "material" {
                 let _ = studio.update(Msg::App(Message::Material(crate::app::materials::MaterialMessage::Pick("brick".into()))));
+            }
+            // the project with a timber frame picked, in its editor: the face open, or a layer;
+            // the ceilings shown of the build-ups (there are two), so the systems under them
+            // are on the page's first screen
+            if name.starts_with("system") {
+                use crate::app::systems::{Part, SystemMessage};
+                let _ = studio.update(Msg::App(Message::BuildUp(crate::app::buildups::BuildUpMessage::Open(bim_library::Role::Ceiling))));
+                let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Pick("system.timber-frame-140".into()))));
+                if name == "system-layer" {
+                    let _ = studio.update(Msg::App(Message::SystemType(SystemMessage::Part(Part::Layer(3)))));
+                }
             }
             if name == "country-nl" {
                 let _ = studio.update(Msg::App(Message::Standard(crate::app::standards::StandardMessage::Pick(crate::app::standards::Setting::Kind("floor-plan".into())))));

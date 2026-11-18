@@ -163,6 +163,7 @@ pub(super) enum Editor {
     Material,
     BuildUp,
     Profile,
+    System,
 }
 
 /// A library something was found in.
@@ -306,6 +307,9 @@ impl App {
         }
         if editor != Editor::Profile {
             self.profile_view.picked = None;
+        }
+        if editor != Editor::System {
+            self.system_view.picked = None;
         }
     }
 
@@ -465,15 +469,16 @@ impl App {
     }
 
     /// The right pane of the Library product: on the Project page the editor of what was picked
-    /// there, a material, a build-up or a linear type; elsewhere the fields of what is picked of
-    /// the drawing standard.
+    /// there, a material, a build-up, a linear type or a system type; elsewhere the fields of what
+    /// is picked of the drawing standard.
     pub fn library_side(&self, p: Palette, l: Language) -> Element<'_, Message> {
         match self.libraries.source {
             Source::Project if self.material_view.picked.is_some() => self.material_pane(p, l),
             Source::Project if self.profile_view.picked.is_some() => self.profile_pane(p, l),
             Source::Project if self.buildup_view.picked.is_some() => self.buildup_pane(p, l),
+            Source::Project if self.system_view.picked.is_some() => self.system_pane(p, l),
             // nothing picked: what each editor is for
-            Source::Project => column![self.material_pane(p, l), self.buildup_pane(p, l), self.profile_pane(p, l)].into(),
+            Source::Project => column![self.material_pane(p, l), self.buildup_pane(p, l), self.profile_pane(p, l), self.system_pane(p, l)].into(),
             _ => self.standard_pane(p, l),
         }
     }
@@ -485,6 +490,7 @@ impl App {
         use super::materials::MaterialMessage;
         use super::profiles::ProfileMessage;
         use super::standards::Setting;
+        use super::systems::SystemMessage;
         let found = self.library_search(&self.libraries.query, l);
         let title = text(format!("{} · {}", l.text("Zoekresultaten", "Search results"), found.len())).size(20).font(FONT_BOLD).color(p.text);
         if found.is_empty() {
@@ -516,7 +522,8 @@ impl App {
                 }
                 Item::System(shelf, id) => {
                     let library = self.shelf(*shelf);
-                    library.system_type(id).map(|t| system_detail(p, l, library, t))
+                    let copied = (*shelf != Shelf::Project).then(|| hint(as_copy));
+                    library.system_type(id).map(|t| column![system_detail(p, l, library, t)].push(copied).spacing(6).into())
                 }
                 Item::Steel(designation) => bim_library::profile::steel(designation).map(|s| {
                     let make = hint(l.text("Klik om er een balktype van te maken in het project.", "Click to make a beam type of it in the project."));
@@ -539,8 +546,9 @@ impl App {
                 .clip(true)
                 .style(move |_| container::Style { background: Some(p.surface.into()), border: iced::Border { color: p.border, width: 1.0, radius: 6.0.into() }, ..Default::default() });
             // a kind of drawing or a setting opens in its standard, where it is set; a material,
-            // a build-up or a linear type opens in its editor, one of another library as a copy
-            // in the project; a profile of the steel table becomes a beam type of the project
+            // a build-up, a linear type or a system type opens in its editor, one of another
+            // library as a copy in the project; a profile of the steel table becomes a beam type
+            // of the project
             match f.item {
                 Item::Material(Shelf::Project, key) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Material(MaterialMessage::Pick(key))).into(),
                 Item::Material(shelf, key) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Material(MaterialMessage::Copy(shelf, key))).into(),
@@ -550,7 +558,8 @@ impl App {
                 Item::Linear(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::Pick(id))).into(),
                 Item::Linear(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::Copy(shelf, id))).into(),
                 Item::Steel(designation) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::Profile(ProfileMessage::FromSteel(designation))).into(),
-                _ => Element::from(card),
+                Item::System(Shelf::Project, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::SystemType(SystemMessage::Pick(id))).into(),
+                Item::System(shelf, id) => button(card).padding(0).style(move |_, s| p.row_button(s)).on_press(Message::SystemType(SystemMessage::Copy(shelf, id))).into(),
             }
         });
         column![title, row(cards).spacing(10).wrap()].spacing(14).into()
@@ -585,12 +594,13 @@ impl App {
             page = page.push(self.standard_sections(p, l));
         }
         // the project: its materials first, then what is made of them, to be edited: its
-        // build-ups and its linear types side by side, and under the linear types the steel table
-        // one takes its profile from
+        // build-ups and its linear types side by side, under the build-ups its system types and
+        // under the linear types the steel table one takes its profile from
         if view.source == Source::Project {
             let half = iced::Length::FillPortion(1);
             let linear = column![self.profile_lists(p, l), self.steel_table(p, l)].spacing(18);
-            page = page.push(self.material_chips(p, l)).push(row![container(self.buildup_lists(p, l)).width(half), container(linear).width(half)].spacing(12));
+            let layered = column![self.buildup_lists(p, l), self.system_lists(p, l)].spacing(18);
+            page = page.push(self.material_chips(p, l)).push(row![container(layered).width(half), container(linear).width(half)].spacing(12));
         }
         for (section, cards) in self.library_sections(l, &house) {
             let cards = row(cards.into_iter().map(|card| card_view(card, p, l))).spacing(10).wrap();

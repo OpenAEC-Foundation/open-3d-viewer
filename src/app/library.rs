@@ -91,7 +91,7 @@ fn role_label(role: Role, l: Language) -> &'static str {
     }
 }
 
-fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
+pub(super) fn system_group_label(group: SystemGroup, l: Language) -> &'static str {
     match group {
         SystemGroup::CurtainWall => l.text("Vliesgevels", "Curtain walls"),
         SystemGroup::Frame => l.text("Kozijnen", "Frames"),
@@ -478,12 +478,7 @@ pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &Syst
     let mut list = Column::new().spacing(2);
     let pattern = t.grid.pattern.name(t.group, lang(l)).map_or(String::new(), |n| format!(" · {n}"));
     list = list.push(small(format!("{} {} × {} mm{pattern}", l.text("Raster", "Grid"), mm(t.grid.bay, l), mm(t.grid.row, l)), p));
-    // what the members are: a frame's mullions and transoms, a ceiling's profiles, or joints
-    let members = match t.group {
-        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud => l.text("Stijlen en regels", "Members"),
-        SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
-        SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
-    };
+    let members = member_word(t.group, l);
     list = list.push(line(&t.members.material, format!("{members}: {} {}", material(&t.members.material), size(t.members.width, t.members.depth))));
     if let Some(framing) = t.members.framing {
         list = list.push(small(
@@ -526,16 +521,36 @@ pub(super) fn system_detail<'a>(p: Palette, l: Language, lib: &Library, t: &Syst
     }
     let (class, predefined) = t.group.ifc_type();
     list = list.push(small(format!("{class} {predefined}"), p));
+    let mut drawn = column![system_face(p, lib, t)].spacing(6);
+    if !t.layers.is_empty() {
+        drawn = drawn.push(system_cut(p, lib, t));
+    }
+    drawn.push(list).into()
+}
+
+/// What the members of a system of `group` are: a frame's mullions and transoms, a ceiling's
+/// profiles, or joints.
+pub(super) fn member_word(group: SystemGroup, l: Language) -> &'static str {
+    match group {
+        SystemGroup::CurtainWall | SystemGroup::Frame | SystemGroup::TimberFrame | SystemGroup::MetalStud => l.text("Stijlen en regels", "Members"),
+        SystemGroup::Ceiling => l.text("Profielen", "Profiles"),
+        SystemGroup::Masonry | SystemGroup::Cladding | SystemGroup::Floor => l.text("Voegen", "Joints"),
+    }
+}
+
+/// A system type's face alone, a few bays and rows of it as the kernel generates them.
+pub(super) fn system_face<'a>(p: Palette, lib: &Library, t: &SystemType) -> Element<'a, Message> {
     let face = elevation(t, lib, p.text);
     // as high as the face's shape asks, in a canvas about 240 wide
     let tall = (240.0 * face.size[1] / face.size[0]).clamp(40.0, 170.0) as f32;
-    let mut drawn = column![canvas_widget(face).width(Fill).height(tall)].spacing(6);
-    if !t.layers.is_empty() {
-        let section = system_section(t, lib, p.text);
-        let height = (section.depth * 400.0).clamp(24.0, 150.0) as f32;
-        drawn = drawn.push(canvas_widget(section).width(Fill).height(height));
-    }
-    drawn.push(list).into()
+    canvas_widget(face).width(Fill).height(tall).into()
+}
+
+/// A section through a system type's face and layers alone, the exterior at the top.
+pub(super) fn system_cut<'a>(p: Palette, lib: &Library, t: &SystemType) -> Element<'a, Message> {
+    let section = system_section(t, lib, p.text);
+    let height = (section.depth * 400.0).clamp(24.0, 150.0) as f32;
+    canvas_widget(section).width(Fill).height(height).into()
 }
 
 /// The face of system type `t` as the kernel generates it, a few bays wide (as wide as a row is

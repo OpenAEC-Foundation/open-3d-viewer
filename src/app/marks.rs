@@ -335,7 +335,7 @@ impl App {
             drawing: self.draw_tool.filter(|_| self.annotates && !self.dimension_tool && !self.section_tool && !self.note_tool),
             own_lines: self.document.view_lines(view).len(),
             shapes: self.document.view_shapes(view).to_vec(),
-            transforming: self.modeller.transform.is_some() || self.modeller.offset.is_some(),
+            transforming: self.modeller.transform.is_some() || self.modeller.offset.is_some() || self.modeller.pair_edit.is_some(),
             selected: self.sel.items().iter().filter_map(|item| if let super::Pickable::Element(id) = item { Some(*id) } else { None }).collect(),
         })
     }
@@ -366,6 +366,12 @@ impl App {
         } else if self.annotates && self.note_tool {
             rows = rows.push(text_input(l.text("Tekst", "Text"), &self.note_text).on_input(Message::NoteText).size(12).padding([3, 6]));
             rows = rows.push(hint(l.text("Klik waar de tekst komt.", "Click where the text goes.")));
+        }
+        // a fillet's radius or a chamfer's distance, typed here
+        if let Some(e) = self.modeller.pair_edit.as_ref().filter(|e| e.kind.sized()) {
+            let name = if e.kind == super::drawn_edit::PairKind::Fillet { l.text("Straal (mm)", "Radius (mm)") } else { l.text("Afstand (mm)", "Distance (mm)") };
+            rows = rows.push(hint(name));
+            rows = rows.push(text_input("100", &e.size).on_input(Message::PairSize).size(12).padding([3, 6]));
         }
         match self.mark_pick.filter(|_| self.annotates) {
             Some(MarkPick::Note(_)) => {

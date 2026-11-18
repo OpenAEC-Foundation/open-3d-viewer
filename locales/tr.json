@@ -1142,6 +1142,18 @@
     "Click the centre, the end of one axis and how far the other reaches.": "Merkeze, bir eksenin ucuna ve diğerinin ne kadar uzandığına tıklayın.",
     "Offset": "Öteleme",
     "Offset distance (mm)": "Öteleme mesafesi (mm)",
-    "Click on the side where the copy goes · Esc: stop": "Kopyanın geleceği tarafa tıklayın · Esc: durdur"
+    "Click on the side where the copy goes · Esc: stop": "Kopyanın geleceği tarafa tıklayın · Esc: durdur",
+    "Trim": "Kırp",
+    "Extend": "Uzat",
+    "Fillet": "Yuvarlat",
+    "Chamfer": "Pah kır",
+    "Radius (mm)": "Yarıçap (mm)",
+    "Distance (mm)": "Mesafe (mm)",
+    "Click the line to trim against · Esc: stop": "Kırpmanın yapılacağı çizgiye tıklayın · Esc: durdur",
+    "Click the part of a line that goes · Esc: start again": "Bir çizginin gidecek kısmına tıklayın · Esc: yeniden başla",
+    "Click the line to extend to · Esc: stop": "Uzatılacak hedef çizgiye tıklayın · Esc: durdur",
+    "Click the line that is extended · Esc: start again": "Uzatılacak çizgiye tıklayın · Esc: yeniden başla",
+    "Click the first line, on the side that stays · Esc: stop": "İlk çizgiye, kalacak tarafından tıklayın · Esc: durdur",
+    "Click the second line, on the side that stays · Esc: start again": "İkinci çizgiye, kalacak tarafından tıklayın · Esc: yeniden başla"
   }
 }

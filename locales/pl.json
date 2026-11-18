@@ -1142,6 +1142,18 @@
     "Click the centre, the end of one axis and how far the other reaches.": "Kliknij środek, koniec jednej osi i zasięg drugiej.",
     "Offset": "Odsunięcie",
     "Offset distance (mm)": "Odległość odsunięcia (mm)",
-    "Click on the side where the copy goes · Esc: stop": "Kliknij po stronie, po której ma być kopia · Esc: zakończ"
+    "Click on the side where the copy goes · Esc: stop": "Kliknij po stronie, po której ma być kopia · Esc: zakończ",
+    "Trim": "Utnij",
+    "Extend": "Wydłuż",
+    "Fillet": "Zaokrąglij",
+    "Chamfer": "Fazuj",
+    "Radius (mm)": "Promień (mm)",
+    "Distance (mm)": "Odległość (mm)",
+    "Click the line to trim against · Esc: stop": "Kliknij linię, do której się ucina · Esc: zakończ",
+    "Click the part of a line that goes · Esc: start again": "Kliknij część linii, która ma zniknąć · Esc: od nowa",
+    "Click the line to extend to · Esc: stop": "Kliknij linię, do której się wydłuża · Esc: zakończ",
+    "Click the line that is extended · Esc: start again": "Kliknij linię, która ma być wydłużona · Esc: od nowa",
+    "Click the first line, on the side that stays · Esc: stop": "Kliknij pierwszą linię po stronie, która zostaje · Esc: zakończ",
+    "Click the second line, on the side that stays · Esc: start again": "Kliknij drugą linię po stronie, która zostaje · Esc: od nowa"
   }
 }

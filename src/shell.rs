@@ -1308,6 +1308,13 @@ impl Studio {
                 .toggle(app.modeller.offset.is_some())
                 .enabled(app.drawn_picked().is_some() || app.modeller.offset.is_some()),
         );
+        let on_plan = app.shown_drawing().is_some_and(|v| app.document.plan(&v).is_some());
+        list.extend(crate::app::drawn_edit::PairKind::ALL.map(|kind| {
+            Command::new(kind.id(), kind.label(l), go(Message::PairEdit(kind)))
+                .icon(small(kind.icon()), large(kind.icon()))
+                .toggle(app.modeller.pair_edit.as_ref().is_some_and(|e| e.kind == kind))
+                .enabled(on_plan)
+        }));
         list.push(Command::new("edit.explode", l.text("Exploderen", "Explode"), go(Message::ExplodeDrawn)).icon(small("transform.explode"), large("transform.explode")).enabled(app.shape_picked()));
         // the project's levels, views, sheets and library
         use crate::document::PlanKind;
@@ -2344,7 +2351,7 @@ impl Studio {
                 (l.text("Tekenen", "Draw"), vec![smalls(&["draw.line", "draw.polyline", "draw.rectangle"]), smalls(&["draw.circle", "draw.arc", "draw.ellipse"])]),
                 (l.text("Annoteren", "Annotate"), vec![large("annotate.dimension"), smalls(&["annotate.standard-dimensions", "annotate.text"])]),
                 (l.text("Wijzigen", "Modify"), vec![smalls(&["model.move", "model.copy", "model.rotate"]), smalls(&["model.mirror", "model.edit", "model.delete"])]),
-                (l.text("Bewerken", "Edit"), vec![smalls(&["edit.offset", "edit.explode"])]),
+                (l.text("Bewerken", "Edit"), vec![smalls(&["edit.trim", "edit.extend", "edit.offset"]), smalls(&["edit.fillet", "edit.chamfer", "edit.explode"])]),
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![

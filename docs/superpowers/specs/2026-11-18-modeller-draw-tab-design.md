@@ -75,7 +75,8 @@ Done: in the Draw tab and working. Elsewhere: the Modeller has it in another pla
 | Modify | Array, Scale (RE) | open |
 | Edit | Offset | done on a floor plan: a distance typed in the right pane (mm), a click on the side; corners meet again; no key yet |
 | Edit | Explode | done: the shape picked becomes loose lines |
-| Edit | Trim (TR), Extend (EX), Fillet (FL), Chamfer | open |
+| Edit | Trim, Extend | done on a floor plan: click the line to work against, then the line to trim (on the part that goes) or extend; straight lines only, no keys yet |
+| Edit | Fillet, Chamfer | done on a floor plan: click two lines on the side that stays; radius or distance typed in the right pane (mm), 0 makes a corner; the tool stays on for the next pair |
 | Edit | Stretch, Split, Align, Break, Join, Lengthen | open |
 | Clipboard | Paste, Cut, Copy | open |
 | Clipboard | Delete | done: Delete, and Remove in the right pane for what is picked on a view |
@@ -87,6 +88,6 @@ Done: in the Draw tab and working. Elsewhere: the Modeller has it in another pla
    section and a sheet.
 2. The drawing tools take the Modeller's snaps and marks (end, middle, grid, on a line) and the
    typed length; the points being clicked move from the canvas into the app for that.
-3. Edit: Trim, Extend, Fillet, Chamfer, Join.
+3. Edit: Join, keys for the Edit tools, and trimming against and of curves.
 4. Spline, filled region, the other dimensions, leader and cloud.
 5. Clipboard, array and scale.

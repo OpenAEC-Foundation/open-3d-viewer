@@ -1142,6 +1142,18 @@
     "Click the centre, the end of one axis and how far the other reaches.": "Klicka på mittpunkten, änden av den ena axeln och hur långt den andra når.",
     "Offset": "Förskjutning",
     "Offset distance (mm)": "Förskjutningens avstånd (mm)",
-    "Click on the side where the copy goes · Esc: stop": "Klicka på den sida där kopian ska hamna · Esc: avsluta"
+    "Click on the side where the copy goes · Esc: stop": "Klicka på den sida där kopian ska hamna · Esc: avsluta",
+    "Trim": "Trimma",
+    "Extend": "Förläng",
+    "Fillet": "Avrunda",
+    "Chamfer": "Fasa",
+    "Radius (mm)": "Radie (mm)",
+    "Distance (mm)": "Avstånd (mm)",
+    "Click the line to trim against · Esc: stop": "Klicka på linjen att trimma mot · Esc: avsluta",
+    "Click the part of a line that goes · Esc: start again": "Klicka på den del av en linje som ska bort · Esc: börja om",
+    "Click the line to extend to · Esc: stop": "Klicka på linjen att förlänga till · Esc: avsluta",
+    "Click the line that is extended · Esc: start again": "Klicka på linjen som ska förlängas · Esc: börja om",
+    "Click the first line, on the side that stays · Esc: stop": "Klicka på den första linjen, på den sida som blir kvar · Esc: avsluta",
+    "Click the second line, on the side that stays · Esc: start again": "Klicka på den andra linjen, på den sida som blir kvar · Esc: börja om"
   }
 }

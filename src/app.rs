@@ -30,7 +30,7 @@ mod layers;
 pub mod collab;
 mod docs;
 mod drafts;
-mod drawn_edit;
+pub mod drawn_edit;
 pub mod drawn_props;
 mod edit;
 mod element_props;
@@ -587,6 +587,9 @@ pub enum Message {
     /// Offset on or off, and the distance typed for it.
     OffsetTool,
     OffsetText(String),
+    /// Trim, Extend, Fillet or Chamfer on or off, and the size typed for it.
+    PairEdit(drawn_edit::PairKind),
+    PairSize(String),
     /// Put the picked dimension on the other side of what it measures.
     FlipDimension,
     /// The picked dimension looks otherwise: another style, or its style changed.
@@ -2265,6 +2268,12 @@ impl App {
                 self.explode_drawn();
             }
             Message::OffsetTool => self.toggle_offset(),
+            Message::PairEdit(kind) => self.toggle_pair_edit(kind),
+            Message::PairSize(typed) => {
+                if let Some(e) = self.modeller.pair_edit.as_mut() {
+                    e.size = typed;
+                }
+            }
             Message::OffsetText(typed) => {
                 if let Some(text) = self.modeller.offset.as_mut() {
                     *text = typed;
@@ -2656,6 +2665,9 @@ impl App {
                 self.escape_transform();
             }
             Message::Escape if self.modeller.offset.is_some() => self.modeller.offset = None,
+            Message::Escape if self.modeller.pair_edit.is_some() => {
+                self.escape_pair_edit();
+            }
             // Esc drops a length being typed first; the tool goes on drawing
             Message::Escape if !self.modeller.length_typed.is_empty() => self.modeller.length_typed.clear(),
             Message::Escape if self.modeller.grid_tool => self.escape_grid_tool(),
@@ -2791,6 +2803,9 @@ impl App {
         }
         if self.modeller.offset.is_some() {
             return self.offset_click(x, y, width, height);
+        }
+        if self.modeller.pair_edit.is_some() {
+            return self.pair_click(x, y, width, height);
         }
         if self.modeller.grid_tool {
             return self.grid_click(x, y, width, height);
@@ -4136,7 +4151,7 @@ impl App {
                 Some(refusal) => format!("{}: {} · {}", t.kind.label(l), l.translate(refusal.reason()), hint),
                 None => format!("{}: {}", t.kind.label(l), hint),
             })
-        } else if let Some(hint) = self.offset_hint(l) {
+        } else if let Some(hint) = self.offset_hint(l).or_else(|| self.pair_hint(l)) {
             Some(hint)
         } else if let Some(hint) = self.grid_hint(l) {
             Some(hint)

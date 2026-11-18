@@ -6,6 +6,150 @@ use super::marks::MarkPick;
 use super::App;
 use openaec_ui::Language;
 
+/// The Edit tools of two clicks: a first line, then the one it works on (or with).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PairKind {
+    /// The second line loses its part on the side clicked, up to the first.
+    Trim,
+    /// The second line reaches on to the first.
+    Extend,
+    /// The two lines meet in an arc of the radius typed (none: in a corner).
+    Fillet,
+    /// The two lines meet in a bevel, the distance typed back along each.
+    Chamfer,
+}
+
+impl PairKind {
+    pub const ALL: [PairKind; 4] = [PairKind::Trim, PairKind::Extend, PairKind::Fillet, PairKind::Chamfer];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            PairKind::Trim => "edit.trim",
+            PairKind::Extend => "edit.extend",
+            PairKind::Fillet => "edit.fillet",
+            PairKind::Chamfer => "edit.chamfer",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            PairKind::Trim => "transform.trim",
+            PairKind::Extend => "transform.extend",
+            PairKind::Fillet => "transform.fillet",
+            PairKind::Chamfer => "transform.chamfer",
+        }
+    }
+
+    pub fn label(self, l: Language) -> &'static str {
+        match self {
+            PairKind::Trim => l.text("Trimmen", "Trim"),
+            PairKind::Extend => l.text("Verlengen", "Extend"),
+            PairKind::Fillet => l.text("Afronden", "Fillet"),
+            PairKind::Chamfer => l.text("Afschuinen", "Chamfer"),
+        }
+    }
+
+    /// Whether a size is typed for it: a fillet's radius, a chamfer's distance.
+    pub fn sized(self) -> bool {
+        matches!(self, PairKind::Fillet | PairKind::Chamfer)
+    }
+
+    /// What to click next: the first line, or the second.
+    pub fn hint(self, l: Language, first: bool) -> &'static str {
+        match (self, first) {
+            (PairKind::Trim, true) => l.text("Klik de lijn waartegen getrimd wordt · Esc: stoppen", "Click the line to trim against · Esc: stop"),
+            (PairKind::Trim, false) => l.text("Klik het deel van een lijn dat weg moet · Esc: opnieuw", "Click the part of a line that goes · Esc: start again"),
+            (PairKind::Extend, true) => l.text("Klik de lijn waar naartoe verlengd wordt · Esc: stoppen", "Click the line to extend to · Esc: stop"),
+            (PairKind::Extend, false) => l.text("Klik de lijn die verlengd wordt · Esc: opnieuw", "Click the line that is extended · Esc: start again"),
+            (_, true) => l.text("Klik de eerste lijn, aan de kant die blijft · Esc: stoppen", "Click the first line, on the side that stays · Esc: stop"),
+            (_, false) => l.text("Klik de tweede lijn, aan de kant die blijft · Esc: opnieuw", "Click the second line, on the side that stays · Esc: start again"),
+        }
+    }
+}
+
+/// A tool of two clicks under way: the first line clicked and where, and the size typed (mm).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairEdit {
+    pub kind: PairKind,
+    pub first: Option<(usize, [f64; 2])>,
+    pub size: String,
+}
+
+/// Where the endless lines through `a` and `b` cross; none for parallel ones.
+pub fn crossing(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2]) -> Option<[f64; 2]> {
+    let (r, s) = ([a[1][0] - a[0][0], a[1][1] - a[0][1]], [b[1][0] - b[0][0], b[1][1] - b[0][1]]);
+    let cross = r[0] * s[1] - r[1] * s[0];
+    if cross.abs() <= 1e-12 * (r[0].hypot(r[1]) * s[0].hypot(s[1])).max(1e-12) {
+        return None;
+    }
+    let t = ((b[0][0] - a[0][0]) * s[1] - (b[0][1] - a[0][1]) * s[0]) / cross;
+    Some([a[0][0] + r[0] * t, a[0][1] + r[1] * t])
+}
+
+/// The two lines as a tool of two clicks leaves them (none: as it was), and the lines it adds.
+pub type PairResult = ([Option<[[f64; 2]; 2]>; 2], Vec<[[f64; 2]; 2]>);
+
+/// What a tool of two clicks makes of line `a` (clicked at `pa`) and line `b` (clicked at `pb`):
+/// the two lines as they become, and the lines it adds between them (the arc of a fillet, the
+/// bevel of a chamfer). None when the lines do not cross or the size does not fit.
+pub fn pair_edit(kind: PairKind, a: [[f64; 2]; 2], pa: [f64; 2], b: [[f64; 2]; 2], pb: [f64; 2], size: f64) -> Option<PairResult> {
+    let x = crossing(&a, &b)?;
+    let dist = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+    // the end of a line on the side of a click, seen from the crossing
+    let side = |line: &[[f64; 2]; 2], click: [f64; 2]| {
+        let dot = |e: [f64; 2]| (click[0] - x[0]) * (e[0] - x[0]) + (click[1] - x[1]) * (e[1] - x[1]);
+        if dot(line[0]) >= dot(line[1]) { 0 } else { 1 }
+    };
+    match kind {
+        PairKind::Extend => {
+            // the end nearest to the crossing goes there
+            let end = if dist(b[0], x) <= dist(b[1], x) { 0 } else { 1 };
+            let mut line = b;
+            line[end] = x;
+            (line[0] != line[1]).then_some(([None, Some(line)], Vec::new()))
+        }
+        PairKind::Trim => {
+            // the crossing must be on the line trimmed; the end on the side clicked goes there
+            let along = ((x[0] - b[0][0]) * (b[1][0] - b[0][0]) + (x[1] - b[0][1]) * (b[1][1] - b[0][1])) / dist(b[0], b[1]).powi(2).max(1e-18);
+            if !(1e-9..=1.0 - 1e-9).contains(&along) {
+                return None;
+            }
+            let mut line = b;
+            line[side(&b, pb)] = x;
+            Some(([None, Some(line)], Vec::new()))
+        }
+        PairKind::Fillet | PairKind::Chamfer => {
+            // of each line the end on the side clicked stays; the other comes to the corner
+            let (ka, kb) = (a[side(&a, pa)], b[side(&b, pb)]);
+            let (la, lb) = (dist(ka, x), dist(kb, x));
+            if la < 1e-9 || lb < 1e-9 {
+                return None;
+            }
+            let (ua, ub) = ([(ka[0] - x[0]) / la, (ka[1] - x[1]) / la], [(kb[0] - x[0]) / lb, (kb[1] - x[1]) / lb]);
+            if size <= 0.0 {
+                return Some(([Some([ka, x]), Some([kb, x])], Vec::new()));
+            }
+            let half = (ua[0] * ub[0] + ua[1] * ub[1]).clamp(-1.0, 1.0).acos() / 2.0;
+            // how far back from the corner each line ends
+            let back = if kind == PairKind::Fillet { size / half.tan() } else { size };
+            if !back.is_finite() || back >= la - 1e-9 || back >= lb - 1e-9 {
+                return None;
+            }
+            let (ta, tb) = ([x[0] + ua[0] * back, x[1] + ua[1] * back], [x[0] + ub[0] * back, x[1] + ub[1] * back]);
+            let between = if kind == PairKind::Chamfer {
+                vec![[ta, tb]]
+            } else {
+                // the arc touches both lines: its middle is on the bisector, a radius short of its centre
+                let (bx, by) = (ua[0] + ub[0], ua[1] + ub[1]);
+                let run = bx.hypot(by).max(1e-12);
+                let reach = size / half.sin() - size;
+                super::marks::DrawKind::Arc.shape_lines(&[ta, [x[0] + bx / run * reach, x[1] + by / run * reach], tb])
+            };
+            Some(([Some([ka, ta]), Some([kb, tb])], between))
+        }
+    }
+}
+
 /// The distance Offset starts with (millimetres).
 pub const OFFSET_DEFAULT: &str = "100";
 
@@ -82,6 +226,7 @@ impl App {
             self.set_model_tool(None);
         }
         self.modeller.transform = None;
+        self.modeller.pair_edit = None;
         self.modeller.offset = Some(OFFSET_DEFAULT.to_string());
     }
 
@@ -106,6 +251,81 @@ impl App {
         if added > 0 {
             self.mark_pick = Some(MarkPick::Line(first));
         }
+    }
+
+    /// A tool of two clicks on or off (the same one again: off). It works on a floor plan.
+    pub(super) fn toggle_pair_edit(&mut self, kind: PairKind) {
+        let same = self.modeller.pair_edit.as_ref().is_some_and(|e| e.kind == kind);
+        self.modeller.pair_edit = None;
+        if same || self.shown_view().is_none_or(|v| self.document.plan(v).is_none()) {
+            return;
+        }
+        if self.modeller.tool.is_some() {
+            self.set_model_tool(None);
+        }
+        self.modeller.transform = None;
+        self.modeller.offset = None;
+        self.draw_tool = None;
+        self.modeller.pair_edit = Some(PairEdit { kind, first: None, size: if kind.sized() { OFFSET_DEFAULT.to_string() } else { String::new() } });
+    }
+
+    /// Esc: the first line clicked goes, else the tool. False when none was on.
+    pub(super) fn escape_pair_edit(&mut self) -> bool {
+        match self.modeller.pair_edit.as_mut() {
+            Some(e) if e.first.is_some() => e.first = None,
+            Some(_) => self.modeller.pair_edit = None,
+            None => return false,
+        }
+        true
+    }
+
+    /// A click while a tool of two clicks is on: the line of the plan under it is its first
+    /// line, or its second, and then the tool does its work and waits for a next pair.
+    pub(super) fn pair_click(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        let (z, ..) = self.work_plane();
+        let (Some(p), Some(aside)) = (self.plane_point(x, y, width, height, z), self.plane_point(x + 8.0, y, width, height, z)) else { return };
+        let Some(view) = self.shown_view().filter(|v| self.document.plan(v).is_some()).map(str::to_string) else { return };
+        let (p, reach) = ([p.x, p.y], p.distance(aside));
+        // the line under the click: the nearest within eight pixels
+        let away = |l: &[[f64; 2]; 2]| {
+            let (dx, dy) = (l[1][0] - l[0][0], l[1][1] - l[0][1]);
+            let t = (((p[0] - l[0][0]) * dx + (p[1] - l[0][1]) * dy) / (dx * dx + dy * dy).max(1e-18)).clamp(0.0, 1.0);
+            (p[0] - l[0][0] - dx * t).hypot(p[1] - l[0][1] - dy * t)
+        };
+        let Some((k, _)) = self.document.view_lines(&view).iter().map(away).enumerate().filter(|(_, d)| *d <= reach).min_by(|a, b| a.1.total_cmp(&b.1)) else { return };
+        let Some(edit) = self.modeller.pair_edit.clone() else { return };
+        let Some((first, at)) = edit.first.filter(|(first, _)| *first != k) else {
+            if let Some(e) = self.modeller.pair_edit.as_mut() {
+                e.first = Some((k, p));
+            }
+            self.mark_pick = Some(MarkPick::Line(k));
+            return;
+        };
+        let size = edit.size.trim().replace(',', ".").parse::<f64>().ok().filter(|mm| mm.is_finite() && *mm >= 0.0).map_or(0.0, |mm| mm / 1000.0);
+        let lines = self.document.view_lines(&view);
+        let Some((changed, between)) = pair_edit(edit.kind, lines[first], at, lines[k], p, size) else { return };
+        // a line of a shape changed is a line of its own from here on
+        for (index, line) in [first, k].into_iter().zip(changed) {
+            if let Some(line) = line {
+                self.document.explode_view_shape(&view, index);
+                self.document.set_view_line(&view, index, line);
+            }
+        }
+        if between.len() > 1 {
+            self.document.add_view_shape(&view, crate::document::ShapeKind::Arc, &between);
+        } else {
+            self.document.add_view_lines(&view, &between);
+        }
+        self.mark_pick = None;
+        if let Some(e) = self.modeller.pair_edit.as_mut() {
+            e.first = None;
+        }
+    }
+
+    /// What a tool of two clicks waits for, in the banner.
+    pub(super) fn pair_hint(&self, l: Language) -> Option<String> {
+        let e = self.modeller.pair_edit.as_ref()?;
+        Some(format!("{}: {}", e.kind.label(l), e.kind.hint(l, e.first.is_none())))
     }
 
     /// What Offset waits for, in the banner.
@@ -165,6 +385,87 @@ mod tests {
         assert!(!app.shape_picked());
         let _ = app.update(Message::RemoveMark);
         assert_eq!(app.document.view_lines(&plan).len(), 7);
+    }
+
+    #[test]
+    fn the_tools_of_two_clicks_trim_extend_round_and_bevel() {
+        let close = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-9;
+        let level = [[0.0, 0.0], [4.0, 0.0]];
+        let upright = [[2.0, -1.0], [2.0, 3.0]];
+        assert_eq!(crossing(&level, &upright), Some([2.0, 0.0]));
+        assert_eq!(crossing(&level, &[[0.0, 1.0], [4.0, 1.0]]), None);
+        // trim the upright against the level line: the part clicked goes
+        let (lines, between) = pair_edit(PairKind::Trim, level, [1.0, 0.0], upright, [2.0, 2.0], 0.0).unwrap();
+        assert_eq!((lines, between.len()), ([None, Some([[2.0, -1.0], [2.0, 0.0]])], 0));
+        let (lines, _) = pair_edit(PairKind::Trim, level, [1.0, 0.0], upright, [2.0, -0.5], 0.0).unwrap();
+        assert_eq!(lines[1], Some([[2.0, 0.0], [2.0, 3.0]]));
+        // a line that does not reach the other has nothing to trim, and is extended to it
+        let short = [[2.0, 1.0], [2.0, 3.0]];
+        assert!(pair_edit(PairKind::Trim, level, [1.0, 0.0], short, [2.0, 2.0], 0.0).is_none());
+        let (lines, _) = pair_edit(PairKind::Extend, level, [1.0, 0.0], short, [2.0, 2.0], 0.0).unwrap();
+        assert_eq!(lines, [None, Some([[2.0, 0.0], [2.0, 3.0]])]);
+        assert!(pair_edit(PairKind::Extend, level, [0.0, 0.0], [[0.0, 1.0], [4.0, 1.0]], [1.0, 1.0], 0.0).is_none(), "parallel");
+        // a fillet of radius 0: a corner of the sides clicked
+        let (lines, between) = pair_edit(PairKind::Fillet, level, [3.0, 0.0], upright, [2.0, 2.0], 0.0).unwrap();
+        assert_eq!((lines, between.len()), ([Some([[4.0, 0.0], [2.0, 0.0]]), Some([[2.0, 3.0], [2.0, 0.0]])], 0));
+        // radius 0.5 in a right angle: each line ends 0.5 short, the arc is on the circle about (2.5, 0.5)
+        let (lines, arc) = pair_edit(PairKind::Fillet, level, [3.0, 0.0], upright, [2.0, 2.0], 0.5).unwrap();
+        assert!(close(lines[0].unwrap()[1], [2.5, 0.0]) && close(lines[1].unwrap()[1], [2.0, 0.5]));
+        assert!(arc.len() >= 2 && close(arc[0][0], [2.5, 0.0]) && close(arc[arc.len() - 1][1], [2.0, 0.5]));
+        assert!(arc.iter().all(|l| ((l[0][0] - 2.5).hypot(l[0][1] - 0.5) - 0.5).abs() < 1e-9), "{arc:?}");
+        // a radius that does not fit the lines is refused
+        assert!(pair_edit(PairKind::Fillet, level, [3.0, 0.0], upright, [2.0, 2.0], 5.0).is_none());
+        // a chamfer of 0.5: a bevel between the two points 0.5 back
+        let (lines, bevel) = pair_edit(PairKind::Chamfer, level, [1.0, 0.0], upright, [2.0, -0.5], 0.5).unwrap();
+        assert!(close(lines[0].unwrap()[0], [0.0, 0.0]) && close(lines[0].unwrap()[1], [1.5, 0.0]) && close(lines[1].unwrap()[1], [2.0, -0.5]));
+        assert_eq!(bevel.len(), 1);
+        assert!(close(bevel[0][0], [1.5, 0.0]) && close(bevel[0][1], [2.0, -0.5]));
+        for kind in PairKind::ALL {
+            assert!(crate::b2::IDS.contains(&kind.icon()) && !kind.hint(Language::Dutch, true).is_empty() && !kind.label(Language::English).is_empty());
+        }
+    }
+
+    #[test]
+    fn two_clicks_on_a_floor_plan_round_a_corner_of_a_rectangle() {
+        use crate::app::marks::DrawKind;
+        use crate::app::Message;
+        let mut app = App::default();
+        app.new_model("Level 0");
+        app.viewport_size = (1000.0, 800.0);
+        // no floor plan: the tool has nowhere to work
+        let _ = app.update(Message::PairEdit(PairKind::Fillet));
+        assert!(app.modeller.pair_edit.is_none());
+        let level = std::sync::Arc::<str>::from(app.document.levels()[0].path.as_str());
+        let _ = app.update(Message::NewPlan(level));
+        app.anim = None;
+        app.camera.set_preset(crate::viewport::camera::ViewPreset::Top);
+        app.camera.ortho = true;
+        app.camera.target = glam::Vec3::ZERO;
+        app.camera.distance = 40.0 / (app.camera.fov_y * 0.5).tan();
+        let plan = std::sync::Arc::<str>::from(app.shown_view().expect("the plan shows"));
+        let _ = app.update(Message::AddShape(plan.clone(), DrawKind::Rectangle, DrawKind::Rectangle.shape_lines(&[[0.0, 0.0], [8.0, 6.0]])));
+        let click = |app: &mut App, x: f64, y: f64| {
+            let (x, y) = app.on_screen(glam::DVec3::new(x, y, 0.0), 1000.0, 800.0).unwrap();
+            let _ = app.update(Message::Navigate(crate::viewport::Navigate::Pick { x, y, width: 1000.0, height: 800.0, add: false }));
+        };
+        let _ = app.update(Message::PairEdit(PairKind::Fillet));
+        let _ = app.update(Message::PairSize("1000".into()));
+        assert!(app.pair_hint(Language::English).is_some());
+        // a click on nothing takes no line
+        click(&mut app, 4.0, 3.0);
+        assert!(app.modeller.pair_edit.as_ref().is_some_and(|e| e.first.is_none()));
+        // the bottom side, then the right side: the corner (8, 0) is rounded with radius 1
+        click(&mut app, 4.0, 0.0);
+        assert_eq!(app.modeller.pair_edit.as_ref().and_then(|e| e.first).map(|f| f.0), Some(0));
+        click(&mut app, 8.0, 3.0);
+        let lines = app.document.view_lines(&plan);
+        assert!((lines[0][1][0] - 7.0).abs() < 1e-6 && (lines[1][1][1] - 1.0).abs() < 1e-6, "{:?} {:?}", lines[0], lines[1]);
+        assert!(lines.len() > 5 && lines[4..].iter().all(|l| ((l[0][0] - 7.0).hypot(l[0][1] - 1.0) - 1.0).abs() < 1e-6));
+        // the rectangle is loose lines now, the arc a shape; the tool waits for the next pair
+        assert_eq!(app.document.view_shapes(&plan).iter().map(|s| (s.kind, s.first)).collect::<Vec<_>>(), [(crate::document::ShapeKind::Arc, 4)]);
+        assert!(app.modeller.pair_edit.as_ref().is_some_and(|e| e.first.is_none()));
+        let _ = app.update(Message::Escape);
+        assert!(app.modeller.pair_edit.is_none());
     }
 
     #[test]

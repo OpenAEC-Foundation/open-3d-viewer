@@ -242,6 +242,8 @@ pub struct Modeller {
     pub transform: Option<super::transform::Transform>,
     /// Offset is on (`super::drawn_edit`): the distance typed for it, in millimetres.
     pub offset: Option<String>,
+    /// Trim, Extend, Fillet or Chamfer is on (`super::drawn_edit`).
+    pub pair_edit: Option<super::drawn_edit::PairEdit>,
     pub history: crate::history::History<Step>,
     /// The project as its last step left it: what a change is measured against.
     pub base: Step,

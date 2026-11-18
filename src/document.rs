@@ -1386,6 +1386,16 @@ impl Document {
         Some(first..first + run.len())
     }
 
+    /// Gives line `index` of a view's drawing other ends. False for a line that is none.
+    pub fn set_view_line(&mut self, view: &str, index: usize, line: [[f64; 2]; 2]) -> bool {
+        let Some((own, _)) = self.drawn_mut(view) else { return false };
+        if index >= own.len() || line[0] == line[1] || !line.iter().flatten().all(|v| v.is_finite()) {
+            return false;
+        }
+        own[index] = line;
+        true
+    }
+
     /// Makes the shape that line `index` of a view is part of loose lines again. False when the
     /// line is of no shape.
     pub fn explode_view_shape(&mut self, view: &str, index: usize) -> bool {

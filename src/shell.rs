@@ -261,6 +261,9 @@ struct Prefs {
     recent: Vec<PathBuf>,
     /// The ribbon groups switched off, each by its first command.
     ribbon_hidden: Vec<String>,
+    /// The extensions switched off: the integrated tools not on the switch, each by its key.
+    #[serde(default)]
+    extensions_off: Vec<String>,
     /// The product shown last.
     product: Product,
     /// In 3D: the heads of grid lines behind the model are left out; the distances between the
@@ -287,6 +290,7 @@ impl Default for Prefs {
             right_width: 280.0,
             recent: Vec::new(),
             ribbon_hidden: Vec::new(),
+            extensions_off: Vec::new(),
             product: Product::Viewer,
             grid_heads_hidden: true,
             grid_dims: false,
@@ -449,6 +453,7 @@ pub enum Page {
     Settings,
     Shortcuts,
     Ribbon,
+    Extensions,
     Feedback,
     /// The card of the Pointcloud product.
     Cloud,
@@ -464,6 +469,7 @@ impl Page {
             "feedback" => Page::Feedback,
             "cloud" => Page::Cloud,
             "ribbon" => Page::Ribbon,
+            "extensions" => Page::Extensions,
             _ => return None,
         })
     }
@@ -485,6 +491,8 @@ pub enum SettingsPage {
     General,
     Ribbon,
     Shortcuts,
+    /// The extension manager: the integrated tools, each switched on or off.
+    Extensions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -523,6 +531,8 @@ pub enum Msg {
     /// A ribbon group (by its first command) shown or not; and all of them shown again.
     RibbonGroup(&'static str, bool),
     RibbonReset,
+    /// The extension manager: an integrated tool switched on or off.
+    Extension(Product, bool),
     TextSize(TextSize),
     Statusbar(StatusbarSetting),
     Language(Language),
@@ -829,14 +839,37 @@ impl Studio {
     /// A build of `edition`: the Studio, or one product alone.
     pub fn with_edition(mut self, edition: Edition) -> Self {
         self.edition = edition;
-        self.products = edition.products();
+        self.apply_extensions();
         self
+    }
+
+    /// The integrated tools of this build: the extensions the manager lists.
+    pub fn extensions(&self) -> Vec<Product> {
+        self.edition.products()
+    }
+
+    /// Whether an extension is switched on. A build of one product has it on.
+    pub fn extension_on(&self, product: Product) -> bool {
+        matches!(self.edition, Edition::Only(_)) || product == Product::Viewer || !self.prefs.extensions_off.iter().any(|key| key == product.key())
+    }
+
+    /// Puts the extensions that are switched on on the switch; a product shown that is switched
+    /// off makes way for the first that is on.
+    fn apply_extensions(&mut self) {
+        let shown = self.product();
+        self.products = self.extensions().into_iter().filter(|p| self.extension_on(*p)).collect();
+        if !self.products.contains(&shown) {
+            if let Some(first) = self.products.first().copied() {
+                self.set_product(first);
+            }
+        }
     }
 
     /// Reads the preferences and own shortcuts in `dir`, and keeps them there.
     pub fn with_settings_in(mut self, dir: PathBuf) -> Self {
         let prefs = dir.join("preferences.json");
         self.prefs = Prefs::load(&prefs);
+        self.apply_extensions();
         (self.app.grid_heads_hidden, self.app.grid_dims, self.app.levels_3d, self.app.ambient) = (self.prefs.grid_heads_hidden, self.prefs.grid_dims, self.prefs.levels_3d, self.prefs.ambient);
         self.prefs_path = Some(prefs);
         let keymap = dir.join("shortcuts.json");
@@ -860,7 +893,7 @@ impl Studio {
     pub fn show(&mut self, page: Page) {
         self.backstage = page == Page::File;
         self.dialog = match page {
-            Page::Settings | Page::Shortcuts | Page::Ribbon => Some(Dialog::Settings),
+            Page::Settings | Page::Shortcuts | Page::Ribbon | Page::Extensions => Some(Dialog::Settings),
             Page::Feedback => Some(Dialog::Feedback),
             Page::Cloud => Some(Dialog::Cloud),
             _ => None,
@@ -873,6 +906,7 @@ impl Studio {
         self.settings_page = match page {
             Page::Shortcuts => SettingsPage::Shortcuts,
             Page::Ribbon => SettingsPage::Ribbon,
+            Page::Extensions => SettingsPage::Extensions,
             _ => SettingsPage::General,
         };
     }
@@ -1748,6 +1782,15 @@ impl Studio {
             }
             Msg::RibbonReset => {
                 self.prefs.ribbon_hidden.clear();
+                self.save_prefs();
+            }
+            Msg::Extension(product, on) => {
+                self.prefs.extensions_off.retain(|key| key != product.key());
+                // the Viewer is the suite itself: it stays
+                if !on && product != Product::Viewer {
+                    self.prefs.extensions_off.push(product.key().to_string());
+                }
+                self.apply_extensions();
                 self.save_prefs();
             }
             Msg::Statusbar(setting) => {
@@ -2673,7 +2716,7 @@ impl Studio {
         match dialog {
             Dialog::Settings => {
                 let tab = |page, label| w::button(look, label, if self.settings_page == page { K::Secondary } else { K::Quiet }, D::Compact, None, Some(Msg::SettingsPage(page)));
-                let tabs = row![tab(SettingsPage::General, l.text("Algemeen", "General")), tab(SettingsPage::Ribbon, l.text("Lint", "Ribbon")), tab(SettingsPage::Shortcuts, l.text("Sneltoetsen", "Shortcuts"))].spacing(4);
+                let tabs = row![tab(SettingsPage::General, l.text("Algemeen", "General")), tab(SettingsPage::Ribbon, l.text("Lint", "Ribbon")), tab(SettingsPage::Shortcuts, l.text("Sneltoetsen", "Shortcuts")), tab(SettingsPage::Extensions, l.text("Extensies", "Extensions"))].spacing(4);
                 let scale = Scale::ALL.into_iter().find(|s| (s.0 - self.prefs.scale()).abs() < 0.01);
                 let groups = [
                     ("file", l.text("Bestand", "File")),
@@ -2716,6 +2759,16 @@ impl Studio {
                             list = list.push(w::checkbox(look, group.0, shown, Some(move |on| Msg::RibbonGroup(key, on))));
                         }
                         list.push(w::button(look, l.text("Alle groepen tonen", "Show all groups"), K::Secondary, D::Compact, None, (!hidden.is_empty()).then_some(Msg::RibbonReset))).into()
+                    }
+                    // the extension manager: every integrated tool, on the switch or not
+                    SettingsPage::Extensions => {
+                        let mut list = column![w::secondary(look, l.text("Elk onderdeel van de suite is een extensie. Zet uit wat je niet gebruikt: het verdwijnt van de schakelaar bovenaan het venster en komt terug als je het weer aanzet.", "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again."))].spacing(8);
+                        for product in self.extensions() {
+                            // the Viewer is the suite itself
+                            let toggle = (product != Product::Viewer && !matches!(self.edition, Edition::Only(_))).then_some(move |on| Msg::Extension(product, on));
+                            list = list.push(column![w::checkbox(look, product.full_name(), self.extension_on(product), toggle), w::secondary(look, product.purpose(l))].spacing(2));
+                        }
+                        list.into()
                     }
                     // in the Modeller its own keys follow the commands' shortcuts
                     SettingsPage::Shortcuts => column![sc::page(look, &self.shortcuts, &self.commands(), &self.keymap, &groups, Msg::Shortcuts)]
@@ -3375,6 +3428,34 @@ mod tests {
         let mut list = iced_test::simulator(crate::app::modeller::key_actions::key_list::<Msg>(studio.look(), Language::English));
         for label in ["S", "W", "CL", "FL", "PgUp", "PgDn", "Level up"] {
             assert!(list.find(label).is_ok(), "{label}");
+        }
+    }
+
+    #[test]
+    fn an_extension_switched_off_leaves_the_switch_and_comes_back() {
+        let mut studio = Studio::new(App::default());
+        assert_eq!(studio.products, studio.extensions());
+        let _ = studio.update(Msg::Product(Product::Gis));
+        assert_eq!(studio.product(), Product::Gis);
+        // the product shown is switched off: the first that is on is shown
+        let _ = studio.update(Msg::Extension(Product::Gis, false));
+        assert!(!studio.products.contains(&Product::Gis) && !studio.extension_on(Product::Gis));
+        assert_eq!(studio.product(), Product::Viewer);
+        let tabs: Vec<String> = accessibility(&studio).summary().into_iter().filter(|n| n.starts_with("Tab: ")).collect();
+        assert!(!tabs.contains(&"Tab: GIS".to_string()) && tabs.contains(&"Tab: Docs".to_string()), "{tabs:?}");
+        // the manager still lists it, and switching it on puts it back where it stood
+        assert!(studio.extensions().contains(&Product::Gis));
+        let _ = studio.update(Msg::Extension(Product::Gis, true));
+        assert_eq!(studio.products, studio.extensions());
+        // the Viewer is the suite itself: it cannot be switched off
+        let _ = studio.update(Msg::Extension(Product::Viewer, false));
+        assert!(studio.products.contains(&Product::Viewer) && studio.extension_on(Product::Viewer));
+        // the page lists every extension by its name
+        studio.dialog = Some(Dialog::Settings);
+        studio.settings_page = SettingsPage::Extensions;
+        let mut ui = iced_test::simulator(studio.view());
+        for product in Product::ALL {
+            assert!(ui.find(product.full_name()).is_ok(), "{product:?}");
         }
     }
 

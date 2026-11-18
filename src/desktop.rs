@@ -117,7 +117,7 @@ fn parse_args() -> Result<Args, String> {
                 args.language = Some(Language::from_code(&value()?).ok_or("--language en|nl|de|fr")?)
             }
             "--product" => args.product = Some(crate::product::Product::parse(&value()?).ok_or("--product viewer|modeller|validator|docs|gis|pointcloud")?),
-            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|feedback|cloud")?,
+            "--page" => args.page = shell::Page::parse(&value()?).ok_or("--page workspace|file|settings|shortcuts|ribbon|extensions|feedback|cloud")?,
             "--schedule" => args.schedule = Some(value()?),
             "--sheet" => args.sheet = Some(value()?),
             "--drawing" => args.drawing = Some(value()?),

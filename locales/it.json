@@ -1149,6 +1149,8 @@
     "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Recupera le particelle e gli edifici attorno al luogo scelto nella scheda GIS a destra.",
     "Makes a surface with contours of a surveyor's file of points.": "Crea una superficie con curve di livello dal file di punti di un topografo.",
     "Surface from points": "Superficie da punti",
-    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Dove si trova il progetto e cosa lo circonda: il luogo, particelle ed edifici, il terreno"
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Dove si trova il progetto e cosa lo circonda: il luogo, particelle ed edifici, il terreno",
+    "Extensions": "Estensioni",
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Ogni parte della suite è un'estensione. Disattiva ciò che non usi: scompare dal selettore in alto nella finestra e torna quando lo riattivi."
   }
 }

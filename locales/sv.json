@@ -1149,6 +1149,8 @@
     "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Hämtar fastigheter och byggnader runt platsen som valts på fliken GIS till höger.",
     "Makes a surface with contours of a surveyor's file of points.": "Skapar en yta med höjdkurvor av en mätningsteknikers punktfil.",
     "Surface from points": "Yta från punkter",
-    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Var projektet ligger och vad som finns runt det: platsen, fastigheter och byggnader, terrängen"
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Var projektet ligger och vad som finns runt det: platsen, fastigheter och byggnader, terrängen",
+    "Extensions": "Tillägg",
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Varje del av sviten är ett tillägg. Stäng av det du inte använder: det försvinner från växlaren överst i fönstret och kommer tillbaka när du slår på det igen."
   }
 }

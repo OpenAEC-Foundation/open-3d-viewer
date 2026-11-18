@@ -1149,6 +1149,8 @@
     "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Ruft die Flurstücke und Gebäude um den Ort ab, der rechts im Reiter GIS gewählt ist.",
     "Makes a surface with contours of a surveyor's file of points.": "Erstellt aus der Punktdatei eines Vermessers eine Oberfläche mit Höhenlinien.",
     "Surface from points": "Oberfläche aus Punkten",
-    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Wo das Projekt liegt und was darum liegt: der Ort, Flurstücke und Gebäude, das Gelände"
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Wo das Projekt liegt und was darum liegt: der Ort, Flurstücke und Gebäude, das Gelände",
+    "Extensions": "Erweiterungen",
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Jeder Teil der Suite ist eine Erweiterung. Schalten Sie aus, was Sie nicht verwenden: Es verschwindet vom Umschalter oben im Fenster und kommt zurück, wenn Sie es wieder einschalten."
   }
 }

@@ -1154,6 +1154,8 @@ impl Studio {
             // an empty project to model in, with a first level; beside a model it opens in a tab of its own
             Command::new("file.new", l.text("Nieuw", "New"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("file.new"), large("file.new")).shortcut(Shortcut::ctrl('n')),
             Command::new("file.open", l.text("Openen…", "Open…"), go(Message::OpenDialog)).icon(small("file.open"), large("file.open")).shortcut(Shortcut::ctrl('o')).dialog(),
+            // a model kept as a folder: a Tekla model folder, an Allplan project
+            Command::new("file.open-folder", l.text("Map openen…", "Open folder…"), go(Message::OpenFolderDialog)).icon(small("file.open"), large("file.open")).dialog(),
             Command::new("file.add", l.text("Toevoegen…", "Add…"), go(Message::AddDialog))
                 .icon(small("file.import"), large("file.import"))
                 .shortcut(Shortcut::ctrl_shift('o'))
@@ -2358,7 +2360,7 @@ impl Studio {
         };
         let groups: Vec<(&'static str, Vec<RibbonPart>)> = match page {
             RibbonPage::Home => {
-                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])])];
                 groups.extend(view_groups());
                 groups
             }
@@ -2401,7 +2403,7 @@ impl Studio {
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![
-                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])]),
                 (l.text("Snedekrachten", "Internal forces"), vec![smalls(&["analysis.n", "analysis.vy", "analysis.vz"]), smalls(&["analysis.mx", "analysis.my", "analysis.mz"])]),
                 (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
@@ -2430,7 +2432,7 @@ impl Studio {
                 (l.text("Ondergrond", "Ground"), vec![large("geo.model")]),
             ],
             RibbonPage::Cloud => vec![
-                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
+                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"]), large("cloud.details")]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
                 (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("cloud.drawing")]),
@@ -2439,7 +2441,7 @@ impl Studio {
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
-                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])]),
                 (l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
                 (l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
                 (l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
@@ -2527,6 +2529,7 @@ impl Studio {
         let nav = column![
             t::file_nav_row(look, small("file.new"), l.text("Nieuw", "New"), false, Some(Msg::App(Message::NewModel(l.text("Niveau 0", "Level 0"))))),
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
+            t::file_nav_row(look, small("file.open"), l.text("Map openen", "Open folder"), false, Some(Msg::App(Message::OpenFolderDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Exporteren als IFC 4x3", "Export IFC 4x3"), false, loaded.then_some(Msg::App(Message::SaveIfcDialog(crate::export::IfcSchema::Ifc4x3)))),

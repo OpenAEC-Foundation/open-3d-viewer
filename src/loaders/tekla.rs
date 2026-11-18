@@ -68,11 +68,26 @@ impl Loader for TeklaLoader {
                 None => project.info.push(("Tekla drawings".into(), format!("{} (they are read from the model folder, on the desktop)", document.drawings.len()))),
             }
         }
-        let layers = document.meshes.into_iter().map(|mesh| Layer {
-            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new(), line_elements: Vec::new()
-        }).collect();
-        Ok(Loaded { structural: Vec::new(), origin: None, layers, views, project })
+        // the analysis models, with their summary and notes
+        let mut structural = super::tekla_analysis::models(&document.structural, &document.catalogues.materials, &source.name());
+        if !structural.is_empty() {
+            let doc = bim_structural::SamDocument { origin: glam::DVec3::ZERO, source: Default::default(), models: structural };
+            let info = super::sam::info(&doc, glam::DVec3::ZERO);
+            project.info.extend(info.into_iter().skip_while(|(k, _)| k != "Analysis models"));
+            structural = doc.models;
+        }
+        Ok(Loaded { structural, origin: None, layers: layers(document.meshes), views, project })
     }
+}
+
+/// The parts (and what else the reader draws) as layers.
+fn layers(meshes: Vec<tekla_read::Mesh>) -> Vec<Layer> {
+    meshes
+        .into_iter()
+        .map(|mesh| Layer {
+            name: mesh.name, color: mesh.color, positions: mesh.positions, normals: mesh.normals, colors: mesh.colors, indices: mesh.indices, elements: mesh.elements, props: mesh.props, hidden: mesh.hidden, points: false, lines: Vec::new(), line_elements: Vec::new()
+        })
+        .collect()
 }
 
 /// The levels of the grids (their Z lines, by label, low to high) and their X and Y lines, drawn

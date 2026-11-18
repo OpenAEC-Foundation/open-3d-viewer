@@ -1191,6 +1191,8 @@
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, altyapı ve inşaat: projenin haritası, çevresi, arazisi ve zemini",
     "The planning of the project: the web version of Open Planner Studio in a web frame": "Projenin planlaması: Open Planner Studio'nun web sürümü bir web çerçevesinde",
     "The web version of Open Planner Studio opens here in a web frame. If this stays empty, the system's web view is missing or there is no internet.": "Open Planner Studio'nun web sürümü burada bir web çerçevesinde açılır. Burası boş kalırsa sistemin web görünümü eksiktir veya internet yoktur.",
+    "The system's web view runtime (WebView2 Runtime) is missing or does not start. Open the planning in the browser, or choose Refresh to try again.": "Sistemin web görünümü çalışma zamanı (WebView2 Runtime) eksik veya başlamıyor. Planlamayı tarayıcıda açın ya da yeniden denemek için Yenile'yi seçin.",
+    "Web frame": "Web çerçevesi",
     "Geotechnics": "Geoteknik",
     "Civil": "İnşaat mühendisliği",
     "Borings": "Sondajlar",

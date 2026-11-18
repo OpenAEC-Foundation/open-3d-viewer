@@ -12,7 +12,7 @@ use openaec_ui::iced::window::Direction;
 use openaec_ui::iced::{mouse, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 /// How far from an edge a press still resizes (logical pixels).
-const EDGE: f32 = 5.0;
+pub(crate) const EDGE: f32 = 5.0;
 /// How far from a corner, along an edge, a press resizes both ways.
 const CORNER: f32 = 12.0;
 

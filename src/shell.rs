@@ -563,8 +563,17 @@ pub enum Msg {
     PlannerReload,
     /// The page of the Planner's web frame opens in the system's browser.
     PlannerBrowser,
-    /// What laying, hiding or reloading the Planner's web frame gave.
+    /// What laying or hiding the Planner's web frame gave: an error when it could not be made.
     PlannerFrame(Result<(), String>),
+    /// What reloading the frame's page, or taking the keyboard back from it, gave.
+    PlannerDone(Result<(), String>),
+    /// Where the pointer is over the app's own drawing while the Planner shows (`None`: over the
+    /// web frame or outside the window).
+    PlannerPointer(Option<iced::Point>),
+    /// A press on the app's own drawing while the Planner shows: the keyboard comes back to it.
+    PlannerPress,
+    /// The window changed while the Planner shows: its frame is laid again.
+    PlannerWindow,
     /// Opens the desktop app's download page (from [`Dialog::DesktopOnly`]).
     DownloadDesktop,
 }
@@ -604,6 +613,10 @@ pub struct Studio {
     /// The window is open, and where the Planner's web frame was last laid in it (`None`: hidden).
     window_open: bool,
     planner_shown: Option<[f32; 4]>,
+    /// Why the web frame could not be made (no web view runtime), until Refresh tries again.
+    planner_failed: Option<String>,
+    /// Where the pointer is over the app's own drawing while the Planner shows.
+    planner_pointer: Option<iced::Point>,
     /// In the compact layout: the side panel shown instead of the 3D view, and the folded ribbon.
     compact_panel: Option<Side>,
     ribbon_folded: bool,
@@ -697,6 +710,8 @@ impl Studio {
             sized: false,
             window_open: false,
             planner_shown: None,
+            planner_failed: None,
+            planner_pointer: None,
             compact_panel: None,
             ribbon_folded: false,
             edition: Edition::Studio,
@@ -925,24 +940,57 @@ impl Studio {
     /// Where the Planner's web frame lies in the window, in the window's own units (layout units
     /// times the interface size): the whole workspace, from under the ribbon to the status bar.
     /// `None` when it is hidden: another product, File, or a dialog, which the app draws itself
-    /// and which a frame over the window would cover.
+    /// and which a frame over the window would cover; and when the web view could not be made.
+    ///
+    /// The frame is a window of the system, over all the app draws. So it stays clear of the
+    /// window's left and right edge, where a press resizes the window (the bottom edge is the
+    /// status bar's), and it makes room for a tip that hangs into the workspace while the pointer
+    /// is where such a tip opens: on the ribbon, whose buttons reach almost to its lower edge (or
+    /// on the tabs when the ribbon is folded), and on the status bar, whose tips open above it.
+    /// The tips of the title bar end above the workspace.
     pub fn planner_area(&self) -> Option<[f32; 4]> {
+        let scale = self.prefs.scale() as f32;
+        self.planner_insets().map(|[left, top, right, bottom]| [left, top, (self.width * scale - left - right).max(1.0), (self.height * scale - top - bottom).max(1.0)])
+    }
+
+    /// How far the Planner's web frame stays from the window's left, top, right and bottom, in
+    /// the window's own units: what [`Studio::planner_area`] is laid by. The frame is laid from
+    /// these and the window's size as the system gives it at that moment, which the size the
+    /// window last told the shell may not be (a window just opened, or moved to another display).
+    pub fn planner_insets(&self) -> Option<[f32; 4]> {
         use openaec_ui::design::shell::{RIBBON, RIBBON_TABS, STATUSBAR, TITLEBAR};
-        if self.product() != Product::Planner || self.backstage || self.dialog.is_some() || !self.window_open {
+        if self.product() != Product::Planner || self.backstage || self.dialog.is_some() || !self.window_open || self.planner_failed.is_some() {
             return None;
         }
         let folded = self.compact() && self.ribbon_folded;
-        let top = TITLEBAR + RIBBON_TABS + if folded { 0.0 } else { RIBBON };
+        let (mut top, mut bottom) = (TITLEBAR + RIBBON_TABS + if folded { 0.0 } else { RIBBON }, STATUSBAR);
+        if let Some(at) = self.planner_pointer {
+            if at.y >= if folded { TITLEBAR } else { TITLEBAR + RIBBON_TABS } && at.y < top {
+                top += if folded { PLANNER_TIP } else { PLANNER_RIBBON_TIP };
+            }
+            if at.y >= self.height - STATUSBAR {
+                bottom += PLANNER_TIP;
+            }
+        }
+        let edge = if self.maximized { 0.0 } else { crate::resize_frame::EDGE };
         let scale = self.prefs.scale() as f32;
-        Some([0.0, top * scale, self.width * scale, (self.height - top - STATUSBAR).max(1.0) * scale])
+        Some([edge * scale, top * scale, edge * scale, bottom * scale])
     }
 
     /// [`Studio::update`], and then the Planner's web frame laid where the window now has its
     /// workspace, when that changed: the frame follows the product, the window and the ribbon.
     pub fn update_with_frame(&mut self, message: Msg) -> Task<Msg> {
+        // what laying the frame answers lays no frame again
+        let answer = matches!(message, Msg::PlannerFrame(_) | Msg::PlannerDone(_));
         let task = self.update(message);
-        let area = self.planner_area();
-        if area == self.planner_shown {
+        if self.product() != Product::Planner {
+            // the pointer is followed on the Planner only: what it was says nothing on return
+            self.planner_pointer = None;
+        }
+        // a frame that shows is laid again after every message: the window may have changed
+        // without telling (the frame itself skips what it already is)
+        let area = self.planner_insets();
+        if answer || (area.is_none() && self.planner_shown.is_none()) {
             return task;
         }
         self.planner_shown = area;
@@ -2091,17 +2139,36 @@ impl Studio {
                 }
             }
             Msg::PlannerReload => {
+                // a frame that could not be made is tried again: `update_with_frame` lays it
+                if self.planner_failed.take().is_some() {
+                    self.planner_shown = None;
+                    self.app.status = Status::Ready;
+                    return Task::none();
+                }
                 #[cfg(all(feature = "planner", windows))]
-                return iced::window::latest().and_then(|id| iced::window::run(id, |_| crate::planner_frame::reload())).map(Msg::PlannerFrame);
+                return iced::window::latest().and_then(|id| iced::window::run(id, |_| crate::planner_frame::reload())).map(Msg::PlannerDone);
+            }
+            Msg::PlannerPointer(at) => self.planner_pointer = at,
+            Msg::PlannerWindow => {}
+            Msg::PlannerPress => {
+                #[cfg(all(feature = "planner", windows))]
+                if self.planner_shown.is_some() {
+                    return iced::window::latest().and_then(|id| iced::window::run(id, |_| crate::planner_frame::release_keyboard())).map(Msg::PlannerDone);
+                }
             }
             Msg::PlannerBrowser => {
                 if let Err(e) = open_url(PLANNER_URL) {
                     self.app.status = Status::Error(e);
                 }
             }
-            // a frame that could not be made says why in the status bar; the page under it stays
-            Msg::PlannerFrame(Err(e)) => self.app.status = Status::Error(e),
-            Msg::PlannerFrame(Ok(())) => {}
+            // a frame that could not be made: the page under it says the web view is missing, the
+            // status bar says what the system gave
+            Msg::PlannerFrame(Err(e)) => {
+                self.app.status = Status::Error(format!("{}: {e}", self.l().text("Webframe", "Web frame")));
+                self.planner_failed = Some(e);
+            }
+            Msg::PlannerDone(Err(e)) => self.app.status = Status::Error(e),
+            Msg::PlannerFrame(Ok(())) | Msg::PlannerDone(Ok(())) => {}
             Msg::DownloadDesktop => {
                 if let Err(e) = open_url(crate::loaders::DESKTOP_DOWNLOAD) {
                     self.app.status = Status::Error(e);
@@ -2138,8 +2205,23 @@ impl Studio {
             iced::Event::Window(iced::window::Event::Opened { .. }) => Some(Msg::WindowOpened(id)),
             _ => None,
         });
+        // the Planner's web frame is a window of the system: the shell follows the pointer over
+        // its own drawing to make room for a tip, and takes the keyboard back on a press
+        let planner = if self.product() == Product::Planner && self.planner_failed.is_none() {
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => Some(Msg::PlannerPointer(Some(position))),
+                iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Msg::PlannerPointer(None)),
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Msg::PlannerPress),
+                // the window moved, changed size or went to another display: the frame follows
+                iced::Event::Window(iced::window::Event::Moved(_) | iced::window::Event::Resized(_) | iced::window::Event::Rescaled(_) | iced::window::Event::Focused) => Some(Msg::PlannerWindow),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             self.app.subscription().map(Msg::App),
+            planner,
             resized,
             opened,
             open.map(Msg::App),
@@ -2638,10 +2720,17 @@ impl Studio {
         // the Planner is a web page in a frame over the whole workspace: no panels, no tabs. This
         // lies under the frame, and shows while the page is not there (a dialog, no web view)
         if self.product() == Product::Planner {
-            let explanation = l.text(
-                "De webversie van Open Planner Studio opent hier in een webframe. Blijft dit leeg, dan ontbreekt de webweergave van het systeem of is er geen internet.",
-                "The web version of Open Planner Studio opens here in a web frame. If this stays empty, the system's web view is missing or there is no internet.",
-            );
+            let explanation = if self.planner_failed.is_some() {
+                l.text(
+                    "De webweergave van het systeem (WebView2 Runtime) ontbreekt of start niet. Open de planning in de browser, of kies Vernieuwen om het opnieuw te proberen.",
+                    "The system's web view runtime (WebView2 Runtime) is missing or does not start. Open the planning in the browser, or choose Refresh to try again.",
+                )
+            } else {
+                l.text(
+                    "De webversie van Open Planner Studio opent hier in een webframe. Blijft dit leeg, dan ontbreekt de webweergave van het systeem of is er geen internet.",
+                    "The web version of Open Planner Studio opens here in a web frame. If this stays empty, the system's web view is missing or there is no internet.",
+                )
+            };
             return container(w::empty_state(look, large("drawing.plan"), "Open Planner Studio", explanation, Some(cm::button(look, &self.command("planner.browser"), K::Secondary, D::Regular))))
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -3008,19 +3097,27 @@ fn desktop_only_text(l: Language, format: &str) -> String {
 /// Opens `url` in the browser: a new tab on the web, the default browser on the desktop.
 /// The page the Planner shows in its web frame.
 pub(crate) const PLANNER_URL: &str = "https://open-planner-studio.open-aec.com/";
+/// The room the Planner's web frame makes for a tip of the app that hangs into the workspace:
+/// a line of text, its padding and the gap to its control.
+const PLANNER_TIP: f32 = 32.0;
+/// The same under the open ribbon: how far the tip of one of its large buttons hangs below it.
+const PLANNER_RIBBON_TIP: f32 = 16.0;
+
+/// The program that opens an address in the system's browser.
+#[cfg(not(target_arch = "wasm32"))]
+fn url_opener() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "explorer",
+        "macos" => "open",
+        _ => "xdg-open",
+    }
+}
 
 fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     return crate::web::open_url(url);
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let program = match std::env::consts::OS {
-            "windows" => "explorer",
-            "macos" => "open",
-            _ => "xdg-open",
-        };
-        std::process::Command::new(program).arg(url).spawn().map(|_| ()).map_err(|e| format!("Open {url}: {e}"))
-    }
+    std::process::Command::new(url_opener()).arg(url).spawn().map(|_| ()).map_err(|e| format!("Open {url}: {e}"))
 }
 
 /// The start screen's hint: the featured formats this build opens, from the loader registry
@@ -3679,11 +3776,48 @@ mod tests {
         // the frame is the workspace: the window's width, from under the ribbon to the status bar
         studio.window_open = true;
         let _ = studio.update(Msg::Sized(iced::Size::new(1400.0, 900.0)));
-        let (top, scale) = (TITLEBAR + RIBBON_TABS + RIBBON, studio.prefs.scale() as f32);
+        // (but for the window's left and right edge, where a press resizes the window)
+        let (top, scale, edge) = (TITLEBAR + RIBBON_TABS + RIBBON, studio.prefs.scale() as f32, crate::resize_frame::EDGE);
+        assert_eq!(studio.planner_area(), Some([edge * scale, top * scale, (1400.0 - 2.0 * edge) * scale, (900.0 - top - STATUSBAR) * scale]));
+        // a maximized window has no edges to drag
+        studio.maximized = true;
         assert_eq!(studio.planner_area(), Some([0.0, top * scale, 1400.0 * scale, (900.0 - top - STATUSBAR) * scale]));
+        studio.maximized = false;
         // it follows the window
         let _ = studio.update(Msg::Sized(iced::Size::new(1000.0, 700.0)));
-        assert_eq!(studio.planner_area().map(|[_, _, w, h]| (w, h)), Some((1000.0 * scale, (700.0 - top - STATUSBAR) * scale)));
+        assert_eq!(studio.planner_area().map(|[_, _, w, h]| (w, h)), Some(((1000.0 - 2.0 * edge) * scale, (700.0 - top - STATUSBAR) * scale)));
+        // and the app's interface size: the frame is laid in the window's own units
+        studio.prefs.scale = 1.5;
+        let _ = studio.update(Msg::Sized(iced::Size::new(800.0, 500.0)));
+        assert_eq!(studio.planner_area(), Some([edge * 1.5, top * 1.5, (800.0 - 2.0 * edge) * 1.5, (500.0 - top - STATUSBAR) * 1.5]));
+        studio.prefs.scale = scale as f64;
+        let _ = studio.update(Msg::Sized(iced::Size::new(1000.0, 700.0)));
+        // the pointer on the status bar: a tip there opens above it, and the frame makes room
+        let full = studio.planner_area().expect("frame");
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(900.0, 695.0))));
+        assert_eq!(studio.planner_area().map(|[_, y, _, h]| (y, h)), Some((full[1], full[3] - PLANNER_TIP * scale)));
+        // on the ribbon: the tip of a large button hangs a little below it
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(60.0, 100.0))));
+        assert_eq!(studio.planner_area().map(|[_, y, _, h]| (y, h)), Some((full[1] + PLANNER_RIBBON_TIP * scale, full[3] - PLANNER_RIBBON_TIP * scale)));
+        // on the title bar its tips end above the workspace, and over the page the app sees no pointer
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(60.0, 10.0))));
+        assert_eq!(studio.planner_area(), Some(full));
+        let _ = studio.update(Msg::PlannerPointer(Some(iced::Point::new(900.0, 695.0))));
+        let _ = studio.update(Msg::PlannerPointer(None));
+        assert_eq!(studio.planner_area(), Some(full));
+        // no web view on this computer: no frame, the page says so and still opens the browser
+        let _ = studio.update(Msg::PlannerFrame(Err("no runtime".into())));
+        assert_eq!(studio.planner_area(), None);
+        assert!(matches!(&studio.app.status, Status::Error(e) if e.contains("no runtime")));
+        {
+            let mut ui = iced_test::simulator(studio.view());
+            assert!(ui.find("The system's web view runtime (WebView2 Runtime) is missing or does not start. Open the planning in the browser, or choose Refresh to try again.").is_ok());
+            assert!(ui.find("Open in browser").is_ok());
+        }
+        assert_eq!(url_opener(), if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+        // Refresh tries again
+        let _ = studio.update(Msg::PlannerReload);
+        assert_eq!(studio.planner_area(), Some(full));
         // a dialog and File are drawn by the app, which a frame would cover: it hides for them
         studio.dialog = Some(Dialog::Settings);
         assert_eq!(studio.planner_area(), None);

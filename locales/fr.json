@@ -1191,6 +1191,8 @@
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, infrastructure et génie civil : la carte, l'environnement, le terrain et le sous-sol du projet",
     "The planning of the project: the web version of Open Planner Studio in a web frame": "Le planning du projet : la version web d'Open Planner Studio dans un cadre web",
     "The web version of Open Planner Studio opens here in a web frame. If this stays empty, the system's web view is missing or there is no internet.": "La version web d'Open Planner Studio s'ouvre ici dans un cadre web. Si cela reste vide, la vue web du système manque ou il n'y a pas d'internet.",
+    "The system's web view runtime (WebView2 Runtime) is missing or does not start. Open the planning in the browser, or choose Refresh to try again.": "Le moteur de vue web du système (WebView2 Runtime) est absent ou ne démarre pas. Ouvrez le planning dans le navigateur, ou choisissez Actualiser pour réessayer.",
+    "Web frame": "Cadre web",
     "Geotechnics": "Géotechnique",
     "Civil": "Génie civil",
     "Borings": "Forages",

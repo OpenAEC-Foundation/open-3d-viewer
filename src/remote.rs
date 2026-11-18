@@ -521,7 +521,8 @@ impl App {
             let mut sources = Vec::new();
             for p in list.iter().filter_map(Value::as_str) {
                 match confine(p) {
-                    Ok(path) if path.is_file() => sources.push(crate::loaders::Source::File(path)),
+                    // a file, or a model kept as a folder (a Tekla model folder)
+                    Ok(path) if path.is_file() || crate::loaders::opens_folder(&path) => sources.push(crate::loaders::Source::File(path)),
                     Ok(path) => {
                         call.answer(Err(format!("no such file: {}", path.display())));
                         return Task::none();
@@ -560,7 +561,7 @@ impl App {
                 return Task::none();
             }
         };
-        if !path.is_file() {
+        if !path.is_file() && !crate::loaders::opens_folder(&path) {
             call.answer(Err(format!("no such file: {}", path.display())));
             return Task::none();
         }

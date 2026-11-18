@@ -1132,6 +1132,25 @@
     "Party": "Partie",
     "Take in BCF": "Intégrer un BCF",
     "Send BCF": "Envoyer un BCF",
-    "Send open issues only": "Envoyer uniquement les issues ouvertes"
+    "Send open issues only": "Envoyer uniquement les issues ouvertes",
+    "Terrain": "Terrain",
+    "Contours": "Courbes de niveau",
+    "Surface": "Surface",
+    "The browser build does not fetch terrain yet.": "La version navigateur ne charge pas encore le terrain.",
+    "Fetching the terrain…": "Chargement du terrain…",
+    "Load terrain": "Charger le terrain",
+    "Surface from a points file…": "Surface à partir d'un fichier de points…",
+    "Lines without a point left out": "Lignes sans point ignorées",
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "« Charger le terrain » récupère les altitudes du sol dans le modèle altimétrique national des Pays-Bas (AHN) via PDOK, pour le lieu et le rayon ci-dessus. Sous les bâtiments et l'eau, il n'a pas d'altitude : le terrain y est complété à partir du bord.",
+    "Cut and fill against level (m)": "Déblai et remblai par rapport au niveau (m)",
+    "Above": "Au-dessus de",
+    "Below": "Au-dessous de",
+    "Fetches the ground around the place, with contours.": "Récupère le terrain autour du lieu, avec les courbes de niveau.",
+    "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Récupère les parcelles et les bâtiments autour du lieu choisi dans l'onglet GIS à droite.",
+    "Makes a surface with contours of a surveyor's file of points.": "Crée une surface avec courbes de niveau à partir du fichier de points d'un géomètre.",
+    "Surface from points": "Surface à partir de points",
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Où se trouve le projet et ce qui l'entoure : le lieu, les parcelles et bâtiments, le terrain",
+    "Extensions": "Extensions",
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Chaque partie de la suite est une extension. Désactivez ce que vous n'utilisez pas : cela quitte le sélecteur en haut de la fenêtre et revient quand vous le réactivez."
   }
 }

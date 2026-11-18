@@ -1,0 +1,14 @@
+[package]
+name = "bim-civil"
+version = "0.1.0"
+description = "Headless civil and site design: survey points, terrain surfaces (TIN) with breaklines and a boundary, contours and volumes"
+authors = ["Open BIM Suite Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
+publish = false
+
+[dependencies]
+# Delaunay triangulation with constraint edges, for breaklines and a boundary (MIT OR Apache-2.0)
+spade = "2.15"

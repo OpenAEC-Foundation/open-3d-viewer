@@ -1132,6 +1132,25 @@
     "Party": "Partei",
     "Take in BCF": "BCF einlesen",
     "Send BCF": "BCF senden",
-    "Send open issues only": "Nur offene Issues senden"
+    "Send open issues only": "Nur offene Issues senden",
+    "Terrain": "Gelände",
+    "Contours": "Höhenlinien",
+    "Surface": "Oberfläche",
+    "The browser build does not fetch terrain yet.": "Die Browserversion lädt noch kein Gelände.",
+    "Fetching the terrain…": "Gelände wird geladen…",
+    "Load terrain": "Gelände laden",
+    "Surface from a points file…": "Oberfläche aus Punktdatei…",
+    "Lines without a point left out": "Zeilen ohne Punkt ausgelassen",
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "„Gelände laden“ ruft die Geländehöhen aus dem niederländischen Höhenmodell (AHN) über PDOK ab, für den Ort und Radius oben. Unter Gebäuden und Wasser hat es keine Höhe: Dort wird das Gelände vom Rand her ergänzt.",
+    "Cut and fill against level (m)": "Auf- und Abtrag gegen Niveau (m)",
+    "Above": "Über",
+    "Below": "Unter",
+    "Fetches the ground around the place, with contours.": "Ruft das Gelände um den Ort ab, mit Höhenlinien.",
+    "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Ruft die Flurstücke und Gebäude um den Ort ab, der rechts im Reiter GIS gewählt ist.",
+    "Makes a surface with contours of a surveyor's file of points.": "Erstellt aus der Punktdatei eines Vermessers eine Oberfläche mit Höhenlinien.",
+    "Surface from points": "Oberfläche aus Punkten",
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Wo das Projekt liegt und was darum liegt: der Ort, Flurstücke und Gebäude, das Gelände",
+    "Extensions": "Erweiterungen",
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Jeder Teil der Suite ist eine Erweiterung. Schalten Sie aus, was Sie nicht verwenden: Es verschwindet vom Umschalter oben im Fenster und kommt zurück, wenn Sie es wieder einschalten."
   }
 }

@@ -1132,6 +1132,25 @@
     "Party": "Part",
     "Take in BCF": "Läs in BCF",
     "Send BCF": "Skicka BCF",
-    "Send open issues only": "Skicka bara öppna ärenden"
+    "Send open issues only": "Skicka bara öppna ärenden",
+    "Terrain": "Terräng",
+    "Contours": "Höjdkurvor",
+    "Surface": "Yta",
+    "The browser build does not fetch terrain yet.": "Webbläsarversionen hämtar ännu inte terrängen.",
+    "Fetching the terrain…": "Hämtar terrängen…",
+    "Load terrain": "Läs in terrängen",
+    "Surface from a points file…": "Yta från en punktfil…",
+    "Lines without a point left out": "Rader utan punkt utelämnade",
+    "Load terrain fetches the ground heights from the national height model of the Netherlands (AHN) through PDOK, for the place and radius above. Under buildings and water it has no height: there the terrain is filled in from the edge.": "”Läs in terrängen” hämtar markhöjderna från Nederländernas nationella höjdmodell (AHN) via PDOK, för platsen och radien ovan. Under byggnader och vatten saknar den höjd: där fylls terrängen i från kanten.",
+    "Cut and fill against level (m)": "Schakt och fyll mot nivå (m)",
+    "Above": "Över",
+    "Below": "Under",
+    "Fetches the ground around the place, with contours.": "Hämtar marken runt platsen, med höjdkurvor.",
+    "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.": "Hämtar fastigheter och byggnader runt platsen som valts på fliken GIS till höger.",
+    "Makes a surface with contours of a surveyor's file of points.": "Skapar en yta med höjdkurvor av en mätningsteknikers punktfil.",
+    "Surface from points": "Yta från punkter",
+    "Where the project lies and what lies around it: the place, parcels and buildings, the terrain": "Var projektet ligger och vad som finns runt det: platsen, fastigheter och byggnader, terrängen",
+    "Extensions": "Tillägg",
+    "Every part of the suite is an extension. Switch off what you do not use: it leaves the switch at the top of the window and comes back when you switch it on again.": "Varje del av sviten är ett tillägg. Stäng av det du inte använder: det försvinner från växlaren överst i fönstret och kommer tillbaka när du slår på det igen."
   }
 }

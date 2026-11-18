@@ -1189,6 +1189,26 @@
     "Opens soundings from GEF files and puts them in the model.": "Abre sondeos desde archivos GEF y los coloca en el modelo.",
     "GIS, infrastructure and civil: the map, the surroundings, the terrain and the ground of the project": "GIS, infraestructura y obra civil: el mapa, el entorno, el terreno y el subsuelo del proyecto",
     "Geotechnics": "Geotecnia",
-    "Civil": "Obra civil"
+    "Civil": "Obra civil",
+    "Borings": "Sondeos",
+    "Ground model": "Modelo del subsuelo",
+    "Ground": "Subsuelo",
+    "Load borings around the place": "Cargar sondeos alrededor del lugar",
+    "Open GEF files of borings": "Abrir archivos GEF de sondeos",
+    "Borings loaded": "Sondeos cargados",
+    "The area holds more borings; the nearest were loaded.": "La zona contiene más sondeos; se cargaron los más cercanos.",
+    "No borings found around this place.": "No se encontraron sondeos alrededor de este lugar.",
+    "Each described layer is a block of the column, to be picked. Coloured by main soil: gravel orange, sand yellow, silt and loam pale olive, clay green, peat brown, anything else grey.": "Cada capa descrita es un bloque de la columna, que se puede seleccionar. Color según el suelo principal: grava naranja, arena amarillo, limo y marga verde oliva pálido, arcilla verde, turba marrón, el resto gris.",
+    "Make ground model": "Crear modelo del subsuelo",
+    "Made": "Creado",
+    "layers of": "capas de",
+    "borings": "sondeos",
+    "Load borings with a place first.": "Cargue primero sondeos con un lugar.",
+    "Every place takes the layers of the nearest boring, from that boring's ground down. Nothing is laid between borings: where two borings differ, the model steps. It shows what was bored; it is no soil profile to calculate with.": "Cada lugar toma las capas del sondeo más cercano, desde el nivel del terreno de ese sondeo hacia abajo. No se interpola nada entre sondeos: donde dos sondeos difieren, el modelo da un salto. Muestra lo que se perforó; no es un perfil del terreno para calcular.",
+    "Soundings and borings around the place come from the Dutch register of the subsurface (the Netherlands only). The request tells the register which place you are looking at; nothing else goes along.": "Los ensayos de penetración y sondeos alrededor del lugar proceden del registro neerlandés del subsuelo (solo Países Bajos). La solicitud indica al registro qué lugar está consultando; no se envía nada más.",
+    "Load borings": "Cargar sondeos",
+    "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.": "Obtiene los sondeos geotécnicos alrededor del lugar del registro neerlandés del subsuelo y los coloca en el modelo.",
+    "Opens borings from GEF files and puts them in the model.": "Abre sondeos desde archivos GEF y los coloca en el modelo.",
+    "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.": "Crea un modelo 3D del subsuelo a partir de los sondeos cargados: cada lugar toma las capas del sondeo más cercano."
   }
 }

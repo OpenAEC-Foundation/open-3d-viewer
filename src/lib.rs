@@ -63,6 +63,8 @@ mod units;
 mod view_cube;
 mod viewport;
 #[cfg(target_arch = "wasm32")]
+mod host;
+#[cfg(target_arch = "wasm32")]
 pub mod web;
 
 pub const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");

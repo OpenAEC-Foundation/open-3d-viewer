@@ -74,6 +74,7 @@ What works and what does not on Android:
 - **Several models at once.** **Open** puts a file in a tab of its own beside the open model (several files dropped at once load side by side, each in its tab), **Add** puts another file in the same view (an IFCX file layers over an open IFCX model instead), and each model has its own visibility toggle.
 - **Saves as IFCX and IFC.** **Save as** writes IFCX (IFC5) unless you pick another type: the viewer's own project file, with the model by element, its levels, and its floor plans, sections, elevations, sheets and dimensions, which come back when the file is opened again. Any model the viewer opens can also be saved as IFC 4, with storeys, classes, properties and materials, or with **Export IFC 4x3** on the File page as IFC 4x3 (IFC4X3_ADD2, the current ISO 16739-1). The viewer writes IFC itself, without an IFC library.
 - **The same app in the browser and on the desktop.** One code base; the browser version needs no installation.
+- **Works from Docs in an OpenAEC SuperCloud environment.** There the browser version opens the model from Docs and **Save as** stores it next to it; **Render with Blender** lets the environment's Blender render the stored model and puts the picture next to it.
 - **Measure and cut.** Distances, angles, areas and polygons, a section box and a section plane with filled cuts, and an exploded view.
 - **AI agents can drive it.** An MCP server lets Claude and other agents open files, look around, select and measure, in the window you see.
 

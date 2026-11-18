@@ -787,7 +787,7 @@ impl Studio {
             self.ribbon_tab = 0;
         }
         // GIS works from its tab of the right pane
-        if product == Product::Gis {
+        if product == Product::Gis && self.app.side_tab != crate::app::SideTab::Geo {
             self.app.side_tab = crate::app::SideTab::Gis;
         }
         if product != Product::Modeller {
@@ -1154,6 +1154,8 @@ impl Studio {
             // an empty project to model in, with a first level; beside a model it opens in a tab of its own
             Command::new("file.new", l.text("Nieuw", "New"), go(Message::NewModel(l.text("Niveau 0", "Level 0")))).icon(small("file.new"), large("file.new")).shortcut(Shortcut::ctrl('n')),
             Command::new("file.open", l.text("Openen…", "Open…"), go(Message::OpenDialog)).icon(small("file.open"), large("file.open")).shortcut(Shortcut::ctrl('o')).dialog(),
+            // a model kept as a folder: a Tekla model folder, an Allplan project
+            Command::new("file.open-folder", l.text("Map openen…", "Open folder…"), go(Message::OpenFolderDialog)).icon(small("file.open"), large("file.open")).dialog(),
             Command::new("file.add", l.text("Toevoegen…", "Add…"), go(Message::AddDialog))
                 .icon(small("file.import"), large("file.import"))
                 .shortcut(Shortcut::ctrl_shift('o'))
@@ -1262,6 +1264,12 @@ impl Studio {
                 .enabled(app.section_on || app.plane.is_some()),
             // Docs: the project folder, and opening and linking the picked document
             Command::new("docs.folder", l.text("Projectmap", "Project folder"), go(Message::Docs(crate::app::DocsMessage::Choose))).icon(small("project.folder"), large("project.folder")),
+            Command::new("gis.map", l.text("Kaart laden", "Load map"), go(Message::Gis(crate::app::GisMessage::Map(crate::app::MapMessage::Fetch(l))))).icon(small("view.top"), large("view.top")).detail(l.text("Legt de kaart die in het tabblad GIS rechts gekozen is onder het project: de achtergrondkaart, de luchtfoto of een eigen WMS-dienst.", "Lays the map chosen in the GIS tab on the right under the project: the background map, the aerial photograph or a WMS service of your own.")),
+            Command::new("geo.fetch", l.text("Sonderingen laden", "Load soundings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Fetch(l))))).icon(small("draw.coordinate"), large("draw.coordinate")).detail(l.text("Haalt de sonderingen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the soundings around the place from the Dutch register of the subsurface and puts them in the model.")),
+            Command::new("geo.borings", l.text("Boringen laden", "Load borings"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::FetchBorings(l))))).icon(small("pile.columns"), large("pile.columns")).detail(l.text("Haalt de geotechnische boringen rond de plek op uit de Basisregistratie Ondergrond en zet ze in het model.", "Fetches the geotechnical borings around the place from the Dutch register of the subsurface and puts them in the model.")),
+            Command::new("geo.open-borings", l.text("GEF openen", "Open GEF"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::PickBorings(l))))).icon(small("file.import"), large("file.import")).detail(l.text("Opent boringen uit GEF-bestanden en zet ze in het model.", "Opens borings from GEF files and puts them in the model.")).dialog(),
+            Command::new("geo.model", l.text("Ondergrondmodel", "Ground model"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Model(l))))).icon(small("mesh.closed"), large("mesh.closed")).detail(l.text("Maakt een 3D-model van de ondergrond uit de geladen boringen: elke plek krijgt de lagen van de dichtstbijzijnde boring.", "Makes a 3D model of the ground of the borings loaded: every place takes the layers of the nearest boring.")),
+            Command::new("geo.open", l.text("GEF openen", "Open GEF"), go(Message::Gis(crate::app::GisMessage::Geo(crate::app::GeoMessage::Pick(l))))).icon(small("file.import"), large("file.import")).detail(l.text("Opent sonderingen uit GEF-bestanden en zet ze in het model.", "Opens soundings from GEF files and puts them in the model.")).dialog(),
             Command::new("gis.surroundings", l.text("Omgeving laden", "Load surroundings"), go(Message::Gis(crate::app::GisMessage::Fetch(l)))).icon(small("drawing.plan"), large("drawing.plan")).detail(l.text("Haalt de percelen en panden rond de plek op die in het tabblad GIS rechts gekozen is.", "Fetches the parcels and buildings around the place chosen in the GIS tab on the right.")),
             Command::new("gis.terrain", l.text("Terrein laden", "Load terrain"), go(Message::Gis(crate::app::GisMessage::Terrain(crate::app::TerrainMessage::Fetch(l))))).icon(small("mesh.surface"), large("mesh.surface")).detail(l.text("Haalt het maaiveld rond de plek op, met hoogtelijnen.", "Fetches the ground around the place, with contours.")),
             Command::new("gis.points", l.text("Oppervlak uit punten", "Surface from points"), go(Message::Gis(crate::app::GisMessage::Terrain(crate::app::TerrainMessage::Pick(l))))).icon(small("file.import"), large("file.import")).detail(l.text("Maakt een oppervlak met hoogtelijnen van een puntenbestand van een landmeter.", "Makes a surface with contours of a surveyor's file of points.")),
@@ -1327,6 +1335,15 @@ impl Studio {
                 .icon(small("edit.delete"), large("edit.delete"))
                 .enabled(!app.selected_modelled().is_empty()),
         ];
+        // in an environment with Blender (the web app): a render of the file opened from Docs
+        #[cfg(target_arch = "wasm32")]
+        if crate::host::renders() {
+            list.push(
+                Command::new("file.render-blender", l.text("Renderen met Blender", "Render with Blender"), go(Message::BlenderRender))
+                    .icon(small("mesh.surface"), large("mesh.surface"))
+                    .enabled(crate::host::can_render()),
+            );
+        }
         // through the clashes with the keys: the next and the one before, accept, reject, issue
         // (the Validator's, which the web build leaves out)
         #[cfg(all(feature = "validator", not(target_arch = "wasm32")))]
@@ -1657,7 +1674,7 @@ impl Studio {
                     Message::Open(path) => Some(path.clone()),
                     _ => None,
                 };
-                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveProjectDialog | Message::SaveIfcDialog(_)) {
+                if opened.is_some() || matches!(message, Message::OpenDialog | Message::SaveDialog | Message::SaveProjectDialog | Message::SaveIfcDialog(_) | Message::BlenderRender) {
                     self.backstage = false;
                 }
                 if let Some(path) = opened {
@@ -2356,7 +2373,11 @@ impl Studio {
         };
         let groups: Vec<(&'static str, Vec<RibbonPart>)> = match page {
             RibbonPage::Home => {
-                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.add", "file.save-as"])])];
+                let mut groups = vec![(l.text("Bestand", "File"), vec![large("file.new"), large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])])];
+                #[cfg(target_arch = "wasm32")]
+                if crate::host::renders() {
+                    groups[0].1.push(large("file.render-blender"));
+                }
                 groups.extend(view_groups());
                 groups
             }
@@ -2399,7 +2420,7 @@ impl Studio {
             ],
             // the clouds of the project, how their points show and the meshes made of them
             RibbonPage::Analysis => vec![
-                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Rekenmodellen", "Analysis models"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])]),
                 (l.text("Snedekrachten", "Internal forces"), vec![smalls(&["analysis.n", "analysis.vy", "analysis.vz"]), smalls(&["analysis.mx", "analysis.my", "analysis.mz"])]),
                 (l.text("Resultaten", "Results"), vec![large("analysis.deformed"), large("analysis.reactions"), large("analysis.supports"), smalls(&["analysis.set-next", "analysis.set-previous"])]),
                 (l.text("Belastingen", "Loads"), vec![large("analysis.loads"), smalls(&["analysis.case-next", "analysis.case-previous"])]),
@@ -2414,11 +2435,21 @@ impl Studio {
             // the place is searched in the GIS tab of the right pane; what is fetched around it is here
             RibbonPage::Gis => vec![
                 (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Kaart", "Map"), vec![large("gis.map"), smalls(&["camera.top", "camera.ortho", "camera.perspective"])]),
                 (l.text("Omgeving", "Surroundings"), vec![large("gis.surroundings")]),
                 (l.text("Terrein", "Terrain"), vec![large("gis.terrain"), large("gis.points")]),
             ],
+            // roads, structures and rail: the pages are there, their tools are still to come
+            RibbonPage::Infra | RibbonPage::Civil | RibbonPage::Rail => vec![(l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])])],
+            // the ground under the project: what was investigated
+            RibbonPage::Geo => vec![
+                (l.text("Bestand", "File"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Sonderingen", "Soundings"), vec![large("geo.fetch"), large("geo.open")]),
+                (l.text("Boringen", "Borings"), vec![large("geo.borings"), large("geo.open-borings")]),
+                (l.text("Ondergrond", "Ground"), vec![large("geo.model")]),
+            ],
             RibbonPage::Cloud => vec![
-                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.add", "file.save-as"]), large("cloud.details")]),
+                (l.text("Puntenwolken", "Point clouds"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"]), large("cloud.details")]),
                 (l.text("Punten", "Points"), vec![smalls(&["cloud.points-smaller", "cloud.points-larger", "cloud.depth"])]),
                 (l.text("Kleur", "Colour"), vec![smalls(&["cloud.color-stored", "cloud.color-elevation"]), smalls(&["cloud.color-intensity", "cloud.color-class"])]),
                 (l.text("Doorsnede", "Section"), vec![large("section.box"), large("cloud.drawing")]),
@@ -2427,7 +2458,7 @@ impl Studio {
             ],
             // the project's models together; issues, checks, comments and sharing to come
             RibbonPage::Collaborate => vec![
-                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.add", "file.save-as"])]),
+                (l.text("Modellen", "Models"), vec![large("file.open"), smalls(&["file.open-folder", "file.add", "file.save-as"])]),
                 (l.text("Issues", "Issues"), vec![large("collaborate.issue"), smalls(&["collaborate.bcf-import", "collaborate.bcf-export"])]),
                 (l.text("Controle", "Check"), vec![large("collaborate.check"), smalls(&["collaborate.ids", "collaborate.report"])]),
                 (l.text("Clashes", "Clashes"), vec![large("collaborate.clash")]),
@@ -2512,9 +2543,11 @@ impl Studio {
         let l = self.l();
         let c = look.color;
         let loaded = self.app.model.is_some();
-        let nav = column![
+        #[allow(unused_mut)]
+        let mut nav = column![
             t::file_nav_row(look, small("file.new"), l.text("Nieuw", "New"), false, Some(Msg::App(Message::NewModel(l.text("Niveau 0", "Level 0"))))),
             t::file_nav_row(look, small("file.open"), l.text("Openen", "Open"), false, Some(Msg::App(Message::OpenDialog))),
+            t::file_nav_row(look, small("file.open"), l.text("Map openen", "Open folder"), false, Some(Msg::App(Message::OpenFolderDialog))),
             t::file_nav_row(look, small("file.import"), l.text("Toevoegen", "Add"), false, Some(Msg::App(Message::AddDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Opslaan als", "Save as"), false, loaded.then_some(Msg::App(Message::SaveDialog))),
             t::file_nav_row(look, small("file.save-as"), l.text("Project opslaan", "Save project"), false, loaded.then_some(Msg::App(Message::SaveProjectDialog))),
@@ -2522,6 +2555,10 @@ impl Studio {
             t::file_nav_row(look, small("ui.settings"), l.text("Instellingen", "Settings"), false, Some(Msg::Dialog(Some(Dialog::Settings)))),
         ]
         .width(260);
+        #[cfg(target_arch = "wasm32")]
+        if crate::host::renders() {
+            nav = nav.push(t::file_nav_row(look, small("mesh.surface"), l.text("Renderen met Blender", "Render with Blender"), false, crate::host::can_render().then_some(Msg::App(Message::BlenderRender))));
+        }
         let files: Vec<t::RecentFile<'_, Msg>> = self
             .prefs
             .recent
@@ -3464,7 +3501,7 @@ mod tests {
         assert!(!studio.products.contains(&Product::Gis) && !studio.extension_on(Product::Gis));
         assert_eq!(studio.product(), Product::Viewer);
         let tabs: Vec<String> = accessibility(&studio).summary().into_iter().filter(|n| n.starts_with("Tab: ")).collect();
-        assert!(!tabs.contains(&"Tab: GIS".to_string()) && tabs.contains(&"Tab: Docs".to_string()), "{tabs:?}");
+        assert!(!tabs.contains(&"Tab: GIC".to_string()) && tabs.contains(&"Tab: Docs".to_string()), "{tabs:?}");
         // the manager still lists it, and switching it on puts it back where it stood
         assert!(studio.extensions().contains(&Product::Gis));
         let _ = studio.update(Msg::Extension(Product::Gis, true));
@@ -3486,7 +3523,7 @@ mod tests {
         let mut studio = Studio::new(App::default());
         let _ = studio.update(Msg::Product(Product::Gis));
         let groups = studio.ribbon_groups_of(RibbonPage::Gis);
-        assert!(groups.len() >= 3, "the GIS tab has its file, surroundings and terrain");
+        assert!(groups.len() >= 3, "the GIS tab has its file, map, surroundings and terrain");
         let (name, key) = (groups[2].0, group_key(&groups[2]));
         // the page lists the tools of every extension under it
         studio.dialog = Some(Dialog::Settings);

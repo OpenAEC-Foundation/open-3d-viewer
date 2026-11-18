@@ -54,7 +54,8 @@ impl Loader for RvtLoader {
             }
         }
         // the ways the file's browser orders its views, each view in the folders of the one shown
-        let (mut orders, shown) = super::rvt_browser::organizations(&doc, &infos);
+        let (orders, shown) = rvt_export::browser::organizations(&doc, &infos);
+        let mut orders: Vec<crate::model::ViewOrder> = orders.into_iter().map(|o| crate::model::ViewOrder { name: o.name, folders: o.folders }).collect();
         let (view_ids, mut views): (Vec<u64>, Vec<SavedView>) = saved_views(&infos).into_iter().unzip();
         let at: HashMap<u64, usize> = infos.iter().enumerate().map(|(k, v)| (v.id, k)).collect();
         for order in &mut orders {
@@ -107,6 +108,7 @@ impl Loader for RvtLoader {
                     points: false,
                     lines: Vec::new(),
                     line_elements: Vec::new(),
+                    texturing: None,
                 }
             })
             .collect::<Vec<Layer>>();

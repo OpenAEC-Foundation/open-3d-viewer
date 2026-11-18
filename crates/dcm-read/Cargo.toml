@@ -1,0 +1,18 @@
+[package]
+name = "dcm-read"
+version = "0.1.0"
+description = "Reads the 3D model a DICOM file carries (Encapsulated STL, OBJ and MTL documents) and says what other DICOM files hold instead"
+authors = ["Open BIM Suite Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
+publish = false
+
+[dependencies]
+# The DICOM file: its meta group and data set (MIT OR Apache-2.0)
+dicom-object = { version = "0.10", default-features = false }
+dicom-dictionary-std = "0.10"
+
+[dev-dependencies]
+dicom-core = "0.10"

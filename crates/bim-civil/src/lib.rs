@@ -7,10 +7,13 @@
 //!   breaklines the triangles follow and a boundary they stay within, or from a grid of heights.
 //!   A surface gives the height at a place, its contours, and volumes against a level or
 //!   another surface.
+//! - [`ground`]: ground investigation: cone penetration tests as GEF files and the register of
+//!   the subsurface give them.
 //!
 //! Headless: no GUI and no files; the caller reads and draws. Lengths are metres, x is east,
 //! y is north, z is up.
 
+pub mod ground;
 pub mod points;
 pub mod tin;
 

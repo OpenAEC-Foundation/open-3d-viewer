@@ -33,6 +33,10 @@ pub enum Message {
     Typed(Moves, usize, String),
     /// Use what is typed (Enter).
     Done(Moves),
+    /// The turn typed for the picked model (degrees).
+    Turn(String),
+    /// Use the turn typed (Enter).
+    Turned,
     /// The map of a model (by its id) came, as RGBA rows, or why not.
     Map(u64, Result<Arc<Vec<u8>>, String>),
 }
@@ -53,8 +57,11 @@ pub enum Map {
 #[derive(Debug, Clone, Default)]
 pub struct Placed {
     pub moved: DVec3,
+    /// How far the model is turned about its zero point (degrees, anticlockwise seen from above).
+    pub turned: f64,
     pub zero: DVec3,
     typed: [[Option<String>; 3]; 2],
+    typed_turn: Option<String>,
     pub map: Map,
 }
 
@@ -106,6 +113,14 @@ impl App {
         let Some(entry) = self.picked_model.and_then(|i| self.models.get_mut(i)) else { return };
         match message {
             Message::Map(..) => {}
+            Message::Turn(typed) => entry.placed.typed_turn = Some(typed),
+            Message::Turned => {
+                let Some(next) = entry.placed.typed_turn.take().as_deref().and_then(number).map(|degrees| degrees.rem_euclid(360.0)) else { return };
+                if next != entry.placed.turned {
+                    entry.placed.turned = next;
+                    self.replace_models();
+                }
+            }
             Message::Typed(moves, axis, typed) => {
                 if let Some(slot) = entry.placed.typed[moves as usize].get_mut(axis) {
                     *slot = Some(typed);
@@ -134,9 +149,10 @@ impl App {
         let picked = self.picked_model;
         let sources: Vec<Arc<Model>> = self.models.iter().map(|entry| entry.model.clone()).collect();
         let moves: Vec<DVec3> = self.models.iter().map(|entry| entry.placed.moved).collect();
+        let turns: Vec<f64> = self.models.iter().map(|entry| entry.placed.turned).collect();
         let scene = match sources.as_slice() {
-            [one] if moves[0] == DVec3::ZERO => one.clone(),
-            _ => Arc::new(Model::combine_moved(&sources, &moves)),
+            [one] if moves[0] == DVec3::ZERO && turns[0] == 0.0 => one.clone(),
+            _ => Arc::new(Model::combine_placed(&sources, &moves, &turns)),
         };
         self.set_scene(scene);
         self.restore_model_visibility();
@@ -186,8 +202,19 @@ impl App {
         };
         let mut rows = column![
             line(l.text("Model verplaatst (m)", "Model moved (m)"), Moves::Model, entry.placed.moved),
+            row![
+                text(l.text("Model gedraaid (°)", "Model turned (°)").to_string()).size(12).color(p.text_secondary).wrapping(Wrapping::WordOrGlyph).width(Length::FillPortion(2)),
+                row![openaec_ui::design::a11y::named(
+                    text_input("°", &entry.placed.typed_turn.clone().unwrap_or_else(|| shown(entry.placed.turned))).on_input(|typed| AppMessage::Origin(Message::Turn(typed))).on_submit(AppMessage::Origin(Message::Turned)).size(12).padding([2, 4]),
+                    openaec_ui::design::a11y::Role::Label,
+                    l.text("Model gedraaid (°)", "Model turned (°)"),
+                )]
+                .width(Length::FillPortion(3)),
+            ]
+            .spacing(8)
+            .align_y(Center),
             line(l.text("Nulpunt in model (m)", "Zero point in model (m)"), Moves::Zero, entry.placed.zero),
-            text(l.text("X, Y, Z in meters; Enter past toe.", "X, Y, Z in metres; Enter applies.").to_string()).size(11).color(p.text_muted),
+            text(l.text("X, Y, Z in meters, de draaiing in graden linksom om het nulpunt; Enter past toe.", "X, Y, Z in metres, the turn in degrees anticlockwise about the zero point; Enter applies.").to_string()).size(11).color(p.text_muted),
         ]
         .spacing(4);
         // the map of where its file says it lies

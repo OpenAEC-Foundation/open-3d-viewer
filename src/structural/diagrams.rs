@@ -558,10 +558,14 @@ fn loads(doc: &AnalysisModel, case: Id, reach: f64, pen: &mut Pen) {
                     pen.arrow(tip - dir * length, tip, LOAD);
                 }
             }
-            (Load::MemberDistributed { dir, moment: false, .. }, Target::Member { id, span }) => {
+            (Load::MemberDistributed { dir, moment: false, dist }, Target::Member { id, span }) => {
                 let Some(frame) = doc.member(*id).and_then(|m| frame_of(doc, m)) else { continue };
                 let dir = if a.frame == LoadFrame::Local { frame.vector_to_global(*dir) } else { *dir }.normalize_or_zero();
-                let (from, to) = span.unwrap_or((0.0, frame.length));
+                // over its span, or the part of the member a trapezoidal load covers
+                let (from, to) = span.unwrap_or(match dist {
+                    Distribution::Trapezoidal { a, b, .. } => (*a, *b),
+                    _ => (0.0, frame.length),
+                });
                 // an arrow about every reach, at least at both ends
                 let n = (((to - from) / reach.max(1e-6)).ceil() as usize).clamp(2, 24);
                 let foot = |k: usize| frame.origin + frame.x * (from + (to - from) * k as f64 / n as f64);
@@ -570,9 +574,16 @@ fn loads(doc: &AnalysisModel, case: Id, reach: f64, pen: &mut Pen) {
                 }
                 pen.line(foot(0) - dir * length, foot(n) - dir * length, LOAD);
             }
-            (Load::Surface { dir, .. }, Target::Surface(id)) => {
-                let Some(surface) = doc.surface(*id) else { continue };
-                let corners: Vec<DVec3> = surface.boundary.iter().filter_map(|n| doc.node(*n)).map(|n| n.p).collect();
+            (Load::Surface { dir, .. }, Target::Surface(_) | Target::Free(_)) => {
+                // the corners of its surface, or of its own outline
+                let corners: Vec<DVec3> = match &a.target {
+                    Target::Surface(id) => {
+                        let Some(surface) = doc.surface(*id) else { continue };
+                        surface.boundary.iter().filter_map(|n| doc.node(*n)).map(|n| n.p).collect()
+                    }
+                    Target::Free(points) => points.clone(),
+                    _ => continue,
+                };
                 if corners.len() < 3 {
                     continue;
                 }

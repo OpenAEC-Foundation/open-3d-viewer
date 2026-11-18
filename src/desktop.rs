@@ -8,7 +8,7 @@
 //!                  [--view iso|top|front|right] [--ortho] [--view-tab] [--theme ...] [--language ...]
 //!                  [--product ...] [--mesh terrain|surface|closed|faces]
 //!                  [--page workspace|file|settings|shortcuts|ribbon|feedback|cloud] [--schedule NAME] [--sheet NUMBER] [--drawing NAME] [--draft NAME]
-//!                  [--recent PATH]... [--docs FOLDER [--doc FILE]] [--gis PLACE (an address or coordinates: its parcels and buildings are fetched)]
+//!                  [--recent PATH]... [--docs FOLDER [--doc FILE]] [--gis PLACE (an address or coordinates: its parcels and buildings are fetched) [--map background|aerial] [--soundings] [--borings]]
 //!                  [--explode X,Y,Z (percent)] [--explode-mode storeys|elements]
 //!                  [--section X0,X1,Y0,Y1,Z0,Z1 (the section box, percent of the model)]
 //!   open-3d-viewer [FILE] --window-screenshot OUT.png   (real window, captured, then exits)
@@ -67,6 +67,12 @@ struct Args {
     recent: Vec<PathBuf>,
     /// For `--screenshot`: a place whose surroundings the GIS tab fetches.
     gis: Option<String>,
+    /// For `--screenshot` with `--gis`: the map laid under the place (`background` or `aerial`).
+    map: Option<crate::app::MapSource>,
+    /// For `--screenshot` with `--gis`: the soundings around the place are fetched too.
+    soundings: bool,
+    /// For `--screenshot` with `--gis`: the borings around the place and the model of the ground.
+    borings: bool,
     screenshot: Option<PathBuf>,
     window_screenshot: Option<PathBuf>,
     size: Option<(f32, f32)>,
@@ -133,6 +139,15 @@ fn parse_args() -> Result<Args, String> {
             "--recent" => args.recent.push(PathBuf::from(value()?)),
             "--screenshot" => args.screenshot = Some(PathBuf::from(value()?)),
             "--gis" => args.gis = Some(value()?),
+            "--map" => {
+                args.map = Some(match value()?.as_str() {
+                    "background" => crate::app::MapSource::Background,
+                    "aerial" => crate::app::MapSource::Aerial,
+                    _ => return Err("--map background|aerial".into()),
+                })
+            }
+            "--soundings" => args.soundings = true,
+            "--borings" => args.borings = true,
             "--window-screenshot" => args.window_screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
@@ -578,6 +593,15 @@ fn screenshot(args: &Args, out: &std::path::Path) -> Result<(), String> {
     // `--gis PLACE`: the place found, its surroundings fetched and the GIS tab shown
     if let Some(place) = &args.gis {
         studio.app.open_place(place, args.language.unwrap_or(Language::English))?;
+        if let Some(source) = args.map {
+            studio.app.open_map(source, args.language.unwrap_or(Language::English))?;
+        }
+        if args.soundings {
+            studio.app.open_soundings(args.language.unwrap_or(Language::English))?;
+        }
+        if args.borings {
+            studio.app.open_borings(args.language.unwrap_or(Language::English))?;
+        }
     }
     #[cfg(feature = "validator")]
     if let Some(language) = args.language {

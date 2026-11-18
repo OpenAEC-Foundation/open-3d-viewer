@@ -54,6 +54,10 @@ pub struct Gis {
     pub(super) fetched: Vec<u64>,
     /// The terrain section.
     pub(super) terrain: super::terrain::State,
+    /// The map section.
+    pub(super) map: super::map::State,
+    /// The Geotechnics tab.
+    pub(super) geo: super::geo::State,
     pub radius: u32,
     /// Which layers to fetch, as [`Layer::ALL`].
     pub layers: [bool; 2],
@@ -64,7 +68,7 @@ pub struct Gis {
 
 impl Default for Gis {
     fn default() -> Self {
-        Gis { query: String::new(), searching: false, found: None, place: None, zero: None, zero_level: None, fetched: Vec::new(), terrain: Default::default(), radius: RADII[1], layers: [true; 2], fetching: false, note: None }
+        Gis { query: String::new(), searching: false, found: None, place: None, zero: None, zero_level: None, fetched: Vec::new(), terrain: Default::default(), map: Default::default(), geo: Default::default(), radius: RADII[1], layers: [true; 2], fetching: false, note: None }
     }
 }
 
@@ -102,6 +106,10 @@ pub enum Message {
     Fetched(Result<(Frame, Vec<Fetched>), String>),
     /// The terrain section.
     Terrain(super::terrain::Message),
+    /// The map section.
+    Map(super::map::Message),
+    /// The Geotechnics tab.
+    Geo(super::geo::Message),
 }
 
 /// How the grid lies in a model whose file says so: its map conversion to RD New.
@@ -249,6 +257,8 @@ impl App {
                 return fetch_task(names, pdok::Bounds::around(center, f64::from(self.gis.radius)), frame, self.kept_terrain().map(|kept| kept.tin.clone()));
             }
             Message::Terrain(message) => return self.update_terrain(message),
+            Message::Map(message) => return self.update_map(message),
+            Message::Geo(message) => return self.update_geo(message),
             Message::Fetched(result) => {
                 self.gis.fetching = false;
                 match result {
@@ -362,6 +372,7 @@ impl App {
             (None, Some(rd)) => rows = rows.push(plain(l.text("Locatie uit het model", "Location from the model").to_string())).push(note(coordinates(rd))),
             (None, None) => {}
         }
+        rows = rows.push(iced::widget::rule::horizontal(1)).push(self.map_section(p, l));
         rows = rows.push(iced::widget::rule::horizontal(1)).push(section(l.text("Omgeving", "Surroundings")));
         if cfg!(target_arch = "wasm32") {
             return rows.push(note(l.text("De browserversie haalt nog geen omgeving op.", "The browser build does not fetch surroundings yet.").to_string())).into();

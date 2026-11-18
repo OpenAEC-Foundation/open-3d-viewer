@@ -56,7 +56,7 @@ Lines of Rust in `src/loaders/` per format, tests included.
 
 | Format | In the app | Its repository | Laid out as the model | To do |
 |---|---:|---|---|---|
-| Revit (`.rvt`, `.rfa`) | 6,769 in 9 files | `revit-dll` | yes | Move what the app knows of Revit's drawings, tags, schedules, filters, phases, fonts, images and browser into the reader; the adapter only maps. |
+| Revit (`.rvt`, `.rfa`) | 6,346 in 7 files | `revit-dll` | yes | Move what the app knows of Revit's drawings, tags, schedules, filters, phases, fonts, images and browser into the reader; the adapter only maps. |
 | Archicad (`.pln`, `.pla`) | 5,995 | none | | New repository; the whole reader moves. |
 | Allplan (`.ndw`) | 4,006 | none | | New repository; the whole reader moves. |
 | Coordination model (`.smc`) | 2,674 in 3 files | none | | New repository; the whole reader moves. |
@@ -83,6 +83,7 @@ Together this is some 30,000 lines of format knowledge in the app.
 | PLY (`.ply`) | 299 | `ply-dll` (one crate) | Slim the adapter; lay the repository out as the model. |
 | PCD, PTX, XYZ, ASC grid, OFF, AMF, 3MF, COLLADA, LandXML, CityGML, CityJSON, GeoJSON | 145 to 570 each | in the app | Each a small reader: a repository of its own when it is next worked on. |
 | IFC, IFCX, STEP, glTF, OBJ, STL, USD, LAS and LAZ, E57, Shapefile, DWG and DXF | 125 to 936 each | published crates and `ifcx-rs` | Adapters; check each against rule 4 when it is next worked on. |
+| DICOM with an embedded model (`.dcm`) | 73 | `crates/dcm-read`, on the published `dicom-object` (MIT OR Apache-2.0): it takes the STL, OBJ or MTL document out of the file and says what other files hold | A crate in the suite for now, as the other new readers of 2026-11-18; it uses nothing of the app and moves one to one into a repository of its own (`dicom-dll`) later. The adapter reads the document with the app's STL and OBJ readers. |
 
 ## Moved so far
 
@@ -95,6 +96,9 @@ Together this is some 30,000 lines of format knowledge in the app.
   of the project and its views (`rvt_read::phases`; 205 lines and three tests left the app). The
   reader returns plain types of its own here, and the app copies them into its `Pattern`, `Grid`
   and `Phasing`.
+- 2026-11-18, Revit: how the browser orders the views (`rvt_export::browser`) and the typefaces
+  of the texts (`rvt_read::fonts`; 429 lines and three tests left the app, which copies the
+  reader's `Organization` and `FontFace` into its `ViewOrder` and `Face`).
 
 ## Order
 
@@ -118,3 +122,7 @@ it; the owner sets those.
   files a slice takes.
 - The readers' tests and sample files move with them; what stays here tests the adapter with a
   small file.
+- The readers of MagicaVoxel, URDF, OpenDRIVE and DICOM models (2026-11-18) are crates in this
+  repository's `crates/` for now, by the owner's choice, not repositories of their own. Each uses
+  nothing of the app and has the name it will keep (`vox-read`, `urdf-read`, `xodr-read`,
+  `dcm-read`), so it moves one to one into its own `-dll` repository later.

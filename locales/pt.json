@@ -1123,6 +1123,13 @@
     "Without a georeference the place of the first load lies at the zero point of the project.": "Sem georreferência, o local do primeiro carregamento fica no ponto zero do projeto.",
     "nothing found in this area": "nada encontrado nesta área",
     "Not everything was loaded: the area holds more objects than are fetched at once.": "Nem tudo foi carregado: a área contém mais objetos do que os obtidos de uma só vez.",
-    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "As parcelas e os edifícios vêm do cadastro neerlandês através do PDOK (apenas Países Baixos). O pedido indica ao PDOK que local está a ver; nada mais é enviado."
+    "Parcels and buildings come from the Dutch land registry through PDOK (the Netherlands only). The request tells PDOK which place you are looking at; nothing else goes along.": "As parcelas e os edifícios vêm do cadastro neerlandês através do PDOK (apenas Países Baixos). O pedido indica ao PDOK que local está a ver; nada mais é enviado.",
+    "updated": "atualizado",
+    "unchanged": "inalterado",
+    "Sent as": "Enviado como",
+    "Party": "Parte",
+    "Take in BCF": "Incorporar BCF",
+    "Send BCF": "Enviar BCF",
+    "Send open issues only": "Enviar apenas as issues abertas"
   }
 }

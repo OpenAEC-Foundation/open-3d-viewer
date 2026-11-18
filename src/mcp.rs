@@ -308,8 +308,8 @@ pub fn tools() -> Vec<Value> {
                 "text": { "type": "string", "description": "comment: its text" },
                 "viewpoint": { "type": "integer", "description": "show: which viewpoint (from 0)" }
             }), &["action"], false),
-        tool("collab_bcf", "Open a BCF file (.bcfzip / .bcf, BCF 2.0, 2.1 or 3.0) as the project's issues, or save the issues as BCF 2.1 (or 3.0 with version).",
-            json!({ "action": { "type": "string", "enum": ["open", "save"] }, "path": { "type": "string" }, "version": { "type": "string", "enum": ["2.1", "3.0"] } }), &["action", "path"], false),
+        tool("collab_bcf", "BCF files to and from the other parties. open takes in a .bcfzip / .bcf (BCF 2.0, 2.1 or 3.0): with no issues yet it is the project's issues, else its issues are merged in (new ones added; of one both have the later change stands, with the comments of both) and the answer says how many were new and updated. save writes all issues as BCF 2.1 (or 3.0 with version). send writes the issues for a party (open ones only unless open_only is false) and notes it in the list of exchanges.",
+            json!({ "action": { "type": "string", "enum": ["open", "save", "send"] }, "path": { "type": "string" }, "version": { "type": "string", "enum": ["2.1", "3.0"] }, "party": { "type": "string", "description": "send: whom it goes to; open: whom it comes from" }, "open_only": { "type": "boolean" } }), &["action", "path"], false),
         tool("collab_rules", "Rule sets: list them (checks and clash tests), select one (NL BIM Basis ILS, RVB BIM-norm 1.1, basic check, coordination of structure and services, or one opened), open or save a rule set file (.rules.json), load an IDS into it, or set the built-in model checks, the BIM basis ILS profile and who you are.",
             json!({
                 "action": { "type": "string", "enum": ["list", "select", "open", "save", "load_ids", "set"] },

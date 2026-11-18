@@ -3812,6 +3812,7 @@ dependencies = [
  "rvt-export",
  "rvt-model",
  "rvt-read",
+ "sedge-read",
  "serde",
  "serde_json",
  "shapefile",
@@ -4918,6 +4919,22 @@ dependencies = [
  "memmap2",
  "smithay-client-toolkit 0.19.2",
  "tiny-skia",
+]
+
+[[package]]
+name = "sedge-core"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/solidedge-dll?rev=04a068e6a06409b8396d0e05a2613d86c3af50c4#04a068e6a06409b8396d0e05a2613d86c3af50c4"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
+name = "sedge-read"
+version = "0.1.0"
+source = "git+https://github.com/OpenAEC-Foundation/solidedge-dll?rev=04a068e6a06409b8396d0e05a2613d86c3af50c4#04a068e6a06409b8396d0e05a2613d86c3af50c4"
+dependencies = [
+ "sedge-core",
 ]
 
 [[package]]

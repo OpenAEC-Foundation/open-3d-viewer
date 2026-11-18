@@ -1,0 +1,14 @@
+[package]
+name = "urdf-read"
+version = "0.1.0"
+description = "Reads URDF robot descriptions into placed shapes: the links' visual boxes, cylinders, capsules and spheres as meshes, their mesh files by path, each placed by the joints in their zero position"
+authors = ["Open BIM Suite Contributors"]
+license = "LGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/OpenAEC-Foundation/open-bim-suite"
+publish = false
+
+[dependencies]
+# The URDF XML: links, joints, materials (Apache-2.0)
+urdf-rs = "0.10"

@@ -32,7 +32,6 @@ mod rvt_materials;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_phases;
 #[cfg(not(target_arch = "wasm32"))]
-mod rvt_joins;
 #[cfg(not(target_arch = "wasm32"))]
 mod rvt_filters;
 #[cfg(not(target_arch = "wasm32"))]

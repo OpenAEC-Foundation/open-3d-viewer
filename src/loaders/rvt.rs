@@ -298,7 +298,7 @@ fn drawings(doc: &rvt_read::Document, infos: &[rvt_export::views::ViewInfo], vie
     }
     project.drawings = super::rvt_drawings::drawings(doc, infos, file, &tags, &details);
     // which of the drawn elements are joined with which
-    project.joins = super::rvt_joins::joins(doc, elements.iter().copied());
+    project.joins = rvt_read::joins::joins(doc, elements.iter().copied());
     // the legends and drafting views: drawings without a model
     project.drafts = super::rvt_drafts::drafts(doc, &tags, &details);
     project.drawn = super::rvt_props::drawn(doc, &project.drafts);

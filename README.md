@@ -214,7 +214,7 @@ Every pull request and every release starts the Linux build this way on GitHub A
 | [`test-models/`](test-models/) | The models the tests open |
 | [`docs/architecture/`](docs/architecture/) | How one code base is three products: the Viewer, the Modeller and the BIM Validator |
 
-The readers for SketchUp, Tekla, PLY and Rhino, and the Revit library, live in their own OpenAEC repositories ([`sketchup-dll`](https://github.com/OpenAEC-Foundation/sketchup-dll), [`tekla-dll`](https://github.com/OpenAEC-Foundation/tekla-dll), [`ply-dll`](https://github.com/OpenAEC-Foundation/ply-dll), [`rhino-dll`](https://github.com/OpenAEC-Foundation/rhino-dll), [`revit-dll`](https://github.com/OpenAEC-Foundation/revit-dll)). This repository pins each to a fixed commit.
+The readers for SketchUp, Tekla, PLY, Rhino and SolidWorks, and the Revit library, live in their own OpenAEC repositories ([`sketchup-dll`](https://github.com/OpenAEC-Foundation/sketchup-dll), [`tekla-dll`](https://github.com/OpenAEC-Foundation/tekla-dll), [`ply-dll`](https://github.com/OpenAEC-Foundation/ply-dll), [`rhino-dll`](https://github.com/OpenAEC-Foundation/rhino-dll), [`solidworks-dll`](https://github.com/OpenAEC-Foundation/solidworks-dll), [`revit-dll`](https://github.com/OpenAEC-Foundation/revit-dll)). This repository pins each to a fixed commit.
 
 ## Interoperability
 

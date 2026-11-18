@@ -47,7 +47,7 @@ impl Loader for VwxLoader {
                 }
             }
         }
-        project.info = info(&scene.info);
+        project.info = info(&scene);
         project.grids = grids(&scene.meshes);
         project.rooms = rooms(&scene.meshes);
         project.drafts = plans(&scene.meshes, &scene.texts);
@@ -156,16 +156,36 @@ fn left_out(viewport: &vwx_read::model::Viewport, meshes: &[vwx_read::model::Mes
     meshes.iter().filter(hides).flat_map(|m| m.props.iter().map(|p| p.0)).collect()
 }
 
-/// What the file says about itself: the application that saved it and its version.
-fn info(info: &vwx_read::model::Info) -> Vec<(String, String)> {
+/// What the file says about itself: its project data (name, number, client, address, date and
+/// the rest of the fields of its title block data), the application that saved it, its units
+/// and where it lies on earth.
+fn info(scene: &vwx_read::model::Scene) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    if let Some(application) = &info.application {
-        out.push(("application".to_string(), application.clone()));
+    let mut add = |key: &str, value: String| {
+        if !value.trim().is_empty() && !out.iter().any(|(k, _): &(String, String)| k == key) {
+            out.push((key.to_string(), value));
+        }
+    };
+    let p = &scene.project;
+    for (key, value) in [("number", &p.number), ("name", &p.name), ("client", &p.client), ("address", &p.address), ("date", &p.date)] {
+        add(key, value.clone());
     }
-    if let Some(version) = &info.version {
-        out.push(("version".to_string(), version.clone()));
+    for (key, value) in &p.fields {
+        add(key, value.clone());
     }
-    out.push(("Vectorworks objects".to_string(), info.objects.to_string()));
+    if let Some(application) = &scene.info.application {
+        add("application", application.clone());
+    }
+    if let Some(version) = &scene.info.version {
+        add("version", version.clone());
+    }
+    add("units", scene.units.primary.name.clone());
+    if let Some(g) = &scene.georeference {
+        add("coordinate system", if g.crs_name.is_empty() { g.epsg.map(|e| format!("EPSG:{e}")).unwrap_or_default() } else { g.crs_name.clone() });
+        add("latitude, longitude", format!("{:.6}, {:.6}", g.latitude, g.longitude));
+        add("angle to north", format!("{:.2}°", g.angle_to_north));
+    }
+    add("Vectorworks objects", scene.info.objects.to_string());
     out
 }
 
